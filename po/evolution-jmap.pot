@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-19 10:29+0000\n"
+"POT-Creation-Date: 2026-08-19 11:18+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -94,14 +94,14 @@ msgstr ""
 
 #. TRANSLATORS: shown when Evolution asks a JMAP account to
 #. create a collection whose kind the request does not state.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:167
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:165
 msgid "the new collection is neither an address book nor a calendar"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
 #. the JMAP server behind an account offers no account of that
 #. kind at all, so there is nowhere to create one.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:179
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:177
 #, c-format
 msgid "this account's JMAP server has no place to create %1$s in"
 msgstr ""
@@ -110,11 +110,36 @@ msgstr ""
 #. developer-facing description of the setting that could not be
 #. written. Shown when the collection was made on the server and
 #. the local source describing it could not be completed.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:188
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:186
 #, c-format
 msgid ""
 "the %1$s was created on the server, but the source for it could not be "
 "written: %2$s"
+msgstr ""
+
+#. TRANSLATORS: shown when Evolution asks a JMAP account to
+#. delete something that is not one of the address books or
+#. calendars that account created.
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:132
+msgid "this is not an address book or a calendar of this JMAP account"
+msgstr ""
+
+#. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
+#. the JMAP server behind an account offers no account of that
+#. kind at all, so the collection cannot be there to delete.
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:143
+#, c-format
+msgid "this account's JMAP server has no %1$s to delete"
+msgstr ""
+
+#. TRANSLATORS: %1$s is a developer-facing reason from Evolution
+#. Data Server. Shown when the collection was deleted on the
+#. server and the local source describing it stayed behind.
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:155
+#, c-format
+msgid ""
+"the collection was deleted on the server, but the source for it could not be "
+"removed: %1$s"
 msgstr ""
 
 #: rust/crates/jmap-config/src/backend.rs:299

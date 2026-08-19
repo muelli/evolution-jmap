@@ -44,6 +44,7 @@
 use std::ptr;
 
 use eds_sys::{ESource, e_source_remove_sync};
+use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, g_error_free};
 use jmap_backend_core::marshal::read_string;
 use jmap_collection_sync::Fanout;
@@ -101,32 +102,61 @@ pub unsafe fn remove_obsolete(fanout: &Fanout, children: &[*mut ESource]) -> Vec
     obsolete
         .into_iter()
         .filter_map(|(source, resource_id)| {
-            let mut error: *mut GError = ptr::null_mut();
             // No cancellable: `populate` is handed none, and there is nothing
             // above this to cancel it.
-            // SAFETY: a valid child source, a NULL cancellable and an
-            // out-parameter initialised to NULL are the documented arguments.
-            let removed = unsafe { e_source_remove_sync(source, ptr::null_mut(), &mut error) };
-
-            if removed != GFALSE {
-                // A success that also set an error would be a broken callee,
-                // but freeing it costs nothing and leaking it costs a report.
-                if !error.is_null() {
-                    // SAFETY: a GError this call owns and nothing else holds.
-                    unsafe { g_error_free(error) };
-                }
-                return None;
-            }
-
-            // SAFETY: the call failed, so the out-parameter is NULL or a GError
-            // ownership of which passed to us.
-            let message = unsafe { take_message(error) };
-            Some(NotRemoved {
+            // SAFETY: a valid child source by the contract above.
+            let removed = unsafe { remove_source(source, ptr::null_mut()) };
+            removed.err().map(|message| NotRemoved {
                 resource_id,
                 message,
             })
         })
         .collect()
+}
+
+/// One `e_source_remove_sync`, with the failure turned into a reason worth
+/// printing.
+///
+/// The one call in this crate that destroys a child, in the one place it is
+/// written: the populate half above removes children the server no longer has,
+/// and [`crate::delete_resource`] removes the one the *user* asked to delete —
+/// EDS's documented obligation on `delete_resource_sync`, and the same
+/// `e_source_remove_sync` `ews_backend_delete_resource_sync` ends on. Removing a
+/// child takes its uid, its `.source` file and its offline cache with it, and
+/// the source Evolution would recreate afterwards is a different source with a
+/// different uid; there is no undo either way in.
+///
+/// The `Err` is a message rather than a `GError` because the two callers report
+/// it differently — a populate logs it, the vfunc puts it in a `GError` of its
+/// own — and neither has anywhere to put a second `GError`'s domain and code.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource` — one that is really a child of this
+/// backend's collection — and `cancellable` NULL or a valid `GCancellable`.
+pub unsafe fn remove_source(
+    source: *mut ESource,
+    cancellable: *mut GCancellable,
+) -> Result<(), String> {
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: a valid child source, a cancellable satisfying this function's
+    // contract and an out-parameter initialised to NULL are the documented
+    // arguments.
+    let removed = unsafe { e_source_remove_sync(source, cancellable, &mut error) };
+
+    if removed != GFALSE {
+        // A success that also set an error would be a broken callee, but
+        // freeing it costs nothing and leaking it costs a report.
+        if !error.is_null() {
+            // SAFETY: a GError this call owns and nothing else holds.
+            unsafe { g_error_free(error) };
+        }
+        return Ok(());
+    }
+
+    // SAFETY: the call failed, so the out-parameter is NULL or a GError
+    // ownership of which passed to us.
+    Err(unsafe { take_message(error) })
 }
 
 /// [`obsolete`], with each source's resource id kept — read once, since reading

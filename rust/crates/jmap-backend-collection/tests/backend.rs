@@ -380,14 +380,48 @@ fn installing_the_middle_slots_left_the_ones_beside_them_inherited() {
         inherited.create_resource_finish.map(|f| f as usize),
         "class_init overwrote create_resource_finish"
     );
-    // Still inherited on purpose, not by omission: the delete half is the
-    // destructive one and is its own increment. Until it is written, this slot
-    // must stay EDS's `G_IO_ERROR_NOT_SUPPORTED`, which is also why nothing here
-    // sets `remote-deletable` on a child — see `crate::create_resource`.
+    // `delete_resource` and `delete_resource_finish` sit immediately after
+    // `delete_resource_sync`, which this crate now writes too, so they are what
+    // pins *that* slot from the far side — the same job `create_resource` and
+    // `create_resource_finish` do for the create one.
     assert_eq!(
-        ours.delete_resource_sync.map(|f| f as usize),
-        inherited.delete_resource_sync.map(|f| f as usize),
-        "class_init overwrote delete_resource_sync"
+        ours.delete_resource.map(|f| f as usize),
+        inherited.delete_resource.map(|f| f as usize),
+        "class_init overwrote delete_resource"
+    );
+    assert_eq!(
+        ours.delete_resource_finish.map(|f| f as usize),
+        inherited.delete_resource_finish.map(|f| f as usize),
+        "class_init overwrote delete_resource_finish"
+    );
+}
+
+#[test]
+fn class_init_replaces_the_default_delete_resource_sync_rather_than_leaving_it() {
+    // The create slot's twin, and EDS's default is the same kind of thing:
+    // `collection_backend_delete_resource()` does nothing but
+    // `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
+    // deleting remote resources")`. So this override must not chain up either —
+    // and leaving the slot uninstalled while `remote-deletable` is set on the
+    // children (see `tests/delete_resource.rs`) would be the worst of both: a
+    // "Delete" Evolution offers and answers with that message.
+    let class = Class::get();
+    // SAFETY: the parent type's class is alive for as long as ours is.
+    let parent: *mut ECollectionBackendClass =
+        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+    assert!(!parent.is_null(), "the parent class was not referenced");
+
+    let ours = class
+        .vfuncs()
+        .delete_resource_sync
+        .expect("class_init installed no delete_resource_sync");
+    // SAFETY: a live class struct.
+    let inherited = unsafe { (*parent).delete_resource_sync }
+        .expect("EDS installs a default that refuses every delete");
+
+    assert!(
+        ours as usize != inherited as usize,
+        "the slot still holds EDS's default, which refuses every delete"
     );
 }
 
