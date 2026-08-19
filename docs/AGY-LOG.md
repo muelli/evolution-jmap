@@ -156,4 +156,22 @@ Running record of headless polish increments on the `antigravity` branch.
 - **Calcard behaviour-difference findings:** None.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — Mutation testing on jmap-ical (cargo-mutants)
+
+- **AGY-TASKS sub-step:** 6. Mutation testing (`cargo-mutants`, stable) on `jmap-ical` (`event.rs`, `zone.rs`, and `error.rs`).
+- **Changes:**
+  - Ran `cargo-mutants` against `evolution-jmap-ical` (1142 mutants generated across `event.rs`, `zone.rs`, and `error.rs`).
+  - Added comprehensive test suites in `rust/crates/jmap-ical/tests/event.rs` (`ical_error_display_and_source_formatting`, `timezone_observance_onsets_and_transition_offset_resolution`, `calendar_event_mapping_and_override_predicates_fidelity`, `timezone_advanced_transition_permutations_and_boundary_fidelity`) to kill surviving behavioral mutants across error formatting, timezone onsets and transition offsets, participant rendering, alerts, recurrence overrides, time zone definitions, multi-component unfolding, and Gregorian calendar boundary arithmetic:
+    - `ical_error_display_and_source_formatting`: tests `Display` and `std::error::Error` trait implementations for all 6 `ICalError` variants (`NotACalendar`, `Unterminated`, `Mismatched`, `Trailing`, `TooDeep`, `NoEvent`).
+    - `timezone_observance_onsets_and_transition_offset_resolution`: tests `offset_at` when target is before all onsets, when multiple observances have identical or differing onsets, VTIMEZONE with `RDATE` transitions, RRULEs carrying `BYSECOND`/`BYMINUTE`/`BYHOUR`, local non-UTC `UNTIL` without `Z`, RRULE `COUNT` expiry, negative `BYMONTHDAY` runs in `WeekdayAmong`, and positive nth `BYDAY`.
+    - `calendar_event_mapping_and_override_predicates_fidelity`: tests `drawn_participants` omitting `ORGANIZER` when no participant holds owner role, `read_alert` with `RELATED=START`/`END`/`INVALID`, `maps_recurrence_override` with boolean vs non-boolean `excluded`, `time_zone_definition` lookup, `modified_instance` struct field inheritance (`uid`, `description`, `status`, `show_without_time`), `parse_ical` `Trailing` and `Mismatched` errors, multi-line `unfold` with CRLF/spaces/tabs, `stated_zones` with IANA timezone and `X-LIC-LOCATION`, `read_definition` ignoring empty `VTIMEZONE`s with zero observances, invented keys deduplication for conferences and links, all-day events with single-part time RRULEs, override empty duration handling, subsecond `DTSTART` precision, and proleptic Gregorian calendar leap-century roundtrips in years 1900, 2000, 2100, 2400.
+    - `timezone_advanced_transition_permutations_and_boundary_fidelity`: tests `Day::named` rejection of `BYMONTHDAY=0`, precise `RDATE` onset boundaries, positive nth weekdays (`2SU`, `3TH`), negative nth weekdays (`-2SA`, `-3TU`) with boundary offsets (`+23:00`, `+05:59`), fractional minute offsets (`+05:30`), multi-digit `NDay` ordinals (`+10MO`, `-12FR`), and unresolvable `UNTIL` fallback formatting (`format!("{local}Z")`).
+  - Total tests in `jmap-ical` increased to 294 unit/roundtrip tests + 8 hostile input tests.
+- **Deliberately left equivalent mutants:**
+  - `crates/jmap-ical/src/zone.rs:76:75`: `>` with `>=` in `offset_at` (tie-breaking between concurrent observances on the exact same second).
+  - `crates/jmap-ical/src/zone.rs:79:55`: `<` with `<=` in `offset_at` (tie-breaking between concurrent initial observance onsets).
+- **Calcard behaviour-difference findings:** None.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+
 
