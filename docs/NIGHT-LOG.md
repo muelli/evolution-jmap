@@ -36612,3 +36612,36 @@ unavailable on this VM, so `ci/checks.sh` itself was not run — its
 constituent checks were run individually as above, per the standing
 workaround. Disk at 7.7G free after the sweep — did not hit the standing
 "No space left on device" wall this session.
+
+## 2026-08-19 (claim) — Claiming Track A4 (remainder): proptest fuzzing of `jmap-client`'s untrusted-server URL handling
+
+Fresh survey: all milestones COMPLETE; CURRENT PRIORITY's one open thread
+(SRV autodiscovery) is down to the `g_resolver_lookup_service()`-backed real
+`Resolver` (FFI, standing escalation candidate). Round 2's lead-order Track D
+item (D1's EDS-vtable wiring) is the same GObject-vtable-FFI category. Track
+E and Track B are NEEDS-DECISION. UNSAFE-AUDIT (A6) is down to Pattern C
+(refcount reasoning, escalation-worthy) and Pattern E (explicitly "fold into
+other work"). The last session's own log entry named the exact next
+increment: A4's still-open half — hostile session URLs into `jmap-client`.
+
+Traced the two functions every server-controlled session URL passes through:
+`jmap-client/src/url.rs`'s `rebase_origin` (rewrites `apiUrl`/`downloadUrl`/
+`uploadUrl`/`eventSourceUrl` when `JMAP_LIVE_SERVER_REBASE_URLS`/
+`rebase_urls_to_origin` is set — see `client.rs:236-240`) and
+`encode_template_value` (substitutes `blobId`/`accountId`/`name` into the
+`downloadUrl`/`uploadUrl` templates). Both are pure `&str` transforms, no
+FFI, `pub(crate)` — a proptest harness for them is Sonnet-sized, unlike the
+GResolver/FFI items above. Both already looked panic-safe by inspection
+(prior sessions' notes on `rebase_origin`; `encode_template_value` delegates
+to `percent_encoding::utf8_percent_encode`, a maintained crate), so per A3/A4
+precedent this is expected to land as a regression net, not a bug hunt —
+proving the claim with generated hostile input rather than resting on
+inspection.
+
+Since both functions are `pub(crate)`, the harness has to live inside
+`jmap-client/src/url.rs`'s own `#[cfg(test)]` module (a `tests/` integration
+binary cannot see `pub(crate)` items), using `proptest!` over an unconstrained
+`.*` string strategy for both the URL/origin arguments and the template
+value — arbitrary Unicode, not just ASCII attack strings.
+
+Claiming this increment now.
