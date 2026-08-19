@@ -84,7 +84,7 @@
 //! [`Fanout::is_obsolete`]: jmap_collection_sync::Fanout::is_obsolete
 
 use eds_sys::ESource;
-use gobject_sys::g_object_unref;
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::source;
 use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Fanout, Setting};
@@ -240,10 +240,9 @@ pub unsafe fn apply_fanout<C: Collection + ?Sized>(
     // valid source this scope holds a reference to.
     report.not_removed = unsafe { remove_obsolete(fanout, &existing) };
     for source in existing {
-        if !source.is_null() {
-            // SAFETY: the reference `existing_children` handed over.
-            unsafe { g_object_unref(source.cast()) };
-        }
+        // SAFETY: the reference `existing_children` handed over, released as
+        // this drops.
+        drop(unsafe { Owned::<ESource>::from_raw(source) });
     }
 
     report
@@ -268,34 +267,30 @@ pub unsafe fn adopt<C: Collection + ?Sized>(
     resource_id: &str,
     settings: &[Setting],
 ) -> Adopted {
-    let source = collection.new_child(resource_id);
-    if source.is_null() {
+    // SAFETY: `new_child` is `(transfer full)`; the reference `Owned` takes here
+    // is released at the end of this function whichever path is taken below —
+    // an exported child is held by the registry server's own reference, and an
+    // abandoned one is held by nothing and should be.
+    let Some(source) = (unsafe { Owned::<ESource>::from_raw(collection.new_child(resource_id)) })
+    else {
         return Adopted::Uncreated;
-    }
+    };
 
     // Asked before the write, so that the answer is about the source EDS handed
     // over rather than about one this code has already changed.
-    let is_new = collection.is_new_child(source);
+    let is_new = collection.is_new_child(source.as_ptr());
 
     // SAFETY: a non-NULL source EDS created or drew from its cache, alive for
     // as long as this scope's reference to it.
-    let written = unsafe { apply(source, settings) };
+    let written = unsafe { apply(source.as_ptr(), settings) };
 
-    let adopted = match written {
+    match written {
         Ok(()) => {
             if is_new {
-                collection.publish(source);
+                collection.publish(source.as_ptr());
             }
             Adopted::Written { published: is_new }
         }
         Err(setting) => Adopted::Abandoned(setting),
-    };
-
-    // The reference `new_child` transferred. Dropped whatever happened: an
-    // exported child is held by the registry server, and an abandoned one is
-    // held by nothing and should be.
-    // SAFETY: the reference handed over by `new_child`, not used again.
-    unsafe { g_object_unref(source.cast()) };
-
-    adopted
+    }
 }

@@ -105,11 +105,11 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, g_error_free};
-use gobject_sys::g_object_unref;
 use jmap_backend_core::connect::Collection;
 use jmap_backend_core::error::{cstring_lossy, invalid_arg_gerror, to_gerror};
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{password as password_of, read_string};
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::source::{self, ConnectTarget};
 use jmap_backend_core::trampoline::log_critical;
 use jmap_client::Credentials;
@@ -392,23 +392,21 @@ pub unsafe fn stored_password_of(
 
     // SAFETY: a valid registry server; the provider comes back `(transfer
     // full)`.
-    let provider = unsafe { e_source_registry_server_ref_credentials_provider(server) };
-    if provider.is_null() {
+    let provider = unsafe {
+        Owned::<ESourceCredentialsProvider>::from_raw(
+            e_source_registry_server_ref_credentials_provider(server),
+        )
+    };
+    let Some(provider) = provider else {
         log_critical(&format!(
             "{context}: the registry server has no credentials provider"
         ));
         return None;
-    }
+    };
 
     // SAFETY: a live provider, a valid source and a cancellable satisfying this
     // function's contract.
-    let password = unsafe { lookup_password(provider, source, cancellable, context) };
-
-    // SAFETY: the reference `ref_credentials_provider` handed over, not used
-    // again.
-    unsafe { g_object_unref(provider.cast()) };
-
-    password
+    unsafe { lookup_password(provider.as_ptr(), source, cancellable, context) }
 }
 
 /// One `e_source_credentials_provider_lookup_sync`, with both things it hands

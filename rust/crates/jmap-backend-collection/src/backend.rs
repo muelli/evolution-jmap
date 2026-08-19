@@ -24,23 +24,25 @@ use std::ffi::CString;
 use eds_sys::{
     E_SOURCE_AUTHENTICATION_ERROR, E_SOURCE_CREDENTIALS_REASON_REQUIRED, EBackend,
     ECollectionBackend, ECollectionBackendClass, ENamedParameters, ESource,
-    ESourceAuthenticationResult, e_backend_get_source, e_backend_schedule_authenticate,
-    e_backend_schedule_credentials_required, e_collection_backend_claim_all_resources,
-    e_collection_backend_freeze_populate, e_collection_backend_get_cache_dir,
-    e_collection_backend_get_type, e_collection_backend_is_new_source,
-    e_collection_backend_list_calendar_sources, e_collection_backend_list_contacts_sources,
-    e_collection_backend_new_child, e_collection_backend_ref_server,
-    e_collection_backend_thaw_populate, e_server_side_source_set_remote_creatable,
-    e_source_get_uid, e_source_registry_debug_print, e_source_registry_server_add_source,
+    ESourceAuthenticationResult, ESourceRegistryServer, e_backend_get_source,
+    e_backend_schedule_authenticate, e_backend_schedule_credentials_required,
+    e_collection_backend_claim_all_resources, e_collection_backend_freeze_populate,
+    e_collection_backend_get_cache_dir, e_collection_backend_get_type,
+    e_collection_backend_is_new_source, e_collection_backend_list_calendar_sources,
+    e_collection_backend_list_contacts_sources, e_collection_backend_new_child,
+    e_collection_backend_ref_server, e_collection_backend_thaw_populate,
+    e_server_side_source_set_remote_creatable, e_source_get_uid, e_source_registry_debug_print,
+    e_source_registry_server_add_source,
 };
 use gio_sys::{GCancellable, GTlsCertificateFlags};
 use glib_sys::{GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar};
-use gobject_sys::{g_object_unref, g_type_class_peek};
+use gobject_sys::g_type_class_peek;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, fail_bool, fail_invalid};
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::{dup_string, read_string};
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, guard_bool, guard_value, log_critical};
 use jmap_collection_sync::Parts;
@@ -644,15 +646,13 @@ unsafe fn login_for(
     context: &str,
 ) -> Result<Login, crate::authenticate::LoginError> {
     // SAFETY: a valid backend by this function's contract; the server comes back
-    // `(transfer full)` and is released before it goes out of scope.
+    // `(transfer full)` and is dropped, releasing the reference, before it goes
+    // out of scope.
     let password = unsafe {
-        let server = e_collection_backend_ref_server(backend);
-        let password = stored_password_of(server, account, cancellable, context);
-        if !server.is_null() {
-            // SAFETY: the reference `ref_server` handed over, not used again.
-            g_object_unref(server.cast());
-        }
-        password
+        let server =
+            Owned::<ESourceRegistryServer>::from_raw(e_collection_backend_ref_server(backend));
+        let server_ptr = server.as_ref().map_or(ptr::null_mut(), Owned::as_ptr);
+        stored_password_of(server_ptr, account, cancellable, context)
     };
 
     // SAFETY: a valid account source and a cancellable that satisfies
@@ -719,19 +719,19 @@ impl Live {
     /// shutdown, say — and then there is nothing to export to.
     fn export(&self, child: *mut ESource, context: &str) {
         // SAFETY: a valid backend; the server comes back `(transfer full)`.
-        let server = unsafe { e_collection_backend_ref_server(self.0) };
-        if server.is_null() {
+        let server = unsafe {
+            Owned::<ESourceRegistryServer>::from_raw(e_collection_backend_ref_server(self.0))
+        };
+        let Some(server) = server else {
             log_critical(&format!(
                 "{context}: the registry server is gone; a child stays unexported"
             ));
             return;
-        }
+        };
 
         // SAFETY: a live registry server and a live child source; the call takes
         // a reference of its own if it keeps the source.
-        unsafe { e_source_registry_server_add_source(server, child) };
-        // SAFETY: the reference `ref_server` handed over, not used again.
-        unsafe { g_object_unref(server.cast()) };
+        unsafe { e_source_registry_server_add_source(server.as_ptr(), child) };
     }
 }
 

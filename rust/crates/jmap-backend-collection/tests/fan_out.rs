@@ -24,7 +24,7 @@ use eds_sys::{
     e_source_has_extension, e_source_new_with_uid,
 };
 use glib_sys::GFALSE;
-use gobject_sys::{g_object_ref, g_object_unref};
+use gobject_sys::{GObject, g_object_ref, g_object_unref};
 use jmap_backend_collection::authenticate::Login;
 use jmap_backend_collection::collection_source::Server;
 use jmap_backend_collection::fan_out::{Adopted, Populated, adopt, apply_fanout, fan_out};
@@ -58,6 +58,14 @@ impl Source {
     fn dup(&self) -> *mut ESource {
         // SAFETY: a live GObject this test holds a reference to.
         unsafe { g_object_ref(self.0.cast()) }.cast()
+    }
+
+    /// The GObject reference count, which is how a reference `adopt` took but
+    /// did not give back — or gave back twice — becomes an assertion rather
+    /// than a leak or a use-after-free nobody notices.
+    fn ref_count(&self) -> u32 {
+        // SAFETY: a live GObject; `ref_count` is a field of the instance struct.
+        unsafe { (*self.0.cast::<GObject>()).ref_count }
     }
 }
 
@@ -456,6 +464,57 @@ fn nothing_is_exported_before_all_of_it_is_written() {
     assert!(
         collection.published.borrow().is_empty(),
         "a half-written child was exported"
+    );
+}
+
+#[test]
+fn adopt_releases_exactly_the_reference_new_child_handed_over() {
+    // `e_collection_backend_new_child` is `(transfer full)`: a reference
+    // `adopt` keeps past its own return leaks the source for the life of the
+    // account, and one it releases twice frees a source that is still held —
+    // by the registry server, for a newly created and exported child, or by
+    // this collection's own cache, for one drawn from it.
+    //
+    // No settings are written here (`&[]`): writing even one creates the EDS
+    // extension that holds it, and that extension takes a reference of its
+    // own on the source — a real, permanent reference, but EDS's, not one
+    // `adopt`'s own transfer-full contract is answerable for. An empty
+    // settings list isolates the one reference this test is about.
+    let cached_id = ChildKind::AddressBook.resource_id(&Id::new("AB1"));
+    let new_id = ChildKind::AddressBook.resource_id(&Id::new("AB2"));
+    let collection = Collection {
+        cached: vec![(cached_id.clone(), Source::new("jmap-cached"))],
+        ..Collection::default()
+    };
+
+    // SAFETY: the collection satisfies the trait's contract.
+    let cached_adopted = unsafe { adopt(&collection, &cached_id, &[]) };
+    assert_eq!(cached_adopted, Adopted::Written { published: false });
+    let (_, source) = collection
+        .cached
+        .iter()
+        .find(|(id, _)| *id == cached_id)
+        .expect("the cached child is still in the fixture");
+    assert_eq!(
+        source.ref_count(),
+        1,
+        "a child drawn from the cache kept the reference `new_child` handed over, \
+         or lost its own"
+    );
+
+    // SAFETY: as above.
+    let new_adopted = unsafe { adopt(&collection, &new_id, &[]) };
+    assert_eq!(new_adopted, Adopted::Written { published: true });
+    let created = collection.created.borrow();
+    let (_, source) = created
+        .iter()
+        .find(|(id, _)| *id == new_id)
+        .expect("AB2 was created");
+    assert_eq!(
+        source.ref_count(),
+        1,
+        "a newly created, exported child kept the reference `new_child` handed over, \
+         or lost its own"
     );
 }
 
