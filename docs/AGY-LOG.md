@@ -320,6 +320,26 @@ Running record of headless polish increments on the `antigravity` branch.
   3. `calcard`'s parser losslessly unfolds both CRLF + space (`\r\n `) and CRLF + tab (`\r\n\t`), stripping the CRLF and the first whitespace continuation character while preserving any subsequent whitespace characters as part of the field data.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — Value escaping (RFC 2426 §2) & fixed-point convergence (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 2. Value escaping (RFC 2426 §2): `\n`, `\,`, `\;`, `\\` in text values must escape on write and unescape on read with no loss and no double-escaping; test `NOTE` containing all four, comma inside `ORG` unit, and semicolon inside `ADR` component; assert fixed-point convergence.
+- **Changes:**
+  - Added comprehensive characterization, boundary, and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `rfc2426_value_escaping_note_with_all_four_special_characters_roundtrip`: tests a `NOTE` containing all four special characters (`\n`, `\,`, `\;`, `\\`) and literal escape sequences (`\\n`, `\\,`, `\\;`, `\\\\`), verifying wire format serialization, exact unescaped string parsing, and fixed-point stability across multiple successive roundtrips (`vcard3 == vcard`).
+    - `rfc2426_value_escaping_comma_inside_org_unit_roundtrip`: tests structured `ORG` properties containing commas in employer name (`"Acme, Inc."` -> `Acme\, Inc.`) and units (`"Research, Development & Innovation"`, `"Optics, Lasers & Sensors"`), semicolons in units (`"Hardware; Systems Division"` -> `Hardware\; Systems Division`), and backslashes/newlines, confirming that semicolons delimit organizational units without splitting on escaped semicolons/commas; tests nameless organizations (`ORG:;Engineering, Core Team;Architecture\; Infrastructure`) retaining the leading positional semicolon.
+    - `rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip`: tests all 7 structured RFC 2426 §3.2.1 `ADR` components (`postOfficeBox`, `apartment`, `name`, `locality`, `region`, `postcode`, `country`) and paired `LABEL` containing embedded semicolons (`\;`), commas (`\,`), backslashes (`\\`), and newlines (`\n`), verifying that semicolons inside components do not shift subsequent components into wrong positional slots and reach fixed-point stability.
+    - `rfc2426_value_escaping_across_all_vcard_properties_roundtrip`: tests delimiter and backslash escaping across all mapped properties (`FN`, structured `N`, `NICKNAME`, `TITLE`, `ROLE`, `X-EVOLUTION-SPOUSE`, `CATEGORIES`, `TEL`, `EMAIL`, `URL`).
+    - `rfc2426_value_escaping_no_double_escaping_multiroundtrip`: performs 3 sequential serialization/deserialization passes on text with mixed literal escapes and backslashes, asserting that backslashes never accumulate or double-escape (`\\` remains `\\`).
+    - `rfc2426_inbound_unescaping_variants_and_boundary_cases`: tests inbound vCard parsing with uppercase `\N` (RFC 2426 §2.4.2), trailing backslashes, consecutive backslashes (`\\\\` -> `\\`), and escaped backslashes preceding delimiters (`\\;` -> `\;`).
+  - Added property test `prop_value_escaping_never_double_escapes_or_loses_characters` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` asserting 100% lossless text recovery and fixed-point convergence under randomized escape sequence combinations.
+  - Updated Section 4.6 of `docs/VCARD-MAPPING.md` documenting RFC 2426 §2 value escaping and unescaping semantics, structured delimiter protection, and the no-double-escaping invariant.
+- **Calcard behaviour-difference findings:**
+  1. `calcard` automatically escapes commas (`,`), semicolons (`;`), newlines (`\n` and `\r`), and backslashes (`\`) on emission as `\,`, `\;`, `\n`, `\r`, `\\` according to property value types, and unescapes both lowercase `\n` and uppercase `\N` (RFC 2426 §2.4.2) on parsing.
+  2. `calcard` preserves carriage returns (`\r`) as `\r` rather than stripping them, enabling lossless CRLF text roundtrips.
+  3. `calcard` handles escaped backslashes preceding delimiters (`\\;`, `\\,`) cleanly without misinterpreting the backslash as escaping the delimiter.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+
 
 
 

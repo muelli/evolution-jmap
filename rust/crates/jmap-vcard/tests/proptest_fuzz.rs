@@ -635,4 +635,50 @@ proptest! {
             );
         }
     }
+
+    #[test]
+    fn prop_value_escaping_never_double_escapes_or_loses_characters(
+        prefix in "[a-zA-Z0-9 ]{0,10}",
+        escapes in prop::collection::vec(
+            prop_oneof![
+                Just("\n"),
+                Just("\r\n"),
+                Just(","),
+                Just(";"),
+                Just("\\"),
+                Just("\\n"),
+                Just("\\,"),
+                Just("\\;"),
+                Just("\\\\"),
+            ],
+            1..8,
+        ),
+        suffix in "[a-zA-Z0-9 ]{0,10}",
+    ) {
+        let text = format!("{prefix}{}{suffix}", escapes.join(""));
+        let mut notes = BTreeMap::new();
+        notes.insert(
+            "n1".to_owned(),
+            Note {
+                note: text.clone(),
+                extra: BTreeMap::new(),
+            },
+        );
+        let card = ContactCard {
+            id: Some("C-PROP-ESC".into()),
+            notes: Some(notes),
+            ..ContactCard::default()
+        };
+
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("parse emitted escaped vcard");
+        let parsed_note = &parsed1.notes.as_ref().unwrap()["n1"].note;
+        // Text must match original exactly (calcard preserves CRLF and escapes losslessly)
+        prop_assert_eq!(parsed_note, &text);
+
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip vcard");
+        let vcard3 = card_to_vcard(&parsed2);
+        prop_assert_eq!(vcard2, vcard3, "Escaped value must reach fixed point");
+    }
 }
