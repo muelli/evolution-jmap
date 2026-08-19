@@ -38844,3 +38844,98 @@ module already is. This does not by itself finish item 2(a) — the discovery/
 registration wiring itself (`config_lookup.rs`'s worker, `discover_and_
 register`) is unaffected and was already correct; this fixes the reason it
 was never being *reached* in a real Evolution install.
+
+## 2026-08-19 — Delivered: CURRENT PRIORITY item 2(a)'s missing `RUNPATH`, module now self-contained
+
+Followed through on this session's claim. `module-jmap-configuration.so`
+(built from the `jmap-config-module` cdylib crate) carried no `RUNPATH`/
+`RPATH` at all — confirmed with `readelf -d` against the built `.so` — unlike
+every real Evolution module in `/usr/lib/evolution/modules/*.so` (all of
+which carry `RUNPATH=/usr/lib/evolution`, the real `module-config-lookup.so`
+included). A bare `dlopen()` on the built module with `LD_LIBRARY_PATH`
+unset fails: `libevolution-mail.so.0: cannot open shared object file` —
+`/usr/lib/evolution` is in neither `ldconfig`'s cache nor any
+`/etc/ld.so.conf.d` entry, so nothing else makes it resolvable. That is a
+complete, headless explanation for the operator's "Look Up still returns
+imapx" symptom, with no live Evolution session needed to reach it: our
+config-lookup worker never registers with a real `EConfigLookup` because the
+module that would register it never successfully loads.
+
+**Root cause, traced to the crate split.** `jmap-config/build.rs` already
+solves exactly this class of problem — it reads `DEP_EVOLUTION_SHELL_LIBDIRS`
+(published by `evo-sys`'s `links = "evolution-shell"` key from the `-Wl,-R`
+already in `evolution-shell-3.0`/`evolution-mail-3.0`'s own `.pc` files) and
+emits `cargo:rustc-link-arg=-Wl,-rpath,<dir>`. But `rustc-link-arg` is scoped
+to the package whose build script emits it, and the actual installed cdylib
+is built by the separate `jmap-config-module` crate (`crate-type =
+["cdylib"]`, depending only on `jmap-config` + `gobject-sys`, no build
+script). So the fix reached `jmap-config`'s own test binaries — which is
+exactly why the functional-test harness needing a manual `LD_LIBRARY_PATH`
+looked like the unremarkable state of things — but never reached the module
+Evolution actually loads. `jmap-config`'s own build.rs comment even said "and
+for the module this crate will eventually be installed as", which was never
+true once the module got split into its own crate; corrected in place.
+
+**Fix.** `jmap-config-module` gained its own copy of the same build script
+(`rust/crates/jmap-config-module/build.rs`) plus an `evo-sys` dependency —
+metadata-only, since `DEP_EVOLUTION_SHELL_LIBDIRS` requires a direct
+(non-build) dependency on the `links`-owning crate, and this crate calls none
+of `evo-sys`'s bindings. Verified directly, not just by inference: post-fix,
+`readelf -d target/debug/libjmap_config_module.so` shows `RUNPATH=/usr/lib/
+evolution:...`, and a bare `dlopen()` with `LD_LIBRARY_PATH` unset now
+succeeds.
+
+**TDD, and the actual proof.** Red first: removed the `LD_LIBRARY_PATH`
+workaround from `jmap_functional::Session::stage_config_lookup_module` (in
+place since the 307th session, which found the symptom without tracing the
+cause) — `functional-config-lookup` then failed exactly the way the bare
+`dlopen` probe above did. Applied the fix; reran `cmake -S . -B build -G
+Ninja -DENABLE_FUNCTIONAL_TESTS=ON && ninja -C build && ctest --test-dir
+build -L functional`: **5/5 green**, `functional-config-lookup` included,
+with no `LD_LIBRARY_PATH` anywhere in the harness. That is the real proof —
+a passing test that still carried the workaround would not have
+distinguished "still broken, hidden by the env var" from "actually fixed".
+
+**Scope, stated plainly.** This closes the "does the module even load in a
+real Evolution install" half of item 2(a) — a genuine, previously-unnoticed
+bug, not a restatement of the known symptom. It does not close item 2(a) as
+a whole: whether `config_lookup.rs`'s `EConfigLookupWorker::run` then
+actually surfaces a JMAP result and runs `discover_and_register` against a
+real SRV-published provider (Fastmail) still needs the operator's live
+Evolution session, exactly as the roadmap text already said. `docs/
+ROADMAP.md`'s item 2(a) entry updated in place with a `FIXED` sub-entry
+rather than left to describe the pre-fix state.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked --
+-D warnings` (default-members) clean; `cargo clippy -p evolution-jmap-client
+-p jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config -p jmap-config-module -p
+jmap-functional --all-targets --locked -- -D warnings` clean (the seven
+EDS-gated crates plus the two this change actually touches). `cargo test
+--locked` per-crate for the touched/EDS-gated set: all green. `cargo test
+--locked --workspace --exclude example-module -- --skip
+prop_ical_roundtrip_reaches_fixed_point_stability` (the whole default-members
+tree in one pass): every suite green except the documented, pre-existing
+`jmap-functional` `JMAP_FUNCTIONAL_*_CLIENT`-unset failures (11 book, 5
+calendar, 1 config-lookup, 1 mail, 2 transport — same cause, same message
+every prior session's gate has logged; proven passing above via the real
+CTest run instead) and the one proptest case skipped by name.
+
+**Found on the way, not caused here, filed not fixed.** The same full-suite
+run tripped `evolution-jmap-ical`'s `prop_ical_roundtrip_reaches_fixed_point_
+stability` on a random seed — reproduces on unmodified `master` (stashed this
+change and reran), so unrelated. Same shape as the already-filed
+`jmap-vcard` fixed-point bug, different crate and property
+(`CATEGORIES:\ ` — a single-space category survives one emit, is read back
+as empty/absent, and the second emit drops the whole property). Logged in
+`docs/BACKLOG.md` with the minimal input; `.proptest-regressions` deliberately
+not committed, same reasoning as the `jmap-vcard` entry — a closed M4 backend,
+low severity, and committing the seed would turn an intermittent red into a
+permanent one for every lane's gate.
+
+`rust/Cargo.lock` gained one line (`evo-sys` as a dependency edge of
+`jmap-config-module`) — no new crate, `evo-sys` was already in the tree.
+Both new/changed Rust files carry SPDX `GPL-3.0-or-later` headers;
+`ci/checks.sh` still cannot run on this VM ([[checks-sh-blocked-on-vm]]).
+Disk stayed comfortable throughout (24G free before the session; watched,
+no `cargo clean` needed this time).

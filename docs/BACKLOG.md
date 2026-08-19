@@ -90,6 +90,21 @@ to polish a completed backend. A later hardening pass works through them.
 ## Calendar / iCal fidelity (M4 area, backend already works)
 - `UNTIL` values the parser itself refuses (invisible to `jmap-ical`).
 - Windows time-zone names (unsendable by design — confirm the refusal path).
+- **`jmap-ical` round trip is not a fixed point for a whitespace-only
+  `CATEGORIES` value (found 2026-08-19).** Same shape as the `jmap-vcard`
+  entry below, different crate: `evolution-jmap-ical/tests/proptest_fuzz.rs`'s
+  `prop_ical_roundtrip_reaches_fixed_point_stability` fails on a random seed —
+  reproduces on unmodified `master` (`ab35cde`), so not a regression from any
+  work in flight. Minimal input:
+  `BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCATEGORIES:\ \r\nEND:VEVENT\r\nEND:VCALENDAR\r\n`
+  (a `CATEGORIES` line whose sole category is a single space). First emit
+  keeps a `CATEGORIES: ` line with the space; parsing that and re-emitting
+  drops the property entirely — so the parse side treats the space-only
+  category as empty/absent while the first emit did not, and one round trip
+  too few hides it. Low severity (a closed M4 backend, costs a category no
+  one can see rather than a panic), so filed per the current ROADMAP
+  priority rather than fixed. `.proptest-regressions` deliberately not
+  committed, same reasoning as the `jmap-vcard` entry.
 - ~~`merge_units` degenerate case: a unit with an empty name is dropped.~~
   Fixed 2026-08-16 (`jmap-book-sync: keep an org unit the ORG line has no
   name to state`) — the work was finished and green before this file landed.

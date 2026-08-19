@@ -76,10 +76,34 @@ they close, prioritise in this order:
        wired to Look Up.) **First task: make the Look Up worker actually surface a
        JMAP result and run `discover_and_register` against the SRV-resolved host**
        — the same "imapx, not JMAP" symptom the operator hit, now that item 5's
-       SRV resolver exists to reach `api.fastmail.com`. Diagnose whether the
-       worker even runs in the installed Evolution (the module's transitive
-       `libevolution-mail.so` needs `LD_LIBRARY_PATH=/usr/lib/evolution`; the
-       307th session only hand-drove it under `dbus-run-session`).
+       SRV resolver exists to reach `api.fastmail.com`.
+       - **FIXED 2026-08-19 — one concrete cause found and closed, not merely
+         diagnosed.** `module-jmap-configuration.so` (`jmap-config-module`, a
+         cdylib crate) was missing the `RUNPATH`/`RPATH` every other Evolution
+         module carries: `jmap-config`'s own `build.rs` already turns
+         `evo-sys`'s published `DEP_EVOLUTION_SHELL_LIBDIRS` into
+         `-Wl,-rpath,/usr/lib/evolution`, but `cargo:rustc-link-arg` is
+         package-scoped and the installed cdylib is built by the separate
+         `jmap-config-module` crate, which had no build script of its own. So
+         the built module could not resolve its transitive
+         `libevolution-mail.so.0`/`libevolution-util.so.0` outside a process
+         that already had them loaded or `LD_LIBRARY_PATH` pointed at
+         `/usr/lib/evolution` — confirmed with a bare `dlopen()` and `readelf
+         -d` against the built `.so`, and against every real
+         `/usr/lib/evolution/modules/*.so` (all of which carry
+         `RUNPATH=/usr/lib/evolution`, `module-config-lookup.so` included) —
+         which is a complete, headless explanation for the module never
+         registering with a real `EConfigLookup`, no live Evolution session
+         needed to reach it. Gave `jmap-config-module` its own copy of that
+         build script (an `evo-sys` dependency for its metadata only). TDD:
+         removed the `LD_LIBRARY_PATH` workaround `jmap_functional::Session::
+         stage_config_lookup_module` had carried since the 307th session (red
+         — `functional-config-lookup` failed the same way the bare `dlopen`
+         probe did), then confirmed green without it. **Still open:** whether
+         `discover_and_register` actually runs and completes end to end
+         against a real SRV-published provider needs the operator's live
+         Evolution session, same as before — this closes the "does the module
+         even load" half, not the whole item.
      - **(b) The Fastmail-specific flow gaps, from `docs/OAUTH-FASTMAIL.md`:**
        `config_lookup::REDIRECT_URI = "jmap-oauth2:/redirect"` lacks the required
        dot (Fastmail needs a dotted reverse-DNS private-use scheme); use the
