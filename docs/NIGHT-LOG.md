@@ -36735,3 +36735,84 @@ standing rule). `rust/target` was at 13G; ran the standing `cargo clean
 workspace build is part of verifying this.
 
 Claiming this increment now.
+
+## 2026-08-19 — Delivered: Track C3, `debian/` packaging skeleton
+
+Followed through on this session's claim. Added `debian/control`,
+`debian/rules`, `debian/watch`, `debian/source/format`, and
+`debian/README.source`; `debian/changelog` and `debian/copyright` are
+symlinks to `docs/packaging/{changelog,copyright}` (already the right
+formats, already kept current by hand and by Track C2's generator
+respectively) rather than a third copy of either to keep in sync.
+
+`debian/rules` reuses the existing `cmake/{Rust,Backends,Packaging}.cmake`
+build rather than reinventing it: `override_dh_auto_configure` runs
+`cmake -G Ninja`, `override_dh_auto_build` runs `cmake --build`, and
+`override_dh_auto_install` loops `cmake --install --component` over the
+same five components `cmake/Packaging.cmake`'s `CPACK_COMPONENTS_ALL`
+names, for the same reason: `src/`'s demo C module has no `COMPONENT` of
+its own, so installing everything unfiltered would ship it. Kept `dh`'s
+sequencer (`%: dh $@`) rather than hand-rolling `binary`/`build`/`clean`
+targets, since compat 13 gets strip/compress/permissions/shlibdeps for
+free — the same things Track C1 had to earn one CPack variable at a time.
+
+**Verified, not just written:** `debhelper` is not in `ci/install-deps.sh`
+(Track C1's CPack `.deb` path never needed `dh`) and wasn't on this VM;
+installed it locally (`sudo apt-get install --no-install-recommends
+debhelper`) specifically to run this for real rather than trust it by
+inspection. First `dpkg-buildpackage -us -uc -b -d` run failed at
+`dh_shlibdeps`: `cannot find library libevolution-mail.so.0` /
+`libevolution-util.so.0` — the exact problem `cmake/Packaging.cmake`
+already solved for CPack via `CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS`
+(Evolution keeps its own libraries in `evolution-shell-3.0`'s private
+libdir, found only because the shell process that dlopens these modules
+has already loaded them itself — `dpkg-shlibdeps` doesn't know that).
+Same fix, dh-shaped: `override_dh_shlibdeps: dh_shlibdeps -a -- -l$(shell
+pkg-config --variable=privlibdir evolution-shell-3.0)`. Second run
+succeeded end to end: `../evolution-jmap_0.2.0_amd64.deb` built, and
+`lintian --pedantic` on it came back with **zero output** — clean, the
+same bar Track C1 already holds the CPack package to.
+
+**Explicitly not solved, and said so in `debian/README.source` (mirroring
+Track C2's copyright-file note of the identical problem from the other
+direction):** the build above only worked because `~/.cargo/registry`
+already holds all ~140 crates in `rust/Cargo.lock` from ordinary
+`cargo build`/`cargo test` use on this VM. A real Debian buildd has no
+network and no such warm cache, so a `.dsc` built from this skeleton would
+fail at the first `cargo build` invocation on an official builder. Two real
+paths forward are on record in `debian/README.source`, neither attempted
+here (real effort, and arguably a maintainer call on which): (a) `cargo
+vendor` the dependency graph into the source package (`orig.tar` + `dh-cargo`
+checksums — the common pattern for Rust "leaf" packages already in Debian),
+or (b) `debcargo`-generate a `librust-*-dev` binary package per dependency,
+official policy's preferred shape but a large ongoing undertaking against a
+graph that shifts on every `cargo update`. Also flagged as unverified:
+`debian/watch` follows the standard GitHub-tags convention against the real
+`v0.1.0`/`v0.2.0` tags, but `uscan`/`devscripts` aren't installed here, so
+it has never actually run; `dh_auto_test` is a deliberate no-op (comment in
+`debian/rules` explains why — same crates.io-access reasoning, and the
+suite already runs via `ci/checks.sh`/CTest against this exact source).
+
+`.gitignore` gained the dh/dpkg build-product paths (`/obj-debian/`,
+`/debian/evolution-jmap/`, `/debian/.debhelper/`, etc.) so a local
+`dpkg-buildpackage` run doesn't leave build products for `git status` to
+notice. `REUSE.toml` gained `debian/**` in the existing "files that don't
+carry recognized comment headers" aggregate block: `control`/`rules`/
+`watch` do carry `#`-comment SPDX headers, but reuse's comment-style lookup
+keys off filename/extension and none of these extensionless
+Debian-packaging names are in its built-in table; `changelog`/`copyright`
+are symlinks that need their own annotated path even though their targets
+are already covered under `docs/**`; `source/format`'s content is fixed by
+dpkg-source's own format string, with no room for a comment at all.
+`reuse`/`pipx`/`uvx` remain unavailable on this VM (standing limitation),
+so this reasoning is by inspection of REUSE.toml's existing pattern for the
+same problem (`docs/**`'s own comment explains it identically), not a
+lint run.
+
+`rust/target` was cleaned to 91M by `dh_clean` (dpkg-buildpackage's own
+Cargo target dir lives under the now-removed `obj-debian/`, not
+`rust/target/`), so this session never touched the standing
+disk-fills-from-cargo-target problem. No Rust source changed this session
+(packaging files only), so the full Rust gate was not re-run in full;
+`cargo fmt --check` (fast, and the thing most likely to catch an
+accidental edit) stayed clean as a sanity check.

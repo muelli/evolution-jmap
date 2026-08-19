@@ -359,6 +359,49 @@ tracks follow; the maintainer may reorder anytime.
   cmake/cargo build, watch file) so a Debian packager starts from a working tree.
   Document the Rust-in-Debian reality (dh-cargo wants every crate dep packaged /
   vendored) rather than pretend it away.
+  - **DONE 2026-08-19 (skeleton only — not upload-ready, see below)** —
+    `debian/control` (Build-Depends mirroring `ci/install-deps.sh` plus
+    `debhelper-compat (= 13)`/`cargo`/`rustc`), `debian/rules` (dh over the
+    existing `cmake/{Rust,Backends,Packaging}.cmake` tree, `-G Ninja`, an
+    `override_dh_auto_install` looping `cmake --install --component` over
+    the same five components Track C1's CPack path names, so the demo
+    `src/` module stays excluded the same way), `debian/watch` (GitHub tags,
+    matching the `vX.Y.Z` tags already pushed), `debian/source/format`
+    (`3.0 (quilt)`, empty patch queue), and `debian/README.source`.
+    `debian/changelog`/`debian/copyright` are symlinks to
+    `docs/packaging/{changelog,copyright}` rather than second copies, since
+    those are already in the right formats and already kept current (by
+    hand, and by Track C2's generator, respectively). Verified for real,
+    not just written: installed `debhelper` locally (`ci/install-deps.sh`
+    never needed it — Track C1's CPack path doesn't use `dh`) and ran
+    `dpkg-buildpackage -us -uc -b -d` end to end; needed one fix
+    `dh_shlibdeps` doesn't get for free — Evolution's private libdir
+    (`pkg-config --variable=privlibdir evolution-shell-3.0`), the same one
+    `cmake/Packaging.cmake` already passes to CPack's `dpkg-shlibdeps` —
+    passed via an `override_dh_shlibdeps`. Resulting `.deb`: `lintian
+    --pedantic` clean, same standard as Track C1's package.
+    **Explicitly not solved, and said so in `debian/README.source`:** the
+    build only succeeds because `~/.cargo/registry` already holds the ~140
+    crates from ordinary `cargo build`/`cargo test` use on this VM — a real
+    Debian buildd has no network and no such cache, so this is a stress-free
+    local demo of the skeleton, not proof it survives an official build.
+    Two ways to actually close that gap are recorded in
+    `debian/README.source` (mirroring Track C2's own copyright-file note of
+    the identical problem, since it's the same missing vendoring
+    decision from both directions): `cargo vendor` into the source package,
+    or `debcargo`-generated `librust-*-dev` packages per dependency —
+    neither attempted here, a maintainer call plus real effort either way.
+    `debian/watch` is unverified against the live GitHub tags page (no
+    `uscan`/`devscripts` on this VM). `dh_auto_test` is a deliberate no-op
+    (same crates.io-access reasoning; the Rust suite already runs via
+    `ci/checks.sh`/CTest against this exact source). `.gitignore` gained the
+    dh/dpkg build-product entries (`/obj-debian/`, `/debian/evolution-jmap/`,
+    etc.) and `REUSE.toml` a `debian/**` entry — `control`/`rules`/`watch`
+    carry in-file SPDX headers already, but reuse's comment-style lookup is
+    by filename/extension and none of these extensionless Debian-packaging
+    names are in its recognized list; `changelog`/`copyright` are symlinks
+    needing their own annotated path; `source/format`'s content is fixed by
+    dpkg-source's own format string, leaving no room for a comment.
 - **C4 NEEDS-DECISION (maintainer/social):** filing an ITP and uploading to
   Debian proper is a human process, not agent work. Flagged only.
 
