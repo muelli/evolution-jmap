@@ -38432,3 +38432,12 @@ in `jmap-backend-cal` (invoked from `jmap-cal-sync`) plus a
 `Client::get_availability`/`Principal/query` (attendee→principal) already
 landed from the mock-side slice. Build and test against `jmap-mockd` — it is
 fully headless-testable that way; only the vfunc registration itself is FFI.
+
+## 2026-08-19 (claim) — Track E Path A: `get_free_busy_sync` vfunc + `BusyPeriod → VFREEBUSY`
+
+Claiming the last piece of Track E Path A, on opus per the escalation at
+`6ba07a9`: the `ECalBackendSync::get_free_busy_sync` vfunc in
+`jmap-backend-cal`, a `BusyPeriod → VFREEBUSY` marshaller in `jmap-ical`, and
+the `jmap-cal-sync` free/busy call that joins them (attendee address →
+`Principal/query` → `Client::get_availability`). Mock-first TDD against
+`jmap-mockd`; only the vtable slot itself is untestable headlessly.
