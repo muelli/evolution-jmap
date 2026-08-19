@@ -35043,3 +35043,27 @@ OAuth2 issuer mismatch, EDS 3.60+ mapping decisions). ROADMAP's "Lead order"
 note said the Claude lane leads Round 2 once M10's 3 tests and this win both
 land — M10 is still open (needs a CI dispatch this runner cannot trigger), so
 Round 2 is not yet unlocked by this session's work alone.
+
+## 2026-08-19 (claim) — Claiming ROADMAP priority item 5: JMAP SRV autodiscovery, client-side seam
+
+Fresh survey: M10's 3 newer-EDS assertions need a CI dispatch this runner
+cannot trigger (unchanged, still off the table). Real-server readiness's two
+named items are maintainer-gated. Round 2 (Track D/E, Track A audits) is not
+yet unlocked per the maintainer's own "Lead order" note, since M10 is still
+open. That leaves ROADMAP priority item 5 — JMAP SRV autodiscovery — marked
+"CLAIMABLE NOW" and unblocked: confirmed by grep that no `_jmap._tcp`/SRV
+support exists anywhere in `rust/` yet.
+
+Scoping this session's increment: the item's own design note says the real
+fix needs a `Resolver` trait seam in `jmap-client` (pure crate, kept
+dependency-lean — no DNS crate) plus an EDS-side implementation backed by
+`g_resolver_lookup_service()` (FFI, in `eds-sys`/the EDS integration crates),
+and explicitly says "reasonable to escalate if the `Resolver` seam or the
+GResolver binding proves gnarly." Splitting it: this increment builds and
+TDD-tests the `Resolver` trait seam and the SRV-vs-bare-domain decision in
+`jmap-client` only (pure Rust, no unsafe, fully mock/fake-testable) — the
+part squarely in Sonnet's reach. Wiring a real `GResolver`-backed resolver
+into the EDS-facing crates (`jmap-config`/`jmap-backend-core`, touching
+`config_lookup.rs::probe_host` and the password-path connect flow) is left
+for a follow-up session once this seam exists to wire into; noted below
+rather than attempted in the same increment as the FFI work.
