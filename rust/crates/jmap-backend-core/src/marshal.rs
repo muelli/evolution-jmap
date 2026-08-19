@@ -29,7 +29,8 @@ use eds_sys::{
     E_SOURCE_CREDENTIAL_PASSWORD, ENamedParameters, ESource, e_named_parameters_get,
     e_source_get_extension, e_source_has_extension,
 };
-use glib_sys::{GFALSE, GSList, g_strdup, gchar};
+use glib_sys::{GFALSE, GSList, GType, g_strdup, gchar};
+use gobject_sys::g_type_check_instance_is_a;
 
 use crate::error::cstring_lossy;
 
@@ -113,6 +114,48 @@ pub unsafe fn dup_string(value: &str) -> *mut gchar {
 pub unsafe fn dispatched_borrow<'a, C, T>(ptr: *mut C) -> Option<&'a T> {
     // SAFETY: the caller's contract is exactly what makes this cast sound.
     unsafe { ptr.cast::<T>().as_ref() }
+}
+
+/// The Rust view of a GObject instance that arrived via an ordinary property
+/// or argument rather than vfunc dispatch — so, unlike [`dispatched_borrow`],
+/// the class dispatch guarantee does not hold and `gtype` must be checked
+/// before the cast is sound.
+///
+/// # Safety
+///
+/// `ptr` must be NULL or point at a live `GTypeInstance`.
+pub unsafe fn checked_borrow<'a, C, T>(ptr: *mut C, gtype: GType) -> Option<&'a T> {
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: `ptr` is a live `GTypeInstance` by the caller's contract; the
+    // type check just performed is what makes the cast below sound.
+    unsafe {
+        if g_type_check_instance_is_a(ptr.cast(), gtype) == GFALSE {
+            return None;
+        }
+        ptr.cast::<T>().as_ref()
+    }
+}
+
+/// As [`checked_borrow`], but returns the raw pointer rather than a borrow —
+/// for callers where `T` is a foreign C type this crate only forwards to
+/// further C calls, not a Rust struct it can safely hand out a reference to.
+///
+/// # Safety
+///
+/// `ptr` must be NULL or point at a live `GTypeInstance`.
+pub unsafe fn checked_borrow_ptr<C, T>(ptr: *mut C, gtype: GType) -> Option<*mut T> {
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: see `checked_borrow`.
+    unsafe {
+        if g_type_check_instance_is_a(ptr.cast(), gtype) == GFALSE {
+            return None;
+        }
+        Some(ptr.cast::<T>())
+    }
 }
 
 /// Reads `source`'s extension named `name`, without creating it if absent.

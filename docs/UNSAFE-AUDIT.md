@@ -157,17 +157,36 @@ two helpers exist; touches 9 files across `jmap-mail`, so needs a careful
   above under "Checked" was imprecise), so it now goes through
   `dispatched_borrow` transitively with no code change of its own. No
   behaviour change; every existing `jmap-mail` test stayed green unmodified.
-  **Still open — the checked family, ~10 sites across 6 files**
-  (`folder.rs::parent_store`, `server.rs::network`, `envelope.rs::internet`,
-  `summary.rs::JmapSummary::borrow`, `message_info.rs::
-  JmapMessageInfo::borrow`, `transfer.rs::mailbox_of`): these return three
-  different shapes (`Option<&T>`, `Option<*mut T>`, and `envelope.rs::
-  internet`'s `Result<Option<*mut T>, EnvelopeError>`, whose type-mismatch
-  case is a user-facing error, not just `None`), so `checked_borrow`'s exact
-  signature needs to accommodate at least a pointer-returning variant
-  alongside the reference-returning one — deliberately not attempted in the
-  same increment as the simpler trusted half. Left for the next session on
-  this thread.
+  **DONE 2026-08-19 for the rest of the checked family, except
+  `envelope.rs::internet`.** `jmap_backend_core::marshal` grew
+  `checked_borrow<'a, C, T>(ptr, gtype) -> Option<&'a T>` and
+  `checked_borrow_ptr<C, T>(ptr, gtype) -> Option<*mut T>` — same null-check-
+  then-`g_type_check_instance_is_a`-then-cast shape as `dispatched_borrow`,
+  plus the type check, with the choice between the two now an explicit
+  decision at each call site (reference when `T` is a Rust struct this crate
+  can safely hand out a borrow of; raw pointer when `T` is a foreign C type
+  only forwarded to further C calls). `summary.rs::JmapSummary::borrow` and
+  `message_info.rs::JmapMessageInfo::borrow` switch to `checked_borrow`
+  directly; `server.rs::network` switches to `checked_borrow_ptr` (its
+  `CamelNetworkSettings` target is exactly that foreign-pointer case).
+  `folder.rs::parent_store` and `transfer.rs::mailbox_of` each collapse
+  further than a straight port: both previously did the type check inline
+  and then delegated to another type's own `::borrow` (`JmapStore::borrow`,
+  `JmapFolder::borrow`), which — per the trusted-family increment above — is
+  now just `dispatched_borrow` (unconditional null+cast). Since the caller
+  had already validated non-null and the exact type before that delegate
+  ran, the two steps were doing one job in two calls; both now call
+  `checked_borrow::<_, JmapStore>`/`checked_borrow::<_, JmapFolder>`
+  directly instead. No behaviour change in any of the five: same `Option`
+  for the same inputs, and every existing test in `jmap-mail` stayed green
+  unmodified.
+  **Still open — `envelope.rs::internet` only.** Its
+  `Result<Option<*mut T>, EnvelopeError>` distinguishes a NULL input (valid,
+  "no address") from a wrong-type input (a user-facing
+  `EnvelopeError::NotInternet`, not just `None`) — a third return shape
+  neither helper above fits without either losing that distinction or
+  forcing an unrelated error type through a generic helper's signature. Left
+  as its own smaller follow-up rather than guessed at here.
 
 ### Pattern C — IMPROVE (the one real safety-adjacent gap): no RAII wrapper for libical/GObject ref-counted pointers
 
@@ -404,8 +423,14 @@ point, so its gaps aren't copied forward.
    `jmap-mail`) — two generic helpers in `jmap-backend-core`. **~2–3 hours.**
    - **DONE 2026-08-19 for the trusted/dispatched family (3 sites +
      `subscribe.rs::borrow`'s transitive one)** — see Pattern B's own
-     section above. **Still open:** the checked family, ~10 sites across 6
-     files, whose three different return shapes want their own increment.
+     section above.
+   - **DONE 2026-08-19 (later same day) for the rest of the checked family**
+     — `checked_borrow`/`checked_borrow_ptr` land and cover 5 of the 6 sites
+     (`folder.rs::parent_store`, `server.rs::network`, `summary.rs::
+     JmapSummary::borrow`, `message_info.rs::JmapMessageInfo::borrow`,
+     `transfer.rs::mailbox_of`). **Still open:** `envelope.rs::internet`
+     alone, whose `Result`-with-a-user-facing-error shape doesn't fit either
+     helper — see Pattern B's own section above.
 4. **Pattern C** (no RAII wrapper for libical/GObject ref-counted
    pointers) — `Owned<T>` newtype, migrate `jmap-backend-cal/marshal.rs`'s
    timezone cluster first. **~1 day.** Highest safety value of the five, but

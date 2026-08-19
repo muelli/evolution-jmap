@@ -69,10 +69,9 @@ use glib_sys::{
     GError, GFALSE, GPtrArray, GTRUE, g_ptr_array_new, g_ptr_array_set_size, g_strdup, gboolean,
     gchar,
 };
-use gobject_sys::g_type_check_instance_is_a;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
-use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::marshal::{checked_borrow, read_string};
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_mail_sync::Filing;
 use jmap_proto::Id;
@@ -247,12 +246,7 @@ unsafe fn file_message(
 unsafe fn mailbox_of<'a>(folder: *mut CamelFolder) -> Option<&'a Id> {
     // SAFETY: the contract above; the type check is what makes the borrow
     // below sound, exactly as it is for the store behind a folder.
-    unsafe {
-        if folder.is_null() || g_type_check_instance_is_a(folder.cast(), folder_type()) == GFALSE {
-            return None;
-        }
-        JmapFolder::borrow(folder)?.mailbox()
-    }
+    unsafe { checked_borrow::<_, JmapFolder>(folder, folder_type())?.mailbox() }
 }
 
 /// The uids Camel named, copied out of its array.

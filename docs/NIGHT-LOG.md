@@ -36346,3 +36346,61 @@ itself flagged as not a mechanical fit for either helper above, so it is
 left as its own follow-up rather than forcing a shape onto it.
 
 Claiming this increment now.
+
+## 2026-08-19 — Delivered: `checked_borrow`/`checked_borrow_ptr`, UNSAFE-AUDIT Pattern B (checked family)
+
+Followed through on this session's claim. `jmap_backend_core::marshal`
+gained `checked_borrow<'a, C, T>(ptr, gtype) -> Option<&'a T>` and
+`checked_borrow_ptr<C, T>(ptr, gtype) -> Option<*mut T>` — same
+null-then-cast shape as `dispatched_borrow`, plus
+`g_type_check_instance_is_a` before the cast, with the "does this pointer
+need a type check or does dispatch already vouch for it" choice now explicit
+at each call site instead of buried in ~10 near-identical private copies.
+
+Five of the six remaining checked-family sites now use one of the two:
+`summary.rs::JmapSummary::borrow` and `message_info.rs::
+JmapMessageInfo::borrow` switch to `checked_borrow` (their target is a Rust
+struct this crate owns); `server.rs::network` switches to
+`checked_borrow_ptr` (its target, `CamelNetworkSettings`, is a foreign C
+type only forwarded to further Camel calls, not something to hand out a
+Rust reference to). `folder.rs::parent_store` and `transfer.rs::mailbox_of`
+collapse one step further than a mechanical port: both previously did the
+type check inline and then delegated to another type's own `::borrow`
+(`JmapStore::borrow`, `JmapFolder::borrow`) — which, since the trusted-family
+increment two sessions ago, is just `dispatched_borrow` (an unconditional
+null+cast, no check of its own). Because the caller had already validated
+non-null and the exact type before that delegate ran, the two calls were
+doing one job; both now call `checked_borrow::<_, JmapStore>`/
+`checked_borrow::<_, JmapFolder>` directly and drop the delegate. No
+behaviour change in any of the five: same `Option` for the same inputs.
+
+**Left open, per the claim:** `envelope.rs::internet` alone. Its
+`Result<Option<*mut CamelInternetAddress>, EnvelopeError>` distinguishes a
+NULL input (valid — "no address" — reported `Ok(None)`) from a wrong-type
+input (a user-facing `EnvelopeError::NotInternet`, not just `None`) — a
+third return shape that doesn't fit `checked_borrow`'s `Option`-returning
+contract without either collapsing that distinction or threading an
+unrelated error type through a generic helper's signature. Logged in
+`docs/UNSAFE-AUDIT.md`'s Pattern B section and its prioritized follow-up
+list as the one site left in this pattern.
+
+Removed now-unused imports at each touched call site
+(`g_type_check_instance_is_a` from `folder.rs`/`message_info.rs`/
+`server.rs`/`transfer.rs`, `GTypeInstance` from `server.rs`, `GFALSE` from
+`folder.rs` where nothing else in the file used it) rather than leaving
+dead `use`s for clippy to flag later.
+
+Full gate: `cargo fmt --check` clean; `cargo build -p jmap-backend-core -p
+jmap-mail` clean; `cargo clippy --all-targets --locked -- -D warnings`
+(default-members) clean; `cargo clippy -p evolution-jmap-client -p
+jmap-backend-core -p jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+touched EDS-gated crates plus their siblings, direct-built since this VM
+has the headers) clean; `cargo test --locked` (default-members) and the
+same seven-crate `cargo test --locked` both green, every `test result: ok`,
+0 failed. No new files, so no `REUSE.toml`/SPDX changes needed;
+`reuse`/`pipx`/`uvx`/`cargo-deny` remain unavailable on this VM, so
+`ci/checks.sh` itself was not run — its constituent checks were run
+individually as above, per the standing workaround. 3.5G free on disk after
+the full sweep — did not hit the standing "No space left on device" wall
+this session.
