@@ -37051,3 +37051,56 @@ an unrelated local constant using an `https://` value). Claiming this
 increment now: change the scheme to a dotted reverse-DNS form
 (`org.gnome.evolution.jmap:/redirect`), red-test first that `REDIRECT_URI`
 is dotted reverse-DNS, then green.
+
+## 2026-08-19 — Delivered: fix OAuth2 redirect URI scheme (dotted reverse-DNS)
+
+Followed through on this session's claim. Red test first:
+`config_lookup::tests::redirect_uri_scheme_is_dotted_reverse_dns` asserts
+`REDIRECT_URI`'s scheme (the substring before the first `:`) contains a
+dot; it failed against `"jmap-oauth2:/redirect"` (`scheme "jmap-oauth2"
+has no dot`), confirming the bug `docs/OAUTH-FASTMAIL.md` flagged. Green:
+changed the constant to `"org.gnome.evolution.jmap:/redirect"` — still a
+private-use URI scheme (the shape the module docs already settled on,
+following EDS's own `e-oauth2-service-google.c` precedent), just reshaped
+to satisfy providers that require reverse-DNS notation with a dot, per
+Fastmail's OAuth doc. `org.gnome.evolution.jmap` was chosen over inventing
+a novel prefix since it names this project under a namespace Evolution
+itself already occupies (no formal reverse-DNS app id exists elsewhere in
+this repo yet — checked `CMakeLists.txt`'s `GETTEXT_PACKAGE`, which is
+still the `example-module` placeholder, and found no `.desktop`/metainfo
+file to match instead).
+
+Confirmed no other test hardcodes this literal (grepped for
+`"jmap-oauth2:/redirect"`): `jmap-config/tests/oauth2_setup.rs`'s own
+`REDIRECT_URI` is an unrelated local test constant (an arbitrary
+`https://client.example.org/callback`) exercising `discover_and_register`
+generically, not this production value; `jmap-config/tests/
+oauth2_service.rs`'s redirect-URI assertions likewise use their own
+`config()` test fixture's value. So this was a single-site fix plus one
+new regression test, not a rename sweep.
+
+This closes a concrete gap `docs/OAUTH-FASTMAIL.md` (landed `0341d0a`,
+research from a concurrent session) found before it was ever exercised
+against a real provider: dynamic client registration against Fastmail
+would have registered a dot-less scheme, and per that research, providers
+requiring reverse-DNS notation reject it — so the bug would have surfaced
+as an opaque registration failure during the still-deferred real-server
+OAuth2 validation, not before. Fixing it now, ahead of that validation,
+means one fewer thing to debug blind against a live server later.
+
+Gate before pushing (jmap-config is EDS-gated, out of default-members):
+`cargo fmt --check` clean; `cargo clippy --all-targets --locked --
+-D warnings` (default-members, unaffected by this change) and
+`cargo clippy -p evolution-jmap-client -p jmap-backend-core -p
+jmap-backend-book -p jmap-backend-cal -p jmap-mail -p
+jmap-backend-collection -p jmap-config --all-targets -- -D warnings` (the
+EDS-gated crates, this VM having the headers) both clean; `cargo test
+--locked` (default-members) and the same seven-crate `cargo test` both
+green, every `test result: ok`, 0 failed.
+
+Ending the session here — one focused increment, pushed. Every other
+[claude]-lane item surveyed this session remains what the last several
+sessions already found it to be: FFI/refcount escalation-worthy (SRV
+autodiscovery's GResolver `Resolver`, A5, A6 Pattern C, D1's vtable
+wiring) or NEEDS-DECISION (B1, C2's third-party notices, C4, Track E) —
+unchanged by this increment, not re-litigated further.

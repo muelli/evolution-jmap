@@ -120,7 +120,12 @@ use crate::oauth2_setup::discover_and_register;
 /// [`crate::oauth2_service::Service::get_redirect_uri`] — see the module docs
 /// for why this, and not the RFC 8252 out-of-band URN, is what actually works
 /// against EDS's WebKit-based consent prompter.
-pub const REDIRECT_URI: &str = "jmap-oauth2:/redirect";
+///
+/// Dotted reverse-DNS, not a bare word: some providers (Fastmail's OAuth
+/// doc, confirmed in `docs/OAUTH-FASTMAIL.md`) require a private-use
+/// redirect scheme to contain at least one dot and reject registration
+/// otherwise.
+pub const REDIRECT_URI: &str = "org.gnome.evolution.jmap:/redirect";
 
 /// The host RFC 8414 discovery is asked of, and later written as
 /// `[Authentication] host` in a positive result — a bare domain, not a
@@ -561,7 +566,22 @@ unsafe extern "C" fn run(
 mod tests {
     use jmap_client::resolver::{NoSrvResolver, Resolver, SrvTarget};
 
-    use super::{parse_target, probe_host};
+    use super::{REDIRECT_URI, parse_target, probe_host};
+
+    #[test]
+    fn redirect_uri_scheme_is_dotted_reverse_dns() {
+        // Fastmail's OAuth 2.0 doc requires a private-use redirect scheme in
+        // reverse-DNS notation with at least one dot (or a loopback/https
+        // URI, neither of which fits EDS's WebKit-based consent prompter —
+        // see the module docs) — a dot-less scheme is rejected at dynamic
+        // client registration (docs/OAUTH-FASTMAIL.md).
+        let scheme = REDIRECT_URI.split(':').next().expect("a URI has a scheme");
+        assert!(
+            scheme.contains('.'),
+            "redirect URI scheme {scheme:?} has no dot; providers requiring \
+             reverse-DNS notation (e.g. Fastmail) would reject it"
+        );
+    }
 
     /// Returns one fixed answer for every domain asked, or none — the same
     /// fake `jmap-client/tests/srv_discovery.rs` uses.
