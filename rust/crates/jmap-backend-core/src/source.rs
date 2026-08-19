@@ -253,12 +253,16 @@ pub enum ConnectTarget {
 /// Connects to the server `target` names, honouring `_jmap._tcp` SRV
 /// autodiscovery for a [`ConnectTarget::Domain`].
 ///
-/// The only resolver anything constructs today is
-/// `jmap_client::resolver::NoSrvResolver`, which never finds a record — so
-/// behaviour is unchanged until a real resolver exists (the EDS integration
-/// layer will supply one backed by `g_resolver_lookup_service()`); this is
-/// the seam it plugs into, the same one `jmap-config`'s "Look Up Account
-/// Details" worker already consults via `ClientBuilder::connect_domain`.
+/// A [`ConnectTarget::Domain`] is resolved through [`crate::resolver::
+/// SystemResolver`], the real `_jmap._tcp` lookup — this is the seam
+/// `jmap-client` leaves for it, the same one `jmap-config`'s "Look Up Account
+/// Details" worker consults. A record only ever redirects discovery: a domain
+/// that publishes none falls back to `https://<domain>/.well-known/jmap`,
+/// which is what every deployment answering at its own domain relies on.
+///
+/// A [`ConnectTarget::Origin`] is dialled as stated and never resolved — SRV
+/// autodiscovery answers "where is this domain's JMAP server", a question an
+/// explicit endpoint has already answered.
 pub fn connect(
     target: &ConnectTarget,
     credentials: jmap_client::Credentials,
@@ -267,6 +271,7 @@ pub fn connect(
         ConnectTarget::Origin(origin) => jmap_client::Client::connect(origin, credentials),
         ConnectTarget::Domain(domain) => jmap_client::Client::builder()
             .rebase_urls_to_origin(jmap_client::rebase_urls_from_env())
+            .resolver(crate::resolver::SystemResolver)
             .connect_domain(domain, credentials),
     }
 }
