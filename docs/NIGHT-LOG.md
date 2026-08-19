@@ -36313,3 +36313,36 @@ run — its constituent checks were run individually as above, per the
 standing workaround. Disk at 3.5G free after the full test sweep — did not
 hit the standing "No space left on device" wall this session, so no
 `cargo clean` needed.
+
+## 2026-08-19 (claim) — Claiming UNSAFE-AUDIT Pattern B (checked-borrow family)
+
+Fresh survey: all milestones COMPLETE (`docs/MILESTONES.md`); CURRENT
+PRIORITY's one open thread (SRV autodiscovery) has both call sites wired,
+leaving only the `g_resolver_lookup_service()`-backed real `Resolver` — FFI,
+the standing escalation candidate, not attempted again here. Round 2's
+lead-order Track D's one open item (D1's EDS-vtable wiring) is the same
+GObject-vtable-FFI category. Track E is NEEDS-DECISION. So, continuing the
+Pattern B thread the last two sessions worked (trusted half done, Pattern D
+done before that): the **checked** family — `folder.rs::parent_store`,
+`server.rs::network`, `envelope.rs::internet`, `summary.rs::JmapSummary::
+borrow`, `message_info.rs::JmapMessageInfo::borrow`, `transfer.rs::
+mailbox_of` — ~10 sites across 6 `jmap-mail` files, each independently
+reimplementing "null-check, `g_type_check_instance_is_a`, then cast."
+
+**Design:** two helpers in `jmap_backend_core::marshal`, alongside
+`dispatched_borrow`: `checked_borrow<'a, C, T>(ptr, gtype) -> Option<&'a T>`
+for sites that hand out a Rust-owned struct reference (`summary.rs`,
+`message_info.rs`, and `folder.rs::parent_store`/`transfer.rs::mailbox_of`,
+both of which currently do the check then delegate to another type's
+`::borrow` — collapsible to one direct `checked_borrow` call since the
+delegate's own cast was already unconditional/trusted), and
+`checked_borrow_ptr<C, T>(ptr, gtype) -> Option<*mut T>` for sites that need
+the raw pointer because `T` is a foreign C type this crate doesn't own the
+layout of (`server.rs::network`'s `CamelNetworkSettings`). `envelope.rs::
+internet` is scoped out of this increment: its `Result<Option<*mut T>,
+EnvelopeError>` distinguishes a NULL input (valid, "no address") from a
+wrong-type input (a user-facing error) — a third return shape the audit
+itself flagged as not a mechanical fit for either helper above, so it is
+left as its own follow-up rather than forcing a shape onto it.
+
+Claiming this increment now.
