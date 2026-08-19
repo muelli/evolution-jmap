@@ -19,7 +19,7 @@ use eds_sys::{
     CAMEL_SERVICE_ERROR_INVALID, CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_SERVICE_ERROR_URL_INVALID,
     camel_folder_error_quark, camel_service_error_quark,
 };
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_client::{Client, Credentials, Error};
 use jmap_mail::connect::{ACCEPTED_AUTHENTICATION, StoreError, open_mail, password_credentials};
 use jmap_mail::server::ServerConfig;
@@ -31,7 +31,7 @@ use jmap_proto::session::CAPABILITY_MAIL;
 
 fn config(server: &MockServer) -> ServerConfig {
     ServerConfig {
-        origin: server.origin().to_owned(),
+        target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
     }
 }
@@ -203,7 +203,7 @@ fn only_a_401_makes_camel_ask_for_the_password_again() {
 fn an_unreachable_server_is_an_error_not_a_credentials_problem() {
     let config = ServerConfig {
         // Port 1 is reserved and nothing listens there.
-        origin: "http://127.0.0.1:1".to_owned(),
+        target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
     };
     let error = expect_error(open(&config, None));

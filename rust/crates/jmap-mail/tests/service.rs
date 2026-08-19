@@ -35,7 +35,7 @@ use eds_sys::{
     camel_service_ref_settings,
 };
 use glib_sys::GError;
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_client::{Client, Credentials, Error};
 use jmap_mail::connect::{StoreError, password_credentials};
 use jmap_mail::server::ServerConfig;
@@ -50,7 +50,7 @@ const CACHED: eds_sys::CamelStoreGetFolderInfoFlags = 0;
 
 fn config(server: &MockServer) -> ServerConfig {
     ServerConfig {
-        origin: server.origin().to_owned(),
+        target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
     }
 }
@@ -156,7 +156,7 @@ fn an_unreachable_server_is_an_error_with_the_gerror_camel_routes_on() {
     let store = JmapStore::detached();
     let config = ServerConfig {
         // Port 1 is reserved and nothing listens there.
-        origin: "http://127.0.0.1:1".to_owned(),
+        target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
     };
 
@@ -196,7 +196,7 @@ fn a_cancelled_attempt_is_an_error_reported_in_glibs_own_domain() {
 fn an_account_with_no_server_fails_without_asking_for_a_password() {
     let store = JmapStore::detached();
     let config = ServerConfig {
-        origin: String::new(),
+        target: ConnectTarget::Origin(String::new()),
         user: None,
     };
 
@@ -225,7 +225,7 @@ fn a_failed_attempt_leaves_a_working_connection_alone() {
     let tree = store.folders(CACHED).expect("listed");
 
     let unreachable = ServerConfig {
-        origin: "http://127.0.0.1:1".to_owned(),
+        target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
     };
     open(&store, &unreachable, None).expect_err("nothing listens there");

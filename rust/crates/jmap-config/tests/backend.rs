@@ -40,7 +40,7 @@ use gobject_sys::{
 };
 use jmap_backend_collection::collection_source::{parts_of, server_of, user_of};
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_backend_core::subclass::register_static;
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
@@ -162,9 +162,9 @@ impl Collection {
         unsafe { user_of(self.0) }
     }
 
-    fn server(&self) -> Result<String, SourceError> {
+    fn server(&self) -> Result<ConnectTarget, SourceError> {
         // SAFETY: a live source.
-        unsafe { server_of(self.0) }.map(|server| server.origin)
+        unsafe { server_of(self.0) }.map(|server| server.target)
     }
 
     /// Writes `account` onto the collection — what the widgets do to it while
@@ -273,9 +273,9 @@ impl MailSource {
     /// The server this mail source now reaches, through the same reader the
     /// account itself is read with — `[Authentication]` plus `[Security]` are
     /// one pair of groups whichever kind of source they are on.
-    fn server(&self) -> Result<String, SourceError> {
+    fn server(&self) -> Result<ConnectTarget, SourceError> {
         // SAFETY: a live source.
-        unsafe { server_of(self.0) }.map(|server| server.origin)
+        unsafe { server_of(self.0) }.map(|server| server.target)
     }
 
     fn user(&self) -> Option<String> {
@@ -433,7 +433,10 @@ fn the_defaults_are_the_account_the_address_names() {
 
     assert_eq!(collection.identity().as_deref(), Some("vera@example.com"));
     assert_eq!(collection.user().as_deref(), Some("vera@example.com"));
-    assert_eq!(collection.server().as_deref(), Ok("https://example.com"));
+    assert_eq!(
+        collection.server(),
+        Ok(ConnectTarget::Domain("example.com".into()))
+    );
     // And the account is one the setup may commit, which is the point of
     // offering it: the page opens with its *Next* already sensitive for the
     // ordinary case, rather than greyed out over an address the user has
@@ -504,8 +507,8 @@ fn a_second_visit_to_the_page_keeps_the_server_the_user_typed() {
         .with_server("jmap.example.com");
     assert!(collection.setup("vera@example.com"));
     assert_eq!(
-        collection.server().as_deref(),
-        Ok("https://example.com"),
+        collection.server(),
+        Ok(ConnectTarget::Domain("example.com".into())),
         "the first pass has no earlier answer to keep: the address is new"
     );
 
@@ -515,8 +518,8 @@ fn a_second_visit_to_the_page_keeps_the_server_the_user_typed() {
         "the same address a second time is nothing further to say"
     );
     assert_eq!(
-        collection.server().as_deref(),
-        Ok("https://jmap.example.com")
+        collection.server(),
+        Ok(ConnectTarget::Domain("jmap.example.com".into()))
     );
 }
 
@@ -533,7 +536,10 @@ fn a_corrected_address_is_derived_from_again() {
     assert!(collection.setup("vera@example.net"));
     assert_eq!(collection.identity().as_deref(), Some("vera@example.net"));
     assert_eq!(collection.user().as_deref(), Some("vera@example.net"));
-    assert_eq!(collection.server().as_deref(), Ok("https://example.net"));
+    assert_eq!(
+        collection.server(),
+        Ok(ConnectTarget::Domain("example.net".into()))
+    );
 }
 
 #[test]
@@ -586,8 +592,10 @@ fn a_finished_account_is_one_the_setup_may_commit() {
     // And it is the same account on the way out: the registry's reader gets the
     // server the check accepted, rather than a second reading of the source.
     assert_eq!(
-        collection.server().as_deref(),
-        Ok("https://jmap.example.com:8443")
+        collection.server(),
+        Ok(ConnectTarget::Origin(
+            "https://jmap.example.com:8443".into()
+        ))
     );
 }
 
@@ -693,8 +701,10 @@ fn a_commit_gives_the_mail_source_the_server_the_account_names() {
     // account does, in the same words. A host that agreed and a port that did
     // not would be a store connecting somewhere the account never named.
     assert_eq!(
-        source.server().as_deref(),
-        Ok("https://jmap.example.com:8443")
+        source.server(),
+        Ok(ConnectTarget::Origin(
+            "https://jmap.example.com:8443".into()
+        ))
     );
     assert_eq!(source.server(), collection.server());
     // And the user, which is load-bearing beyond consistency: EDS decides
@@ -737,7 +747,10 @@ fn plaintext_to_this_machine_reaches_the_mail_source_too() {
 
     // SAFETY: two live sources, as above.
     assert!(unsafe { commit(collection.0, source.0) });
-    assert_eq!(source.server().as_deref(), Ok("http://localhost:8443"));
+    assert_eq!(
+        source.server(),
+        Ok(ConnectTarget::Origin("http://localhost:8443".into()))
+    );
 }
 
 #[test]

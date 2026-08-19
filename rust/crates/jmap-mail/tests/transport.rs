@@ -33,6 +33,7 @@ use glib_sys::{GFALSE, GTRUE};
 use gobject_sys::{
     G_TYPE_INVALID, g_type_class_ref, g_type_class_unref, g_type_from_name, g_type_is_a,
 };
+use jmap_backend_core::source::ConnectTarget;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_client::Credentials;
 use jmap_mail::server::ServerConfig;
@@ -45,7 +46,7 @@ use jmap_proto::mail::role;
 
 fn config(server: &MockServer) -> ServerConfig {
     ServerConfig {
-        origin: server.origin().to_owned(),
+        target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
     }
 }
@@ -203,7 +204,7 @@ fn a_failed_attempt_leaves_a_working_connection_alone() {
 
     let unreachable = ServerConfig {
         // Port 1 is reserved and nothing listens there.
-        origin: "http://127.0.0.1:1".to_owned(),
+        target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
     };
     authenticate(&*transport, &unreachable, Credentials::none())

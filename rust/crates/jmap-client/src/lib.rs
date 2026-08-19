@@ -26,6 +26,6 @@ pub mod transport;
 mod url;
 
 pub use changes::ChangeSet;
-pub use client::{Client, ClientBuilder, Credentials};
+pub use client::{Client, ClientBuilder, Credentials, rebase_urls_from_env};
 pub use error::Error;
 pub use transport::CancelFlag;

@@ -85,7 +85,7 @@
 
 use eds_sys::ESource;
 use gobject_sys::g_object_unref;
-use jmap_client::Client;
+use jmap_backend_core::source;
 use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Fanout, Setting};
 
@@ -195,7 +195,7 @@ pub unsafe fn fan_out<C: Collection + ?Sized>(
     collection: &C,
     login: &Login,
 ) -> Result<Populated, jmap_client::Error> {
-    let client = Client::connect(&login.server.origin, login.credentials.clone())?;
+    let client = source::connect(&login.server.target, login.credentials.clone())?;
     let fanout = Fanout::discover(&client, login.parts)?;
 
     // SAFETY: the caller's contract is this function's.
