@@ -235,6 +235,7 @@ fn handle_method(
         "Email/set" => crate::mail::email_set(state, arguments),
         "Email/import" => crate::mail::email_import(state, arguments),
         "AddressBook/get" => crate::contacts::address_book_get(state, arguments),
+        "AddressBook/set" => crate::contacts::address_book_set(state, arguments),
         "ContactCard/get" => crate::contacts::contact_card_get(state, arguments),
         "ContactCard/set" => crate::contacts::contact_card_set(state, arguments),
         "ContactCard/query" => crate::contacts::contact_card_query(state, arguments),
@@ -268,6 +269,7 @@ fn handle_method(
             to_result(&response)
         }
         "Calendar/get" => crate::calendars::calendar_get(state, arguments),
+        "Calendar/set" => crate::calendars::calendar_set(state, arguments),
         "CalendarEvent/get" => crate::calendars::calendar_event_get(state, arguments),
         "CalendarEvent/set" => crate::calendars::calendar_event_set(state, arguments),
         "CalendarEvent/query" => crate::calendars::calendar_event_query(state, arguments),
