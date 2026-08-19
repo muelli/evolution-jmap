@@ -242,6 +242,22 @@ tracks follow; the maintainer may reorder anytime.
   `create_resource_sync`/`delete_resource_sync` to call them and mint/remove the
   child ESource — mail folders already do exactly this via `Mailbox/set`
   (`jmap-mail/src/manage.rs:227`, `jmap-client/src/mail.rs:164`); mirror it.
+  - **PARTIAL 2026-08-19** — the protocol/client/mock half landed:
+    `AddressBook/set` and `Calendar/set` (create + destroy) in `jmap-mock`
+    (`contacts.rs::address_book_set`, `calendars.rs::calendar_set`, both
+    `simple_set` over the existing generic `SetRequest<T>`/`SetResponse<T>` —
+    no `jmap-proto` changes needed, since `AddressBook`/`Calendar` are plain
+    data types with no hierarchy like `Mailbox` has), wired into
+    `dispatch.rs`, and `Client::address_book_create`/`address_book_destroy` +
+    `Client::calendar_create`/`calendar_destroy` in `jmap-client`, mirroring
+    `contact_create`/`contact_destroy` and `event_create`/`event_destroy`
+    exactly. TDD'd in `jmap-client/tests/{contacts,calendars}.rs`. **Still
+    open:** wiring `create_resource_sync`/`delete_resource_sync` on
+    `ECollectionBackendClass` to call these and mint/remove the child
+    `ESource` — GObject-vtable FFI work of the same kind as `child_added`'s,
+    not attempted this session (kept out of an increment that is otherwise
+    pure safe Rust). Not claimable-complete; the next session on this thread
+    should do the FFI wiring.
 - **D2 `[claude]` Calendar colour.** `Calendar.color` is parsed
   (`jmap-proto/src/calendars.rs:29`) then dropped — thread it Resource→Child and
   emit an ESourceSelectable `("Calendar","Color", …)` setting in

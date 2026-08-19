@@ -35256,3 +35256,53 @@ carefully in its own session rather than folded into a "just add the wire
 methods" increment. This session lands the half that is pure, safe,
 TDD-able Rust with no unsafe/FFI surface, so the FFI half has something
 correct to call into.
+
+## 2026-08-19 — Delivered: `AddressBook/set` + `Calendar/set` create/destroy (protocol/client/mock)
+
+Followed through on this session's claim. `AddressBook` and `Calendar` are
+plain data types with no hierarchy the way `Mailbox` has (no `parentId`, no
+uniqueness-among-siblings rule), so no `jmap-proto` changes were needed: the
+existing generic `SetRequest<T>`/`SetResponse<T>` and `jmap-mock`'s
+`simple_set` helper (already used by `ContactCard/set` and
+`CalendarEvent/set`) cover both new methods completely.
+
+- **`jmap-mock/src/contacts.rs`**: new `address_book_set`, `simple_set` over
+  `account.address_books`; the only per-create checks are the ones every
+  `/set` create here shares — server-set `id` rejected, `name` required
+  non-empty (mirrors `contact_card_set`'s and `mailbox_set`'s shape).
+- **`jmap-mock/src/calendars.rs`**: new `calendar_set`, same shape over
+  `account.calendars`.
+- **`jmap-mock/src/dispatch.rs`**: routes `"AddressBook/set"` and
+  `"Calendar/set"` to them.
+- **`jmap-client/src/contacts.rs`**: `Client::address_book_create` /
+  `address_book_destroy` (+ private `address_book_set` helper), byte-for-byte
+  mirroring `contact_create`/`contact_destroy`'s created/not_created and
+  destroyed/not_destroyed handling.
+- **`jmap-client/src/calendars.rs`**: `Client::calendar_create` /
+  `calendar_destroy` (+ private `calendar_set` helper), mirroring
+  `event_create`/`event_destroy` the same way.
+- **Tests** (red-then-green, in the existing
+  `jmap-client/tests/{contacts,calendars}.rs`): create returns a server-set
+  id and is visible in a subsequent `/get`; create rejects an empty `name`
+  and a client-supplied `id`, both as `invalidProperties`; destroy removes it
+  from the store and a second destroy answers `notFound`. Confirmed red
+  before the client methods existed (`no method named` `address_book_destroy`/
+  `calendar_destroy` `found for struct Client`), green after.
+- Full gate: `cargo fmt --check` clean (one line `cargo fmt` reflowed in
+  `calendars.rs`, applied), `cargo clippy --all-targets --locked --
+  -D warnings` (default-members) clean, `cargo clippy -p
+  evolution-jmap-client --all-targets --locked --features live-server --
+  -D warnings` clean, `cargo test --locked` green with 0 failures across
+  every crate. No new files, so no new SPDX headers needed; `cargo
+  deny`/`reuse lint` unavailable on this VM as usual.
+
+**Deliberately left for a follow-up, not claimed as done:** wiring
+`create_resource_sync`/`delete_resource_sync` on `ECollectionBackendClass`
+(`jmap-backend-collection/src/backend.rs`) to call these new client methods
+and mint/remove the child `ESource` on the EDS side. That is GObject-vtable
+FFI work — same category as `child_added`'s override, which this crate's own
+comments describe as needing care about which class struct offset is
+written and what chains up to the parent. Doing it well deserves its own
+session rather than being folded into what was otherwise a fully safe,
+TDD-only increment; `docs/ROADMAP.md`'s D1 entry is updated to PARTIAL with
+this split spelled out for whoever picks it up next.
