@@ -36816,3 +36816,26 @@ disk-fills-from-cargo-target problem. No Rust source changed this session
 (packaging files only), so the full Rust gate was not re-run in full;
 `cargo fmt --check` (fast, and the thing most likely to catch an
 accidental edit) stayed clean as a sanity check.
+
+## 2026-08-19 (claim) — Claiming Track A2: mutation testing of jmap-proto and jmap-client
+
+Fresh survey: every CURRENT PRIORITY item is complete or blocked
+(SRV autodiscovery's GResolver leg and OAuth2 real-server validation are
+both parked/escalation-worthy; Round 2's lead-order Track D item (D1's
+create_resource_sync/delete_resource_sync vtable wiring) is GObject-vtable
+FFI, escalation-worthy; Track B/C2/C4/E are NEEDS-DECISION; Track A's other
+[claude] items are done (A4, A7) or explicitly escalation-worthy (A5, A6
+Pattern C)). That leaves **A2** — mutation testing of `jmap-proto`
+(`evolution-jmap-proto`) and `jmap-client` (`evolution-jmap-client`) via
+`cargo-mutants` — the one CLAIMABLE, no-FFI, no-decision-needed item left.
+A prior session (Track C3 claim) flagged A2 as risky due to this VM's
+standing disk-fills-from-cargo-target problem without actually attempting
+it; `rust/target` is at 91M right now (cleaned during that same session),
+so re-assessing: installed `cargo-mutants` (network to crates.io works;
+`cargo install cargo-mutants` succeeded, v27.1.0), plan to scope this
+increment to `jmap-proto` only (smaller, self-contained wire-format crate)
+given mutation testing's rebuild-per-mutant cost, watch disk with `df -h`
+between runs, and hand off `jmap-client` to a follow-up session same as
+other Round 2 tracks have split across sessions.
+
+Claiming this increment now.
