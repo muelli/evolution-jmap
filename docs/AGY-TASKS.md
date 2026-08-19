@@ -38,6 +38,22 @@ not something to guess at.
 5. **`merge_units` empty-name edge case**: a unit with an empty name is currently
    dropped — characterize, add a test, and fix if the drop is wrong.
 
+## Quality: mutation testing & fuzzing (headless) — added 2026-08-19
+These strengthen the `jmap-vcard` / `jmap-ical` test suites and stay entirely
+in-lane (no GUI, no maintainer decision). See ROADMAP.md ROUND 2 BACKLOG A1/A3.
+6. **Mutation testing (`cargo-mutants`, stable)** on `jmap-vcard` and `jmap-ical`.
+   `cargo install cargo-mutants` if absent. For each *surviving* mutant that is a
+   real behavioural gap, add a round-trip test that kills it. Log deliberately
+   left equivalent mutants (one line each, in `docs/AGY-LOG.md`). Work it a crate
+   or a module at a time so each push stays small.
+7. **Structure-aware fuzzing** of the vCard↔JSContact and iCal↔JSCalendar
+   round-trips with `proptest` + `arbitrary` (dev-deps, **stable** — do NOT use
+   `cargo-fuzz`, it needs nightly and breaks the pinned-stable reproducibility).
+   Generate random JSContact/JSCalendar and random vCard/iCal; assert (a) no
+   panic, (b) round-trip stability. Any panic is a bug to fix (or a finding to
+   log if the input is genuinely out of contract). Keep the generators shrinking
+   nicely so failures are minimal.
+
 Work one increment per session, each self-contained so the periodic
 `antigravity → master` merge stays trivial. Only when you exhaust these AND find
 no further in-lane headless sub-step should you report `AGY-SHIFT: BLOCKED` — the

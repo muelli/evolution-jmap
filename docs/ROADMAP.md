@@ -87,6 +87,105 @@ them in `docs/BACKLOG.md` for a later hardening pass and move on. Correctness
 still governs *how* the priority work is done (TDD, honest verification); this
 directive governs *what* to work on.
 
+## ROUND 2 BACKLOG (2026-08-19) — hardening, observability, packaging, EDS parity
+
+The CURRENT PRIORITY goal (usable end-to-end) is met. This is the maintainer's
+next-mountain list, grouped into tracks. Status tags: **CLAIMABLE** = unblocked,
+headless, no decision needed; **NEEDS-DECISION** = a design/product call is open
+(do NOT start it; it is listed for visibility). Lane tag: `[claude]` heavier /
+priority lane, `[agy]` in-lane polish (headless, test-gated). Log completions as
+usual. Do not reopen closed backends except where an item names one.
+
+### Track A — Quality & security (CLAIMABLE)
+- **A1 `[agy]` Mutation testing of the mapping crates.** Run `cargo-mutants`
+  (stable; `cargo install` it if absent) on `jmap-vcard` and `jmap-ical`. For
+  each *surviving* mutant that is a real behavioural gap, add a round-trip test
+  that kills it; log deliberately-left equivalent mutants with a one-line why.
+- **A2 `[claude]` Mutation testing of the protocol/client core.** Same tool on
+  `jmap-proto` and `jmap-client` — they carry the untrusted-server wire
+  contract. Strengthen tests to kill high-value survivors.
+- **A3 `[agy]` Structure-aware fuzzing of the vCard/iCal round-trips.**
+  `proptest` + `arbitrary` as dev-deps on **stable** (NOT `cargo-fuzz`: it needs
+  nightly and breaks the pinned-stable reproducibility). Generate random
+  JSContact/JSCalendar and random vCard/iCal; assert (a) no panic, (b) round-trip
+  stability. Fix any panic found.
+- **A4 `[claude]` Malicious-input hardening of the untrusted-server boundary.**
+  proptest/arbitrary harness feeding hostile JMAP *responses* into `jmap-proto`
+  deserialization + `jmap-client`, and hostile session `apiUrl`/redirect targets
+  into `transport.rs`. The server is NOT trusted: assert no panic and no auth
+  leak on redirect (same surface as the 86fea00 redirect-auth fix). Aligns with
+  the standing "Recurring security re-audit" directive.
+- **A5 `[claude]` FFI soundness audit.** Worth doing, and timely — Tracks D/B add
+  FFI surface and M10 already exposed cross-version FFI drift. Scope: every vfunc
+  trampoline `catch_unwind`-wrapped; transfer-full vs transfer-none ownership on
+  every returned GObject/string (g_free correctness); nullability at each
+  boundary; `GCancellable` honoured on the sync vfuncs. Deliverable:
+  `docs/FFI-SOUNDNESS-AUDIT.md` + TDD fixes for findings. Escalation-worthy.
+
+### Track B — Observability (NEEDS-DECISION on approach, then CLAIMABLE)
+- **B1 `[claude]` journald structured logging, TRACE→ERROR.** Replace the ~54
+  ad-hoc `println!`/`eprintln!`/`g_message` sites with the `tracing` crate.
+  Recommended sink: `tracing-journald` (writes the journal native protocol
+  directly — no libsystemd FFI, keeps the dep/repro posture clean; MIT/Apache,
+  allowlist-ok) behind an env filter (default WARN, opt-in to TRACE via e.g.
+  `EVOLUTION_JMAP_LOG`). Init ONCE per process via `OnceLock`/`try_init` — the
+  backends load as cdylibs into shared EDS factory processes, so double-init must
+  be a no-op. Structured fields: account id, JMAP method, object type, request
+  id. DECISION: `tracing`+`tracing-journald` vs. routing through glib `g_log`
+  (EDS already funnels g_log to the journal, but that loses Rust-side structured
+  fields and TRACE granularity). Recommend the former.
+
+### Track C — Packaging (mostly CLAIMABLE; official Debian is a human process)
+- **C1 `[claude]` Lintian-clean .deb.** Run `lintian` on the CPack `.deb`; fix
+  warnings (Section, Priority, extended description, Depends/Recommends). Add a
+  CI check that lintian stays clean.
+- **C2 `[claude]` Machine-readable DEP-5 `debian/copyright`** generated from the
+  REUSE metadata we already maintain — the single biggest ease-of-packaging win.
+- **C3 `[claude]` `debian/` skeleton** (control, rules using `dh` over the
+  cmake/cargo build, watch file) so a Debian packager starts from a working tree.
+  Document the Rust-in-Debian reality (dh-cargo wants every crate dep packaged /
+  vendored) rather than pretend it away.
+- **C4 NEEDS-DECISION (maintainer/social):** filing an ITP and uploading to
+  Debian proper is a human process, not agent work. Flagged only.
+
+### Track D — EDS parity features (CLAIMABLE; restores evolution-ews parity)
+- **D1 `[claude]` Create/delete a calendar and an address book.** We mirror
+  existing server collections but cannot create new ones (audit: no
+  `AddressBook/set`/`Calendar/set`, and `create_resource`/`delete_resource` are
+  left as EDS defaults — `jmap-backend-collection/src/backend.rs:110`, with
+  `tests/backend.rs:340` asserting they are NOT overridden). Add `AddressBook/set`
+  + `Calendar/set` create to jmap-proto/jmap-client + mock, then wire
+  `create_resource_sync`/`delete_resource_sync` to call them and mint/remove the
+  child ESource — mail folders already do exactly this via `Mailbox/set`
+  (`jmap-mail/src/manage.rs:227`, `jmap-client/src/mail.rs:164`); mirror it.
+- **D2 `[claude]` Calendar colour.** `Calendar.color` is parsed
+  (`jmap-proto/src/calendars.rs:29`) then dropped — thread it Resource→Child and
+  emit an ESourceSelectable `("Calendar","Color", …)` setting in
+  `jmap-collection-sync/src/child_source.rs`; write-back rides on D1's
+  `Calendar/set`.
+
+### Track E — Sharing + scheduling (NEEDS-DECISION — one capability unlocks both)
+"See another party's free/busy and pick a slot" AND "share a calendar / address
+book / mailbox" are the **same** JMAP capability: `urn:ietf:params:jmap:principals`
+(**RFC 9670**, JMAP Sharing / Principals) — it defines `Principal/getAvailability`
+(free/busy → slot picking) and the `shareWith`/`myRights` ACL surface, and
+Stalwart implements it. Today we advertise/consume none of it
+(`jmap-proto/src/session.rs:14-18`); server-sent `myRights` lands unread in the
+serde `extra` bag. Sizable: proto models, client methods, mock support, an
+availability hook, and mapping ACLs onto Evolution's per-source
+read-only/permission flags (replacing the account-wide `read_only` heuristic in
+`jmap-collection-sync/src/children.rs:94`). DECISION: greenlight this track? It
+is the highest-leverage single addition — it answers two of the maintainer's
+asks at once.
+
+### Not doing (protocol-gated)
+- **Tasks (VTODO) / Memos (VJOURNAL).** BLOCKED upstream: draft-ietf-jmap-calendars
+  models events only; there is no standardized JMAP task/note object (JSTask is a
+  separate, less-mature draft). The cal factory registers VEVENT only, on purpose
+  (`jmap-backend-cal/src/factory.rs:41-53`) — empty Task/Memo factories would look
+  broken, not absent. Revisit if/when a JMAP task object standardizes. Recorded,
+  not queued.
+
 ## MAINTAINER DECISIONS (2026-08-17) — resolves the three open items
 
 The 338th night-log entry surfaced three items only the maintainer could
