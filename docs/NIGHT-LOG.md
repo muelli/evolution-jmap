@@ -37400,3 +37400,22 @@ rewire) remain open for a future session; everything else surveyed at claim
 time is unchanged — FFI/refcount escalation-worthy (SRV `Resolver`, A5, A6
 Pattern C, D1's vtable wiring) or NEEDS-DECISION (B1, C2's third-party
 notices, C4).
+
+## 2026-08-19 (claim) — Claiming Track E Path A: `Principal/getAvailability` proto/client/mock slice
+
+Fresh survey: all milestones COMPLETE; Track E Phase 0 (the `Principal`
+shared floor) landed just ahead of this session (`7f1fea9`). Per
+`docs/ROADMAP.md`'s Track E and `docs/PRINCIPALS-DESIGN.md` §5, Path A is
+next: `Principal/getAvailability` request/response + `BusyPeriod` in proto,
+a `get_availability()` client method, and a mock computation over seeded
+`CalendarEvent`s — explicitly scoped as "fully headless-testable against the
+mock" (design §4.2–4.3). The one heavy piece on this thread, the
+`ECalBackend get_free_busy_sync` vfunc + `BusyPeriod→VFREEBUSY` marshaller,
+is explicitly flagged L/escalation-worthy (unsafe FFI, EDS-only testing) and
+is NOT part of this claim — this increment stops at the mock-testable proto/
+client/server slice, same boundary the design itself draws. Every other open
+thread is unchanged from what recent sessions found: CURRENT PRIORITY's SRV
+`Resolver` (GResolver, FFI), A5, A6 Pattern C, D1's vtable wiring are
+escalation-worthy; Track B/C2/C4 are NEEDS-DECISION; A6 Pattern E's
+`fail`/`fail_bool` half needs real design. Claiming Path A's non-FFI slice
+now.
