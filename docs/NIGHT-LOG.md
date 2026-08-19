@@ -36215,3 +36215,48 @@ files, so no `REUSE.toml`/SPDX changes needed; `reuse`/`pipx`/`uvx`/
 `cargo-deny` remain unavailable on this VM, so `ci/checks.sh` itself was not
 run — its constituent checks were run individually as above, per the
 standing workaround.
+
+## 2026-08-19 (claim) — Claiming UNSAFE-AUDIT Track A6 Pattern B (trusted-borrow half)
+
+Fresh survey: every milestone is COMPLETE (`docs/MILESTONES.md`).
+CURRENT PRIORITY's one open thread (JMAP SRV autodiscovery) has both call
+sites wired; the one thing left on it is the `g_resolver_lookup_service()`-
+backed real `Resolver` — FFI, the standing escalation candidate, not
+attempted again here. Round 2's lead-order Track D's one open item (D1's
+`create_resource_sync`/`delete_resource_sync` EDS-vtable wiring) is the same
+GObject-vtable-FFI category. Track E is NEEDS-DECISION. So, as the last two
+sessions on this thread did, claiming the next item on `docs/
+UNSAFE-AUDIT.md`'s own prioritized follow-up list: **Pattern B**, "checked/
+trusted borrow helpers" across `jmap-mail`, ~13 sites, next after Pattern A
+and Pattern D (both delivered in prior sessions).
+
+Pattern B is two families, not one: three sites (`folder.rs::JmapFolder::
+borrow`, `store.rs::JmapStore::borrow`, `transport.rs::JmapTransport::
+borrow`) are the **trusted/dispatched** shape — a bare null-check-then-cast,
+sound because Camel only ever dispatches a class's vfuncs on an instance of
+that class — while the other ~10 (`folder.rs::parent_store`, `server.rs::
+network`, `envelope.rs::internet`, `summary.rs::JmapSummary::borrow`,
+`message_info.rs::JmapMessageInfo::borrow`, `subscribe.rs::borrow`,
+`transfer.rs::mailbox_of`) are the **checked** shape — `g_type_check_
+instance_is_a` first, because the pointer arrived via an ordinary property
+or argument, not vfunc dispatch — and return different shapes (`Option<&T>`,
+`Option<*mut T>`, and one `Result<Option<*mut T>, EnvelopeError>` in
+`envelope.rs::internet`, whose error case is load-bearing, not merely
+defensive). Scoping this increment to the **trusted/dispatched** family
+only: it is the simpler, lower-risk half (no type-check semantics to get
+subtly wrong), and the checked family's shape variety is enough to want its
+own increment. `docs/UNSAFE-AUDIT.md` will get the checked half logged as
+the explicit next step, same pattern as Pattern D's `follow_collection`/
+`follow_server` carve-out.
+
+**Design:** `jmap_backend_core::marshal` gains `pub unsafe fn dispatched_
+borrow<'a, T>(ptr: *mut impl Copy) -> Option<&'a T>` (or the concrete cast
+shape once written) alongside `extension_if_present`/`read_string` — null
+check, then `.cast::<T>().as_ref()`, with the "Camel only dispatches on an
+instance of this class" contract stated once in its doc comment instead of
+three times. `folder.rs::JmapFolder::borrow`, `store.rs::JmapStore::borrow`,
+`transport.rs::JmapTransport::borrow` all switch to it. No behaviour
+change: same `Option<&Self>` for the same inputs; every existing test in
+`jmap-mail` stays green unmodified.
+
+Claiming this increment now.
