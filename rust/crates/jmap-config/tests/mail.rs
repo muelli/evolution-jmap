@@ -35,10 +35,11 @@ use eds_sys::{
     CamelNetworkSecurityMethod, CamelSettings, E_SOURCE_EXTENSION_AUTHENTICATION,
     E_SOURCE_EXTENSION_MAIL_ACCOUNT, E_SOURCE_EXTENSION_MAIL_IDENTITY,
     E_SOURCE_EXTENSION_MAIL_SUBMISSION, E_SOURCE_EXTENSION_MAIL_TRANSPORT,
-    E_SOURCE_EXTENSION_SECURITY, ESource, ESourceBackend, ESourceCamel, ESourceMailAccount,
-    ESourceMailIdentity, ESourceMailSubmission, ESourceSecurity,
+    E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication, ESourceBackend, ESourceCamel,
+    ESourceMailAccount, ESourceMailIdentity, ESourceMailSubmission, ESourceSecurity,
     camel_network_settings_get_security_method, e_collection_backend_factory_prepare_mail,
-    e_source_backend_get_backend_name, e_source_camel_generate_subtype,
+    e_source_authentication_get_method, e_source_backend_get_backend_name,
+    e_source_camel_generate_subtype,
     e_source_camel_get_extension_name, e_source_camel_get_settings,
     e_source_collection_get_identity, e_source_get_extension, e_source_get_parent,
     e_source_get_uid, e_source_has_extension, e_source_mail_account_get_identity_uid,
@@ -139,6 +140,19 @@ impl Source {
     fn parent(&self) -> Option<String> {
         // SAFETY: as above, for the other string on `[Data Source]`.
         unsafe { read_string(e_source_get_parent(self.0)) }
+    }
+
+    /// `[Authentication] Method` — the credential-type selector jmap-mail and
+    /// the backends read (via `CamelNetworkSettings:auth-mechanism`) to choose
+    /// Basic vs Bearer vs OAuth 2.0.
+    fn authentication_method(&self) -> Option<String> {
+        // SAFETY: a live source; the extension is created on demand and owned
+        // by the source, and the getter's string outlives this read.
+        unsafe {
+            let auth: *mut ESourceAuthentication =
+                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+            read_string(e_source_authentication_get_method(auth))
+        }
     }
 
     fn has_extension(&self, name: &CStr) -> bool {
@@ -423,6 +437,29 @@ fn the_three_mail_sources_hang_off_the_account() {
         );
     }
     assert_eq!(committed.collection.uid().as_deref(), Some(ACCOUNT_UID));
+}
+
+/// The mail services inherit the account's authentication method, so a Bearer
+/// (or OAuth 2.0) account does not silently fall back to Basic on its mail
+/// child. Regression: `apply_server` used to blank `[Authentication] Method`,
+/// which left an API-token Fastmail account connecting its collection over
+/// Bearer while its mail child re-prompted for a password forever.
+#[test]
+fn the_mail_services_inherit_the_authentication_method() {
+    let mut account = account();
+    account.connection.auth_method = Some("bearer".to_owned());
+    let committed = Committed::new(&account);
+
+    for (what, source) in [
+        ("the mail account", &committed.account),
+        ("the transport", &committed.transport),
+    ] {
+        assert_eq!(
+            source.authentication_method().as_deref(),
+            Some("bearer"),
+            "{what} did not inherit the account's Bearer auth method"
+        );
+    }
 }
 
 /// The mail account is what Evolution receives through, and its backend name is
