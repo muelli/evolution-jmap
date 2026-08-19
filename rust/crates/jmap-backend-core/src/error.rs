@@ -20,13 +20,14 @@
 //! `Display` text, which already carries the JMAP error type and description.
 
 use std::ffi::{CString, c_int};
+use std::ptr;
 
 use eds_sys::{
-    E_CLIENT_ERROR_AUTHENTICATION_FAILED, E_CLIENT_ERROR_OTHER_ERROR,
+    E_CLIENT_ERROR_AUTHENTICATION_FAILED, E_CLIENT_ERROR_INVALID_ARG, E_CLIENT_ERROR_OTHER_ERROR,
     E_CLIENT_ERROR_PERMISSION_DENIED, E_CLIENT_ERROR_REPOSITORY_OFFLINE, EClientError,
     e_client_error_create,
 };
-use glib_sys::{GError, GQuark, g_error_new_literal, g_quark_from_static_string};
+use glib_sys::{GError, GFALSE, GQuark, g_error_new_literal, g_quark_from_static_string, gboolean};
 use jmap_client::Error;
 
 /// Error domain for failures that are ours, not the server's or the
@@ -93,6 +94,59 @@ pub unsafe fn set_raw_gerror(dest: *mut *mut GError, error: *mut GError) {
     }
 }
 
+/// A `GError` for an argument EDS itself passed us that was invalid — a
+/// vCard/iCalendar Evolution asked us to save that the mapping cannot read,
+/// or an operation with nothing to act on. Shared by call sites across the
+/// backend crates that each independently built this exact `GError`.
+pub fn invalid_arg_gerror(message: &str) -> *mut GError {
+    let message = cstring_lossy(message);
+    // SAFETY: the code is one of the enum's own values and the message is
+    // copied by the call.
+    unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
+}
+
+/// Reports `failure` through `error` (mapped to a `GError` by `to_gerror`,
+/// since every crate's mapping is its own — a `StoreError`, a `SyncError`,
+/// whatever the caller's vfunc fails with) and returns the null pointer that
+/// means failure to a vfunc whose success return is a fresh, owned pointer.
+///
+/// # Safety
+///
+/// As [`set_raw_gerror`].
+pub unsafe fn fail<E, T>(
+    error: *mut *mut GError,
+    failure: &E,
+    to_gerror: impl FnOnce(&E) -> *mut GError,
+) -> *mut T {
+    unsafe { set_raw_gerror(error, to_gerror(failure)) };
+    ptr::null_mut()
+}
+
+/// The same, for a vfunc whose success return is `gboolean` `TRUE`.
+///
+/// # Safety
+///
+/// As [`set_raw_gerror`].
+pub unsafe fn fail_bool<E>(
+    error: *mut *mut GError,
+    failure: &E,
+    to_gerror: impl FnOnce(&E) -> *mut GError,
+) -> gboolean {
+    unsafe { set_raw_gerror(error, to_gerror(failure)) };
+    GFALSE
+}
+
+/// The same, for the arguments EDS itself got wrong: reports `message` as an
+/// [`invalid_arg_gerror`] and returns `FALSE`.
+///
+/// # Safety
+///
+/// As [`set_raw_gerror`].
+pub unsafe fn fail_invalid(error: *mut *mut GError, message: &str) -> gboolean {
+    unsafe { set_raw_gerror(error, invalid_arg_gerror(message)) };
+    GFALSE
+}
+
 fn client_error_code(err: &Error) -> EClientError {
     match err {
         Error::Transport(_) => E_CLIENT_ERROR_REPOSITORY_OFFLINE,
@@ -123,6 +177,7 @@ pub fn cstring_lossy(s: &str) -> CString {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eds_sys::e_client_error_quark;
 
     #[test]
     fn a_message_with_an_interior_nul_is_truncated_not_panicked_on() {
@@ -133,5 +188,21 @@ mod tests {
     fn the_error_domain_is_stable_across_calls() {
         assert_eq!(jmap_backend_error_quark(), jmap_backend_error_quark());
         assert_ne!(jmap_backend_error_quark(), 0);
+    }
+
+    #[test]
+    fn invalid_arg_gerror_carries_the_invalid_arg_code_and_the_message() {
+        let error = invalid_arg_gerror("not a vcard");
+        assert!(!error.is_null());
+        // SAFETY: a freshly allocated GError this test owns.
+        unsafe {
+            assert_eq!((*error).domain, e_client_error_quark());
+            assert_eq!((*error).code, eds_sys::E_CLIENT_ERROR_INVALID_ARG as i32);
+            assert_eq!(
+                std::ffi::CStr::from_ptr((*error).message).to_string_lossy(),
+                "not a vcard"
+            );
+            glib_sys::g_error_free(error);
+        }
     }
 }

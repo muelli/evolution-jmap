@@ -21,6 +21,15 @@ name = "jmap_backend_collection"
 # `e_module_load` collapsed into one entry point answering for both.
 crate-type = ["rlib"]
 
+[features]
+# Compiler-enforced (not just documented) test-only gate on `detached()`,
+# which builds an instance by zeroing memory outside the GObject type system —
+# see docs/UNSAFE-AUDIT.md Pattern A. Enabled for this crate's own test builds
+# via the self dev-dependency below; never on for a normal build. Reaches
+# through to jmap-backend-core's own `testing` gate on `instance::zeroed_box`,
+# the shared helper `detached()` is built on.
+testing = ["jmap-backend-core/testing"]
+
 [dependencies]
 eds-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
@@ -37,6 +46,9 @@ gobject-sys = { workspace = true }
 jmap-config = { workspace = true }
 
 [dev-dependencies]
+# Self dev-dependency to turn on `testing` (and so `detached()`) for this
+# crate's own test builds only — see the `[features]` comment above.
+jmap-backend-collection = { path = ".", features = ["testing"] }
 evolution-jmap-mock = { workspace = true }
 evolution-jmap-proto = { workspace = true }
 # What the mail sources this backend writes on are read by. A dev-dependency

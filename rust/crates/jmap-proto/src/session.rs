@@ -16,6 +16,8 @@ pub const CAPABILITY_MAIL: &str = "urn:ietf:params:jmap:mail";
 pub const CAPABILITY_SUBMISSION: &str = "urn:ietf:params:jmap:submission";
 pub const CAPABILITY_CONTACTS: &str = "urn:ietf:params:jmap:contacts";
 pub const CAPABILITY_CALENDARS: &str = "urn:ietf:params:jmap:calendars";
+pub const CAPABILITY_PRINCIPALS: &str = "urn:ietf:params:jmap:principals";
+pub const CAPABILITY_PRINCIPALS_OWNER: &str = "urn:ietf:params:jmap:principals:owner";
 
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

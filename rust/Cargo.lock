@@ -328,6 +328,7 @@ dependencies = [
  "evolution-jmap-proto",
  "getrandom 0.3.4",
  "percent-encoding",
+ "proptest",
  "serde",
  "serde_json",
  "sha2",
@@ -384,6 +385,7 @@ version = "0.2.0"
 name = "evolution-jmap-proto"
 version = "0.2.0"
 dependencies = [
+ "proptest",
  "serde",
  "serde_json",
 ]
@@ -641,6 +643,7 @@ dependencies = [
  "gio-sys",
  "glib-sys",
  "gobject-sys",
+ "jmap-backend-book",
  "jmap-backend-core",
 ]
 
@@ -665,6 +668,7 @@ dependencies = [
  "gio-sys",
  "glib-sys",
  "gobject-sys",
+ "jmap-backend-cal",
  "jmap-backend-core",
  "serde_json",
 ]
@@ -689,6 +693,7 @@ dependencies = [
  "gio-sys",
  "glib-sys",
  "gobject-sys",
+ "jmap-backend-collection",
  "jmap-backend-core",
  "jmap-config",
  "jmap-mail",
@@ -729,6 +734,7 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-collection",
  "jmap-backend-core",
+ "jmap-config",
  "jmap-mail",
  "serde_json",
 ]
@@ -763,6 +769,7 @@ dependencies = [
  "glib-sys",
  "gobject-sys",
  "jmap-backend-core",
+ "jmap-mail",
 ]
 
 [[package]]

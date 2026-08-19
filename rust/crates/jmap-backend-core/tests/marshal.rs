@@ -13,10 +13,12 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use eds_sys::{
-    E_SOURCE_CREDENTIAL_PASSWORD, e_named_parameters_free, e_named_parameters_new,
-    e_named_parameters_set,
+    CamelAddress, CamelInternetAddress, E_SOURCE_CREDENTIAL_PASSWORD, camel_address_new,
+    camel_internet_address_get_type, camel_internet_address_new, e_named_parameters_free,
+    e_named_parameters_new, e_named_parameters_set,
 };
 use glib_sys::{GSList, g_free, g_slist_free_full, g_slist_length, g_slist_nth_data, gchar};
+use gobject_sys::g_object_unref;
 use jmap_backend_core::marshal;
 
 // ---------------------------------------------------------------------------
@@ -142,5 +144,58 @@ fn null_credentials_report_none() {
     // SAFETY: NULL is what EDS passes before it has any credentials.
     unsafe {
         assert_eq!(marshal::password(ptr::null()), None);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// checked_borrow_ptr_or
+
+/// A NULL pointer is "nothing here", not a type mismatch — the same rule
+/// [`checked_borrow`]/[`checked_borrow_ptr`] apply, kept even though this
+/// variant's failure case carries a caller-supplied error instead of `None`.
+#[test]
+fn a_null_pointer_is_ok_none_not_the_supplied_error() {
+    // SAFETY: NULL is a valid input to a checked-borrow helper.
+    let result = unsafe {
+        marshal::checked_borrow_ptr_or::<CamelAddress, CamelInternetAddress, &str>(
+            ptr::null_mut(),
+            camel_internet_address_get_type(),
+            "boom",
+        )
+    };
+    assert_eq!(result, Ok(None));
+}
+
+/// A pointer of the right type is a borrow, not the error.
+#[test]
+fn a_pointer_of_the_right_type_is_ok_some() {
+    // SAFETY: a live `CamelInternetAddress`, which is-a `CamelAddress`.
+    unsafe {
+        let address: *mut CamelAddress = camel_internet_address_new().cast();
+        let result = marshal::checked_borrow_ptr_or::<CamelAddress, CamelInternetAddress, &str>(
+            address,
+            camel_internet_address_get_type(),
+            "boom",
+        );
+        assert_eq!(result, Ok(Some(address.cast())));
+        g_object_unref(address.cast());
+    }
+}
+
+/// A pointer of the wrong type is the caller's error, not `Ok(None)` — the
+/// distinction `envelope.rs::internet` needs to turn a wrong-type argument
+/// into a refusal rather than silently treating it as an absent address.
+#[test]
+fn a_pointer_of_the_wrong_type_is_the_supplied_error() {
+    // SAFETY: a live `CamelAddress` that is not a `CamelInternetAddress`.
+    unsafe {
+        let plain = camel_address_new();
+        let result = marshal::checked_borrow_ptr_or::<CamelAddress, CamelInternetAddress, &str>(
+            plain,
+            camel_internet_address_get_type(),
+            "boom",
+        );
+        assert_eq!(result, Err("boom"));
+        g_object_unref(plain.cast());
     }
 }

@@ -6,9 +6,12 @@
 //! field silently dropped or renamed by our types fails the test.
 
 use jmap_proto::error::{MethodError, RequestError};
+use jmap_proto::id::Id;
+use jmap_proto::methods::{Comparator, GetRequest, QueryRequest};
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::response::Response;
 use jmap_proto::session::Session;
+use jmap_proto::state::{State, UtcDate};
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -48,6 +51,7 @@ fn error_response_roundtrip() {
 
     let error_invocation = &response.method_responses[3];
     assert!(error_invocation.is_error());
+    assert!(!response.method_responses[0].is_error());
     let error: MethodError = error_invocation.parse().unwrap();
     assert_eq!(error.error_type, "unknownMethod");
 
@@ -162,4 +166,247 @@ fn a_session_that_names_no_upload_limit_says_so() {
         .remove("maxSizeUpload");
     let session: Session = serde_json::from_value(value).unwrap();
     assert_eq!(session.max_size_upload(), None);
+}
+
+/// How many ids one `/get` call may name (RFC 8620 §2), like the other three
+/// core-capability limits above.
+#[test]
+fn the_session_names_how_many_ids_one_get_call_may_name() {
+    let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
+    assert_eq!(session.max_objects_in_get(), Some(256));
+}
+
+/// A server that names no `/get` limit is answered with `None`, like the
+/// other three: a caller has to know it has no number to plan a batch size
+/// around, not be handed an invented one.
+#[test]
+fn a_session_that_names_no_get_limit_says_so() {
+    let mut value = fixture("core/session.json");
+    value["capabilities"][jmap_proto::session::CAPABILITY_CORE]
+        .as_object_mut()
+        .unwrap()
+        .remove("maxObjectsInGet");
+    let session: Session = serde_json::from_value(value).unwrap();
+    assert_eq!(session.max_objects_in_get(), None);
+}
+
+/// `Response::responses_for` groups a call id's (possibly several)
+/// responses, in wire order, and nothing else's.
+#[test]
+fn responses_for_groups_by_call_id_in_order() {
+    let response: Response =
+        serde_json::from_value(fixture("core/response_with_error.json")).unwrap();
+
+    let c2: Vec<&str> = response
+        .responses_for("c2")
+        .map(|invocation| invocation.name.as_str())
+        .collect();
+    assert_eq!(c2, vec!["method2", "anotherResponseFromMethod2"]);
+
+    assert_eq!(response.responses_for("no-such-call").count(), 0);
+}
+
+#[test]
+fn id_as_ref_borrows_the_inner_string() {
+    let id = Id::from("A13824");
+    assert_eq!(AsRef::<str>::as_ref(&id), "A13824");
+}
+
+#[test]
+fn id_display_agrees_with_the_wire_value() {
+    assert_eq!(Id::from("A13824").to_string(), "A13824");
+}
+
+#[test]
+fn state_as_str_and_display_agree_with_the_wire_value() {
+    let state = State::from("75128aab4b1b");
+    assert_eq!(state.as_str(), "75128aab4b1b");
+    assert_eq!(state.to_string(), "75128aab4b1b");
+}
+
+#[test]
+fn utc_date_as_str_and_display_agree_with_the_wire_value() {
+    let date = UtcDate::from("2026-08-19T06:00:00Z");
+    assert_eq!(date.as_str(), "2026-08-19T06:00:00Z");
+    assert_eq!(date.to_string(), "2026-08-19T06:00:00Z");
+}
+
+/// `primary_account` reads `primaryAccounts` verbatim: present for a
+/// capability the server named one for, `None` for one it didn't.
+#[test]
+fn primary_account_reads_the_map_verbatim() {
+    let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
+    assert_eq!(
+        session.primary_account(jmap_proto::session::CAPABILITY_MAIL),
+        Some(&Id::from("A13824"))
+    );
+    assert_eq!(
+        session.primary_account("urn:ietf:params:jmap:vacationresponse"),
+        None
+    );
+}
+
+/// `resolve_primary_account` believes a `primaryAccounts` entry once the
+/// named account actually claims the capability.
+#[test]
+fn resolve_primary_account_trusts_a_consistent_primary_accounts_entry() {
+    let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
+    assert_eq!(
+        session.resolve_primary_account(jmap_proto::session::CAPABILITY_MAIL),
+        Some(&Id::from("A13824"))
+    );
+}
+
+/// A capability the session never mentions at all resolves to `None` — a
+/// `using` naming it would be answered `unknownCapability`, so nothing
+/// behind it is reachable.
+#[test]
+fn resolve_primary_account_is_none_for_an_unnamed_capability() {
+    let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
+    assert_eq!(
+        session.resolve_primary_account("urn:ietf:params:jmap:vacationresponse"),
+        None
+    );
+}
+
+/// The fixture's `primaryAccounts` names "A13824" for `contacts`, but that
+/// account's own `accountCapabilities` never claims `contacts` — a
+/// contradiction in the document per the doc comment, and not believed.
+#[test]
+fn resolve_primary_account_rejects_a_primary_accounts_entry_the_account_does_not_claim() {
+    let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
+    assert_eq!(
+        session.resolve_primary_account(jmap_proto::session::CAPABILITY_CONTACTS),
+        None
+    );
+}
+
+/// With no `primaryAccounts` entry at all, the one personal account that
+/// claims the capability is inferred.
+#[test]
+fn resolve_primary_account_falls_back_to_the_sole_personal_account() {
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {"urn:ietf:params:jmap:mail": {}},
+        "accounts": {
+            "A1": {
+                "name": "a@example.com",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {"urn:ietf:params:jmap:mail": {}}
+            }
+        },
+        "primaryAccounts": {},
+        "username": "a@example.com",
+        "apiUrl": "https://jmap.example.com/api/",
+        "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?accept={type}",
+        "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+        "eventSourceUrl": "https://jmap.example.com/eventsource/",
+        "state": "s1"
+    }))
+    .unwrap();
+    assert_eq!(
+        session.resolve_primary_account(jmap_proto::session::CAPABILITY_MAIL),
+        Some(&Id::from("A1"))
+    );
+}
+
+/// The fallback requires *both* personal and capability-claiming — an
+/// account that is personal but does not claim the capability must not be
+/// inferred just because it is the only account around.
+#[test]
+fn resolve_primary_account_fallback_requires_personal_and_the_capability_together() {
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {"urn:ietf:params:jmap:mail": {}},
+        "accounts": {
+            "A1": {
+                "name": "a@example.com",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {}
+            }
+        },
+        "primaryAccounts": {},
+        "username": "a@example.com",
+        "apiUrl": "https://jmap.example.com/api/",
+        "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?accept={type}",
+        "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+        "eventSourceUrl": "https://jmap.example.com/eventsource/",
+        "state": "s1"
+    }))
+    .unwrap();
+    assert_eq!(
+        session.resolve_primary_account(jmap_proto::session::CAPABILITY_MAIL),
+        None
+    );
+}
+
+/// `GetRequest::ids` actually sets `ids`, not just the fields `all` already
+/// sets.
+#[test]
+fn get_request_ids_builder_sets_the_ids_field() {
+    let request = GetRequest::ids(Id::from("A1"), [Id::from("M1"), Id::from("M2")]);
+    assert_eq!(request.ids, Some(vec![Id::from("M1"), Id::from("M2")]));
+}
+
+/// `position: 0` and `calculateTotal: false` are `/query`'s defaults (RFC
+/// 8620 §5.5) and are omitted from the wire, not sent as explicit zeroes.
+#[test]
+fn query_request_omits_default_position_and_calculate_total() {
+    let request = QueryRequest::<Value>::new(Id::from("A1"));
+    let value = serde_json::to_value(&request).unwrap();
+    assert!(value.get("position").is_none());
+    assert!(value.get("calculateTotal").is_none());
+}
+
+/// A non-default position or an explicit `calculateTotal: true` must survive
+/// onto the wire — the omission above is specifically for the defaults, not
+/// for these fields generally.
+#[test]
+fn query_request_keeps_a_nonzero_position_and_true_calculate_total() {
+    let mut request = QueryRequest::<Value>::new(Id::from("A1"));
+    request.position = 5;
+    request.calculate_total = true;
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["position"], serde_json::json!(5));
+    assert_eq!(value["calculateTotal"], serde_json::json!(true));
+}
+
+/// A `Comparator` the wire omits `isAscending` on defaults to ascending (RFC
+/// 8620 §5.5).
+#[test]
+fn comparator_defaults_to_ascending_when_the_wire_omits_it() {
+    let comparator: Comparator =
+        serde_json::from_value(serde_json::json!({"property": "foo"})).unwrap();
+    assert!(comparator.is_ascending);
+}
+
+/// The fallback also excludes an account that claims the capability but is
+/// not personal (a shared account) — `isPersonal` is one of the two
+/// conditions the fallback requires, not a redundant one alongside the
+/// capability check `resolve_primary_account` does afterwards.
+#[test]
+fn resolve_primary_account_fallback_excludes_a_non_personal_account() {
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {"urn:ietf:params:jmap:mail": {}},
+        "accounts": {
+            "A1": {
+                "name": "shared@example.com",
+                "isPersonal": false,
+                "isReadOnly": false,
+                "accountCapabilities": {"urn:ietf:params:jmap:mail": {}}
+            }
+        },
+        "primaryAccounts": {},
+        "username": "a@example.com",
+        "apiUrl": "https://jmap.example.com/api/",
+        "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?accept={type}",
+        "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+        "eventSourceUrl": "https://jmap.example.com/eventsource/",
+        "state": "s1"
+    }))
+    .unwrap();
+    assert_eq!(
+        session.resolve_primary_account(jmap_proto::session::CAPABILITY_MAIL),
+        None
+    );
 }

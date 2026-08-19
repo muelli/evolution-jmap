@@ -166,6 +166,22 @@ impl ChildKind {
             Self::Calendar => EXTENSION_CALENDAR,
         }
     }
+
+    /// Which kind a source carrying `extension` is, or `None` for a group that
+    /// names no kind of this backend's.
+    ///
+    /// The inverse of [`ChildKind::extension`], and deliberately the only one:
+    /// [`resource_id_for`] reads a child this backend already wrote, while a
+    /// `create_resource_sync` reads a *scratch* source that has no identity yet
+    /// and so cannot go through it. Two matches over the same two constants is
+    /// one of them going stale.
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        match extension {
+            EXTENSION_ADDRESS_BOOK => Some(Self::AddressBook),
+            EXTENSION_CALENDAR => Some(Self::Calendar),
+            _ => None,
+        }
+    }
 }
 
 impl Child {
@@ -227,11 +243,7 @@ pub fn resource_id_for(extension: &str, identity: &str) -> Option<String> {
     if identity.is_empty() {
         return None;
     }
-    let kind = match extension {
-        EXTENSION_ADDRESS_BOOK => ChildKind::AddressBook,
-        EXTENSION_CALENDAR => ChildKind::Calendar,
-        _ => return None,
-    };
+    let kind = ChildKind::from_extension(extension)?;
     Some(format!("{}:{identity}", kind.prefix()))
 }
 

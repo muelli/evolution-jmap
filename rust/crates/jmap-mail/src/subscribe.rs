@@ -55,7 +55,7 @@ use eds_sys::{
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, GType, gboolean, gchar};
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::error::set_raw_gerror;
+use jmap_backend_core::error::fail_bool;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::InterfaceImpl;
 use jmap_backend_core::trampoline::{guard, guard_bool};
@@ -234,7 +234,7 @@ unsafe fn change(
     // SAFETY: the contract above.
     let Some(store) = (unsafe { borrow(subscribable) }) else {
         // SAFETY: the contract above.
-        return unsafe { fail(error, &StoreError::Disconnected) };
+        return unsafe { fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror) };
     };
     // Borrowed from Camel and NUL-terminated; `read_string` copies, and reads a
     // NULL or empty name as no name — which no mailbox answers to, because a
@@ -245,7 +245,7 @@ unsafe fn change(
     let folder = match set_subscribed(store, &path, subscribed) {
         Ok(folder) => folder,
         // SAFETY: the contract above.
-        Err(failure) => return unsafe { fail(error, &failure) },
+        Err(failure) => return unsafe { fail_bool(error, &failure, StoreError::to_gerror) },
     };
 
     let announcement = FolderInfoChain::from_forest(slice::from_ref(&folder), Some(0));
@@ -271,16 +271,4 @@ unsafe fn change(
 /// every instance this vfunc is dispatched on is one.
 unsafe fn borrow<'a>(subscribable: *mut CamelSubscribable) -> Option<&'a JmapStore> {
     unsafe { JmapStore::borrow(subscribable.cast::<CamelStore>()) }
-}
-
-/// Reports a failure and answers with it.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail(error: *mut *mut GError, failure: &StoreError) -> gboolean {
-    // SAFETY: `to_gerror` hands over an owned GError, and `error` meets
-    // `set_raw_gerror`'s contract by this function's.
-    unsafe { set_raw_gerror(error, failure.to_gerror()) };
-    GFALSE
 }

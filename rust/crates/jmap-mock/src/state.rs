@@ -194,6 +194,12 @@ pub struct AccountState {
     pub contact_cards: Store<jmap_proto::contacts::ContactCard>,
     pub calendars: Store<jmap_proto::calendars::Calendar>,
     pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
+    pub principals: Store<jmap_proto::principals::Principal>,
+    /// The principal that answers RFC 9670 §2.5's `currentUserPrincipalId` —
+    /// "which principal is *me* in this account". `None` until a test seeds
+    /// one; the session document then omits the property rather than naming a
+    /// principal that does not exist.
+    pub current_user_principal_id: Option<Id>,
     pub blobs: BTreeMap<Id, Blob>,
     next_blob_id: u64,
 }
@@ -211,6 +217,8 @@ impl AccountState {
             contact_cards: Store::new("C"),
             calendars: Store::new("CAL"),
             calendar_events: Store::new("CE"),
+            principals: Store::new("P"),
+            current_user_principal_id: None,
             blobs: BTreeMap::new(),
             next_blob_id: 1,
         }

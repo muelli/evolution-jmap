@@ -28,7 +28,7 @@ use glib_sys::GFALSE;
 use gobject_sys::g_object_unref;
 use jmap_backend_collection::child_source::{EXTENSIONS, UnwritableSetting, apply};
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::SourceConfig;
+use jmap_backend_core::source::{ConnectTarget, SourceConfig};
 use jmap_collection_sync::child_source::{
     Connection, EXTENSION_AUTHENTICATION, EXTENSION_DATA_SOURCE,
 };
@@ -202,7 +202,7 @@ fn a_written_child_reaches_the_server_its_account_named() {
     assert_eq!(
         source.config(),
         SourceConfig {
-            origin: "https://jmap.example.com:8443".to_owned(),
+            target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
             user: Some("vera@example.com".to_owned()),
             resource_id: Some("AB1".to_owned()),
         }
@@ -349,7 +349,10 @@ fn a_plain_http_account_writes_children_that_do_not_insist_on_tls() {
 
     let source = TestSource::new().written(&child, &plain);
     assert!(!source.secure());
-    assert_eq!(source.config().origin, "http://127.0.0.1:8443");
+    assert_eq!(
+        source.config().target,
+        ConnectTarget::Origin("http://127.0.0.1:8443".into())
+    );
 
     let secure = TestSource::new().written(&child, &connection());
     assert!(secure.secure(), "and a TLS account's children still say so");
@@ -366,7 +369,10 @@ fn a_port_the_account_did_not_name_leaves_the_child_at_the_scheme_default() {
     let source =
         TestSource::new().written(&child(ChildKind::AddressBook, "AB1", "Personal"), &unported);
 
-    assert_eq!(source.config().origin, "https://jmap.example.com");
+    assert_eq!(
+        source.config().target,
+        ConnectTarget::Domain("jmap.example.com".into())
+    );
 }
 
 #[test]

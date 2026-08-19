@@ -141,6 +141,30 @@ impl Fanout {
     }
 }
 
+impl Child {
+    /// The child source one collection of `account` becomes.
+    ///
+    /// Public because a collection is not only ever *discovered*: a
+    /// `create_resource_sync` has just made one on the server and has to write
+    /// the same child for it that the next populate would have written. A second
+    /// spelling of this mapping there would be a created source that differs
+    /// from the discovered one in some field nobody compares — and the fields in
+    /// question are the ones that decide whether EDS keeps the cache file and
+    /// which server the child talks to.
+    pub fn for_resource(kind: ChildKind, account: &ServiceAccount, resource: &Resource) -> Self {
+        Self {
+            resource_id: kind.resource_id(&resource.id),
+            kind,
+            display_name: resource.name.clone(),
+            account_id: account.id.clone(),
+            collection_id: resource.id.clone(),
+            is_default: resource.is_default,
+            color: resource.color.clone(),
+            read_only: account.read_only,
+        }
+    }
+}
+
 /// Reads `resource_id` back into the child it names.
 ///
 /// `None` is a resource id this backend did not write — a child of some other
@@ -166,16 +190,9 @@ fn children<'a>(
     account: &'a ServiceAccount,
     resources: &'a [Resource],
 ) -> impl Iterator<Item = Child> + 'a {
-    resources.iter().map(move |resource| Child {
-        resource_id: kind.resource_id(&resource.id),
-        kind,
-        display_name: resource.name.clone(),
-        account_id: account.id.clone(),
-        collection_id: resource.id.clone(),
-        is_default: resource.is_default,
-        color: resource.color.clone(),
-        read_only: account.read_only,
-    })
+    resources
+        .iter()
+        .map(move |resource| Child::for_resource(kind, account, resource))
 }
 
 #[cfg(test)]

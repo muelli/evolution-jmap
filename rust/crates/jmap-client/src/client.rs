@@ -57,6 +57,16 @@ impl Credentials {
     }
 }
 
+/// Whether `JMAP_LIVE_SERVER_REBASE_URLS` asks for
+/// [`ClientBuilder::rebase_urls_to_origin`]. Shared by every top-level
+/// `connect*` convenience so the env var switches them all identically,
+/// rather than each one growing its own copy of the same two comparisons.
+pub fn rebase_urls_from_env() -> bool {
+    std::env::var("JMAP_LIVE_SERVER_REBASE_URLS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 pub struct ClientBuilder {
     timeout: Duration,
     transport: Option<Box<dyn Transport>>,
@@ -206,11 +216,8 @@ impl Client {
     /// Every EDS backend reaches a server through this method, so one env var
     /// switches them all.
     pub fn connect(origin: &str, credentials: Credentials) -> Result<Self, Error> {
-        let rebase = std::env::var("JMAP_LIVE_SERVER_REBASE_URLS")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
         Self::builder()
-            .rebase_urls_to_origin(rebase)
+            .rebase_urls_to_origin(rebase_urls_from_env())
             .connect(origin, credentials)
     }
 
@@ -432,5 +439,20 @@ impl Client {
             });
         }
         Ok(response)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// White-box: `timeout`'s field is private, so only an in-crate test can
+    /// see that the builder kept the value passed rather than falling back to
+    /// a fresh default (both look identical from outside the crate until a
+    /// connection is slow enough to time out).
+    #[test]
+    fn timeout_replaces_the_default() {
+        let builder = ClientBuilder::default().timeout(Duration::from_secs(5));
+        assert_eq!(builder.timeout, Duration::from_secs(5));
     }
 }

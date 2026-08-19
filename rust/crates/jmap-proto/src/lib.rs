@@ -14,6 +14,8 @@
 //! - [draft-ietf-jmap-calendars] JMAP for Calendars: `Calendar`,
 //!   `CalendarEvent` carrying JSCalendar ([RFC 8984]) events
 //!   (feature `calendars`).
+//! - [RFC 9670] JMAP Sharing: the `Principal` object and its `/get`/`/query`
+//!   methods (feature `principals`).
 //!
 //! [RFC 8620]: https://www.rfc-editor.org/rfc/rfc8620
 //! [RFC 8621]: https://www.rfc-editor.org/rfc/rfc8621
@@ -21,6 +23,7 @@
 //! [RFC 9553]: https://www.rfc-editor.org/rfc/rfc9553
 //! [RFC 8984]: https://www.rfc-editor.org/rfc/rfc8984
 //! [draft-ietf-jmap-calendars]: https://datatracker.ietf.org/doc/draft-ietf-jmap-calendars/
+//! [RFC 9670]: https://www.rfc-editor.org/rfc/rfc9670
 
 #[cfg(feature = "calendars")]
 pub mod calendars;
@@ -31,6 +34,8 @@ pub mod id;
 #[cfg(feature = "mail")]
 pub mod mail;
 pub mod methods;
+#[cfg(feature = "principals")]
+pub mod principals;
 pub mod request;
 pub mod response;
 pub mod session;

@@ -78,6 +78,45 @@ if(NOT EVOLUTION_PRIVATE_LIB_DIR)
 endif()
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS "${EVOLUTION_PRIVATE_LIB_DIR}")
 
+# lintian's no-changelog and no-copyright-file: Debian policy §12.3/§12.5 asks
+# every package for both under /usr/share/doc/<package>/, and lintian checks
+# regardless of whether this .deb ever reaches an actual Debian archive. The
+# changelog is a plain-text upstream one (docs/packaging/changelog), gzipped
+# here; `gzip -n` leaves the original name and modification time out of the
+# compressed stream, so the bytes it produces depend only on the changelog's
+# own content, not on when this ran — required by
+# cmake/tests/check-deb-reproducible.cmake. The copyright file
+# (docs/packaging/copyright) is DEP-5 format but hand-written, not the
+# REUSE-metadata-generated one docs/ROADMAP.md's Track C2 asks for; it says so
+# of itself.
+find_program(GZIP_EXECUTABLE gzip REQUIRED)
+set(_changelog_build "${CMAKE_BINARY_DIR}/changelog")
+set(_changelog_gz "${CMAKE_BINARY_DIR}/changelog.gz")
+configure_file(
+	"${CMAKE_SOURCE_DIR}/docs/packaging/changelog"
+	"${_changelog_build}"
+	COPYONLY
+)
+add_custom_command(
+	OUTPUT "${_changelog_gz}"
+	COMMAND ${GZIP_EXECUTABLE} -n -9 -f -k "${_changelog_build}"
+	DEPENDS "${_changelog_build}"
+	COMMENT "Compressing the upstream changelog for packaging"
+)
+add_custom_target(packaging-changelog ALL DEPENDS "${_changelog_gz}")
+
+# Attached to one component rather than all five: CPACK_COMPONENTS_GROUPING
+# ALL_COMPONENTS_IN_ONE already merges every component into the single .deb
+# above, so which one owns these two files is otherwise arbitrary.
+install(FILES "${_changelog_gz}"
+	DESTINATION "/usr/share/doc/${PACKAGE_NAME}"
+	COMPONENT config-module
+)
+install(FILES "${CMAKE_SOURCE_DIR}/docs/packaging/copyright"
+	DESTINATION "/usr/share/doc/${PACKAGE_NAME}"
+	COMPONENT config-module
+)
+
 # The *extended* description only: CPack puts
 # CPACK_PACKAGE_DESCRIPTION_SUMMARY on the synopsis line and indents each line
 # below by the one space Debian policy asks for. Repeating the summary here, or
@@ -122,6 +161,8 @@ set(EXPECTED_PACKAGE_FILES
 	${CAMEL_PROVIDER_DIR}/libcameljmap.urls
 	${EDS_REGISTRY_MODULE_DIR}/module-jmap-backend.so
 	${EVOLUTION_MODULE_DIR}/module-jmap-configuration.so
+	/usr/share/doc/${PACKAGE_NAME}/changelog.gz
+	/usr/share/doc/${PACKAGE_NAME}/copyright
 )
 
 # Named by add_translations() rather than spelled out again, so a catalogue
@@ -167,3 +208,34 @@ add_test(
 		"-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
 		-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-release-workflow.cmake"
 )
+
+# Track C1: lintian-clean .deb, kept that way by CI rather than by whoever
+# next happens to run it by hand. Optional — not every machine building this
+# tree has lintian installed (`ci/install-deps.sh` is what guarantees CI
+# does) — so the test is only registered when `find_program` locates it,
+# rather than requiring it the way the two tests above require cpack/dpkg.
+find_program(LINTIAN_EXECUTABLE lintian)
+if(LINTIAN_EXECUTABLE)
+	add_test(
+		NAME package-deb-lintian
+		COMMAND ${CMAKE_COMMAND}
+			"-DBUILD_DIR=${CMAKE_BINARY_DIR}"
+			"-DSTAGE_DIR=${CMAKE_BINARY_DIR}/package-lintian-test"
+			"-DLINTIAN_EXECUTABLE=${LINTIAN_EXECUTABLE}"
+			-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-deb-lintian.cmake"
+	)
+endif()
+
+# Track C2: keeps docs/packaging/copyright generated (tools/
+# generate-debian-copyright.py) in sync with REUSE.toml rather than letting
+# it drift back into a hand-maintained file nobody remembers to update.
+find_program(PYTHON3_EXECUTABLE python3)
+if(PYTHON3_EXECUTABLE)
+	add_test(
+		NAME debian-copyright-in-sync
+		COMMAND ${CMAKE_COMMAND}
+			"-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+			"-DPYTHON3_EXECUTABLE=${PYTHON3_EXECUTABLE}"
+			-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-debian-copyright.cmake"
+	)
+endif()

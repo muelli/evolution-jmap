@@ -27,11 +27,12 @@
 //! does not implement either.
 
 use eds_sys::{
-    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG, ETimezoneCache, ICalComponent,
-    e_cal_client_error_create, e_client_error_create,
+    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, ETimezoneCache, ICalComponent, e_cal_client_error_create,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
-use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
+use jmap_backend_core::error::{
+    cstring_lossy, fail_bool, fail_invalid, invalid_arg_gerror, set_raw_gerror,
+};
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{read_string, set_out_list, set_out_string};
 use jmap_cal_sync::{CalSync, SyncError, Unsendable};
@@ -71,7 +72,7 @@ pub unsafe fn list_existing(
         Ok(listed) => listed,
         // SAFETY: `error` satisfies set_raw_gerror's contract by this
         // function's own.
-        Err(failure) => return unsafe { fail(error, &failure) },
+        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
     };
 
     // SAFETY: as above for the out-parameters; both allocations are GLib ones
@@ -181,7 +182,7 @@ pub unsafe fn load_component(
     let info = match sync.load_component(&uid) {
         Ok(info) => info,
         // SAFETY: as above.
-        Err(failure) => return unsafe { fail(error, &failure) },
+        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
     };
 
     let component = marshal::component_from_ical(&info.icalendar);
@@ -272,7 +273,7 @@ pub unsafe fn save_component(
     let info = match sync.save_component(&saved.icalendar, existing_uid.as_deref()) {
         Ok(info) => info,
         // SAFETY: as above.
-        Err(failure) => return unsafe { fail(error, &failure) },
+        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
     };
 
     // SAFETY: `out_new_uid` satisfies the contract by this function's own, and
@@ -301,7 +302,7 @@ pub unsafe fn remove_component(
     match sync.remove_component(&uid) {
         Ok(()) => GTRUE,
         // SAFETY: as above.
-        Err(failure) => unsafe { fail(error, &failure) },
+        Err(failure) => unsafe { fail_bool(error, &failure, to_gerror) },
     }
 }
 
@@ -331,12 +332,12 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
         // own account of what it could not parse — developer-facing text, and
         // deliberately not translated, because a user cannot act on it and a
         // bug report should quote it in the language it was written in.
-        SyncError::ICal(_) => invalid_arg(&failure.to_string()),
+        SyncError::ICal(_) => invalid_arg_gerror(&failure.to_string()),
         // A component we could read but cannot state as JSCalendar. The same
         // code — the save was refused over what the component says, so the
         // argument was bad rather than the server — and the one message here a
         // user is expected to read and act on, so this one is translated.
-        SyncError::Unsendable(reason) => invalid_arg(&refusal(reason)),
+        SyncError::Unsendable(reason) => invalid_arg_gerror(&refusal(reason)),
     }
 }
 
@@ -378,31 +379,4 @@ fn refusal(reason: &Unsendable) -> String {
             c"This event repeats in a way that cannot be stored on the server, so it was not created. Stating the recurrence as a repeat count is the spelling that always works.",
         ),
     }
-}
-
-fn invalid_arg(message: &str) -> *mut GError {
-    let message = cstring_lossy(message);
-    // SAFETY: the code is one of the enum's own values and the message is
-    // copied by the call.
-    unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
-}
-
-/// Reports `failure` through `error` and returns the vfunc's FALSE.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail(error: *mut *mut GError, failure: &SyncError) -> gboolean {
-    unsafe { set_raw_gerror(error, to_gerror(failure)) };
-    GFALSE
-}
-
-/// The same, for the arguments EDS itself got wrong.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail_invalid(error: *mut *mut GError, message: &str) -> gboolean {
-    unsafe { set_raw_gerror(error, invalid_arg(message)) };
-    GFALSE
 }

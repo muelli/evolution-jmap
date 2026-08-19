@@ -91,8 +91,8 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
 }
 
 /// A throwaway `ESource` authenticating by this service's own name — what a
-/// real JMAP account's `[Authentication] method` would be set to once M7's
-/// setup UI writes OAuth2 accounts.
+/// real JMAP account's `[Authentication] method` is set to when M7's setup UI
+/// writes an OAuth2 account.
 fn source_naming_this_service() -> *mut ESource {
     let uid = CString::new("jmap-collection-oauth2-service-test").expect("no NUL in a literal");
     let mut error = ptr::null_mut();

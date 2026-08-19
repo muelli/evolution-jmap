@@ -30,6 +30,8 @@
 
 use std::any::type_name;
 use std::marker::PhantomData;
+#[cfg(feature = "testing")]
+use std::mem::MaybeUninit;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
@@ -142,4 +144,29 @@ impl<T> Drop for Slot<T> {
         // SAFETY: `&mut self` proves no borrow is outstanding.
         unsafe { self.clear() }
     }
+}
+
+/// Builds a `Box<T>` from an all-zero allocation, bypassing `T`'s own
+/// constructors entirely.
+///
+/// This is the shared plumbing behind the `detached()` test doubles across
+/// the backend crates (`docs/UNSAFE-AUDIT.md` Pattern A): each builds an
+/// instance outside the GObject type system because a real one needs
+/// infrastructure — a running `evolution-source-registry`, a `CamelSession`,
+/// a `GtkWidget`'s display — that neither the test VM nor CI has.
+/// `#[cfg(feature = "testing")]`-gated so that path is compiler-enforced
+/// test-only, not just documented.
+///
+/// # Safety
+///
+/// Every field of `T` must be valid at all-zero bytes — the same thing each
+/// call site already has to verify on its own account (a pointer or an
+/// integer field, or a [`Slot`], whose empty state *is* all-zero). The
+/// result is not a valid `T` beyond that one property: passing it to code
+/// that assumes real construction ran — an EDS or Camel function, for
+/// instance — is undefined behaviour.
+#[cfg(feature = "testing")]
+pub unsafe fn zeroed_box<T>() -> Box<T> {
+    // SAFETY: forwarded to the caller via this function's own contract above.
+    unsafe { Box::new(MaybeUninit::zeroed().assume_init()) }
 }

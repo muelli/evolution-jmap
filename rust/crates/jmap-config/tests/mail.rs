@@ -52,7 +52,7 @@ use jmap_backend_collection::factory::JmapCollectionFactory;
 use jmap_backend_collection::mail_child;
 use jmap_backend_collection::resource_id::resource_id_of;
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_backend_core::subclass::register_static;
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
@@ -724,7 +724,7 @@ fn the_mail_account_names_the_server_the_store_would_connect_to() {
     assert_eq!(
         committed.account.server(),
         Ok(ServerConfig {
-            origin: "https://jmap.example.com:8443".to_owned(),
+            target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
             user: Some("vera".to_owned()),
         })
     );
@@ -823,8 +823,10 @@ fn both_readers_of_the_security_method_agree_that_the_account_is_encrypted() {
             "Camel reads {what} as some other kind of connection than HTTPS"
         );
         assert_eq!(
-            source.server().map(|server| server.origin),
-            Ok("https://jmap.example.com:8443".to_owned()),
+            source.server().map(|server| server.target),
+            Ok(ConnectTarget::Origin(
+                "https://jmap.example.com:8443".to_owned()
+            )),
             "{what} does not assemble the origin a store would open"
         );
     }
@@ -862,7 +864,7 @@ fn an_account_the_user_did_not_secure_reaches_its_server_in_plaintext() {
     assert_eq!(
         committed.account.server(),
         Ok(ServerConfig {
-            origin: "http://localhost:8080".to_owned(),
+            target: ConnectTarget::Origin("http://localhost:8080".to_owned()),
             user: Some("vera".to_owned()),
         })
     );
@@ -884,8 +886,10 @@ fn moving_an_account_to_another_server_reaches_the_settings_camel_holds() {
     let committed = Committed::new(&account());
     let settings = committed.account.camel_settings();
     assert_eq!(
-        committed.account.server().map(|server| server.origin),
-        Ok("https://jmap.example.com:8443".to_owned())
+        committed.account.server().map(|server| server.target),
+        Ok(ConnectTarget::Origin(
+            "https://jmap.example.com:8443".to_owned()
+        ))
     );
 
     let moved = Account {
@@ -908,9 +912,10 @@ fn moving_an_account_to_another_server_reaches_the_settings_camel_holds() {
     assert_eq!(
         committed.account.server(),
         Ok(ServerConfig {
-            // No port: the account stopped naming one, so the scheme's default
-            // applies rather than the one it named before.
-            origin: "https://jmap.example.org".to_owned(),
+            // No port: the account stopped naming one, which is RFC 8620
+            // §2.2's own shape — SRV-autodiscovery-eligible, not merely a
+            // scheme default.
+            target: ConnectTarget::Domain("jmap.example.org".to_owned()),
             user: Some("vera.new".to_owned()),
         })
     );

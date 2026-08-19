@@ -19,7 +19,7 @@ use eds_sys::{
     e_source_resource_set_identity, e_source_security_set_secure,
 };
 use gobject_sys::g_object_unref;
-use jmap_backend_core::source::{SourceConfig, SourceError};
+use jmap_backend_core::source::{ConnectTarget, SourceConfig, SourceError};
 
 /// An `ESource` that is not backed by the registry — `e_source_new_with_uid`
 /// with a NULL D-Bus object is exactly what EDS itself uses for a source read
@@ -111,7 +111,11 @@ fn a_configured_source_yields_an_origin_a_user_and_an_address_book() {
         .config()
         .expect("a complete https source is valid");
 
-    assert_eq!(config.origin, "https://jmap.example.com");
+    // No port named: RFC 8620 §2.2 SRV autodiscovery applies.
+    assert_eq!(
+        config.target,
+        ConnectTarget::Domain("jmap.example.com".into())
+    );
     assert_eq!(config.user.as_deref(), Some("vera@example.com"));
     assert_eq!(config.resource_id.as_deref(), Some("Ab1"));
 }
@@ -127,7 +131,10 @@ fn security_defaults_to_tls_when_the_source_never_mentions_it() {
         .config()
         .expect("a source with no [Security] group is secure");
 
-    assert_eq!(config.origin, "https://jmap.example.com");
+    assert_eq!(
+        config.target,
+        ConnectTarget::Domain("jmap.example.com".into())
+    );
 }
 
 #[test]
@@ -155,11 +162,15 @@ fn an_explicit_port_is_carried_into_the_origin() {
         .config()
         .expect("a complete https source is valid");
 
-    assert_eq!(config.origin, "https://jmap.example.com:8443");
+    // A named port states an endpoint, not a domain to autodiscover.
+    assert_eq!(
+        config.target,
+        ConnectTarget::Origin("https://jmap.example.com:8443".into())
+    );
 }
 
 #[test]
-fn port_zero_means_unset_and_leaves_the_scheme_default() {
+fn port_zero_means_unset_and_is_srv_eligible() {
     let config = TestSource::new()
         .host("jmap.example.com")
         .secure(true)
@@ -167,7 +178,10 @@ fn port_zero_means_unset_and_leaves_the_scheme_default() {
         .config()
         .expect("a complete https source is valid");
 
-    assert_eq!(config.origin, "https://jmap.example.com");
+    assert_eq!(
+        config.target,
+        ConnectTarget::Domain("jmap.example.com".into())
+    );
 }
 
 #[test]
@@ -196,8 +210,14 @@ fn plaintext_to_loopback_is_allowed() {
             .port(8080)
             .config()
             .unwrap_or_else(|e| panic!("{host} should be reachable in the clear: {e}"));
-        assert!(config.origin.starts_with("http://"), "{}", config.origin);
-        assert!(config.origin.ends_with(":8080"), "{}", config.origin);
+        let ConnectTarget::Origin(origin) = &config.target else {
+            panic!(
+                "an explicit port names an endpoint, not a domain: {:?}",
+                config.target
+            );
+        };
+        assert!(origin.starts_with("http://"), "{origin}");
+        assert!(origin.ends_with(":8080"), "{origin}");
     }
 }
 
@@ -210,7 +230,10 @@ fn an_ipv6_literal_is_bracketed_so_the_port_stays_a_port() {
         .config()
         .expect("an IPv6 literal is a valid host");
 
-    assert_eq!(config.origin, "https://[2001:db8::1]:8443");
+    assert_eq!(
+        config.target,
+        ConnectTarget::Origin("https://[2001:db8::1]:8443".into())
+    );
 }
 
 #[test]

@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-17 12:10+0000\n"
+"POT-Creation-Date: 2026-08-19 10:29+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -21,7 +21,7 @@ msgstr ""
 #. saved. %1$s is the date and time the series ends, as it was
 #. written in the appointment; %2$s is a time zone identifier such
 #. as "Europe/Berlin".
-#: rust/crates/jmap-backend-cal/src/ops.rs:369
+#: rust/crates/jmap-backend-cal/src/ops.rs:370
 #, c-format
 msgid ""
 "This event repeats until %1$s, and the time zone it is in, %2$s, is not "
@@ -33,7 +33,7 @@ msgstr ""
 #. TRANSLATORS: shown when a new recurring appointment could not be
 #. saved, and the reason is not something the user can be pointed
 #. at more precisely than this.
-#: rust/crates/jmap-backend-cal/src/ops.rs:378
+#: rust/crates/jmap-backend-cal/src/ops.rs:379
 msgid ""
 "This event repeats in a way that cannot be stored on the server, so it was "
 "not created. Stating the recurrence as a repeat count is the spelling that "
@@ -82,41 +82,66 @@ msgstr ""
 
 #. TRANSLATORS: shown when EDS refused an OAuth 2.0 account's
 #. access token but did not say why.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:208
+#: rust/crates/jmap-backend-core/src/oauth2.rs:203
 msgid "the account has no OAuth 2.0 access token"
 msgstr ""
 
 #. TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
 #. token that was empty rather than absent.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:229
+#: rust/crates/jmap-backend-core/src/oauth2.rs:224
 msgid "the OAuth 2.0 service returned an empty access token"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:297
-msgid "_Server:"
+#. TRANSLATORS: shown when Evolution asks a JMAP account to
+#. create a collection whose kind the request does not state.
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:167
+msgid "the new collection is neither an address book nor a calendar"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:298
-msgid "_Port:"
+#. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
+#. the JMAP server behind an account offers no account of that
+#. kind at all, so there is nowhere to create one.
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:179
+#, c-format
+msgid "this account's JMAP server has no place to create %1$s in"
+msgstr ""
+
+#. TRANSLATORS: %1$s is "address book" or "calendar"; %2$s is a
+#. developer-facing description of the setting that could not be
+#. written. Shown when the collection was made on the server and
+#. the local source describing it could not be completed.
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:188
+#, c-format
+msgid ""
+"the %1$s was created on the server, but the source for it could not be "
+"written: %2$s"
 msgstr ""
 
 #: rust/crates/jmap-config/src/backend.rs:299
+msgid "_Server:"
+msgstr ""
+
+#: rust/crates/jmap-config/src/backend.rs:300
+msgid "_Port:"
+msgstr ""
+
+#: rust/crates/jmap-config/src/backend.rs:301
 msgid "_Username:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:306
+#: rust/crates/jmap-config/src/backend.rs:308
 msgid "Use a _secure connection (TLS)"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:311
+#: rust/crates/jmap-config/src/backend.rs:313
 msgid "A_uthentication:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:331
+#: rust/crates/jmap-config/src/backend.rs:333
 msgid "Password"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:332
+#: rust/crates/jmap-config/src/backend.rs:334
 msgid "OAuth 2.0"
 msgstr ""
 
@@ -138,18 +163,18 @@ msgid ""
 "Details\" instead."
 msgstr ""
 
-#: rust/crates/jmap-config/src/config_lookup.rs:297
+#: rust/crates/jmap-config/src/config_lookup.rs:323
 msgid "Look up JMAP account details"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the server this account was discovered
 #. against, shown in the account assistant's list of lookup results.
-#: rust/crates/jmap-config/src/config_lookup.rs:361
+#: rust/crates/jmap-config/src/config_lookup.rs:387
 #, c-format
 msgid "JMAP account at %1$s, using OAuth 2.0"
 msgstr ""
 
-#: rust/crates/jmap-config/src/config_lookup.rs:381
+#: rust/crates/jmap-config/src/config_lookup.rs:407
 msgid "JMAP account (OAuth 2.0)"
 msgstr ""
 

@@ -54,9 +54,8 @@ use eds_sys::{
     camel_internet_address_get, camel_internet_address_get_type, camel_service_error_quark,
 };
 use glib_sys::{GError, GFALSE, g_error_new_literal, gchar};
-use gobject_sys::g_type_check_instance_is_a;
 use jmap_backend_core::error::cstring_lossy;
-use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::marshal::{checked_borrow_ptr_or, read_string};
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
 
 /// A pair of addresses that does not describe a message that can be delivered.
@@ -198,17 +197,14 @@ unsafe fn internet(
     address: *mut CamelAddress,
     which: &'static str,
 ) -> Result<Option<*mut CamelInternetAddress>, EnvelopeError> {
-    if address.is_null() {
-        return Ok(None);
-    }
     // SAFETY: the contract above — a live GObject instance, and a type that
     // registers itself on first use.
-    let is_internet = unsafe {
-        g_type_check_instance_is_a(address.cast(), camel_internet_address_get_type()) != GFALSE
-    };
-    match is_internet {
-        true => Ok(Some(address.cast())),
-        false => Err(EnvelopeError::NotInternet(which)),
+    unsafe {
+        checked_borrow_ptr_or(
+            address,
+            camel_internet_address_get_type(),
+            EnvelopeError::NotInternet(which),
+        )
     }
 }
 

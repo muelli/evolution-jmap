@@ -54,13 +54,12 @@ use std::ffi::CStr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_RESOURCE,
-    ESource, ESourceResource, e_source_get_extension, e_source_has_extension,
-    e_source_resource_get_identity,
+    ESource, ESourceResource, e_source_has_extension, e_source_resource_get_identity,
 };
 use glib_sys::GFALSE;
-use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::marshal::{extension_if_present, read_string};
 use jmap_collection_sync::child_source::{EXTENSION_ADDRESS_BOOK, EXTENSION_CALENDAR};
-use jmap_collection_sync::resource_id_for;
+use jmap_collection_sync::{ChildKind, resource_id_for};
 
 /// The `ESource` extensions this backend's children carry, each paired with the
 /// spelling `jmap-collection-sync` knows it by.
@@ -94,31 +93,62 @@ pub const KIND_EXTENSIONS: [(&CStr, &str); 2] = [
 ///
 /// `child_source` must be NULL or a valid `ESource` that outlives the call.
 pub unsafe fn resource_id_of(child_source: *mut ESource) -> Option<String> {
-    if child_source.is_null() {
-        return None;
-    }
-
-    let (_, extension) = KIND_EXTENSIONS.iter().find(|(defined, _)| {
-        // SAFETY: a valid source by the contract above, and a header constant.
-        unsafe { e_source_has_extension(child_source, defined.as_ptr()) != GFALSE }
-    })?;
+    // SAFETY: the caller's contract is this function's; NULL is handled there.
+    let extension = unsafe { kind_extension_of(child_source) }?;
 
     // Tested for rather than fetched: `e_source_get_extension` would create it.
-    // SAFETY: as above.
-    if unsafe { e_source_has_extension(child_source, E_SOURCE_EXTENSION_RESOURCE.as_ptr()) }
-        == GFALSE
-    {
+    // SAFETY: `child_source` is non-NULL by the check above, valid by this
+    // function's contract, and the extension named is `ESourceResource`'s own.
+    let resource = unsafe {
+        extension_if_present::<ESourceResource>(child_source, E_SOURCE_EXTENSION_RESOURCE)
+    }?;
+    // SAFETY: `resource` is a live extension the source owns, by the guard
+    // above; the identity it holds is NULL or a NUL-terminated string with
+    // the same lifetime.
+    let identity = unsafe { read_string(e_source_resource_get_identity(resource)) }?;
+
+    resource_id_for(extension, &identity)
+}
+
+/// Which kind of collection `source` is, by the extension it carries — or
+/// `None` for a source that is neither an address book nor a calendar.
+///
+/// The half of [`resource_id_of`] that does not need `[Resource] Identity`, and
+/// the half a `create_resource_sync` has: EDS hands that vfunc a *scratch*
+/// source, which carries the kind Evolution's dialog gave it and no identity at
+/// all — the identity is what the create is about to obtain from the server.
+///
+/// A source carrying **both** extensions answers `AddressBook`, which is
+/// [`KIND_EXTENSIONS`]'s documented precedence rather than a second rule; the
+/// caller decides whether an ambiguous scratch source is worth refusing. This
+/// backend never writes one.
+///
+/// # Safety
+///
+/// As [`resource_id_of`].
+pub unsafe fn kind_of(source: *mut ESource) -> Option<ChildKind> {
+    // SAFETY: the caller's contract is this function's; NULL is handled there.
+    let extension = unsafe { kind_extension_of(source) }?;
+    ChildKind::from_extension(extension)
+}
+
+/// The [`KIND_EXTENSIONS`] entry `source` carries, as `jmap-collection-sync`
+/// spells it.
+///
+/// # Safety
+///
+/// As [`resource_id_of`].
+unsafe fn kind_extension_of(source: *mut ESource) -> Option<&'static str> {
+    if source.is_null() {
         return None;
     }
 
-    // SAFETY: the extension is present, so this returns the source's own, which
-    // the source owns and which outlives the call; the identity it holds is
-    // NULL or a NUL-terminated string with the same lifetime.
-    let identity = unsafe {
-        let resource: *mut ESourceResource =
-            e_source_get_extension(child_source, E_SOURCE_EXTENSION_RESOURCE.as_ptr()).cast();
-        read_string(e_source_resource_get_identity(resource))
-    }?;
-
-    resource_id_for(extension, &identity)
+    KIND_EXTENSIONS
+        .iter()
+        .find(|(defined, _)| {
+            // SAFETY: a valid source by the contract above, and a header
+            // constant.
+            unsafe { e_source_has_extension(source, defined.as_ptr()) != GFALSE }
+        })
+        .map(|(_, extension)| *extension)
 }

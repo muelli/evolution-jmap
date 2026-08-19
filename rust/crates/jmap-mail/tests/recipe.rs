@@ -54,7 +54,7 @@ use eds_sys::{
 };
 use glib_sys::GFALSE;
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::source::SourceError;
+use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_mail::provider::PROTOCOL;
 use jmap_mail::server::ServerConfig;
 use jmap_mail::settings::settings_type;
@@ -387,7 +387,7 @@ fn the_documented_services_both_reach_the_mock_server() {
         assert_eq!(
             service.server(),
             Ok(ServerConfig {
-                origin: "http://127.0.0.1:8080".to_owned(),
+                target: ConnectTarget::Origin("http://127.0.0.1:8080".to_owned()),
                 user: None,
             }),
             "docs/examples/{name} does not reach the mock server"

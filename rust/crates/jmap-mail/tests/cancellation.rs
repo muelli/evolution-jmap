@@ -51,6 +51,7 @@ use gio_sys::{
 };
 use glib_sys::{GError, g_error_free};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
+use jmap_backend_core::source::ConnectTarget;
 use jmap_client::transport::{CancelFlag, CancelScope};
 use jmap_client::{Client, Credentials};
 use jmap_mail::connect::StoreError;
@@ -283,7 +284,7 @@ fn an_authentication_the_user_stopped_does_not_reach_the_server() {
     let server = MockServer::builder().start();
     let store = JmapStore::detached();
     let config = ServerConfig {
-        origin: server.origin().to_owned(),
+        target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
     };
 
@@ -324,7 +325,7 @@ fn a_connection_does_not_inherit_the_cancellation_of_the_call_that_opened_it() {
     }
     let store = JmapStore::detached();
     let config = ServerConfig {
-        origin: server.origin().to_owned(),
+        target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
     };
 

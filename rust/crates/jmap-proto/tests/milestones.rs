@@ -20,12 +20,19 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+/// Walks upward from `start` looking for the checkout root (marked by
+/// `.git`). Returns `None` if no ancestor has one — e.g. a mutation-testing
+/// sandbox that copies only the `rust/` subtree, so `docs/` was never copied
+/// at all and there is nothing honest to assert here.
+fn find_repo_root(start: &Path) -> Option<PathBuf> {
+    start
         .ancestors()
-        .nth(3)
-        .expect("the crate directory is three levels below the checkout root")
-        .to_path_buf()
+        .find(|dir| dir.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
+fn repo_root() -> Option<PathBuf> {
+    find_repo_root(Path::new(env!("CARGO_MANIFEST_DIR")))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -112,7 +119,14 @@ pub fn parse_milestones(content: &str) -> Vec<MilestoneEntry> {
 
 #[test]
 fn milestones_file_exists_and_parses() {
-    let path = repo_root().join("docs/MILESTONES.md");
+    let Some(root) = repo_root() else {
+        eprintln!(
+            "skipping milestones_file_exists_and_parses: no `.git` ancestor found, \
+             not running inside a full repository checkout"
+        );
+        return;
+    };
+    let path = root.join("docs/MILESTONES.md");
     assert!(
         path.exists(),
         "docs/MILESTONES.md must exist in the repository root"
@@ -137,7 +151,10 @@ fn milestones_file_exists_and_parses() {
 
 #[test]
 fn milestones_entries_are_chronological() {
-    let path = repo_root().join("docs/MILESTONES.md");
+    let Some(root) = repo_root() else {
+        return;
+    };
+    let path = root.join("docs/MILESTONES.md");
     if !path.exists() {
         return;
     }
@@ -187,7 +204,10 @@ fn parser_rejects_malformed_entries() {
 
 #[test]
 fn milestone_commits_exist_in_git_history() {
-    let path = repo_root().join("docs/MILESTONES.md");
+    let Some(root) = repo_root() else {
+        return;
+    };
+    let path = root.join("docs/MILESTONES.md");
     if !path.exists() {
         return;
     }
@@ -196,7 +216,7 @@ fn milestone_commits_exist_in_git_history() {
 
     for entry in entries {
         let output = std::process::Command::new("git")
-            .current_dir(repo_root())
+            .current_dir(&root)
             .args([
                 "rev-parse",
                 "--verify",
@@ -212,4 +232,41 @@ fn milestone_commits_exist_in_git_history() {
             entry.sha
         );
     }
+}
+
+/// A scratch directory under the system temp dir, guaranteed not to sit
+/// inside this checkout (so no real `.git` ancestor can leak into the
+/// assertions below), unique per call so parallel tests don't collide.
+fn scratch_dir(name: &str) -> PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "jmap-proto-milestones-test-{name}-{}-{n}",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn find_repo_root_finds_the_nearest_git_ancestor() {
+    let base = scratch_dir("hit");
+    let nested = base.join("a/b/c");
+    fs::create_dir_all(&nested).expect("create nested scratch dirs");
+    fs::create_dir_all(base.join(".git")).expect("create fake .git marker");
+
+    assert_eq!(find_repo_root(&nested), Some(base.clone()));
+
+    fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn find_repo_root_returns_none_without_a_git_ancestor() {
+    let base = scratch_dir("miss");
+    let nested = base.join("x/y");
+    fs::create_dir_all(&nested).expect("create nested scratch dirs");
+    // Deliberately no `.git` anywhere under `base`; the system temp dir and
+    // its ancestors are not part of a git checkout.
+
+    assert_eq!(find_repo_root(&nested), None);
+
+    fs::remove_dir_all(&base).ok();
 }
