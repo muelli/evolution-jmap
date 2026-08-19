@@ -39309,3 +39309,30 @@ two unguarded-read sites, A5's FFI soundness audit as a related but distinct
 item). Nothing here needs human verification: a refcount-preserving refactor
 of code with no user-visible surface, on a crate whose own test suite already
 exercises every touched site.
+
+## 2026-08-19 (claim) — Claiming Track A6 Pattern D's remaining follow-up: `follow_collection`/`follow_server`
+
+CURRENT PRIORITY items 1–6 are all code-complete pending only operator/human
+verification already logged as such (M7, item 2 real-server, item 5 SRV
+resolver, item 6 API-token auth); M1–M10 and CALCARD are all tagged COMPLETE
+in `docs/MILESTONES.md`. No in-progress M7/real-server code work is left for
+an agent to pick up, and this is not a reopening of a completed backend for
+edge-case polish — it is the maintainer's own Round 2 Track A quality/security
+lane (A6, unsafe reduction/idiom audit), whose Pattern D entry named this
+exact follow-up as still open: `jmap-backend-collection/src/child_added.rs::
+follow_collection` and `mail_child.rs::follow_server` mix the already-shared
+`extension_if_present<T>` "read if present" idiom with a genuine
+create-if-absent read on a second source in the same function.
+
+Scoped first (research agent, read-only): `follow_collection`'s own loop
+already guards both sides before fetching (no create-if-absent in that
+function directly — that only enters via its delegation to `follow_server`),
+so it is a 1:1 mechanical port. `follow_server`'s collection-side reads can
+also take `extension_if_present` with a small tuple→`if let` reshape, leaving
+its child-side create-if-absent `e_source_get_extension` calls untouched and
+unchanged. No GObject ownership/refcount decision involved — extensions stay
+`(transfer none)`, owned by their source either way. Acceptance suite:
+`jmap-backend-collection/tests/child_added.rs` and `tests/mail_child.rs`,
+both expected to stay green unmodified.
+
+Claiming this increment now.
