@@ -173,14 +173,20 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 - vCard 3.0 represents preference as a boolean flag (`TYPE=PREF`). Inbound lines with `TYPE=PREF` are parsed as `pref: 1` (or `extra["pref"] = 1`).
 - Outbound lines are sorted by `(pref.unwrap_or(u32::MAX), key)` to guarantee preferred entries land in EDS primary positions (`E_CONTACT_EMAIL_1`, `E_CONTACT_PHONE_PRIMARY`, `E_CONTACT_ADDRESS_HOME`).
 
-### 4.5 Line Folding, Delimiter Escaping & Whitespace Trimming
-- **Line Folding & Unfolding (RFC 2426 §2.6)**:
-  - **Outbound Emission**: Handled automatically by `calcard` via `entry.write_to(out, true)`. Physical content lines target the standard 75-octet limit and fold using CRLF followed by a single space (`\r\n `). Because `calcard` iterates over Unicode scalar values (`char`) and evaluates `char::len_utf8()` before writing, multi-byte UTF-8 sequences (2-byte umlauts, 3-byte CJK/Devanagari, 4-byte emoji) are **never split** across a fold.
-  - **Boundary Characterization**: Due to parameter `:` delimiters and 2-byte escape sequences (`\n`, `\\`, `\;`) checked against 1-byte char sizes, physical lines on the wire may measure up to 76–77 octets before folding, fully compliant with RFC 2426 §2.6 ("lines of more than 75 characters SHOULD be folded").
-  - **Inbound Unfolding**: `vcard_to_card` losslessly unfolds pre-folded input delimited by CRLF + space (`\r\n `) or CRLF + tab (`\r\n\t`), stripping the CRLF and the leading continuation whitespace while preserving any subsequent spaces or tabs as literal data.
-  - **Large Binary / Inline Media**: Long values such as multi-line `NOTE`s and inline base64-encoded `PHOTO;ENCODING=b;TYPE=...` payloads fold across multiple continuation lines and round-trip to `Media` / `Note` with 100% binary and text fidelity and fixed-point stability (`card2 == card` and `vcard2 == vcard3`).
-- **Delimiter Escaping**: Commas (`,`) and semicolons (`;`) in structured and free-text fields are automatically escaped (`\,`, `\;`) on emission and unescaped on parse.
-- **Whitespace Defense**: Tags and handles with leading/trailing whitespace or carriage returns are filtered by `states_keyword` and `drawn_service` to prevent EDS from silently trimming them and triggering unwanted server renames.
+### 4.5 Line Folding & Unfolding (RFC 2426 §2.6)
+- **Outbound Emission**: Handled automatically by `calcard` via `entry.write_to(out, true)`. Physical content lines target the standard 75-octet limit and fold using CRLF followed by a single space (`\r\n `). Because `calcard` iterates over Unicode scalar values (`char`) and evaluates `char::len_utf8()` before writing, multi-byte UTF-8 sequences (2-byte umlauts, 3-byte CJK/Devanagari, 4-byte emoji) are **never split** across a fold.
+- **Boundary Characterization**: Due to parameter `:` delimiters and 2-byte escape sequences (`\n`, `\\`, `\;`) checked against 1-byte char sizes, physical lines on the wire may measure up to 76–77 octets before folding, fully compliant with RFC 2426 §2.6 ("lines of more than 75 characters SHOULD be folded").
+- **Inbound Unfolding**: `vcard_to_card` losslessly unfolds pre-folded input delimited by CRLF + space (`\r\n `) or CRLF + tab (`\r\n\t`), stripping the CRLF and the leading continuation whitespace while preserving any subsequent spaces or tabs as literal data.
+- **Large Binary / Inline Media**: Long values such as multi-line `NOTE`s and inline base64-encoded `PHOTO;ENCODING=b;TYPE=...` payloads fold across multiple continuation lines and round-trip to `Media` / `Note` with 100% binary and text fidelity and fixed-point stability (`card2 == card` and `vcard2 == vcard3`).
+
+### 4.6 Value Escaping & Unescaping (RFC 2426 §2)
+- **Special Character Escaping**: Free-text and structured values containing newlines (`\n` or `\r\n`), commas (`,`), semicolons (`;`), and backslashes (`\`) are escaped on emission and unescaped on parsing:
+  - `\n` or `\N`: Represent newlines in text values (e.g. `NOTE`, `LABEL`, `NICKNAME`, `TITLE`, `ROLE`). `vcard_to_card` unescapes both lowercase `\n` and uppercase `\N` losslessly.
+  - `\,`: Escapes literal commas. In structured properties like `ORG` (e.g. `"Acme, Inc."` -> `Acme\, Inc.`) and `ADR` (e.g. `"Apt 4B, Room 12"` -> `Apt 4B\, Room 12`), and list properties like `CATEGORIES`, commas within an item are escaped to prevent premature item splitting.
+  - `\;`: Escapes literal semicolons. In structured properties like `ADR` (e.g. `street: "Suite 100; Building A"` -> `Suite 100\; Building A`) and `ORG` (e.g. `unit: "Hardware; Systems"` -> `Hardware\; Systems`), semicolons within a component are escaped to prevent component shifting into wrong positional slots.
+  - `\\`: Escapes literal backslashes. Consecutive backslashes (e.g. `\\` -> `\\\\`) and escaped backslashes preceding delimiters (e.g. `\;` -> `\\\;`) are preserved with exact round-trip fidelity.
+- **No Double-Escaping Invariant**: Serialization and deserialization passes are idempotent and achieve fixed-point convergence (`card_to_vcard(vcard_to_card(vcard)) == vcard`). Repeated serialization cycles never accumulate redundant backslashes (`\\` remains `\\`, not growing into `\\\\`).
+- **Whitespace Defense**: Tags and handles with leading/trailing whitespace or carriage returns are filtered by [`states_keyword`] and [`drawn_service`] to prevent EDS from silently trimming them and triggering unwanted server renames.
 
 ---
 

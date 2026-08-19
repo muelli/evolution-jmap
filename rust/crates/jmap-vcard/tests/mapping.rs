@@ -8409,3 +8409,485 @@ fn rfc2426_line_folding_with_escaped_delimiters_and_backslashes() {
     let vcard2 = card_to_vcard(&read_card);
     assert_eq!(vcard2, vcard);
 }
+
+#[test]
+fn rfc2426_value_escaping_note_with_all_four_special_characters_roundtrip() {
+    // RFC 2426 §2: Value escaping for text values:
+    // \n (or \N), \,, \;, and \\ must escape on write and unescape on read
+    // with no loss and no double-escaping.
+    let note_text = "First line of notes.\nSecond line with comma, semicolon; and backslash \\.\nThird line with literal escapes: \\n \\, \\; \\\\ and more.";
+
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_owned(),
+        Note {
+            note: note_text.to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-ESC-NOTE".into()),
+        notes: Some(notes),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Verify wire format has escaped characters
+    assert!(
+        vcard.contains(r"\nSecond line with comma\, semicolon\; and backslash \\.")
+            || vcard.contains("NOTE;X-JMAP-KEY=n1:First line of notes.\\n"),
+        "vCard should contain escaped characters on the wire: {vcard}"
+    );
+
+    // Parse back
+    let read_card = vcard_to_card(&vcard).expect("parse note with all four escapes");
+    assert_eq!(
+        read_card.notes.as_ref().unwrap()["n1"].note,
+        note_text,
+        "Note text must match original exactly"
+    );
+
+    // Fixed point convergence: second pass
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(vcard2, vcard, "Emitted vCard must reach fixed point");
+
+    // Third pass to guarantee no double-escaping
+    let read_card2 = vcard_to_card(&vcard2).expect("parse second-pass vcard");
+    assert_eq!(
+        read_card2.notes.as_ref().unwrap()["n1"].note,
+        note_text,
+        "Note text must remain unchanged after multiple roundtrips"
+    );
+    let vcard3 = card_to_vcard(&read_card2);
+    assert_eq!(vcard3, vcard, "Third-pass vCard must match first pass");
+}
+
+#[test]
+fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
+    // RFC 2426 §2 / §3.5.5: Commas inside ORG unit components and employer names:
+    // Semicolon (;) delimits components of ORG, while comma (,) inside a unit
+    // must be escaped as \, so it is not confused or lost, and semicolons inside
+    // a unit must be escaped as \; so they don't split the component.
+    let mut orgs = BTreeMap::new();
+    orgs.insert(
+        "o1".to_owned(),
+        Organization {
+            name: Some("Acme, Inc.".to_owned()),
+            units: Some(vec![
+                OrgUnit::new("Research, Development & Innovation"),
+                OrgUnit::new("Optics, Lasers & Sensors"),
+                OrgUnit::new("Hardware; Systems Division"),
+                OrgUnit::new("Unit with \\ backslash and \n newline"),
+            ]),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-ESC-ORG".into()),
+        organizations: Some(orgs),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Verify wire format contains escaped commas and semicolons
+    assert!(
+        vcard.contains(r"Acme\, Inc.") || vcard.contains("ORG;X-JMAP-KEY=o1:"),
+        "vCard should contain escaped comma in ORG name: {vcard}"
+    );
+
+    // Parse back
+    let read_card = vcard_to_card(&vcard).expect("parse org with escaped commas and semicolons");
+    let read_org = &read_card.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(
+        read_org.name.as_deref(),
+        Some("Acme, Inc."),
+        "Employer name with comma must roundtrip intact"
+    );
+    let units = read_org.units.as_ref().unwrap();
+    assert_eq!(units.len(), 4, "Must have exactly 4 units");
+    assert_eq!(units[0].name, "Research, Development & Innovation");
+    assert_eq!(units[1].name, "Optics, Lasers & Sensors");
+    assert_eq!(units[2].name, "Hardware; Systems Division");
+    assert_eq!(units[3].name, "Unit with \\ backslash and \n newline");
+
+    // Fixed point convergence
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(vcard2, vcard, "Emitted vCard must reach fixed point");
+
+    // Test nameless organization with leading semicolon and commas in units
+    let mut nameless_orgs = BTreeMap::new();
+    nameless_orgs.insert(
+        "o_nameless".to_owned(),
+        Organization {
+            name: None,
+            units: Some(vec![
+                OrgUnit::new("Engineering, Core Team"),
+                OrgUnit::new("Architecture; Infrastructure"),
+                OrgUnit::new("Group\\Gamma\nAlpha"),
+            ]),
+            extra: BTreeMap::new(),
+        },
+    );
+    let nameless_card = ContactCard {
+        id: Some("C-NAMELESS-ESC-ORG".into()),
+        organizations: Some(nameless_orgs),
+        ..ContactCard::default()
+    };
+    let nameless_vcard = card_to_vcard(&nameless_card);
+    assert!(
+        nameless_vcard.contains(";Engineering")
+            || nameless_vcard.contains("ORG;X-JMAP-KEY=o_nameless:;"),
+        "Nameless org must retain leading semicolon: {nameless_vcard}"
+    );
+    let read_nameless = vcard_to_card(&nameless_vcard).expect("parse nameless org with escapes");
+    let read_n_org = &read_nameless.organizations.as_ref().unwrap()["o_nameless"];
+    assert_eq!(read_n_org.name, None);
+    let n_units = read_n_org.units.as_ref().unwrap();
+    assert_eq!(n_units.len(), 3);
+    assert_eq!(n_units[0].name, "Engineering, Core Team");
+    assert_eq!(n_units[1].name, "Architecture; Infrastructure");
+    assert_eq!(n_units[2].name, "Group\\Gamma\nAlpha");
+    assert_eq!(card_to_vcard(&read_nameless), nameless_vcard);
+}
+
+#[test]
+fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
+    // RFC 2426 §2 / §3.2.1: Semicolons inside ADR components:
+    // Semicolon (;) is the component separator for ADR. A semicolon inside an
+    // individual component (e.g. street name "Suite 100; Building A") must be
+    // escaped as \; so it does not shift subsequent components into wrong slots.
+    let mut addresses = BTreeMap::new();
+    addresses.insert(
+        "a1".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("postOfficeBox", "PO Box 123; Station B"),
+                AddressComponent::new("apartment", "Apt 4B, Room 12; Building C"),
+                AddressComponent::new("name", "123 Main St; 2nd Floor, West Wing"),
+                AddressComponent::new("locality", "San Francisco; Bay Area"),
+                AddressComponent::new("region", "California; Northern"),
+                AddressComponent::new("postcode", "94105; 94107"),
+                AddressComponent::new("country", "United States; North America"),
+            ]),
+            contexts: Some(json!({"work": true})),
+            full: Some(
+                "PO Box 123; Station B\nApt 4B, Room 12; Building C\n123 Main St; 2nd Floor, West Wing\nSan Francisco; Bay Area, California; Northern 94105; 94107\nUnited States; North America"
+                    .to_owned(),
+            ),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-ESC-ADR".into()),
+        addresses: Some(addresses),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Parse back and verify no component shifting occurred
+    let read_card = vcard_to_card(&vcard).expect("parse adr with escaped semicolons");
+    let read_addr = &read_card.addresses.as_ref().unwrap()["a1"];
+    let comps = read_addr.components.as_ref().unwrap();
+    assert_eq!(
+        comps.len(),
+        7,
+        "Must have all 7 components without shifting"
+    );
+    assert_eq!(comps[0].kind, "postOfficeBox");
+    assert_eq!(comps[0].value, "PO Box 123; Station B");
+    assert_eq!(comps[1].kind, "apartment");
+    assert_eq!(comps[1].value, "Apt 4B, Room 12; Building C");
+    assert_eq!(comps[2].kind, "name");
+    assert_eq!(comps[2].value, "123 Main St; 2nd Floor, West Wing");
+    assert_eq!(comps[3].kind, "locality");
+    assert_eq!(comps[3].value, "San Francisco; Bay Area");
+    assert_eq!(comps[4].kind, "region");
+    assert_eq!(comps[4].value, "California; Northern");
+    assert_eq!(comps[5].kind, "postcode");
+    assert_eq!(comps[5].value, "94105; 94107");
+    assert_eq!(comps[6].kind, "country");
+    assert_eq!(comps[6].value, "United States; North America");
+
+    assert_eq!(
+        read_addr.full.as_deref(),
+        Some(
+            "PO Box 123; Station B\nApt 4B, Room 12; Building C\n123 Main St; 2nd Floor, West Wing\nSan Francisco; Bay Area, California; Northern 94105; 94107\nUnited States; North America"
+        )
+    );
+
+    // Fixed point convergence
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(
+        vcard2, vcard,
+        "ADR with escaped semicolons must reach fixed point"
+    );
+}
+
+#[test]
+fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
+    // Tests escaping of \n, \,, \;, \\ across all mapped vCard properties
+    let mut nicknames = BTreeMap::new();
+    nicknames.insert(
+        "k1".to_owned(),
+        Nickname {
+            name: "Ali, Baba; Chief\\Boss\nLead".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut titles = BTreeMap::new();
+    titles.insert(
+        "t1".to_owned(),
+        Title {
+            name: "Director, Architecture; Core \\ Systems\nLead".to_owned(),
+            kind: Some("title".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    titles.insert(
+        "t2".to_owned(),
+        Title {
+            name: "Lead, Quality; Assurance \\ Test\nSpecialist".to_owned(),
+            kind: Some("role".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut related_to = BTreeMap::new();
+    related_to.insert(
+        "Bob, Smith; Jr.\\II".to_owned(),
+        Relation {
+            relation: Some([("spouse".to_string(), json!(true))].into()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut emails = BTreeMap::new();
+    emails.insert(
+        "e1".to_owned(),
+        ContactEmail {
+            address: "alice+tag,filter;opt=1\\test@example.com".to_owned(),
+            contexts: Some(json!({"work": true})),
+            pref: Some(1),
+            ..ContactEmail::default()
+        },
+    );
+
+    let mut phones = BTreeMap::new();
+    phones.insert(
+        "p1".to_owned(),
+        ContactPhone {
+            number: "+1 (555) 123-4567, ext; 890 \\ test".to_owned(),
+            contexts: Some(json!({"work": true})),
+            features: Some(json!({"voice": true})),
+            pref: Some(1),
+            ..ContactPhone::default()
+        },
+    );
+
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l1".to_owned(),
+        Link {
+            uri: "https://example.com/query?q=test;sort=desc,rank&filter=a\\b".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut keywords = BTreeMap::new();
+    keywords.insert("Tag 1, with comma".to_owned(), json!(true));
+    keywords.insert("Tag 2; with semicolon".to_owned(), json!(true));
+    keywords.insert("Tag 3\\backslash".to_owned(), json!(true));
+
+    let card = ContactCard {
+        id: Some("C-ALL-ESC".into()),
+        name: Some(Name {
+            full: Some("Dr. Alice Smith, Ph.D.; Junior\\Senior".to_owned()),
+            components: Some(vec![
+                NameComponent::new("surname", "Smith, Jr."),
+                NameComponent::new("given", "Alice; Marie"),
+                NameComponent::new("given2", "B.\\C."),
+                NameComponent::new("title", "Dr., Prof."),
+                NameComponent::new("credential", "III; Esq."),
+            ]),
+            extra: BTreeMap::new(),
+        }),
+        nicknames: Some(nicknames),
+        titles: Some(titles),
+        related_to: Some(related_to),
+        emails: Some(emails),
+        phones: Some(phones),
+        links: Some(links),
+        keywords: Some(keywords),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Parse back
+    let read_card = vcard_to_card(&vcard).expect("parse all properties with escapes");
+
+    // Assert name
+    let read_name = read_card.name.as_ref().unwrap();
+    assert_eq!(
+        read_name.full.as_deref(),
+        Some("Dr. Alice Smith, Ph.D.; Junior\\Senior")
+    );
+    let name_comps = read_name.components.as_ref().unwrap();
+    assert_eq!(name_comps[0].value, "Dr., Prof.");
+    assert_eq!(name_comps[1].value, "Alice; Marie");
+    assert_eq!(name_comps[2].value, "B.\\C.");
+    assert_eq!(name_comps[3].value, "Smith, Jr.");
+    assert_eq!(name_comps[4].value, "III; Esq.");
+
+    // Assert nickname, titles, spouse, email, phone, links, keywords
+    assert_eq!(
+        read_card.nicknames.as_ref().unwrap()["k1"].name,
+        "Ali, Baba; Chief\\Boss\nLead"
+    );
+    assert_eq!(
+        read_card.titles.as_ref().unwrap()["t1"].name,
+        "Director, Architecture; Core \\ Systems\nLead"
+    );
+    assert_eq!(
+        read_card.titles.as_ref().unwrap()["t2"].name,
+        "Lead, Quality; Assurance \\ Test\nSpecialist"
+    );
+    assert!(
+        read_card
+            .related_to
+            .as_ref()
+            .unwrap()
+            .contains_key("Bob, Smith; Jr.\\II")
+    );
+    assert_eq!(
+        read_card.emails.as_ref().unwrap()["e1"].address,
+        "alice+tag,filter;opt=1\\test@example.com"
+    );
+    assert_eq!(
+        read_card.phones.as_ref().unwrap()["p1"].number,
+        "+1 (555) 123-4567, ext; 890 \\ test"
+    );
+    assert_eq!(
+        read_card.links.as_ref().unwrap()["l1"].uri,
+        "https://example.com/query?q=test;sort=desc,rank&filter=a\\b"
+    );
+    let read_kw = read_card.keywords.as_ref().unwrap();
+    assert!(read_kw.contains_key("Tag 1, with comma"));
+    assert!(read_kw.contains_key("Tag 2; with semicolon"));
+    assert!(read_kw.contains_key("Tag 3\\backslash"));
+
+    // Fixed point
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(
+        vcard2, vcard,
+        "All properties with escapes must reach fixed point"
+    );
+}
+
+#[test]
+fn rfc2426_value_escaping_no_double_escaping_multiroundtrip() {
+    // Tests that multiple sequential roundtrips never double-escape or accumulate backslashes:
+    // vcard1 -> card1 -> vcard2 -> card2 -> vcard3 -> card3
+    let complex_text = "Text with single backslash \\, literal \\n, literal \\,, literal \\;, and double \\\\ backslashes.";
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_owned(),
+        Note {
+            note: complex_text.to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card0 = ContactCard {
+        id: Some("C-MULTI-ROUND".into()),
+        notes: Some(notes),
+        ..ContactCard::default()
+    };
+
+    let vcard1 = card_to_vcard(&card0);
+    let card1 = vcard_to_card(&vcard1).expect("roundtrip pass 1 parse");
+    assert_eq!(card1.notes.as_ref().unwrap()["n1"].note, complex_text);
+
+    let vcard2 = card_to_vcard(&card1);
+    assert_eq!(vcard2, vcard1, "Pass 2 vCard must equal Pass 1 vCard");
+    let card2 = vcard_to_card(&vcard2).expect("roundtrip pass 2 parse");
+    assert_eq!(card2.notes.as_ref().unwrap()["n1"].note, complex_text);
+
+    let vcard3 = card_to_vcard(&card2);
+    assert_eq!(vcard3, vcard1, "Pass 3 vCard must equal Pass 1 vCard");
+    let card3 = vcard_to_card(&vcard3).expect("roundtrip pass 3 parse");
+    assert_eq!(card3.notes.as_ref().unwrap()["n1"].note, complex_text);
+}
+
+#[test]
+fn rfc2426_inbound_unescaping_variants_and_boundary_cases() {
+    // Tests inbound vCard unescaping variants:
+    // 1. \N uppercase newline escape (RFC 2426 §2.4.2)
+    // 2. Trailing backslash at end of property
+    // 3. Consecutive escaped backslashes (\\\\ -> \\)
+    // 4. Escaped backslash preceding escaped delimiter (\\; -> \;, \\, -> \,)
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:inbound-escapes\r\n",
+        "FN:Alice\\, Smith\\; Ph.D.\\NPrefix\\\\Suffix\r\n",
+        "NOTE;X-JMAP-KEY=n1:Line 1\\NLine 2 with \\; and \\, and \\\\ backslash\\NTrailing backslash\\\\\r\n",
+        "ORG;X-JMAP-KEY=o1:Company\\, Inc.\\; Division;Team\\; Alpha;Group\\\\Beta\\NGamma\r\n",
+        "ADR;TYPE=WORK;X-JMAP-KEY=a1:PO\\; 1;Ext\\, 2;Street\\; 3;City\\; 4;State\\, 5;94105\\; 6;USA\\\\7\r\n",
+        "CATEGORIES:Alpha\\, Tag,Beta\\; Tag,Gamma\\\\Tag\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(raw_vcard).expect("parse inbound vcard with escape variants");
+
+    // Assert FN unescaped with uppercase \N
+    assert_eq!(
+        card.name.as_ref().unwrap().full.as_deref(),
+        Some("Alice, Smith; Ph.D.\nPrefix\\Suffix")
+    );
+
+    // Assert NOTE
+    let note = &card.notes.as_ref().unwrap()["n1"].note;
+    assert_eq!(
+        note,
+        "Line 1\nLine 2 with ; and , and \\ backslash\nTrailing backslash\\"
+    );
+
+    // Assert ORG
+    let org = &card.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org.name.as_deref(), Some("Company, Inc.; Division"));
+    let units = org.units.as_ref().unwrap();
+    assert_eq!(units[0].name, "Team; Alpha");
+    assert_eq!(units[1].name, "Group\\Beta\nGamma");
+
+    // Assert ADR
+    let addr = &card.addresses.as_ref().unwrap()["a1"];
+    let comps = addr.components.as_ref().unwrap();
+    assert_eq!(comps[0].value, "PO; 1");
+    assert_eq!(comps[1].value, "Ext, 2");
+    assert_eq!(comps[2].value, "Street; 3");
+    assert_eq!(comps[3].value, "City; 4");
+    assert_eq!(comps[4].value, "State, 5");
+    assert_eq!(comps[5].value, "94105; 6");
+    assert_eq!(comps[6].value, "USA\\7");
+
+    // Assert CATEGORIES
+    let kw = card.keywords.as_ref().unwrap();
+    assert!(kw.contains_key("Alpha, Tag"));
+    assert!(kw.contains_key("Beta; Tag"));
+    assert!(kw.contains_key("Gamma\\Tag"));
+
+    // Fixed point convergence
+    let emitted = card_to_vcard(&card);
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(reemitted, emitted, "Emitted vCard must reach fixed point");
+}
