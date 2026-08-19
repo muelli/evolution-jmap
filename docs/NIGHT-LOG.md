@@ -39336,3 +39336,55 @@ unchanged. No GObject ownership/refcount decision involved — extensions stay
 both expected to stay green unmodified.
 
 Claiming this increment now.
+
+## 2026-08-19 (done) — Track A6 Pattern D: `follow_collection`/`follow_server`
+
+Delivered the increment claimed above. Both functions the audit flagged as
+"mixing the shared `extension_if_present` idiom with a genuine
+create-if-absent read on a second source" turned out to be cleanly separable
+once read closely:
+
+- `child_added.rs::follow_collection`'s `BOUND` loop already guarded both the
+  collection's and the child's side with `e_source_has_extension` before
+  fetching either with `e_source_get_extension` — no create-if-absent read at
+  all in that loop body (the only one in the function belongs to the
+  delegated `follow_server` call, for the two mail-service children).
+  Replaced the guard-then-fetch pair on each side with one
+  `extension_if_present` call each, destructured with a `let (Some(from),
+  Some(to)) = (.., ..) else { continue }`.
+- `mail_child.rs::follow_server` interleaves the two idioms for real: its
+  `[Authentication]`/`[Security]` reads off the **collection** (account) side
+  are guard-then-fetch, read-only, and now go through `extension_if_present`;
+  its reads off the **child** (mail source) side are the actual
+  create-if-absent calls this module exists for, and stayed hand-written
+  `e_source_get_extension`, unchanged.
+
+No behaviour change intended or found: `tests/child_added.rs` (10 tests) and
+`tests/mail_child.rs` (13 tests) both pass unmodified. `e_source_has_extension`
+dropped out of both files' imports entirely (no remaining call site in
+either); `e_source_get_extension` stays imported in `mail_child.rs` for the
+child-side create-if-absent calls. `cargo fmt` reflowed the new `let`-else
+across both files after the mechanical edit — accepted as-is rather than
+fought.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean. `cargo test --locked` (default-members, 0 failed) and each of the
+seven EDS-gated crates' own `cargo test --locked` (0 failed) all green,
+including `jmap-backend-collection`'s full suite. No new dependency, no new
+user-facing string, no new file (no SPDX/`reuse` concern).
+
+**Scope, stated plainly.** This closes Pattern D's two composed sites; the
+one remaining open item on Pattern D is `jmap-backend-core/source.rs::
+SourceConfig::from_source`'s unguarded `AUTHENTICATION`/`RESOURCE` reads,
+which the audit already flags as a behaviour decision (whether reading
+should ever silently create an empty group) rather than a mechanical port —
+left for a session with a maintainer answer on that question. `docs/
+UNSAFE-AUDIT.md`'s Pattern D section and its priority-list item 2 updated to
+match. Nothing here needs human verification: a refcount-neutral, read-only
+refactor with no user-visible surface, on files whose own test suites
+already exercise every touched code path end to end. Disk was at 91% full
+(5.3G free) going into this session; `cargo clean --profile dev` recommended
+before further build work if it tightens further.

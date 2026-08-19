@@ -321,10 +321,6 @@ book/cal/collection with no shared helper").
   extension. See NIGHT-LOG "Track A6 Pattern D: `extension_if_present`
   helper".
   **Still open, deliberately not folded into the same increment:**
-  - `child_added.rs::follow_collection` and `mail_child.rs::follow_server`
-    mix this "read if present" idiom with a genuine create-if-absent read on
-    a *second* source in the same function; composing the helper there
-    changes the call shape, not a 1:1 substitution.
   - `jmap-backend-core/source.rs::SourceConfig::from_source`'s
     `AUTHENTICATION`/`RESOURCE` reads skip the `has_extension` guard
     entirely today (unlike every sibling function's `SECURITY` guard, which
@@ -332,9 +328,24 @@ book/cal/collection with no shared helper").
     fix a latent side effect (an account source silently gaining an empty
     `[Authentication]`/`[Resource]` group merely by being read), which is a
     behaviour decision nothing currently tests for, not a mechanical port.
+- **DONE 2026-08-19 (later still) — the two composed sites.**
+  `child_added.rs::follow_collection` and `mail_child.rs::follow_server` each
+  turned out to route cleanly through `extension_if_present` after all: the
+  guarded, read-only *collection*-side lookup in each becomes one call
+  (`follow_collection`'s loop already guarded both sides before fetching
+  either, so both its `e_source_has_extension`/`e_source_get_extension` pairs
+  fold into one `extension_if_present` call apiece; `follow_server`'s two
+  `[Authentication]`/`[Security]` guards on the *account* source do the
+  same), while the child-side create-if-absent `e_source_get_extension`
+  calls that actually make this pair non-mechanical stay untouched,
+  hand-written, exactly as before. No behaviour change and no new test:
+  `tests/child_added.rs` (10 tests) and `tests/mail_child.rs` (13 tests)
+  both stayed green unmodified. See NIGHT-LOG "Track A6 Pattern D:
+  `follow_collection`/`follow_server`".
 
-Rough effort: **~2–3 hours** for the clean sites (delivered); the three
-open items above are smaller follow-ups each, but need a decision or a
+Rough effort: **~2–3 hours** for the clean sites (delivered); the two
+composed sites took about the same again (delivered); the one remaining
+open item needs a decision or a
 composed (non-mechanical) call shape rather than a straight port.
 
 ### Pattern E — IMPROVE (low priority): small repeated GError-builder / `fail()` helpers
@@ -536,10 +547,11 @@ point, so its gaps aren't copied forward.
    one `extension_if_present<T>` helper in `jmap-backend-core`. **~2–3
    hours.** Named directly by this audit's own brief; clear highest-value
    consolidation in the collection crate.
-   - **DONE 2026-08-19 for the clean sites** — see Pattern D's own section
-     above for what landed and what is still open (`follow_collection`/
-     `follow_server`'s composed shape, `SourceConfig::from_source`'s
-     unguarded `AUTHENTICATION`/`RESOURCE` reads).
+   - **DONE 2026-08-19 for the clean sites**, and **DONE 2026-08-19 (later
+     still) for `follow_collection`/`follow_server`'s composed shape** — see
+     Pattern D's own section above. **Still open:**
+     `SourceConfig::from_source`'s unguarded `AUTHENTICATION`/`RESOURCE`
+     reads, which need a behaviour decision, not a mechanical port.
 3. **Pattern B** (checked/trusted borrow helpers, ~13 sites across
    `jmap-mail`) — two generic helpers in `jmap-backend-core`. **~2–3 hours.**
    - **DONE 2026-08-19 for the trusted/dispatched family (3 sites +

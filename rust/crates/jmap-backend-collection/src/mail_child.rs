@@ -92,8 +92,8 @@ use eds_sys::{
     E_SOURCE_EXTENSION_MAIL_TRANSPORT, E_SOURCE_EXTENSION_SECURITY, ESource, ESourceBackend,
     ESourceSecurity, e_binding_bind_property, e_binding_bind_property_full,
     e_source_authentication_get_type, e_source_backend_get_backend_name, e_source_get_extension,
-    e_source_has_extension, e_source_mail_account_get_type, e_source_mail_transport_get_type,
-    e_source_security_get_type, e_source_security_set_method,
+    e_source_mail_account_get_type, e_source_mail_transport_get_type, e_source_security_get_type,
+    e_source_security_set_method,
 };
 use glib_sys::{GFALSE, GTRUE, gboolean, gpointer};
 use gobject_sys::{
@@ -206,19 +206,14 @@ pub unsafe fn follow_server(collection: *mut ESource, child: *mut ESource) {
 
     // Tested for on the account and never fetched from it: this is the user's
     // own file, and an account that names no server has nothing to pass on.
-    // SAFETY: valid sources by this function's contract, and header constants.
-    if unsafe { e_source_has_extension(collection, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) }
-        != GFALSE
+    // SAFETY: valid sources by this function's contract, and a header constant.
+    if let Some(from) =
+        unsafe { extension_if_present(collection, E_SOURCE_EXTENSION_AUTHENTICATION) }
     {
-        // SAFETY: present on the account, so this returns its own; created on
-        // demand on the mail source, which is the point of this module and is
-        // owned by the source either way.
-        let (from, to) = unsafe {
-            (
-                e_source_get_extension(collection, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()),
-                e_source_get_extension(child, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()),
-            )
-        };
+        // SAFETY: created on demand on the mail source, which is the point of
+        // this module, and owned by the source either way.
+        let to =
+            unsafe { e_source_get_extension(child, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) };
 
         for property in BOUND_MAIL_AUTHENTICATION {
             // SAFETY: two live extension objects and a NUL-terminated property
@@ -236,19 +231,13 @@ pub unsafe fn follow_server(collection: *mut ESource, child: *mut ESource) {
         }
     }
 
-    // SAFETY: as above.
-    let secure_on_account =
-        unsafe { e_source_has_extension(collection, E_SOURCE_EXTENSION_SECURITY.as_ptr()) }
-            != GFALSE;
     // SAFETY: created on demand and owned by the mail source; the branch below
     // is what is written into it.
     let security: *mut ESourceSecurity =
         unsafe { e_source_get_extension(child, E_SOURCE_EXTENSION_SECURITY.as_ptr()) }.cast();
 
-    if secure_on_account {
-        // SAFETY: the extension is present, so this returns the account's own.
-        let from =
-            unsafe { e_source_get_extension(collection, E_SOURCE_EXTENSION_SECURITY.as_ptr()) };
+    // SAFETY: valid sources by this function's contract, and a header constant.
+    if let Some(from) = unsafe { extension_if_present(collection, E_SOURCE_EXTENSION_SECURITY) } {
         // `G_BINDING_SYNC_CREATE`, so this also *is* the initial write: the
         // transform runs once here and again on every later change.
         // SAFETY: two live extension objects, a boolean property of the one and
