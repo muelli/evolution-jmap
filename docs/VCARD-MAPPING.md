@@ -228,6 +228,23 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 - **No Double-Escaping Invariant**: Serialization and deserialization passes are idempotent and achieve fixed-point convergence (`card_to_vcard(vcard_to_card(vcard)) == vcard`). Repeated serialization cycles never accumulate redundant backslashes (`\\` remains `\\`, not growing into `\\\\`).
 - **Whitespace Defense**: Tags and handles with leading/trailing whitespace or carriage returns are filtered by [`states_keyword`] and [`drawn_service`] to prevent EDS from silently trimming them and triggering unwanted server renames.
 
+### 4.7 Non-ASCII, `CHARSET`, and `ENCODING` Parameters (RFC 2426 §2.1.2 & §2.1.3)
+- **vCard 3.0 Character Set & Transport Contract**:
+  - **Character Set**: RFC 2426 §2.1.2 mandates that vCard 3.0 is unconditionally UTF-8. The `CHARSET` parameter is not supported / deprecated for text properties.
+  - **Transport Encoding**: RFC 2426 §2.1.3 mandates that vCard 3.0 uses 8-bit MIME transport encoding. `ENCODING=QUOTED-PRINTABLE`, `ENCODING=8BIT`, and `ENCODING=7BIT` are not supported on text properties. Binary properties (`PHOTO`) use `ENCODING=b` (or `b`).
+  - **Outbound Emission (`card_to_vcard`)**: Always conforms strictly to RFC 2426 by emitting native UTF-8 strings directly without redundant `CHARSET` or `ENCODING` parameters on text properties.
+- **Inbound Compatibility & Robustness (Postel's Law)**:
+  - Older exporters (vCard 2.1, Evolution 2.x/3.x, Outlook, Apple Address Book, Thunderbird) frequently export vCard 3.0 with redundant `;CHARSET=UTF-8` or legacy `;ENCODING=QUOTED-PRINTABLE`.
+  - **`CHARSET` Parameter**: `vcard_to_card` (via `calcard`) accepts case-insensitive `CHARSET` parameters (`UTF-8`, `utf-8`, `ISO-8859-1`, `WINDOWS-1252`) across all properties.
+  - **`ENCODING=QUOTED-PRINTABLE`**: Properties carrying `ENCODING=QUOTED-PRINTABLE` are automatically decoded according to the specified `CHARSET` (defaulting to ISO-8859-1 if `CHARSET` is omitted, per RFC 2045 / vCard 2.1). Soft line breaks (`=\r\n` and `=\n`) and hex byte escapes (`=XX`, e.g. `=3D`, `=3B`, `=2C`, `=0D=0A`) are decoded losslessly into native UTF-8 text in JSContact fields.
+  - **`ENCODING=8BIT` / `7BIT`**: Accepted on input and parsed as plain text without modification.
+  - **`ENCODING=b` / `BASE64` / `B`**: Decoded as binary data for inline `PHOTO`s into standard data URIs (`data:image/<subtype>;base64,<payload>`).
+- **Outbound Normalization & Fixed-Point Stability**:
+  - Legacy inputs parsed with `CHARSET` or `ENCODING=QUOTED-PRINTABLE` are normalized on subsequent save operations into clean, standard vCard 3.0 UTF-8 format.
+  - Subsequent roundtrips achieve fixed-point stability (`card_to_vcard(parsed) == card_to_vcard(vcard_to_card(card_to_vcard(parsed)))`).
+- **Multilingual Script Coverage**:
+  - Full roundtrip fidelity is verified across diverse world writing systems: Latin with diacritics (French, German, Spanish, Icelandic, Polish), Cyrillic, Greek, Hebrew, Arabic (RTL), East Asian (Chinese Hanzi, Japanese Kanji/Kana, Korean Hangul), South Asian (Hindi Devanagari), Southeast Asian (Vietnamese), and Emoji/symbols (`🧑‍💻`, `🚀`, `🌟`).
+
 ---
 
 ## 5. Function & Predicate Index

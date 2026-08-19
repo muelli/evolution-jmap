@@ -388,6 +388,36 @@ Running record of headless polish increments on the `antigravity` branch.
   3. `calcard` preserves raw RFC 3986 URI punctuation (e.g. `;`, `,` in query parameters) without backslash-escaping, ensuring valid URIs on the wire format.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — Non-ASCII and CHARSET / ENCODING params fidelity & characterization (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 5. Non-ASCII and `CHARSET`/`ENCODING` params: verify non-ASCII names/values round-trip; characterize and pin `CHARSET=UTF-8` and legacy `ENCODING=QUOTED-PRINTABLE` values; log contract findings.
+- **Changes:**
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `non_ascii_multilingual_names_and_components_roundtrip`: verifies round-trip fidelity across diverse world writing systems and scripts (French accents, German umlauts/eszett, Spanish tildes, Icelandic thorn/eth, Polish crossed-L, Russian Cyrillic, Greek, Hebrew, Arabic RTL, Chinese Hanzi, Japanese Kanji/Kana, Korean Hangul, Hindi Devanagari, Vietnamese, and Emoji/symbols), confirming exact component extraction, valid line folding without UTF-8 code point splitting, and fixed-point roundtrip stability (`vcard2 == vcard3`).
+    - `non_ascii_multilingual_organization_title_and_role_roundtrip`: tests multi-component `ORG` and `TITLE`/`ROLE` with non-ASCII text across French, German, Russian, and Japanese, verifying unit retention and default title kind normalization.
+    - `non_ascii_structured_addresses_and_labels_roundtrip`: tests all 7 structured RFC 2426 `ADR` components and multi-line `LABEL` with non-ASCII characters across French, German, and Japanese addresses, verifying delimiter escaping and label pairing.
+    - `non_ascii_notes_nicknames_categories_and_spouse_roundtrip`: tests multilingual paragraphs with special mathematical symbols (`∀x ∈ ℝ`), non-ASCII single/multiple nicknames, keyword tags, and spouse relations.
+    - `inbound_vcard_charset_parameter_variations_and_normalization`: tests inbound vCards carrying `;CHARSET=UTF-8`, `;CHARSET=utf-8`, `;charset=UTF-8` across all properties, verifying accurate extraction into JSContact fields, outbound normalization to clean vCard 3.0 without redundant `CHARSET` parameters, and fixed-point convergence.
+    - `inbound_vcard_quoted_printable_encoding_with_charset_utf8_and_latin1`: tests legacy vCard 2.1 / 3.0 `ENCODING=QUOTED-PRINTABLE` with `CHARSET=UTF-8`, `CHARSET=ISO-8859-1`, `CHARSET=WINDOWS-1252`, and without `CHARSET` (default Latin-1), verifying lossless hex octet decoding into JSContact fields, outbound normalization to clean vCard 3.0 UTF-8 format, and fixed-point stability.
+    - `inbound_vcard_quoted_printable_soft_line_breaks_and_escaped_delimiters`: tests QP soft line breaks (`=\r\n` and `=\n`) and encoded delimiters (`=3D`, `=3B`, `=2C`, `=0D=0A`).
+    - `inbound_vcard_encoding_parameter_8bit_7bit_and_base64_fidelity`: tests `ENCODING=8BIT` and `ENCODING=7BIT` text properties and `PHOTO;ENCODING=b;TYPE=JPEG:...` inline images.
+  - Enhanced `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`:
+    - Added `CHARSET` (`UTF-8`, `utf-8`, `ISO-8859-1`, `WINDOWS-1252`) and `ENCODING` (`QUOTED-PRINTABLE`, `8BIT`, `7BIT`, `BASE64`) parameter variations to `arb_vcard_property_line`.
+    - Added `prop_non_ascii_unicode_card_roundtrips_without_corruption` property test verifying fuzzing roundtrips of arbitrary non-ASCII names and notes.
+  - Updated `docs/VCARD-MAPPING.md` with Section 4.7 documenting RFC 2426 §2.1.2 & §2.1.3 character set and transport contracts, Postel's law legacy compatibility, QUOTED-PRINTABLE decoding rules, and outbound normalization.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **vCard 3.0 Standard Contract (RFC 2426 §2.1.2 & §2.1.3)**:
+     - RFC 2426 §2.1.2 mandates that vCard 3.0 is unconditionally UTF-8; the `CHARSET` parameter is not supported / deprecated for text properties.
+     - RFC 2426 §2.1.3 mandates that vCard 3.0 uses 8-bit MIME transport encoding; `ENCODING=QUOTED-PRINTABLE`, `ENCODING=8BIT`, and `ENCODING=7BIT` are not supported on text properties. Binary properties (`PHOTO`) use `ENCODING=b` (or `b`).
+     - `card_to_vcard` strictly adheres to RFC 2426 by emitting native UTF-8 strings directly without redundant `CHARSET` or `ENCODING` parameters on text properties.
+  2. **Inbound Compatibility & Postel's Law**:
+     - `calcard` automatically recognizes and accepts `CHARSET` (case-insensitively, including `UTF-8`, `ISO-8859-1`, `WINDOWS-1252`) on input.
+     - `calcard` automatically decodes `ENCODING=QUOTED-PRINTABLE` byte sequences according to the specified `CHARSET` (or ISO-8859-1 default per RFC 2045) and unfolds soft line breaks (`=\r\n`), translating legacy vCard 2.1 data losslessly into standard JSContact strings.
+  3. **Outbound Normalization & Convergence**:
+     - Cards parsed from legacy `CHARSET` or `ENCODING=QUOTED-PRINTABLE` inputs are normalized on output into standard vCard 3.0 UTF-8 format, achieving fixed-point convergence (`vcard2 == vcard3`) on subsequent passes.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+
 
 
 
