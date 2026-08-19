@@ -68,7 +68,7 @@ use eds_sys::{
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean};
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::error::set_raw_gerror;
+use jmap_backend_core::error::{fail_bool, set_raw_gerror};
 use jmap_backend_core::trampoline::guard_bool;
 
 use crate::connect::StoreError;
@@ -136,7 +136,7 @@ unsafe extern "C" fn send_to_sync(
             // SAFETY: as above; a NULL is the only thing `borrow` rejects, and
             // Camel dispatches this slot on instances of our type.
             let Some(transport) = JmapTransport::borrow(transport) else {
-                return fail(error, &StoreError::Disconnected);
+                return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
 
             match transport.send_message(source, envelope) {
@@ -145,7 +145,7 @@ unsafe extern "C" fn send_to_sync(
                     report_saved(out_sent_message_saved, sent.saved);
                     GTRUE
                 }
-                Err(problem) => fail(error, &problem),
+                Err(problem) => fail_bool(error, &problem, StoreError::to_gerror),
             }
         })
     }
@@ -204,17 +204,5 @@ unsafe fn unwritable(error: *mut *mut GError, failure: Unwritable) -> gboolean {
             failure.into_gerror(quark, CAMEL_SERVICE_ERROR_INVALID as c_int),
         )
     };
-    GFALSE
-}
-
-/// Reports a failure and answers with it.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail(error: *mut *mut GError, failure: &StoreError) -> gboolean {
-    // SAFETY: `to_gerror` hands over an owned GError, and `error` meets
-    // `set_raw_gerror`'s contract by this function's.
-    unsafe { set_raw_gerror(error, failure.to_gerror()) };
     GFALSE
 }

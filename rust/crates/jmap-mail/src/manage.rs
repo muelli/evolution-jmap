@@ -104,7 +104,6 @@
 //! flag needs no line of ours, and a line that OR-ed in a bit already set would
 //! be one nothing could ever observe.
 
-use std::ptr;
 use std::slice;
 
 use eds_sys::{
@@ -112,9 +111,9 @@ use eds_sys::{
     camel_store_folder_deleted,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
+use glib_sys::{GError, GTRUE, gboolean, gchar};
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::error::set_raw_gerror;
+use jmap_backend_core::error::{fail, fail_bool};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::{guard_bool, guard_ptr};
 use jmap_mail_sync::{FolderInfo, path};
@@ -265,7 +264,7 @@ unsafe extern "C" fn create_folder_sync(
             let _cancel = observe(cancellable);
 
             let Some(instance) = JmapStore::borrow(store) else {
-                return fail(error, &StoreError::Disconnected);
+                return fail(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
             // Borrowed from Camel and NUL-terminated; `read_string` copies. A
             // NULL parent is the account itself; a NULL name is no name, which
@@ -275,7 +274,7 @@ unsafe extern "C" fn create_folder_sync(
 
             let created = match create_folder(instance, parent.as_deref(), &name) {
                 Ok(folder) => folder,
-                Err(failure) => return fail(error, &failure),
+                Err(failure) => return fail(error, &failure, StoreError::to_gerror),
             };
 
             let announcement = FolderInfoChain::from_forest(slice::from_ref(&created), Some(0));
@@ -312,7 +311,7 @@ unsafe extern "C" fn delete_folder_sync(
             let _cancel = observe(cancellable);
 
             let Some(instance) = JmapStore::borrow(store) else {
-                return fail_bool(error, &StoreError::Disconnected);
+                return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
             // Borrowed from Camel and NUL-terminated; `read_string` copies, and
             // reads a NULL or empty name as no name — which no mailbox answers
@@ -321,7 +320,7 @@ unsafe extern "C" fn delete_folder_sync(
 
             let removed = match delete_folder(instance, &path) {
                 Ok(folder) => folder,
-                Err(failure) => return fail_bool(error, &failure),
+                Err(failure) => return fail_bool(error, &failure, StoreError::to_gerror),
             };
 
             let announcement = FolderInfoChain::from_forest(slice::from_ref(&removed), Some(0));
@@ -359,7 +358,7 @@ unsafe extern "C" fn rename_folder_sync(
             let _cancel = observe(cancellable);
 
             let Some(instance) = JmapStore::borrow(store) else {
-                return fail_bool(error, &StoreError::Disconnected);
+                return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
             // Borrowed from Camel and NUL-terminated; `read_string` copies, and
             // reads a NULL or empty path as no path — which no mailbox answers
@@ -369,32 +368,9 @@ unsafe extern "C" fn rename_folder_sync(
             let to = read_string(new_name).unwrap_or_default();
 
             if let Err(failure) = rename_folder(instance, &from, &to) {
-                return fail_bool(error, &failure);
+                return fail_bool(error, &failure, StoreError::to_gerror);
             }
             GTRUE
         })
     }
-}
-
-/// Reports a failure and answers with nothing.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail<T>(error: *mut *mut GError, failure: &StoreError) -> *mut T {
-    // SAFETY: `to_gerror` hands over an owned GError, and `error` meets
-    // `set_raw_gerror`'s contract by this function's.
-    unsafe { set_raw_gerror(error, failure.to_gerror()) };
-    ptr::null_mut()
-}
-
-/// The same, for the vfunc that answers with a boolean.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail_bool(error: *mut *mut GError, failure: &StoreError) -> gboolean {
-    // SAFETY: the contract above.
-    unsafe { set_raw_gerror(error, failure.to_gerror()) };
-    GFALSE
 }

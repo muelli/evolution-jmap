@@ -96,7 +96,7 @@ use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
 use gobject_sys::g_object_unref;
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::error::set_raw_gerror;
+use jmap_backend_core::error::fail_bool;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_mail_sync::KeywordChange;
@@ -142,7 +142,11 @@ unsafe extern "C" fn synchronize_sync(
 
             let summary = camel_folder_get_folder_summary(folder);
             if summary.is_null() {
-                return fail(error, &StoreError::NoFolder(name_of(folder)));
+                return fail_bool(
+                    error,
+                    &StoreError::NoFolder(name_of(folder)),
+                    StoreError::to_gerror,
+                );
             }
 
             let mut failure = None;
@@ -165,7 +169,7 @@ unsafe extern "C" fn synchronize_sync(
             }
 
             match failure {
-                Some(problem) => fail(error, &problem),
+                Some(problem) => fail_bool(error, &problem, StoreError::to_gerror),
                 None => GTRUE,
             }
         })
@@ -310,16 +314,4 @@ unsafe fn name_of(folder: *mut CamelFolder) -> String {
     // SAFETY: the accessor returns a string the folder owns and outlives the
     // call; `read_string` copies it.
     unsafe { read_string(camel_folder_get_full_name(folder)).unwrap_or_default() }
-}
-
-/// Reports a failure and answers with it.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail(error: *mut *mut GError, failure: &StoreError) -> gboolean {
-    // SAFETY: `to_gerror` hands over an owned GError, and `error` meets
-    // `set_raw_gerror`'s contract by this function's.
-    unsafe { set_raw_gerror(error, failure.to_gerror()) };
-    GFALSE
 }

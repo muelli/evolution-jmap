@@ -73,7 +73,6 @@
 //! round trip per folder.
 
 use std::borrow::Cow;
-use std::ptr;
 use std::sync::Arc;
 
 use eds_sys::{
@@ -86,7 +85,7 @@ use eds_sys::{
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::error::set_raw_gerror;
+use jmap_backend_core::error::fail;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::{guard, guard_ptr};
 use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree};
@@ -387,14 +386,14 @@ unsafe extern "C" fn get_folder_info_sync(
             let _cancel = observe(cancellable);
 
             let Some(store) = JmapStore::borrow(store) else {
-                return fail(error, &StoreError::Disconnected);
+                return fail(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
             // Borrowed from Camel and NUL-terminated; `read_string` copies.
             let top = read_string(top);
 
             let tree = match store.folders(flags) {
                 Ok(tree) => tree,
-                Err(failure) => return fail(error, &failure),
+                Err(failure) => return fail(error, &failure, StoreError::to_gerror),
             };
 
             // The tree is borrowed for exactly as long as the forest is being
@@ -446,7 +445,7 @@ unsafe extern "C" fn get_folder_sync(
             let _cancel = observe(cancellable);
 
             let Some(instance) = JmapStore::borrow(store) else {
-                return fail(error, &StoreError::Disconnected);
+                return fail(error, &StoreError::Disconnected, StoreError::to_gerror);
             };
             // Borrowed from Camel and NUL-terminated; `read_string` copies, and
             // reads a NULL or empty name as no name — which no mailbox answers
@@ -455,10 +454,10 @@ unsafe extern "C" fn get_folder_sync(
 
             let tree = match tree_holding(instance, |tree| tree.find(&path).is_some()) {
                 Ok(tree) => tree,
-                Err(failure) => return fail(error, &failure),
+                Err(failure) => return fail(error, &failure, StoreError::to_gerror),
             };
             let Some(mailbox) = tree.find(&path) else {
-                return fail(error, &StoreError::NoFolder(path));
+                return fail(error, &StoreError::NoFolder(path), StoreError::to_gerror);
             };
 
             // SAFETY: `store` is the live `CamelStore` borrowed above, which is
@@ -600,7 +599,7 @@ unsafe fn open_by_role(
     // `CREATE` would make a mailbox the tree says already exists.
     unsafe {
         let Some(instance) = JmapStore::borrow(store) else {
-            return fail(error, &StoreError::Disconnected);
+            return fail(error, &StoreError::Disconnected, StoreError::to_gerror);
         };
 
         // Installed here rather than in each of the three vfuncs above,
@@ -614,10 +613,10 @@ unsafe fn open_by_role(
 
         let tree = match tree_holding(instance, |tree| tree.role(role).is_some()) {
             Ok(tree) => tree,
-            Err(failure) => return fail(error, &failure),
+            Err(failure) => return fail(error, &failure, StoreError::to_gerror),
         };
         let Some(folder) = tree.role(role) else {
-            return fail(error, &StoreError::NoRole(role));
+            return fail(error, &StoreError::NoRole(role), StoreError::to_gerror);
         };
         let path = c_string(&folder.path);
 
@@ -653,16 +652,4 @@ pub(crate) fn tree_holding(
         return Ok(held);
     }
     store.folders(CAMEL_STORE_FOLDER_INFO_REFRESH)
-}
-
-/// Reports a failure and answers with nothing.
-///
-/// # Safety
-///
-/// As [`set_raw_gerror`].
-unsafe fn fail<T>(error: *mut *mut GError, failure: &StoreError) -> *mut T {
-    // SAFETY: `to_gerror` hands over an owned GError, and `error` meets
-    // `set_raw_gerror`'s contract by this function's.
-    unsafe { set_raw_gerror(error, failure.to_gerror()) };
-    ptr::null_mut()
 }
