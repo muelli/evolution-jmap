@@ -37272,3 +37272,32 @@ FFI/refcount escalation-worthy; Track B/C2/C4/E remain NEEDS-DECISION; A6
 Pattern E's remaining `fail`/`fail_bool` half is a real design task, not a
 mechanical one, and is left for a session that wants to take that on
 deliberately.
+
+## 2026-08-19 (claim) — Claiming Track F: the newer-Evolution/EDS portability spike
+
+Fresh survey (same ground the last several sessions mapped, re-confirmed
+rather than re-litigated): all milestones COMPLETE; CURRENT PRIORITY's one
+open thread (SRV autodiscovery's GResolver `Resolver`) and Round 2's Track
+D (D1 vtable wiring) and A6 Pattern C (libical/GObject RAII) are
+FFI/refcount escalation-worthy, unchanged. Track B/C2/C4/E are
+NEEDS-DECISION. A6 Pattern E's remaining `fail`/`fail_bool` half needs real
+design, not a mechanical port. A7 (stale-comments audit) is already done.
+
+Track F (queued `0b186d8`, never yet attempted) is different from all of
+those: it is a **spike** — compile `jmap-config` + `evo-sys` against the
+newer-Evolution/EDS container `ci/eds-matrix.sh` already uses, characterize
+any `EMailConfig*`/shell API drift, and write the go/no-go verdict to
+`docs/NEWER-EVOLUTION-SPIKE.md` — no new `unsafe`, no FFI authoring, just
+investigation against a container this VM can already run (`sudo docker`
+works; the exact digest-pinned `fedora@sha256:6c75d5bf57cb…` image from
+`ci.yml`'s `eds-version-matrix` job is already pulled locally). Claiming it
+now.
+
+Note before starting: `ci/eds-matrix.sh`'s crate list already includes
+`-p jmap-config`, and M10's 2026-08-19 re-verification ran that exact
+script against this exact image fresh (see this file's earlier "1132
+passed, 0 failed" entry) — so compile-level survival of `jmap-config`/
+`evo-sys` against this container is already evidenced, not unknown. This
+session verifies that firsthand (container Evolution/EDS version, any
+`EMailConfig*` signature drift) rather than resting on the earlier run's
+framing, and turns it into Track F's actual deliverable doc + recommendation.
