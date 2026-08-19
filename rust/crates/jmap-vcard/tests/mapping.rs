@@ -8891,3 +8891,428 @@ fn rfc2426_inbound_unescaping_variants_and_boundary_cases() {
     let reemitted = card_to_vcard(&reparsed);
     assert_eq!(reemitted, emitted, "Emitted vCard must reach fixed point");
 }
+
+#[test]
+fn categories_empty_absent_and_refused_permutations_roundtrip() {
+    // Tests empty, absent, and refused keyword combinations:
+    // 1. keywords: None -> No CATEGORIES line, roundtrips to keywords: None.
+    // 2. keywords: Some(BTreeMap::new()) -> No CATEGORIES line, roundtrips to keywords: None.
+    // 3. Inbound empty CATEGORIES: -> parses to keywords: None.
+    // 4. Inbound CATEGORIES:,,, -> parses to keywords: None.
+    // 5. Inbound CATEGORIES with only whitespace items -> states_keyword refuses them, re-emits no line.
+
+    // 1. None keywords
+    let card_none = ContactCard {
+        name: Some(Name {
+            full: Some("Alice Smith".to_owned()),
+            ..Name::default()
+        }),
+        keywords: None,
+        ..ContactCard::default()
+    };
+    let vcard_none = card_to_vcard(&card_none);
+    assert!(!vcard_none.contains("\r\nCATEGORIES:"));
+    let parsed_none = vcard_to_card(&vcard_none).expect("parse none card");
+    assert_eq!(parsed_none.keywords, None);
+
+    // 2. Empty map keywords
+    let card_empty_map = ContactCard {
+        name: Some(Name {
+            full: Some("Alice Smith".to_owned()),
+            ..Name::default()
+        }),
+        keywords: Some(BTreeMap::new()),
+        ..ContactCard::default()
+    };
+    let vcard_empty_map = card_to_vcard(&card_empty_map);
+    assert!(!vcard_empty_map.contains("\r\nCATEGORIES:"));
+    let parsed_empty_map = vcard_to_card(&vcard_empty_map).expect("parse empty map card");
+    assert_eq!(parsed_empty_map.keywords, None);
+
+    // 3. Inbound CATEGORIES: (empty string)
+    let inbound_empty =
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Smith\r\nCATEGORIES:\r\nEND:VCARD\r\n";
+    let parsed_inbound_empty = vcard_to_card(inbound_empty).expect("parse inbound empty");
+    assert_eq!(parsed_inbound_empty.keywords, None);
+    let reemitted_empty = card_to_vcard(&parsed_inbound_empty);
+    assert!(!reemitted_empty.contains("\r\nCATEGORIES:"));
+
+    // 4. Inbound CATEGORIES:,,, (consecutive empty items)
+    let inbound_commas =
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Smith\r\nCATEGORIES:,,,\r\nEND:VCARD\r\n";
+    let parsed_inbound_commas = vcard_to_card(inbound_commas).expect("parse inbound commas");
+    assert_eq!(parsed_inbound_commas.keywords, None);
+    let reemitted_commas = card_to_vcard(&parsed_inbound_commas);
+    assert!(!reemitted_commas.contains("\r\nCATEGORIES:"));
+
+    // 5. Keywords map with only refused tags (empty, leading/trailing whitespace, carriage return, non-bool)
+    let card_refused = ContactCard {
+        name: Some(Name {
+            full: Some("Alice Smith".to_owned()),
+            ..Name::default()
+        }),
+        keywords: Some(
+            [
+                ("".to_owned(), json!(true)),
+                (" leading".to_owned(), json!(true)),
+                ("trailing ".to_owned(), json!(true)),
+                ("\ttabbed".to_owned(), json!(true)),
+                ("with\rreturn".to_owned(), json!(true)),
+                ("not_bool".to_owned(), json!(false)),
+                ("string_val".to_owned(), json!("tag")),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let vcard_refused = card_to_vcard(&card_refused);
+    assert!(!vcard_refused.contains("\r\nCATEGORIES:"));
+    let parsed_refused = vcard_to_card(&vcard_refused).expect("parse refused card");
+    assert_eq!(parsed_refused.keywords, None);
+}
+
+#[test]
+fn categories_single_tag_variations_and_escaped_delimiters_roundtrip() {
+    // Tests single category tags containing plain text, interior spaces, commas, semicolons,
+    // backslashes, newlines, and combinations, asserting exact value preservation and fixed-point convergence.
+    let test_cases = [
+        ("Work", "CATEGORIES:Work\r\n"),
+        ("Project Alpha", "CATEGORIES:Project Alpha\r\n"),
+        ("Acme, Inc.", "CATEGORIES:Acme\\, Inc.\r\n"),
+        ("One, Two, Three", "CATEGORIES:One\\, Two\\, Three\r\n"),
+        ("Project;Alpha", "CATEGORIES:Project\\;Alpha\r\n"),
+        (
+            "Architecture; Core; Platform",
+            "CATEGORIES:Architecture\\; Core\\; Platform\r\n",
+        ),
+        ("Dept\\Core", "CATEGORIES:Dept\\\\Core\r\n"),
+        (
+            "Path\\\\To\\\\Tag",
+            "CATEGORIES:Path\\\\\\\\To\\\\\\\\Tag\r\n",
+        ),
+        ("Line 1\nLine 2", "CATEGORIES:Line 1\\nLine 2\r\n"),
+        (
+            "Tag\\, with \\; and \\\\ and \n all four",
+            "CATEGORIES:Tag\\\\\\, with \\\\\\; and \\\\\\\\ and \\n all four\r\n",
+        ),
+    ];
+
+    for (tag, expected_line) in test_cases {
+        let card = ContactCard {
+            name: Some(Name {
+                full: Some("Bob Builder".to_owned()),
+                ..Name::default()
+            }),
+            keywords: Some([(tag.to_owned(), json!(true))].into()),
+            ..ContactCard::default()
+        };
+
+        let vcard = card_to_vcard(&card);
+        assert!(
+            vcard.contains(expected_line),
+            "Expected {expected_line} in emitted vCard for tag {tag:?}, got:\n{vcard}"
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse card with single category");
+        let kw = parsed.keywords.as_ref().expect("keywords present");
+        assert_eq!(
+            kw.keys().collect::<Vec<_>>(),
+            vec![&tag.to_owned()],
+            "Parsed tag must match original {tag:?}"
+        );
+        assert_eq!(kw[tag], json!(true));
+
+        // Fixed point convergence
+        let reemitted = card_to_vcard(&parsed);
+        assert_eq!(
+            reemitted, vcard,
+            "Re-emitted vCard must match for tag {tag:?}"
+        );
+        let reparsed = vcard_to_card(&reemitted).expect("reparse");
+        assert_eq!(
+            reparsed.keywords, parsed.keywords,
+            "Re-parsed keywords must match for tag {tag:?}"
+        );
+    }
+}
+
+#[test]
+fn categories_multiple_tags_sorted_order_and_escaping_roundtrip() {
+    // Tests multiple category tags emitted on a single line in lexicographically sorted order,
+    // verifying that embedded commas and semicolons within tags do not cause spurious item splits.
+    let tags = [
+        "Software, Core & Tools",
+        "Hardware, Components",
+        "Optics; Lasers & Sensors",
+        "Finance & Accounting",
+        "Executive; Strategy",
+    ];
+
+    let mut map = BTreeMap::new();
+    for tag in tags {
+        map.insert(tag.to_owned(), json!(true));
+    }
+
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Charlie Davis".to_owned()),
+            ..Name::default()
+        }),
+        keywords: Some(map),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Verify sorted order on the single emitted CATEGORIES line (unfolded):
+    // "Executive; Strategy" -> Executive\; Strategy
+    // "Finance & Accounting" -> Finance & Accounting
+    // "Hardware, Components" -> Hardware\, Components
+    // "Optics; Lasers & Sensors" -> Optics\; Lasers & Sensors
+    // "Software, Core & Tools" -> Software\, Core & Tools
+    let unfolded_vcard = unfolded(&vcard);
+    let expected_categories_line = "CATEGORIES:Executive\\; Strategy,Finance & Accounting,Hardware\\, Components,Optics\\; Lasers & Sensors,Software\\, Core & Tools";
+    assert_eq!(
+        line(&unfolded_vcard, "CATEGORIES"),
+        expected_categories_line,
+        "Expected sorted CATEGORIES line in unfolded vCard"
+    );
+    assert_eq!(
+        unfolded_vcard.matches("CATEGORIES:").count(),
+        1,
+        "Exactly one CATEGORIES line should be emitted"
+    );
+
+    // Parse back and verify exact tag preservation
+    let parsed = vcard_to_card(&vcard).expect("parse multiple categories card");
+    let kw = parsed.keywords.as_ref().expect("keywords present");
+    assert_eq!(kw.len(), 5);
+    for tag in tags {
+        assert!(
+            kw.contains_key(tag),
+            "Expected parsed keywords to contain tag {tag:?}, got: {kw:?}"
+        );
+        assert_eq!(kw[tag], json!(true));
+    }
+
+    // Fixed point convergence
+    let reemitted = card_to_vcard(&parsed);
+    assert_eq!(reemitted, vcard);
+    let reparsed = vcard_to_card(&reemitted).expect("reparse");
+    assert_eq!(reparsed.keywords, parsed.keywords);
+}
+
+#[test]
+fn categories_multiple_inbound_lines_merging_deduplication_and_fixed_point() {
+    // Tests that multiple inbound CATEGORIES lines (e.g. from vCard imports or multiple providers)
+    // are merged into a single deduplicated set, and outbound serialization consolidates them
+    // into a single canonical sorted CATEGORIES line.
+    let multi_line_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Dana Evans\r\n",
+        "CATEGORIES:Development,QA,Release\r\n",
+        "CATEGORIES:Release,Ops,Security\r\n",
+        "CATEGORIES:Development,Infrastructure,Security,Monitoring\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(multi_line_vcard).expect("parse multi-line categories");
+    let kw = parsed.keywords.as_ref().expect("keywords present");
+
+    let expected_keys = vec![
+        "Development",
+        "Infrastructure",
+        "Monitoring",
+        "Ops",
+        "QA",
+        "Release",
+        "Security",
+    ];
+    assert_eq!(kw.keys().collect::<Vec<_>>(), expected_keys);
+    assert!(kw.values().all(|v| v == &json!(true)));
+
+    // Re-emission consolidates into a single sorted line
+    let emitted = card_to_vcard(&parsed);
+    assert_eq!(
+        emitted.matches("CATEGORIES:").count(),
+        1,
+        "Must emit exactly one consolidated CATEGORIES line"
+    );
+    assert!(
+        emitted.contains(
+            "CATEGORIES:Development,Infrastructure,Monitoring,Ops,QA,Release,Security\r\n"
+        ),
+        "Emitted vCard must have consolidated sorted CATEGORIES line: {emitted}"
+    );
+
+    // Fixed point stability across successive passes
+    let reparsed = vcard_to_card(&emitted).expect("reparse");
+    assert_eq!(reparsed.keywords, parsed.keywords);
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(reemitted, emitted);
+}
+
+#[test]
+fn categories_inbound_delimiter_variations_and_empty_item_skipping() {
+    // Tests inbound vCards with empty items between/around commas, mixed-case property names,
+    // parameters (ALTID, LANGUAGE, custom X- parameters), and parameter casing.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Evan Foster\r\n",
+        "categories:Alpha,,Beta,,,Gamma,\r\n",
+        "Categories;ALTID=1;LANGUAGE=en:Delta,Epsilon\r\n",
+        "CATEGORIES;X-TAG-SYSTEM=CUSTOM;PID=1.1:Zeta,Eta\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse categories variations");
+    let kw = parsed.keywords.as_ref().expect("keywords present");
+
+    let expected_keys = vec!["Alpha", "Beta", "Delta", "Epsilon", "Eta", "Gamma", "Zeta"];
+    assert_eq!(kw.keys().collect::<Vec<_>>(), expected_keys);
+
+    // Emitted vCard combines all into one canonical line
+    let emitted = card_to_vcard(&parsed);
+    assert_eq!(emitted.matches("CATEGORIES:").count(), 1);
+    assert!(emitted.contains("CATEGORIES:Alpha,Beta,Delta,Epsilon,Eta,Gamma,Zeta\r\n"));
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse");
+    assert_eq!(reparsed.keywords, parsed.keywords);
+}
+
+#[test]
+fn categories_unicode_and_multibyte_utf8_roundtrip() {
+    // Tests non-ASCII and multi-byte UTF-8 categories across various languages and emoji scripts,
+    // asserting lossless round-trip fidelity and RFC 2426 line folding without UTF-8 splitting.
+    let utf8_tags = [
+        "Büro & Verwaltung",
+        "Forschung, Entwicklung",
+        "Santé, Sécurité",
+        "Équipe d'ingénierie",
+        "営業部",
+        "開発，基盤",
+        "مشاريع",
+        "🚀 Launch",
+        "⭐ VIP",
+        "🔥 Urgent, P0",
+    ];
+
+    let mut map = BTreeMap::new();
+    for tag in utf8_tags {
+        map.insert(tag.to_owned(), json!(true));
+    }
+
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Fiona Gallagher".to_owned()),
+            ..Name::default()
+        }),
+        keywords: Some(map),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Verify all emitted lines are valid UTF-8 and <= 77 octets
+    for line_str in vcard.split("\r\n") {
+        assert!(
+            line_str.len() <= 77,
+            "Line exceeded 77 octets: {line_str} (len={})",
+            line_str.len()
+        );
+    }
+
+    let parsed = vcard_to_card(&vcard).expect("parse unicode categories");
+    let kw = parsed.keywords.as_ref().expect("keywords present");
+    assert_eq!(kw.len(), utf8_tags.len());
+
+    for tag in utf8_tags {
+        assert!(
+            kw.contains_key(tag),
+            "Parsed keywords must contain UTF-8 tag {tag:?}, got: {kw:?}"
+        );
+        assert_eq!(kw[tag], json!(true));
+    }
+
+    // Fixed point convergence
+    let reemitted = card_to_vcard(&parsed);
+    assert_eq!(reemitted, vcard);
+    let reparsed = vcard_to_card(&reemitted).expect("reparse");
+    assert_eq!(reparsed.keywords, parsed.keywords);
+}
+
+#[test]
+fn categories_eds_category_list_fidelity_and_states_keyword_invariants() {
+    // Tests states_keyword against valid and invalid inputs, verifying EDS whitespace trimming defense.
+    // 1. Valid tags: return true
+    assert!(states_keyword("Work", &json!(true)));
+    assert!(states_keyword("Personal & Family", &json!(true)));
+    assert!(states_keyword("Acme, Inc.", &json!(true)));
+    assert!(states_keyword("Project;Alpha", &json!(true)));
+    assert!(states_keyword("Dept\\Special", &json!(true)));
+    assert!(states_keyword("Line 1\nLine 2", &json!(true)));
+    assert!(states_keyword("🚀 VIP", &json!(true)));
+
+    // 2. Refused: empty tag
+    assert!(!states_keyword("", &json!(true)));
+
+    // 3. Refused: carriage return
+    assert!(!states_keyword("tag\rwith_cr", &json!(true)));
+    assert!(!states_keyword("\rtag", &json!(true)));
+    assert!(!states_keyword("tag\r", &json!(true)));
+
+    // 4. Refused: leading/trailing ASCII whitespace (EDS trims them)
+    assert!(!states_keyword(" leading_space", &json!(true)));
+    assert!(!states_keyword("trailing_space ", &json!(true)));
+    assert!(!states_keyword("\tleading_tab", &json!(true)));
+    assert!(!states_keyword("trailing_tab\t", &json!(true)));
+    assert!(!states_keyword("\nleading_newline", &json!(true)));
+    assert!(!states_keyword("trailing_newline\n", &json!(true)));
+    assert!(!states_keyword("\u{b}vertical_tab", &json!(true)));
+    assert!(!states_keyword("vertical_tab\u{b}", &json!(true)));
+    assert!(!states_keyword("\u{c}form_feed", &json!(true)));
+    assert!(!states_keyword("form_feed\u{c}", &json!(true)));
+
+    // 5. Refused: non-boolean-true values (RFC 9553 Set constraint)
+    assert!(!states_keyword("Work", &json!(false)));
+    assert!(!states_keyword("Work", &json!("true")));
+    assert!(!states_keyword("Work", &json!(1)));
+    assert!(!states_keyword("Work", &json!(null)));
+    assert!(!states_keyword("Work", &json!({})));
+
+    // 6. Card containing mix of valid and refused tags:
+    // only valid tags are emitted, refused tags are omitted to prevent EDS trimming corruption.
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("George Harris".to_owned()),
+            ..Name::default()
+        }),
+        keywords: Some(
+            [
+                ("Valid Tag A".to_owned(), json!(true)),
+                (" leading".to_owned(), json!(true)),
+                ("trailing ".to_owned(), json!(true)),
+                ("with\rcarriage_return".to_owned(), json!(true)),
+                ("false_val".to_owned(), json!(false)),
+                ("Valid Tag B".to_owned(), json!(true)),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&vcard, "CATEGORIES"),
+        "CATEGORIES:Valid Tag A,Valid Tag B"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse mixed card");
+    let kw = parsed.keywords.as_ref().expect("keywords present");
+    assert_eq!(
+        kw.keys().collect::<Vec<_>>(),
+        vec!["Valid Tag A", "Valid Tag B"]
+    );
+}

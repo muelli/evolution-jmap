@@ -406,6 +406,23 @@ prop_compose! {
     }
 }
 
+fn arb_keyword_tag() -> impl Strategy<Value = String> {
+    prop_oneof![
+        "[a-zA-Z0-9_-]{1,10}",
+        Just("Work, Urgent".to_string()),
+        Just("Acme, Inc.".to_string()),
+        Just("Project;Alpha".to_string()),
+        Just("Dept\\Core".to_string()),
+        Just("Line 1\nLine 2".to_string()),
+        Just("Büro & Verwaltung".to_string()),
+        Just("🚀 VIP".to_string()),
+        Just(" leading".to_string()),
+        Just("trailing ".to_string()),
+        Just("with\rcr".to_string()),
+        "\\PC{1,10}",
+    ]
+}
+
 prop_compose! {
     fn arb_card_resources()(
         anniversaries in prop::option::of(prop::collection::btree_map(arb_key(), arb_anniversary(), 0..3)),
@@ -413,7 +430,7 @@ prop_compose! {
         calendars in prop::option::of(prop::collection::btree_map(arb_key(), arb_calendar(), 0..3)),
         media in prop::option::of(prop::collection::btree_map(arb_key(), arb_media(), 0..2)),
         keywords in prop::option::of(prop::collection::btree_map(
-            "[a-zA-Z0-9_-]{1,10}",
+            arb_keyword_tag(),
             prop_oneof![Just(json!(true)), Just(json!(false)), Just(json!("tag")), Just(json!(1))],
             0..4,
         )),
