@@ -328,6 +328,7 @@ dependencies = [
  "evolution-jmap-proto",
  "getrandom 0.3.4",
  "percent-encoding",
+ "proptest",
  "serde",
  "serde_json",
  "sha2",
