@@ -1,0 +1,30 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: evolution-jmap
+Upstream-Contact: Tobias Mueller <muelli@cryptobitch.de>
+Source: https://github.com/muelli/evolution-jmap
+
+Files: *
+Copyright: 2026 Tobias Mueller <muelli@cryptobitch.de>
+License: GPL-3.0-or-later
+Comment:
+ Covers this project's own source (rust/crates/*, per the SPDX headers
+ REUSE checks against LICENSES/GPL-3.0-or-later.txt). It does not yet
+ enumerate the license of every Rust crate statically linked into the
+ shipped modules (mostly MIT/Apache-2.0, per rust/Cargo.lock) — that
+ per-dependency accounting is docs/ROADMAP.md Track C2's job, to be
+ generated from the project's REUSE metadata rather than hand-maintained
+ here.
+
+License: GPL-3.0-or-later
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ GNU General Public License for more details.
+ .
+ On Debian systems, the complete text of the GNU General Public
+ License version 3 can be found in "/usr/share/common-licenses/GPL-3".

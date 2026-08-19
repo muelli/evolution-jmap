@@ -135,6 +135,18 @@ function(add_cargo_cdylib _lib_name)
 		COMPONENT "${_arg_COMPONENT}"
 	)
 
+	# lintian's unstripped-binary-or-object: this is `install(PROGRAMS ...)`,
+	# not `install(TARGETS ...)`, which is the only install() form CMake's own
+	# STRIP option applies to (CPack's CPACK_STRIP_FILES was tried first and
+	# left these five untouched, for the same reason). Stripping by hand in an
+	# install(CODE) block runs it wherever the file lands — a real
+	# `cmake --install`, and CPack's own re-run of the install rules into its
+	# staging tree alike.
+	install(CODE
+		"execute_process(COMMAND \"${CMAKE_STRIP}\" \"\$ENV{DESTDIR}${_arg_DESTINATION}/${_arg_OUTPUT_NAME}\")"
+		COMPONENT "${_arg_COMPONENT}"
+	)
+
 	# FILES rather than PROGRAMS: these are read, not executed.
 	set(_expected_data)
 	foreach(_data IN LISTS _arg_DATA)
