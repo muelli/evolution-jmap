@@ -360,6 +360,35 @@ Running record of headless polish increments on the `antigravity` branch.
   4. Multiple inbound `CATEGORIES` lines are merged into a unified set by `read_keywords` so tags on subsequent lines are never lost during sync, while emission produces a single consolidated `CATEGORIES` line matching Evolution's UI display (`E_CONTACT_CATEGORY_LIST`).
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — NICKNAME & URL fidelity, EDS slotting & characterization (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 4. `NICKNAME` and `URL`: Characterize `NICKNAME` (single and multiple) and one-or-more `URL` properties into their EDS fields (`E_CONTACT_NICKNAME`, homepage/blog/etc.); pin round-trips; log a finding where the slotting is a product decision rather than obvious.
+- **Changes:**
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `nickname_single_and_multiple_entries_eds_slotting_and_roundtrip`: verifies single and multiple keyed JSContact `nicknames` emitting individual `NICKNAME;X-JMAP-KEY=...` lines to preserve keys, EDS in-place editing of the primary `E_CONTACT_NICKNAME` line, inbound unkeyed line key allocation, and fixed-point stability.
+    - `nickname_comma_separated_text_list_inbound_and_escaping_fidelity`: verifies inbound comma-separated lists on a single line (`NICKNAME:Rob,Robbie,Boss` per RFC 2426 §3.1.3 text-list) parsing into a single `Nickname` struct (`"Rob,Robbie,Boss"`) because EDS 3.52 treats the line as a single string, outbound comma escaping (`\,`), and roundtrip fixed-point convergence.
+    - `nickname_special_characters_escaping_unicode_and_parameters`: tests nicknames containing semicolons, backslashes, newlines, double quotes, non-ASCII/multi-byte UTF-8 (Japanese, Cyrillic, emoji), and parameters (`TYPE`, `ALTID`, `LANGUAGE`).
+    - `nickname_empty_absent_and_predicate_fidelity`: validates `states_nickname` predicate and verifies empty/whitespace nickname omission on emission and parse.
+    - `url_single_and_multiple_properties_eds_slotting_and_roundtrip`: verifies single and multiple `links` (`kind: None`) emitting distinct `URL;X-JMAP-KEY=...` lines, EDS `E_CONTACT_HOMEPAGE_URL` slotting onto the first `URL` line with subsequent lines preserved, unkeyed key allocation, and fixed-point convergence.
+    - `url_kind_filtering_and_contact_uri_omission`: characterizes link kind filtering, verifying that RFC 9553 `kind: "contact"` (vCard 4.0 `CONTACT-URI`) and vendor kinds (`kind: "blog"`, `"video"`, `"feed"`, `"custom"`) are omitted from vCard 3.0 `URL` lines to prevent populating EDS `E_CONTACT_HOMEPAGE_URL` with non-homepage URLs.
+    - `url_eds_blog_video_and_custom_extensions_characterization`: characterizes unmapped EDS `X-EVOLUTION-BLOG-URL` (`E_CONTACT_BLOG_URL`) and `X-EVOLUTION-VIDEO-URL` (`E_CONTACT_VIDEO_URL`), verifying they are safely ignored on parse without corrupting JSContact models.
+    - `url_query_parameters_punctuation_and_encoding_fidelity`: tests complex URIs containing query semicolons, commas, hashes, credentials, ports, IPv6 literals, and percent-encodings without backslash escaping per RFC 3986 and RFC 2426 §3.6.8.
+    - `url_empty_absent_and_predicate_fidelity`: validates `states_link` and `maps_link_kind` predicates, empty URL line skipping, and unmodeled field preservation in `Link.extra`.
+    - `url_and_calendar_properties_coexistence_and_slotting`: tests coexistence of `URL` (`E_CONTACT_HOMEPAGE_URL`), `CALURI` (`E_CONTACT_CALENDAR_URI`), and `FBURL` (`E_CONTACT_FREEBUSY_URL`) on the same card with distinct keys and clean roundtrips.
+  - Enhanced property-based fuzzing strategies `arb_nickname` and `arb_link` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`.
+  - Updated `docs/VCARD-MAPPING.md` with Section 3.9 detailing `NICKNAME` and `URL` mapping architecture, cardinality decision, comma escaping vs text-list parsing, EDS slotting, and link kind filtering.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `NICKNAME` Cardinality & Comma Handling:
+     - RFC 2426 §3.1.3 defines `NICKNAME` as a comma-separated text-list, but JSContact (RFC 9553 §2.2.2) models nicknames as a keyed map. `jmap-vcard` emits one line per entry so each entry carries its `X-JMAP-KEY`.
+     - Inbound comma-separated lists (`NICKNAME:Rob,Robbie,Boss`) are parsed via `entry_text_list` into a single `Nickname` struct (`"Rob,Robbie,Boss"`). This matches EDS 3.52's behavior, which hands the whole value back as one string (`E_CONTACT_NICKNAME`) without splitting on commas. Re-emission escapes commas as `\,`, converging to a fixed point.
+  2. `URL` (Links) Slotting & Kind Filtering:
+     - In EDS, `E_CONTACT_HOMEPAGE_URL` maps to the first `URL` line in document order. Subsequent `URL` lines pass through intact in the raw vCard.
+     - `jmap-vcard` strictly restricts vCard 3.0 `URL` emission to `kind: None` (plain website). RFC 9553 `kind: "contact"` (vCard 4.0 `CONTACT-URI`) and vendor kinds (`kind: "blog"`, `"video"`, `"feed"`) emit no `URL` line by design to prevent misrepresenting them as the contact's homepage in Evolution's UI.
+     - `X-EVOLUTION-BLOG-URL` (`E_CONTACT_BLOG_URL`) and `X-EVOLUTION-VIDEO-URL` (`E_CONTACT_VIDEO_URL`) are EDS-specific extensions and remain unmapped by design in `jmap-vcard`.
+  3. `calcard` preserves raw RFC 3986 URI punctuation (e.g. `;`, `,` in query parameters) without backslash-escaping, ensuring valid URIs on the wire format.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+
 
 
 

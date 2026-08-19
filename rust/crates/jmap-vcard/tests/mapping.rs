@@ -9316,3 +9316,692 @@ fn categories_eds_category_list_fidelity_and_states_keyword_invariants() {
         vec!["Valid Tag A", "Valid Tag B"]
     );
 }
+
+#[test]
+fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
+    // Characterizes NICKNAME cardinality and EDS slotting:
+    // RFC 2426 §3.1.3 states NICKNAME on a single comma-separated line, but
+    // JSContact (RFC 9553 §2.2.2) keys nicknames individually.
+    // jmap-vcard emits one NICKNAME line per keyed entry so each carries an X-JMAP-KEY parameter.
+    // Evolution / EDS 3.52 reads E_CONTACT_NICKNAME from the first line, rewrites that line in
+    // place upon edit, and leaves parameters intact, while passing subsequent lines through.
+
+    // 1. Single nickname roundtrip
+    let mut single_nick = BTreeMap::new();
+    single_nick.insert(
+        "k1".to_owned(),
+        Nickname {
+            name: "Vee".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    let card = ContactCard {
+        id: Some("C-NICK-SINGLE".into()),
+        nicknames: Some(single_nick),
+        ..ContactCard::default()
+    };
+    let vcard = card_to_vcard(&card);
+    assert_eq!(line(&vcard, "NICKNAME"), "NICKNAME;X-JMAP-KEY=k1:Vee");
+
+    let parsed = vcard_to_card(&vcard).expect("parse single nickname");
+    let parsed_nicks = parsed.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(parsed_nicks.len(), 1);
+    assert_eq!(parsed_nicks["k1"].name, "Vee");
+    assert_eq!(card_to_vcard(&parsed), vcard);
+
+    // 2. Multiple nicknames emitted as distinct lines
+    let mut multi_nicks = BTreeMap::new();
+    multi_nicks.insert(
+        "k1".to_owned(),
+        Nickname {
+            name: "Vee".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    multi_nicks.insert(
+        "k2".to_owned(),
+        Nickname {
+            name: "Vera the Elder".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    multi_nicks.insert(
+        "k3".to_owned(),
+        Nickname {
+            name: "Chief Architect".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    let multi_card = ContactCard {
+        id: Some("C-NICK-MULTI".into()),
+        nicknames: Some(multi_nicks),
+        ..ContactCard::default()
+    };
+    let multi_vcard = card_to_vcard(&multi_card);
+    assert_eq!(multi_vcard.matches("\r\nNICKNAME;X-JMAP-KEY=").count(), 3);
+    assert!(multi_vcard.contains("NICKNAME;X-JMAP-KEY=k1:Vee\r\n"));
+    assert!(multi_vcard.contains("NICKNAME;X-JMAP-KEY=k2:Vera the Elder\r\n"));
+    assert!(multi_vcard.contains("NICKNAME;X-JMAP-KEY=k3:Chief Architect\r\n"));
+
+    let parsed_multi = vcard_to_card(&multi_vcard).expect("parse multi nickname");
+    let p_nicks = parsed_multi.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(p_nicks.len(), 3);
+    assert_eq!(p_nicks["k1"].name, "Vee");
+    assert_eq!(p_nicks["k2"].name, "Vera the Elder");
+    assert_eq!(p_nicks["k3"].name, "Chief Architect");
+    assert_eq!(card_to_vcard(&parsed_multi), multi_vcard);
+
+    // 3. Inbound multiple unkeyed NICKNAME lines allocate k1, k2, k3
+    let raw_unkeyed = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Test User\r\n",
+        "NICKNAME:First Nick\r\n",
+        "NICKNAME:Second Nick\r\n",
+        "NICKNAME:Third Nick\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_unkeyed = vcard_to_card(raw_unkeyed).expect("parse unkeyed nicknames");
+    let unkeyed_nicks = parsed_unkeyed
+        .nicknames
+        .as_ref()
+        .expect("nicknames present");
+    assert_eq!(unkeyed_nicks.len(), 3);
+    assert_eq!(unkeyed_nicks["k1"].name, "First Nick");
+    assert_eq!(unkeyed_nicks["k2"].name, "Second Nick");
+    assert_eq!(unkeyed_nicks["k3"].name, "Third Nick");
+
+    // 4. EDS in-place edit simulation on first line
+    let edited_vcard = multi_vcard.replace(
+        "NICKNAME;X-JMAP-KEY=k1:Vee\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:Vee Updated\r\n",
+    );
+    let parsed_edited = vcard_to_card(&edited_vcard).expect("parse edited vcard");
+    let ed_nicks = parsed_edited.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(ed_nicks["k1"].name, "Vee Updated");
+    assert_eq!(ed_nicks["k2"].name, "Vera the Elder");
+    assert_eq!(ed_nicks["k3"].name, "Chief Architect");
+}
+
+#[test]
+fn nickname_comma_separated_text_list_inbound_and_escaping_fidelity() {
+    // Characterizes comma handling in NICKNAME:
+    // 1. Inbound vCard with comma-separated list on a single line (RFC 2426 §3.1.3 text-list):
+    //    `NICKNAME:Rob,Robbie,Boss`
+    //    entry_text_list reads calcard's parsed values and joins them with commas into a single
+    //    Nickname struct ("Rob,Robbie,Boss") because EDS (libebook-contacts 3.52) hands the entire
+    //    line back as a single E_CONTACT_NICKNAME string.
+    // 2. Outbound emission escapes literal commas as `\,`:
+    //    `NICKNAME;X-JMAP-KEY=k1:Rob\,Robbie\,Boss`
+    // 3. Reading back the escaped vCard parses back to "Rob,Robbie,Boss", reaching fixed-point convergence.
+    let raw_list_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Rob Example\r\n",
+        "NICKNAME:Rob,Robbie,Boss\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(raw_list_vcard).expect("parse comma-separated nickname list");
+    let nicks = card.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(nicks.len(), 1);
+    assert_eq!(nicks["k1"].name, "Rob,Robbie,Boss");
+
+    // Outbound emission escapes commas
+    let emitted = card_to_vcard(&card);
+    assert_eq!(
+        line(&emitted, "NICKNAME"),
+        "NICKNAME;X-JMAP-KEY=k1:Rob\\,Robbie\\,Boss"
+    );
+
+    // Roundtrip back preserves the exact nickname string
+    let roundtrip_card = vcard_to_card(&emitted).expect("parse escaped nickname");
+    assert_eq!(
+        roundtrip_card.nicknames.as_ref().unwrap()["k1"].name,
+        "Rob,Robbie,Boss"
+    );
+    assert_eq!(card_to_vcard(&roundtrip_card), emitted);
+
+    // Inbound mixed escaped and unescaped commas
+    let raw_mixed = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:John Smith\r\n",
+        "NICKNAME:Smith\\, John,Chief\\, Executive,Boss\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_mixed = vcard_to_card(raw_mixed).expect("parse mixed commas nickname");
+    assert_eq!(
+        card_mixed.nicknames.as_ref().unwrap()["k1"].name,
+        "Smith, John,Chief, Executive,Boss"
+    );
+}
+
+#[test]
+fn nickname_special_characters_escaping_unicode_and_parameters() {
+    // Tests nicknames with semicolons, backslashes, newlines, UTF-8 unicode, and parameters:
+    let mut nicks = BTreeMap::new();
+    nicks.insert(
+        "k_special".to_owned(),
+        Nickname {
+            name: "Nick;Name\\With\nNewline & \"Quotes\"".to_owned(),
+            extra: [
+                ("pref".to_owned(), json!(1)),
+                ("contexts".to_owned(), json!({"work": true})),
+            ]
+            .into(),
+        },
+    );
+    nicks.insert(
+        "k_unicode_jp".to_owned(),
+        Nickname {
+            name: "たなかさん (田中)".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    nicks.insert(
+        "k_unicode_cyrillic".to_owned(),
+        Nickname {
+            name: "Саша (Александр)".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    nicks.insert(
+        "k_unicode_emoji".to_owned(),
+        Nickname {
+            name: "🌟 SuperStar 🦊".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-NICK-SPECIAL".into()),
+        nicknames: Some(nicks),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    let parsed = vcard_to_card(&vcard).expect("parse special nicknames");
+    let p_nicks = parsed.nicknames.as_ref().expect("nicknames present");
+
+    assert_eq!(
+        p_nicks["k_special"].name,
+        "Nick;Name\\With\nNewline & \"Quotes\""
+    );
+    assert_eq!(p_nicks["k_unicode_jp"].name, "たなかさん (田中)");
+    assert_eq!(p_nicks["k_unicode_cyrillic"].name, "Саша (Александр)");
+    assert_eq!(p_nicks["k_unicode_emoji"].name, "🌟 SuperStar 🦊");
+
+    // Fixed-point convergence
+    assert_eq!(card_to_vcard(&parsed), vcard);
+
+    // Inbound parameters (TYPE, ALTID, LANGUAGE)
+    let raw_param_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Elena\r\n",
+        "NICKNAME;TYPE=WORK;X-JMAP-KEY=k_work:Office Elena\r\n",
+        "NICKNAME;ALTID=1;LANGUAGE=de;X-JMAP-KEY=k_de:Leni\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_params = vcard_to_card(raw_param_vcard).expect("parse parameterized nicknames");
+    let param_nicks = parsed_params.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(param_nicks["k_work"].name, "Office Elena");
+    assert_eq!(param_nicks["k_de"].name, "Leni");
+}
+
+#[test]
+fn nickname_empty_absent_and_predicate_fidelity() {
+    // Tests states_nickname predicate and empty/absent nickname handling:
+    assert!(states_nickname(&Nickname {
+        name: "Nick".into(),
+        extra: BTreeMap::new()
+    }));
+    assert!(!states_nickname(&Nickname {
+        name: "".into(),
+        extra: BTreeMap::new()
+    }));
+
+    // Empty nicknames are not emitted
+    let mut nicks = BTreeMap::new();
+    nicks.insert(
+        "k1".to_owned(),
+        Nickname {
+            name: "".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    nicks.insert(
+        "k2".to_owned(),
+        Nickname {
+            name: "Valid Nick".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    let card = ContactCard {
+        nicknames: Some(nicks),
+        ..ContactCard::default()
+    };
+    let vcard = card_to_vcard(&card);
+    assert_eq!(vcard.matches("\r\nNICKNAME").count(), 1);
+    assert_eq!(
+        line(&vcard, "NICKNAME"),
+        "NICKNAME;X-JMAP-KEY=k2:Valid Nick"
+    );
+
+    // Inbound empty NICKNAME lines are safely skipped
+    let raw_empty = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Test\r\n",
+        "NICKNAME:\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_empty = vcard_to_card(raw_empty).expect("parse empty nickname lines");
+    assert_eq!(parsed_empty.nicknames, None);
+}
+
+#[test]
+fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
+    // Characterizes URL properties into EDS fields:
+    // 1. Single URL (kind: None): maps to EDS E_CONTACT_HOMEPAGE_URL.
+    // 2. Multiple URLs (kind: None): emitted as multiple URL;X-JMAP-KEY=... lines.
+    //    EDS 3.52 maps the first URL line to E_CONTACT_HOMEPAGE_URL and preserves subsequent lines.
+    // 3. Roundtrips preserve all keys and URIs without data loss.
+
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l1".to_owned(),
+        Link {
+            uri: "https://alice.example.com".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l2".to_owned(),
+        Link {
+            uri: "https://work.example.org/alice".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l3".to_owned(),
+        Link {
+            uri: "https://github.com/alice".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-URL-MULTI".into()),
+        links: Some(links),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(vcard.matches("\r\nURL;X-JMAP-KEY=").count(), 3);
+    assert!(vcard.contains("URL;X-JMAP-KEY=l1:https://alice.example.com\r\n"));
+    assert!(vcard.contains("URL;X-JMAP-KEY=l2:https://work.example.org/alice\r\n"));
+    assert!(vcard.contains("URL;X-JMAP-KEY=l3:https://github.com/alice\r\n"));
+
+    let parsed = vcard_to_card(&vcard).expect("parse multiple url lines");
+    let p_links = parsed.links.as_ref().expect("links present");
+    assert_eq!(p_links.len(), 3);
+    assert_eq!(p_links["l1"].uri, "https://alice.example.com");
+    assert_eq!(p_links["l1"].kind, None);
+    assert_eq!(p_links["l2"].uri, "https://work.example.org/alice");
+    assert_eq!(p_links["l2"].kind, None);
+    assert_eq!(p_links["l3"].uri, "https://github.com/alice");
+    assert_eq!(p_links["l3"].kind, None);
+
+    // Fixed-point stability
+    assert_eq!(card_to_vcard(&parsed), vcard);
+
+    // Inbound unkeyed multiple URL lines allocate l1, l2, l3
+    let raw_unkeyed = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice\r\n",
+        "URL:https://primary.example.com\r\n",
+        "URL:https://secondary.example.com\r\n",
+        "URL;X-JMAP-KEY=l9:https://retained.example.com\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_unkeyed = vcard_to_card(raw_unkeyed).expect("parse unkeyed urls");
+    let unk_links = parsed_unkeyed.links.as_ref().expect("links present");
+    assert_eq!(unk_links.len(), 3);
+    assert_eq!(unk_links["l1"].uri, "https://primary.example.com");
+    assert_eq!(unk_links["l2"].uri, "https://secondary.example.com");
+    assert_eq!(unk_links["l9"].uri, "https://retained.example.com");
+}
+
+#[test]
+fn url_kind_filtering_and_contact_uri_omission() {
+    // Product Decision & Rationale:
+    // RFC 9553 §2.6.3 defines `kind: "contact"` as a URI for communicating with the person.
+    // RFC 9555 §2.6.3 states `kind: "contact"` on vCard 4.0's `CONTACT-URI`.
+    // vCard 3.0 has only `URL` (RFC 2426 §3.6.8), which EDS maps to E_CONTACT_HOMEPAGE_URL.
+    // Emitting a contact link (or vendor kinds like feed/blog/video) on `URL` would misrepresent
+    // it in Evolution's UI as the contact's homepage.
+    // Therefore, ONLY `kind: None` (plain website) maps to `URL`. All other kinds emit no line.
+
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l_web".to_owned(),
+        Link {
+            uri: "https://alice.example.com".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_contact".to_owned(),
+        Link {
+            uri: "https://contact.example.com/form".to_owned(),
+            kind: Some("contact".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_feed".to_owned(),
+        Link {
+            uri: "https://alice.example.com/rss.xml".to_owned(),
+            kind: Some("feed".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_blog".to_owned(),
+        Link {
+            uri: "https://blog.alice.example.com".to_owned(),
+            kind: Some("blog".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_custom".to_owned(),
+        Link {
+            uri: "https://custom.example.com/profile".to_owned(),
+            kind: Some("x-vendor-profile".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-URL-KINDS".into()),
+        links: Some(links),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    // Only the plain website link gets a URL line
+    assert_eq!(vcard.matches("\r\nURL").count(), 1);
+    assert_eq!(
+        line(&vcard, "URL"),
+        "URL;X-JMAP-KEY=l_web:https://alice.example.com"
+    );
+    assert!(!vcard.contains("contact.example.com"));
+    assert!(!vcard.contains("rss.xml"));
+    assert!(!vcard.contains("blog.alice.example.com"));
+    assert!(!vcard.contains("custom.example.com"));
+
+    let parsed = vcard_to_card(&vcard).expect("parse filtered url vcard");
+    let p_links = parsed.links.as_ref().expect("links present");
+    assert_eq!(p_links.len(), 1);
+    assert_eq!(p_links["l_web"].uri, "https://alice.example.com");
+    assert_eq!(p_links["l_web"].kind, None);
+}
+
+#[test]
+fn url_eds_blog_video_and_custom_extensions_characterization() {
+    // Characterizes EDS blog and video URL properties:
+    // EDS defines E_CONTACT_BLOG_URL (`X-EVOLUTION-BLOG-URL`) and
+    // E_CONTACT_VIDEO_URL (`X-EVOLUTION-VIDEO-URL`).
+    // jmap-vcard deliberately does NOT map them to `links` (or `extra`):
+    // 1. JSContact represents links in `links` map with optional vendor kinds or `extra`.
+    // 2. Synthesizing non-standard properties into JSContact would corrupt standard JMAP schemas.
+    // 3. jmap-vcard safely ignores them on parse and does not emit them on serialization.
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Baker\r\n",
+        "URL;X-JMAP-KEY=l1:https://alice.example.com\r\n",
+        "X-EVOLUTION-BLOG-URL:https://blogs.example.com/alice\r\n",
+        "X-EVOLUTION-VIDEO-URL:https://videos.example.com/alice\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(raw_vcard).expect("parse vcard with eds blog/video urls");
+    let links = parsed.links.as_ref().expect("links present");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links["l1"].uri, "https://alice.example.com");
+    assert_eq!(parsed.extra.get("xEvolutionBlogUrl"), None);
+    assert_eq!(parsed.extra.get("xEvolutionVideoUrl"), None);
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(emitted.contains("URL;X-JMAP-KEY=l1:https://alice.example.com\r\n"));
+    assert!(!emitted.contains("X-EVOLUTION-BLOG-URL"));
+    assert!(!emitted.contains("X-EVOLUTION-VIDEO-URL"));
+    assert_eq!(card_to_vcard(&vcard_to_card(&emitted).unwrap()), emitted);
+}
+
+#[test]
+fn url_query_parameters_punctuation_and_encoding_fidelity() {
+    // Verifies complex URIs containing query strings, semicolons, commas, hashes,
+    // authentication userinfo, ports, and percent-encodings:
+    // calcard preserves raw URI characters without backslash-escaping URI punctuation (RFC 3986 / RFC 2426 §3.6.8).
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l_complex_query".to_owned(),
+        Link {
+            uri: "https://api.example.com:8443/v1/search?q=tag:a,b;status:active&filter=x,y;z#top"
+                .to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_auth".to_owned(),
+        Link {
+            uri: "https://user:p%40ssw%3Brd@secure.example.org:9000/path/to/res?a=1&b=2#sec"
+                .to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_ipv6".to_owned(),
+        Link {
+            uri: "http://[2001:db8::1]:8080/index.html?token=abc;def,ghi".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-URL-COMPLEX".into()),
+        links: Some(links),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    let parsed = vcard_to_card(&vcard).expect("parse complex urls");
+    let p_links = parsed.links.as_ref().expect("links present");
+
+    assert_eq!(
+        p_links["l_complex_query"].uri,
+        "https://api.example.com:8443/v1/search?q=tag:a,b;status:active&filter=x,y;z#top"
+    );
+    assert_eq!(
+        p_links["l_auth"].uri,
+        "https://user:p%40ssw%3Brd@secure.example.org:9000/path/to/res?a=1&b=2#sec"
+    );
+    assert_eq!(
+        p_links["l_ipv6"].uri,
+        "http://[2001:db8::1]:8080/index.html?token=abc;def,ghi"
+    );
+
+    // Assert fixed-point convergence
+    assert_eq!(card_to_vcard(&parsed), vcard);
+}
+
+#[test]
+fn url_empty_absent_and_predicate_fidelity() {
+    // Tests states_link predicate and empty/absent link handling:
+    assert!(states_link(&Link {
+        uri: "https://example.com".into(),
+        kind: None,
+        extra: BTreeMap::new()
+    }));
+    assert!(!states_link(&Link {
+        uri: "".into(),
+        kind: None,
+        extra: BTreeMap::new()
+    }));
+    assert!(!states_link(&Link {
+        uri: "https://example.com".into(),
+        kind: Some("contact".into()),
+        extra: BTreeMap::new()
+    }));
+    assert!(!states_link(&Link {
+        uri: "https://example.com".into(),
+        kind: Some("other".into()),
+        extra: BTreeMap::new()
+    }));
+
+    // Empty links are not emitted
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l1".to_owned(),
+        Link {
+            uri: "".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l2".to_owned(),
+        Link {
+            uri: "https://valid.example.com".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    let card = ContactCard {
+        links: Some(links),
+        ..ContactCard::default()
+    };
+    let vcard = card_to_vcard(&card);
+    assert_eq!(vcard.matches("\r\nURL").count(), 1);
+    assert_eq!(
+        line(&vcard, "URL"),
+        "URL;X-JMAP-KEY=l2:https://valid.example.com"
+    );
+
+    // Inbound empty URL lines are safely skipped
+    let raw_empty = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Test\r\n",
+        "URL:\r\n",
+        "URL;X-JMAP-KEY=l1:\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_empty = vcard_to_card(raw_empty).expect("parse empty url lines");
+    assert_eq!(parsed_empty.links, None);
+
+    // Unmodeled Link fields (contexts, pref, label, mediaType) in extra survive roundtrips untouched
+    let mut extra_links = BTreeMap::new();
+    extra_links.insert(
+        "l_rich".to_owned(),
+        Link {
+            uri: "https://rich.example.com".to_owned(),
+            kind: None,
+            extra: [
+                ("pref".to_owned(), json!(1)),
+                ("contexts".to_owned(), json!({"work": true})),
+                ("label".to_owned(), json!("Work Portal")),
+                ("mediaType".to_owned(), json!("text/html")),
+            ]
+            .into(),
+        },
+    );
+    let rich_card = ContactCard {
+        links: Some(extra_links),
+        ..ContactCard::default()
+    };
+    let rich_vcard = card_to_vcard(&rich_card);
+    let parsed_rich = vcard_to_card(&rich_vcard).expect("parse rich url");
+    assert_eq!(
+        parsed_rich.links.as_ref().unwrap()["l_rich"].uri,
+        "https://rich.example.com"
+    );
+}
+
+#[test]
+fn url_and_calendar_properties_coexistence_and_slotting() {
+    // Tests clean separation and coexistence of URL, CALURI, and FBURL:
+    // URL -> E_CONTACT_HOMEPAGE_URL (card.links)
+    // CALURI -> E_CONTACT_CALENDAR_URI (card.calendars, kind: "calendar")
+    // FBURL -> E_CONTACT_FREEBUSY_URL (card.calendars, kind: "freeBusy")
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l1".to_owned(),
+        Link {
+            uri: "https://alice.example.com".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut cals = BTreeMap::new();
+    cals.insert(
+        "c1".to_owned(),
+        Calendar {
+            uri: "https://cal.example.com/alice.ics".to_owned(),
+            kind: Some("calendar".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    cals.insert(
+        "c2".to_owned(),
+        Calendar {
+            uri: "https://cal.example.com/fb/alice.ifb".to_owned(),
+            kind: Some("freeBusy".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-URL-CAL-COEXIST".into()),
+        links: Some(links),
+        calendars: Some(cals),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&vcard, "URL"),
+        "URL;X-JMAP-KEY=l1:https://alice.example.com"
+    );
+    assert_eq!(
+        line(&vcard, "CALURI"),
+        "CALURI;X-JMAP-KEY=c1:https://cal.example.com/alice.ics"
+    );
+    assert_eq!(
+        line(&vcard, "FBURL"),
+        "FBURL;X-JMAP-KEY=c2:https://cal.example.com/fb/alice.ifb"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse coexisting url and calendar lines");
+    let p_links = parsed.links.as_ref().expect("links present");
+    let p_cals = parsed.calendars.as_ref().expect("calendars present");
+
+    assert_eq!(p_links.len(), 1);
+    assert_eq!(p_links["l1"].uri, "https://alice.example.com");
+    assert_eq!(p_links["l1"].kind, None);
+
+    assert_eq!(p_cals.len(), 2);
+    assert_eq!(p_cals["c1"].uri, "https://cal.example.com/alice.ics");
+    assert_eq!(p_cals["c1"].kind.as_deref(), Some("calendar"));
+    assert_eq!(p_cals["c2"].uri, "https://cal.example.com/fb/alice.ifb");
+    assert_eq!(p_cals["c2"].kind.as_deref(), Some("freeBusy"));
+
+    // Fixed-point stability
+    assert_eq!(card_to_vcard(&parsed), vcard);
+}

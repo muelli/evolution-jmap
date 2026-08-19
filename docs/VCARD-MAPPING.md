@@ -163,6 +163,32 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
   - [`states_keyword`] refuses empty tags (`""`), non-boolean values (`Value::Bool(false)` or strings/numbers), carriage returns (`\r`), and tags with leading or trailing ASCII whitespace (`edged_with_whitespace`). This prevents emitting tags that EDS would silently trim and rename on the server.
 - **Empty / Absent Categories**: Cards with `keywords: None`, empty sets, or only unstated tags emit no `CATEGORIES` line. Inbound vCards with absent `CATEGORIES`, empty values (`CATEGORIES:`), or delimiter-only lines (`CATEGORIES:,,,`) parse to `keywords: None`.
 
+### 3.9 Nicknames & URLs (`NICKNAME`, `URL` ↔ `E_CONTACT_NICKNAME`, `E_CONTACT_HOMEPAGE_URL`)
+- **`NICKNAME` Cardinality & Identity Preservation**:
+  - RFC 2426 §3.1.3 specifies `NICKNAME` as a single comma-separated `text-list` on the wire format (`NICKNAME:Rob,Robbie,Boss`).
+  - JSContact (RFC 9553 §2.2.2) models nicknames as a keyed map (`nicknames: { "k1": { "name": "Rob" }, "k2": { "name": "Robbie" } }`).
+  - `jmap-vcard` emits **one line per keyed entry** (`NICKNAME;X-JMAP-KEY=k1:Rob\r\nNICKNAME;X-JMAP-KEY=k2:Robbie\r\n`) so that each entry carries its unique `X-JMAP-KEY` parameter across synchronization cycles.
+  - EDS 3.52 (`libebook-contacts`) reads `E_CONTACT_NICKNAME` from the first `NICKNAME` line. When editing the nickname in Evolution, EDS rewrites that first line's value in place while leaving parameters intact, and passes subsequent `NICKNAME` lines through untouched.
+- **`NICKNAME` Comma Handling & Single-String Parsing**:
+  - Inbound vCards from third-party clients containing comma-separated lists on a single line (`NICKNAME:Rob,Robbie,Boss`) are parsed via `entry_text_list` into a single `Nickname { name: "Rob,Robbie,Boss" }`.
+  - *Rationale*: EDS 3.52 hands the entire value back as one string and does not split it on commas. Splitting it into multiple JSContact entries would create synthetic entries that Evolution's UI cannot display individually.
+  - Outbound re-emission escapes literal commas as `\,` (`NICKNAME;X-JMAP-KEY=k1:Rob\,Robbie\,Boss`), and subsequent parse passes read it back as `"Rob,Robbie,Boss"`, guaranteeing deterministic fixed-point convergence.
+  - Unmodeled `contexts` and `pref` in `Nickname.extra` ride untouched on the JMAP layer.
+- **`URL` Mapping & EDS Homepage Slotting**:
+  - Plain website links (`kind: None` in JSContact `links`) map directly to RFC 2426 §3.6.8 `URL` lines carrying `X-JMAP-KEY`.
+  - In EDS, `E_CONTACT_HOMEPAGE_URL` maps to the **first `URL` line** in the vCard. Subsequent `URL` lines pass through intact on the vCard stream and are parsed back into `card.links` with their respective keys (`l1`, `l2`, `l3`).
+- **`URL` Kind Filtering & Contact URI Omission**:
+  - RFC 9553 §2.6.3 defines `kind: "contact"` as a URI for communicating with the person (e.g. contact forms, mailto links), which RFC 9555 §2.6.3 states on vCard 4.0's `CONTACT-URI`.
+  - vCard 3.0 has no `CONTACT-URI` property. Emitting `kind: "contact"` or vendor kinds (`kind: "blog"`, `"video"`, `"feed"`) on a vCard 3.0 `URL` would populate Evolution's `E_CONTACT_HOMEPAGE_URL` and mislead the user into seeing a contact form or feed as the person's homepage.
+  - Therefore, [`states_link`] and [`maps_link_kind`] restrict vCard 3.0 emission **strictly to `kind: None`** (plain websites). All other kinds are omitted on the wire format and remain safely preserved on the server.
+- **EDS Blog & Video URLs vs JSContact Links**:
+  - EDS defines `E_CONTACT_BLOG_URL` (`X-EVOLUTION-BLOG-URL`) and `E_CONTACT_VIDEO_URL` (`X-EVOLUTION-VIDEO-URL`).
+  - `jmap-vcard` deliberately does NOT map these non-standard properties into `links` or `extra` to prevent polluting standard JSContact schemas. `vcard_to_card` safely ignores them on parse, leaving them as unmapped EDS extensions.
+- **URI Punctuation & Escaping**:
+  - URIs with query strings containing semicolons, commas, ampersands, hashes, and percent-encodings (e.g. `https://api.example.com/search?q=a,b;c#top`) are formatted without backslash escaping per RFC 3986 and RFC 2426 §3.6.8, round-tripping with 100% fidelity.
+- **Unmodeled `Link` Properties**:
+  - JSContact `Link` fields `mediaType`, `contexts`, `pref`, and `label` ride in `extra` and are untouched during `jmap-book-sync`'s `PatchObject` synchronization.
+
 ---
 
 ## 4. Special Semantics & Product Decision Catalog
@@ -229,6 +255,8 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 | [`states_title`] | `pub` | Checks if title has non-empty name and supported kind (`title` or `role`). |
 | [`states_note`] | `pub` | Checks if note contains non-empty text. |
 | [`states_link`] | `pub` | Checks if link contains non-empty URI and plain website kind (`None`). |
+| `maps_link_kind` | `private` | Filters link kind to allow only plain website links (`kind: None`) on vCard 3.0 `URL`. |
+| `entry_text_list` | `private` | Reads parsed text values of a multi-valued property and joins them with commas. |
 | [`states_calendar`] | `pub` | Checks if calendar has non-empty URI and mapped kind (`calendar` or `freeBusy`). |
 | [`states_media`] | `pub` | Evaluates if media entry is a valid photo with supported inline/URI payload. |
 | [`same_photo`] | `pub` | Compares two media entries for semantic image equality across base64/MIME representations. |
