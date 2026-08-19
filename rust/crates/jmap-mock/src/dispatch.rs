@@ -275,6 +275,9 @@ fn handle_method(
         "CalendarEvent/query" => crate::calendars::calendar_event_query(state, arguments),
         "Principal/get" => crate::principals::principal_get(state, arguments),
         "Principal/query" => crate::principals::principal_query(state, arguments),
+        "Principal/getAvailability" => {
+            crate::principals::principal_get_availability(state, arguments)
+        }
         "Identity/get" => crate::mail::identity_get(state, arguments),
         "EmailSubmission/set" => crate::mail::email_submission_set(state, arguments, created_ids),
         _ => Err(MethodError::new(error::method::UNKNOWN_METHOD)),
