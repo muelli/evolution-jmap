@@ -72,6 +72,16 @@
 //!   a fan-out writes, written back onto it so that a created child and a
 //!   discovered one are the same source. The decision in between is
 //!   [`jmap_collection_sync::create`]'s.
+//! - [`delete_resource`] is that request's mirror, and the destructive one:
+//!   Evolution's "Delete" on an address book or a calendar of this account.
+//!   `ECollectionBackendClass::delete_resource_sync` is another slot whose EDS
+//!   default is a refusal, so it does not chain up either. What is here is which
+//!   collection a child `ESource` stands for — read through the very
+//!   [`resource_id`] string `dup_resource_id` hands EDS, so the delete cannot
+//!   name a different object than the child does — and the `remote-deletable`
+//!   flag that makes the menu item exist, set from [`child_added`] for every
+//!   child of this collection and for nothing else. The removal of the source
+//!   afterwards is [`removal`]'s call, the same one a populate uses.
 //! - [`populate`] is the vfunc EDS reaches all of that through first, and the
 //!   half of it that needs no server: the cached children of previous sessions,
 //!   claimed and exported so that an account works *offline*, and then the one
@@ -130,6 +140,7 @@ pub mod child_added;
 pub mod child_source;
 pub mod collection_source;
 pub mod create_resource;
+pub mod delete_resource;
 pub mod factory;
 pub mod fan_out;
 pub mod mail_child;
