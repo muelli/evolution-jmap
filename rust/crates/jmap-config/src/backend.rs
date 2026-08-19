@@ -990,10 +990,38 @@ pub unsafe fn setup(collection: *mut ESource, address: &str) -> bool {
 unsafe extern "C" fn check_complete(backend: *mut EMailConfigServiceBackend) -> gboolean {
     guard("check_complete", GFALSE, || {
         // SAFETY: a live backend of this class, which is what Evolution
-        // dispatches through this slot. The collection comes back
-        // `(transfer none)` — the backend's own reference, which outlives this
-        // call — and is only read from.
-        let collection = unsafe { e_mail_config_service_backend_get_collection(backend) };
+        // dispatches through this slot. Both come back `(transfer none)` — the
+        // backend's own references, which outlive this call.
+        let (collection, page) = unsafe {
+            (
+                e_mail_config_service_backend_get_collection(backend),
+                e_mail_config_service_backend_get_page(backend),
+            )
+        };
+
+        // Narrow the collection to the address the user typed, if the page knows
+        // it. `setup_defaults` is Evolution's intended hook for this, but it does
+        // not fire when the user reaches this page by revising an autoconfig
+        // result and switching the server type to JMAP, and at `insert_widgets`
+        // construction time the page's address is not set yet. `check_complete`
+        // is asked again every time the page changes — i.e. after the address has
+        // propagated — so it is where the narrow reliably lands on that path.
+        // `setup` writes only when the address differs from the one the collection
+        // already names: a no-op once narrowed, and it never overwrites a host the
+        // user corrected by hand unless they also changed the address it was for.
+        if !page.is_null() {
+            // SAFETY: `page` is the backend's own live page, just checked
+            // non-NULL; the address returns `(transfer none)` as a NUL-terminated
+            // string the page owns, copied out by `read_string`.
+            let address =
+                unsafe { read_string(e_mail_config_service_page_get_email_address(page)) };
+            if let Some(address) = address.filter(|a| !a.trim().is_empty()) {
+                // SAFETY: `collection` is NULL or the backend's live collection
+                // source; `setup` handles NULL and nothing here outlives the call.
+                unsafe { setup(collection, &address) };
+            }
+        }
+
         // SAFETY: NULL or the backend's live collection source, which is
         // exactly what `is_complete` documents it takes.
         if unsafe { is_complete(collection) } {
