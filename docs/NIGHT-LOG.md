@@ -37508,3 +37508,70 @@ claim time is unchanged: CURRENT PRIORITY's SRV `Resolver` (GResolver, FFI),
 A5, A6 Pattern C, D1's vtable wiring remain escalation-worthy; Track B/C2/C4
 remain NEEDS-DECISION; A6 Pattern E's `fail`/`fail_bool` half needs real
 design.
+
+## 2026-08-19 — escalating the real SRV `Resolver` (GResolver FFI), not attempting it
+
+Fresh survey: all milestones (M1–M10, CALCARD) tagged COMPLETE in
+`docs/MILESTONES.md`; `git fetch` shows local `master` already equals
+`origin/master` (`efea5f4`) — no new maintainer commit to `docs/ROADMAP.md`.
+Checked `~/.night-shift-escalate` first: absent, so no pending escalation to
+honour or re-run.
+
+Walked the CURRENT PRIORITY order the task names (M7 → real-server readiness
+→ M9/M10) before anything else: M7 is COMPLETE and operator-verified; OAuth2
+real-server validation is explicitly DEFERRED by the maintainer (not a bug,
+not to touch); the `--features live-server` harness and the redirect-auth /
+`apiUrl` scheme fixes are DONE; M9 and M10 are both COMPLETE. That leaves
+CURRENT PRIORITY item 5's one open piece: **build the real SRV `Resolver`**
+(`_jmap._tcp.<domain>` via `g_resolver_lookup_service()`/`gio-sys`) — both
+call sites (`jmap_backend_core::source::connect`, `config_lookup::run`)
+already route through the `Resolver` trait seam but still construct
+`NoSrvResolver`, so Fastmail's password path still 404s. The roadmap names
+this "FFI — reasonable to escalate" itself, not just a past session's
+judgment call.
+
+Before treating it as the only candidate, re-checked every other thread this
+repo's Round 2 backlog names, rather than trusting the last entry's list at
+face value: Track A's `[claude]` items are done (A2, A4, A7) or explicitly
+escalation-worthy (A5, A6 Pattern C — both named as such in
+`docs/UNSAFE-AUDIT.md`/the roadmap, not inferred here); Track B/C2/C4 are
+NEEDS-DECISION; Track C1/C3 are DONE; Track D1's remaining piece is
+GObject-vtable FFI wiring, same category; Track D2's write-back is blocked on
+D1; Track E's remaining piece (`ECalBackend get_free_busy_sync` +
+`BusyPeriod→VFREEBUSY`) is FFI, explicitly flagged escalation-worthy in the
+design; Track F was claimed at `81dac75` (2026-08-19 08:24:53Z, ~42 minutes
+before this session started at 09:06Z per `git log`) — a live, non-stale
+lock (well under the 24h expiry rule), so left untouched, not claimed out
+from under a concurrent session. `docs/BACKLOG.md` is unchanged and still
+out of scope by the current-priority directive.
+
+So, for the first time across this long run of sessions that have repeatedly
+*noted* the SRV resolver as escalation-worthy while finding something else
+tractable, there genuinely is nothing else: every remaining `[claude]`-lane
+item is either FFI/unsafe (escalation-worthy by the roadmap's own words),
+NEEDS-DECISION, or a live concurrent claim. The SRV `Resolver` is also the
+highest-priority item among the escalation-worthy set (CURRENT PRIORITY,
+not Round 2).
+
+Why this one is genuinely FFI risk, not just "uses `unsafe`": the
+implementation calls `g_resolver_lookup_service()` (already bound via
+`gio-sys`, no new dependency), walks the returned `GList` of `GSrvTarget`s
+via `g_srv_target_get_hostname/_port/_priority/_weight`, sorts by RFC 2782
+order, and must free the list correctly (`g_resolver_free_targets`) on every
+path including the error/empty ones — transfer-full ownership over a
+GLib-owned list is exactly the "plausible-but-wrong-but-compiles" shape this
+project's own escalation criteria and its FFI-soundness audit (A5) call out:
+a wrong free (double-free, leak, or freeing before reading every element)
+would not show up as a compile error or even as a mock-test failure (no fake
+`GResolver` exists to catch it), only as a leak or crash under real use.
+
+Not attempting it on Sonnet. Wrote `claude-opus-5` to
+`~/.night-shift-escalate` and stopping here without claiming the work, no
+lock taken (nothing is in progress to hold a lock against). The next session
+on opus should start from `docs/ROADMAP.md`'s CURRENT PRIORITY item 5's
+"CLAIMABLE NOW" paragraph: implement `Resolver` for a real `GResolver`
+in the EDS integration layer (likely `jmap-backend-core` or a small new
+module alongside it), inject it in place of `NoSrvResolver` at both named
+call sites, and TDD it the way `srv_discovery.rs` already does against a
+fake — true end-to-end confirmation against `_jmap._tcp.fastmail.com` is
+still an operator step (no creds on this runner).
