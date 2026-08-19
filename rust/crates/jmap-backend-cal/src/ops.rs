@@ -27,11 +27,10 @@
 //! does not implement either.
 
 use eds_sys::{
-    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, E_CLIENT_ERROR_INVALID_ARG, ETimezoneCache, ICalComponent,
-    e_cal_client_error_create, e_client_error_create,
+    E_CAL_CLIENT_ERROR_OBJECT_NOT_FOUND, ETimezoneCache, ICalComponent, e_cal_client_error_create,
 };
 use glib_sys::{GError, GFALSE, GSList, GTRUE, gboolean, gchar};
-use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
+use jmap_backend_core::error::{cstring_lossy, invalid_arg_gerror, set_raw_gerror};
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{read_string, set_out_list, set_out_string};
 use jmap_cal_sync::{CalSync, SyncError, Unsendable};
@@ -331,12 +330,12 @@ pub fn to_gerror(failure: &SyncError) -> *mut GError {
         // own account of what it could not parse — developer-facing text, and
         // deliberately not translated, because a user cannot act on it and a
         // bug report should quote it in the language it was written in.
-        SyncError::ICal(_) => invalid_arg(&failure.to_string()),
+        SyncError::ICal(_) => invalid_arg_gerror(&failure.to_string()),
         // A component we could read but cannot state as JSCalendar. The same
         // code — the save was refused over what the component says, so the
         // argument was bad rather than the server — and the one message here a
         // user is expected to read and act on, so this one is translated.
-        SyncError::Unsendable(reason) => invalid_arg(&refusal(reason)),
+        SyncError::Unsendable(reason) => invalid_arg_gerror(&refusal(reason)),
     }
 }
 
@@ -380,13 +379,6 @@ fn refusal(reason: &Unsendable) -> String {
     }
 }
 
-fn invalid_arg(message: &str) -> *mut GError {
-    let message = cstring_lossy(message);
-    // SAFETY: the code is one of the enum's own values and the message is
-    // copied by the call.
-    unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
-}
-
 /// Reports `failure` through `error` and returns the vfunc's FALSE.
 ///
 /// # Safety
@@ -403,6 +395,6 @@ unsafe fn fail(error: *mut *mut GError, failure: &SyncError) -> gboolean {
 ///
 /// As [`set_raw_gerror`].
 unsafe fn fail_invalid(error: *mut *mut GError, message: &str) -> gboolean {
-    unsafe { set_raw_gerror(error, invalid_arg(message)) };
+    unsafe { set_raw_gerror(error, invalid_arg_gerror(message)) };
     GFALSE
 }

@@ -22,7 +22,7 @@
 use std::ffi::{CString, c_int};
 
 use eds_sys::{
-    E_CLIENT_ERROR_AUTHENTICATION_FAILED, E_CLIENT_ERROR_OTHER_ERROR,
+    E_CLIENT_ERROR_AUTHENTICATION_FAILED, E_CLIENT_ERROR_INVALID_ARG, E_CLIENT_ERROR_OTHER_ERROR,
     E_CLIENT_ERROR_PERMISSION_DENIED, E_CLIENT_ERROR_REPOSITORY_OFFLINE, EClientError,
     e_client_error_create,
 };
@@ -93,6 +93,17 @@ pub unsafe fn set_raw_gerror(dest: *mut *mut GError, error: *mut GError) {
     }
 }
 
+/// A `GError` for an argument EDS itself passed us that was invalid — a
+/// vCard/iCalendar Evolution asked us to save that the mapping cannot read,
+/// or an operation with nothing to act on. Shared by call sites across the
+/// backend crates that each independently built this exact `GError`.
+pub fn invalid_arg_gerror(message: &str) -> *mut GError {
+    let message = cstring_lossy(message);
+    // SAFETY: the code is one of the enum's own values and the message is
+    // copied by the call.
+    unsafe { e_client_error_create(E_CLIENT_ERROR_INVALID_ARG, message.as_ptr()) }
+}
+
 fn client_error_code(err: &Error) -> EClientError {
     match err {
         Error::Transport(_) => E_CLIENT_ERROR_REPOSITORY_OFFLINE,
@@ -123,6 +134,7 @@ pub fn cstring_lossy(s: &str) -> CString {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eds_sys::e_client_error_quark;
 
     #[test]
     fn a_message_with_an_interior_nul_is_truncated_not_panicked_on() {
@@ -133,5 +145,21 @@ mod tests {
     fn the_error_domain_is_stable_across_calls() {
         assert_eq!(jmap_backend_error_quark(), jmap_backend_error_quark());
         assert_ne!(jmap_backend_error_quark(), 0);
+    }
+
+    #[test]
+    fn invalid_arg_gerror_carries_the_invalid_arg_code_and_the_message() {
+        let error = invalid_arg_gerror("not a vcard");
+        assert!(!error.is_null());
+        // SAFETY: a freshly allocated GError this test owns.
+        unsafe {
+            assert_eq!((*error).domain, e_client_error_quark());
+            assert_eq!((*error).code, eds_sys::E_CLIENT_ERROR_INVALID_ARG as i32);
+            assert_eq!(
+                std::ffi::CStr::from_ptr((*error).message).to_string_lossy(),
+                "not a vcard"
+            );
+            glib_sys::g_error_free(error);
+        }
     }
 }
