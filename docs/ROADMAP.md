@@ -290,6 +290,40 @@ they close, prioritise in this order:
      operator end-to-end confirmation against real Fastmail in the VM, using
      an **app password / API token** (the login password 401s — a separate
      concern from the 404 this closes).
+6. **API-token (Bearer) auth method — CLAIMABLE NOW (maintainer-directed
+   2026-08-19).** Bearer-token JMAP providers can't be reached today: the config
+   UI offers only Password (→ HTTP `Basic`) and OAuth 2.0 (→ `Bearer`, but only
+   via the deferred consent flow). There is no way to paste an **API token** and
+   have it sent as `Authorization: Bearer`. Fastmail is the concrete case — its
+   dev docs say JMAP authenticates with an API token over Bearer (app passwords
+   are IMAP/CalDAV only), and the operator's app-password attempt 401'd and
+   re-prompted for exactly this reason. **This also unblocks item 5's operator
+   confirmation** — SRV cannot be proven against real Fastmail until the token
+   can be sent as Bearer.
+   **Do:** add a third authentication method, "API token", to the JMAP config.
+   - `jmap-config::insert_entries`: add the combo entry beside Password / OAuth
+     2.0, writing a distinct `[Authentication] Method` string (e.g. `"bearer"`)
+     — anything NOT registered as an `EOAuth2Service`, so EDS collects the token
+     with its ordinary password prompt into libsecret rather than the OAuth
+     prompter. **Verify that assumption** against EDS
+     (`e-source-credentials-provider*`): an unregistered method must fall through
+     to the password prompt, not silently do nothing.
+   - The connect path (where `jmap_backend_core`'s `method_is_oauth2` today
+     picks `Credentials::Bearer` vs `Credentials::Basic`): add a third branch —
+     when the method is the token method, read the same stored secret Basic
+     reads (the prompted `E_SOURCE_CREDENTIAL_PASSWORD`) and send it as
+     `Credentials::Bearer(secret)`. `jmap_client::Credentials::Bearer` already
+     exists and `jmap-mock` already accepts Bearer (`auth_bearer_ok`) — wiring,
+     not new protocol.
+   - `check_complete`: unchanged — the token, like the password, is prompted at
+     connect, not typed on the page, so completeness stays host + identity.
+   **TDD:** `jmap-mock` in Bearer mode + a test that the token method makes the
+   client send `Authorization: Bearer <secret>` (not Basic); a config test that
+   the combo writes the token method string. **Verify (operator, VM):** a real
+   Fastmail **API token** (Settings → API tokens, scoped mail/contacts/
+   calendars) connects end-to-end, which finally proves the item-5 SRV chain
+   against a real provider. Does NOT touch the autodiscovery-only OAuth decision
+   (#1 below) — this is a separate manual method, not OAuth client registration.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
