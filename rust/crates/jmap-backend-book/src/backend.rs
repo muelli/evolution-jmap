@@ -35,6 +35,7 @@
 //! [`observe`]: jmap_backend_core::cancel::observe
 
 use std::ffi::CStr;
+#[cfg(feature = "testing")]
 use std::mem::MaybeUninit;
 use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -123,6 +124,7 @@ impl JmapBookBackend {
     /// valid bit pattern (every field is a pointer or an integer, and NULL is
     /// a pointer) but they are not a GObject, so passing one to any EDS
     /// function is undefined behaviour.
+    #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value, and an all-zero `Slot` is its

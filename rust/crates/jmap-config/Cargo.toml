@@ -20,6 +20,13 @@ name = "jmap_config"
 # both rlibs used to define `e_module_load`, and in one link they became one.
 crate-type = ["rlib"]
 
+[features]
+# Compiler-enforced (not just documented) test-only gate on `detached()`,
+# which builds an instance by zeroing memory outside the GObject type system —
+# see docs/UNSAFE-AUDIT.md Pattern A. Enabled for this crate's own test builds
+# via the self dev-dependency below; never on for a normal build.
+testing = []
+
 [dependencies]
 eds-sys = { workspace = true }
 # The Evolution side of the ABI: the one class `backend` subclasses. Every EDS
@@ -42,6 +49,9 @@ gio-sys = { workspace = true }
 gobject-sys = { workspace = true }
 
 [dev-dependencies]
+# Self dev-dependency to turn on `testing` (and so `detached()`) for this
+# crate's own test builds only — see the `[features]` comment above.
+jmap-config = { path = ".", features = ["testing"] }
 # The account this writes is only right if the collection backend reads it back
 # as the account that was written, so the tests link the reader and hold the two
 # against each other.

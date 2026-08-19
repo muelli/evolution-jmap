@@ -51,6 +51,7 @@
 //! [`MailSync::send_message`]: jmap_mail_sync::MailSync::send_message
 
 use std::ffi::CStr;
+#[cfg(feature = "testing")]
 use std::mem::MaybeUninit;
 use std::sync::RwLock;
 
@@ -191,6 +192,7 @@ impl JmapTransport {
     /// Nothing but the slot may be touched through the result.
     ///
     /// [`JmapStore::detached`]: crate::store::JmapStore::detached
+    #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value, and an all-zero `Slot` is its

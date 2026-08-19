@@ -91,6 +91,7 @@
 //! [`evo-sys`]: ../../evo_sys/index.html
 
 use std::ffi::CStr;
+#[cfg(feature = "testing")]
 use std::mem::MaybeUninit;
 use std::ptr;
 
@@ -160,6 +161,7 @@ impl JmapConfigServiceBackend {
     /// `tests/backend.rs` drives with it.
     ///
     /// [detached]: ../../jmap_backend_collection/backend/struct.JmapCollectionBackend.html#method.detached
+    #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
         // SAFETY: every field of the parent is a pointer or an integer, for
         // which all-zero is a valid value.

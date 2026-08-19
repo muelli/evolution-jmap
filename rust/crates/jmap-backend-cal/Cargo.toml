@@ -19,6 +19,13 @@ name = "jmap_backend_cal"
 # cannot live in an rlib.
 crate-type = ["rlib"]
 
+[features]
+# Compiler-enforced (not just documented) test-only gate on `detached()`,
+# which builds an instance by zeroing memory outside the GObject type system —
+# see docs/UNSAFE-AUDIT.md Pattern A. Enabled for this crate's own test builds
+# via the self dev-dependency below; never on for a normal build.
+testing = []
+
 [dependencies]
 eds-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
@@ -30,6 +37,9 @@ glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 
 [dev-dependencies]
+# Self dev-dependency to turn on `testing` (and so `detached()`) for this
+# crate's own test builds only — see the `[features]` comment above.
+jmap-backend-cal = { path = ".", features = ["testing"] }
 evolution-jmap-mock = { workspace = true }
 # To name an ICalError variant when checking the error mapping — the backend
 # itself never sees one that jmap-cal-sync has not already wrapped — and to
