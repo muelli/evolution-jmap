@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-19 11:18+0000\n"
+"POT-Creation-Date: 2026-08-19 12:14+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -21,7 +21,7 @@ msgstr ""
 #. saved. %1$s is the date and time the series ends, as it was
 #. written in the appointment; %2$s is a time zone identifier such
 #. as "Europe/Berlin".
-#: rust/crates/jmap-backend-cal/src/ops.rs:370
+#: rust/crates/jmap-backend-cal/src/ops.rs:371
 #, c-format
 msgid ""
 "This event repeats until %1$s, and the time zone it is in, %2$s, is not "
@@ -33,7 +33,7 @@ msgstr ""
 #. TRANSLATORS: shown when a new recurring appointment could not be
 #. saved, and the reason is not something the user can be pointed
 #. at more precisely than this.
-#: rust/crates/jmap-backend-cal/src/ops.rs:379
+#: rust/crates/jmap-backend-cal/src/ops.rs:380
 msgid ""
 "This event repeats in a way that cannot be stored on the server, so it was "
 "not created. Stating the recurrence as a repeat count is the spelling that "
@@ -43,39 +43,39 @@ msgstr ""
 #. TRANSLATORS: names one of an account's two kinds of
 #. server-side collection, inside a sentence describing an
 #. account error.
-#: rust/crates/jmap-backend-core/src/connect.rs:66
+#: rust/crates/jmap-backend-core/src/connect.rs:67
 msgid "address book"
 msgstr ""
 
 #. TRANSLATORS: names one of an account's two kinds of
 #. server-side collection, inside a sentence describing an
 #. account error.
-#: rust/crates/jmap-backend-core/src/connect.rs:72
+#: rust/crates/jmap-backend-core/src/connect.rs:73
 msgid "calendar"
 msgstr ""
 
 #. TRANSLATORS: shown when an account configured with a user
 #. name has no password stored for it yet.
-#: rust/crates/jmap-backend-core/src/connect.rs:121
+#: rust/crates/jmap-backend-core/src/connect.rs:122
 msgid "the account has no password yet"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar"; %2$s is
 #. the identifier this account is configured to use for it,
 #. which the server does not have.
-#: rust/crates/jmap-backend-core/src/connect.rs:129
+#: rust/crates/jmap-backend-core/src/connect.rs:130
 #, c-format
 msgid "the account names %1$s \"%2$s\", which the server does not have"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar".
-#: rust/crates/jmap-backend-core/src/connect.rs:134
+#: rust/crates/jmap-backend-core/src/connect.rs:135
 #, c-format
 msgid "the server offers no default %1$s for this account"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar".
-#: rust/crates/jmap-backend-core/src/connect.rs:379
+#: rust/crates/jmap-backend-core/src/connect.rs:397
 #, c-format
 msgid "the %1$s backend has no account to connect to"
 msgstr ""
@@ -162,12 +162,16 @@ msgstr ""
 msgid "A_uthentication:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:333
+#: rust/crates/jmap-config/src/backend.rs:341
 msgid "Password"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:334
+#: rust/crates/jmap-config/src/backend.rs:342
 msgid "OAuth 2.0"
+msgstr ""
+
+#: rust/crates/jmap-config/src/backend.rs:345
+msgid "API Token"
 msgstr ""
 
 #. TRANSLATORS: shown on the account setup page when no email address has been typed in yet.

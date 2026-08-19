@@ -316,22 +316,34 @@ const AUTH_LABEL: &CStr = N_(c"A_uthentication:");
 /// `ESourceAuthentication:method` paired with the translatable text the combo
 /// shows for it.
 ///
-/// Both ids are load-bearing elsewhere, not chosen for this dialog: `"none"`
-/// is `ESourceAuthentication:method`'s own default and the one
-/// `crate::account`'s own doc pins as "ask for a password the ordinary way",
-/// and [`oauth2_service::NAME`] is the exact string
+/// All three ids are load-bearing elsewhere, not chosen for this dialog:
+/// `"none"` is `ESourceAuthentication:method`'s own default and the one
+/// `crate::account`'s own doc pins as "ask for a password the ordinary way";
+/// [`oauth2_service::NAME`] is the exact string
 /// `EOAuth2Service::can_process`'s default implementation compares `method`
 /// against (see that module's own doc) — the only spelling of "use OAuth 2.0"
 /// `e_source_get_oauth2_access_token_sync` will actually honour for this
 /// account, as opposed to the generic `"OAuth2"` alias
 /// [`jmap_backend_core::oauth2::method_is_oauth2`] also accepts but
-/// `can_process` does not. This is the manual counterpart to
+/// `can_process` does not; and
+/// [`jmap_backend_core::api_token::API_TOKEN_METHOD`] is what
+/// `connect_with`'s third branch checks for, a spelling that matters only to
+/// this project's own connect paths since nothing outside it registers a
+/// service by that name. `"OAuth 2.0"` is the manual counterpart to
 /// [`config_lookup`](crate::config_lookup)'s automatic discovery: a user who
 /// skips or fails "Look Up Account Details" still has a way to say a server
-/// is OAuth 2.0, and one who used it sees here what it chose.
-const AUTH_CHOICES: [(&CStr, &CStr); 2] = [
+/// is OAuth 2.0, and one who used it sees here what it chose. **"API Token"**
+/// is for a provider that authenticates over Bearer but has no OAuth 2.0
+/// consent flow to discover — Fastmail's JMAP API is the concrete case, and
+/// the token is typed into the same password prompt Basic uses (see
+/// [`jmap_backend_core::api_token`]'s module docs for why).
+const AUTH_CHOICES: [(&CStr, &CStr); 3] = [
     (c"none", N_(c"Password")),
     (oauth2_service::NAME, N_(c"OAuth 2.0")),
+    (
+        jmap_backend_core::api_token::API_TOKEN_METHOD,
+        N_(c"API Token"),
+    ),
 ];
 
 /// The keys [`insert_entries`] stashes the status label and the collection it
@@ -558,7 +570,7 @@ unsafe fn insert_entries(
     // SAFETY: `authentication` is NULL or the collection's own extension
     // (created above, and owned by `collection`); `auth_combo` is a live
     // `GtkComboBox` (a `GtkComboBoxText` is one) with a string `active-id`
-    // property, and `AUTH_CHOICES` gave it exactly the two ids `method` can
+    // property, and `AUTH_CHOICES` gave it exactly the three ids `method` can
     // hold, so no transform is needed here either.
     unsafe {
         e_binding_bind_property(

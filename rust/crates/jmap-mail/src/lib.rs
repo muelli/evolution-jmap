@@ -135,6 +135,7 @@
 //! `cdylib`, together with `libcameljmap.urls`, into Camel's provider
 //! directory.
 
+pub mod api_token;
 pub mod append;
 pub mod cache;
 pub mod changes;

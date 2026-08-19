@@ -347,6 +347,19 @@ pub fn password_credentials(user: Option<&str>, password: Option<&str>) -> Crede
     }
 }
 
+/// The API-token sibling of [`password_credentials`], for
+/// [`crate::api_token::uses_api_token`] accounts — see that module's docs for
+/// why `attempt` asks the same `auth-mechanism` field a third way. There is
+/// no user-name half to a token, so an account nobody has been prompted for
+/// yet produces the same no-credentials request `password_credentials` sends
+/// for one, and lets the server's 401 turn into the retry prompt.
+pub fn bearer_credentials(password: Option<&str>) -> Credentials {
+    match password {
+        Some(password) => Credentials::bearer(password),
+        None => Credentials::none(),
+    }
+}
+
 /// Connects to the server `config` names and resolves the account its mail
 /// lives in.
 ///

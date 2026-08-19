@@ -32,6 +32,7 @@ use glib_sys::GError;
 use jmap_client::{Credentials, Error};
 use jmap_proto::Id;
 
+use crate::api_token::source_uses_api_token;
 use crate::cancel::observe;
 use crate::error::{cstring_lossy, set_raw_gerror};
 use crate::i18n::{translate, translate_with};
@@ -218,6 +219,21 @@ pub fn credentials(
     }
 }
 
+/// What to authenticate as for [`crate::api_token::source_uses_api_token`]'s
+/// method — the same [`E_SOURCE_CREDENTIAL_PASSWORD`](crate::marshal::password)
+/// slot Basic reads, sent as a Bearer token instead of paired with a user
+/// name. There is no user-name half to this method — a token identifies the
+/// account by itself — so the only question is whether one has been prompted
+/// for yet; an empty stored token is sent as-is and left to the server's 401
+/// to turn into a re-prompt, exactly as an empty stored password is on the
+/// Basic path.
+pub fn bearer_credentials(password: Option<&str>) -> Result<Credentials, ConnectError> {
+    match password {
+        Some(password) => Ok(Credentials::bearer(password)),
+        None => Err(ConnectError::CredentialsRequired),
+    }
+}
+
 /// Which of the server's collections this source stands for.
 ///
 /// `candidates` is `(id, is_default)` for each collection the account offers,
@@ -340,6 +356,8 @@ where
     let resolved = unsafe {
         if source_uses_oauth2(source) {
             access_token(source, cancellable).map(Credentials::bearer)
+        } else if source_uses_api_token(source) {
+            bearer_credentials(password.as_deref())
         } else {
             self::credentials(config.user.as_deref(), password.as_deref())
         }
@@ -527,5 +545,20 @@ mod tests {
             .unwrap(),
             id("B")
         );
+    }
+
+    /// The API-token sibling of [`credentials`]'s own user/password matrix:
+    /// there is no user-name half to this method, so the only question is
+    /// whether a token has been prompted for yet.
+    #[test]
+    fn a_stored_token_is_sent_as_bearer_and_an_absent_one_is_required() {
+        assert!(matches!(
+            bearer_credentials(Some("t0k3n")),
+            Ok(Credentials::Bearer(ref token)) if token == "t0k3n"
+        ));
+        assert!(matches!(
+            bearer_credentials(None),
+            Err(ConnectError::CredentialsRequired)
+        ));
     }
 }

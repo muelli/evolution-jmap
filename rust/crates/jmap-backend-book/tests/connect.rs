@@ -11,15 +11,18 @@ use eds_sys::{
     E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_INVALID_ARG,
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, E_SOURCE_AUTHENTICATION_ACCEPTED,
     E_SOURCE_AUTHENTICATION_ERROR, E_SOURCE_AUTHENTICATION_REJECTED,
-    E_SOURCE_AUTHENTICATION_REQUIRED, E_SOURCE_EXTENSION_AUTHENTICATION,
-    E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication, ESourceAuthenticationResult,
-    e_client_error_quark, e_source_authentication_set_host, e_source_authentication_set_port,
+    E_SOURCE_AUTHENTICATION_REQUIRED, E_SOURCE_CREDENTIAL_PASSWORD,
+    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication,
+    ESourceAuthenticationResult, e_client_error_quark, e_named_parameters_free,
+    e_named_parameters_new, e_named_parameters_set, e_source_authentication_set_host,
+    e_source_authentication_set_method, e_source_authentication_set_port,
     e_source_authentication_set_user, e_source_get_extension, e_source_new_with_uid,
     e_source_security_set_secure,
 };
 use glib_sys::GError;
 use gobject_sys::g_object_unref;
 use jmap_backend_book::connect;
+use jmap_backend_core::api_token::API_TOKEN_METHOD;
 use jmap_backend_core::connect::{Collection, ConnectError, credentials};
 use jmap_backend_core::source::{ConnectTarget, SourceConfig};
 use jmap_client::Credentials;
@@ -336,6 +339,13 @@ impl TestSource {
         unsafe { e_source_authentication_set_user(self.authentication(), user.as_ptr()) };
         self
     }
+
+    fn method(self, method: &str) -> Self {
+        let method = CString::new(method).expect("no NUL in a method");
+        // SAFETY: as `at`.
+        unsafe { e_source_authentication_set_method(self.authentication(), method.as_ptr()) };
+        self
+    }
 }
 
 impl Drop for TestSource {
@@ -411,6 +421,83 @@ fn a_source_with_a_user_and_no_password_asks_for_one_before_connecting() {
     let mut outs = ConnectOuts::default();
 
     // SAFETY: as above.
+    let sync = unsafe {
+        connect::connect(
+            source.0,
+            ptr::null(),
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+
+    assert!(sync.is_none());
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_REQUIRED);
+    // SAFETY: the call failed, so it owns an error it handed over.
+    unsafe { outs.take_error(E_CLIENT_ERROR_AUTHENTICATION_REQUIRED) };
+}
+
+/// The API-token method's whole point: an account with no user name at all
+/// reaches the server as `Authorization: Bearer …`, off the same
+/// `E_SOURCE_CREDENTIAL_PASSWORD` slot Basic reads its password from — proved
+/// end to end, `[Authentication] Method` on a real `ESource` down to the
+/// wire, the way `connecting_from_a_source_opens_the_default_address_book_and_reports_accepted`
+/// proves the password path.
+#[test]
+fn an_api_token_source_sends_the_stored_secret_as_bearer_credentials() {
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token("t0k3n"), true);
+    let source = TestSource::new()
+        .at(fixture.server.origin())
+        .method(API_TOKEN_METHOD.to_str().unwrap());
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: a live `ENamedParameters`, freed below.
+    let credentials = unsafe {
+        let params = e_named_parameters_new();
+        let value = CString::new("t0k3n").unwrap();
+        e_named_parameters_set(
+            params,
+            E_SOURCE_CREDENTIAL_PASSWORD.as_ptr(),
+            value.as_ptr(),
+        );
+        params
+    };
+
+    // SAFETY: a live ESource, the credentials just built, no cancellable and
+    // two writable out-parameters — what EDS passes on a re-connect with a
+    // prompted secret in hand.
+    let sync = unsafe {
+        connect::connect(
+            source.0,
+            credentials,
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+    // SAFETY: this test owns the only reference.
+    unsafe { e_named_parameters_free(credentials) };
+
+    let sync = sync.expect("the connection was refused");
+    assert_eq!(
+        sync.address_book_id(),
+        fixture.default_book.as_ref().expect("seeded")
+    );
+    assert!(outs.error.is_null(), "a successful connect set an error");
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+}
+
+/// The same prompt-before-sending rule the password path follows: an
+/// API-token account with no stored secret yet must not reach the server
+/// either.
+#[test]
+fn an_api_token_source_with_no_stored_secret_asks_for_one_before_connecting() {
+    let source = TestSource::new()
+        .at("http://127.0.0.1:1")
+        .method(API_TOKEN_METHOD.to_str().unwrap());
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: as `a_source_with_a_user_and_no_password_asks_for_one_before_connecting`.
     let sync = unsafe {
         connect::connect(
             source.0,
