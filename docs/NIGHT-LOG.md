@@ -36933,3 +36933,22 @@ and `cargo test --locked` (default-members) all clean/green. No source
 files changed (only two `tests/` files and `.gitignore`), so the EDS-gated
 seven-crate leg was not re-run — nothing in it depends on jmap-proto's
 test-only files.
+
+## 2026-08-19 (claim) — Claiming Track A2 remainder: mutation testing of `jmap-client`
+
+Fresh survey: all milestones M1-M10 COMPLETE, CALCARD COMPLETE. CURRENT
+PRIORITY's remaining items (SRV autodiscovery's GResolver leg, OAuth2
+real-server validation) are both explicitly parked/deferred by the
+maintainer or escalation-worthy FFI, not Sonnet-sized. Round 2's lead-order
+Track D's open item (D1's `create_resource_sync`/`delete_resource_sync`
+vtable wiring) is GObject-vtable FFI, escalation-worthy. Track B/C2/C4/E are
+NEEDS-DECISION. Track A's other `[claude]` items are done (A4, A7) or
+escalation-worthy (A5, A6 Pattern C). That leaves **A2's second half**: the
+previous session (delivered in `d5cf563`) did `jmap-proto`'s mutation
+testing and explicitly logged `jmap-client`'s half as "fully unstarted" —
+CLAIMABLE, no FFI, no decision needed. `cargo-mutants` 27.1.0 is already
+installed from that session; disk currently at 17G free on `/` (well clear
+of the standing disk-fills-from-cargo-target wall). Scoping to
+`jmap-client` (`evolution-jmap-client`) only, same as the proto pass.
+
+Claiming this increment now.
