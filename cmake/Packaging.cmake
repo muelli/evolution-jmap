@@ -225,3 +225,17 @@ if(LINTIAN_EXECUTABLE)
 			-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-deb-lintian.cmake"
 	)
 endif()
+
+# Track C2: keeps docs/packaging/copyright generated (tools/
+# generate-debian-copyright.py) in sync with REUSE.toml rather than letting
+# it drift back into a hand-maintained file nobody remembers to update.
+find_program(PYTHON3_EXECUTABLE python3)
+if(PYTHON3_EXECUTABLE)
+	add_test(
+		NAME debian-copyright-in-sync
+		COMMAND ${CMAKE_COMMAND}
+			"-DSOURCE_DIR=${CMAKE_SOURCE_DIR}"
+			"-DPYTHON3_EXECUTABLE=${PYTHON3_EXECUTABLE}"
+			-P "${CMAKE_SOURCE_DIR}/cmake/tests/check-debian-copyright.cmake"
+	)
+endif()
