@@ -225,3 +225,54 @@ red into a permanent one on `master` and block every other lane's gate for a
 low-severity nit. Recreate it by pasting the minimal input above into a
 `#[test]` that asserts the fixed point directly — that is the red test to
 start from, and it is deterministic.
+
+## `jmap-ical` panics on a DATE-TIME value with a non-ASCII byte before offset 6 (found 2026-08-19)
+
+Found incidentally while gating an unrelated OAuth increment: `cargo test
+--locked` (workspace, unmodified test selection) failed on
+`jmap-ical/tests/proptest_fuzz.rs`'s `prop_ical_to_event_never_panics_on_raw_ical`
+— a property whose entire job is asserting no panic on arbitrary/hostile
+iCalendar text. Confirmed to reproduce on unmodified `master` (`57ec2ea`), so
+not a regression from this session's work; the regenerated
+`proptest-regressions` file was deliberately not committed, same reasoning as
+the `jmap-vcard` entry above (an intermittent red must not become a permanent
+one on `master`).
+
+**Severity: higher than the vCard nit above — this is a real panic, not a
+fidelity loss**, reachable from a hostile or merely malformed `DTEND`/similar
+DATE-TIME value in server-supplied or imported iCalendar text (the untrusted-
+server/untrusted-file boundary Track A3/A4 exist to harden). Minimal input
+(from the fuzzer):
+
+```
+BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nDTEND: Aက ®T𐎟￼\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n
+```
+
+**Root cause, read not guessed:** `jmap-ical/src/event.rs` (around line 3876,
+the DATE-TIME parsing helper) does:
+
+```rust
+if date.len() != 8 || time.len() < 6 {
+    return None;
+}
+let time = &time[..6];                 // byte-slices before checking bytes 0..6 are ASCII
+if !date.bytes().chain(time.bytes()).all(|b| b.is_ascii_digit()) {
+    return None;                       // ASCII-digit check happens AFTER the slice above
+}
+```
+
+`time.len()` is a byte length, so `time.len() >= 6` does not mean byte offset
+6 is a char boundary — a multi-byte UTF-8 character straddling it panics on
+the slice, before the ASCII-digit check three lines down ever gets to reject
+the value cleanly. The fix is mechanical (check `time.is_char_boundary(6)`
+before slicing, or slice on `.as_bytes()` and validate ASCII-digit-ness first,
+then convert), but is real work: a red test first (the input above, asserted
+to return `None` rather than panic), then the fix, then confirming the
+existing proptest properties (which is what caught this) stay green.
+
+**Not fixed here, on purpose:** `jmap-ical` is part of the closed M4 calendar
+backend (`docs/ROADMAP.md` CURRENT PRIORITY says not to reopen M1–M6/M8 for
+this), and Track A3 (structure-aware vCard/iCal fuzzing, where a survivor like
+this belongs) is tagged `[agy]` lane, not `[claude]`. Logged with full
+reproduction and root cause so whichever lane picks it up next does not have
+to re-derive either.

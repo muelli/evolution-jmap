@@ -162,6 +162,7 @@ fn registration_reads_back_the_client_id() {
     let request = ClientRegistrationRequest {
         client_name: "Evolution",
         redirect_uris: &["https://client.example.org/callback"],
+        scope: None,
     };
     let registered = register(&format!("{}/oauth/register", server.origin()), &request)
         .expect("the deployment registers this client");
@@ -189,6 +190,10 @@ fn registration_sends_the_client_name_redirect_uris_and_a_public_clients_metadat
                 json!(["authorization_code", "refresh_token"])
             );
             assert_eq!(request["response_types"], json!(["code"]));
+            assert!(
+                request.get("scope").is_none(),
+                "a request naming no scope must omit the field, not send it empty: {request:?}"
+            );
             (201, json!({"client_id": "abc123"}))
         })
         .start();
@@ -196,6 +201,34 @@ fn registration_sends_the_client_name_redirect_uris_and_a_public_clients_metadat
     let request = ClientRegistrationRequest {
         client_name: "Evolution",
         redirect_uris: &["https://client.example.org/callback"],
+        scope: None,
+    };
+    register(&format!("{}/oauth/register", server.origin()), &request)
+        .expect("the deployment registers this client");
+}
+
+#[test]
+fn a_named_scope_is_sent_as_the_registrations_default() {
+    // Confirmed against a real deployment (Fastmail, 2026-08-19): a
+    // registration naming no `scope` is issued an *empty* default scope, and
+    // RFC 6749 §3.3 lets an authorization request that itself omits `scope`
+    // fall back to exactly that registered default — silently producing a
+    // token with no JMAP access at all. A caller that discovered a non-empty
+    // `scopes_supported` must be able to ask for it here instead.
+    let server = MockServer::builder()
+        .oauth_client_registration(|request| {
+            assert_eq!(
+                request["scope"],
+                "urn:ietf:params:oauth:scope:mail urn:ietf:params:oauth:scope:contacts"
+            );
+            (201, json!({"client_id": "abc123"}))
+        })
+        .start();
+
+    let request = ClientRegistrationRequest {
+        client_name: "Evolution",
+        redirect_uris: &["https://client.example.org/callback"],
+        scope: Some("urn:ietf:params:oauth:scope:mail urn:ietf:params:oauth:scope:contacts"),
     };
     register(&format!("{}/oauth/register", server.origin()), &request)
         .expect("the deployment registers this client");
@@ -215,6 +248,7 @@ fn registration_is_served_without_credentials() {
     let request = ClientRegistrationRequest {
         client_name: "Evolution",
         redirect_uris: &["https://client.example.org/callback"],
+        scope: None,
     };
     let registered = register(&format!("{}/oauth/register", server.origin()), &request)
         .expect("registration needs no credentials");
@@ -231,6 +265,7 @@ fn a_deployment_that_offers_no_registration_says_so() {
     let request = ClientRegistrationRequest {
         client_name: "Evolution",
         redirect_uris: &["https://client.example.org/callback"],
+        scope: None,
     };
     let error = register(&format!("{}/oauth/register", server.origin()), &request)
         .expect_err("no registration endpoint exists");

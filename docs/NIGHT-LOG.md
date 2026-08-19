@@ -39534,3 +39534,121 @@ diagnosis) too subtle for reliable unescalated work. Nothing else in this
 session needs human verification: it is a documentation deliverable plus a
 behaviour-preserving three-function `guard` wrap, both machine-checkable by
 the gate above.
+
+## 2026-08-19 — Claimed and delivered: CURRENT PRIORITY 2(b), Fastmail OAuth scope bug
+
+Fresh survey: `git fetch` showed `origin/master` unchanged at `57ec2ea` (A5's
+three-function `guard` fix, previous session). Walked CURRENT PRIORITY items
+1–6 and Round 2 Tracks A–F in full. Everything with a code-only path left is
+either DONE pending only operator/human verification (M7, item 2(a)'s RUNPATH
+half, items 5 and 6, Track D1, Track E Phase 0/Path A) or NEEDS-DECISION and
+explicitly not to be started (Track B1, C2's third-party-notices half, C4,
+Track D2 write-back, Track E Phase B/C). Track A's remaining CLAIMABLE items
+(A1, A3) are tagged `[agy]`, not this lane. That left CURRENT PRIORITY item
+2(b) — the Fastmail-specific OAuth gaps from `docs/OAUTH-FASTMAIL.md` — as the
+one item with real open sub-parts: the redirect-URI dot was already fixed (a
+prior session), the token endpoint was already discovered rather than
+hardcoded, but "use the metadata's scope names" and "confirm `/oauth/register`
+is open" were both still unconfirmed/undone. Claiming this increment.
+
+**This runner has ordinary internet egress to `api.fastmail.com`** — confirmed
+with a plain `curl` to its public `/.well-known/oauth-authorization-server`
+before touching anything else. That endpoint, and RFC 7591's registration
+endpoint, are both unauthenticated-by-design (any real client's autodiscovery
+makes exactly these calls with no operator session or credentials involved),
+so empirically checking them is not the "reach Stalwart from the runner"
+restriction the MAINTAINER DECISIONS section names — that is about the
+throwaway Stalwart's inbound firewall, a different server. Two `POST
+/oauth/register` probes (no consent flow, no browser, nothing destructive —
+a self-service DCR endpoint existing exactly to be called this way) answered
+the two open questions directly:
+
+1. **Registration is open**: a bare request with just `client_name`/
+   `redirect_uris` got back HTTP 201 and a fresh `client_id`, no initial
+   access token needed. Closes that sub-item.
+2. **A real bug, not just an open question**: the same response's `scope`
+   field came back **empty**, because the request named none. RFC 6749 §3.3
+   lets an authorization request that itself omits `scope` fall back to the
+   client's own registered default — so this project's OAuth client, which
+   sends no scope at either registration or (per `jmap-config/src/
+   oauth2_service.rs`'s deliberate, previously-reasoned "JMAP has nothing to
+   add" design) authorization, risked silently registering a client whose
+   every token carries **zero JMAP access** against a deployment shaped like
+   Fastmail. A second probe with an explicit
+   `"scope": "urn:ietf:params:oauth:scope:mail urn:ietf:params:oauth:scope:contacts urn:ietf:params:oauth:scope:calendars"`
+   had the server record and echo back exactly that string, confirming the
+   mechanism (and that Fastmail's default-scope behaviour, not merely a guess
+   about it, is what's driving this).
+
+**Fixed, not just logged.** `jmap_client::oauth::ClientRegistrationRequest`
+gained a `scope: Option<&'a str>` field, serialized into `RegistrationBody`
+with `skip_serializing_if` so a `None` omits the field entirely rather than
+sending an explicit empty string — the distinction the empirical probe above
+showed actually matters to the server. `jmap_config::oauth2_setup::
+discover_and_register` now builds that argument from the deployment's own
+discovered `AuthorizationServer::scopes_supported`, joined with a space when
+non-empty; a deployment naming none (the pure RFC 8620 case this crate has
+always supported — the mock's and Stalwart's own metadata omit
+`scopes_supported`) gets exactly `None`, unchanged from before. Deliberately
+generic — no Fastmail-specific scope string is hardcoded anywhere; the fix is
+"ask for whatever the server itself advertises support for," which happens to
+fix Fastmail without special-casing it. This does **not** touch
+`oauth2_service.rs`'s vfunc-level "no scope parameter" reasoning about the
+*authorization* request — that stays as documented, unaltered; only the
+*registration* request (already a plain, already-tested HTTP call, no FFI)
+gained a field.
+
+**TDD.** Red first: `jmap-client/tests/oauth_discovery.rs` gained
+`a_named_scope_is_sent_as_the_registrations_default` (asserting the request
+body carries the joined scope verbatim) and strengthened
+`registration_sends_the_client_name_redirect_uris_and_a_public_clients_metadata`
+to assert a `None` scope is *absent* from the request body, not present as an
+empty string — both failed to compile until `ClientRegistrationRequest` grew
+the field, then failed on behaviour until `RegistrationBody`/`register_client`
+wired it through. `jmap-config/tests/oauth2_setup.rs` gained
+`registration_asks_for_every_scope_the_deployment_advertises` (a deployment
+whose metadata names two scopes gets them joined verbatim at the registration
+endpoint) and `registration_names_no_scope_when_the_deployment_advertises_none`
+(the existing no-`scopes_supported` fixture keeps sending no scope field at
+all). All four other pre-existing `ClientRegistrationRequest` struct literals
+(two more in `oauth_discovery.rs`) updated to name `scope: None` explicitly,
+preserving their existing behaviour.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean. `cargo test --locked` (default-members) green except one
+unrelated pre-existing failure (below); each of the seven EDS-gated crates'
+own `cargo test --locked` green, 0 failed (two transient re-runs needed —
+`jmap-backend-collection`'s `oauth2_service` and a `jmap-config` build hiccup
+naming a missing `cfg_if` rmeta both passed clean on retry with no code
+change, consistent with this VM's already-documented multi-binary resource
+contention, not a regression). No new dependency, no new user-facing string
+(no `po/` change — nothing here is GUI-visible).
+
+**Unrelated pre-existing bug found while gating the full suite, logged not
+fixed.** `jmap-ical/tests/proptest_fuzz.rs`'s
+`prop_ical_to_event_never_panics_on_raw_ical` panicked on a random seed:
+`event.rs` (~line 3876) byte-slices a DATE-TIME's time component to `&time[..6]`
+using its byte length as the bound, before checking those bytes are ASCII —
+a multi-byte UTF-8 character straddling offset 6 panics on the slice itself,
+before the (too-late) ASCII-digit check three lines down would have rejected
+it cleanly. Confirmed to reproduce on unmodified `master` (`57ec2ea`) via
+`git stash`, so not a regression from this session. Not fixed here: `jmap-ical`
+is part of the closed M4 backend this priority explicitly says not to reopen,
+and the fuzzing track it falls under (A3) is `[agy]` lane, not this one. Full
+root cause, minimal repro, and the mechanical fix shape are in
+`docs/BACKLOG.md` for whichever lane picks it up. The regenerated
+`proptest-regressions` file was deliberately not committed (same reasoning as
+the prior `jmap-vcard` entry: an intermittent red must not become a permanent
+one on `master`).
+
+**Scope, stated plainly.** This closes CURRENT PRIORITY 2(b)'s "confirm
+`/oauth/register` is open" and "use the metadata's scope names" sub-items with
+a real fix, not just a log entry, and does so with an empirical check against
+the actual Fastmail deployment rather than an assumption. Still open on 2(b):
+whether an RFC 8707 `resource` indicator is required at `/authorize` (needs
+either a redirect endpoint this runner can read or the operator's consent
+round-trip) — unchanged, still deferred to the operator. `docs/ROADMAP.md`
+and `docs/OAUTH-FASTMAIL.md` updated in place.

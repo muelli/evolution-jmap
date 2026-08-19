@@ -105,13 +105,54 @@ they close, prioritise in this order:
          Evolution session, same as before — this closes the "does the module
          even load" half, not the whole item.
      - **(b) The Fastmail-specific flow gaps, from `docs/OAUTH-FASTMAIL.md`:**
-       `config_lookup::REDIRECT_URI = "jmap-oauth2:/redirect"` lacks the required
-       dot (Fastmail needs a dotted reverse-DNS private-use scheme); use the
-       metadata's `urn:ietf:params:oauth:scope:*` names and the *discovered* token
-       endpoint (`/oauth/refresh`); confirm `/oauth/register` is open (no initial
-       access token); check whether an RFC 8707 `resource` indicator is required.
+       ~~`config_lookup::REDIRECT_URI = "jmap-oauth2:/redirect"` lacks the required
+       dot~~ **already fixed** (it is `"org.gnome.evolution.jmap:/redirect"`);
+       ~~use the metadata's `urn:ietf:params:oauth:scope:*` names~~ and
+       ~~confirm `/oauth/register` is open (no initial access token)~~ **DONE
+       2026-08-19** — see below; the *discovered* token endpoint (`/oauth/refresh`)
+       was already used, not hardcoded. **Still open:** check whether an RFC 8707
+       `resource` indicator is required (unconfirmed against a primary source;
+       needs either an empirical `/authorize` probe against a real
+       registration, which needs the redirect landing somewhere this runner can
+       read, or the operator's consent round-trip).
        Fastmail DOES support RFC 7591 dynamic registration (confirmed in the doc),
        so the autodiscovery-only design is viable.
+     - **DONE 2026-08-19 — registration confirmed open, and a real scope bug
+       found and fixed by the same empirical check.** This runner has ordinary
+       internet egress to `api.fastmail.com` (a public, unauthenticated RFC
+       8414/7591 endpoint — the same call any real client's autodiscovery
+       makes, no operator session involved): a bare `POST /oauth/register`
+       returned HTTP 201 with a fresh `client_id`, confirming registration is
+       open with no initial access token. The same probe surfaced a real
+       finding: the registered default `scope` is **empty** when the request
+       names none, and RFC 6749 §3.3 lets an authorization request that also
+       omits `scope` fall back to exactly that per-client default — so this
+       project's client, which sent no scope at either step, risked silently
+       registering a client whose tokens carry **no JMAP access at all** on a
+       deployment shaped like this. Repeating registration with an explicit
+       scope string had the server record and echo it back as the client's
+       default, confirming the mechanism. Fixed: `jmap_client::oauth::
+       ClientRegistrationRequest` gained a `scope: Option<&str>` field (omitted
+       from the request when `None`, matching every prior call site's
+       behaviour exactly); `jmap_config::oauth2_setup::discover_and_register`
+       passes the deployment's own discovered `scopes_supported` joined with a
+       space when it names any, and `None` — unchanged from before — when it
+       names none (the pure RFC 8620 case this crate has always supported, no
+       deployment-specific string hardcoded). TDD: new tests in both
+       `jmap-client/tests/oauth_discovery.rs` (a named scope is sent verbatim;
+       an unnamed one is omitted, not sent empty) and
+       `jmap-config/tests/oauth2_setup.rs` (the discovered-scopes-joined case,
+       and the no-scopes-advertised case unchanged). Full gate green: `cargo
+       fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`
+       (default-members) and the seven-crate EDS-gated clippy both clean;
+       `cargo test --locked` and the seven-crate `cargo test` both green.
+       **Unrelated pre-existing failure found while gating, logged not fixed:**
+       `jmap-ical`'s own proptest fuzzer (`prop_ical_to_event_never_panics_on_
+       raw_ical`) panics on a DATE-TIME value with a non-ASCII byte before byte
+       offset 6 — reproduces on unmodified `master`, a closed-M4-backend/Track-
+       A3-lane finding, filed in `docs/BACKLOG.md` with root cause and minimal
+       repro rather than fixed in the same increment as this one.
+       See `docs/OAUTH-FASTMAIL.md` for the full write-up.
      **Verify:** operator does the consent browser round-trip in the VM against
      real Fastmail — the inherently human step. Sequence after the Bearer method
      (item 6) if quota is tight (Bearer is the faster path to *a* working Fastmail

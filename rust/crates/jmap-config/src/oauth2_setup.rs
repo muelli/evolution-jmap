@@ -99,6 +99,16 @@ pub fn discover_and_register(
     }
     let registration_endpoint = server.registration_endpoint.ok_or(Error::NoRegistration)?;
 
+    // Ask for every scope the deployment advertises, rather than naming none:
+    // confirmed against a real deployment (see `docs/OAUTH-FASTMAIL.md`) that
+    // a registration naming no scope is issued an *empty* default, which RFC
+    // 6749 §3.3 then lets an authorization request that also omits `scope`
+    // fall back to — silently producing a token with no JMAP access at all.
+    // A deployment naming none (the pure RFC 8620 case, `scopes_supported`
+    // absent from its metadata) keeps today's behaviour: no `scope` sent,
+    // whatever the server treats as its own default.
+    let scope = (!server.scopes_supported.is_empty()).then(|| server.scopes_supported.join(" "));
+
     let registered = oauth::register_client(
         transport,
         &registration_endpoint,
@@ -106,6 +116,7 @@ pub fn discover_and_register(
             // TRANSLATORS: this client's name, shown on the consent page a real identity provider renders.
             client_name: &translate(c"Evolution"),
             redirect_uris: &[redirect_uri],
+            scope: scope.as_deref(),
         },
         cancel,
     )

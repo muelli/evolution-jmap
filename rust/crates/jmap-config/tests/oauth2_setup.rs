@@ -119,6 +119,70 @@ fn a_server_issuing_a_secret_anyway_has_it_carried_into_the_config() {
 }
 
 #[test]
+fn registration_asks_for_every_scope_the_deployment_advertises() {
+    // Confirmed against a real deployment (Fastmail, see
+    // `docs/OAUTH-FASTMAIL.md`): a registration naming no `scope` is issued an
+    // *empty* default, which RFC 6749 §3.3 lets an authorization request that
+    // itself omits `scope` fall back to — a token with no JMAP access at all.
+    let server = MockServer::builder()
+        .oauth_authorization_server(|origin| {
+            let mut document = metadata(origin);
+            document["scopes_supported"] = json!([
+                "urn:ietf:params:oauth:scope:mail",
+                "urn:ietf:params:oauth:scope:contacts",
+            ]);
+            document
+        })
+        .oauth_client_registration(|request| {
+            assert_eq!(
+                request["scope"],
+                "urn:ietf:params:oauth:scope:mail urn:ietf:params:oauth:scope:contacts"
+            );
+            (201, json!({"client_id": "abc123"}))
+        })
+        .start();
+    let (host, port) = host_and_port(&server);
+
+    discover_and_register(
+        &UreqTransport::default(),
+        host,
+        port,
+        false,
+        REDIRECT_URI,
+        None,
+    )
+    .expect("the deployment registers this client");
+}
+
+#[test]
+fn registration_names_no_scope_when_the_deployment_advertises_none() {
+    // `metadata()` publishes no `scopes_supported` — the pure RFC 8620
+    // deployment this crate has always supported — and that must keep
+    // sending no `scope` at all, not an empty string.
+    let server = MockServer::builder()
+        .oauth_authorization_server(metadata)
+        .oauth_client_registration(|request| {
+            assert!(
+                request.get("scope").is_none(),
+                "expected no scope field, got {request:?}"
+            );
+            (201, json!({"client_id": "abc123"}))
+        })
+        .start();
+    let (host, port) = host_and_port(&server);
+
+    discover_and_register(
+        &UreqTransport::default(),
+        host,
+        port,
+        false,
+        REDIRECT_URI,
+        None,
+    )
+    .expect("the deployment registers this client");
+}
+
+#[test]
 fn a_deployment_with_no_oauth2_metadata_is_a_client_error() {
     let server = MockServer::builder().start();
     let (host, port) = host_and_port(&server);
