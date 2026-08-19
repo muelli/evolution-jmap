@@ -35830,3 +35830,36 @@ Rust source touched, so `cargo fmt --check`/`cargo clippy --all-targets
 --locked -- -D warnings`/`cargo test --locked` are unaffected by this
 change (not re-run for a docs-only diff, consistent with the A7 session's
 same reasoning for its own doc-only file).
+
+## 2026-08-19 (claim) — Claiming JMAP SRV autodiscovery call site (b): config_lookup.rs::probe_host
+
+Fresh survey: every milestone in `docs/MILESTONES.md` is COMPLETE. CURRENT
+PRIORITY's one open item is JMAP SRV autodiscovery (ROADMAP item 5), PARTIAL
+since the `Resolver` trait seam landed (`jmap-client/src/resolver.rs`,
+`ClientBuilder::resolver`/`connect_domain`, TDD'd in
+`jmap-client/tests/srv_discovery.rs`). Two named call sites are still
+unwired: (a) the real backend connect paths (`jmap-backend-collection/src/
+fan_out.rs::fan_out`, `jmap-backend-book`/`cal`'s `connect.rs`, `jmap-mail`'s
+`connect.rs`) all call `Client::connect(&config.origin, …)` where `origin` is
+a fully-assembled `scheme://host:port` string from
+`jmap_backend_core::source::origin(host, port, secure)` — reconciling that
+structured host/port/secure model with `connect_domain`'s bare-`https`-only
+domain argument is a real design decision (every existing backend test wires
+an explicit mock-server port through `origin`), not a quick swap, and is left
+open, not attempted this session; (b) `jmap-config/src/config_lookup.rs::
+probe_host`, which still unconditionally returns the bare email domain for
+the "Look Up Account Details" OAuth2-discovery worker. (b) is self-contained
+(one pure function, already unit-tested, no FFI, does not touch any of the
+real connect paths or their mock-backed tests) and does not need the
+GResolver-backed real resolver to be *wired in correctly* — only to actually
+*find* a record, which stays future work. Claiming (b) only: thread a
+`&dyn jmap_client::resolver::Resolver` through `probe_host`, defaulting to
+`NoSrvResolver` in `run()` until a real `g_resolver_lookup_service()`-backed
+resolver exists (that FFI work stays escalation-worthy, unstarted, per the
+roadmap). Behaviour is unchanged today (`NoSrvResolver` never finds a
+record); this is the plumbing the real resolver plugs into next.
+
+Disk: 3.6G free (`df -h .`) — same tight budget prior sessions have flagged.
+This change is a small, targeted edit to one already-built crate
+(`jmap-config`), not a mutation-testing rebuild loop, so it should not be at
+risk.
