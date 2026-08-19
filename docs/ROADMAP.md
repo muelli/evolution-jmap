@@ -520,6 +520,46 @@ tracks follow; the maintainer may reorder anytime.
   every returned GObject/string (g_free correctness); nullability at each
   boundary; `GCancellable` honoured on the sync vfuncs. Deliverable:
   `docs/FFI-SOUNDNESS-AUDIT.md` + TDD fixes for findings. Escalation-worthy.
+  - **DONE 2026-08-19 (the audit; one mechanical fix landed, one finding
+    left open by design) —** the audit itself turned out to be Sonnet-sized
+    despite the escalation flag, the same way A6's own original inventory
+    was: only *fixes* that need new unsafe-abstraction design are the
+    escalation-worthy part, not reading and documenting. Result: `catch_unwind`
+    coverage was already proven total by A6's Pattern F; transfer correctness
+    and nullability came back clean across `jmap-backend-book`/`cal`/
+    `collection`/`jmap-collection-sync`/`jmap-mail`/`jmap-mail-sync`
+    (cross-checked against `.gir`/EDS 3.52.4 C source, not just in-repo
+    comments) with one low-priority hardening gap in `jmap-backend-core::
+    error::set_raw_gerror` (a `debug_assert`-only precondition, no live
+    violation) and one cosmetic nullability-guard asymmetry in `jmap-config::
+    backend::insert_entries`, both logged not fixed; `GCancellable` is
+    honoured everywhere it should be. One real, mechanical finding fixed:
+    three of `jmap-config`'s 24 `unsafe extern "C"` functions
+    (`oauth2_service.rs::get_name`/`get_display_name`,
+    `config_lookup.rs::get_display_name`) were not routed through
+    `trampoline::guard`, an exception to the crate's otherwise-universal
+    convention (currently infallible bodies, so not a live bug, but nothing
+    stopped a future edit from unwinding into GObject/EDS uncaught) — wrapped
+    all three in `guard`, matching every sibling vtable function. **One
+    finding deliberately left open, and the reason A5 was flagged
+    escalation-worthy in the first place:** `jmap-config/src/oauth2.rs::
+    borrowed` releases its mutex before returning a raw pointer into the
+    `CString` that mutex was protecting, and `apply()` (driven by the
+    account-editor's GTK signal handlers) can replace that `CString` while
+    an `EOAuth2Service` vtable call on another thread still holds the
+    pointer — the same INVESTIGATE item `docs/UNSAFE-AUDIT.md` already
+    flagged, sharpened but not fixed, since a wrong fix here is a
+    plausible-looking one that leaves the race, and a right one trades away
+    the module's deliberate leak-free/zero-allocation design. Needs either a
+    read of EDS's own threading contract (to rule the race out) or a
+    deliberate redesign with a test that can actually drive the race —
+    left for a session that budgets for that, not guessed at here. Full
+    gate green: `cargo fmt --check`; `cargo clippy --all-targets --locked --
+    -D warnings` (default-members) and the seven-crate EDS-gated clippy both
+    clean; `cargo test --locked` (default-members) and all seven EDS-gated
+    crates' own `cargo test --locked` green, 0 failed. No new dependency, no
+    new user-facing string. See `docs/FFI-SOUNDNESS-AUDIT.md` for the full
+    write-up.
 - **A6 `[claude]` Unsafe reduction / idiom audit.** Deliverable
   `docs/UNSAFE-AUDIT.md`: inventory every `unsafe` in `rust/` by category, tag
   each cluster **KEEP** (intrinsic, well-contained) / **IMPROVE** (a concrete

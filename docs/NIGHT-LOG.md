@@ -39435,3 +39435,102 @@ effort estimate and left for a dedicated follow-up (escalated if the finding
 warrants it), not attempted inline.
 
 Claiming this increment now.
+
+## 2026-08-19 — Delivered: Track A5, FFI soundness audit
+
+Delivered the increment claimed above. Ran five parallel read-only research
+sweeps (one per crate group: `jmap-backend-core`; `jmap-backend-book`+`jmap-
+backend-cal`; `jmap-backend-collection`+`jmap-collection-sync`; `jmap-mail`+
+`jmap-mail-sync`; `jmap-config`+`jmap-config-module`) against the audit's four
+named questions — catch_unwind coverage, transfer-full/none correctness,
+nullability, `GCancellable` handling — each cross-checking transfer
+annotations against the installed `.gir` files or the vendored EDS 3.52.4 C
+source rather than trusting in-repo comments alone. Wrote up the synthesis in
+`docs/FFI-SOUNDNESS-AUDIT.md`.
+
+**Result: the codebase is sound on all four questions**, with one mechanical
+gap fixed and two low-priority items logged, not fixed:
+
+- **catch_unwind coverage**: already proven total by Track A6's own Pattern F
+  finding; reconfirmed, no counter-example found except the mechanical gap
+  below.
+- **Transfer correctness / nullability**: clean across five of six crate
+  groups (`jmap-backend-book`, `jmap-backend-cal`, `jmap-backend-collection`,
+  `jmap-collection-sync`, `jmap-mail`, `jmap-mail-sync`) — every transfer-full
+  pointer/list this audit traced by hand is released on every exit path and
+  every nullable FFI return is checked, largely because Track A6's own
+  `Owned<T>`/`checked_borrow*`/`extension_if_present` consolidation already
+  makes those the correct-by-construction default. `jmap-backend-core` and
+  `jmap-config` each turned up one low-priority item (below), otherwise clean.
+- **GCancellable**: every sync vfunc across every crate that declares a
+  cancellable either routes it through `jmap_backend_core::cancel::observe`/
+  `CancelBridge` before network-touching work, or correctly passes it straight
+  through to a nested native-GIO/Camel sync call that honours its own — no
+  ignored cancellable found anywhere.
+
+**Fixed this session**: three of `jmap-config`'s 24 `unsafe extern "C"`
+functions (`oauth2_service.rs::get_name`/`get_display_name`,
+`config_lookup.rs::get_display_name`) were calling their bodies directly
+rather than through `trampoline::guard` — a mechanical exception to the
+crate's otherwise-universal convention. Neither body can panic today (one
+returns a `'static` pointer, the other two call `i18n::translate_static`,
+itself a thin `dgettext` wrapper), so this was not a live bug, but nothing
+stopped a future edit adding fallible logic from unwinding into GObject/EDS
+uncaught. Wrapped all three in `guard`, matching every sibling vtable
+function in the same files. No behaviour change: `guard`'s fallback on the
+(unreachable-today) panic path is the same `ptr::null()` GIO already reads as
+"no name."
+
+**Logged, not fixed — the two items that keep this from being a pure clean
+bill:**
+- `jmap-backend-core/src/error.rs::set_raw_gerror`'s "`*dest` must already be
+  NULL" precondition is enforced only by `debug_assert!`, compiled out in
+  release. No call site violates it today, so no live bug, but a fix
+  (free-then-set instead of just asserting) changes behaviour and deserves
+  its own regression test rather than a drive-by change in an audit session.
+- `jmap-config/src/backend.rs::insert_entries`'s `[Authentication]`/
+  `[Security]` extension pointers get an explicit NULL guard before their
+  `g_signal_connect_object` calls but not before the earlier
+  `e_binding_bind_property` calls a few lines above — not a live bug (the
+  extension types are guaranteed-registered by the time either runs, same
+  reasoning the rest of the crate already relies on), just an asymmetry
+  worth harmonising in a readability pass, not a soundness fix.
+
+**The one finding worth escalation, left open by design, not by oversight:**
+`jmap-config/src/oauth2.rs::borrowed` releases its mutex before returning a
+raw `*const c_char` into the `CString` that mutex was protecting — and
+`EOAuth2Service` vtable calls (potentially from an EDS worker thread) can run
+concurrently with `apply()` (driven by the account-editor's GTK signal
+handlers on the main thread), which replaces the whole `Fields` struct and
+drops the `CString` a caller may still be holding a pointer into. This
+sharpens, but does not newly discover, `docs/UNSAFE-AUDIT.md`'s existing
+INVESTIGATE tag on the same function. Deliberately not fixed here: this is
+exactly the subtle cross-thread pointer-lifetime reasoning the night-shift
+escalation criteria name explicitly, no test today drives the race to prove
+or disprove it, and a plausible-but-wrong fix (narrowing the lock's scope
+without changing what's returned) would look correct and leave the same
+race. Left with a concrete next step in the audit doc: first read EDS's own
+threading contract to see whether the race is even reachable in practice
+(which would make this a documented KEEP instead of an IMPROVE) before
+attempting a redesign.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean. `cargo test --locked` (default-members, 0 failed) and each of the
+seven EDS-gated crates' own `cargo test --locked` (0 failed) all green. No new
+dependency, no new user-facing string (no `po/` change — `guard`'s fallback
+values are the same `ptr::null()` already in use). `docs/ROADMAP.md`'s A5
+entry updated in place with a `DONE` sub-entry. Disk at 61% (23G free);
+no `cargo clean` needed this session.
+
+**Scope, stated plainly.** This closes A5 as an audit deliverable and its one
+mechanical finding. It does not close the `oauth2.rs::borrowed` concurrency
+question, which needs either a threading-contract read or a deliberate
+redesign+test — recorded in `docs/FFI-SOUNDNESS-AUDIT.md` for whoever picks
+it up next, escalated if that session judges the fix itself (not the
+diagnosis) too subtle for reliable unescalated work. Nothing else in this
+session needs human verification: it is a documentation deliverable plus a
+behaviour-preserving three-function `guard` wrap, both machine-checkable by
+the gate above.
