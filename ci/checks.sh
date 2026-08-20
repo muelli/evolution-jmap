@@ -41,4 +41,23 @@ echo "== cargo-deny (licences, advisories, bans) =="
 have cargo-deny || cargo install --locked cargo-deny
 cargo deny check
 
+cd ..
+
+echo "== packaging (.deb ctest, if EDS dev headers/cmake/ninja are present) =="
+# Scoped to the package-deb* tests only, not the full ctest suite: those are
+# pure packaging checks (build the .deb, run lintian, check reproducibility)
+# that need nothing beyond a CMake configure + build, unlike the
+# functional/gui-smoke legs, which need a live D-Bus/Xvfb registry this
+# script has never assumed. This is what would have caught `ac00396`'s
+# lintian-clean-.deb regression (CURRENT PRIORITY item 8) before it sat red
+# in CI for days — the packaging job that does catch it runs separately from
+# this script, so nobody watching only `ci/checks.sh` saw it break.
+if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution-calendar-3.0 evolution-mail-3.0 libecal-2.0 2>/dev/null; then
+    cmake -S . -B build -G Ninja >/dev/null
+    ninja -C build
+    ctest --test-dir build -R 'package-deb' --output-on-failure
+else
+    echo "-- cmake, ninja, or the EDS dev headers are not available; skipping the .deb packaging check (expected on a bare Rust-only machine) --" >&2
+fi
+
 echo "== all checks passed =="
