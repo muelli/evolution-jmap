@@ -109,3 +109,38 @@ fn http_problem_details_reach_the_message() {
 fn a_null_out_parameter_is_a_no_op_rather_than_a_crash() {
     unsafe { set_gerror(ptr::null_mut(), &Error::Cancelled) };
 }
+
+/// A caller that writes into an already-set `GError**` violated the
+/// standard GLib out-parameter contract (`*dest` must start NULL). GLib's
+/// own `g_set_error()` refuses to overwrite in that case rather than leak
+/// the first error; this must do the same, not silently clobber it.
+#[test]
+fn overwriting_an_already_set_gerror_keeps_the_first_and_frees_the_second() {
+    let mut out: *mut GError = ptr::null_mut();
+    unsafe { set_gerror(&mut out, &Error::Cancelled) };
+    assert!(!out.is_null());
+    let first_message = unsafe {
+        CStr::from_ptr((*out).message)
+            .to_string_lossy()
+            .into_owned()
+    };
+
+    unsafe {
+        set_gerror(
+            &mut out,
+            &Error::Http {
+                status: 403,
+                problem: None,
+            },
+        )
+    };
+
+    let message = unsafe {
+        CStr::from_ptr((*out).message)
+            .to_string_lossy()
+            .into_owned()
+    };
+    assert_eq!(message, first_message, "the first error must survive");
+
+    unsafe { g_error_free(out) };
+}
