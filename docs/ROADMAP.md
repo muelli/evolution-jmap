@@ -896,6 +896,14 @@ tracks follow; the maintainer may reorder anytime.
     not silently dropped. `jmap-client`: 64 mutants, 13→2 missed, both
     inspected and confirmed genuinely equivalent (documented inline above).
     Full detail in `docs/NIGHT-LOG.md`'s two "Track A2" claim/delivery pairs.
+  - **Follow-up DONE 2026-08-20** — the 27 (re-measured as 29 against current
+    `master`) remaining `jmap-proto` survivors are now all caught: one test
+    per convenience constructor in `tests/{calendars,contacts,mail}.rs` plus a
+    new `tests/principals.rs`, each asserting every field the constructor sets
+    and that the fields it doesn't touch stay `None`. Re-ran `cargo mutants -p
+    evolution-jmap-proto` after: 29 missed → 0 missed, 29 unviable unchanged.
+    **Track A2 is now fully closed for both crates.** See `docs/NIGHT-LOG.md`,
+    "Delivered: jmap-proto's last Track A2 mutation-testing survivors killed".
 - **A3 `[agy]` Structure-aware fuzzing of the vCard/iCal round-trips.**
   `proptest` + `arbitrary` as dev-deps on **stable** (NOT `cargo-fuzz`: it needs
   nightly and breaks the pinned-stable reproducibility). Generate random

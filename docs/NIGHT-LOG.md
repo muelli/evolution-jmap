@@ -1110,3 +1110,58 @@ is the wire-protocol crate all backends share, not one of them). Claiming it:
 re-running `cargo mutants -p evolution-jmap-proto` to get the current survivor
 list, then adding in-crate assertions on each constructor's fields until they
 are killed.
+
+## 2026-08-20 — Delivered: jmap-proto's last Track A2 mutation-testing survivors killed
+
+`cargo mutants -p evolution-jmap-proto --no-shuffle -j 4` on unmodified
+`master` found exactly the 29 survivors `d5cf563`'s follow-up note predicted:
+100 mutants, 71 caught, 29 missed, 0 unviable-among-missed — the missed set
+is `CalendarEvent::simple`, `CalendarEventQueryFilter::in_calendar`/
+`time_range`, `ContactCard::simple`, `ContactCardQueryFilter::in_address_book`,
+`EmailImport::keyword`/`received_at`, `EmailQueryFilter::in_mailbox`, and
+`PrincipalQueryFilter::email` — every convenience constructor/builder method
+in the crate, each missed either by "replace the whole body with
+`Default::default()`" or "delete one struct-literal field", because nothing
+in-crate calls them and asserts the result (they are only exercised
+end-to-end through `jmap-client`'s integration tests, which `cargo mutants -p
+evolution-jmap-proto` does not run).
+
+**Fix:** one test per constructor, in the existing `tests/{calendars,
+contacts,mail}.rs` plus a new `tests/principals.rs` (no test file existed for
+the `principals` feature yet), each asserting every field the constructor
+sets and that fields it does NOT set stay `None` — the second half is what
+kills the "delete a field" mutants, not just the "replace with default" ones.
+Followed the existing files' plain-assertion style rather than introducing a
+new helper, since each constructor's shape is small and this crate's test
+files don't already have one abstraction for "assert a builder result."
+
+**Re-verified, not assumed:** re-ran the identical `cargo mutants` invocation
+after the new tests — 100 mutants, 71 caught, **29 missed → 0 missed**, 29
+unviable (structurally-impossible mutants, unchanged from before, not
+something tests can affect). Track A2's own acceptance bar ("strengthen
+tests to kill high-value survivors") is now fully met for `jmap-proto`; the
+crate has zero surviving non-equivalent mutants.
+
+**Scope note:** this is `jmap-proto`, the shared wire-protocol crate every
+backend depends on — not one of the closed M1–M6/M8 backends themselves, so
+it does not fall under the "do not reopen a closed backend" directive; it is
+the completion of a Round 2 Track A item two sessions ago flagged as
+unfinished, not new scope invented tonight.
+
+Full gate green: `cargo fmt --check`; `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean; `cargo test --locked` (default-members) and the same seven
+crates' own `cargo test --locked` both green, 0 failed throughout. No new
+dependency; no new user-facing string, so no `po/` action. One new file
+(`jmap-proto/tests/principals.rs`) carries the same SPDX header every
+sibling test file in the crate does.
+
+NIGHT-SHIFT: Round 2 Track A2's last named follow-up delivered and pushed —
+`jmap-proto`'s 29 surviving convenience-constructor mutants are now all
+caught, with 5 new/expanded test files. This was the only headless,
+undecided, non-backend-reopening increment the survey found after CURRENT
+PRIORITY items 1-9 all came up DONE or operator-blocked and Round 2 Track D
+had nothing left either. Ending the session here per the standing rule
+against starting a second large item.

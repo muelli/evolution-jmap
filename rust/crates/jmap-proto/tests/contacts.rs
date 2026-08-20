@@ -5,7 +5,7 @@
 
 #![cfg(feature = "contacts")]
 
-use jmap_proto::contacts::{AddressBook, ContactCard};
+use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -187,4 +187,34 @@ fn contact_card_roundtrip() {
     );
     // Unmodeled JSContact properties (preferredLanguages) survive via `extra`.
     assert!(card.extra.contains_key("preferredLanguages"));
+}
+
+#[test]
+fn contact_card_simple_sets_every_field() {
+    let card = ContactCard::simple("AB1", "Alice Example", "alice@example.com");
+    let address_book_ids: Vec<_> = card
+        .address_book_ids
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|(id, included)| (id.as_str(), *included))
+        .collect();
+    assert_eq!(address_book_ids, [("AB1", true)]);
+    assert_eq!(card.card_type.as_deref(), Some("Card"));
+    assert_eq!(card.version.as_deref(), Some("1.0"));
+    assert_eq!(
+        card.name.as_ref().unwrap().full.as_deref(),
+        Some("Alice Example")
+    );
+    let emails = card.emails.as_ref().unwrap();
+    assert_eq!(emails["e0"].address, "alice@example.com");
+}
+
+#[test]
+fn contact_card_query_filter_in_address_book_sets_only_that_field() {
+    let filter = ContactCardQueryFilter::in_address_book("AB1");
+    assert_eq!(filter.in_address_book.as_ref().unwrap().as_str(), "AB1");
+    assert_eq!(filter.text, None);
+    assert_eq!(filter.name, None);
+    assert_eq!(filter.email, None);
 }
