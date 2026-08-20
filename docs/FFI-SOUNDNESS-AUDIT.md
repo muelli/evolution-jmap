@@ -65,16 +65,15 @@ off transfer-full correctly).
 
 The one gap found, in `jmap-backend-core`:
 
-- **`error.rs::set_raw_gerror`'s "`*dest` must already be NULL" precondition
+- ~~**`error.rs::set_raw_gerror`'s "`*dest` must already be NULL" precondition
   is enforced only by `debug_assert!`, which compiles out in release
-  builds.** Every call site in the workspace today obeys the contract (this
-  is not a live double-set), but nothing beyond a debug build would catch a
-  future caller that violates it — the release behaviour would silently
-  overwrite `*dest` and leak the previous `GError` rather than assert or
-  free-then-set. **Tag: IMPROVE, low priority.** A fix that changes
-  behaviour (free-then-set) rather than just tightening the assertion is a
-  small, real design choice — worth a session that wants to also add the
-  regression test proving it, not folded into this audit.
+  builds.**~~ **Fixed 2026-08-20.** A third branch now handles an already-set
+  `*dest`: log a critical via `trampoline::log_critical` and free the
+  incoming `error`, keeping the first one — matching GLib's own
+  `g_set_error()` family, which refuses the same way at runtime, not only in
+  debug builds, and this crate's own existing idiom for "cannot happen but
+  must not be UB if it somehow does." See `docs/NIGHT-LOG.md`'s "Delivered:
+  FFI-SOUNDNESS-AUDIT Finding 1" entry.
 
 ## Question 3 — nullability
 
@@ -127,7 +126,7 @@ crate taking a cancellable and it is correctly bridged.
 
 | # | Where | Category | Confidence | Status |
 |---|---|---|---|---|
-| 1 | `jmap-backend-core/src/error.rs::set_raw_gerror` | transfer/precondition enforcement | LOW (no live bug; hardening) | logged, not fixed (behaviour-changing) |
+| 1 | `jmap-backend-core/src/error.rs::set_raw_gerror` | transfer/precondition enforcement | LOW (no live bug; hardening) | **fixed 2026-08-20** |
 | 2 | `jmap-config/src/oauth2_service.rs::get_name`/`get_display_name`, `config_lookup.rs::get_display_name` | catch_unwind coverage | LOW (theoretical; both bodies are currently infallible) | **fixed this session** |
 | 3 | `jmap-config/src/oauth2.rs::borrowed` | concurrency / pointer lifetime | MEDIUM (see below) | logged, not fixed — needs deliberate design |
 | 4 | `jmap-config/src/backend.rs::insert_entries` | nullability consistency | LOW (cosmetic) | logged, not fixed |
