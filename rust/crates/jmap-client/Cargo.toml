@@ -33,3 +33,4 @@ sha2 = { workspace = true }
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
 proptest = { workspace = true }
+tiny_http = { workspace = true }

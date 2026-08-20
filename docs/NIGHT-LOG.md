@@ -775,3 +775,95 @@ host()`, confirmed against `ureq-proto`'s `can_redirect_auth_header` source,
 so two ports on the same loopback address would not exercise cross-host at
 all); fix `jmap-client` to refuse a download whose response came from a
 different origin than requested.
+
+## 2026-08-20 — Delivered: `download_blob` refuses a cross-origin redirect's answer instead of returning it as the blob
+
+Delivered the increment claimed above.
+
+**Mock:** `MockServerBuilder::download_via_redirect_to(origin)` makes every
+`GET /download/...` answer a `302` to the same path on `origin` instead of
+serving the blob — `jmap-mock/src/server.rs`/`state.rs`, alongside
+`session_via_redirect`/`advertise_origin`, which it is deliberately distinct
+from: `advertise_origin` changes what the *session document* names without
+changing what answers a request, this changes what answers the request while
+the session still calls this server the download host — the shape of a
+redirect the client never agreed to via the session.
+
+**Test:** `jmap-client/tests/redirect_auth.rs` gained
+`a_cross_host_redirect_on_download_is_not_trusted_as_the_blob`, plus a
+`ForeignHost` test helper — a bare `tiny_http` responder (added as a dev-
+dependency; already an existing workspace dependency of `jmap-mock`, so no
+new crate in `Cargo.lock`) bound to `127.0.0.2:0`, not another port on
+`127.0.0.1`. Confirmed against `ureq-proto`'s actual redirect source
+(`can_redirect_auth_header` in `src/client/redirect.rs`, fetched from
+GitHub, no local copy of the crate's source in this VM's registry cache) that
+`RedirectAuthHeaders::SameHost` compares `http::uri::Authority::host()` —
+hostname only, not port — so two mock servers on different ports of the same
+loopback address would both read as "the same host" to `ureq` itself and
+never exercise the cross-host path this item is about.
+
+**Red confirmed first, by actually removing the fix and rerunning**, not by
+inspection: the test failed with the foreign host's own page returned as the
+blob, the exact Fastmail failure this item describes, then passed once the
+fix (below) was restored — genuine TDD, not written to already-passing code.
+
+**Fix:** `HttpResponse` (`jmap-client/src/transport.rs`) gained a
+`final_url: String` field — the URL a response actually came from, via
+`ureq`'s own `ResponseExt::get_uri()`, which tracks the post-redirect URL
+regardless of `redirect_auth_headers` (that setting only gates whether
+`Authorization` follows a redirect, not whether the redirect itself is
+taken, so it was already being tracked, just never read). A new
+`url::origin_of()` helper (scheme+authority prefix, sibling to the existing
+`rebase_origin`, same slicing shape, own proptest for hostile input)
+compares the origin requested against `final_url`'s; `download_blob` returns
+a new `Error::CrossOriginRedirect { requested, followed }` on a mismatch
+instead of the body. Scoped to `download_blob` only, not the shared
+`execute_within` every request goes through — a deliberate choice, not an
+oversight: rejecting *every* cross-host redirect at the transport level
+would also catch a legitimate autodiscovery redirect to a provider's
+JMAP-specific subdomain during session discovery, which nothing here tests
+is safe to forbid, whereas a blob download addressed by the session's own
+`downloadUrl` has no comparable legitimate reason to end up somewhere else.
+Two existing fake `Transport` implementations (`srv_discovery.rs`'s, and
+`response_size.rs`'s `Recording`, which wraps the real transport and needed
+no change) were the only other `HttpResponse` construction sites; both
+updated/confirmed.
+
+**Does not close the item.** This closes the "Do" list's headless half — the
+mock now reproduces the failure class and the client no longer silently
+trusts an unauthenticated bounce. It does **not** determine which of the
+item's three hypotheses actually explains Fastmail's live behaviour (the
+item's own text already says that needs an operator/live token probe), and
+it does not by itself make real Fastmail mail bodies readable if the true
+cause turns out to be hypothesis 2 or 3 (a different credential scheme, or a
+template bug) rather than 1 — those would still need their own fix once an
+operator's live probe identifies which one it is. What this closes is a real
+client-side soundness gap regardless of which hypothesis is Fastmail's actual
+one: silently accepting an unauthenticated redirect target's content as
+message bytes was always wrong, on any server shaped this way.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean. `cargo test --locked` (default-members) green, 0 failed; the
+seven EDS-gated crates run per-crate (the standing multi-package hang) all
+green, 0 failed throughout. Also ran the packaging leg per item 8's own
+standing-fix note: `cmake -S . -B build -G Ninja && ninja -C build && ctest
+--test-dir build -R 'package-deb'` — all three packaging tests passed;
+packaging-neutral change (no build script, no install rule touched), so this
+confirms rather than fixes. Disk filled to "No space left on device" on the
+first `cargo test --locked` run (`rust/target` at 24G) — `rm -rf
+rust/target` recovered it, the standing note again
+([[disk-fills-from-cargo-target]]). No new user-facing string, so no `po/`
+regeneration. `reuse lint` could not run on this VM
+([[checks-sh-blocked-on-vm]]) — the only files touched already carry their
+SPDX header and no new file was added.
+
+NIGHT-SHIFT: item 9's headless half delivered and pushed — a real client-side
+soundness gap (an unauthenticated cross-host redirect's answer silently
+trusted as blob data) found, TDD'd, and fixed. The item stays open: it needs
+an operator's live Fastmail probe to identify which of its three hypotheses
+actually explains the marketing-homepage response, and possibly a further
+fix once that is known. Ending the session here per the standing rule
+against starting a second large item.

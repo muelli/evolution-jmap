@@ -43,6 +43,7 @@ impl Transport for FakeTransport {
             status: 200,
             content_type: Some("application/json".to_owned()),
             body: self.session_body.clone(),
+            final_url: request.url.to_owned(),
         })
     }
 }

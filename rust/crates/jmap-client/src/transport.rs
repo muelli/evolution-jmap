@@ -133,6 +133,15 @@ pub struct HttpResponse {
     pub status: u16,
     pub content_type: Option<String>,
     pub body: Vec<u8>,
+    /// The URL this response actually came from — [`HttpRequest::url`] unless
+    /// a redirect was followed, in which case this is the last one.
+    ///
+    /// A caller that must not trust a redirect target it never named (a blob
+    /// download addressed by the session's own `downloadUrl`, in particular —
+    /// see [`crate::Client::download_blob`]) compares this against the URL it
+    /// asked for; a transport with nothing to report here because it never
+    /// redirects sets it to the request's own URL.
+    pub final_url: String,
 }
 
 /// Errors a transport can produce; mapped onto [`crate::Error`] by the
@@ -231,6 +240,12 @@ mod ureq_transport {
                 .get("content-type")
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned);
+            // The URL this response actually came from, which `ureq` tracks
+            // regardless of `redirect_auth_headers` — that setting only
+            // decides whether `Authorization` follows a redirect, not
+            // whether the redirect itself is taken. `get_uri()` is the
+            // request's own URL when nothing redirected.
+            let final_url = ureq::ResponseExt::get_uri(&response).to_string();
             // `read_to_vec()` would apply `ureq`'s own `MAX_BODY_SIZE`; the
             // limit is set here so the number in force is the caller's.
             //
@@ -259,6 +274,7 @@ mod ureq_transport {
                 status,
                 content_type,
                 body,
+                final_url,
             })
         }
     }

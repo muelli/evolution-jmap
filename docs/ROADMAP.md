@@ -672,6 +672,42 @@ they close, prioritise in this order:
    step, escalation-worthy if the redirect-auth reasoning gets subtle. This is
    the last blocker to readable mail; it is NOT item 7 (verified) and NOT the API
    auth (works).
+   - **PARTIAL 2026-08-20 (Do items 1+2's headless half done; root cause on
+     real Fastmail still unconfirmed) —** `jmap-mock` gained
+     `MockServerBuilder::download_via_redirect_to(origin)` (mirrors
+     `session_via_redirect`'s shape, on the download route), and
+     `jmap-client/tests/redirect_auth.rs` gained
+     `a_cross_host_redirect_on_download_is_not_trusted_as_the_blob`, using a
+     second listener on a genuinely different loopback address (127.0.0.2,
+     not another port on 127.0.0.1 — confirmed against `ureq-proto`'s
+     `can_redirect_auth_header` source that `SameHost` compares hostname
+     only, so same-address/different-port would not have exercised the
+     cross-host path at all). Red confirmed first by actually removing the
+     fix and rerunning, not by inspection: without it, the foreign host's own
+     unrelated page came back as if it were the blob. **Fix:** `HttpResponse`
+     gained `final_url` (via `ureq`'s `ResponseExt::get_uri()`, which tracks
+     the post-redirect URL independent of `redirect_auth_headers`); a new
+     `url::origin_of()` helper compares it against the URL requested, and
+     `download_blob` returns a new `Error::CrossOriginRedirect` instead of
+     the body on a mismatch — scoped to `download_blob` alone, not the
+     shared request path every call goes through, since a legitimate
+     autodiscovery redirect to a provider's JMAP subdomain during *session*
+     discovery is not something anything here tests is safe to forbid, while
+     a blob addressed by the session's own `downloadUrl` has no comparable
+     reason to answer from elsewhere. Full gate green (`cargo fmt --check`;
+     `cargo clippy --all-targets --locked -- -D warnings` default-members and
+     the seven-crate EDS-gated clippy; `cargo test --locked` default-members
+     and the seven crates per-crate, 0 failed throughout; the packaging
+     `.deb` ctest per item 8's standing note). See `docs/NIGHT-LOG.md`,
+     "`download_blob` refuses a cross-origin redirect's answer instead of
+     returning it as the blob". **Still open, unchanged from this item's own
+     text:** this closes a real client-side soundness gap (silently trusting
+     an unauthenticated redirect target's content as message bytes) that
+     holds regardless of which hypothesis explains Fastmail, but it does
+     *not* determine which of the three actually does, and does not by
+     itself make Fastmail readable if the true cause is hypothesis 2 or 3
+     rather than 1 — still needs the operator's live, token-gated probe this
+     item always said it would.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
