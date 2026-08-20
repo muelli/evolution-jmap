@@ -40534,3 +40534,57 @@ confirm the new step passes on current `master`, then temporarily
 and confirm the new step fails on it, then revert the temporary change and
 confirm green again — proving the gate actually catches the regression class
 it exists for, not just that it runs.
+
+## 2026-08-20 — Delivered: item 8's standing fix (`ci/checks.sh` now runs the `.deb` packaging ctest)
+
+Delivered the increment claimed above. `ci/checks.sh` gained a final step
+that configures/builds the CMake tree and runs `ctest --test-dir build -R
+'package-deb'` (the three CPack-based tests: `package-deb`,
+`package-deb-reproducible`, `package-deb-lintian`) — not the full ctest
+suite, since the functional/gui-smoke legs need a live D-Bus/Xvfb registry
+this script has never assumed, only a CMake configure + build. Gated on
+`cmake`, `ninja`, and the four EDS pkg-config modules `CMakeLists.txt`
+requires all being present; otherwise it prints a skip message rather than
+failing, preserving the script's documented "works on a bare Rust-only
+machine" property (`cmake_minimum_required`'s own `pkg_check_modules(...
+REQUIRED ...)` would hard-fail the configure step on a machine without EDS
+headers, so this has to be checked before invoking cmake, not left for cmake
+to report).
+
+**Proved it actually catches the regression it exists for, not just that it
+runs.** Ran the new step on unmodified `master` first (green: all three
+`package-deb*` tests pass). Then, in the working tree only (never committed),
+replaced `evo-sys/build.rs` with its pre-`e14d991` content — the exact
+`ac00396` RUNPATH regression CURRENT PRIORITY item 8 fixed — rebuilt, and
+reran just `package-deb-lintian`: it failed with the same two
+`custom-library-search-path RUNPATH /usr/lib` /
+`RUNPATH /usr/lib/x86_64-linux-gnu` findings item 8's own report quoted,
+confirmed the lintian override alone (already in the tree) does not mask a
+reintroduced regression of the broader kind. Restored the real `build.rs`,
+rebuilt, reran: green again, and `git status`/`git diff` confirmed the file
+came back byte-identical (no residual diff) before committing anything.
+
+No Rust source changed, so `cargo fmt --check` (already run: clean),
+clippy, and the test suite are unaffected by this change and stay covered by
+CI's existing green run at `dab9348`; re-ran `cargo fmt --check` anyway as a
+sanity check on the touched-tree state. `reuse lint` could not run on this VM
+(`[[checks-sh-blocked-on-vm]]`, unchanged), but the only file touched already
+carries its SPDX header and needed no new one; `bash -n ci/checks.sh` confirms
+the script still parses. No new dependency, no new user-facing string, no
+Cargo.lock change.
+
+**Scope, stated plainly:** this closes item 8's own "standing fix" footnote,
+not a new roadmap item — CURRENT PRIORITY items 1-8 remain exactly where the
+claim entry above described them (all code-complete, pending
+operator/maintainer steps this runner cannot produce). No M7/real-server/M9/
+M10 work was available to claim this session; this was the one concrete,
+unblocked, non-backend-polish gap the roadmap's own text still named.
+
+`ci/checks.sh` still cannot run its first (`reuse lint`) step on this VM
+([[checks-sh-blocked-on-vm]]) — everything past that step was verified by
+hand, as in every prior session hitting the same gap.
+
+NIGHT-SHIFT: item 8's standing fix delivered and pushed — `ci/checks.sh` now
+runs the packaging `.deb` ctest, demonstrated to catch the exact RUNPATH
+regression class item 8 closed. Ending the session here; no priority-lane
+(M7/real-server/M9/M10) work remained unblocked to start a second item.
