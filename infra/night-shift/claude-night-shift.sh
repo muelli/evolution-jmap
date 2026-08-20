@@ -108,6 +108,20 @@ while true; do
         log "stop requested; exiting cleanly between iterations (no work lost)"
         exit 0
     fi
+    # Start every iteration from a clean, current master. An iteration killed
+    # mid-increment — e.g. the weekly usage limit is reached while the agent is
+    # editing — leaves uncommitted changes (and possibly an interrupted
+    # rebase/merge). `git pull --rebase` then refuses, the `|| true` masks it,
+    # and we would launch a fresh agent on a stale, dirty tree. A cleanly-
+    # finished iteration commits+pushes and exits, so there is nothing to lose
+    # here: only a killed iteration's partial, uncommitted edits are discarded.
+    # Any green local commit is kept (reset to HEAD, not origin) and pushed with
+    # the next increment. We deliberately do NOT `git clean`: it could delete
+    # untracked operator-provisioned files, and stray untracked files do not
+    # block a rebase anyway.
+    git rebase --abort >/dev/null 2>&1 || true
+    git merge  --abort >/dev/null 2>&1 || true
+    git reset  --hard  >> "$LOG" 2>&1 || true
     git pull --rebase --quiet >> "$LOG" 2>&1 || true
 
     # Model for this iteration: the shared subscription's Sonnet by default,
