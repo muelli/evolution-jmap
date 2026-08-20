@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use base64::Engine;
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
@@ -7998,4 +7999,3437 @@ fn x_property_name_casing_and_empty_values_handling() {
     let re_emitted = card_to_vcard(&card);
     let back = vcard_to_card(&re_emitted).expect("parse re-emitted");
     assert_eq!(back, card);
+}
+
+#[test]
+fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
+    // 1. Long NOTE round-trip: value longer than 75 octets must fold on write and unfold losslessly on read
+    let long_note_text = "This is an extremely long note that exceeds seventy-five octets by a substantial margin. \
+        It contains detailed historical records, meeting minutes, action items, and extensive documentation \
+        that must be folded across multiple physical lines according to RFC 2426 Section 2.6, and unfolded \
+        with 100% lossless fidelity upon reading back from vCard 3.0 format.";
+
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_owned(),
+        Note {
+            note: long_note_text.to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    // 2. Inline base64 PHOTO round-trip: large binary image payload encoded as data URI
+    let binary_data: Vec<u8> = (0..350).map(|i| (i % 256) as u8).collect();
+    let base64_payload = base64::engine::general_purpose::STANDARD.encode(&binary_data);
+    let photo_uri = format!("data:image/jpeg;base64,{base64_payload}");
+
+    let mut media = BTreeMap::new();
+    media.insert(
+        "m1".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: photo_uri.clone(),
+            media_type: Some("image/jpeg".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-FOLD-1".into()),
+        name: Some(Name {
+            full: Some("Line Folding Verification".to_owned()),
+            ..Name::default()
+        }),
+        notes: Some(notes),
+        media: Some(media),
+        ..ContactCard::default()
+    };
+
+    // Emit vCard
+    let vcard = card_to_vcard(&card);
+
+    // Assert that folding occurred on the NOTE and PHOTO lines
+    assert!(vcard.contains("\r\n "));
+
+    // Assert that physical lines in the vCard output target 75 octets and never exceed 77 octets
+    for physical_line in vcard.split("\r\n") {
+        assert!(
+            physical_line.len() <= 77,
+            "Physical line exceeds maximum line length (len = {}): {:?}",
+            physical_line.len(),
+            physical_line
+        );
+        assert!(
+            std::str::from_utf8(physical_line.as_bytes()).is_ok(),
+            "Invalid UTF-8 in physical line slice: {physical_line:?}"
+        );
+    }
+
+    // Read back and verify lossless unfolding
+    let read_card = vcard_to_card(&vcard).expect("parse folded vcard");
+
+    // Verify NOTE unfolded losslessly
+    let read_notes = read_card.notes.as_ref().expect("notes present");
+    assert_eq!(
+        read_notes["n1"].note, long_note_text,
+        "Folded NOTE did not unfold losslessly"
+    );
+
+    // Verify PHOTO unfolded losslessly and preserved media_type and binary content
+    let read_media = read_card.media.as_ref().expect("media present");
+    assert_eq!(read_media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(read_media["m1"].media_type.as_deref(), Some("image/jpeg"));
+    assert_eq!(read_media["m1"].uri, photo_uri);
+
+    // Verify fixed-point stability: emitting the parsed card produces identical vCard
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(vcard2, vcard, "Emitted folded vCard must be at fixed-point");
+}
+
+#[test]
+fn rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs() {
+    // RFC 2426 §2.6: Lines can be folded with CRLF + space OR CRLF + tab.
+    // Unfolding removes the CRLF and the immediately following space/tab continuation marker.
+    // If multiple spaces/tabs follow, only the first is the folding marker;
+    // subsequent spaces/tabs are part of the value.
+    let prefolded_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:prefolded-card-1\r\n",
+        "FN;X-JMAP-KEY=name:Dr. Jane \r\n\tWatson\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:The\r\n  Detective\r\n",
+        "EMAIL;X-JMAP-KEY=e1;TYPE=WORK:jane.watson\r\n @example.org\r\n",
+        "TEL;X-JMAP-KEY=p1;TYPE=WORK,VOICE:+44 20 \r\n\t7946 0958\r\n",
+        "ORG;X-JMAP-KEY=o1:Metropolitan Police\r\n  Service;Forensics \r\n\tDivision;Ballistics Unit\r\n",
+        "TITLE;X-JMAP-KEY=t1:Senior Forensic \r\n\tConsultant\r\n",
+        "ROLE;X-JMAP-KEY=t2:Lead Ballistics \r\n Specialist\r\n",
+        "ADR;X-JMAP-KEY=a1;TYPE=WORK:PO Box \r\n 999;Suite 400;221B \r\n\tBaker Street;London;Greater \r\n London;NW1 6XE;United \r\n Kingdom\r\n",
+        "LABEL;X-JMAP-KEY=a1;TYPE=WORK:221B Baker \r\n Street\\nSuite 400\\nLondon\\nNW1 \r\n\t6XE\\nUnited Kingdom\r\n",
+        "NOTE;X-JMAP-KEY=n1:First line of note.\r\n Continued with space.\r\n\tContinued with tab.\r\n   Three leading spaces (one fold + two data).\r\n",
+        "CATEGORIES:Forensics,Ballistics,Investigation,\r\n\tScotland Yard\r\n",
+        "URL;X-JMAP-KEY=l1:https://example.org/forensics/\r\n deep/case/archive\r\n",
+        "PHOTO;ENCODING=b;TYPE=PNG:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAf\r\n\tFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9aw\r\n AAAABJRU5ErkJggg==\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(prefolded_vcard).expect("parse pre-folded vcard");
+
+    // Assert exact unfolded values:
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Dr. Jane Watson")
+    );
+    assert_eq!(card.nicknames.as_ref().unwrap()["k1"].name, "The Detective");
+    assert_eq!(
+        card.emails.as_ref().unwrap()["e1"].address,
+        "jane.watson@example.org"
+    );
+    assert_eq!(
+        card.phones.as_ref().unwrap()["p1"].number,
+        "+44 20 7946 0958"
+    );
+
+    // ORG: note "  Service" has 2 spaces after CRLF -> 1 space in value
+    let org = &card.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org.name.as_deref(), Some("Metropolitan Police Service"));
+    let units: Vec<&str> = org
+        .units
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|u| u.name.as_str())
+        .collect();
+    assert_eq!(units, ["Forensics Division", "Ballistics Unit"]);
+
+    assert_eq!(
+        card.titles.as_ref().unwrap()["t1"].name,
+        "Senior Forensic Consultant"
+    );
+    assert_eq!(
+        card.titles.as_ref().unwrap()["t2"].name,
+        "Lead Ballistics Specialist"
+    );
+
+    // ADR structured components
+    let adr = &card.addresses.as_ref().unwrap()["a1"];
+    let comp_map: BTreeMap<&str, &str> = adr
+        .components
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|c| (c.kind.as_str(), c.value.as_str()))
+        .collect();
+    assert_eq!(comp_map.get("postOfficeBox"), Some(&"PO Box 999"));
+    assert_eq!(comp_map.get("apartment"), Some(&"Suite 400"));
+    assert_eq!(comp_map.get("name"), Some(&"221B Baker Street"));
+    assert_eq!(comp_map.get("locality"), Some(&"London"));
+    assert_eq!(comp_map.get("region"), Some(&"Greater London"));
+    assert_eq!(comp_map.get("postcode"), Some(&"NW1 6XE"));
+    assert_eq!(comp_map.get("country"), Some(&"United Kingdom"));
+
+    // LABEL
+    assert_eq!(
+        adr.full.as_deref(),
+        Some("221B Baker Street\nSuite 400\nLondon\nNW1 6XE\nUnited Kingdom")
+    );
+
+    // NOTE: check multiline and leading space preservation
+    let note = &card.notes.as_ref().unwrap()["n1"].note;
+    assert!(note.contains("First line of note.Continued with space.Continued with tab.  Three leading spaces (one fold + two data)."));
+
+    // CATEGORIES
+    let keywords = card.keywords.as_ref().expect("keywords");
+    assert!(keywords.contains_key("Forensics"));
+    assert!(keywords.contains_key("Ballistics"));
+    assert!(keywords.contains_key("Investigation"));
+    assert!(keywords.contains_key("Scotland Yard"));
+
+    // URL
+    assert_eq!(
+        card.links.as_ref().unwrap()["l1"].uri,
+        "https://example.org/forensics/deep/case/archive"
+    );
+
+    // PHOTO
+    let photo = &card.media.as_ref().unwrap()["m1"];
+    assert_eq!(photo.media_type.as_deref(), Some("image/PNG"));
+    assert!(photo.uri.starts_with("data:image/PNG;base64,"));
+
+    // Re-emission must produce valid lines targeting 75 octets and reach fixed point
+    let re_emitted = card_to_vcard(&card);
+    for physical_line in re_emitted.split("\r\n") {
+        assert!(
+            physical_line.len() <= 77,
+            "Re-emitted line exceeds 77 octets: {physical_line:?}"
+        );
+        assert!(std::str::from_utf8(physical_line.as_bytes()).is_ok());
+    }
+    let back = vcard_to_card(&re_emitted).expect("parse re-emitted");
+    assert_eq!(back, card);
+}
+
+#[test]
+fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
+    // Tests that multi-byte UTF-8 sequences (2-byte, 3-byte, 4-byte) positioned
+    // across the 75-octet fold boundary are never split across line folds.
+    // Line folding must break on a valid UTF-8 character boundary.
+
+    let test_cases = [
+        // 2-byte UTF-8 sequences (German umlauts, Cyrillic, accented Latin)
+        ("2-byte umlauts", "äöüßéñДж"),
+        // 3-byte UTF-8 sequences (CJK characters, Japanese Hiragana, Devanagari)
+        ("3-byte CJK & Hiragana", "漢字東京日本語संस्कृत"),
+        // 4-byte UTF-8 sequences (Emoji, musical and math symbols)
+        ("4-byte Emoji", "🦀🚀🌟🎉🔥𝄞𝕬🌍"),
+    ];
+
+    for (label, multibyte_sample) in test_cases {
+        // Test padding lengths from 40 to 85 bytes before the multi-byte characters
+        // to systematically exercise all possible boundary positions relative to 75 octets
+        for pad_len in 40..=85 {
+            let padding = "A".repeat(pad_len);
+            let note_text = format!(
+                "{padding}{multibyte_sample} -- trailing text to force multiple line folds if needed."
+            );
+
+            let mut notes = BTreeMap::new();
+            notes.insert(
+                "n1".to_owned(),
+                Note {
+                    note: note_text.clone(),
+                    extra: BTreeMap::new(),
+                },
+            );
+
+            let card = ContactCard {
+                id: Some("C-UTF8".into()),
+                name: Some(Name {
+                    full: Some(format!("UTF8 Test {label} pad {pad_len}")),
+                    ..Name::default()
+                }),
+                notes: Some(notes),
+                ..ContactCard::default()
+            };
+
+            let vcard = card_to_vcard(&card);
+
+            // 1. Check that EVERY physical line is valid UTF-8 and targets 75 octets (max <= 77)
+            for (line_idx, physical_line) in vcard.split("\r\n").enumerate() {
+                assert!(
+                    physical_line.len() <= 77,
+                    "[{label}, pad {pad_len}, line {line_idx}] line exceeds max limit (len={}): {:?}",
+                    physical_line.len(),
+                    physical_line
+                );
+                // Confirm valid UTF-8 boundary integrity: no split UTF-8 code point
+                assert!(
+                    std::str::from_utf8(physical_line.as_bytes()).is_ok(),
+                    "[{label}, pad {pad_len}, line {line_idx}] invalid UTF-8 in line slice"
+                );
+            }
+
+            // 2. Parse back and assert 100% byte-for-byte exact equality (no corruption, no replacement chars)
+            let read_card = vcard_to_card(&vcard).unwrap_or_else(|e| {
+                panic!(
+                    "[{label}, pad {pad_len}] failed to parse emitted vCard: {e:?}\nvCard:\n{vcard}"
+                )
+            });
+            let read_note = &read_card.notes.as_ref().unwrap()["n1"].note;
+            assert_eq!(
+                read_note, &note_text,
+                "[{label}, pad {pad_len}] UTF-8 content corrupted across line fold"
+            );
+            assert!(
+                !read_note.contains('\u{FFFD}'),
+                "[{label}, pad {pad_len}] UTF-8 replacement character found"
+            );
+
+            // 3. Verify fixed point
+            let vcard2 = card_to_vcard(&read_card);
+            assert_eq!(
+                vcard2, vcard,
+                "[{label}, pad {pad_len}] fixed point failure"
+            );
+        }
+    }
+}
+
+#[test]
+fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
+    // Tests exact line length boundaries around 75 octets:
+    // Property prefix is "NOTE;X-JMAP-KEY=n1:" which is 19 octets.
+    // ASCII characters without escaping.
+    // Lengths <= 75 octets (total line with prefix <= 75) fit in 1 line.
+    // Lengths > 75 octets fold into 2 lines.
+
+    for (target_line_len, expect_folded) in [
+        (70, false),
+        (73, false),
+        (74, false),
+        (75, false),
+        (78, true),
+        (80, true),
+        (100, true),
+    ] {
+        let prefix_len = "NOTE;X-JMAP-KEY=n1:".len(); // 19
+        let value_len = target_line_len - prefix_len;
+        let value = "X".repeat(value_len);
+
+        let mut notes = BTreeMap::new();
+        notes.insert(
+            "n1".to_owned(),
+            Note {
+                note: value.clone(),
+                extra: BTreeMap::new(),
+            },
+        );
+
+        let card = ContactCard {
+            id: Some("C-BOUND".into()),
+            notes: Some(notes),
+            ..ContactCard::default()
+        };
+
+        let vcard = card_to_vcard(&card);
+
+        // Find the lines corresponding to NOTE
+        let note_lines: Vec<&str> = vcard
+            .split("\r\n")
+            .filter(|l| l.starts_with("NOTE") || l.starts_with(' '))
+            .collect();
+
+        if expect_folded {
+            assert!(
+                note_lines.len() >= 2,
+                "Target length {target_line_len} was expected to fold into multiple lines, got: {note_lines:?}"
+            );
+            assert!(
+                note_lines[0].len() <= 77,
+                "First folded line exceeds limit: {}",
+                note_lines[0].len()
+            );
+            assert!(note_lines[1].starts_with(' '));
+        } else {
+            assert_eq!(
+                note_lines.len(),
+                1,
+                "Target length {target_line_len} was expected to fit in 1 line, got: {note_lines:?}"
+            );
+        }
+
+        // Parse back and verify lossless recovery
+        let read_card = vcard_to_card(&vcard).expect("parse bounded card");
+        assert_eq!(read_card.notes.as_ref().unwrap()["n1"].note, value);
+    }
+}
+
+#[test]
+fn rfc2426_line_folding_with_escaped_delimiters_and_backslashes() {
+    // Tests line folding interacting with escaped characters:
+    // RFC 2426 §2 escaping: \n, \;, \,, \\ in Note values.
+    // Verify that newlines, commas, semicolons, and backslashes in multiline text
+    // fold and unfold without splitting escape tokens or losing characters.
+
+    let multiline_note = "Line 1 with text.\nLine 2 with semicolon ; and comma , and backslash \\.\nLine 3 with more text.";
+    let long_note_with_escapes = multiline_note.repeat(4);
+
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_owned(),
+        Note {
+            note: long_note_with_escapes.clone(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-ESC-FOLD".into()),
+        notes: Some(notes),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Verify all physical lines <= 77 octets
+    for physical_line in vcard.split("\r\n") {
+        assert!(
+            physical_line.len() <= 77,
+            "Physical line exceeds 77 octets: {physical_line:?}"
+        );
+        assert!(std::str::from_utf8(physical_line.as_bytes()).is_ok());
+    }
+
+    // Parse back and verify lossless text recovery
+    let read_card = vcard_to_card(&vcard).expect("parse escaped folded card");
+    assert_eq!(
+        read_card.notes.as_ref().unwrap()["n1"].note,
+        long_note_with_escapes
+    );
+
+    // Fixed point
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(vcard2, vcard);
+}
+
+#[test]
+fn rfc2426_value_escaping_note_with_all_four_special_characters_roundtrip() {
+    // RFC 2426 §2: Value escaping for text values:
+    // \n (or \N), \,, \;, and \\ must escape on write and unescape on read
+    // with no loss and no double-escaping.
+    let note_text = "First line of notes.\nSecond line with comma, semicolon; and backslash \\.\nThird line with literal escapes: \\n \\, \\; \\\\ and more.";
+
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_owned(),
+        Note {
+            note: note_text.to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-ESC-NOTE".into()),
+        notes: Some(notes),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Verify wire format has escaped characters
+    assert!(
+        vcard.contains(r"\nSecond line with comma\, semicolon\; and backslash \\.")
+            || vcard.contains("NOTE;X-JMAP-KEY=n1:First line of notes.\\n"),
+        "vCard should contain escaped characters on the wire: {vcard}"
+    );
+
+    // Parse back
+    let read_card = vcard_to_card(&vcard).expect("parse note with all four escapes");
+    assert_eq!(
+        read_card.notes.as_ref().unwrap()["n1"].note,
+        note_text,
+        "Note text must match original exactly"
+    );
+
+    // Fixed point convergence: second pass
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(vcard2, vcard, "Emitted vCard must reach fixed point");
+
+    // Third pass to guarantee no double-escaping
+    let read_card2 = vcard_to_card(&vcard2).expect("parse second-pass vcard");
+    assert_eq!(
+        read_card2.notes.as_ref().unwrap()["n1"].note,
+        note_text,
+        "Note text must remain unchanged after multiple roundtrips"
+    );
+    let vcard3 = card_to_vcard(&read_card2);
+    assert_eq!(vcard3, vcard, "Third-pass vCard must match first pass");
+}
+
+#[test]
+fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
+    // RFC 2426 §2 / §3.5.5: Commas inside ORG unit components and employer names:
+    // Semicolon (;) delimits components of ORG, while comma (,) inside a unit
+    // must be escaped as \, so it is not confused or lost, and semicolons inside
+    // a unit must be escaped as \; so they don't split the component.
+    let mut orgs = BTreeMap::new();
+    orgs.insert(
+        "o1".to_owned(),
+        Organization {
+            name: Some("Acme, Inc.".to_owned()),
+            units: Some(vec![
+                OrgUnit::new("Research, Development & Innovation"),
+                OrgUnit::new("Optics, Lasers & Sensors"),
+                OrgUnit::new("Hardware; Systems Division"),
+                OrgUnit::new("Unit with \\ backslash and \n newline"),
+            ]),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-ESC-ORG".into()),
+        organizations: Some(orgs),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Verify wire format contains escaped commas and semicolons
+    assert!(
+        vcard.contains(r"Acme\, Inc.") || vcard.contains("ORG;X-JMAP-KEY=o1:"),
+        "vCard should contain escaped comma in ORG name: {vcard}"
+    );
+
+    // Parse back
+    let read_card = vcard_to_card(&vcard).expect("parse org with escaped commas and semicolons");
+    let read_org = &read_card.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(
+        read_org.name.as_deref(),
+        Some("Acme, Inc."),
+        "Employer name with comma must roundtrip intact"
+    );
+    let units = read_org.units.as_ref().unwrap();
+    assert_eq!(units.len(), 4, "Must have exactly 4 units");
+    assert_eq!(units[0].name, "Research, Development & Innovation");
+    assert_eq!(units[1].name, "Optics, Lasers & Sensors");
+    assert_eq!(units[2].name, "Hardware; Systems Division");
+    assert_eq!(units[3].name, "Unit with \\ backslash and \n newline");
+
+    // Fixed point convergence
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(vcard2, vcard, "Emitted vCard must reach fixed point");
+
+    // Test nameless organization with leading semicolon and commas in units
+    let mut nameless_orgs = BTreeMap::new();
+    nameless_orgs.insert(
+        "o_nameless".to_owned(),
+        Organization {
+            name: None,
+            units: Some(vec![
+                OrgUnit::new("Engineering, Core Team"),
+                OrgUnit::new("Architecture; Infrastructure"),
+                OrgUnit::new("Group\\Gamma\nAlpha"),
+            ]),
+            extra: BTreeMap::new(),
+        },
+    );
+    let nameless_card = ContactCard {
+        id: Some("C-NAMELESS-ESC-ORG".into()),
+        organizations: Some(nameless_orgs),
+        ..ContactCard::default()
+    };
+    let nameless_vcard = card_to_vcard(&nameless_card);
+    assert!(
+        nameless_vcard.contains(";Engineering")
+            || nameless_vcard.contains("ORG;X-JMAP-KEY=o_nameless:;"),
+        "Nameless org must retain leading semicolon: {nameless_vcard}"
+    );
+    let read_nameless = vcard_to_card(&nameless_vcard).expect("parse nameless org with escapes");
+    let read_n_org = &read_nameless.organizations.as_ref().unwrap()["o_nameless"];
+    assert_eq!(read_n_org.name, None);
+    let n_units = read_n_org.units.as_ref().unwrap();
+    assert_eq!(n_units.len(), 3);
+    assert_eq!(n_units[0].name, "Engineering, Core Team");
+    assert_eq!(n_units[1].name, "Architecture; Infrastructure");
+    assert_eq!(n_units[2].name, "Group\\Gamma\nAlpha");
+    assert_eq!(card_to_vcard(&read_nameless), nameless_vcard);
+}
+
+#[test]
+fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
+    // RFC 2426 §2 / §3.2.1: Semicolons inside ADR components:
+    // Semicolon (;) is the component separator for ADR. A semicolon inside an
+    // individual component (e.g. street name "Suite 100; Building A") must be
+    // escaped as \; so it does not shift subsequent components into wrong slots.
+    let mut addresses = BTreeMap::new();
+    addresses.insert(
+        "a1".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("postOfficeBox", "PO Box 123; Station B"),
+                AddressComponent::new("apartment", "Apt 4B, Room 12; Building C"),
+                AddressComponent::new("name", "123 Main St; 2nd Floor, West Wing"),
+                AddressComponent::new("locality", "San Francisco; Bay Area"),
+                AddressComponent::new("region", "California; Northern"),
+                AddressComponent::new("postcode", "94105; 94107"),
+                AddressComponent::new("country", "United States; North America"),
+            ]),
+            contexts: Some(json!({"work": true})),
+            full: Some(
+                "PO Box 123; Station B\nApt 4B, Room 12; Building C\n123 Main St; 2nd Floor, West Wing\nSan Francisco; Bay Area, California; Northern 94105; 94107\nUnited States; North America"
+                    .to_owned(),
+            ),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-ESC-ADR".into()),
+        addresses: Some(addresses),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Parse back and verify no component shifting occurred
+    let read_card = vcard_to_card(&vcard).expect("parse adr with escaped semicolons");
+    let read_addr = &read_card.addresses.as_ref().unwrap()["a1"];
+    let comps = read_addr.components.as_ref().unwrap();
+    assert_eq!(
+        comps.len(),
+        7,
+        "Must have all 7 components without shifting"
+    );
+    assert_eq!(comps[0].kind, "postOfficeBox");
+    assert_eq!(comps[0].value, "PO Box 123; Station B");
+    assert_eq!(comps[1].kind, "apartment");
+    assert_eq!(comps[1].value, "Apt 4B, Room 12; Building C");
+    assert_eq!(comps[2].kind, "name");
+    assert_eq!(comps[2].value, "123 Main St; 2nd Floor, West Wing");
+    assert_eq!(comps[3].kind, "locality");
+    assert_eq!(comps[3].value, "San Francisco; Bay Area");
+    assert_eq!(comps[4].kind, "region");
+    assert_eq!(comps[4].value, "California; Northern");
+    assert_eq!(comps[5].kind, "postcode");
+    assert_eq!(comps[5].value, "94105; 94107");
+    assert_eq!(comps[6].kind, "country");
+    assert_eq!(comps[6].value, "United States; North America");
+
+    assert_eq!(
+        read_addr.full.as_deref(),
+        Some(
+            "PO Box 123; Station B\nApt 4B, Room 12; Building C\n123 Main St; 2nd Floor, West Wing\nSan Francisco; Bay Area, California; Northern 94105; 94107\nUnited States; North America"
+        )
+    );
+
+    // Fixed point convergence
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(
+        vcard2, vcard,
+        "ADR with escaped semicolons must reach fixed point"
+    );
+}
+
+#[test]
+fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
+    // Tests escaping of \n, \,, \;, \\ across all mapped vCard properties
+    let mut nicknames = BTreeMap::new();
+    nicknames.insert(
+        "k1".to_owned(),
+        Nickname {
+            name: "Ali, Baba; Chief\\Boss\nLead".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut titles = BTreeMap::new();
+    titles.insert(
+        "t1".to_owned(),
+        Title {
+            name: "Director, Architecture; Core \\ Systems\nLead".to_owned(),
+            kind: Some("title".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    titles.insert(
+        "t2".to_owned(),
+        Title {
+            name: "Lead, Quality; Assurance \\ Test\nSpecialist".to_owned(),
+            kind: Some("role".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut related_to = BTreeMap::new();
+    related_to.insert(
+        "Bob, Smith; Jr.\\II".to_owned(),
+        Relation {
+            relation: Some([("spouse".to_string(), json!(true))].into()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut emails = BTreeMap::new();
+    emails.insert(
+        "e1".to_owned(),
+        ContactEmail {
+            address: "alice+tag,filter;opt=1\\test@example.com".to_owned(),
+            contexts: Some(json!({"work": true})),
+            pref: Some(1),
+            ..ContactEmail::default()
+        },
+    );
+
+    let mut phones = BTreeMap::new();
+    phones.insert(
+        "p1".to_owned(),
+        ContactPhone {
+            number: "+1 (555) 123-4567, ext; 890 \\ test".to_owned(),
+            contexts: Some(json!({"work": true})),
+            features: Some(json!({"voice": true})),
+            pref: Some(1),
+            ..ContactPhone::default()
+        },
+    );
+
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l1".to_owned(),
+        Link {
+            uri: "https://example.com/query?q=test;sort=desc,rank&filter=a\\b".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut keywords = BTreeMap::new();
+    keywords.insert("Tag 1, with comma".to_owned(), json!(true));
+    keywords.insert("Tag 2; with semicolon".to_owned(), json!(true));
+    keywords.insert("Tag 3\\backslash".to_owned(), json!(true));
+
+    let card = ContactCard {
+        id: Some("C-ALL-ESC".into()),
+        name: Some(Name {
+            full: Some("Dr. Alice Smith, Ph.D.; Junior\\Senior".to_owned()),
+            components: Some(vec![
+                NameComponent::new("surname", "Smith, Jr."),
+                NameComponent::new("given", "Alice; Marie"),
+                NameComponent::new("given2", "B.\\C."),
+                NameComponent::new("title", "Dr., Prof."),
+                NameComponent::new("credential", "III; Esq."),
+            ]),
+            extra: BTreeMap::new(),
+        }),
+        nicknames: Some(nicknames),
+        titles: Some(titles),
+        related_to: Some(related_to),
+        emails: Some(emails),
+        phones: Some(phones),
+        links: Some(links),
+        keywords: Some(keywords),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Parse back
+    let read_card = vcard_to_card(&vcard).expect("parse all properties with escapes");
+
+    // Assert name
+    let read_name = read_card.name.as_ref().unwrap();
+    assert_eq!(
+        read_name.full.as_deref(),
+        Some("Dr. Alice Smith, Ph.D.; Junior\\Senior")
+    );
+    let name_comps = read_name.components.as_ref().unwrap();
+    assert_eq!(name_comps[0].value, "Dr., Prof.");
+    assert_eq!(name_comps[1].value, "Alice; Marie");
+    assert_eq!(name_comps[2].value, "B.\\C.");
+    assert_eq!(name_comps[3].value, "Smith, Jr.");
+    assert_eq!(name_comps[4].value, "III; Esq.");
+
+    // Assert nickname, titles, spouse, email, phone, links, keywords
+    assert_eq!(
+        read_card.nicknames.as_ref().unwrap()["k1"].name,
+        "Ali, Baba; Chief\\Boss\nLead"
+    );
+    assert_eq!(
+        read_card.titles.as_ref().unwrap()["t1"].name,
+        "Director, Architecture; Core \\ Systems\nLead"
+    );
+    assert_eq!(
+        read_card.titles.as_ref().unwrap()["t2"].name,
+        "Lead, Quality; Assurance \\ Test\nSpecialist"
+    );
+    assert!(
+        read_card
+            .related_to
+            .as_ref()
+            .unwrap()
+            .contains_key("Bob, Smith; Jr.\\II")
+    );
+    assert_eq!(
+        read_card.emails.as_ref().unwrap()["e1"].address,
+        "alice+tag,filter;opt=1\\test@example.com"
+    );
+    assert_eq!(
+        read_card.phones.as_ref().unwrap()["p1"].number,
+        "+1 (555) 123-4567, ext; 890 \\ test"
+    );
+    assert_eq!(
+        read_card.links.as_ref().unwrap()["l1"].uri,
+        "https://example.com/query?q=test;sort=desc,rank&filter=a\\b"
+    );
+    let read_kw = read_card.keywords.as_ref().unwrap();
+    assert!(read_kw.contains_key("Tag 1, with comma"));
+    assert!(read_kw.contains_key("Tag 2; with semicolon"));
+    assert!(read_kw.contains_key("Tag 3\\backslash"));
+
+    // Fixed point
+    let vcard2 = card_to_vcard(&read_card);
+    assert_eq!(
+        vcard2, vcard,
+        "All properties with escapes must reach fixed point"
+    );
+}
+
+#[test]
+fn rfc2426_value_escaping_no_double_escaping_multiroundtrip() {
+    // Tests that multiple sequential roundtrips never double-escape or accumulate backslashes:
+    // vcard1 -> card1 -> vcard2 -> card2 -> vcard3 -> card3
+    let complex_text = "Text with single backslash \\, literal \\n, literal \\,, literal \\;, and double \\\\ backslashes.";
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_owned(),
+        Note {
+            note: complex_text.to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card0 = ContactCard {
+        id: Some("C-MULTI-ROUND".into()),
+        notes: Some(notes),
+        ..ContactCard::default()
+    };
+
+    let vcard1 = card_to_vcard(&card0);
+    let card1 = vcard_to_card(&vcard1).expect("roundtrip pass 1 parse");
+    assert_eq!(card1.notes.as_ref().unwrap()["n1"].note, complex_text);
+
+    let vcard2 = card_to_vcard(&card1);
+    assert_eq!(vcard2, vcard1, "Pass 2 vCard must equal Pass 1 vCard");
+    let card2 = vcard_to_card(&vcard2).expect("roundtrip pass 2 parse");
+    assert_eq!(card2.notes.as_ref().unwrap()["n1"].note, complex_text);
+
+    let vcard3 = card_to_vcard(&card2);
+    assert_eq!(vcard3, vcard1, "Pass 3 vCard must equal Pass 1 vCard");
+    let card3 = vcard_to_card(&vcard3).expect("roundtrip pass 3 parse");
+    assert_eq!(card3.notes.as_ref().unwrap()["n1"].note, complex_text);
+}
+
+#[test]
+fn rfc2426_inbound_unescaping_variants_and_boundary_cases() {
+    // Tests inbound vCard unescaping variants:
+    // 1. \N uppercase newline escape (RFC 2426 §2.4.2)
+    // 2. Trailing backslash at end of property
+    // 3. Consecutive escaped backslashes (\\\\ -> \\)
+    // 4. Escaped backslash preceding escaped delimiter (\\; -> \;, \\, -> \,)
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:inbound-escapes\r\n",
+        "FN:Alice\\, Smith\\; Ph.D.\\NPrefix\\\\Suffix\r\n",
+        "NOTE;X-JMAP-KEY=n1:Line 1\\NLine 2 with \\; and \\, and \\\\ backslash\\NTrailing backslash\\\\\r\n",
+        "ORG;X-JMAP-KEY=o1:Company\\, Inc.\\; Division;Team\\; Alpha;Group\\\\Beta\\NGamma\r\n",
+        "ADR;TYPE=WORK;X-JMAP-KEY=a1:PO\\; 1;Ext\\, 2;Street\\; 3;City\\; 4;State\\, 5;94105\\; 6;USA\\\\7\r\n",
+        "CATEGORIES:Alpha\\, Tag,Beta\\; Tag,Gamma\\\\Tag\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(raw_vcard).expect("parse inbound vcard with escape variants");
+
+    // Assert FN unescaped with uppercase \N
+    assert_eq!(
+        card.name.as_ref().unwrap().full.as_deref(),
+        Some("Alice, Smith; Ph.D.\nPrefix\\Suffix")
+    );
+
+    // Assert NOTE
+    let note = &card.notes.as_ref().unwrap()["n1"].note;
+    assert_eq!(
+        note,
+        "Line 1\nLine 2 with ; and , and \\ backslash\nTrailing backslash\\"
+    );
+
+    // Assert ORG
+    let org = &card.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org.name.as_deref(), Some("Company, Inc.; Division"));
+    let units = org.units.as_ref().unwrap();
+    assert_eq!(units[0].name, "Team; Alpha");
+    assert_eq!(units[1].name, "Group\\Beta\nGamma");
+
+    // Assert ADR
+    let addr = &card.addresses.as_ref().unwrap()["a1"];
+    let comps = addr.components.as_ref().unwrap();
+    assert_eq!(comps[0].value, "PO; 1");
+    assert_eq!(comps[1].value, "Ext, 2");
+    assert_eq!(comps[2].value, "Street; 3");
+    assert_eq!(comps[3].value, "City; 4");
+    assert_eq!(comps[4].value, "State, 5");
+    assert_eq!(comps[5].value, "94105; 6");
+    assert_eq!(comps[6].value, "USA\\7");
+
+    // Assert CATEGORIES
+    let kw = card.keywords.as_ref().unwrap();
+    assert!(kw.contains_key("Alpha, Tag"));
+    assert!(kw.contains_key("Beta; Tag"));
+    assert!(kw.contains_key("Gamma\\Tag"));
+
+    // Fixed point convergence
+    let emitted = card_to_vcard(&card);
+    let reparsed = vcard_to_card(&emitted).expect("reparse emitted card");
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(reemitted, emitted, "Emitted vCard must reach fixed point");
+}
+
+#[test]
+fn categories_empty_absent_and_refused_permutations_roundtrip() {
+    // Tests empty, absent, and refused keyword combinations:
+    // 1. keywords: None -> No CATEGORIES line, roundtrips to keywords: None.
+    // 2. keywords: Some(BTreeMap::new()) -> No CATEGORIES line, roundtrips to keywords: None.
+    // 3. Inbound empty CATEGORIES: -> parses to keywords: None.
+    // 4. Inbound CATEGORIES:,,, -> parses to keywords: None.
+    // 5. Inbound CATEGORIES with only whitespace items -> states_keyword refuses them, re-emits no line.
+
+    // 1. None keywords
+    let card_none = ContactCard {
+        name: Some(Name {
+            full: Some("Alice Smith".to_owned()),
+            ..Name::default()
+        }),
+        keywords: None,
+        ..ContactCard::default()
+    };
+    let vcard_none = card_to_vcard(&card_none);
+    assert!(!vcard_none.contains("\r\nCATEGORIES:"));
+    let parsed_none = vcard_to_card(&vcard_none).expect("parse none card");
+    assert_eq!(parsed_none.keywords, None);
+
+    // 2. Empty map keywords
+    let card_empty_map = ContactCard {
+        name: Some(Name {
+            full: Some("Alice Smith".to_owned()),
+            ..Name::default()
+        }),
+        keywords: Some(BTreeMap::new()),
+        ..ContactCard::default()
+    };
+    let vcard_empty_map = card_to_vcard(&card_empty_map);
+    assert!(!vcard_empty_map.contains("\r\nCATEGORIES:"));
+    let parsed_empty_map = vcard_to_card(&vcard_empty_map).expect("parse empty map card");
+    assert_eq!(parsed_empty_map.keywords, None);
+
+    // 3. Inbound CATEGORIES: (empty string)
+    let inbound_empty =
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Smith\r\nCATEGORIES:\r\nEND:VCARD\r\n";
+    let parsed_inbound_empty = vcard_to_card(inbound_empty).expect("parse inbound empty");
+    assert_eq!(parsed_inbound_empty.keywords, None);
+    let reemitted_empty = card_to_vcard(&parsed_inbound_empty);
+    assert!(!reemitted_empty.contains("\r\nCATEGORIES:"));
+
+    // 4. Inbound CATEGORIES:,,, (consecutive empty items)
+    let inbound_commas =
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Smith\r\nCATEGORIES:,,,\r\nEND:VCARD\r\n";
+    let parsed_inbound_commas = vcard_to_card(inbound_commas).expect("parse inbound commas");
+    assert_eq!(parsed_inbound_commas.keywords, None);
+    let reemitted_commas = card_to_vcard(&parsed_inbound_commas);
+    assert!(!reemitted_commas.contains("\r\nCATEGORIES:"));
+
+    // 5. Keywords map with only refused tags (empty, leading/trailing whitespace, carriage return, non-bool)
+    let card_refused = ContactCard {
+        name: Some(Name {
+            full: Some("Alice Smith".to_owned()),
+            ..Name::default()
+        }),
+        keywords: Some(
+            [
+                ("".to_owned(), json!(true)),
+                (" leading".to_owned(), json!(true)),
+                ("trailing ".to_owned(), json!(true)),
+                ("\ttabbed".to_owned(), json!(true)),
+                ("with\rreturn".to_owned(), json!(true)),
+                ("not_bool".to_owned(), json!(false)),
+                ("string_val".to_owned(), json!("tag")),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let vcard_refused = card_to_vcard(&card_refused);
+    assert!(!vcard_refused.contains("\r\nCATEGORIES:"));
+    let parsed_refused = vcard_to_card(&vcard_refused).expect("parse refused card");
+    assert_eq!(parsed_refused.keywords, None);
+}
+
+#[test]
+fn categories_single_tag_variations_and_escaped_delimiters_roundtrip() {
+    // Tests single category tags containing plain text, interior spaces, commas, semicolons,
+    // backslashes, newlines, and combinations, asserting exact value preservation and fixed-point convergence.
+    let test_cases = [
+        ("Work", "CATEGORIES:Work\r\n"),
+        ("Project Alpha", "CATEGORIES:Project Alpha\r\n"),
+        ("Acme, Inc.", "CATEGORIES:Acme\\, Inc.\r\n"),
+        ("One, Two, Three", "CATEGORIES:One\\, Two\\, Three\r\n"),
+        ("Project;Alpha", "CATEGORIES:Project\\;Alpha\r\n"),
+        (
+            "Architecture; Core; Platform",
+            "CATEGORIES:Architecture\\; Core\\; Platform\r\n",
+        ),
+        ("Dept\\Core", "CATEGORIES:Dept\\\\Core\r\n"),
+        (
+            "Path\\\\To\\\\Tag",
+            "CATEGORIES:Path\\\\\\\\To\\\\\\\\Tag\r\n",
+        ),
+        ("Line 1\nLine 2", "CATEGORIES:Line 1\\nLine 2\r\n"),
+        (
+            "Tag\\, with \\; and \\\\ and \n all four",
+            "CATEGORIES:Tag\\\\\\, with \\\\\\; and \\\\\\\\ and \\n all four\r\n",
+        ),
+    ];
+
+    for (tag, expected_line) in test_cases {
+        let card = ContactCard {
+            name: Some(Name {
+                full: Some("Bob Builder".to_owned()),
+                ..Name::default()
+            }),
+            keywords: Some([(tag.to_owned(), json!(true))].into()),
+            ..ContactCard::default()
+        };
+
+        let vcard = card_to_vcard(&card);
+        assert!(
+            vcard.contains(expected_line),
+            "Expected {expected_line} in emitted vCard for tag {tag:?}, got:\n{vcard}"
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse card with single category");
+        let kw = parsed.keywords.as_ref().expect("keywords present");
+        assert_eq!(
+            kw.keys().collect::<Vec<_>>(),
+            vec![&tag.to_owned()],
+            "Parsed tag must match original {tag:?}"
+        );
+        assert_eq!(kw[tag], json!(true));
+
+        // Fixed point convergence
+        let reemitted = card_to_vcard(&parsed);
+        assert_eq!(
+            reemitted, vcard,
+            "Re-emitted vCard must match for tag {tag:?}"
+        );
+        let reparsed = vcard_to_card(&reemitted).expect("reparse");
+        assert_eq!(
+            reparsed.keywords, parsed.keywords,
+            "Re-parsed keywords must match for tag {tag:?}"
+        );
+    }
+}
+
+#[test]
+fn categories_multiple_tags_sorted_order_and_escaping_roundtrip() {
+    // Tests multiple category tags emitted on a single line in lexicographically sorted order,
+    // verifying that embedded commas and semicolons within tags do not cause spurious item splits.
+    let tags = [
+        "Software, Core & Tools",
+        "Hardware, Components",
+        "Optics; Lasers & Sensors",
+        "Finance & Accounting",
+        "Executive; Strategy",
+    ];
+
+    let mut map = BTreeMap::new();
+    for tag in tags {
+        map.insert(tag.to_owned(), json!(true));
+    }
+
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Charlie Davis".to_owned()),
+            ..Name::default()
+        }),
+        keywords: Some(map),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Verify sorted order on the single emitted CATEGORIES line (unfolded):
+    // "Executive; Strategy" -> Executive\; Strategy
+    // "Finance & Accounting" -> Finance & Accounting
+    // "Hardware, Components" -> Hardware\, Components
+    // "Optics; Lasers & Sensors" -> Optics\; Lasers & Sensors
+    // "Software, Core & Tools" -> Software\, Core & Tools
+    let unfolded_vcard = unfolded(&vcard);
+    let expected_categories_line = "CATEGORIES:Executive\\; Strategy,Finance & Accounting,Hardware\\, Components,Optics\\; Lasers & Sensors,Software\\, Core & Tools";
+    assert_eq!(
+        line(&unfolded_vcard, "CATEGORIES"),
+        expected_categories_line,
+        "Expected sorted CATEGORIES line in unfolded vCard"
+    );
+    assert_eq!(
+        unfolded_vcard.matches("CATEGORIES:").count(),
+        1,
+        "Exactly one CATEGORIES line should be emitted"
+    );
+
+    // Parse back and verify exact tag preservation
+    let parsed = vcard_to_card(&vcard).expect("parse multiple categories card");
+    let kw = parsed.keywords.as_ref().expect("keywords present");
+    assert_eq!(kw.len(), 5);
+    for tag in tags {
+        assert!(
+            kw.contains_key(tag),
+            "Expected parsed keywords to contain tag {tag:?}, got: {kw:?}"
+        );
+        assert_eq!(kw[tag], json!(true));
+    }
+
+    // Fixed point convergence
+    let reemitted = card_to_vcard(&parsed);
+    assert_eq!(reemitted, vcard);
+    let reparsed = vcard_to_card(&reemitted).expect("reparse");
+    assert_eq!(reparsed.keywords, parsed.keywords);
+}
+
+#[test]
+fn categories_multiple_inbound_lines_merging_deduplication_and_fixed_point() {
+    // Tests that multiple inbound CATEGORIES lines (e.g. from vCard imports or multiple providers)
+    // are merged into a single deduplicated set, and outbound serialization consolidates them
+    // into a single canonical sorted CATEGORIES line.
+    let multi_line_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Dana Evans\r\n",
+        "CATEGORIES:Development,QA,Release\r\n",
+        "CATEGORIES:Release,Ops,Security\r\n",
+        "CATEGORIES:Development,Infrastructure,Security,Monitoring\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(multi_line_vcard).expect("parse multi-line categories");
+    let kw = parsed.keywords.as_ref().expect("keywords present");
+
+    let expected_keys = vec![
+        "Development",
+        "Infrastructure",
+        "Monitoring",
+        "Ops",
+        "QA",
+        "Release",
+        "Security",
+    ];
+    assert_eq!(kw.keys().collect::<Vec<_>>(), expected_keys);
+    assert!(kw.values().all(|v| v == &json!(true)));
+
+    // Re-emission consolidates into a single sorted line
+    let emitted = card_to_vcard(&parsed);
+    assert_eq!(
+        emitted.matches("CATEGORIES:").count(),
+        1,
+        "Must emit exactly one consolidated CATEGORIES line"
+    );
+    assert!(
+        emitted.contains(
+            "CATEGORIES:Development,Infrastructure,Monitoring,Ops,QA,Release,Security\r\n"
+        ),
+        "Emitted vCard must have consolidated sorted CATEGORIES line: {emitted}"
+    );
+
+    // Fixed point stability across successive passes
+    let reparsed = vcard_to_card(&emitted).expect("reparse");
+    assert_eq!(reparsed.keywords, parsed.keywords);
+    let reemitted = card_to_vcard(&reparsed);
+    assert_eq!(reemitted, emitted);
+}
+
+#[test]
+fn categories_inbound_delimiter_variations_and_empty_item_skipping() {
+    // Tests inbound vCards with empty items between/around commas, mixed-case property names,
+    // parameters (ALTID, LANGUAGE, custom X- parameters), and parameter casing.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Evan Foster\r\n",
+        "categories:Alpha,,Beta,,,Gamma,\r\n",
+        "Categories;ALTID=1;LANGUAGE=en:Delta,Epsilon\r\n",
+        "CATEGORIES;X-TAG-SYSTEM=CUSTOM;PID=1.1:Zeta,Eta\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard).expect("parse categories variations");
+    let kw = parsed.keywords.as_ref().expect("keywords present");
+
+    let expected_keys = vec!["Alpha", "Beta", "Delta", "Epsilon", "Eta", "Gamma", "Zeta"];
+    assert_eq!(kw.keys().collect::<Vec<_>>(), expected_keys);
+
+    // Emitted vCard combines all into one canonical line
+    let emitted = card_to_vcard(&parsed);
+    assert_eq!(emitted.matches("CATEGORIES:").count(), 1);
+    assert!(emitted.contains("CATEGORIES:Alpha,Beta,Delta,Epsilon,Eta,Gamma,Zeta\r\n"));
+
+    let reparsed = vcard_to_card(&emitted).expect("reparse");
+    assert_eq!(reparsed.keywords, parsed.keywords);
+}
+
+#[test]
+fn categories_unicode_and_multibyte_utf8_roundtrip() {
+    // Tests non-ASCII and multi-byte UTF-8 categories across various languages and emoji scripts,
+    // asserting lossless round-trip fidelity and RFC 2426 line folding without UTF-8 splitting.
+    let utf8_tags = [
+        "Büro & Verwaltung",
+        "Forschung, Entwicklung",
+        "Santé, Sécurité",
+        "Équipe d'ingénierie",
+        "営業部",
+        "開発，基盤",
+        "مشاريع",
+        "🚀 Launch",
+        "⭐ VIP",
+        "🔥 Urgent, P0",
+    ];
+
+    let mut map = BTreeMap::new();
+    for tag in utf8_tags {
+        map.insert(tag.to_owned(), json!(true));
+    }
+
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Fiona Gallagher".to_owned()),
+            ..Name::default()
+        }),
+        keywords: Some(map),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Verify all emitted lines are valid UTF-8 and <= 77 octets
+    for line_str in vcard.split("\r\n") {
+        assert!(
+            line_str.len() <= 77,
+            "Line exceeded 77 octets: {line_str} (len={})",
+            line_str.len()
+        );
+    }
+
+    let parsed = vcard_to_card(&vcard).expect("parse unicode categories");
+    let kw = parsed.keywords.as_ref().expect("keywords present");
+    assert_eq!(kw.len(), utf8_tags.len());
+
+    for tag in utf8_tags {
+        assert!(
+            kw.contains_key(tag),
+            "Parsed keywords must contain UTF-8 tag {tag:?}, got: {kw:?}"
+        );
+        assert_eq!(kw[tag], json!(true));
+    }
+
+    // Fixed point convergence
+    let reemitted = card_to_vcard(&parsed);
+    assert_eq!(reemitted, vcard);
+    let reparsed = vcard_to_card(&reemitted).expect("reparse");
+    assert_eq!(reparsed.keywords, parsed.keywords);
+}
+
+#[test]
+fn categories_eds_category_list_fidelity_and_states_keyword_invariants() {
+    // Tests states_keyword against valid and invalid inputs, verifying EDS whitespace trimming defense.
+    // 1. Valid tags: return true
+    assert!(states_keyword("Work", &json!(true)));
+    assert!(states_keyword("Personal & Family", &json!(true)));
+    assert!(states_keyword("Acme, Inc.", &json!(true)));
+    assert!(states_keyword("Project;Alpha", &json!(true)));
+    assert!(states_keyword("Dept\\Special", &json!(true)));
+    assert!(states_keyword("Line 1\nLine 2", &json!(true)));
+    assert!(states_keyword("🚀 VIP", &json!(true)));
+
+    // 2. Refused: empty tag
+    assert!(!states_keyword("", &json!(true)));
+
+    // 3. Refused: carriage return
+    assert!(!states_keyword("tag\rwith_cr", &json!(true)));
+    assert!(!states_keyword("\rtag", &json!(true)));
+    assert!(!states_keyword("tag\r", &json!(true)));
+
+    // 4. Refused: leading/trailing ASCII whitespace (EDS trims them)
+    assert!(!states_keyword(" leading_space", &json!(true)));
+    assert!(!states_keyword("trailing_space ", &json!(true)));
+    assert!(!states_keyword("\tleading_tab", &json!(true)));
+    assert!(!states_keyword("trailing_tab\t", &json!(true)));
+    assert!(!states_keyword("\nleading_newline", &json!(true)));
+    assert!(!states_keyword("trailing_newline\n", &json!(true)));
+    assert!(!states_keyword("\u{b}vertical_tab", &json!(true)));
+    assert!(!states_keyword("vertical_tab\u{b}", &json!(true)));
+    assert!(!states_keyword("\u{c}form_feed", &json!(true)));
+    assert!(!states_keyword("form_feed\u{c}", &json!(true)));
+
+    // 5. Refused: non-boolean-true values (RFC 9553 Set constraint)
+    assert!(!states_keyword("Work", &json!(false)));
+    assert!(!states_keyword("Work", &json!("true")));
+    assert!(!states_keyword("Work", &json!(1)));
+    assert!(!states_keyword("Work", &json!(null)));
+    assert!(!states_keyword("Work", &json!({})));
+
+    // 6. Card containing mix of valid and refused tags:
+    // only valid tags are emitted, refused tags are omitted to prevent EDS trimming corruption.
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("George Harris".to_owned()),
+            ..Name::default()
+        }),
+        keywords: Some(
+            [
+                ("Valid Tag A".to_owned(), json!(true)),
+                (" leading".to_owned(), json!(true)),
+                ("trailing ".to_owned(), json!(true)),
+                ("with\rcarriage_return".to_owned(), json!(true)),
+                ("false_val".to_owned(), json!(false)),
+                ("Valid Tag B".to_owned(), json!(true)),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&vcard, "CATEGORIES"),
+        "CATEGORIES:Valid Tag A,Valid Tag B"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse mixed card");
+    let kw = parsed.keywords.as_ref().expect("keywords present");
+    assert_eq!(
+        kw.keys().collect::<Vec<_>>(),
+        vec!["Valid Tag A", "Valid Tag B"]
+    );
+}
+
+#[test]
+fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
+    // Characterizes NICKNAME cardinality and EDS slotting:
+    // RFC 2426 §3.1.3 states NICKNAME on a single comma-separated line, but
+    // JSContact (RFC 9553 §2.2.2) keys nicknames individually.
+    // jmap-vcard emits one NICKNAME line per keyed entry so each carries an X-JMAP-KEY parameter.
+    // Evolution / EDS 3.52 reads E_CONTACT_NICKNAME from the first line, rewrites that line in
+    // place upon edit, and leaves parameters intact, while passing subsequent lines through.
+
+    // 1. Single nickname roundtrip
+    let mut single_nick = BTreeMap::new();
+    single_nick.insert(
+        "k1".to_owned(),
+        Nickname {
+            name: "Vee".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    let card = ContactCard {
+        id: Some("C-NICK-SINGLE".into()),
+        nicknames: Some(single_nick),
+        ..ContactCard::default()
+    };
+    let vcard = card_to_vcard(&card);
+    assert_eq!(line(&vcard, "NICKNAME"), "NICKNAME;X-JMAP-KEY=k1:Vee");
+
+    let parsed = vcard_to_card(&vcard).expect("parse single nickname");
+    let parsed_nicks = parsed.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(parsed_nicks.len(), 1);
+    assert_eq!(parsed_nicks["k1"].name, "Vee");
+    assert_eq!(card_to_vcard(&parsed), vcard);
+
+    // 2. Multiple nicknames emitted as distinct lines
+    let mut multi_nicks = BTreeMap::new();
+    multi_nicks.insert(
+        "k1".to_owned(),
+        Nickname {
+            name: "Vee".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    multi_nicks.insert(
+        "k2".to_owned(),
+        Nickname {
+            name: "Vera the Elder".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    multi_nicks.insert(
+        "k3".to_owned(),
+        Nickname {
+            name: "Chief Architect".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    let multi_card = ContactCard {
+        id: Some("C-NICK-MULTI".into()),
+        nicknames: Some(multi_nicks),
+        ..ContactCard::default()
+    };
+    let multi_vcard = card_to_vcard(&multi_card);
+    assert_eq!(multi_vcard.matches("\r\nNICKNAME;X-JMAP-KEY=").count(), 3);
+    assert!(multi_vcard.contains("NICKNAME;X-JMAP-KEY=k1:Vee\r\n"));
+    assert!(multi_vcard.contains("NICKNAME;X-JMAP-KEY=k2:Vera the Elder\r\n"));
+    assert!(multi_vcard.contains("NICKNAME;X-JMAP-KEY=k3:Chief Architect\r\n"));
+
+    let parsed_multi = vcard_to_card(&multi_vcard).expect("parse multi nickname");
+    let p_nicks = parsed_multi.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(p_nicks.len(), 3);
+    assert_eq!(p_nicks["k1"].name, "Vee");
+    assert_eq!(p_nicks["k2"].name, "Vera the Elder");
+    assert_eq!(p_nicks["k3"].name, "Chief Architect");
+    assert_eq!(card_to_vcard(&parsed_multi), multi_vcard);
+
+    // 3. Inbound multiple unkeyed NICKNAME lines allocate k1, k2, k3
+    let raw_unkeyed = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Test User\r\n",
+        "NICKNAME:First Nick\r\n",
+        "NICKNAME:Second Nick\r\n",
+        "NICKNAME:Third Nick\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_unkeyed = vcard_to_card(raw_unkeyed).expect("parse unkeyed nicknames");
+    let unkeyed_nicks = parsed_unkeyed
+        .nicknames
+        .as_ref()
+        .expect("nicknames present");
+    assert_eq!(unkeyed_nicks.len(), 3);
+    assert_eq!(unkeyed_nicks["k1"].name, "First Nick");
+    assert_eq!(unkeyed_nicks["k2"].name, "Second Nick");
+    assert_eq!(unkeyed_nicks["k3"].name, "Third Nick");
+
+    // 4. EDS in-place edit simulation on first line
+    let edited_vcard = multi_vcard.replace(
+        "NICKNAME;X-JMAP-KEY=k1:Vee\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:Vee Updated\r\n",
+    );
+    let parsed_edited = vcard_to_card(&edited_vcard).expect("parse edited vcard");
+    let ed_nicks = parsed_edited.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(ed_nicks["k1"].name, "Vee Updated");
+    assert_eq!(ed_nicks["k2"].name, "Vera the Elder");
+    assert_eq!(ed_nicks["k3"].name, "Chief Architect");
+}
+
+#[test]
+fn nickname_comma_separated_text_list_inbound_and_escaping_fidelity() {
+    // Characterizes comma handling in NICKNAME:
+    // 1. Inbound vCard with comma-separated list on a single line (RFC 2426 §3.1.3 text-list):
+    //    `NICKNAME:Rob,Robbie,Boss`
+    //    entry_text_list reads calcard's parsed values and joins them with commas into a single
+    //    Nickname struct ("Rob,Robbie,Boss") because EDS (libebook-contacts 3.52) hands the entire
+    //    line back as a single E_CONTACT_NICKNAME string.
+    // 2. Outbound emission escapes literal commas as `\,`:
+    //    `NICKNAME;X-JMAP-KEY=k1:Rob\,Robbie\,Boss`
+    // 3. Reading back the escaped vCard parses back to "Rob,Robbie,Boss", reaching fixed-point convergence.
+    let raw_list_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Rob Example\r\n",
+        "NICKNAME:Rob,Robbie,Boss\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(raw_list_vcard).expect("parse comma-separated nickname list");
+    let nicks = card.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(nicks.len(), 1);
+    assert_eq!(nicks["k1"].name, "Rob,Robbie,Boss");
+
+    // Outbound emission escapes commas
+    let emitted = card_to_vcard(&card);
+    assert_eq!(
+        line(&emitted, "NICKNAME"),
+        "NICKNAME;X-JMAP-KEY=k1:Rob\\,Robbie\\,Boss"
+    );
+
+    // Roundtrip back preserves the exact nickname string
+    let roundtrip_card = vcard_to_card(&emitted).expect("parse escaped nickname");
+    assert_eq!(
+        roundtrip_card.nicknames.as_ref().unwrap()["k1"].name,
+        "Rob,Robbie,Boss"
+    );
+    assert_eq!(card_to_vcard(&roundtrip_card), emitted);
+
+    // Inbound mixed escaped and unescaped commas
+    let raw_mixed = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:John Smith\r\n",
+        "NICKNAME:Smith\\, John,Chief\\, Executive,Boss\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_mixed = vcard_to_card(raw_mixed).expect("parse mixed commas nickname");
+    assert_eq!(
+        card_mixed.nicknames.as_ref().unwrap()["k1"].name,
+        "Smith, John,Chief, Executive,Boss"
+    );
+}
+
+#[test]
+fn nickname_special_characters_escaping_unicode_and_parameters() {
+    // Tests nicknames with semicolons, backslashes, newlines, UTF-8 unicode, and parameters:
+    let mut nicks = BTreeMap::new();
+    nicks.insert(
+        "k_special".to_owned(),
+        Nickname {
+            name: "Nick;Name\\With\nNewline & \"Quotes\"".to_owned(),
+            extra: [
+                ("pref".to_owned(), json!(1)),
+                ("contexts".to_owned(), json!({"work": true})),
+            ]
+            .into(),
+        },
+    );
+    nicks.insert(
+        "k_unicode_jp".to_owned(),
+        Nickname {
+            name: "たなかさん (田中)".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    nicks.insert(
+        "k_unicode_cyrillic".to_owned(),
+        Nickname {
+            name: "Саша (Александр)".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    nicks.insert(
+        "k_unicode_emoji".to_owned(),
+        Nickname {
+            name: "🌟 SuperStar 🦊".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-NICK-SPECIAL".into()),
+        nicknames: Some(nicks),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    let parsed = vcard_to_card(&vcard).expect("parse special nicknames");
+    let p_nicks = parsed.nicknames.as_ref().expect("nicknames present");
+
+    assert_eq!(
+        p_nicks["k_special"].name,
+        "Nick;Name\\With\nNewline & \"Quotes\""
+    );
+    assert_eq!(p_nicks["k_unicode_jp"].name, "たなかさん (田中)");
+    assert_eq!(p_nicks["k_unicode_cyrillic"].name, "Саша (Александр)");
+    assert_eq!(p_nicks["k_unicode_emoji"].name, "🌟 SuperStar 🦊");
+
+    // Fixed-point convergence
+    assert_eq!(card_to_vcard(&parsed), vcard);
+
+    // Inbound parameters (TYPE, ALTID, LANGUAGE)
+    let raw_param_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Elena\r\n",
+        "NICKNAME;TYPE=WORK;X-JMAP-KEY=k_work:Office Elena\r\n",
+        "NICKNAME;ALTID=1;LANGUAGE=de;X-JMAP-KEY=k_de:Leni\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_params = vcard_to_card(raw_param_vcard).expect("parse parameterized nicknames");
+    let param_nicks = parsed_params.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(param_nicks["k_work"].name, "Office Elena");
+    assert_eq!(param_nicks["k_de"].name, "Leni");
+}
+
+#[test]
+fn nickname_empty_absent_and_predicate_fidelity() {
+    // Tests states_nickname predicate and empty/absent nickname handling:
+    assert!(states_nickname(&Nickname {
+        name: "Nick".into(),
+        extra: BTreeMap::new()
+    }));
+    assert!(!states_nickname(&Nickname {
+        name: "".into(),
+        extra: BTreeMap::new()
+    }));
+
+    // Empty nicknames are not emitted
+    let mut nicks = BTreeMap::new();
+    nicks.insert(
+        "k1".to_owned(),
+        Nickname {
+            name: "".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    nicks.insert(
+        "k2".to_owned(),
+        Nickname {
+            name: "Valid Nick".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    let card = ContactCard {
+        nicknames: Some(nicks),
+        ..ContactCard::default()
+    };
+    let vcard = card_to_vcard(&card);
+    assert_eq!(vcard.matches("\r\nNICKNAME").count(), 1);
+    assert_eq!(
+        line(&vcard, "NICKNAME"),
+        "NICKNAME;X-JMAP-KEY=k2:Valid Nick"
+    );
+
+    // Inbound empty NICKNAME lines are safely skipped
+    let raw_empty = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Test\r\n",
+        "NICKNAME:\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_empty = vcard_to_card(raw_empty).expect("parse empty nickname lines");
+    assert_eq!(parsed_empty.nicknames, None);
+}
+
+#[test]
+fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
+    // Characterizes URL properties into EDS fields:
+    // 1. Single URL (kind: None): maps to EDS E_CONTACT_HOMEPAGE_URL.
+    // 2. Multiple URLs (kind: None): emitted as multiple URL;X-JMAP-KEY=... lines.
+    //    EDS 3.52 maps the first URL line to E_CONTACT_HOMEPAGE_URL and preserves subsequent lines.
+    // 3. Roundtrips preserve all keys and URIs without data loss.
+
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l1".to_owned(),
+        Link {
+            uri: "https://alice.example.com".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l2".to_owned(),
+        Link {
+            uri: "https://work.example.org/alice".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l3".to_owned(),
+        Link {
+            uri: "https://github.com/alice".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-URL-MULTI".into()),
+        links: Some(links),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(vcard.matches("\r\nURL;X-JMAP-KEY=").count(), 3);
+    assert!(vcard.contains("URL;X-JMAP-KEY=l1:https://alice.example.com\r\n"));
+    assert!(vcard.contains("URL;X-JMAP-KEY=l2:https://work.example.org/alice\r\n"));
+    assert!(vcard.contains("URL;X-JMAP-KEY=l3:https://github.com/alice\r\n"));
+
+    let parsed = vcard_to_card(&vcard).expect("parse multiple url lines");
+    let p_links = parsed.links.as_ref().expect("links present");
+    assert_eq!(p_links.len(), 3);
+    assert_eq!(p_links["l1"].uri, "https://alice.example.com");
+    assert_eq!(p_links["l1"].kind, None);
+    assert_eq!(p_links["l2"].uri, "https://work.example.org/alice");
+    assert_eq!(p_links["l2"].kind, None);
+    assert_eq!(p_links["l3"].uri, "https://github.com/alice");
+    assert_eq!(p_links["l3"].kind, None);
+
+    // Fixed-point stability
+    assert_eq!(card_to_vcard(&parsed), vcard);
+
+    // Inbound unkeyed multiple URL lines allocate l1, l2, l3
+    let raw_unkeyed = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice\r\n",
+        "URL:https://primary.example.com\r\n",
+        "URL:https://secondary.example.com\r\n",
+        "URL;X-JMAP-KEY=l9:https://retained.example.com\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_unkeyed = vcard_to_card(raw_unkeyed).expect("parse unkeyed urls");
+    let unk_links = parsed_unkeyed.links.as_ref().expect("links present");
+    assert_eq!(unk_links.len(), 3);
+    assert_eq!(unk_links["l1"].uri, "https://primary.example.com");
+    assert_eq!(unk_links["l2"].uri, "https://secondary.example.com");
+    assert_eq!(unk_links["l9"].uri, "https://retained.example.com");
+}
+
+#[test]
+fn url_kind_filtering_and_contact_uri_omission() {
+    // Product Decision & Rationale:
+    // RFC 9553 §2.6.3 defines `kind: "contact"` as a URI for communicating with the person.
+    // RFC 9555 §2.6.3 states `kind: "contact"` on vCard 4.0's `CONTACT-URI`.
+    // vCard 3.0 has only `URL` (RFC 2426 §3.6.8), which EDS maps to E_CONTACT_HOMEPAGE_URL.
+    // Emitting a contact link (or vendor kinds like feed/blog/video) on `URL` would misrepresent
+    // it in Evolution's UI as the contact's homepage.
+    // Therefore, ONLY `kind: None` (plain website) maps to `URL`. All other kinds emit no line.
+
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l_web".to_owned(),
+        Link {
+            uri: "https://alice.example.com".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_contact".to_owned(),
+        Link {
+            uri: "https://contact.example.com/form".to_owned(),
+            kind: Some("contact".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_feed".to_owned(),
+        Link {
+            uri: "https://alice.example.com/rss.xml".to_owned(),
+            kind: Some("feed".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_blog".to_owned(),
+        Link {
+            uri: "https://blog.alice.example.com".to_owned(),
+            kind: Some("blog".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_custom".to_owned(),
+        Link {
+            uri: "https://custom.example.com/profile".to_owned(),
+            kind: Some("x-vendor-profile".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-URL-KINDS".into()),
+        links: Some(links),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    // Only the plain website link gets a URL line
+    assert_eq!(vcard.matches("\r\nURL").count(), 1);
+    assert_eq!(
+        line(&vcard, "URL"),
+        "URL;X-JMAP-KEY=l_web:https://alice.example.com"
+    );
+    assert!(!vcard.contains("contact.example.com"));
+    assert!(!vcard.contains("rss.xml"));
+    assert!(!vcard.contains("blog.alice.example.com"));
+    assert!(!vcard.contains("custom.example.com"));
+
+    let parsed = vcard_to_card(&vcard).expect("parse filtered url vcard");
+    let p_links = parsed.links.as_ref().expect("links present");
+    assert_eq!(p_links.len(), 1);
+    assert_eq!(p_links["l_web"].uri, "https://alice.example.com");
+    assert_eq!(p_links["l_web"].kind, None);
+}
+
+#[test]
+fn url_eds_blog_video_and_custom_extensions_characterization() {
+    // Characterizes EDS blog and video URL properties:
+    // EDS defines E_CONTACT_BLOG_URL (`X-EVOLUTION-BLOG-URL`) and
+    // E_CONTACT_VIDEO_URL (`X-EVOLUTION-VIDEO-URL`).
+    // jmap-vcard deliberately does NOT map them to `links` (or `extra`):
+    // 1. JSContact represents links in `links` map with optional vendor kinds or `extra`.
+    // 2. Synthesizing non-standard properties into JSContact would corrupt standard JMAP schemas.
+    // 3. jmap-vcard safely ignores them on parse and does not emit them on serialization.
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Baker\r\n",
+        "URL;X-JMAP-KEY=l1:https://alice.example.com\r\n",
+        "X-EVOLUTION-BLOG-URL:https://blogs.example.com/alice\r\n",
+        "X-EVOLUTION-VIDEO-URL:https://videos.example.com/alice\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(raw_vcard).expect("parse vcard with eds blog/video urls");
+    let links = parsed.links.as_ref().expect("links present");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links["l1"].uri, "https://alice.example.com");
+    assert_eq!(parsed.extra.get("xEvolutionBlogUrl"), None);
+    assert_eq!(parsed.extra.get("xEvolutionVideoUrl"), None);
+
+    let emitted = card_to_vcard(&parsed);
+    assert!(emitted.contains("URL;X-JMAP-KEY=l1:https://alice.example.com\r\n"));
+    assert!(!emitted.contains("X-EVOLUTION-BLOG-URL"));
+    assert!(!emitted.contains("X-EVOLUTION-VIDEO-URL"));
+    assert_eq!(card_to_vcard(&vcard_to_card(&emitted).unwrap()), emitted);
+}
+
+#[test]
+fn url_query_parameters_punctuation_and_encoding_fidelity() {
+    // Verifies complex URIs containing query strings, semicolons, commas, hashes,
+    // authentication userinfo, ports, and percent-encodings:
+    // calcard preserves raw URI characters without backslash-escaping URI punctuation (RFC 3986 / RFC 2426 §3.6.8).
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l_complex_query".to_owned(),
+        Link {
+            uri: "https://api.example.com:8443/v1/search?q=tag:a,b;status:active&filter=x,y;z#top"
+                .to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_auth".to_owned(),
+        Link {
+            uri: "https://user:p%40ssw%3Brd@secure.example.org:9000/path/to/res?a=1&b=2#sec"
+                .to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l_ipv6".to_owned(),
+        Link {
+            uri: "http://[2001:db8::1]:8080/index.html?token=abc;def,ghi".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-URL-COMPLEX".into()),
+        links: Some(links),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    let parsed = vcard_to_card(&vcard).expect("parse complex urls");
+    let p_links = parsed.links.as_ref().expect("links present");
+
+    assert_eq!(
+        p_links["l_complex_query"].uri,
+        "https://api.example.com:8443/v1/search?q=tag:a,b;status:active&filter=x,y;z#top"
+    );
+    assert_eq!(
+        p_links["l_auth"].uri,
+        "https://user:p%40ssw%3Brd@secure.example.org:9000/path/to/res?a=1&b=2#sec"
+    );
+    assert_eq!(
+        p_links["l_ipv6"].uri,
+        "http://[2001:db8::1]:8080/index.html?token=abc;def,ghi"
+    );
+
+    // Assert fixed-point convergence
+    assert_eq!(card_to_vcard(&parsed), vcard);
+}
+
+#[test]
+fn url_empty_absent_and_predicate_fidelity() {
+    // Tests states_link predicate and empty/absent link handling:
+    assert!(states_link(&Link {
+        uri: "https://example.com".into(),
+        kind: None,
+        extra: BTreeMap::new()
+    }));
+    assert!(!states_link(&Link {
+        uri: "".into(),
+        kind: None,
+        extra: BTreeMap::new()
+    }));
+    assert!(!states_link(&Link {
+        uri: "https://example.com".into(),
+        kind: Some("contact".into()),
+        extra: BTreeMap::new()
+    }));
+    assert!(!states_link(&Link {
+        uri: "https://example.com".into(),
+        kind: Some("other".into()),
+        extra: BTreeMap::new()
+    }));
+
+    // Empty links are not emitted
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l1".to_owned(),
+        Link {
+            uri: "".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    links.insert(
+        "l2".to_owned(),
+        Link {
+            uri: "https://valid.example.com".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    let card = ContactCard {
+        links: Some(links),
+        ..ContactCard::default()
+    };
+    let vcard = card_to_vcard(&card);
+    assert_eq!(vcard.matches("\r\nURL").count(), 1);
+    assert_eq!(
+        line(&vcard, "URL"),
+        "URL;X-JMAP-KEY=l2:https://valid.example.com"
+    );
+
+    // Inbound empty URL lines are safely skipped
+    let raw_empty = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Test\r\n",
+        "URL:\r\n",
+        "URL;X-JMAP-KEY=l1:\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_empty = vcard_to_card(raw_empty).expect("parse empty url lines");
+    assert_eq!(parsed_empty.links, None);
+
+    // Unmodeled Link fields (contexts, pref, label, mediaType) in extra survive roundtrips untouched
+    let mut extra_links = BTreeMap::new();
+    extra_links.insert(
+        "l_rich".to_owned(),
+        Link {
+            uri: "https://rich.example.com".to_owned(),
+            kind: None,
+            extra: [
+                ("pref".to_owned(), json!(1)),
+                ("contexts".to_owned(), json!({"work": true})),
+                ("label".to_owned(), json!("Work Portal")),
+                ("mediaType".to_owned(), json!("text/html")),
+            ]
+            .into(),
+        },
+    );
+    let rich_card = ContactCard {
+        links: Some(extra_links),
+        ..ContactCard::default()
+    };
+    let rich_vcard = card_to_vcard(&rich_card);
+    let parsed_rich = vcard_to_card(&rich_vcard).expect("parse rich url");
+    assert_eq!(
+        parsed_rich.links.as_ref().unwrap()["l_rich"].uri,
+        "https://rich.example.com"
+    );
+}
+
+#[test]
+fn url_and_calendar_properties_coexistence_and_slotting() {
+    // Tests clean separation and coexistence of URL, CALURI, and FBURL:
+    // URL -> E_CONTACT_HOMEPAGE_URL (card.links)
+    // CALURI -> E_CONTACT_CALENDAR_URI (card.calendars, kind: "calendar")
+    // FBURL -> E_CONTACT_FREEBUSY_URL (card.calendars, kind: "freeBusy")
+    let mut links = BTreeMap::new();
+    links.insert(
+        "l1".to_owned(),
+        Link {
+            uri: "https://alice.example.com".to_owned(),
+            kind: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut cals = BTreeMap::new();
+    cals.insert(
+        "c1".to_owned(),
+        Calendar {
+            uri: "https://cal.example.com/alice.ics".to_owned(),
+            kind: Some("calendar".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    cals.insert(
+        "c2".to_owned(),
+        Calendar {
+            uri: "https://cal.example.com/fb/alice.ifb".to_owned(),
+            kind: Some("freeBusy".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-URL-CAL-COEXIST".into()),
+        links: Some(links),
+        calendars: Some(cals),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&vcard, "URL"),
+        "URL;X-JMAP-KEY=l1:https://alice.example.com"
+    );
+    assert_eq!(
+        line(&vcard, "CALURI"),
+        "CALURI;X-JMAP-KEY=c1:https://cal.example.com/alice.ics"
+    );
+    assert_eq!(
+        line(&vcard, "FBURL"),
+        "FBURL;X-JMAP-KEY=c2:https://cal.example.com/fb/alice.ifb"
+    );
+
+    let parsed = vcard_to_card(&vcard).expect("parse coexisting url and calendar lines");
+    let p_links = parsed.links.as_ref().expect("links present");
+    let p_cals = parsed.calendars.as_ref().expect("calendars present");
+
+    assert_eq!(p_links.len(), 1);
+    assert_eq!(p_links["l1"].uri, "https://alice.example.com");
+    assert_eq!(p_links["l1"].kind, None);
+
+    assert_eq!(p_cals.len(), 2);
+    assert_eq!(p_cals["c1"].uri, "https://cal.example.com/alice.ics");
+    assert_eq!(p_cals["c1"].kind.as_deref(), Some("calendar"));
+    assert_eq!(p_cals["c2"].uri, "https://cal.example.com/fb/alice.ifb");
+    assert_eq!(p_cals["c2"].kind.as_deref(), Some("freeBusy"));
+
+    // Fixed-point stability
+    assert_eq!(card_to_vcard(&parsed), vcard);
+}
+
+#[test]
+fn non_ascii_multilingual_names_and_components_roundtrip() {
+    // Tests across diverse world writing systems and scripts:
+    // French accents, German umlauts/eszett, Spanish tildes, Icelandic thorn/eth,
+    // Polish crossed-L, Russian Cyrillic, Greek, Hebrew, Arabic RTL, Chinese Hanzi,
+    // Japanese Kanji/Kana, Korean Hangul, Hindi Devanagari, Vietnamese, and Emoji.
+    let test_cases = [
+        (
+            "French",
+            "René François de Chateaubriand",
+            Some("Chateaubriand"),
+            Some("René"),
+            Some("François"),
+            Some("de"),
+            None,
+        ),
+        (
+            "German",
+            "Dr. Jörg Weiß-Müller Jr.",
+            Some("Weiß-Müller"),
+            Some("Jörg"),
+            None,
+            Some("Dr."),
+            Some("Jr."),
+        ),
+        (
+            "Spanish",
+            "María José Carreño Quiñones",
+            Some("Carreño Quiñones"),
+            Some("María"),
+            Some("José"),
+            None,
+            None,
+        ),
+        (
+            "Icelandic",
+            "Guðmundur Þórðarson",
+            Some("Þórðarson"),
+            Some("Guðmundur"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Polish",
+            "Stanisław Lem",
+            Some("Lem"),
+            Some("Stanisław"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Russian Cyrillic",
+            "Граф Лев Николаевич Толстой",
+            Some("Толстой"),
+            Some("Лев"),
+            Some("Николаевич"),
+            Some("Граф"),
+            None,
+        ),
+        (
+            "Greek",
+            "Σωκράτης",
+            Some("Σωκράτης"),
+            None,
+            None,
+            None,
+            None,
+        ),
+        (
+            "Hebrew",
+            "שלום עליכם",
+            Some("עליכם"),
+            Some("שלום"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Arabic",
+            "نجيب محفوظ",
+            Some("محفوظ"),
+            Some("نجيب"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Chinese Hanzi",
+            "李白",
+            Some("李"),
+            Some("白"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Japanese Kanji and Kana",
+            "宮崎 駿 (みやざき はやお)",
+            Some("宮崎"),
+            Some("駿"),
+            Some("みやざき はやお"),
+            None,
+            None,
+        ),
+        (
+            "Korean Hangul",
+            "김연아",
+            Some("김"),
+            Some("연아"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Hindi Devanagari",
+            "रवीन्द्रनाथ ठाकुर",
+            Some("ठाकुर"),
+            Some("रवीन्द्रनाथ"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Vietnamese",
+            "Nguyễn Du",
+            Some("Nguyễn"),
+            Some("Du"),
+            None,
+            None,
+            None,
+        ),
+        (
+            "Emoji and Symbols",
+            "🧑‍💻 Alice Smith 🚀",
+            Some("Smith"),
+            Some("Alice"),
+            Some("🧑‍💻"),
+            None,
+            Some("🚀"),
+        ),
+    ];
+
+    for (label, full_name, surname, given, middle, prefix, suffix) in test_cases {
+        let mut components = Vec::new();
+        if let Some(s) = surname {
+            components.push(NameComponent::new("surname", s));
+        }
+        if let Some(g) = given {
+            components.push(NameComponent::new("given", g));
+        }
+        if let Some(m) = middle {
+            components.push(NameComponent::new("given2", m));
+        }
+        if let Some(p) = prefix {
+            components.push(NameComponent::new("title", p));
+        }
+        if let Some(suf) = suffix {
+            components.push(NameComponent::new("credential", suf));
+        }
+
+        let card = ContactCard {
+            id: Some(format!("C-NAME-{}", label.replace(' ', "-")).into()),
+            name: Some(Name {
+                full: Some(full_name.to_owned()),
+                components: (!components.is_empty()).then_some(components),
+                extra: BTreeMap::new(),
+            }),
+            ..ContactCard::default()
+        };
+
+        let vcard1 = card_to_vcard(&card);
+        // Verify line is valid UTF-8 and starts with standard envelope
+        assert!(
+            vcard1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"),
+            "label: {label}"
+        );
+        assert!(
+            vcard1.contains(&format!("FN:{full_name}")),
+            "label: {label}, vcard: {vcard1}"
+        );
+
+        let parsed1 =
+            vcard_to_card(&vcard1).unwrap_or_else(|e| panic!("{label} parse error: {e:?}"));
+        let p_name = parsed1
+            .name
+            .as_ref()
+            .unwrap_or_else(|| panic!("{label} missing name"));
+        assert_eq!(p_name.full.as_deref(), Some(full_name), "label: {label}");
+
+        // Verify components match
+        if let Some(comps) = &p_name.components {
+            let get_comp = |kind: &str| {
+                comps
+                    .iter()
+                    .find(|c| c.kind == kind)
+                    .map(|c| c.value.as_str())
+            };
+            assert_eq!(get_comp("surname"), surname, "surname mismatch for {label}");
+            assert_eq!(get_comp("given"), given, "given mismatch for {label}");
+            assert_eq!(get_comp("given2"), middle, "middle mismatch for {label}");
+            assert_eq!(get_comp("title"), prefix, "prefix mismatch for {label}");
+            assert_eq!(
+                get_comp("credential"),
+                suffix,
+                "suffix mismatch for {label}"
+            );
+        }
+
+        // Fixed-point stability
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("re-parse second pass");
+        let vcard3 = card_to_vcard(&parsed2);
+        assert_eq!(vcard2, vcard3, "fixed-point stability for {label}");
+    }
+}
+
+#[test]
+fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
+    let mut orgs = BTreeMap::new();
+    orgs.insert(
+        "o1".to_owned(),
+        Organization {
+            name: Some("Société Générale & Compagnie".to_owned()),
+            units: Some(vec![
+                OrgUnit::new("Direction des Systèmes d'Information"),
+                OrgUnit::new("Pôle Innovation & Recherche"),
+                OrgUnit::new("Équipe Cryptographie"),
+            ]),
+            extra: BTreeMap::new(),
+        },
+    );
+    orgs.insert(
+        "o2".to_owned(),
+        Organization {
+            name: Some("ООО \"Яндекс\"".to_owned()),
+            units: Some(vec![
+                OrgUnit::new("Департамент разработки"),
+                OrgUnit::new("Группа поисковых технологий"),
+            ]),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut titles = BTreeMap::new();
+    titles.insert(
+        "t1".to_owned(),
+        Title {
+            name: "Directeur Général Adjoint".to_owned(),
+            kind: Some("title".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    titles.insert(
+        "t2".to_owned(),
+        Title {
+            name: "Главный архитектор систем".to_owned(),
+            kind: Some("role".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    titles.insert(
+        "t3".to_owned(),
+        Title {
+            name: "開発最高責任者".to_owned(),
+            kind: Some("title".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-NONASCII-ORG-TITLE".into()),
+        organizations: Some(orgs),
+        titles: Some(titles),
+        ..ContactCard::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    let parsed1 = vcard_to_card(&vcard1).expect("parse non-ascii org and titles");
+
+    let p_orgs = parsed1.organizations.as_ref().expect("orgs present");
+    assert_eq!(p_orgs.len(), 2);
+    assert_eq!(
+        p_orgs["o1"].name.as_deref(),
+        Some("Société Générale & Compagnie")
+    );
+    assert_eq!(
+        p_orgs["o1"].units.as_ref().unwrap(),
+        &[
+            OrgUnit::new("Direction des Systèmes d'Information"),
+            OrgUnit::new("Pôle Innovation & Recherche"),
+            OrgUnit::new("Équipe Cryptographie"),
+        ]
+    );
+    assert_eq!(p_orgs["o2"].name.as_deref(), Some("ООО \"Яндекс\""));
+    assert_eq!(
+        p_orgs["o2"].units.as_ref().unwrap(),
+        &[
+            OrgUnit::new("Департамент разработки"),
+            OrgUnit::new("Группа поисковых технологий"),
+        ]
+    );
+
+    let p_titles = parsed1.titles.as_ref().expect("titles present");
+    assert_eq!(p_titles.len(), 3);
+    assert_eq!(p_titles["t1"].name, "Directeur Général Adjoint");
+    assert_eq!(p_titles["t1"].kind, None); // default kind "title"
+    assert_eq!(p_titles["t2"].name, "Главный архитектор систем");
+    assert_eq!(p_titles["t2"].kind.as_deref(), Some("role"));
+    assert_eq!(p_titles["t3"].name, "開発最高責任者");
+    assert_eq!(p_titles["t3"].kind, None); // default kind "title"
+
+    // Fixed-point stability
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("re-parse second pass");
+    let vcard3 = card_to_vcard(&parsed2);
+    assert_eq!(vcard2, vcard3);
+}
+
+#[test]
+fn non_ascii_structured_addresses_and_labels_roundtrip() {
+    let mut addrs = BTreeMap::new();
+    // French address with accents and special characters
+    addrs.insert(
+        "a_fr".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("postOfficeBox", "Boîte Postale 42"),
+                AddressComponent::new("apartment", "Bâtiment B, Étage 3, Porte 12"),
+                AddressComponent::new("name", "12 Rue de l'Étoile"),
+                AddressComponent::new("locality", "Épinay-sur-Seine"),
+                AddressComponent::new("region", "Île-de-France"),
+                AddressComponent::new("postcode", "93800"),
+                AddressComponent::new("country", "France"),
+            ]),
+            full: Some(
+                "12 Rue de l'Étoile\nBâtiment B, Étage 3\n93800 Épinay-sur-Seine\nFrance"
+                    .to_owned(),
+            ),
+            contexts: Some(json!({"work": true})),
+            extra: BTreeMap::new(),
+        },
+    );
+    // German address with umlauts and eszett
+    addrs.insert(
+        "a_de".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("apartment", "Hinterhaus 2. Stock"),
+                AddressComponent::new("name", "Goethestraße 42"),
+                AddressComponent::new("locality", "München"),
+                AddressComponent::new("region", "Bayern"),
+                AddressComponent::new("postcode", "80336"),
+                AddressComponent::new("country", "Deutschland"),
+            ]),
+            full: Some("Goethestraße 42\n80336 München\nDeutschland".to_owned()),
+            contexts: Some(json!({"home": true})),
+            extra: BTreeMap::new(),
+        },
+    );
+    // Japanese address with Kanji
+    addrs.insert(
+        "a_ja".to_owned(),
+        Address {
+            components: Some(vec![
+                AddressComponent::new("name", "千代田区千代田1-1"),
+                AddressComponent::new("region", "東京都"),
+                AddressComponent::new("postcode", "100-8111"),
+                AddressComponent::new("country", "日本"),
+            ]),
+            full: Some("〒100-8111 東京都千代田区千代田1-1\n日本".to_owned()),
+            contexts: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-NONASCII-ADR".into()),
+        addresses: Some(addrs),
+        ..ContactCard::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    let parsed1 = vcard_to_card(&vcard1).expect("parse non-ascii addresses");
+
+    let p_addrs = parsed1.addresses.as_ref().expect("addresses present");
+    assert_eq!(p_addrs.len(), 3);
+
+    let a_fr = &p_addrs["a_fr"];
+    let comps_fr = a_fr.components.as_ref().expect("french comps");
+    let get_comp = |comps: &[AddressComponent], k: &str| -> Option<String> {
+        comps.iter().find(|c| c.kind == k).map(|c| c.value.clone())
+    };
+    assert_eq!(
+        get_comp(comps_fr, "postOfficeBox").as_deref(),
+        Some("Boîte Postale 42")
+    );
+    assert_eq!(
+        get_comp(comps_fr, "apartment").as_deref(),
+        Some("Bâtiment B, Étage 3, Porte 12")
+    );
+    assert_eq!(
+        get_comp(comps_fr, "name").as_deref(),
+        Some("12 Rue de l'Étoile")
+    );
+    assert_eq!(
+        get_comp(comps_fr, "locality").as_deref(),
+        Some("Épinay-sur-Seine")
+    );
+    assert_eq!(
+        get_comp(comps_fr, "region").as_deref(),
+        Some("Île-de-France")
+    );
+    assert_eq!(get_comp(comps_fr, "postcode").as_deref(), Some("93800"));
+    assert_eq!(get_comp(comps_fr, "country").as_deref(), Some("France"));
+    assert_eq!(
+        a_fr.full.as_deref(),
+        Some("12 Rue de l'Étoile\nBâtiment B, Étage 3\n93800 Épinay-sur-Seine\nFrance")
+    );
+
+    let a_de = &p_addrs["a_de"];
+    let comps_de = a_de.components.as_ref().expect("german comps");
+    assert_eq!(
+        get_comp(comps_de, "name").as_deref(),
+        Some("Goethestraße 42")
+    );
+    assert_eq!(get_comp(comps_de, "locality").as_deref(), Some("München"));
+    assert_eq!(get_comp(comps_de, "region").as_deref(), Some("Bayern"));
+    assert_eq!(
+        get_comp(comps_de, "country").as_deref(),
+        Some("Deutschland")
+    );
+
+    let a_ja = &p_addrs["a_ja"];
+    let comps_ja = a_ja.components.as_ref().expect("japanese comps");
+    assert_eq!(
+        get_comp(comps_ja, "name").as_deref(),
+        Some("千代田区千代田1-1")
+    );
+    assert_eq!(get_comp(comps_ja, "region").as_deref(), Some("東京都"));
+    assert_eq!(get_comp(comps_ja, "country").as_deref(), Some("日本"));
+
+    // Fixed-point stability
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("re-parse second pass");
+    let vcard3 = card_to_vcard(&parsed2);
+    assert_eq!(vcard2, vcard3);
+}
+
+#[test]
+fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
+    let mut notes = BTreeMap::new();
+    notes.insert(
+        "n1".to_owned(),
+        Note {
+            note: "München ist eine wunderschöne Stadt mit vielen Parks und Museen.\nRené & Hélène apprécient beaucoup la gastronomie française: café, croissants, crème brûlée.\n∀x ∈ ℝ: x² ≥ 0 (math symbols test 🧑‍💻🚀🌟)".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut nicknames = BTreeMap::new();
+    nicknames.insert(
+        "k1".to_owned(),
+        Nickname {
+            name: "Schätzchen".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    nicknames.insert(
+        "k2".to_owned(),
+        Nickname {
+            name: "Маша (Мария)".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    nicknames.insert(
+        "k3".to_owned(),
+        Nickname {
+            name: "たなか (田中)".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut keywords = BTreeMap::new();
+    keywords.insert("Amis".to_owned(), json!(true));
+    keywords.insert("Collègues de travail".to_owned(), json!(true));
+    keywords.insert("Familie & Freunde".to_owned(), json!(true));
+    keywords.insert("仕事関係".to_owned(), json!(true));
+    keywords.insert("VIP ★ 🌟".to_owned(), json!(true));
+
+    let mut related_to = BTreeMap::new();
+    let mut spouse_rel = BTreeMap::new();
+    spouse_rel.insert("spouse".to_owned(), json!(true));
+    related_to.insert(
+        "Hélène Müller-Mayer".to_owned(),
+        Relation {
+            relation: Some(spouse_rel),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let card = ContactCard {
+        id: Some("C-NONASCII-MIXED".into()),
+        notes: Some(notes),
+        nicknames: Some(nicknames),
+        keywords: Some(keywords),
+        related_to: Some(related_to),
+        ..ContactCard::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    let parsed1 = vcard_to_card(&vcard1).expect("parse non-ascii mixed properties");
+
+    let p_notes = parsed1.notes.as_ref().expect("notes present");
+    assert_eq!(
+        p_notes["n1"].note,
+        "München ist eine wunderschöne Stadt mit vielen Parks und Museen.\nRené & Hélène apprécient beaucoup la gastronomie française: café, croissants, crème brûlée.\n∀x ∈ ℝ: x² ≥ 0 (math symbols test 🧑‍💻🚀🌟)"
+    );
+
+    let p_nicknames = parsed1.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(p_nicknames["k1"].name, "Schätzchen");
+    assert_eq!(p_nicknames["k2"].name, "Маша (Мария)");
+    assert_eq!(p_nicknames["k3"].name, "たなか (田中)");
+
+    let p_keywords = parsed1.keywords.as_ref().expect("keywords present");
+    assert!(p_keywords.contains_key("Amis"));
+    assert!(p_keywords.contains_key("Collègues de travail"));
+    assert!(p_keywords.contains_key("Familie & Freunde"));
+    assert!(p_keywords.contains_key("仕事関係"));
+    assert!(p_keywords.contains_key("VIP ★ 🌟"));
+
+    let p_rel = parsed1.related_to.as_ref().expect("related_to present");
+    assert!(p_rel.contains_key("Hélène Müller-Mayer"));
+    assert!(states_spouse(
+        "Hélène Müller-Mayer",
+        &p_rel["Hélène Müller-Mayer"]
+    ));
+
+    // Fixed-point stability
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("re-parse second pass");
+    let vcard3 = card_to_vcard(&parsed2);
+    assert_eq!(vcard2, vcard3);
+}
+
+#[test]
+fn inbound_vcard_charset_parameter_variations_and_normalization() {
+    // Tests inbound vCards carrying CHARSET parameters across case variations
+    // and multiple properties. vCard 3.0 specifies UTF-8 unconditionally, so
+    // our reader accepts CHARSET=UTF-8 for compatibility with older/buggy clients,
+    // while card_to_vcard normalizes outbound output to clean vCard 3.0 without
+    // redundant CHARSET parameters.
+    let vcard_inbound = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;CHARSET=UTF-8:René Müller\r\n",
+        "N;CHARSET=utf-8:Müller;René;François;Dr.;Jr.\r\n",
+        "ORG;CHARSET=UTF-8;X-JMAP-KEY=o1:Société Générale;Pôle Innovation\r\n",
+        "TITLE;CHARSET=Utf-8;X-JMAP-KEY=t1:Ingénieur en chef\r\n",
+        "ROLE;charset=UTF-8;X-JMAP-KEY=t2:Développeur sénior\r\n",
+        "NOTE;CHARSET=UTF-8;X-JMAP-KEY=n1:München ist schön\r\n",
+        "NICKNAME;CHARSET=UTF-8;X-JMAP-KEY=k1:Schätzchen\r\n",
+        "CATEGORIES;CHARSET=UTF-8:Amis,Collègues,Familie\r\n",
+        "X-EVOLUTION-SPOUSE;CHARSET=UTF-8:Hélène Müller\r\n",
+        "ADR;TYPE=HOME;CHARSET=UTF-8;X-JMAP-KEY=a1:;;12 Rue de l'Étoile;Paris;;75008;France\r\n",
+        "LABEL;TYPE=HOME;CHARSET=UTF-8;X-JMAP-KEY=a1:12 Rue de l'Étoile\\n75008 Paris\\nFrance\r\n",
+        "TEL;TYPE=WORK,VOICE;CHARSET=UTF-8;X-JMAP-KEY=p1:+33 1 23 45 67 89\r\n",
+        "EMAIL;TYPE=INTERNET;CHARSET=UTF-8;X-JMAP-KEY=e1:rene.muller@example.fr\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed1 =
+        vcard_to_card(vcard_inbound).expect("parse inbound vcard with CHARSET parameters");
+
+    // Assert accurate extraction into JSContact fields
+    let name = parsed1.name.as_ref().expect("name present");
+    assert_eq!(name.full.as_deref(), Some("René Müller"));
+    let comps = name.components.as_ref().expect("name components");
+    let get_comp = |kind: &str| {
+        comps
+            .iter()
+            .find(|c| c.kind == kind)
+            .map(|c| c.value.as_str())
+    };
+    assert_eq!(get_comp("given"), Some("René"));
+    assert_eq!(get_comp("given2"), Some("François"));
+    assert_eq!(get_comp("surname"), Some("Müller"));
+    assert_eq!(get_comp("title"), Some("Dr."));
+    assert_eq!(get_comp("credential"), Some("Jr."));
+
+    let orgs = parsed1.organizations.as_ref().expect("orgs present");
+    assert_eq!(orgs["o1"].name.as_deref(), Some("Société Générale"));
+    assert_eq!(
+        orgs["o1"].units.as_ref().unwrap(),
+        &[OrgUnit::new("Pôle Innovation")]
+    );
+
+    let titles = parsed1.titles.as_ref().expect("titles present");
+    assert_eq!(titles["t1"].name, "Ingénieur en chef");
+    assert_eq!(titles["t1"].kind, None); // default kind "title"
+    assert_eq!(titles["t2"].name, "Développeur sénior");
+    assert_eq!(titles["t2"].kind.as_deref(), Some("role"));
+
+    let notes = parsed1.notes.as_ref().expect("notes present");
+    assert_eq!(notes["n1"].note, "München ist schön");
+
+    let nicks = parsed1.nicknames.as_ref().expect("nicknames present");
+    assert_eq!(nicks["k1"].name, "Schätzchen");
+
+    let cats = parsed1.keywords.as_ref().expect("keywords present");
+    assert!(cats.contains_key("Amis"));
+    assert!(cats.contains_key("Collègues"));
+    assert!(cats.contains_key("Familie"));
+
+    let rels = parsed1.related_to.as_ref().expect("related_to present");
+    assert!(rels.contains_key("Hélène Müller"));
+
+    let addrs = parsed1.addresses.as_ref().expect("addresses present");
+    assert_eq!(
+        addrs["a1"].full.as_deref(),
+        Some("12 Rue de l'Étoile\n75008 Paris\nFrance")
+    );
+
+    let phones = parsed1.phones.as_ref().expect("phones present");
+    assert_eq!(phones["p1"].number, "+33 1 23 45 67 89");
+
+    let emails = parsed1.emails.as_ref().expect("emails present");
+    assert_eq!(emails["e1"].address, "rene.muller@example.fr");
+
+    // Outbound normalization: standard vCard 3.0 emission must NOT include CHARSET=UTF-8
+    let vcard_out = card_to_vcard(&parsed1);
+    assert!(
+        !vcard_out.contains("CHARSET="),
+        "Outbound vCard 3.0 must not carry CHARSET params: {vcard_out}"
+    );
+    assert!(
+        !vcard_out.contains("charset="),
+        "Outbound vCard 3.0 must not carry charset params: {vcard_out}"
+    );
+    assert!(vcard_out.contains("FN:René Müller\r\n"), "{vcard_out}");
+    assert!(
+        vcard_out.contains("N:Müller;René;François;Dr.;Jr.\r\n"),
+        "{vcard_out}"
+    );
+    assert!(
+        vcard_out.contains("ORG;X-JMAP-KEY=o1:Société Générale;Pôle Innovation\r\n"),
+        "{vcard_out}"
+    );
+    assert!(
+        vcard_out.contains("NOTE;X-JMAP-KEY=n1:München ist schön\r\n"),
+        "{vcard_out}"
+    );
+
+    // Fixed-point convergence
+    let parsed2 = vcard_to_card(&vcard_out).expect("re-parse outbound vcard");
+    let vcard_out2 = card_to_vcard(&parsed2);
+    assert_eq!(
+        vcard_out, vcard_out2,
+        "Emitted vCard must reach fixed point"
+    );
+}
+
+#[test]
+fn inbound_vcard_quoted_printable_encoding_with_charset_utf8_and_latin1() {
+    // Tests inbound legacy/vCard 2.1 QUOTED-PRINTABLE encoded properties.
+    // 1. QP with explicit CHARSET=UTF-8 (UTF-8 multi-byte octets in =XX)
+    // 2. QP with explicit CHARSET=ISO-8859-1 (Single byte Latin-1 in =XX)
+    // 3. QP with explicit CHARSET=WINDOWS-1252
+    // 4. QP without CHARSET parameter (defaults to Latin-1 per vCard 2.1 RFC 2045)
+    let vcard_qp_utf8 = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:Ren=C3=A9=20M=C3=BCller\r\n",
+        "N;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:M=C3=BCller;Ren=C3=A9;Fran=C3=A7ois;Dr.;\r\n",
+        "ORG;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8;X-JMAP-KEY=o1:Soci=C3=A9t=C3=A9=20G=C3=A9n=C3=A9rale;P=C3=B4le=20R&D\r\n",
+        "TITLE;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8;X-JMAP-KEY=t1:Ing=C3=A9nieur=20en=20chef\r\n",
+        "NOTE;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8;X-JMAP-KEY=n1:M=C3=BCnchen=20ist=20eine=20sch=C3=B6ne=20Stadt\r\n",
+        "X-EVOLUTION-SPOUSE;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:H=C3=A9l=C3=A8ne\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed_utf8 = vcard_to_card(vcard_qp_utf8).expect("parse QP with CHARSET=UTF-8");
+    let name_utf8 = parsed_utf8.name.as_ref().expect("name present");
+    assert_eq!(name_utf8.full.as_deref(), Some("René Müller"));
+    let comps_utf8 = name_utf8.components.as_ref().expect("components");
+    let get_comp_utf8 = |kind: &str| {
+        comps_utf8
+            .iter()
+            .find(|c| c.kind == kind)
+            .map(|c| c.value.as_str())
+    };
+    assert_eq!(get_comp_utf8("given"), Some("René"));
+    assert_eq!(get_comp_utf8("given2"), Some("François"));
+    assert_eq!(get_comp_utf8("surname"), Some("Müller"));
+    assert_eq!(get_comp_utf8("title"), Some("Dr."));
+
+    let orgs_utf8 = parsed_utf8.organizations.as_ref().expect("orgs present");
+    assert_eq!(orgs_utf8["o1"].name.as_deref(), Some("Société Générale"));
+    assert_eq!(
+        orgs_utf8["o1"].units.as_ref().unwrap(),
+        &[OrgUnit::new("Pôle R&D")]
+    );
+
+    let titles_utf8 = parsed_utf8.titles.as_ref().expect("titles present");
+    assert_eq!(titles_utf8["t1"].name, "Ingénieur en chef");
+
+    let notes_utf8 = parsed_utf8.notes.as_ref().expect("notes present");
+    assert_eq!(notes_utf8["n1"].note, "München ist eine schöne Stadt");
+
+    let rels_utf8 = parsed_utf8.related_to.as_ref().expect("related_to present");
+    assert!(rels_utf8.contains_key("Hélène"));
+
+    // 2. QP with CHARSET=ISO-8859-1 (0xE9 -> é, 0xFC -> ü, 0xF4 -> ô, 0xE8 -> è)
+    let vcard_qp_latin1 = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE;CHARSET=ISO-8859-1:Ren=E9=20M=FCller\r\n",
+        "N;ENCODING=QUOTED-PRINTABLE;CHARSET=ISO-8859-1:M=FCller;Ren=E9;;;\r\n",
+        "NOTE;ENCODING=QUOTED-PRINTABLE;CHARSET=ISO-8859-1;X-JMAP-KEY=n1:M=FCnchen=20sch=F6n\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed_latin1 = vcard_to_card(vcard_qp_latin1).expect("parse QP with CHARSET=ISO-8859-1");
+    let name_latin1 = parsed_latin1.name.as_ref().expect("name present");
+    assert_eq!(name_latin1.full.as_deref(), Some("René Müller"));
+    assert_eq!(
+        parsed_latin1.notes.as_ref().unwrap()["n1"].note,
+        "München schön"
+    );
+
+    // 3. QP with CHARSET=WINDOWS-1252
+    let vcard_qp_win1252 = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE;CHARSET=WINDOWS-1252:Ren=E9=20M=FCller\r\n",
+        "END:VCARD\r\n",
+    );
+    let parsed_win1252 =
+        vcard_to_card(vcard_qp_win1252).expect("parse QP with CHARSET=WINDOWS-1252");
+    assert_eq!(
+        parsed_win1252.name.as_ref().unwrap().full.as_deref(),
+        Some("René Müller")
+    );
+
+    // 4. QP without CHARSET parameter (defaults to Latin-1)
+    let vcard_qp_no_charset = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE:Ren=E9=20M=FCller\r\n",
+        "END:VCARD\r\n",
+    );
+    let parsed_no_charset =
+        vcard_to_card(vcard_qp_no_charset).expect("parse QP without CHARSET parameter");
+    assert_eq!(
+        parsed_no_charset.name.as_ref().unwrap().full.as_deref(),
+        Some("René Müller")
+    );
+
+    // Outbound emission of QP-decoded cards: must emit clean standard vCard 3.0 UTF-8
+    let vcard_out = card_to_vcard(&parsed_utf8);
+    assert!(
+        !vcard_out.contains("ENCODING="),
+        "Outbound vCard 3.0 must not carry ENCODING=QP: {vcard_out}"
+    );
+    assert!(
+        !vcard_out.contains("QUOTED-PRINTABLE"),
+        "Outbound vCard 3.0 must not carry QUOTED-PRINTABLE: {vcard_out}"
+    );
+    assert!(vcard_out.contains("FN:René Müller\r\n"), "{vcard_out}");
+
+    // Fixed-point stability
+    let parsed_out = vcard_to_card(&vcard_out).expect("re-parse outbound vcard");
+    let vcard_out2 = card_to_vcard(&parsed_out);
+    assert_eq!(vcard_out, vcard_out2);
+}
+
+#[test]
+fn inbound_vcard_quoted_printable_soft_line_breaks_and_escaped_delimiters() {
+    // Tests QUOTED-PRINTABLE soft line breaks (=\r\n and =\n) and encoded delimiters:
+    // =3D ('='), =3B (';'), =2C (','), =0D=0A (CRLF).
+    let vcard_qp_soft_breaks = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8:Alice=\r\n",
+        "=20Smith\r\n",
+        "NOTE;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8;X-JMAP-KEY=n1:This is a long note that was folded=\r\n",
+        "=20using quoted-printable soft line breaks=\r\n",
+        "=20and contains an equals sign (=3D) and a semicolon (=3B).\r\n",
+        "ADR;TYPE=HOME;ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8;X-JMAP-KEY=a1:;;12 Rue de l'=C3=89toile;Paris;;75008;France\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed = vcard_to_card(vcard_qp_soft_breaks).expect("parse QP with soft line breaks");
+    assert_eq!(
+        parsed.name.as_ref().unwrap().full.as_deref(),
+        Some("Alice Smith")
+    );
+
+    let note = &parsed.notes.as_ref().unwrap()["n1"].note;
+    assert_eq!(
+        note,
+        "This is a long note that was folded using quoted-printable soft line breaks and contains an equals sign (=) and a semicolon (;)."
+    );
+
+    let addrs = parsed.addresses.as_ref().unwrap();
+    let street = addrs["a1"]
+        .components
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|c| c.kind == "name")
+        .unwrap();
+    assert_eq!(street.value, "12 Rue de l'Étoile");
+
+    // Outbound emission and fixed-point convergence
+    let vcard_out = card_to_vcard(&parsed);
+    assert!(!vcard_out.contains("ENCODING="));
+    let parsed2 = vcard_to_card(&vcard_out).expect("re-parse emitted vcard");
+    let vcard_out2 = card_to_vcard(&parsed2);
+    assert_eq!(vcard_out, vcard_out2);
+}
+
+#[test]
+fn inbound_vcard_encoding_parameter_8bit_7bit_and_base64_fidelity() {
+    // Tests ENCODING=8BIT, ENCODING=7BIT, ENCODING=b, ENCODING=BASE64, ENCODING=B
+    let vcard_encodings = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN;ENCODING=8BIT:René Müller\r\n",
+        "N;ENCODING=8BIT:Müller;René;;;\r\n",
+        "NOTE;ENCODING=7BIT;X-JMAP-KEY=n1:ASCII note content\r\n",
+        "PHOTO;ENCODING=b;TYPE=JPEG:AQIDBA==\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed =
+        vcard_to_card(vcard_encodings).expect("parse vcard with 8bit, 7bit, and b encodings");
+    assert_eq!(
+        parsed.name.as_ref().unwrap().full.as_deref(),
+        Some("René Müller")
+    );
+    assert_eq!(
+        parsed.notes.as_ref().unwrap()["n1"].note,
+        "ASCII note content"
+    );
+
+    let media = parsed.media.as_ref().expect("media present");
+    assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(media["m1"].media_type.as_deref(), Some("image/JPEG"));
+    assert_eq!(media["m1"].uri, "data:image/JPEG;base64,AQIDBA==");
+
+    // Outbound emission: ENCODING=8BIT and 7BIT are stripped on text; ENCODING=b is emitted on photo
+    let vcard_out = card_to_vcard(&parsed);
+    assert_eq!(line(&vcard_out, "FN:"), "FN:René Müller");
+    assert_eq!(
+        line(&vcard_out, "NOTE"),
+        "NOTE;X-JMAP-KEY=n1:ASCII note content"
+    );
+    assert!(line(&vcard_out, "PHOTO").starts_with("PHOTO;"));
+    assert!(line(&vcard_out, "PHOTO").contains("ENCODING=b"));
+    assert!(line(&vcard_out, "PHOTO").contains("TYPE=JPEG"));
+    assert!(line(&vcard_out, "PHOTO").ends_with(":AQIDBA=="));
+
+    // Fixed-point stability
+    let parsed2 = vcard_to_card(&vcard_out).expect("re-parse emitted vcard");
+    let vcard_out2 = card_to_vcard(&parsed2);
+    assert_eq!(vcard_out, vcard_out2);
+}
+
+#[test]
+fn photo_inline_base64_media_type_variants_and_roundtrip() {
+    // Characterizes inline base64 PHOTO roundtrip fidelity across 10 image formats:
+    // JPEG, PNG, GIF, WebP, SVG, BMP, TIFF, AVIF, HEIC, Icon.
+    let subtypes = [
+        ("image/jpeg", "jpeg"),
+        ("image/png", "png"),
+        ("image/gif", "gif"),
+        ("image/webp", "webp"),
+        ("image/svg+xml", "svg+xml"),
+        ("image/bmp", "bmp"),
+        ("image/tiff", "tiff"),
+        ("image/avif", "avif"),
+        ("image/heic", "heic"),
+        ("image/x-icon", "x-icon"),
+    ];
+
+    for (media_type, expected_subtype) in subtypes {
+        let card = one_photo(
+            &format!("data:{media_type};base64,{PAYLOAD}"),
+            Some(media_type),
+        );
+        let vcard = card_to_vcard(&card);
+        let photo_str = line(&vcard, "PHOTO;");
+        assert!(
+            photo_str.contains(&format!("TYPE={expected_subtype}")),
+            "{media_type} must state TYPE={expected_subtype} on line: {photo_str}"
+        );
+        assert!(
+            photo_str.contains("ENCODING=b"),
+            "Inline photo must state ENCODING=b: {photo_str}"
+        );
+        assert!(
+            photo_str.contains("X-JMAP-KEY=m1"),
+            "Inline photo must state X-JMAP-KEY: {photo_str}"
+        );
+        assert!(
+            photo_str.ends_with(&format!(":{PAYLOAD}")),
+            "Inline photo must end with payload: {photo_str}"
+        );
+
+        // Parse back and verify exact media_type and URI reconstruction
+        let parsed = vcard_to_card(&vcard).expect("parse emitted photo vcard");
+        let media = parsed.media.as_ref().expect("media present");
+        let entry = &media["m1"];
+        assert_eq!(entry.kind.as_deref(), Some("photo"));
+        assert_eq!(
+            entry.media_type.as_deref(),
+            Some(media_type),
+            "media_type must roundtrip intact for {media_type}"
+        );
+        assert_eq!(
+            entry.uri,
+            format!("data:{media_type};base64,{PAYLOAD}"),
+            "URI must be reconstructed with exact media_type for {media_type}"
+        );
+
+        // Fixed-point convergence
+        let vcard2 = card_to_vcard(&parsed);
+        let parsed2 = vcard_to_card(&vcard2).expect("second parse");
+        let vcard3 = card_to_vcard(&parsed2);
+        assert_eq!(
+            vcard2, vcard3,
+            "vCard must reach fixed point for {media_type}"
+        );
+    }
+
+    // Inbound uppercase / mixed-case parameters and legacy ENCODING=BASE64
+    let vcard_casing = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Photo Case\r\n",
+        "PHOTO;TYPE=JPEG;ENCODING=b;X-JMAP-KEY=m1:aGVsbG8tcGhvdG8=\r\n",
+        "PHOTO;ENCODING=BASE64;TYPE=PNG;X-JMAP-KEY=m2:aGVsbG8tcGhvdG8=\r\n",
+        "PHOTO;encoding=b;type=gif;x-jmap-key=m3:aGVsbG8tcGhvdG8=\r\n",
+        "END:VCARD\r\n",
+    );
+    let parsed_casing = vcard_to_card(vcard_casing).expect("parse casing vcard");
+    let media_casing = parsed_casing.media.as_ref().expect("media present");
+    assert_eq!(media_casing["m1"].media_type.as_deref(), Some("image/JPEG"));
+    assert_eq!(media_casing["m2"].media_type.as_deref(), Some("image/PNG"));
+    assert_eq!(media_casing["m3"].media_type.as_deref(), Some("image/gif"));
+
+    let vcard_casing_out = card_to_vcard(&parsed_casing);
+    let parsed_casing2 = vcard_to_card(&vcard_casing_out).expect("reparse casing");
+    let vcard_casing_out2 = card_to_vcard(&parsed_casing2);
+    assert_eq!(vcard_casing_out, vcard_casing_out2);
+}
+
+#[test]
+fn photo_uri_variant_and_lossy_media_type_characterization() {
+    // 1. Valid URI variants: HTTPS, HTTP, file://, URN
+    let test_uris = [
+        "https://example.com/alice.jpg",
+        "http://photos.org/pic.png?size=large&format=raw",
+        "file:///home/user/.face",
+        "urn:uuid:6a2f7965-728b-47e2-8924-d2e7d7ffba44",
+    ];
+
+    for uri in test_uris {
+        let card = one_photo(uri, None);
+        let vcard = card_to_vcard(&card);
+        let unf = unfolded(&vcard);
+        let photo_str = line(&unf, "PHOTO;");
+        assert_eq!(
+            photo_str,
+            format!("PHOTO;X-JMAP-KEY=m1;VALUE=uri:{uri}"),
+            "URI photo must emit VALUE=uri and key without TYPE or ENCODING"
+        );
+        assert!(
+            !vcard.contains("ENCODING="),
+            "URI photo must not have ENCODING: {vcard}"
+        );
+        assert!(
+            !vcard.contains("TYPE="),
+            "URI photo must not have TYPE: {vcard}"
+        );
+
+        // Parse back
+        let parsed = vcard_to_card(&vcard).expect("parse URI photo");
+        let media = parsed.media.as_ref().expect("media present");
+        let entry = &media["m1"];
+        assert_eq!(entry.kind.as_deref(), Some("photo"));
+        assert_eq!(entry.uri, uri);
+        assert_eq!(entry.media_type, None);
+
+        // Fixed-point convergence
+        let vcard2 = card_to_vcard(&parsed);
+        assert_eq!(vcard, vcard2);
+    }
+
+    // 2. Inbound parameter variations: VALUE=URI, value=uri, mixed case
+    for val_param in ["VALUE=URI", "value=uri", "Value=Uri", "VALUE=uri"] {
+        let vcard_in = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Uri Photo\r\nPHOTO;{val_param};X-JMAP-KEY=m1:https://cdn.example.com/avatar.webp\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard_in).expect("parse uri photo variation");
+        let media = parsed.media.as_ref().expect("media present");
+        assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+        assert_eq!(media["m1"].uri, "https://cdn.example.com/avatar.webp");
+        assert_eq!(media["m1"].media_type, None);
+
+        let vcard_out = card_to_vcard(&parsed);
+        assert_eq!(
+            line(&vcard_out, "PHOTO;"),
+            "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://cdn.example.com/avatar.webp"
+        );
+    }
+
+    // 3. Lossy-by-design characterization: media_type on remote URI
+    // In JSContact, a remote URI may specify media_type: Some("image/jpeg").
+    // But RFC 2426 §3.1.4 states no TYPE on URI references, and EDS reads no TYPE off URI lines.
+    // Therefore, card_to_vcard omits TYPE by design, which reads back as media_type: None.
+    let card_with_media_type = one_photo("https://example.org/photo.jpg", Some("image/jpeg"));
+    let vcard_lossy = card_to_vcard(&card_with_media_type);
+    assert_eq!(
+        line(&vcard_lossy, "PHOTO;"),
+        "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://example.org/photo.jpg"
+    );
+    assert!(
+        !vcard_lossy.contains("TYPE="),
+        "TYPE omitted on URI by design"
+    );
+
+    let parsed_lossy = vcard_to_card(&vcard_lossy).expect("parse lossy vcard");
+    let entry_lossy = &parsed_lossy.media.as_ref().unwrap()["m1"];
+    assert_eq!(
+        entry_lossy.media_type, None,
+        "media_type on remote URI is unstated across vCard 3.0"
+    );
+    assert_eq!(entry_lossy.uri, "https://example.org/photo.jpg");
+
+    // Subsequent roundtrips reach fixed point
+    let vcard_lossy2 = card_to_vcard(&parsed_lossy);
+    assert_eq!(vcard_lossy, vcard_lossy2);
+}
+
+#[test]
+fn photo_eds_photo_field_replacements_and_same_photo_equality() {
+    // 1. same_photo equality comparisons:
+    let inline_jpeg = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
+        media_type: Some("image/jpeg".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let inline_jpeg_caps = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/JPEG;base64,{PAYLOAD}"),
+        media_type: Some("image/JPEG".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let inline_jpeg_unpadded = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/jpeg;base64,{}", PAYLOAD.trim_end_matches('=')),
+        media_type: Some("image/jpeg".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let inline_png = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/png;base64,{PAYLOAD}"),
+        media_type: Some("image/png".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let inline_diff_payload = Media {
+        kind: Some("photo".to_owned()),
+        uri: "data:image/jpeg;base64,AQIDBA==".to_owned(),
+        media_type: Some("image/jpeg".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let uri_photo1 = Media {
+        kind: Some("photo".to_owned()),
+        uri: "https://example.com/alice.jpg".to_owned(),
+        media_type: None,
+        extra: BTreeMap::new(),
+    };
+    let uri_photo2 = Media {
+        kind: Some("photo".to_owned()),
+        uri: "https://example.com/bob.jpg".to_owned(),
+        media_type: None,
+        extra: BTreeMap::new(),
+    };
+    let non_photo = Media {
+        kind: Some("logo".to_owned()),
+        uri: "https://example.com/logo.png".to_owned(),
+        media_type: None,
+        extra: BTreeMap::new(),
+    };
+
+    // Inline comparisons
+    assert!(same_photo(&inline_jpeg, &inline_jpeg), "identical inline");
+    assert!(
+        same_photo(&inline_jpeg, &inline_jpeg_caps),
+        "case-insensitive subtype"
+    );
+    assert!(
+        same_photo(&inline_jpeg, &inline_jpeg_unpadded),
+        "unpadded vs padded base64"
+    );
+    assert!(!same_photo(&inline_jpeg, &inline_png), "different subtypes");
+    assert!(
+        !same_photo(&inline_jpeg, &inline_diff_payload),
+        "different payload"
+    );
+
+    // URI comparisons
+    assert!(same_photo(&uri_photo1, &uri_photo1), "identical URI");
+    assert!(!same_photo(&uri_photo1, &uri_photo2), "different URI");
+
+    // Cross-variant and non-photo comparisons
+    assert!(!same_photo(&inline_jpeg, &uri_photo1), "inline vs URI");
+    assert!(
+        same_photo(&non_photo, &non_photo),
+        "both non-photos evaluate to None"
+    );
+    assert!(
+        !same_photo(&inline_jpeg, &non_photo),
+        "inline photo vs non-photo"
+    );
+
+    // 2. EDS photo replacement simulation:
+    // When a user changes photo in Evolution UI, EDS rewrites the PHOTO line with no X-JMAP-KEY.
+    let initial_card = one_photo(
+        &format!("data:image/jpeg;base64,{PAYLOAD}"),
+        Some("image/jpeg"),
+    );
+    let initial_vcard = card_to_vcard(&initial_card);
+    assert!(initial_vcard.contains("X-JMAP-KEY=m1"));
+
+    // User chooses a new PNG photo in Evolution
+    let eds_edited_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n",
+        "PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n",
+        "END:VCARD\r\n",
+    );
+    let parsed_eds = vcard_to_card(eds_edited_vcard).expect("parse EDS photo change");
+    let media = parsed_eds.media.as_ref().expect("media present");
+    let new_entry = &media["m1"];
+    assert_eq!(new_entry.media_type.as_deref(), Some("image/png"));
+
+    // same_photo correctly identifies that the user changed the photo
+    assert!(
+        !same_photo(&initial_card.media.unwrap()["m1"], new_entry),
+        "same_photo detects photo update"
+    );
+}
+
+#[test]
+fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
+    // 1. Multiple PHOTO entries on one card (e.g. inline avatar + remote full picture + inline thumbnail)
+    let mut media_map = BTreeMap::new();
+    media_map.insert(
+        "m1".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
+            media_type: Some("image/jpeg".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    media_map.insert(
+        "m2".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: "https://example.com/profile-large.jpg".to_owned(),
+            media_type: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    media_map.insert(
+        "m3".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: "data:image/png;base64,AQIDBA==".to_owned(),
+            media_type: Some("image/png".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let multi_card = ContactCard {
+        id: Some("C-MULTI-PHOTO".into()),
+        media: Some(media_map),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&multi_card);
+    let photo_lines: Vec<&str> = vcard
+        .split("\r\n")
+        .filter(|l| l.starts_with("PHOTO;"))
+        .collect();
+    assert_eq!(
+        photo_lines.len(),
+        3,
+        "All 3 PHOTO lines must be emitted: {vcard}"
+    );
+    assert!(
+        photo_lines
+            .iter()
+            .any(|l| l.contains("X-JMAP-KEY=m1") && l.contains("TYPE=jpeg"))
+    );
+    assert!(
+        photo_lines
+            .iter()
+            .any(|l| l.contains("X-JMAP-KEY=m2") && l.contains("VALUE=uri"))
+    );
+    assert!(
+        photo_lines
+            .iter()
+            .any(|l| l.contains("X-JMAP-KEY=m3") && l.contains("TYPE=png"))
+    );
+
+    // Parse back
+    let parsed = vcard_to_card(&vcard).expect("parse multi-photo vcard");
+    let parsed_media = parsed.media.as_ref().expect("media present");
+    assert_eq!(parsed_media.len(), 3);
+    assert_eq!(parsed_media["m1"].media_type.as_deref(), Some("image/jpeg"));
+    assert_eq!(
+        parsed_media["m2"].uri,
+        "https://example.com/profile-large.jpg"
+    );
+    assert_eq!(parsed_media["m3"].media_type.as_deref(), Some("image/png"));
+
+    // 2. Non-photo media filtering: logos, sounds, documents, and unmapped kinds
+    let mut mixed_media = BTreeMap::new();
+    mixed_media.insert(
+        "m1".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
+            media_type: Some("image/jpeg".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    mixed_media.insert(
+        "m2".to_owned(),
+        Media {
+            kind: Some("logo".to_owned()),
+            uri: "https://example.com/corp-logo.png".to_owned(),
+            media_type: Some("image/png".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    mixed_media.insert(
+        "m3".to_owned(),
+        Media {
+            kind: Some("sound".to_owned()),
+            uri: "https://example.com/pronunciation.ogg".to_owned(),
+            media_type: Some("audio/ogg".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    mixed_media.insert(
+        "m4".to_owned(),
+        Media {
+            kind: Some("document".to_owned()),
+            uri: "https://example.com/resume.pdf".to_owned(),
+            media_type: Some("application/pdf".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    mixed_media.insert(
+        "m5".to_owned(),
+        Media {
+            kind: None,
+            uri: "https://example.com/unknown.dat".to_owned(),
+            media_type: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    // Predicates
+    assert!(states_media(&mixed_media["m1"]), "photo is stateable");
+    assert!(
+        !states_media(&mixed_media["m2"]),
+        "logo is not stateable on PHOTO"
+    );
+    assert!(
+        !states_media(&mixed_media["m3"]),
+        "sound is not stateable on PHOTO"
+    );
+    assert!(
+        !states_media(&mixed_media["m4"]),
+        "document is not stateable on PHOTO"
+    );
+    assert!(
+        !states_media(&mixed_media["m5"]),
+        "none kind is not stateable"
+    );
+
+    let mixed_card = ContactCard {
+        id: Some("C-MIXED-MEDIA".into()),
+        media: Some(mixed_media),
+        ..ContactCard::default()
+    };
+    let mixed_vcard = card_to_vcard(&mixed_card);
+    assert_eq!(
+        mixed_vcard.matches("\r\nPHOTO").count(),
+        1,
+        "Only the photo entry must emit a PHOTO line: {mixed_vcard}"
+    );
+    assert!(mixed_vcard.contains("X-JMAP-KEY=m1"));
+    assert!(!mixed_vcard.contains("corp-logo.png"));
+    assert!(!mixed_vcard.contains("pronunciation.ogg"));
+    assert!(!mixed_vcard.contains("resume.pdf"));
+}
+
+#[test]
+fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
+    // 1. Non-image data URIs: data:application/pdf;base64,... and data:;base64,...
+    let pdf_card = one_photo(
+        &format!("data:application/pdf;base64,{PAYLOAD}"),
+        Some("application/pdf"),
+    );
+    let pdf_vcard = card_to_vcard(&pdf_card);
+    assert_eq!(
+        line(&pdf_vcard, "PHOTO;"),
+        format!("PHOTO;X-JMAP-KEY=m1;ENCODING=b:{PAYLOAD}"),
+        "Non-image data URI emits without TYPE parameter"
+    );
+    let parsed_pdf = vcard_to_card(&pdf_vcard).expect("parse non-image photo");
+    let pdf_entry = &parsed_pdf.media.as_ref().unwrap()["m1"];
+    assert_eq!(pdf_entry.media_type, None);
+    assert_eq!(pdf_entry.uri, format!("data:;base64,{PAYLOAD}"));
+
+    // 2. EDS TYPE="X-EVOLUTION-UNKNOWN" parsing
+    let eds_unknown_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Unknown MIME\r\n",
+        "PHOTO;TYPE=\"X-EVOLUTION-UNKNOWN\";ENCODING=b:AQIDBA==\r\n",
+        "END:VCARD\r\n",
+    );
+    let parsed_unknown = vcard_to_card(eds_unknown_vcard).expect("parse X-EVOLUTION-UNKNOWN");
+    let unk_entry = &parsed_unknown.media.as_ref().unwrap()["m1"];
+    assert_eq!(unk_entry.media_type, None);
+    assert_eq!(unk_entry.uri, "data:;base64,AQIDBA==");
+
+    // 3. Inbound empty / degenerate PHOTO lines produce no media entries
+    for empty_line in [
+        "PHOTO:",
+        "PHOTO;ENCODING=b:",
+        "PHOTO;VALUE=uri:",
+        "PHOTO;TYPE=jpeg;ENCODING=b:",
+        "PHOTO;X-JMAP-KEY=m1:",
+    ] {
+        let vcard_empty = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Empty Photo\r\n{empty_line}\r\nEND:VCARD\r\n"
+        );
+        let parsed_empty = vcard_to_card(&vcard_empty).expect("parse empty photo line");
+        assert!(
+            parsed_empty.media.is_none() || parsed_empty.media.as_ref().unwrap().is_empty(),
+            "Degenerate line {empty_line:?} must produce no media entries"
+        );
+    }
+
+    // 4. Invalid data URIs in JSContact are rejected by states_media and emit no line
+    for invalid_uri in [
+        "data:image/jpeg,%89PNG%0D%0A",
+        "data:image/jpeg;base64,invalid base64!@#$",
+        "data:image/jpeg",
+        "data:",
+        "",
+    ] {
+        let invalid_card = one_photo(invalid_uri, None);
+        assert!(
+            !states_media(&invalid_card.media.as_ref().unwrap()["m1"]),
+            "{invalid_uri:?} must not be stateable"
+        );
+        let vcard_invalid = card_to_vcard(&invalid_card);
+        assert!(
+            !vcard_invalid.contains("PHOTO"),
+            "{invalid_uri:?} must state no PHOTO line"
+        );
+    }
+
+    // 5. Large 2KB binary image with multi-line 75-octet folding
+    let mut raw_bytes = Vec::with_capacity(2048);
+    // Construct simulated PNG binary payload
+    raw_bytes.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+    for i in 0..2040 {
+        raw_bytes.push(((i * 37 + 13) % 256) as u8);
+    }
+    let encoded_payload = base64::engine::general_purpose::STANDARD.encode(&raw_bytes);
+    let large_card = one_photo(
+        &format!("data:image/png;base64,{encoded_payload}"),
+        Some("image/png"),
+    );
+
+    let large_vcard = card_to_vcard(&large_card);
+    let fold_count = large_vcard.matches("\r\n ").count();
+    assert!(
+        fold_count > 30,
+        "2KB payload must fold across 30+ continuation lines (fold_count = {fold_count})"
+    );
+
+    let parsed_large = vcard_to_card(&large_vcard).expect("parse folded large photo");
+    let large_entry = &parsed_large.media.as_ref().unwrap()["m1"];
+    assert_eq!(large_entry.media_type.as_deref(), Some("image/png"));
+
+    let parsed_bytes = base64::engine::general_purpose::STANDARD
+        .decode(
+            large_entry
+                .uri
+                .strip_prefix("data:image/png;base64,")
+                .unwrap(),
+        )
+        .expect("decode reconstructed payload");
+    assert_eq!(
+        parsed_bytes, raw_bytes,
+        "Binary payload must roundtrip byte-for-byte"
+    );
+
+    // Fixed-point stability
+    let large_vcard2 = card_to_vcard(&parsed_large);
+    let parsed_large2 = vcard_to_card(&large_vcard2).expect("second parse");
+    let large_vcard3 = card_to_vcard(&parsed_large2);
+    assert_eq!(
+        large_vcard2, large_vcard3,
+        "Large folded photo reaches fixed point"
+    );
 }

@@ -149,6 +149,60 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 - **URI Scheme Mapping**: `SERVICE_SCHEMES` translates bare URIs (`xmpp:`, `aim:`, `gg:`, `groupwise:`, `icq:`, `msn:`, `msnim:`, `matrix:`, `skype:`, `yahoo:`, `ymsgr:`) into plain handles.
 - **Unslotted / Unmapped Services**: `X-TWITTER` and `X-SIP` are defined in EDS as `EContactAttrList` (`GList*` of `char*`) without `HOME`/`WORK` slots and are deliberately unmapped in `jmap-vcard`.
 
+### 3.8 Categories & Keywords (`CATEGORIES` ↔ `E_CONTACT_CATEGORY_LIST`)
+- **Set vs List Mapping**: JSContact `keywords` (RFC 9553 §2.8.2) is a mathematical `Set` (JSON map with `true` values). vCard 3.0 `CATEGORIES` (RFC 2426 §3.7.1) is a comma-separated list of text values. EDS maps this line to `E_CONTACT_CATEGORY_LIST` (Evolution's Categories field).
+- **Lexicographical Sorting & Stability**: Because sets possess no intrinsic order, `drawn_tags` sorts keyword tags lexicographically before emitting the `CATEGORIES` line. This guarantees deterministic vCard output across serialization cycles, preventing spurious diffs during JMAP sync.
+- **Delimiter & Character Escaping**:
+  - Commas within a category name (e.g. `"Acme, Inc."` -> `Acme\, Inc.`, `"Software, Core"` -> `Software\, Core`) are backslash-escaped on emission and unescaped on parse, preventing categories from splitting into multiple tags.
+  - Semicolons (`\;`), newlines (`\n`), and backslashes (`\\`) are similarly escaped and preserved with 100% roundtrip fidelity.
+- **Multi-Line Inbound Merging & Deduplication**:
+  - RFC 2426 allows multiple `CATEGORIES` lines in a single vCard, but Evolution/EDS only renders the first `CATEGORIES` line in its UI.
+  - `read_keywords` reads all `CATEGORIES` lines across the vCard, flattening `entry_items` and deduplicating identical tags into a unified `keywords` map. Outbound serialization consolidates all tags into a single canonical `CATEGORIES` line.
+- **Whitespace Defense & Refusal Invariants**:
+  - EDS trims leading and trailing whitespace when users edit categories in Evolution.
+  - [`states_keyword`] refuses empty tags (`""`), non-boolean values (`Value::Bool(false)` or strings/numbers), carriage returns (`\r`), and tags with leading or trailing ASCII whitespace (`edged_with_whitespace`). This prevents emitting tags that EDS would silently trim and rename on the server.
+- **Empty / Absent Categories**: Cards with `keywords: None`, empty sets, or only unstated tags emit no `CATEGORIES` line. Inbound vCards with absent `CATEGORIES`, empty values (`CATEGORIES:`), or delimiter-only lines (`CATEGORIES:,,,`) parse to `keywords: None`.
+
+### 3.9 Nicknames & URLs (`NICKNAME`, `URL` ↔ `E_CONTACT_NICKNAME`, `E_CONTACT_HOMEPAGE_URL`)
+- **`NICKNAME` Cardinality & Identity Preservation**:
+  - RFC 2426 §3.1.3 specifies `NICKNAME` as a single comma-separated `text-list` on the wire format (`NICKNAME:Rob,Robbie,Boss`).
+  - JSContact (RFC 9553 §2.2.2) models nicknames as a keyed map (`nicknames: { "k1": { "name": "Rob" }, "k2": { "name": "Robbie" } }`).
+  - `jmap-vcard` emits **one line per keyed entry** (`NICKNAME;X-JMAP-KEY=k1:Rob\r\nNICKNAME;X-JMAP-KEY=k2:Robbie\r\n`) so that each entry carries its unique `X-JMAP-KEY` parameter across synchronization cycles.
+  - EDS 3.52 (`libebook-contacts`) reads `E_CONTACT_NICKNAME` from the first `NICKNAME` line. When editing the nickname in Evolution, EDS rewrites that first line's value in place while leaving parameters intact, and passes subsequent `NICKNAME` lines through untouched.
+- **`NICKNAME` Comma Handling & Single-String Parsing**:
+  - Inbound vCards from third-party clients containing comma-separated lists on a single line (`NICKNAME:Rob,Robbie,Boss`) are parsed via `entry_text_list` into a single `Nickname { name: "Rob,Robbie,Boss" }`.
+  - *Rationale*: EDS 3.52 hands the entire value back as one string and does not split it on commas. Splitting it into multiple JSContact entries would create synthetic entries that Evolution's UI cannot display individually.
+  - Outbound re-emission escapes literal commas as `\,` (`NICKNAME;X-JMAP-KEY=k1:Rob\,Robbie\,Boss`), and subsequent parse passes read it back as `"Rob,Robbie,Boss"`, guaranteeing deterministic fixed-point convergence.
+  - Unmodeled `contexts` and `pref` in `Nickname.extra` ride untouched on the JMAP layer.
+- **`URL` Mapping & EDS Homepage Slotting**:
+  - Plain website links (`kind: None` in JSContact `links`) map directly to RFC 2426 §3.6.8 `URL` lines carrying `X-JMAP-KEY`.
+  - In EDS, `E_CONTACT_HOMEPAGE_URL` maps to the **first `URL` line** in the vCard. Subsequent `URL` lines pass through intact on the vCard stream and are parsed back into `card.links` with their respective keys (`l1`, `l2`, `l3`).
+- **`URL` Kind Filtering & Contact URI Omission**:
+  - RFC 9553 §2.6.3 defines `kind: "contact"` as a URI for communicating with the person (e.g. contact forms, mailto links), which RFC 9555 §2.6.3 states on vCard 4.0's `CONTACT-URI`.
+  - vCard 3.0 has no `CONTACT-URI` property. Emitting `kind: "contact"` or vendor kinds (`kind: "blog"`, `"video"`, `"feed"`) on a vCard 3.0 `URL` would populate Evolution's `E_CONTACT_HOMEPAGE_URL` and mislead the user into seeing a contact form or feed as the person's homepage.
+  - Therefore, [`states_link`] and [`maps_link_kind`] restrict vCard 3.0 emission **strictly to `kind: None`** (plain websites). All other kinds are omitted on the wire format and remain safely preserved on the server.
+- **EDS Blog & Video URLs vs JSContact Links**:
+  - EDS defines `E_CONTACT_BLOG_URL` (`X-EVOLUTION-BLOG-URL`) and `E_CONTACT_VIDEO_URL` (`X-EVOLUTION-VIDEO-URL`).
+  - `jmap-vcard` deliberately does NOT map these non-standard properties into `links` or `extra` to prevent polluting standard JSContact schemas. `vcard_to_card` safely ignores them on parse, leaving them as unmapped EDS extensions.
+- **URI Punctuation & Escaping**:
+  - URIs with query strings containing semicolons, commas, ampersands, hashes, and percent-encodings (e.g. `https://api.example.com/search?q=a,b;c#top`) are formatted without backslash escaping per RFC 3986 and RFC 2426 §3.6.8, round-tripping with 100% fidelity.
+- **Unmodeled `Link` Properties**:
+  - JSContact `Link` fields `mediaType`, `contexts`, `pref`, and `label` ride in `extra` and are untouched during `jmap-book-sync`'s `PatchObject` synchronization.
+
+### 3.10 Photos & Media (`PHOTO` ↔ `E_CONTACT_PHOTO`)
+- **Inline Binary Data (`ENCODING=b`)**:
+  - Encoded using standard base64 per RFC 2426 §3.1.4.
+  - The MIME subtype is extracted by `image_subtype` (e.g. `image/jpeg` -> `TYPE=jpeg`, `image/png` -> `TYPE=png`, `image/svg+xml` -> `TYPE=svg+xml`) and emitted via `VCardParameter::typ`.
+  - Non-image data URIs (e.g. `data:application/pdf;base64,...` or `data:;base64,...`) are emitted without a `TYPE` parameter (`PHOTO;ENCODING=b:...`), which EDS accepts and reports without a MIME type.
+- **Remote URI References (`VALUE=uri`)**:
+  - Emitted as `PHOTO;X-JMAP-KEY=m1;VALUE=uri:<uri>`.
+  - In vCard 3.0, the `VALUE=uri` parameter is mandatory for EDS to populate `E_CONTACT_PHOTO` (`EContactPhotoType::URI`). Lines omitting `VALUE=uri` are not recognized by EDS as URI photos.
+  - No `TYPE` or `ENCODING` parameter is emitted on URI lines (RFC 2426 §3.1.4).
+- **Non-Photo Media Filtering**:
+  - JSContact (RFC 9553 §2.6.4) groups `photo`, `logo`, and `sound` under `card.media`.
+  - [`states_media`] and `photo` filter strictly for `kind: Some("photo")`. Logos, sounds, documents, and unmapped kinds get no `PHOTO` line, preserving UI separation in Evolution.
+  - Unmapped media entries remain safe on the server because `jmap-book-sync` patches only mapped/edited properties.
+
 ---
 
 ## 4. Special Semantics & Product Decision Catalog
@@ -173,10 +227,56 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 - vCard 3.0 represents preference as a boolean flag (`TYPE=PREF`). Inbound lines with `TYPE=PREF` are parsed as `pref: 1` (or `extra["pref"] = 1`).
 - Outbound lines are sorted by `(pref.unwrap_or(u32::MAX), key)` to guarantee preferred entries land in EDS primary positions (`E_CONTACT_EMAIL_1`, `E_CONTACT_PHONE_PRIMARY`, `E_CONTACT_ADDRESS_HOME`).
 
-### 4.5 Line Folding, Delimiter Escaping & Whitespace Trimming
-- **Line Folding**: Handled automatically by `calcard` at 75 octets with CRLF-space folding without splitting multi-byte UTF-8 sequences.
-- **Delimiter Escaping**: Commas (`,`) and semicolons (`;`) in structured and free-text fields are automatically escaped (`\,`, `\;`) on emission and unescaped on parse.
-- **Whitespace Defense**: Tags and handles with leading/trailing whitespace or carriage returns are filtered by `states_keyword` and `drawn_service` to prevent EDS from silently trimming them and triggering unwanted server renames.
+### 4.5 Line Folding & Unfolding (RFC 2426 §2.6)
+- **Outbound Emission**: Handled automatically by `calcard` via `entry.write_to(out, true)`. Physical content lines target the standard 75-octet limit and fold using CRLF followed by a single space (`\r\n `). Because `calcard` iterates over Unicode scalar values (`char`) and evaluates `char::len_utf8()` before writing, multi-byte UTF-8 sequences (2-byte umlauts, 3-byte CJK/Devanagari, 4-byte emoji) are **never split** across a fold.
+- **Boundary Characterization**: Due to parameter `:` delimiters and 2-byte escape sequences (`\n`, `\\`, `\;`) checked against 1-byte char sizes, physical lines on the wire may measure up to 76–77 octets before folding, fully compliant with RFC 2426 §2.6 ("lines of more than 75 characters SHOULD be folded").
+- **Inbound Unfolding**: `vcard_to_card` losslessly unfolds pre-folded input delimited by CRLF + space (`\r\n `) or CRLF + tab (`\r\n\t`), stripping the CRLF and the leading continuation whitespace while preserving any subsequent spaces or tabs as literal data.
+- **Large Binary / Inline Media**: Long values such as multi-line `NOTE`s and inline base64-encoded `PHOTO;ENCODING=b;TYPE=...` payloads fold across multiple continuation lines and round-trip to `Media` / `Note` with 100% binary and text fidelity and fixed-point stability (`card2 == card` and `vcard2 == vcard3`).
+
+### 4.6 Value Escaping & Unescaping (RFC 2426 §2)
+- **Special Character Escaping**: Free-text and structured values containing newlines (`\n` or `\r\n`), commas (`,`), semicolons (`;`), and backslashes (`\`) are escaped on emission and unescaped on parsing:
+  - `\n` or `\N`: Represent newlines in text values (e.g. `NOTE`, `LABEL`, `NICKNAME`, `TITLE`, `ROLE`). `vcard_to_card` unescapes both lowercase `\n` and uppercase `\N` losslessly.
+  - `\,`: Escapes literal commas. In structured properties like `ORG` (e.g. `"Acme, Inc."` -> `Acme\, Inc.`) and `ADR` (e.g. `"Apt 4B, Room 12"` -> `Apt 4B\, Room 12`), and list properties like `CATEGORIES`, commas within an item are escaped to prevent premature item splitting.
+  - `\;`: Escapes literal semicolons. In structured properties like `ADR` (e.g. `street: "Suite 100; Building A"` -> `Suite 100\; Building A`) and `ORG` (e.g. `unit: "Hardware; Systems"` -> `Hardware\; Systems`), semicolons within a component are escaped to prevent component shifting into wrong positional slots.
+  - `\\`: Escapes literal backslashes. Consecutive backslashes (e.g. `\\` -> `\\\\`) and escaped backslashes preceding delimiters (e.g. `\;` -> `\\\;`) are preserved with exact round-trip fidelity.
+- **No Double-Escaping Invariant**: Serialization and deserialization passes are idempotent and achieve fixed-point convergence (`card_to_vcard(vcard_to_card(vcard)) == vcard`). Repeated serialization cycles never accumulate redundant backslashes (`\\` remains `\\`, not growing into `\\\\`).
+- **Whitespace Defense**: Tags and handles with leading/trailing whitespace or carriage returns are filtered by [`states_keyword`] and [`drawn_service`] to prevent EDS from silently trimming them and triggering unwanted server renames.
+
+### 4.7 Non-ASCII, `CHARSET`, and `ENCODING` Parameters (RFC 2426 §2.1.2 & §2.1.3)
+- **vCard 3.0 Character Set & Transport Contract**:
+  - **Character Set**: RFC 2426 §2.1.2 mandates that vCard 3.0 is unconditionally UTF-8. The `CHARSET` parameter is not supported / deprecated for text properties.
+  - **Transport Encoding**: RFC 2426 §2.1.3 mandates that vCard 3.0 uses 8-bit MIME transport encoding. `ENCODING=QUOTED-PRINTABLE`, `ENCODING=8BIT`, and `ENCODING=7BIT` are not supported on text properties. Binary properties (`PHOTO`) use `ENCODING=b` (or `b`).
+  - **Outbound Emission (`card_to_vcard`)**: Always conforms strictly to RFC 2426 by emitting native UTF-8 strings directly without redundant `CHARSET` or `ENCODING` parameters on text properties.
+- **Inbound Compatibility & Robustness (Postel's Law)**:
+  - Older exporters (vCard 2.1, Evolution 2.x/3.x, Outlook, Apple Address Book, Thunderbird) frequently export vCard 3.0 with redundant `;CHARSET=UTF-8` or legacy `;ENCODING=QUOTED-PRINTABLE`.
+  - **`CHARSET` Parameter**: `vcard_to_card` (via `calcard`) accepts case-insensitive `CHARSET` parameters (`UTF-8`, `utf-8`, `ISO-8859-1`, `WINDOWS-1252`) across all properties.
+  - **`ENCODING=QUOTED-PRINTABLE`**: Properties carrying `ENCODING=QUOTED-PRINTABLE` are automatically decoded according to the specified `CHARSET` (defaulting to ISO-8859-1 if `CHARSET` is omitted, per RFC 2045 / vCard 2.1). Soft line breaks (`=\r\n` and `=\n`) and hex byte escapes (`=XX`, e.g. `=3D`, `=3B`, `=2C`, `=0D=0A`) are decoded losslessly into native UTF-8 text in JSContact fields.
+  - **`ENCODING=8BIT` / `7BIT`**: Accepted on input and parsed as plain text without modification.
+  - **`ENCODING=b` / `BASE64` / `B`**: Decoded as binary data for inline `PHOTO`s into standard data URIs (`data:image/<subtype>;base64,<payload>`).
+- **Outbound Normalization & Fixed-Point Stability**:
+  - Legacy inputs parsed with `CHARSET` or `ENCODING=QUOTED-PRINTABLE` are normalized on subsequent save operations into clean, standard vCard 3.0 UTF-8 format.
+  - Subsequent roundtrips achieve fixed-point stability (`card_to_vcard(parsed) == card_to_vcard(vcard_to_card(card_to_vcard(parsed)))`).
+- **Multilingual Script Coverage**:
+  - Full roundtrip fidelity is verified across diverse world writing systems: Latin with diacritics (French, German, Spanish, Icelandic, Polish), Cyrillic, Greek, Hebrew, Arabic (RTL), East Asian (Chinese Hanzi, Japanese Kanji/Kana, Korean Hangul), South Asian (Hindi Devanagari), Southeast Asian (Vietnamese), and Emoji/symbols (`🧑‍💻`, `🚀`, `🌟`).
+
+### 4.8 Inline `PHOTO` (base64) vs URI Semantics, Media Type Lossy-by-Design Finding & EDS Contract
+- **Inline Photo Media Type Normalization**:
+  - EDS 3.52 prepends `image/` to the `TYPE` parameter value (e.g. `TYPE=jpeg` -> `image/jpeg`).
+  - [`image_subtype`] strips `image/` prefixes to ensure `TYPE` contains only the subtype.
+  - When EDS exports a photo without a known MIME type, it emits `TYPE="X-EVOLUTION-UNKNOWN"`. `read_photo` filters this out so `media_type` becomes `None` and the URI becomes `data:;base64,...`, preventing phantom MIME types like `image/X-EVOLUTION-UNKNOWN`.
+- **Remote URI Media Type (Lossy by Design across vCard 3.0)**:
+  - RFC 2426 §3.1.4 does not define `TYPE` on URI-valued `PHOTO` properties (`PHOTO;VALUE=uri:...`).
+  - EDS 3.52 neither writes nor reads `TYPE` on URI photo lines (`E_CONTACT_PHOTO` stores `EContactPhotoType::URI` with just the URI string).
+  - Therefore, if a JSContact `Media` entry specifies a remote URI *and* a `media_type` (e.g. `uri: "https://example.com/avatar.jpg"`, `media_type: Some("image/jpeg")`), `card_to_vcard` intentionally omits `TYPE` to conform to RFC 2426 and EDS contracts.
+  - Reading the vCard back via `vcard_to_card` results in `media_type: None`.
+  - *Sync Safety*: Untouched remote URIs on the JMAP server preserve their original `mediaType` because `jmap-book-sync`'s `PatchObject` issues patches only for modified paths.
+- **EDS Photo Field Replacements & Semantic Equality ([`same_photo`])**:
+  - When a user changes or crops a photo in Evolution, EDS rewrites the `PHOTO` line and drops the `X-JMAP-KEY` parameter.
+  - `vcard_to_card` allocates a new key (`m1`, `m2`), and [`same_photo`] compares image payloads:
+    - Normalizes base64 padding (unpadded `data:` URIs match padded vCard base64).
+    - Compares MIME subtypes case-insensitively (`image/jpeg` == `image/JPEG`).
+    - Compares URI strings directly.
+  - This allows the sync layer to detect whether the photo was actually edited by the user, avoiding redundant image re-uploads on every sync.
 
 ---
 
@@ -205,9 +305,15 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 | [`states_title`] | `pub` | Checks if title has non-empty name and supported kind (`title` or `role`). |
 | [`states_note`] | `pub` | Checks if note contains non-empty text. |
 | [`states_link`] | `pub` | Checks if link contains non-empty URI and plain website kind (`None`). |
+| `maps_link_kind` | `private` | Filters link kind to allow only plain website links (`kind: None`) on vCard 3.0 `URL`. |
+| `entry_text_list` | `private` | Reads parsed text values of a multi-valued property and joins them with commas. |
 | [`states_calendar`] | `pub` | Checks if calendar has non-empty URI and mapped kind (`calendar` or `freeBusy`). |
 | [`states_media`] | `pub` | Evaluates if media entry is a valid photo with supported inline/URI payload. |
 | [`same_photo`] | `pub` | Compares two media entries for semantic image equality across base64/MIME representations. |
+| `photo` | `private` | Resolves `Media` into inline base64 or URI variant, validating format and media type. |
+| `read_photo` | `private` | Parses vCard `PHOTO` entry into JSContact `Media`, extracting subtype and decoding base64 data. |
+| `image_subtype` | `private` | Extracts image subtype from `image/*` MIME string (stripping prefix and parameters). |
+| `photo_entry` | `private` | Constructs standard `Media` struct for `kind: "photo"`. |
 | [`states_online_service`] | `pub` | Checks if online service has an EDS slot, valid handle, and safe whitespace. |
 | [`online_service_handle`] | `pub` | Extracts bare handle from `user` field or URI scheme. |
 | [`online_service_uri`] | `pub` | Formats canonical URI for a supported service and handle. |
@@ -218,3 +324,4 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 | [`states_spouse`] | `pub` | Checks if relation is `spouse` and key names a printable person (not a URI). |
 | [`states_nothing_but_the_marriage`] | `pub` | Checks if relation entry contains only the `spouse` relation type. |
 | [`states_keyword`] | `pub` | Validates keyword tag for boolean `true`, non-emptiness, and whitespace safety. |
+

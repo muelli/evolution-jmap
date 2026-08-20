@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use base64::Engine;
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
@@ -50,7 +51,20 @@ prop_compose! {
 }
 
 prop_compose! {
-    fn arb_nickname()(name in "\\PC*") -> Nickname {
+    fn arb_nickname()(
+        name in prop_oneof![
+            "\\PC*",
+            "[A-Za-z0-9_-]{1,15}",
+            "[A-Za-z]+, [A-Za-z]+",
+            "[A-Za-z]+; [A-Za-z]+",
+            "\"[A-Za-z ]+\"",
+            Just("Bob, The Builder".to_string()),
+            Just("Dr. Who, PhD".to_string()),
+            Just("たなか (田中)".to_string()),
+            Just("Саша".to_string()),
+            Just("🌟 Star".to_string()),
+        ],
+    ) -> Nickname {
         Nickname {
             name,
             extra: BTreeMap::new(),
@@ -234,10 +248,20 @@ prop_compose! {
 
 prop_compose! {
     fn arb_link()(
-        uri in "\\PC*",
+        uri in prop_oneof![
+            "\\PC*",
+            "https://[a-z]{3,10}\\.example\\.(com|org)/[a-z0-9_-]{0,10}",
+            "https://api\\.example\\.com/search\\?q=[a-z]+,[a-z]+;[a-z]+",
+            "http://\\[2001:db8::1\\]:8080/path\\?ref=123;456",
+            "mailto:[a-z]+@[a-z]+\\.example\\.com",
+            Just("https://example.com/tags?a=1,2&b=3;4#sec".to_string()),
+            Just("".to_string()),
+        ],
         kind in prop::option::of(prop_oneof![
             Just("contact".to_string()),
             Just("website".to_string()),
+            Just("feed".to_string()),
+            Just("blog".to_string()),
             "[a-z]{1,8}",
         ]),
     ) -> Link {
@@ -406,6 +430,23 @@ prop_compose! {
     }
 }
 
+fn arb_keyword_tag() -> impl Strategy<Value = String> {
+    prop_oneof![
+        "[a-zA-Z0-9_-]{1,10}",
+        Just("Work, Urgent".to_string()),
+        Just("Acme, Inc.".to_string()),
+        Just("Project;Alpha".to_string()),
+        Just("Dept\\Core".to_string()),
+        Just("Line 1\nLine 2".to_string()),
+        Just("Büro & Verwaltung".to_string()),
+        Just("🚀 VIP".to_string()),
+        Just(" leading".to_string()),
+        Just("trailing ".to_string()),
+        Just("with\rcr".to_string()),
+        "\\PC{1,10}",
+    ]
+}
+
 prop_compose! {
     fn arb_card_resources()(
         anniversaries in prop::option::of(prop::collection::btree_map(arb_key(), arb_anniversary(), 0..3)),
@@ -413,7 +454,7 @@ prop_compose! {
         calendars in prop::option::of(prop::collection::btree_map(arb_key(), arb_calendar(), 0..3)),
         media in prop::option::of(prop::collection::btree_map(arb_key(), arb_media(), 0..2)),
         keywords in prop::option::of(prop::collection::btree_map(
-            "[a-zA-Z0-9_-]{1,10}",
+            arb_keyword_tag(),
             prop_oneof![Just(json!(true)), Just(json!(false)), Just(json!("tag")), Just(json!(1))],
             0..4,
         )),
@@ -537,6 +578,16 @@ prop_compose! {
                 Just(";X-JMAP-KEY=k1".to_string()),
                 Just(";VALUE=uri".to_string()),
                 Just(";ENCODING=b".to_string()),
+                Just(";ENCODING=BASE64".to_string()),
+                Just(";ENCODING=8BIT".to_string()),
+                Just(";ENCODING=7BIT".to_string()),
+                Just(";ENCODING=QUOTED-PRINTABLE".to_string()),
+                Just(";CHARSET=UTF-8".to_string()),
+                Just(";CHARSET=utf-8".to_string()),
+                Just(";CHARSET=ISO-8859-1".to_string()),
+                Just(";CHARSET=WINDOWS-1252".to_string()),
+                Just(";ENCODING=QUOTED-PRINTABLE;CHARSET=UTF-8".to_string()),
+                Just(";ENCODING=QUOTED-PRINTABLE;CHARSET=ISO-8859-1".to_string()),
                 Just(";ALTID=1".to_string()),
                 Just(";LANGUAGE=en-US".to_string()),
                 Just(";LANGUAGE=de".to_string()),
@@ -614,5 +665,225 @@ proptest! {
             let vcard3 = card_to_vcard(&parsed3);
             prop_assert_eq!(vcard2, vcard3, "re-emitted vCard must reach a fixed-point");
         }
+    }
+
+    #[test]
+    fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
+        let vcard = card_to_vcard(&card);
+        for line in vcard.split("\r\n") {
+            // Emitted physical lines target 75 octets and never exceed 80 octets
+            // (when multi-byte UTF-8 sequences or escape tokens land near boundary)
+            prop_assert!(
+                line.len() <= 80,
+                "Physical line exceeds maximum line length (len = {}): {:?}",
+                line.len(),
+                line
+            );
+            // Multi-byte UTF-8 code points must never be split across a fold
+            prop_assert!(
+                std::str::from_utf8(line.as_bytes()).is_ok(),
+                "Invalid UTF-8 sequence in line slice: {:?}",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn prop_value_escaping_never_double_escapes_or_loses_characters(
+        prefix in "[a-zA-Z0-9 ]{0,10}",
+        escapes in prop::collection::vec(
+            prop_oneof![
+                Just("\n"),
+                Just("\r\n"),
+                Just(","),
+                Just(";"),
+                Just("\\"),
+                Just("\\n"),
+                Just("\\,"),
+                Just("\\;"),
+                Just("\\\\"),
+            ],
+            1..8,
+        ),
+        suffix in "[a-zA-Z0-9 ]{0,10}",
+    ) {
+        let text = format!("{prefix}{}{suffix}", escapes.join(""));
+        let mut notes = BTreeMap::new();
+        notes.insert(
+            "n1".to_owned(),
+            Note {
+                note: text.clone(),
+                extra: BTreeMap::new(),
+            },
+        );
+        let card = ContactCard {
+            id: Some("C-PROP-ESC".into()),
+            notes: Some(notes),
+            ..ContactCard::default()
+        };
+
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("parse emitted escaped vcard");
+        let parsed_note = &parsed1.notes.as_ref().unwrap()["n1"].note;
+        // Text must match original exactly (calcard preserves CRLF and escapes losslessly)
+        prop_assert_eq!(parsed_note, &text);
+
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip vcard");
+        let vcard3 = card_to_vcard(&parsed2);
+        prop_assert_eq!(vcard2, vcard3, "Escaped value must reach fixed point");
+    }
+
+    #[test]
+    fn prop_non_ascii_unicode_card_roundtrips_without_corruption(
+        given in prop_oneof![
+            Just("René".to_string()),
+            Just("Jörg".to_string()),
+            Just("María José".to_string()),
+            Just("Лев".to_string()),
+            Just("Σωκράτης".to_string()),
+            Just("שלום".to_string()),
+            Just("نجيب".to_string()),
+            Just("李".to_string()),
+            Just("駿".to_string()),
+            Just("김".to_string()),
+            Just("रवीन्द्रनाथ".to_string()),
+            Just("🧑‍💻".to_string()),
+            "\\PC{1,15}",
+        ],
+        surname in prop_oneof![
+            Just("Müller".to_string()),
+            Just("Weiß".to_string()),
+            Just("Carreño".to_string()),
+            Just("Толстой".to_string()),
+            Just("محفوظ".to_string()),
+            Just("白".to_string()),
+            Just("宮崎".to_string()),
+            Just("연아".to_string()),
+            Just("ठाकुर".to_string()),
+            Just("🚀".to_string()),
+            "\\PC{1,15}",
+        ],
+        note_text in prop_oneof![
+            Just("Café & Croissants in München.\n∀x ∈ ℝ: x² ≥ 0 🌟".to_string()),
+            Just("Привет, мир! 🌍".to_string()),
+            Just("こんにちは 世界 🌸".to_string()),
+            Just("مرحبا بالعالم".to_string()),
+            "\\PC{1,50}",
+        ],
+    ) {
+        let full = format!("{given} {surname}");
+        let card = ContactCard {
+            id: Some("C-PROP-UNICODE".into()),
+            name: Some(Name {
+                full: Some(full.clone()),
+                components: Some(vec![
+                    NameComponent::new("given", &given),
+                    NameComponent::new("surname", &surname),
+                ]),
+                extra: BTreeMap::new(),
+            }),
+            notes: Some([(
+                "n1".to_owned(),
+                Note {
+                    note: note_text.clone(),
+                    extra: BTreeMap::new(),
+                },
+            )].into()),
+            ..ContactCard::default()
+        };
+
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("parse non-ascii unicode card");
+
+        let p_name = parsed1.name.as_ref().expect("name present");
+        prop_assert_eq!(p_name.full.as_deref(), Some(full.as_str()));
+
+        let p_note = &parsed1.notes.as_ref().expect("notes present")["n1"].note;
+        prop_assert_eq!(p_note, &note_text);
+
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip");
+        let vcard3 = card_to_vcard(&parsed2);
+        prop_assert_eq!(vcard2, vcard3, "Unicode card must reach fixed point");
+    }
+
+    #[test]
+    fn prop_photo_inline_and_uri_roundtrip_stability(
+        is_uri in any::<bool>(),
+        subtype in prop_oneof![
+            Just("jpeg".to_string()),
+            Just("png".to_string()),
+            Just("gif".to_string()),
+            Just("webp".to_string()),
+            Just("svg+xml".to_string()),
+            Just("bmp".to_string()),
+            Just("tiff".to_string()),
+            Just("avif".to_string()),
+            Just("heic".to_string()),
+            Just("x-icon".to_string()),
+        ],
+        raw_bytes in prop::collection::vec(any::<u8>(), 1..256),
+        uri_str in prop_oneof![
+            Just("https://example.com/avatar.jpg".to_string()),
+            Just("http://cdn.org/pic.png?w=100&h=100".to_string()),
+            Just("file:///home/user/.face".to_string()),
+            Just("https://photos.example.org/image.webp#top".to_string()),
+        ],
+    ) {
+        let (uri, media_type) = if is_uri {
+            (uri_str, None)
+        } else {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&raw_bytes);
+            (
+                format!("data:image/{subtype};base64,{encoded}"),
+                Some(format!("image/{subtype}")),
+            )
+        };
+
+        let card = ContactCard {
+            id: Some("C-PROP-PHOTO".into()),
+            media: Some([(
+                "m1".to_owned(),
+                Media {
+                    kind: Some("photo".to_owned()),
+                    uri: uri.clone(),
+                    media_type: media_type.clone(),
+                    extra: BTreeMap::new(),
+                },
+            )].into()),
+            ..ContactCard::default()
+        };
+
+        let vcard1 = card_to_vcard(&card);
+        prop_assert!(vcard1.contains("PHOTO;"));
+        if is_uri {
+            prop_assert!(vcard1.contains("VALUE=uri"));
+            prop_assert!(!vcard1.contains("ENCODING="));
+        } else {
+            let expected_type = format!("TYPE={subtype}");
+            prop_assert!(vcard1.contains("ENCODING=b"));
+            prop_assert!(vcard1.contains(&expected_type));
+        }
+
+        let parsed1 = vcard_to_card(&vcard1).expect("parse emitted photo vcard");
+        let entry1 = &parsed1.media.as_ref().expect("media present")["m1"];
+        prop_assert_eq!(entry1.kind.as_deref(), Some("photo"));
+
+        if is_uri {
+            prop_assert_eq!(&entry1.uri, &uri);
+            prop_assert_eq!(entry1.media_type.as_ref(), None);
+        } else {
+            prop_assert_eq!(entry1.media_type.as_deref(), media_type.as_deref());
+            let prefix = format!("data:image/{subtype};base64,");
+            let payload = entry1.uri.strip_prefix(&prefix).expect("data prefix");
+            let decoded_bytes = base64::engine::general_purpose::STANDARD.decode(payload).expect("decode base64");
+            prop_assert_eq!(decoded_bytes, raw_bytes);
+        }
+
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip");
+        let vcard3 = card_to_vcard(&parsed2);
+        prop_assert_eq!(vcard2, vcard3, "Photo roundtrip must reach fixed point");
     }
 }
