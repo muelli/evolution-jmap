@@ -64,11 +64,37 @@ pub(crate) fn rebase_origin(url: &str, origin: &str) -> String {
     format!("{}{path_and_beyond}", origin.trim_end_matches('/'))
 }
 
+/// The scheme+authority prefix of `url` — everything before its first `/`
+/// after `://`, or the whole string if it has none.
+///
+/// Used to decide whether a response came from the URL it was asked for or
+/// wandered somewhere else via a redirect (see
+/// [`crate::transport::HttpResponse::final_url`] and
+/// [`crate::Client::download_blob`]): two URLs naming the same scheme, host
+/// and port are the same origin even if their paths differ, and differ in
+/// this string if either does. Byte comparison rather than RFC 6454's own
+/// normalisation (case-folding the host, dropping a default port) is
+/// deliberate — both sides being compared are strings this crate itself
+/// built or a transport reported back from a URL it built, not
+/// attacker-chosen text to normalise defensively against.
+pub(crate) fn origin_of(url: &str) -> &str {
+    match url.find("://") {
+        Some(scheme_end) => {
+            let after_scheme = scheme_end + 3;
+            match url[after_scheme..].find('/') {
+                Some(slash) => &url[..after_scheme + slash],
+                None => url,
+            }
+        }
+        None => url,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
 
-    use super::{encode_template_value, rebase_origin};
+    use super::{encode_template_value, origin_of, rebase_origin};
 
     #[test]
     fn unreserved_characters_pass_through() {
@@ -132,6 +158,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn origin_of_drops_the_path() {
+        assert_eq!(
+            origin_of("https://example.com/download/A1/B2/name"),
+            "https://example.com"
+        );
+    }
+
+    #[test]
+    fn origin_of_a_bare_origin_is_itself() {
+        assert_eq!(origin_of("https://example.com"), "https://example.com");
+    }
+
+    #[test]
+    fn origin_of_distinguishes_host_and_port() {
+        assert_ne!(
+            origin_of("http://127.0.0.1:1234/download/x"),
+            origin_of("http://127.0.0.1:5678/download/x")
+        );
+        assert_ne!(
+            origin_of("http://a.example.com/x"),
+            origin_of("http://b.example.com/x")
+        );
+    }
+
+    #[test]
+    fn origin_of_a_schemeless_string_is_itself() {
+        assert_eq!(origin_of("not a url"), "not a url");
+    }
+
     proptest! {
         // `url` and `origin` here stand in for `apiUrl`/`downloadUrl`/
         // `uploadUrl`/`eventSourceUrl` straight off an untrusted server's
@@ -144,6 +200,15 @@ mod tests {
         #[test]
         fn rebase_origin_never_panics_on_hostile_input(url in ".*", origin in ".*") {
             let _ = rebase_origin(&url, &origin);
+        }
+
+        // `url` stands in for `HttpResponse::final_url`, which a transport
+        // builds from whatever a server's `Location` header names across
+        // however many redirects it followed — as untrusted as `rebase_origin`'s
+        // own arguments above.
+        #[test]
+        fn origin_of_never_panics_on_hostile_input(url in ".*") {
+            let _ = origin_of(&url);
         }
 
         // `value` stands in for a server-supplied `blobId`/`accountId`, or

@@ -70,6 +70,20 @@ pub enum Error {
         error: String,
         description: Option<String>,
     },
+    /// A blob download was redirected to a different origin than the one the
+    /// session's own `downloadUrl` named.
+    ///
+    /// The transport already drops `Authorization` on a cross-host redirect
+    /// (`UreqTransport::new`'s `redirect_auth_headers`, `SameHost`) — RFC
+    /// 7235's safe default — but it still follows the redirect and hands back
+    /// whatever answered. A JSON response with the wrong shape fails to parse
+    /// and surfaces as [`Self::Json`] or [`Self::Protocol`]; a blob is raw
+    /// bytes with no shape to be wrong, so an unrelated 200 (a captive
+    /// portal, a CDN's catch-all page — Fastmail's own marketing homepage was
+    /// the case that found this) would otherwise be stored as if it were the
+    /// message. `download_blob` checks the origin actually reached against
+    /// the one it requested and refuses to treat a mismatch as data.
+    CrossOriginRedirect { requested: String, followed: String },
 }
 
 impl Error {
@@ -132,6 +146,14 @@ impl std::fmt::Display for Error {
                 f,
                 "OAuth 2.0 token request refused: {error} ({})",
                 description.as_deref().unwrap_or("no description")
+            ),
+            Error::CrossOriginRedirect {
+                requested,
+                followed,
+            } => write!(
+                f,
+                "download redirected from {requested} to a different origin \
+                 ({followed}); refusing to treat its answer as the blob"
             ),
         }
     }

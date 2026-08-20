@@ -821,6 +821,12 @@ impl Client {
     /// such number passes [`crate::limits::MAX_BLOB_BYTES`]. Exactly
     /// `max_bytes` arrives; more is [`Error::ResponseTooLarge`], with the body
     /// abandoned at the ceiling rather than buffered and then judged.
+    ///
+    /// Refuses a response that arrived via a redirect to a different origin
+    /// than `downloadUrl` itself named ([`Error::CrossOriginRedirect`]) — a
+    /// blob is raw bytes, with no shape a wrong answer could fail to match,
+    /// so nothing else here would catch a redirect target's own unrelated 200
+    /// being handed back as if it were the message.
     pub fn download_blob(
         &self,
         account_id: &Id,
@@ -836,6 +842,12 @@ impl Client {
             .replace("{name}", &encode_template_value(name))
             .replace("{type}", &encode_template_value("application/octet-stream"));
         let response = self.execute_within(HttpMethod::Get, &url, None, None, max_bytes)?;
+        if crate::url::origin_of(&response.final_url) != crate::url::origin_of(&url) {
+            return Err(Error::CrossOriginRedirect {
+                requested: crate::url::origin_of(&url).to_owned(),
+                followed: crate::url::origin_of(&response.final_url).to_owned(),
+            });
+        }
         Ok(response.body)
     }
 }
