@@ -884,6 +884,25 @@ tracks follow; the maintainer may reorder anytime.
     crates' own `cargo test --locked` green, 0 failed. No new dependency, no
     new user-facing string. See `docs/FFI-SOUNDNESS-AUDIT.md` for the full
     write-up.
+  - **Findings 1 and 3 both fixed 2026-08-20 (roadmap annotation added
+    2026-08-20 — a docs-sync gap like A1/A2/A3/A7's above; the work landed,
+    this entry just never caught up).** `set_raw_gerror`'s hardening
+    (`3dacd8b`) closed the `debug_assert`-only precondition gap. The
+    `oauth2.rs::borrowed` race — escalated to opus at `0db0438`, claimed at
+    `57dc3a2`, fixed at `dab9348` — was **not** merely theoretical: reading
+    the EDS 3.52.3 source found the real racing writer is `set_property`
+    (via D-Bus source-data reloads), not the GTK-driven `apply()` this
+    section hypothesised, and that EDS's own OAuth2 services avoid the
+    hazard by never freeing what they hand out. The fix adopts that same
+    discipline — `Fields::set` never frees a previously-published value,
+    moving a replaced one into a `retired` list dropped only at
+    `finalize` — closing the race without the lock-widening or owned-copy
+    trade-off this section worried a fix would force. See
+    `docs/FFI-SOUNDNESS-AUDIT.md`'s "Resolution 2026-08-20" under Finding 3
+    for the full account. **A5 is now fully closed**; the one thing still
+    open (Finding 4, `insert_entries`'s asymmetric NULL guards) is tagged
+    cosmetic/INVESTIGATE and explicitly not scheduled — a readability nit,
+    not a soundness gap.
 - **A6 `[claude]` Unsafe reduction / idiom audit.** Deliverable
   `docs/UNSAFE-AUDIT.md`: inventory every `unsafe` in `rust/` by category, tag
   each cluster **KEEP** (intrinsic, well-contained) / **IMPROVE** (a concrete

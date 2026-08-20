@@ -226,7 +226,20 @@ low-severity nit. Recreate it by pasting the minimal input above into a
 `#[test]` that asserts the fixed point directly — that is the red test to
 start from, and it is deterministic.
 
-## `jmap-ical` panics on a DATE-TIME value with a non-ASCII byte before offset 6 (found 2026-08-19)
+## ~~`jmap-ical` panics on a DATE-TIME value with a non-ASCII byte before offset 6~~ (found 2026-08-19)
+
+**Fixed** — `to_local_date_time` (`jmap-ical/src/event.rs`) now checks
+`date.is_char_boundary(8)`/`time.is_char_boundary(6)` before slicing (landed
+as part of the Antigravity/agy-lane vCard-fidelity merge, `3a25473`/`f4c1ae7`,
+2026-08-19 — this entry was written the same day from an independent
+`master` checkout and never got word). Confirmed by reverting the two
+`is_char_boundary` checks locally and rerunning: the exact minimal input
+below panics again at the same site, so this is genuinely what fixed it, not
+a coincidental change elsewhere. Pinned with a permanent regression test,
+`jmap-ical/tests/hostile.rs::a_dtend_with_a_multibyte_character_at_the_slice_boundary_does_not_panic`,
+asserting the event still parses (DTEND dropped, not invented) rather than
+panicking. Left below for its original findings/repro value, not because
+anything is still open here.
 
 Found incidentally while gating an unrelated OAuth increment: `cargo test
 --locked` (workspace, unmodified test selection) failed on
@@ -270,7 +283,8 @@ then convert), but is real work: a red test first (the input above, asserted
 to return `None` rather than panic), then the fix, then confirming the
 existing proptest properties (which is what caught this) stay green.
 
-**Not fixed here, on purpose:** `jmap-ical` is part of the closed M4 calendar
+**Was not fixed by the session that filed this entry, on purpose (see the
+"Fixed" note above for what actually closed it):** `jmap-ical` is part of the closed M4 calendar
 backend (`docs/ROADMAP.md` CURRENT PRIORITY says not to reopen M1–M6/M8 for
 this), and Track A3 (structure-aware vCard/iCal fuzzing, where a survivor like
 this belongs) is tagged `[agy]` lane, not `[claude]`. Logged with full

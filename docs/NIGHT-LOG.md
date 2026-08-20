@@ -867,3 +867,83 @@ an operator's live Fastmail probe to identify which of its three hypotheses
 actually explains the marketing-homepage response, and possibly a further
 fix once that is known. Ending the session here per the standing rule
 against starting a second large item.
+
+## 2026-08-20 — Survey found no unblocked CURRENT PRIORITY / Round 2 work; closed a stale-docs gap and pinned an already-fixed panic instead
+
+Fresh survey against `origin/master` (unchanged at `31919a4`, this thread's
+own last push). Walked CURRENT PRIORITY items 1-9, M9/M10, and Round 2
+Tracks A-F end to end:
+
+- **Item 9** (mail-body blob download) — headless half already delivered
+  last session; the rest needs the operator's live, token-gated Fastmail
+  probe. Human-blocked.
+- **M7, M9, M10** — all tagged `COMPLETE` in `docs/MILESTONES.md`, confirmed
+  by reading the actual milestone text and the CI workflow (`functional`,
+  `gui-smoke`, `eds-version-matrix` jobs all exist and are wired).
+- **Track A** (A1-A7) — every pattern DONE per `docs/UNSAFE-AUDIT.md` and
+  `docs/FFI-SOUNDNESS-AUDIT.md`, **except** their text hadn't caught up with
+  two commits already on `master`: `3dacd8b` (Finding 1,
+  `set_raw_gerror` hardening) and `dab9348` (Finding 3, the
+  `oauth2.rs::borrowed` use-after-free, escalated to opus and fixed) both
+  landed after `docs/ROADMAP.md`'s A5 write-up was last touched, so that
+  section still called Finding 3 "deliberately left open" when it is not —
+  the same "docs-sync gap" pattern A1/A2/A3/A7 hit before. Fixed the roadmap
+  text to match `docs/FFI-SOUNDNESS-AUDIT.md`'s current findings table (only
+  Finding 4, tagged cosmetic/not-scheduled, is genuinely still open).
+- **Track B** — explicitly gated `NEEDS-DECISION`, not claimable.
+- **Track C** — C1/C3 done, C2/C4 explicitly `NEEDS-DECISION`.
+- **Track D** — D1's code side is complete (create *and* delete both
+  wired), pending the operator's real-Evolution right-click-delete
+  confirmation; D2's write-back is tagged `RESEARCHED, NOT CLAIMABLE YET`
+  (needs a signal-lifecycle design, not a mechanical port).
+- **Track E** — Phase 0 + Path A code-complete pending operator
+  confirmation (the free/busy panel needs a live registry); Phase B/C
+  explicitly "do NOT start until Path A lands + maintainer OK".
+- **Track F** — SPIKE closed, no-op.
+- **`docs/BACKLOG.md`** — re-read every entry against the current tree
+  rather than trusting the file. Two are closed-backend fidelity nits
+  correctly left alone (vCard trailing whitespace, calendar colour
+  write-back, contact fidelity list). The third, "`jmap-ical` panics on a
+  DATE-TIME value with a non-ASCII byte before offset 6" (filed 2026-08-19,
+  flagged as the more valuable of two fuzzer survivors precisely because
+  it is a real panic on the untrusted-server boundary, not cosmetic
+  fidelity), turned out to be **already fixed** —
+  `to_local_date_time` (`jmap-ical/src/event.rs:3871`) already checks
+  `date.is_char_boundary(8)`/`time.is_char_boundary(6)` before slicing, via
+  `3a25473` in the Antigravity/agy-lane polish branch merged same-day
+  (`f4c1ae7`), independently of and slightly after whoever wrote that
+  backlog entry from their own checkout. Confirmed this really is what
+  fixed it, not a coincidence, by reverting just those two
+  `is_char_boundary` checks locally and rerunning: the exact minimal input
+  from the backlog entry panics again at the same line
+  (`end byte index 6 is not a char boundary`); restored, green again.
+
+**No genuinely unblocked CURRENT PRIORITY or Round 2 `[claude]`-lane item
+exists this session** — everything left is operator-verification-blocked,
+maintainer-decision-gated, or backlog-listed closed-backend polish this
+thread is directed not to reopen. Rather than end with a bare `BLOCKED`
+report and nothing to show, closed the one real gap the survey turned up:
+the `jmap-ical` panic fix had no regression test pinning it down, so a
+future refactor could silently reopen it with no fuzzer run to catch it
+before it reached `master` again. Added
+`jmap-ical/tests/hostile.rs::a_dtend_with_a_multibyte_character_at_the_slice_boundary_does_not_panic`
+(the untrusted-input-hardening file this class of bug belongs in, per
+Track A3/A4's own framing), asserting the event still parses with `DTEND`
+dropped rather than invented, confirmed red against the reverted code
+first. Also corrected `docs/ROADMAP.md`'s stale A5 write-up and
+`docs/BACKLOG.md`'s panic entry to say "fixed", so neither misleads a future
+session into re-escalating or re-diagnosing work already done.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked --
+-D warnings` (default-members, includes `jmap-ical`) clean — no EDS-gated
+crate touched, so the seven-crate clippy/test rerun was skipped as
+redundant. `cargo test --locked` (default-members) green, 0 failed. No new
+dependency, no new user-facing string, no new file (only an existing
+SPDX-headed test file grew a test), so no `po/`/`reuse` action needed.
+
+NIGHT-SHIFT: no unblocked increment existed; closed a stale-docs gap
+(ROADMAP A5, BACKLOG's jmap-ical entry) and pinned an already-fixed panic
+with a permanent regression test instead of ending with nothing. Next
+session: same survey will likely find the same shape unless the operator
+has run one of the pending live-Evolution/Fastmail confirmations (item 9,
+D1, Path A) or the maintainer has ruled on Track B/C2/D2's open decisions.
