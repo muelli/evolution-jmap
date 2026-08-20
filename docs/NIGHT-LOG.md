@@ -40255,3 +40255,69 @@ session here per the standing rule against starting a second large item —
 the remaining open item in that audit (Finding 3, `oauth2.rs::borrowed`) is
 concurrency/pointer-lifetime design work the audit itself flags as
 escalation-worthy, not a Sonnet-sized next step from here.
+
+## 2026-08-20 (escalated to opus) — no tractable Sonnet-sized item; escalating FFI-SOUNDNESS-AUDIT Finding 3
+
+Fresh survey (`git fetch`: `origin/master` unchanged at `3dacd8b`, the
+previous session's FFI Finding 1 delivery). Walked `docs/ROADMAP.md` end to
+end, including every sub-item's own status text, not just section headers:
+
+- CURRENT PRIORITY items 1-8 are all code-complete, each pending only an
+  operator/maintainer confirmation already logged as such (M7, item 5's SRV
+  resolver, item 6's API-token method, item 7's collection-backend fix, and
+  item 8's CI fix all need a real Evolution/Fastmail session or a live CI
+  run, neither available here).
+- Round 2 Track A (A1-A7): fully closed. A4's one loose end (fuzzing
+  redirect targets beyond the fixed-case test) is explicitly "the one
+  narrower thing left... if a future session wants to broaden it", not a
+  gap the track's own text asks for.
+- Track B1: NEEDS-DECISION (tracing+tracing-journald vs g_log — a
+  recommendation exists in the roadmap text but no maintainer sign-off is
+  recorded).
+- Track C: C1/C3 DONE; C2's remaining half (third-party DEP-5 entries) and
+  C4 are both explicitly NEEDS-DECISION.
+- Track D: D1 code-complete pending operator verification (both
+  create_resource_sync and delete_resource_sync landed). D2's write-back is
+  "RESEARCHED, NOT CLAIMABLE YET" — needs a new signal-lifecycle/concurrency
+  design (EWS has no server round-trip to mirror), the same kind of
+  cross-thread reasoning as the item below, not a mechanical port.
+- Track E: Phase 0 + Path A fully code-complete pending operator
+  confirmation; Phase B/C explicitly need a fresh maintainer decision before
+  starting.
+- Track F: closed, no-op per its own spike.
+- `docs/UNSAFE-AUDIT.md`: every IMPROVE pattern closed except
+  `SourceConfig::from_source`'s unguarded extension reads, which its own
+  text says "needs a behaviour decision, not a mechanical port", and Pattern
+  E, explicitly deprioritized ("Lowest priority... not scheduled").
+- `docs/FFI-SOUNDNESS-AUDIT.md`: Finding 1 fixed last session, Finding 2
+  fixed the session before, Finding 4 explicitly "cosmetic; not scheduled".
+  Finding 3 (`jmap-config/src/oauth2.rs::borrowed` releasing its mutex
+  before returning a raw pointer into the `CString` it was protecting, which
+  a concurrent `apply()` can then free out from under an in-flight
+  `EOAuth2Service` vtable call) is the one remaining item, and the audit's
+  own text calls it out by name: "exactly the kind of subtle cross-thread
+  pointer-lifetime reasoning the night-shift escalation criteria name
+  explicitly."
+
+No other unblocked, no-decision-needed, non-backend-polish item exists.
+Every prior session back through item 8's delivery reached the same
+conclusion about Finding 3 (see the "Why this one and not Finding 3" note
+two entries above) but stopped short of actually escalating it, instead
+ending the session on the item they *did* land. With nothing else left to
+land this iteration, Finding 3 is now the best next step by elimination, not
+new information: it needs either (a) reading EDS 3.52's own threading
+contract closely enough to prove `EOAuth2Service` vtable calls and
+`insert_entries`'s `apply()` cannot race on the same source (turning this
+into a documented KEEP), or (b) a real fix that changes `borrowed()`'s
+return shape (owned copy vs. the current zero-allocation raw pointer) —
+either path is exactly the kind of concurrency/pointer-lifetime reasoning
+where a plausible-but-wrong answer is likely and would either wrongly wave
+off a live race or introduce a subtly broken ownership change. Writing
+`claude-opus-5` to `~/.night-shift-escalate` and stopping without claiming
+any work — no source changed this session, only this log entry.
+
+`ci/checks.sh` still cannot run on this VM ([[checks-sh-blocked-on-vm]]).
+
+NIGHT-SHIFT: escalating FFI-SOUNDNESS-AUDIT Finding 3 to opus (see
+`~/.night-shift-escalate`); no tractable Sonnet-sized item remained this
+iteration.
