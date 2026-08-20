@@ -708,6 +708,45 @@ they close, prioritise in this order:
      itself make Fastmail readable if the true cause is hypothesis 2 or 3
      rather than 1 — still needs the operator's live, token-gated probe this
      item always said it would.
+   - **OPERATOR-VERIFIED guardrail + REAL FIX still open, now WITH the live
+     trace 2026-08-20.** Operator built `d9ef74a`, installed all components,
+     cleared the account's stale body cache, opened a Fastmail message in real
+     Evolution: the marketing-HTML garbage is GONE, and the reading pane now
+     shows the guardrail's clean error verbatim — `Unable to retrieve message.
+     download redirected from https://api.fastmail.com:443 to a different origin
+     (https://www.fastmail.com); refusing to treat its answer as the blob`. So
+     the **guardrail (headless half) is confirmed on real Fastmail**, and the
+     decisive fact is now known: **Fastmail's advertised `downloadUrl` host is
+     `api.fastmail.com`, and an authenticated (Bearer) GET to it 302-redirects
+     to `www.fastmail.com`.** Code review of our path this session
+     (`client.rs`/`mail.rs`): we ARE spec-shaped on the two things that matter —
+     `download_blob` uses the session's advertised `downloadUrl` as-is (rebase
+     is opt-in via `JMAP_LIVE_SERVER_REBASE_URLS`, OFF by default, so the host
+     is Fastmail's, not ours), and `execute_within` attaches
+     `Authorization: Bearer` to the download GET (RFC 8620 §6.2 requires the
+     same auth as API requests). **But one spec-smell is the leading headless
+     lead:** `execute_within` (`client.rs:410`) sends `Accept: application/json`
+     on EVERY request, including the raw-bytes blob download — a blob is not
+     JSON, and a server doing content negotiation can legitimately refuse or
+     redirect a request declaring it accepts only JSON. Making `download_blob`'s
+     GET send an appropriate `Accept` (`*/*`, or the `{type}`, not
+     `application/json`) is spec-correct, needs no Fastmail access, and is
+     jmap-mock-reproducible — **CLAIM THIS FIRST.**
+     **MANDATE (operator 2026-08-20): validate every change against RFC 8620
+     §6.2 / the JMAP spec — do NOT bake in Fastmail-proprietary behavior that is
+     incompatible with the standard.** Plan: (1) [headless, claimable now] fix
+     the `Accept` header on `download_blob`'s GET, with a jmap-mock mode that
+     refuses/redirects a blob GET carrying `Accept: application/json` and serves
+     it for a spec-appropriate `Accept`; (2) [reference-client study, headless]
+     compare our download request to a known-good JMAP client's — candidate
+     `mujmap` (Rust, syncs Fastmail↔maildir, so its download-request shape is
+     Fastmail-proven) or `jmapc` (Python) — read how it sets `Accept`/headers
+     and whether Fastmail answers 200 or 302; (3) [operator/live, token-gated —
+     the runner has no Fastmail creds and Claude does not handle the token]
+     capture the raw exchange, e.g. `curl -sSIL -H "Authorization: Bearer
+     <token>" "<expanded downloadUrl>"`, to see 200-vs-302 + headers and to
+     fetch the session doc's real `downloadUrl` template; then finalize the
+     spec-correct fix and operator re-verifies (open a message → body renders).
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
