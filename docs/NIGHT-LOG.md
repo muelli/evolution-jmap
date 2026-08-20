@@ -956,3 +956,68 @@ marks step (1) — "fix the `Accept` header on `download_blob`'s GET, with a
 jmap-mock mode that refuses/redirects a blob GET carrying `Accept:
 application/json` and serves it for a spec-appropriate `Accept`" —
 headless, claimable now, and explicitly "CLAIM THIS FIRST". Claiming it.
+
+## 2026-08-20 — Delivered: `download_blob` declares `Accept: */*`, not `application/json`
+
+**Root cause, as the roadmap entry already named it:** `execute_within`
+(`jmap-client/src/client.rs`) hardcoded `Accept: application/json` on every
+outgoing request, including `download_blob`'s GET. A blob download never
+answers JSON — RFC 8620 §6.2 gives it no reason to declare that header — and
+a server doing RFC 7231 §5.3.2 content negotiation is free to refuse or
+redirect a request that (wrongly) claims JSON is the only acceptable answer.
+This was flagged as the leading headless explanation for Fastmail's blob GET
+302-redirecting to `www.fastmail.com` instead of answering the message.
+
+**Fix:** `execute_within` gained an `accept: &str` parameter instead of the
+hardcoded literal. `execute_with_content_type` (used by every API call and
+the upload endpoint) passes `"application/json"` — unchanged behaviour, the
+one existing call site of `execute_within` outside `download_blob`.
+`download_blob` (`mail.rs`) is now the one caller that declares `Accept:
+*/*` — "any", the conventional way to state no format preference, and
+correct regardless of which content type the server happens to answer a
+given blob with.
+
+**TDD:** `jmap-mock` gained `MockServerBuilder::reject_download_accept_json()`
+(mirrors `download_via_redirect_to`'s shape): the `/download/...` route
+answers `406` when the GET's `Accept` header is exactly `application/json`,
+and serves the blob for anything else (including no `Accept` header at all).
+Red confirmed first, not by inspection: temporarily reverted
+`download_blob`'s call site back to `"application/json"` and reran the new
+test — failed with the mock's `406`, the same shape of refusal a real
+content-negotiating server could give; restored, green.
+`jmap-client/tests/redirect_auth.rs::download_blob_does_not_declare_accept_application_json`
+pins the fix down permanently, alongside the existing cross-origin-redirect
+test in the same file (both now cover the download path from different
+angles).
+
+**Does not close item 9.** This is plan step (1) only — headless,
+jmap-mock-verified, and a real spec-compliance fix regardless of whether it
+alone explains Fastmail's behaviour. Steps (2) (compare this client's
+download request shape to a reference client like `mujmap`/`jmapc`) and (3)
+(the operator's live, token-gated probe of the real `downloadUrl` exchange
+against Fastmail) are still open and are what will show whether removing
+this `Accept: application/json` claim is sufficient to turn Fastmail's 302
+into a 200, or whether a different credential scheme or URL-template issue
+(the item's other two hypotheses) is also in play.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean. `cargo test --locked` (default-members) green, 0 failed; the
+same seven crates run per-crate (the standing multi-package hang) all
+green, 0 failed throughout. Packaging leg per item 8's own standing-fix
+note: `ninja -C build && ctest --test-dir build -R 'package-deb'` — all
+three packaging tests (`package-deb`, `package-deb-reproducible`,
+`package-deb-lintian`) passed. No new dependency; no new user-facing
+string, so no `po/` regeneration. No new file, so no `reuse lint` action
+needed — every touched file already carries its SPDX header
+([[checks-sh-blocked-on-vm]]).
+
+NIGHT-SHIFT: item 9 plan step (1) delivered and pushed — the `Accept:
+application/json` spec smell on `download_blob`'s GET, fixed and TDD'd
+against a new jmap-mock content-negotiation mode. The item stays open: steps
+(2) and (3) (reference-client comparison, operator's live Fastmail probe)
+are what will confirm whether this alone makes real Fastmail mail bodies
+readable. Ending the session here per the standing rule against starting a
+second large item.

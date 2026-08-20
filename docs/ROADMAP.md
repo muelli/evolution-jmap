@@ -747,6 +747,38 @@ they close, prioritise in this order:
      <token>" "<expanded downloadUrl>"`, to see 200-vs-302 + headers and to
      fetch the session doc's real `downloadUrl` template; then finalize the
      spec-correct fix and operator re-verifies (open a message → body renders).
+   - **DONE 2026-08-20 — plan step (1), the `Accept` smell, fixed and
+     TDD'd.** `execute_within` (`client.rs`) gained an `accept: &str`
+     parameter instead of hardcoding `application/json`; every existing
+     caller (the API endpoint, `Mailbox`/`Email`/etc. calls, uploads) still
+     passes `"application/json"` via `execute_with_content_type`, unchanged
+     behaviour. `download_blob` (`mail.rs`) is the one caller that now
+     declares `Accept: */*` instead — a blob is never JSON, and RFC 8620
+     §6.2 gives it no reason to claim otherwise. `jmap-mock` gained
+     `MockServerBuilder::reject_download_accept_json()` (mirrors
+     `download_via_redirect_to`'s shape): the download route answers `406`
+     when the GET's `Accept` is exactly `application/json`, else serves the
+     blob regardless of `Accept` (including none). TDD: red confirmed first
+     by temporarily reverting `download_blob`'s call site back to
+     `"application/json"` and rerunning — failed with the mock's `406`, the
+     same class of refusal a real content-negotiating server could give;
+     restored, green.
+     `jmap-client/tests/redirect_auth.rs::download_blob_does_not_declare_accept_application_json`
+     pins it down permanently. Full gate green: `cargo fmt --check`; `cargo
+     clippy --all-targets --locked -- -D warnings` (default-members) and the
+     seven-crate EDS-gated clippy both clean; `cargo test --locked`
+     (default-members) and the same seven crates per-crate both green, 0
+     failed throughout; the packaging `.deb` ctest (`ctest --test-dir build
+     -R 'package-deb'`, all 3) green. No new dependency, no new user-facing
+     string.
+     **Does not close the item** — this is plan step (1) only, headless and
+     jmap-mock-verified; steps (2) (reference-client comparison) and (3)
+     (the operator's live, token-gated probe of Fastmail's actual
+     `downloadUrl` exchange) are still open and still what determines
+     whether this alone makes Fastmail's real `downloadUrl` answer 200
+     instead of the observed 302 — this closes a real, independently-correct
+     spec smell regardless of that answer, but does not by itself prove
+     Fastmail mail bodies now render.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
