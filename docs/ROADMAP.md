@@ -1217,6 +1217,42 @@ tracks follow; the maintainer may reorder anytime.
   instead of process-global is a real idea but needs a maintainer decision on
   the ESource surface; log that as NEEDS-DECISION if pursued. TDD: a test that
   a rebased-then-refused download's error message names the env var.
+  - **DONE 2026-08-20 — both named items done, scoped to the one error the
+    item itself named (`CrossOriginRedirect`), not every transport error.**
+    `Client` (`client.rs`) gained a `rebase_note: Option<String>` field,
+    distinct from `rebase_origin.is_some()` (true whenever the opt-in is on,
+    even if the advertised and connected origins already happen to match):
+    `refresh_session` now compares `downloadUrl`'s pre-rebase origin against
+    the origin it rebases to, and when they differ, formats "note:
+    JMAP_LIVE_SERVER_REBASE_URLS is active and rewrote `<advertised>` to
+    `<origin>`", `eprintln!`s it once (item (2), pre-`tracing`/Track B, as the
+    item's own text allowed), and keeps it for item (1).
+    `Error::CrossOriginRedirect` gained a matching `rebase_note: Option<String>`
+    field, appended in parens to its `Display` when set; `download_blob`
+    (`mail.rs`) reads it off a new `pub(crate) Client::rebase_note()` accessor.
+    Scoped to `CrossOriginRedirect` alone (the item's "at minimum") rather than
+    every transport error — the other error variants (`Http`, `Json`,
+    `Protocol`, …) do not carry enough context to say which URL a rebase would
+    have touched without a wider refactor the item did not ask for; the one
+    error where a rebase is the plausible, silent cause of an otherwise
+    ordinary-looking failure is this one. TDD: red confirmed first —
+    `jmap-client/tests/redirect_auth.rs::a_rebased_then_refused_download_names_the_rebase_env_var`
+    combines `MockServerBuilder::advertise_origin` (a stale advertised host,
+    forcing the rebase to actually change `downloadUrl`'s origin) with
+    `download_via_redirect_to` (a genuine cross-origin redirect, so the
+    existing guardrail still fires) and a `rebase_urls_to_origin(true)` client;
+    failed against the unmodified code (message named neither the env var nor
+    the rewrite), green after the fix. Every existing `redirect_auth.rs` test
+    stayed green unmodified — the plain `Error::CrossOriginRedirect { .. }`
+    pattern matches still work since Rust enum field visibility does not
+    require callers to name every field. Full gate green: `cargo fmt --check`;
+    `cargo clippy --all-targets --locked -- -D warnings` (default-members) and
+    the seven-crate EDS-gated clippy both clean; `cargo test --locked`
+    (default-members) and the same seven crates' own `cargo test --locked`
+    both green, 0 failed; the packaging `.deb` ctest (`ctest --test-dir build
+    -R 'package-deb'`, all 3) green. No new dependency, no new user-facing
+    string, no new file (reuse lint unaffected). **Track A is now fully
+    closed** (A1-A8 all DONE).
 
 ### Track B — Observability (NEEDS-DECISION on approach, then CLAIMABLE)
 - **B1 `[claude]` journald structured logging, TRACE→ERROR.** Replace the ~54

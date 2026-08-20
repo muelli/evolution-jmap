@@ -1271,3 +1271,50 @@ its last open item). Claiming it: attach a note naming
 `JMAP_LIVE_SERVER_REBASE_URLS` to `Error::CrossOriginRedirect`'s `Display`
 when the rebase actually changed `downloadUrl`'s origin, and log the rewrite
 once at connect time.
+
+## 2026-08-20 — Delivered: Track A8, `JMAP_LIVE_SERVER_REBASE_URLS` names itself in a rebased-then-refused download's error
+
+**Fix:** `jmap-client::Client` gained a `rebase_note: Option<String>` field,
+set in `refresh_session` when the rebase opt-in actually changes
+`downloadUrl`'s origin (comparing the pre-rebase origin against the one it
+rebases to — distinct from `rebase_origin.is_some()`, which is true whenever
+the opt-in is on even if the two origins already happen to match). When they
+differ, the note ("note: `JMAP_LIVE_SERVER_REBASE_URLS` is active and rewrote
+`<advertised>` to `<origin>`") is `eprintln!`'d once (item (2), plain stderr
+being fine pre-Track-B/`tracing`) and kept for item (1):
+`Error::CrossOriginRedirect` gained a matching `rebase_note` field, appended
+in parens to its `Display` when set, read off a new `pub(crate)
+Client::rebase_note()` accessor from `download_blob` (`mail.rs`). Scoped to
+`CrossOriginRedirect` alone, as the roadmap item's own "at minimum" allowed —
+the other error variants don't carry enough context about which URL a rebase
+would have touched to say anything useful without a wider refactor the item
+did not ask for.
+
+**TDD:** red confirmed first —
+`jmap-client/tests/redirect_auth.rs::a_rebased_then_refused_download_names_the_rebase_env_var`
+combines `MockServerBuilder::advertise_origin` (a stale advertised host, so
+the rebase actually changes `downloadUrl`'s origin, not a no-op) with
+`download_via_redirect_to` (a genuine cross-origin redirect, exercising the
+existing guardrail from item 9) and a client built with
+`rebase_urls_to_origin(true)`. Against the unmodified code the error's
+`Display` named neither the env var nor the rewrite (only "download
+redirected from ... to a different origin"); green after the fix. Every
+existing `redirect_auth.rs` test stayed green unmodified.
+
+**Gate.** `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D
+warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean. `cargo test --locked` (default-members) and the same seven-crate
+`cargo test --locked` both green, 0 failed throughout. Packaging leg per item
+8's standing note: `ninja -C build && ctest --test-dir build -R
+'package-deb'` — all three packaging tests green. No new dependency; no new
+user-facing string, so no `po/` action; no new file, so no `reuse lint`
+action needed.
+
+**Track A is now fully closed** (A1 through A8 all DONE, per
+`docs/ROADMAP.md`'s own lead-order list).
+
+NIGHT-SHIFT: Track A8 delivered and about to be pushed — Track A (quality &
+security) is now fully closed. Ending the session here per the standing rule
+against starting a second large item.
