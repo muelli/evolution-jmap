@@ -81,7 +81,7 @@ use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_RESOURCE, E_SOURCE_EXTENSION_SECURITY,
     EClientError, ESource, ESourceAuthentication, ESourceResource, ESourceSecurity,
     e_client_error_create, e_source_authentication_get_host, e_source_authentication_get_port,
-    e_source_authentication_get_type, e_source_authentication_get_user, e_source_get_extension,
+    e_source_authentication_get_type, e_source_authentication_get_user,
     e_source_resource_get_identity, e_source_resource_get_type, e_source_security_get_secure,
     e_source_security_get_type,
 };
@@ -199,23 +199,42 @@ impl SourceConfig {
             Some(security) => unsafe { e_source_security_get_secure(security) != 0 },
         };
 
-        // SAFETY: as above; the returned extensions are owned by the source
-        // and live as long as it does.
-        let (auth, resource) = unsafe {
-            (
-                e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
-                    .cast::<ESourceAuthentication>(),
-                e_source_get_extension(source, E_SOURCE_EXTENSION_RESOURCE.as_ptr())
-                    .cast::<ESourceResource>(),
-            )
+        // Asked with the same `extension_if_present` guard as `SECURITY`
+        // above, not `e_source_get_extension` directly: a source read for
+        // diagnostics or validation, not owned by the caller, must not gain
+        // an empty `[Authentication]`/`[Resource]` group merely because
+        // something looked at it.
+        // SAFETY: the source is valid for the whole call and the names are
+        // header constants.
+        let auth = unsafe {
+            extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
         };
+        // SAFETY: as above.
+        let resource =
+            unsafe { extension_if_present::<ESourceResource>(source, E_SOURCE_EXTENSION_RESOURCE) };
 
-        // SAFETY: each pointer is either NULL — handled by the readers — or a
-        // live extension of the type the name selects.
-        let host = unsafe { read_string(e_source_authentication_get_host(auth)) };
-        let user = unsafe { read_string(e_source_authentication_get_user(auth)) };
-        let port = unsafe { e_source_authentication_get_port(auth) };
-        let resource_id = unsafe { read_string(e_source_resource_get_identity(resource)) };
+        // An absent extension reads the same defaults a freshly-created,
+        // still-empty one would have answered (NULL host/user/identity, port
+        // 0), so this changes no observable read result — only the side
+        // effect of creating the group goes away.
+        // SAFETY: each `Some` pointer is a live extension of the type
+        // `extension_if_present` selected.
+        let host = match auth {
+            Some(auth) => unsafe { read_string(e_source_authentication_get_host(auth)) },
+            None => None,
+        };
+        let user = match auth {
+            Some(auth) => unsafe { read_string(e_source_authentication_get_user(auth)) },
+            None => None,
+        };
+        let port = match auth {
+            Some(auth) => unsafe { e_source_authentication_get_port(auth) },
+            None => 0,
+        };
+        let resource_id = match resource {
+            Some(resource) => unsafe { read_string(e_source_resource_get_identity(resource)) },
+            None => None,
+        };
 
         let target = connect_target(host.as_deref(), port, secure)?;
 

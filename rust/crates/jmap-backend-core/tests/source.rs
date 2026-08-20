@@ -15,9 +15,10 @@ use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_RESOURCE, E_SOURCE_EXTENSION_SECURITY,
     ESource, ESourceAuthentication, ESourceResource, ESourceSecurity,
     e_source_authentication_set_host, e_source_authentication_set_port,
-    e_source_authentication_set_user, e_source_get_extension, e_source_new_with_uid,
-    e_source_resource_set_identity, e_source_security_set_secure,
+    e_source_authentication_set_user, e_source_get_extension, e_source_has_extension,
+    e_source_new_with_uid, e_source_resource_set_identity, e_source_security_set_secure,
 };
+use glib_sys::GFALSE;
 use gobject_sys::g_object_unref;
 use jmap_backend_core::source::{ConnectTarget, SourceConfig, SourceError};
 
@@ -92,6 +93,11 @@ impl TestSource {
         // SAFETY: the source is alive for the duration of the call.
         unsafe { SourceConfig::from_source(self.0) }
     }
+
+    fn has_extension(&self, name: &std::ffi::CStr) -> bool {
+        // SAFETY: a live source and a NUL-terminated name.
+        unsafe { e_source_has_extension(self.0, name.as_ptr()) != GFALSE }
+    }
 }
 
 impl Drop for TestSource {
@@ -134,6 +140,43 @@ fn security_defaults_to_tls_when_the_source_never_mentions_it() {
     assert_eq!(
         config.target,
         ConnectTarget::Domain("jmap.example.com".into())
+    );
+}
+
+#[test]
+fn reading_a_source_with_no_authentication_group_does_not_create_one() {
+    // A source nothing has written `[Authentication]` into yet — never
+    // reached through `.host()`/`.user()`/`.port()`, which themselves fetch
+    // the extension and so would create it as a side effect of test setup.
+    // `from_source` must fail (there is nothing to connect to) without
+    // leaving a group behind merely because it looked.
+    let source = TestSource::new();
+
+    source
+        .config()
+        .expect_err("a source with no host is invalid");
+
+    assert!(
+        !source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
+        "reading a source must not create the [Authentication] group it lacks"
+    );
+}
+
+#[test]
+fn reading_a_source_with_no_resource_group_does_not_create_one() {
+    // A source with a host but no `[Resource]` group — the "default address
+    // book/calendar" case `from_source`'s own module docs describe. Reading
+    // it for its (absent) resource identity must not create the group.
+    let source = TestSource::new().host("jmap.example.com").secure(true);
+
+    let config = source
+        .config()
+        .expect("a source with a host and no [Resource] group is valid");
+
+    assert_eq!(config.resource_id, None);
+    assert!(
+        !source.has_extension(E_SOURCE_EXTENSION_RESOURCE),
+        "reading a source must not create the [Resource] group it lacks"
     );
 }
 
