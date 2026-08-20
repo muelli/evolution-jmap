@@ -564,6 +564,16 @@ they close, prioritise in this order:
      fix stays correct regardless (Basic-for-a-Bearer-only-endpoint is a real
      bug on its own merits) but item 7 should not be tagged complete until
      that confirmation lands.
+   - **OPERATOR-VERIFIED 2026-08-20 — item 7 DONE.** Confirmed against a real
+     Fastmail API-token account in real Evolution (plugin built at `d318dc2`):
+     the auth-retry / password-reprompt loop is **gone**, and **contacts are
+     discovered and a contact create round-trips**. Both symptoms item 7 targeted
+     are resolved. Calendar did **not** appear, but that is a **Fastmail JMAP
+     limitation, not a bug** — Fastmail's JMAP exposes mail + contacts, not
+     calendars (CalDAV for those), so the collection backend correctly creates no
+     calendar child. The operator's live trace surfaced one *separate* remaining
+     issue — reading a mail body fails — filed as item 9 below; it is the
+     blob-download path, not item 7's discovery/auth.
 
 8. **CI is RED — the OAuth-lookup RUNPATH regressed the lintian-clean .deb.
    CLAIMABLE NOW (operator-found 2026-08-19, HIGH — unblocks CI).** The `build`
@@ -627,6 +637,41 @@ they close, prioritise in this order:
      job had in fact failed on every run since `e21f97d` — this was a real,
      unclaimed gap the last several sessions' surveys missed by scoping
      themselves to "items 1-6" and never walking items 7/8.
+
+9. **Reading a mail body fails against real Fastmail — the blob/download
+   fetches the marketing homepage. CLAIMABLE NOW (operator-traced 2026-08-20).**
+   In real Evolution against a real Fastmail account, the message list is correct
+   (subjects/senders show) but **opening a message shows a blank pane /
+   "(no subject)"**. Root cause, from the operator's trace: `jmap-mail` fetches
+   the raw message via the session's **`downloadUrl` (blob download)**, and
+   against Fastmail that GET returns **Fastmail's public marketing homepage** —
+   ~105 KB of `www.fastmail.com` HTML (`<title>Email and calendar made better |
+   Fastmail</title>`) — cached verbatim at
+   `~/.cache/evolution/mail/<acct>/messages/<xx>/<uid>` in place of the message
+   bytes. The API path is fine (Inbox lists, contacts sync, item 7 verified) and
+   the `Authorization: Bearer` header **is** added to the request
+   (`client.rs::execute_within`), so this is specific to the **blob/download
+   path**: Fastmail serves blobs from a **different host** than `api.fastmail.com`
+   and our Bearer is not honored there — most likely a **cross-host redirect that
+   strips the auth** (same class as `86fea00`'s `redirect_auth_headers=SameHost`
+   session-redirect fix, but on the download hop), or Fastmail wanting the
+   download credential differently (query param / cookie), or a `downloadUrl`
+   template issue. A **mock-vs-real gap**: `jmap-mock` serves blobs trivially
+   same-host, so every existing test passes.
+   **Do:** (1) reproduce with a `jmap-mock` mode that serves `downloadUrl` from a
+   **different host and/or 302-redirects** the blob GET (mirror the existing
+   `session_via_redirect` + `redirect_auth.rs` tests, on the download path); pin
+   that an authed download to the advertised download host returns the blob, not
+   an unauthenticated bounce. (2) Fix the blob-download auth/host handling in
+   `jmap-client` so it holds against Fastmail. **Do NOT weaken auth generally** —
+   carry the Bearer only to the session-advertised download host, never to an
+   arbitrary redirect target. TDD against the mock; **operator verifies** against
+   real Fastmail (open a message → the body renders). Nailing *why* Fastmail
+   bounces the authed GET to the homepage needs a token-gated probe of the live
+   `downloadUrl` (redirect vs auth-scheme vs URL-template) — an operator/live
+   step, escalation-worthy if the redirect-auth reasoning gets subtle. This is
+   the last blocker to readable mail; it is NOT item 7 (verified) and NOT the API
+   auth (works).
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
