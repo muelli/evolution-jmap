@@ -947,3 +947,12 @@ with a permanent regression test instead of ending with nothing. Next
 session: same survey will likely find the same shape unless the operator
 has run one of the pending live-Evolution/Fastmail confirmations (item 9,
 D1, Path A) or the maintainer has ruled on Track B/C2/D2's open decisions.
+
+## 2026-08-20 (claim) — Claiming CURRENT PRIORITY item 9 plan step (1): the `Accept: application/json` smell on `download_blob`'s GET
+
+`git fetch`: `origin/master` unchanged at `3013174` (this thread's own last
+push, the roadmap entry queuing this exact plan). That entry's own text
+marks step (1) — "fix the `Accept` header on `download_blob`'s GET, with a
+jmap-mock mode that refuses/redirects a blob GET carrying `Accept:
+application/json` and serves it for a spec-appropriate `Accept`" —
+headless, claimable now, and explicitly "CLAIM THIS FIRST". Claiming it.
