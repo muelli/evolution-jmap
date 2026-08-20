@@ -40016,3 +40016,61 @@ NIGHT-SHIFT: item 8 (CI red) delivered and pushed. Ending the session here
 per the standing rule against starting a second large item — item 7 is the
 next candidate but needs a real Fastmail API-token account in real
 Evolution, not headlessly tractable this session.
+
+## 2026-08-20 (claim) — Claiming CURRENT PRIORITY item 7's likely root cause: the collection backend's `authenticate.rs` never sends API-token accounts as Bearer
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `e14d991`
+(item 8, previous session). CURRENT PRIORITY items 1/2/3/4/5/6/8 are
+code-complete (several pending only operator confirmation already logged as
+such); Round 2 Tracks A/C1/C3/D/Track E Phase 0+Path A are done pending
+operator verification or a maintainer decision on the remaining
+sub-items (Track B1/C2's third-party half/C4/D2 write-back/Track E Phase
+B-C); Track F is closed. That leaves item 7 as the only CURRENT PRIORITY
+item with headless code work left, and the roadmap's own text names a
+concrete lead to chase rather than a diagnosis to redo: "Diff the two
+connect paths" between the collection backend's `authenticate_sync` and
+the working book/cal/mail backends' `connect_sync`.
+
+Did that diff. `jmap-backend-core/src/connect.rs::connect_with` (what
+`connect_sync` uses for the address book, calendar and mail backends) picks
+credentials with three branches: `source_uses_oauth2` → OAuth2 bearer,
+`source_uses_api_token` → `bearer_credentials` (the item-6 API-token
+method), else Basic. `jmap-backend-collection/src/authenticate.rs::login_of`
+(what `authenticate_sync` uses for the collection backend — the vfunc that
+gates the whole fan-out, i.e. contacts/calendar child creation) has only
+**two** branches: `source_uses_oauth2`, else plain Basic
+(`jmap_backend_core::connect::credentials`) — `source_uses_api_token` is
+never checked here at all, even though `jmap-backend-core::api_token` (item
+6) already exists and is already imported by `connect.rs` right next to it.
+
+This is a complete, headless explanation for both halves of item 7: an
+account using the "API Token" method (Fastmail, per item 6) has its stored
+token sent to the collection backend's `authenticate_sync` as a **Basic**
+password (`Credentials::basic(user, token)`), which a real Bearer-only JMAP
+endpoint 401s. `ConnectError::auth_result`'s existing rule turns a 401 into
+`REJECTED`, which makes EDS discard the "password" and re-prompt — the
+~6-second auth-retry loop — and since `fan_out` is never reached, contacts
+and calendar children are never created. The book/cal/mail backends on the
+*same* account authenticate fine because their `connect_sync` already goes
+through the three-branch `connect_with`; only the collection backend's
+separate `login_of` was left on the old two-branch shape from before item 6
+existed — item 6's own roadmap text scoped itself to "the connect path" and
+`jmap-mail`'s Camel side, and never named `jmap-backend-collection`'s
+`authenticate.rs` as a third site needing the same branch, so it was missed
+then rather than regressed since.
+
+**Claiming:** add the missing `source_uses_api_token` → `bearer_credentials`
+branch to `login_of`, mirroring `connect_with`'s exact three-way shape. Red
+test first in `jmap-backend-collection/tests/authenticate.rs` (a
+`TestSource::api_token()` builder alongside the existing `.oauth2()`,
+asserting the fan-out receives `Credentials::Bearer` rather than `Basic` for
+a stored token) against the current two-branch code, then green. This is a
+pure, mechanical, same-crate-family port of an existing, already-tested
+pattern — not new design — so it does not need the escalation the rest of
+item 7 (tracing a live `evolution-source-registry`) was flagged for.
+**Scope, stated plainly:** this closes the code-side root cause the roadmap
+asked to find; it does not by itself prove the fix against a real Fastmail
+account in real Evolution (still the operator's step, unchanged from item
+7's own text) — but it is a positive, testable finding rather than another
+"needs the operator" report, and worth landing regardless of what the
+operator's own trace eventually shows.
