@@ -1148,3 +1148,63 @@ fn a_time_t_no_calendar_can_show_is_refused_rather_than_wrapped() {
     assert_eq!(marshal::utc_date(i64::MAX), None);
     assert_eq!(marshal::utc_date(i64::MIN), None);
 }
+
+// ---------------------------------------------------------------------------
+// on_source_changed
+
+/// The colour matching the baseline is the ordinary case — every
+/// `source_changed` firing that is not about the colour at all, plus every
+/// firing right after this backend's own read path rewrote it — and must not
+/// send anything.
+#[test]
+fn a_colour_matching_the_baseline_is_a_no_op() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    let outcome = ops::on_source_changed(&sync, Some("#62a0ea"), Some("#62a0ea"));
+    assert!(matches!(outcome, ops::ColorOutcome::Unchanged));
+
+    let calendars = fixture.client().calendars(&fixture.account_id).unwrap();
+    let ours = calendars
+        .into_iter()
+        .find(|c| c.id.as_ref() == Some(&fixture.ours))
+        .unwrap();
+    assert_eq!(ours.color, None, "nothing was ever sent");
+}
+
+/// A colour that differs from the baseline is pushed, and the outcome carries
+/// the new baseline for the caller to store.
+#[test]
+fn a_colour_that_differs_from_the_baseline_is_pushed() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    let outcome = ops::on_source_changed(&sync, Some("#ff00ff"), Some("#62a0ea"));
+    assert!(matches!(outcome, ops::ColorOutcome::Pushed(Some(ref c)) if c == "#ff00ff"));
+
+    let calendars = fixture.client().calendars(&fixture.account_id).unwrap();
+    let ours = calendars
+        .into_iter()
+        .find(|c| c.id.as_ref() == Some(&fixture.ours))
+        .unwrap();
+    assert_eq!(ours.color.as_deref(), Some("#ff00ff"));
+}
+
+/// Clearing the colour locally is a genuine difference too, and is pushed as
+/// `None` rather than treated as "nothing to say".
+#[test]
+fn clearing_the_colour_is_pushed_as_none() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    sync.set_color(Some("#ff00ff")).unwrap();
+
+    let outcome = ops::on_source_changed(&sync, None, Some("#ff00ff"));
+    assert!(matches!(outcome, ops::ColorOutcome::Pushed(None)));
+
+    let calendars = fixture.client().calendars(&fixture.account_id).unwrap();
+    let ours = calendars
+        .into_iter()
+        .find(|c| c.id.as_ref() == Some(&fixture.ours))
+        .unwrap();
+    assert_eq!(ours.color, None);
+}
