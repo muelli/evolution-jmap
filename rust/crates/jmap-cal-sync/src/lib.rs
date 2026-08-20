@@ -17,6 +17,7 @@
 //! It is the calendar-side counterpart of `jmap-book-sync`, and follows its
 //! shape closely enough that the two read as one design.
 
+pub mod color;
 pub mod error;
 pub mod freebusy;
 pub mod patch;

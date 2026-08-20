@@ -216,6 +216,19 @@ fn class_init_installs_every_vfunc_the_meta_backend_dispatches_on() {
         vfuncs.remove_component_sync.is_some(),
         "remove_component_sync"
     );
+    assert!(vfuncs.source_changed.is_some(), "source_changed");
+}
+
+/// Unlike every other slot here, the base class never fills this one in — the
+/// module comment traces why, from `e_cal_meta_backend_class_init`'s own
+/// source: there is nothing to chain up to, so this override must not try.
+#[test]
+fn the_parent_leaves_source_changed_unfilled_so_there_is_nothing_to_chain_up_to() {
+    let parent = parent_class().expect("ECalMetaBackendClass is initialised");
+    assert!(
+        parent.source_changed.is_none(),
+        "ECalMetaBackend fills this slot itself"
+    );
 }
 
 /// The two search slots stay the parent's. `ECalMetaBackend` answers a query by

@@ -1478,3 +1478,68 @@ a `jmap-cal-sync` decision module mirroring `freebusy.rs`, and installing
 `ECalMetaBackendClass::source_changed` with a `last_known_color` diff
 baseline, no chain-up). Claiming that implementation now, exactly as scoped
 there.
+
+## 2026-08-20 — Delivered: Track D2, calendar-colour write-back (code side; pending operator verification)
+
+Implemented the previous session's own three-layer plan exactly as written
+(`docs/ROADMAP.md`'s D2 entry): (1) `jmap_client::calendars::calendar_update`,
+a one-line sibling of `event_update`; (2) `jmap_cal_sync::color::CalSync::
+set_color`, wrapping it in a `{"color": color}` patch, `None` clearing the
+property rather than being sent as empty; (3) `jmap-backend-cal/src/
+backend.rs` installs `ECalMetaBackendClass::source_changed` (no chain-up — the
+parent leaves the slot empty) with a `last_known_color: Slot<RwLock<Option
+<String>>>` baseline alongside the existing `session` slot, delegating the
+actual decision to a new pure `jmap_backend_cal::ops::on_source_changed`
+(`Unchanged`/`Pushed(new_baseline)`/`Failed`) — testable against `jmap-mockd`
+with no `ESource` involved, matching every other vfunc body's split in this
+crate. `read`/`write` (the poison-tolerant `RwLock` helpers) were generalised
+from `RwLock<Option<CalSync>>` to `RwLock<T>` rather than duplicated for the
+new slot.
+
+TDD throughout, red before green at each layer: `jmap-client/tests/
+calendars.rs::calendar_update_color`; `jmap-cal-sync/tests/color.rs`'s two
+cases (push, and clearing pushes `None` rather than no-op-ing); `jmap-backend-
+cal/tests/ops.rs`'s three `on_source_changed` cases (no-op on match, push on a
+genuine diff, clearing pushes `None`); `jmap-backend-cal/tests/backend.rs`'s
+two new assertions (`source_changed` is installed; the parent's own slot is
+confirmed `None`, so there is nothing to chain up to).
+
+**Scoped down from the design's stated test bar, logged rather than silently
+skipped:** the design asked for a same-value/genuine-diff behavioural test
+"against a real `ESource` + `ECalMetaBackend` instance, at `tests/
+create_resource.rs`'s realism bar." That needs a real `EBackend`-derived
+instance built through `g_object_new` with `ECalBackend`'s own `registry`/
+`kind` construct properties on top of `EBackend`'s `source` — more
+construction than `create_resource_sync`'s own test needed (a bare
+`EServerSideSource`, no backend instance around it) — which this increment
+did not attempt. Instead, the vfunc-slot-installed fact is tested (matching
+this crate's own established bar for `connect_sync`'s equally-untested
+`e_backend_get_source` read, per the module doc's own admission) and the full
+decision logic is TDD'd one layer down, against `jmap-mockd`, with no real
+`ESource` in it. The gap this leaves — the FFI glue that reads a live
+`ESourceSelectable` off a real `ESource` inside the vfunc body — is real and
+is the one thing a future session building the fuller `EBackend`-instance
+harness would close; `docs/ROADMAP.md`'s D2 entry names it explicitly rather
+than leaving it implicit.
+
+Full gate green: `cargo fmt --check`; `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean. `cargo test --locked` (default-members) and the same seven-crate
+`cargo test --locked` both green, 0 failed throughout. Packaging leg: `ninja
+-C build && ctest --test-dir build -R 'package-deb'` — all three packaging
+tests green. No new dependency; no new user-facing string, so no `po/`
+action; new files (`jmap-cal-sync/src/color.rs`, `jmap-cal-sync/tests/
+color.rs`) carry the standard SPDX header.
+
+**NEEDS HUMAN VERIFICATION in real Evolution**, unchanged from the design's
+own note — nothing headless can drive a real colour-picker edit against a
+live registry. What to check in the VM: editing a JMAP calendar's colour in
+the calendar-properties dialog reaches the server; an unrelated property edit
+(e.g. refresh interval) does not also re-push the colour.
+
+NIGHT-SHIFT: Track D2's calendar-colour write-back is implemented and pushed
+(code side; needs operator verification in real Evolution, same as every
+other write-side EDS feature in this document). Ending the session here per
+the standing rule against starting a second large item.

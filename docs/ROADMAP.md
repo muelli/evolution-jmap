@@ -1615,6 +1615,76 @@ tracks follow; the maintainer may reorder anytime.
     Evolution** bar every other write-side EDS feature in this document
     carries: nothing headless can drive a real colour-picker edit against a
     live registry.
+  - **DONE 2026-08-20 (code side; pending operator verification) — the
+    implementation plan above landed exactly as laid out, all three layers.**
+    (1) `jmap_client::calendars::calendar_update` — a one-line sibling of
+    `event_update`/`calendar_create`/`calendar_destroy`, same crate.
+    (2) `jmap_cal_sync::color` (new module, `CalSync::set_color`) sends a
+    `{"color": color}` patch through it — `None` clears the property rather
+    than being treated as "nothing to say", matching the omitted-vs-empty
+    rule the read path already uses. (3) `jmap-backend-cal/src/backend.rs`
+    installs `ECalMetaBackendClass::source_changed` (no chain-up, as the
+    design found — the parent never fills the slot) alongside a new
+    `last_known_color: Slot<RwLock<Option<String>>>` instance field,
+    initialised/cleared in `instance_init`/`finalize` exactly like the
+    existing `session` field; the vfunc reads the `ESource`'s "Calendar"
+    extension's current colour and hands it to a new pure decision function,
+    `jmap_backend_cal::ops::on_source_changed(sync, current, baseline) ->
+    ColorOutcome` (`Unchanged` / `Pushed(new_baseline)` / `Failed`) — fully
+    testable against `jmap-mockd` with no `ESource` involved, the same split
+    every other vfunc body in this crate already uses. A failed push leaves
+    the baseline untouched on purpose, so the next `source_changed` (EDS's
+    own periodic refresh fires it regardless of any real change) retries the
+    same diff, per the design's own "naturally retried, no bespoke timer"
+    reasoning. `read`/`write` (the poison-tolerant `RwLock` helpers already
+    used for `session`) were generalised from `RwLock<Option<CalSync>>`-only
+    to `RwLock<T>`, rather than duplicating them for the new `Option<String>`
+    slot.
+    **Scoped down from the design's full test plan, and said plainly:** the
+    design asked for "a same-value/no-op case and a genuine-diff-pushes case
+    against a real `ESource` + `ECalMetaBackend` instance, at
+    `tests/create_resource.rs`'s realism bar." That bar needs a real
+    `EBackend`-derived instance constructed through `g_object_new` with a
+    real `ESource` (`ECalBackend`'s own `registry`/`kind` construct
+    properties, on top of `EBackend`'s `source` — more construction than
+    `create_resource_sync`'s test needed, which only built the bare
+    `EServerSideSource`, not a full backend instance around it), which this
+    increment did not attempt. What is tested instead, at the same bar this
+    crate's *other* vfuncs are held to (see the module doc's own admission
+    that `connect_sync`'s read of `e_backend_get_source` is "tested one layer
+    down" rather than against a live instance): the vfunc slot is installed
+    (`tests/backend.rs`) and not left to the parent to chain up to (the
+    parent's own slot is confirmed `None`, mirroring `the_search_slots_are_
+    left_to_the_meta_backend_cache`'s style); the entire decision —
+    no-op-on-match, push-on-genuine-diff, push-a-clear-as-`None`-not-a-no-op —
+    is TDD'd against `jmap-mockd` through `on_source_changed` and
+    `CalSync::set_color` directly (`jmap-backend-cal/tests/ops.rs`,
+    `jmap-cal-sync/tests/color.rs`); and `jmap-client/tests/calendars.rs`
+    covers the wire call itself. What is *not* covered, and is a real gap
+    against the design's own bar: the FFI glue that reads the live
+    `ESourceSelectable` off a real `ESource` inside the vfunc body — the same
+    class of gap `create_resource_sync`'s own real-`ESource` test exists
+    specifically to close for *that* vfunc, left open here for a session
+    that budgets for the fuller `EBackend` construction it needs.
+    TDD: every new behaviour was red-first (`calendar_update_color` against
+    the unmodified client, `set_color_reaches_the_server`/`_of_none_clears_
+    it` against the unmodified sync layer, the three `on_source_changed`
+    cases against the unmodified `ops` module, the two new `backend.rs`
+    assertions against the unmodified vfunc table) before the fix made each
+    green. Full gate green: `cargo fmt --check`; `cargo clippy --all-targets
+    --locked -- -D warnings` (default-members) and the seven-crate EDS-gated
+    clippy both clean; `cargo test --locked` (default-members) and the same
+    seven-crate `cargo test --locked` both green, 0 failed throughout; the
+    packaging `.deb` ctest (`ninja -C build && ctest --test-dir build -R
+    'package-deb'`, all three) green. No new dependency; no new user-facing
+    string, so no `po/` action.
+    **NEEDS HUMAN VERIFICATION in real Evolution** — unchanged from the
+    design's own note: nothing headless can drive a real colour-picker edit
+    against a live registry. What to check in the VM: change a JMAP
+    calendar's colour in the calendar-properties dialog, confirm it reaches
+    the server (`Calendar/get` shows the new value, or a second client sees
+    it), and confirm the read path's own rewrite of an *unrelated* property
+    change (e.g. a refresh-interval edit) does not also re-push the colour.
     **Unrelated, and deliberately not chased further this session (~10 min
     spent, then dropped per the standing "blocked >20 min, switch" rule):**
     checked whether this session's new `infra/live-server/live-server-env.sh`

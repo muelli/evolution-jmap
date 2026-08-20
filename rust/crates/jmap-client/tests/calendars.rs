@@ -177,6 +177,24 @@ fn event_get_by_id() {
 }
 
 #[test]
+fn calendar_update_color() {
+    let (server, account_id, calendar) = server_with_calendar();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    client
+        .calendar_update(&account_id, &calendar, json!({"color": "#00ff00"}))
+        .unwrap();
+
+    let updated = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .find(|c| c.id.as_ref() == Some(&calendar))
+        .unwrap();
+    assert_eq!(updated.color.as_deref(), Some("#00ff00"));
+}
+
+#[test]
 fn event_update_recurrence() {
     let (server, account_id, calendar) = server_with_calendar();
     let client = Client::connect(server.origin(), Credentials::none()).unwrap();
