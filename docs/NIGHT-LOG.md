@@ -1021,3 +1021,11 @@ against a new jmap-mock content-negotiation mode. The item stays open: steps
 are what will confirm whether this alone makes real Fastmail mail bodies
 readable. Ending the session here per the standing rule against starting a
 second large item.
+
+## 2026-08-20 (claim) — Claiming CURRENT PRIORITY item 9 plan step (2): reference-client comparison
+
+`git fetch`: `origin/master` unchanged at `059c543` (this thread's own last
+push, step (1)). That entry's own plan step (2) — "compare our download
+request to a known-good JMAP client's — candidate `mujmap` (Rust, syncs
+Fastmail↔maildir) or `jmapc` (Python)" — is headless and claimable now.
+Claiming it.
