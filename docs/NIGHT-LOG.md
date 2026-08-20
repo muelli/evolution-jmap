@@ -1543,3 +1543,38 @@ NIGHT-SHIFT: Track D2's calendar-colour write-back is implemented and pushed
 (code side; needs operator verification in real Evolution, same as every
 other write-side EDS feature in this document). Ending the session here per
 the standing rule against starting a second large item.
+
+## 2026-08-20 (claim) — Claiming Track D2 follow-up: test the `ESourceSelectable` colour-read glue one layer down
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `4a6bd37` (this
+thread's own last push, D2's `source_changed` implementation). Walked
+CURRENT PRIORITY (all items DONE or operator-blocked), Round 2 Track A
+(fully closed), Track B (NEEDS-DECISION), Track C (C1/C3 done, C2/C4
+NEEDS-DECISION), Track D (D1 and D2 both code-complete, pending operator
+verification in real Evolution), Track E (Phase 0 + Path A code-complete
+pending operator confirmation; Phase B/C explicitly gated on maintainer
+approval, not yet given), Track F (closed, no-op), and `docs/BACKLOG.md`
+(closed-backend fidelity nits this thread is directed not to reopen). No
+fully unblocked, non-decision-gated, non-operator-blocked item exists at
+the milestone/track level.
+
+One real, narrowly-scoped gap is still open within Track D2 itself, not a
+new item: D2's own text names "the FFI glue that reads a live
+`ESourceSelectable` off a real `ESource` inside the vfunc body" as untested,
+and the fuller `EBackend`-instance harness needed to test the *whole* vfunc
+end to end needs a running `evolution-source-registry` on the session bus —
+`jmap-backend-cal/tests/backend.rs`'s own module comment says plainly that
+neither this VM nor CI has one, which is exactly why `connect_sync`'s
+equally real-`ESource`-reading line is tested "one layer down" instead
+(`tests/connect.rs`, `connect::connect(source, ...)` taking a real `ESource`
+built with `e_source_new_with_uid`, no backend instance around it). The
+same trick applies here and does not need a session bus: extract
+`source_changed`'s three-line colour read (`e_source_get_extension` +
+`e_source_selectable_get_color`) into a small `marshal` function taking a
+real `*mut ESource` directly, then test that function against an `ESource`
+built the same way `jmap-backend-collection/tests/child_source.rs`'s
+`TestSource` already does for the identical "Calendar" extension. This
+closes the exact gap D2's own text flagged, is headless, is not a new
+feature or a decision, and does not touch the parts of D2 that already
+needed the unavailable registry (installing the vfunc slot itself, which
+`tests/backend.rs` already covers via the class struct). Claiming it.
