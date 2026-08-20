@@ -539,6 +539,50 @@ they close, prioritise in this order:
    `package-deb-lintian` ctest locally (`ctest --test-dir build -R lintian`).
    **Also worth a standing fix:** make the agents' pre-push gate run the packaging
    ctest (or at least lintian) so a red `.deb` cannot land unseen again.
+   - **DONE 2026-08-20** — reproduced locally first (`ctest --test-dir build -R
+     lintian`): the installed module's actual `RUNPATH` was three entries,
+     `/usr/lib/evolution:/usr/lib/x86_64-linux-gnu:/usr/lib`, one more than this
+     item's own text named. Traced past what `ac00396` assumed: only
+     `/usr/lib/evolution` is deliberate (Evolution's own `privlibdir`, confirmed
+     with `pkg-config --variable=privlibdir evolution-shell-3.0`); the other two
+     were never `-Wl,-R`-declared by either `.pc` file (both
+     `evolution-shell-3.0.pc` and `evolution-mail-3.0.pc` carry exactly one
+     `-Wl,-R${privlibdir}` each, read verbatim) — they were incidental noise from
+     `evo-sys/build.rs` publishing `cargo:libdirs` off
+     `pkg_config::Library::link_paths` (every `-L` search directory pkg-config's
+     recursive `Requires:` resolution turns up for `evolution-shell-3.0` +
+     `evolution-mail-3.0`, most of it standard system dirs their dependencies
+     happen to also declare) instead of `Library::ld_args` (the actual `-Wl,...`
+     linker options the two `.pc` files spell out, which a probe shows contains
+     only the one `-R/usr/lib/evolution`). **Fixed at the source, narrowing
+     rather than only overriding:** `evo-sys/build.rs` now extracts `-R<dir>`/
+     `-rpath[=,]<dir>` directories from `ld_args` instead of taking every
+     `link_paths` entry; confirmed with `readelf -d` that the built module's
+     `RUNPATH` narrows to exactly `/usr/lib/evolution`, the one entry item
+     2(a)/`ac00396` actually needed. **That one remaining entry is still
+     deliberate and still flagged** (lintian does not exempt a RUNPATH merely
+     for matching a package's own private dir unless it is named
+     `/usr/lib/<source-package-name>`, and this one is Evolution's private dir,
+     not this package's own) — closed with the scoped, justified lintian
+     override this item's text itself suggested:
+     `docs/packaging/lintian-overrides` (installed to
+     `/usr/share/lintian/overrides/evolution-jmap` by `cmake/Packaging.cmake`,
+     added to `EXPECTED_PACKAGE_FILES` alongside the changelog/copyright it sits
+     next to), arguing the one line it overrides in a comment the way
+     `cmake/tests/check-deb-lintian.cmake`'s own comment already asked for.
+     Verified: `ctest --test-dir build -R "package-deb"` (all three packaging
+     tests, including `package-deb-lintian`) green, and the full suite
+     (`ctest --test-dir build`, 18/18) green. Full cargo gate green too: `cargo
+     fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`
+     (default-members) and the nine touched/EDS-gated crates' own clippy both
+     clean; `cargo test --locked` (default-members) and the same nine crates'
+     `cargo test --locked` both green, 0 failed (disk filled mid-session on the
+     nine-crate run — `cargo clean --profile dev` recovered it, the same
+     standing issue prior sessions have logged). No new dependency; no new
+     user-facing string. Confirmed via the GitHub Actions API that CI's `build`
+     job had in fact failed on every run since `e21f97d` — this was a real,
+     unclaimed gap the last several sessions' surveys missed by scoping
+     themselves to "items 1-6" and never walking items 7/8.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner

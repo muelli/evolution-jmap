@@ -39917,3 +39917,102 @@ only; `jmap-config`'s and `jmap-config-module`'s own `build.rs` files already
 just forward whatever `DEP_EVOLUTION_SHELL_LIBDIRS` says, unchanged. Full
 cargo fmt/clippy/test gate (default-members + the seven EDS-gated crates)
 before pushing, per the standing rule.
+
+## 2026-08-20 — Delivered: CURRENT PRIORITY item 8, CI red fixed (lintian-clean .deb restored)
+
+Delivered the increment claimed above. Two parts: narrow the RUNPATH at the
+source (removing two incidental entries), then a scoped, justified lintian
+override for the one entry that is genuinely deliberate and still flagged.
+
+**Narrowing.** `evo-sys/build.rs`'s `cargo:libdirs` (the metadata
+`jmap-config`'s and `jmap-config-module`'s own `build.rs` files turn into
+`-Wl,-rpath` for the binaries/module they build) was built from
+`pkg_config::Library::link_paths` — every `-L` search directory pkg-config's
+recursive `Requires:` resolution turns up for `evolution-shell-3.0` +
+`evolution-mail-3.0` (confirmed with `pkg-config --libs-only-L`, which pulls
+in a chain of dependencies' own libdirs, several of them standard system
+paths). Read both `.pc` files verbatim (`evolution-shell-3.0.pc`,
+`evolution-mail-3.0.pc`): each carries exactly one `-Wl,-R${privlibdir}` in
+its `Libs:` line and nothing else — so only `/usr/lib/evolution` was ever
+actually asked for, and the `pkg_config` crate exposes exactly that narrower
+list separately as `Library::ld_args` ("Linker options specified by -Wl").
+Changed the loop to extract `-R<dir>`/`-rpath[=,]<dir>` directories from
+`ld_args` instead of taking every `link_paths` entry. Confirmed with
+`readelf -d` on the freshly built `libjmap_config_module.so`: `RUNPATH`
+narrowed from `/usr/lib/evolution:/usr/lib/x86_64-linux-gnu:/usr/lib` to
+exactly `/usr/lib/evolution` — the one directory item 2(a)/`ac00396` actually
+needed, unchanged.
+
+**The override.** `/usr/lib/evolution` is still flagged by lintian's
+`custom-library-search-path` even after narrowing — it is genuinely a custom
+search path (Evolution's own private libdir, not this package's), and
+lintian's exemption for a package's *own* private dir only matches
+`/usr/lib/<source-package-name>`, which this is not. This is exactly the
+tag item 8's own text, and `cmake/tests/check-deb-lintian.cmake`'s own
+comment, said belongs in an override file argued with a comment, not
+suppressed by deleting the RUNPATH the Look-Up worker needs to load (item
+2(a)). Added `docs/packaging/lintian-overrides` (one justified override
+line, Debian's package-named-file convention), installed to
+`/usr/share/lintian/overrides/${PACKAGE_NAME}` by `cmake/Packaging.cmake`
+(same `config-module` component the changelog/copyright already install
+from), and added to `EXPECTED_PACKAGE_FILES` so `cmake/tests/
+check-deb-package.cmake`'s exact-file-list check stays accurate. Read
+lintian's own override-matching code
+(`/usr/share/lintian/lib/Lintian/Group.pm`, `Processable/Overrides.pm`) to
+confirm the file format and that the bracketed context after the tag name
+is matched by an exact string, not a partial one — the override line names
+the file path verbatim, no glob needed since only one binary carries this
+RUNPATH.
+
+**Verified, not just argued.** `ctest --test-dir build -R "package-deb"`:
+all three packaging tests (`package-deb`, `package-deb-reproducible`,
+`package-deb-lintian`) green — `package-deb-lintian` was the reproduction
+target and is the primary proof. Full suite `ctest --test-dir build`: 18/18
+green, including `rust-test-eds` and all five `functional-*` tests. Full
+cargo gate: `cargo fmt --check` clean; `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) clean; `cargo clippy -p
+evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config -p
+jmap-config-module -p evo-sys --all-targets --locked -- -D warnings` (the
+seven EDS-gated crates plus the two crates this change actually touches)
+clean; `cargo test --locked` (default-members) green, 0 failed; the same
+nine-crate `cargo test --locked` green, 0 failed. Disk filled mid-session on
+that nine-crate run (`rust/target/debug` again hit capacity, "No space left
+on device" mid-link) — `cargo clean --profile dev` recovered 24.3GiB and the
+rerun was clean, the same standing issue prior sessions have logged
+([[disk-fills-from-cargo-target]]).
+
+**Why this and not item 7.** Item 7 (collection-backend discovery +
+auth-retry loop against a real Fastmail account) needs a real API-token
+account in real Evolution to even reproduce, let alone verify — not
+headlessly tractable this session, unlike item 8, which reproduced locally
+in under a minute and gated fully offline.
+
+**Confirmed the actual CI state, not just the local repro.** Before
+claiming, checked the GitHub Actions API directly
+(`api.github.com/repos/muelli/evolution-jmap/actions/runs`): the `build` job
+had failed on every run back to `e21f97d` (2026-08-19), each at the `Run
+ci/build.sh` step — consistent with the `package-deb-lintian` ctest being
+what `ci/build.sh` runs and what failed locally. Cannot re-trigger CI from
+this session to confirm the fix goes green there too (no `gh`/token per the
+standing note, [[github-actions-status-without-gh]]) — pushing this and
+letting the next scheduled/triggered run prove it is the closing step.
+
+**Why the last several sessions missed this.** Every survey since
+`553d6a2` (which added item 8) explicitly scoped itself to "CURRENT PRIORITY
+items 1-6" and Round 2 Tracks A-F, and none of those surveys' own text ever
+mentions items 7 or 8 — a real gap in scope, not a re-confirmation of an
+already-known block. `docs/ROADMAP.md`'s item 8 entry updated in place with
+a `DONE` sub-bullet in the same style items 2(a)/2(b)/5/6 already use, so a
+future survey does not re-tread this.
+
+No new dependency; no new user-facing string; both new files
+(`docs/packaging/lintian-overrides`, and the `evo-sys/build.rs` edit) fall
+under REUSE.toml's existing `docs/**` and per-crate SPDX-header coverage
+respectively — no REUSE.toml change needed. `ci/checks.sh` still cannot run
+on this VM ([[checks-sh-blocked-on-vm]]).
+
+NIGHT-SHIFT: item 8 (CI red) delivered and pushed. Ending the session here
+per the standing rule against starting a second large item — item 7 is the
+next candidate but needs a real Fastmail API-token account in real
+Evolution, not headlessly tractable this session.
