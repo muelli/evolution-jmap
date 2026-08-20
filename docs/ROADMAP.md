@@ -837,6 +837,33 @@ they close, prioritise in this order:
      **Still open:** step (3), the operator's live, token-gated probe of the
      real Fastmail exchange — unchanged, still the only thing that can
      settle whether Fastmail mail bodies now render.
+   - **RESOLVED, OPERATOR-VERIFIED 2026-08-20 — item 9 DONE; step (3) ran and
+     settled it. Root cause was NOT a client bug: a leftover
+     `JMAP_LIVE_SERVER_REBASE_URLS=1` on the manual-test VM** (in
+     `/etc/environment` + `~/.config/environment.d/jmap.conf`, from earlier
+     localhost→Stalwart-forward testing) made every backend rebase Fastmail's
+     advertised download host (`phl-www.fastmailusercontent.com`, per its real
+     session doc) onto the connect origin `api.fastmail.com`, whose server 302s
+     the nonexistent download path to `www.fastmail.com` — the marketing page.
+     The client was RFC-8620-strict all along. Verified three ways after
+     removing the env var and restarting EDS/Evolution: (a) a stdlib-only
+     python probe (operator-run, token-gated): authed GET of the real
+     `downloadUrl` → 200 + message bytes, for BOTH `Accept: */*` and
+     `Accept: application/json` — so neither the `Accept` header (step 1,
+     `059c543`) nor the `{type}` parameter (step 2's surfaced variable, sent as
+     `application/octet-stream` throughout) was the cause; both stay as-is
+     (`*/*` remains the more truthful header, per step 2's reference-client
+     corroboration); (b) real Evolution: the message body renders in the
+     reading pane; (c) the new `jmap-client/examples/live-download-probe.rs`
+     (committed — reuse it for future live debugging; token from a file, never
+     printed) driving the production `Client::connect` → `download_blob` path:
+     `DOWNLOAD OK: 19551 bytes`. The guardrail (`31919a4`) is what converted
+     the silent wrong-body into the precise diagnosable error that led to the
+     root cause — it stays, and step 2's finding that `mujmap` would have
+     silently written the marketing HTML into a maildir validates it as
+     strictly more defensive than the reference clients. **Follow-up queued as
+     Track A8 below** (the one product lesson: a process-global rebase env var
+     silently poisoned an unrelated account, and nothing in the error said so).
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner
@@ -1150,6 +1177,25 @@ tracks follow; the maintainer may reorder anytime.
     milestone references found. Full gate green (comment-only changes; see
     `docs/NIGHT-LOG.md`'s "Delivered: Track A7" entry for the exact commands
     run). See `docs/STALE-COMMENTS-AUDIT.md` for the full write-up.
+
+- **A8 `[claude]` Make `JMAP_LIVE_SERVER_REBASE_URLS` self-incriminating.
+  CLAIMABLE NOW (lesson from item 9, operator-verified 2026-08-20).** A
+  leftover process-global `JMAP_LIVE_SERVER_REBASE_URLS=1` (set for
+  localhost→Stalwart-forward testing) silently rewrote a *different, unrelated
+  account's* (Fastmail) advertised download host and produced an error that
+  named neither the env var nor the rewrite — the operator+Claude burned a
+  full debugging session before finding it in the VM's `/etc/environment`.
+  Headless, jmap-mock-testable improvements, in priority order: (1) whenever
+  the rebase is active and a request then fails, say so — at minimum, include
+  a "note: JMAP_LIVE_SERVER_REBASE_URLS is active and rewrote <advertised> →
+  <origin>" in `Error::CrossOriginRedirect`'s (and ideally every transport
+  error's) Display when `rebase_origin` is Some; (2) log the rewrite once at
+  connect time (eprintln/g_message is fine pre-B1) so a poisoned account is
+  visible in journald even when nothing fails. Do NOT change the rebase
+  semantics themselves (still opt-in, off by default) — scoping it per-source
+  instead of process-global is a real idea but needs a maintainer decision on
+  the ESource surface; log that as NEEDS-DECISION if pursued. TDD: a test that
+  a rebased-then-refused download's error message names the env var.
 
 ### Track B — Observability (NEEDS-DECISION on approach, then CLAIMABLE)
 - **B1 `[claude]` journald structured logging, TRACE→ERROR.** Replace the ~54
