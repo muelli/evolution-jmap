@@ -1318,3 +1318,45 @@ action needed.
 NIGHT-SHIFT: Track A8 delivered and about to be pushed — Track A (quality &
 security) is now fully closed. Ending the session here per the standing rule
 against starting a second large item.
+
+## 2026-08-20 (claim) — Claiming Round 2 Track D2: design the calendar-colour write-back (the item's own stated blocker)
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `febec2c` (this
+thread's own last push, Track A8). CURRENT PRIORITY items 1-9 are all DONE or
+blocked on the operator's live/token-gated steps (confirmed the operator-only
+ones are still genuinely operator-only: OAuth consent round-trip, real-Fastmail
+confirmations). Checked this session's own new capability first, since it
+looked like it might reopen "real-server readiness": `infra/live-server/
+live-server-env.sh` (added 2026-08-18, never exercised by any prior night
+session per a `docs/NIGHT-LOG.md` grep) claims runner->Stalwart internal-VPC
+reachability, and `~/.config/evolution-jmap/stalwart-creds` is provisioned. In
+practice, from this session's actual runner (`gha-runner-1`,
+europe-west1-b), `stalwart-1.europe-west3-c...internal` does not resolve
+(`resolvectl query` fails; general internet egress and the GCP metadata server
+both work fine, so the resolver itself is functional) and `gcloud compute
+instances describe` 403s with "insufficient authentication scopes" so the
+runner can't even check whether Stalwart is running or query the VPC's DNS
+scope. Most likely a per-zone (not per-VPC) internal DNS scope on this
+project's network, cross-region from this runner's own zone — an infra-level
+fact, not something to fix from here (infra/ is off-limits beyond reading this
+one script, and the runner's service account lacking compute-read scope isn't
+mine to grant). Logged as a real gap for the operator, not chased further past
+this (~10 min): the promised capability does not currently work from this
+specific runner.
+
+With that ruled out, re-surveyed Round 2 in the maintainer's stated lead order:
+Track A (A1-A8) fully closed. Track D leads next. D1 is code-complete pending
+only human verification (nothing headless left). D2 (`docs/ROADMAP.md`) is the
+one item explicitly gated "NOT CLAIMABLE YET... needs a new design" — a local
+`ESourceSelectable` colour edit reaching the server via `Calendar/set` (D1's
+create/delete already wired it for create/destroy). The gate is real: the
+prior research session flagged "detecting a notify::color signal on the child
+ESource ... and safely getting that across to `ECalMetaBackend`'s sync worker
+thread" as needing genuine design, not a mechanical port, since evolution-ews
+has no such round-trip to copy. This is squarely a design task, not a
+decision-gated or backend-reopening one — claiming it: read the actual EDS
+3.52.3 C source (not the installed headers/`.gir` alone) for whatever the
+framework already offers here, per [[read-eds-sources-in-container]]'s general
+lesson (a header only says a slot exists, never what's supposed to call it or
+from which thread), and write up a concrete, source-verified design that
+either unblocks D2 to CLAIMABLE or explains why it still can't be.
