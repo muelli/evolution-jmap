@@ -1521,6 +1521,116 @@ tracks follow; the maintainer may reorder anytime.
     across to a `Calendar/set` call made from `ECalMetaBackend`'s sync worker
     thread — genuine signal-lifecycle/concurrency reasoning, not a mechanical
     port. Needs that design before it is CLAIMABLE.
+  - **DESIGN DONE 2026-08-20 — the signal-lifecycle problem above does not
+    need inventing a bridge; EDS already ships exactly one, and reading the
+    real `evolution-data-server-3.52.3` source (not the installed headers
+    alone, per [[read-eds-sources-in-container]]'s general lesson) turned it
+    up. D2 write-back is now CLAIMABLE — no further design needed, only
+    implementation.** `ECalMetaBackendClass` has a `source_changed` vfunc
+    slot (`e-cal-meta-backend.h:167`, already a struct field bindgen already
+    generates into `eds_sys::ECalMetaBackendClass` — confirmed in the built
+    `bindings.rs`, since the type is already fully allowlisted for D1's and
+    Track E's own vfunc installs; no new eds-sys allowlist change needed).
+    It backs a real signal, `"source-changed"`, and its own doc comment in
+    `e-cal-meta-backend.c` says the quiet part out loud: *"Unlike the
+    #ESource's 'changed' signal this one is tight to the #ECalMetaBackend
+    itself and is emitted from a dedicated thread, thus it doesn't block the
+    main thread."* Concretely: `ecmb_open_sync` connects the *ESource's*
+    `"changed"` signal (fired from whatever thread touched the source) to
+    `ecmb_schedule_source_changed`, which does the actual thread hop —
+    `e_cal_backend_schedule_custom_operation` onto the backend's own worker
+    queue — and only then, from that worker thread, emits `"source-changed"`
+    (`ecmb_source_changed_thread_func`). So a subclass overriding
+    `klass->source_changed` in its own `class_init` receives the notification
+    already on a safe thread, with **no manual `g_signal_connect`, no thread
+    bridging, and no lifecycle to manage** — EDS owns the connect/schedule/
+    disconnect entirely. It is also already single-flight: a
+    `source_changed_cancellable` guard skips scheduling a second run while
+    one is in flight, cleared when it finishes. And the base class's own
+    `e_cal_meta_backend_class_init` never assigns `klass->source_changed`
+    itself, so — unlike `get_free_busy_sync` — an override here must **not**
+    chain up; there is nothing to chain up to (same as D1's
+    `create_resource_sync`/`delete_resource_sync`, for the same reason: the
+    parent leaves the slot empty).
+    **The other half of the worried-about race turned out to be a non-issue
+    too:** `e_source_selectable_set_color` (`e-source-selectable.c`) already
+    compares the new value against the current one (`e_util_strcmp0`) and
+    skips `g_object_notify` entirely when they match. So the read path's own
+    populate/discovery-driven rewrite of an unchanged colour (the ordinary
+    case, run every discovery cycle) never fires `"changed"` at all and can
+    never spuriously trigger a push — no extra guard needed against our own
+    write causing itself to refire.
+    **What's left is an ordinary diff, not concurrency:** track a
+    `last_known_color: Option<String>` baseline in the calendar backend's own
+    instance state (initialised lazily, the first time it's needed, from the
+    `ESourceSelectable` colour the `ESource` already carries at that moment —
+    which is whatever the collection backend's most recent discovery put
+    there). On each `source_changed` firing: read the current colour, compare
+    to the baseline; equal → no-op (covers `source_changed` firing for an
+    unrelated property, e.g. a refresh-interval or auth change); different →
+    push a `Calendar/set` update patching just `color`, then set the baseline
+    to the pushed value. **Cannot loop and cannot corrupt a concurrent
+    server-side change:** a push never touches the local `ESource` (it is a
+    JMAP write to the remote server only), so it cannot itself refire
+    `"changed"`; if the drift the diff caught was actually server-originated
+    (the collection backend's discovery just mirrored a real remote change
+    down to the `ESource`, not a user edit) the "push" is a redundant PUT of
+    the value the server already holds — wasteful, not wrong, and the next
+    discovery cycle's rewrite of that same value is the no-op case above, so
+    it settles in one round trip either way. A push that fails (offline, or
+    the resource id having vanished) is naturally retried without a bespoke
+    timer: `ecmb_source_changed_thread_func` already calls
+    `e_source_refresh_add_timeout` on every run, so the periodic refresh
+    re-fires `source_changed` regardless of any real property change and
+    retries the same diff, as long as the baseline is left unchanged on
+    failure.
+    **The generic JMAP machinery already supports this — D1 just didn't need
+    it yet:** `jmap-proto`'s `SetRequest<T>::update`/`jmap-mock`'s
+    `simple_set` (`setops.rs`) already handle an `update` map generically for
+    any `T`, `Calendar` included; only `jmap-client` is missing a thin
+    wrapper — `Client::calendar_update(account_id, id, patch)` mirroring
+    `mailbox_update`/`email_update` (`jmap-client/src/{mail.rs}`) line for
+    line. No `jmap-proto` or `jmap-mock` change needed at all.
+    **Implementation plan for the next session, layered like D1/Track E:**
+    (1) `jmap-client::calendars::calendar_update` — mechanical, zero risk;
+    (2) `jmap-cal-sync` gains a small decision module (mirrors
+    `freebusy.rs`'s shape) resolving the account id + this calendar's
+    resource id and calling it; (3) `jmap-backend-cal/src/backend.rs`
+    installs `source_changed` on `ECalMetaBackendClass` (no chain-up), the
+    `last_known_color` baseline held in the backend's existing instance
+    `Slot`/lock state — read `backend.rs`'s existing `RwLock` usage before
+    adding it, not a blind copy. TDD, layered: `jmap-client/tests/
+    calendars.rs` (a colour patch reaches the mock, mirroring
+    `mailbox_update`'s own test); a new `jmap-cal-sync/tests/` file (mirrors
+    `freebusy.rs`'s tests against `jmap-mockd`); `jmap-backend-cal/tests/
+    backend.rs` (the vfunc slot IS overridden and differs from the parent's,
+    mirroring D1's own red test), plus a same-value/no-op case and a
+    genuine-diff-pushes case against a real `ESource` + `ECalMetaBackend`
+    instance, at `tests/create_resource.rs`'s realism bar. **Not
+    escalation-worthy the way D1's and Track E's vfuncs were** — `source_changed`
+    takes no parameters and returns nothing (no `GSList`/`gchar *`
+    transfer-full marshaling, no multi-vfunc chain-up ambiguity to get
+    wrong) — a normal session should be able to implement and TDD it
+    end to end. Still needs the same **NEEDS HUMAN VERIFICATION in real
+    Evolution** bar every other write-side EDS feature in this document
+    carries: nothing headless can drive a real colour-picker edit against a
+    live registry.
+    **Unrelated, and deliberately not chased further this session (~10 min
+    spent, then dropped per the standing "blocked >20 min, switch" rule):**
+    checked whether this session's new `infra/live-server/live-server-env.sh`
+    (runner→Stalwart internal-VPC access, added 2026-08-18) actually works
+    from a real night-shift runner, since no `docs/NIGHT-LOG.md` entry had
+    ever exercised it. It does not, from this session's own runner
+    (`gha-runner-1`, europe-west1-b): `stalwart-1.europe-west3-c...internal`
+    does not resolve, and `gcloud compute instances describe` 403s with
+    "insufficient authentication scopes," so the runner cannot even check
+    whether Stalwart is up. General internet egress and the GCP metadata
+    server both resolve fine, so the runner's own DNS resolution is not
+    broken generally — most likely a per-zone (not per-VPC-wide) internal DNS
+    scope on this project's network, cross-region from this runner's zone.
+    An infra-level fact, not fixable from here (infra/ stays off-limits
+    beyond reading that one script) — flagged for the operator, not a client
+    bug, and not chased into a rabbit hole.
 
 ### Track E — Sharing + scheduling — Path A APPROVED (2026-08-19)
 Design: `docs/PRINCIPALS-DESIGN.md` (commit 98c0576). Two premises the spike

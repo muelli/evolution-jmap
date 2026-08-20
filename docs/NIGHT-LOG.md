@@ -1360,3 +1360,108 @@ framework already offers here, per [[read-eds-sources-in-container]]'s general
 lesson (a header only says a slot exists, never what's supposed to call it or
 from which thread), and write up a concrete, source-verified design that
 either unblocks D2 to CLAIMABLE or explains why it still can't be.
+
+## 2026-08-20 — Delivered: Track D2 write-back design — `ECalMetaBackend` already has the signal bridge; D2 is now CLAIMABLE
+
+Downloaded and extracted the real `evolution-data-server_3.52.3.orig.tar.xz`
+source from `archive.ubuntu.com` (matches this VM's installed
+`evolution-data-server 3.52.3-0ubuntu1.2` exactly — `apt-get source` itself
+needs a `deb-src` line this VM doesn't have, so fetched the `.orig.tar.xz`
+named on `packages.ubuntu.com`'s package page directly) rather than inferring
+from the installed headers alone, per [[read-eds-sources-in-container]]'s
+general lesson applied to apt instead of the eds-matrix container.
+
+**Finding: the "genuine signal-lifecycle/concurrency reasoning" the prior
+session flagged does not need inventing — `ECalMetaBackend` already ships it.**
+`ECalMetaBackendClass::source_changed` (`e-cal-meta-backend.h:167`) backs a
+real signal, `"source-changed"`, whose own doc comment in
+`e-cal-meta-backend.c` says exactly what this item worried about doing by
+hand: it is "emitted from a dedicated thread, thus it doesn't block the main
+thread." Traced the chain: `ecmb_open_sync` connects the *ESource's* own
+`"changed"` signal (fired on whatever thread touched the source) to
+`ecmb_schedule_source_changed`, which schedules
+`ecmb_source_changed_thread_func` via `e_cal_backend_schedule_custom_operation`
+onto the backend's own worker queue, single-flight-guarded by a cancellable
+that blocks a second schedule while one is in flight; only from *that* thread
+does it `g_signal_emit` `"source-changed"`. A subclass overriding
+`klass->source_changed` in its own `class_init` gets called already on that
+safe thread — no `g_signal_connect`, no manual thread hop, no signal-handler
+lifetime to track, all of it EDS's own. Confirmed the field is already usable
+from Rust with zero new bindgen work: `eds_sys::ECalMetaBackendClass` already
+carries a `source_changed` field in the built `bindings.rs` (the type was
+already fully allowlisted for D1's and Track E's own vfunc installs). Also
+confirmed the base class's `e_cal_meta_backend_class_init` never assigns
+`klass->source_changed` itself, so an override must NOT chain up — the same
+shape as D1's `create_resource_sync`/`delete_resource_sync`, unlike Track E's
+`get_free_busy_sync`.
+
+**The other half resolved by the same read:** `e_source_selectable_set_color`
+(`e-source-selectable.c`) already `e_util_strcmp0`-compares before
+`g_object_notify`, so the read path's own populate-driven rewrite of an
+*unchanged* colour (the ordinary case, every discovery cycle) never fires
+`"changed"` at all — no risk of our own write self-triggering a push.
+
+**What is left is a plain diff, not concurrency:** a `last_known_color`
+baseline in the calendar backend's own instance state, initialised from
+whatever colour the `ESource` already carries the first time it is needed;
+each `source_changed` firing compares current-vs-baseline and pushes only on
+a genuine difference, updating the baseline after. Worked through why this
+cannot loop or corrupt a concurrent server-side change (a push never touches
+the local `ESource`, so it cannot itself refire `"changed"`; a push that
+turns out to have been server-originated, not a user edit, is a harmless
+redundant PUT of the value the server already holds) and why a failed push
+is not stuck forever (the same `ecmb_source_changed_thread_func` already
+calls `e_source_refresh_add_timeout` on every run, so the periodic refresh
+retries the diff without a bespoke timer). Also confirmed the generic JMAP
+machinery already supports an update — `jmap-proto`'s `SetRequest<T>::update`
+and `jmap-mock`'s `simple_set` already handle it for any `T` — so the only
+missing piece outside `jmap-backend-cal` is a mechanical `jmap-client::
+calendars::calendar_update`, mirroring `mailbox_update`/`email_update`
+line for line. Full concrete implementation plan, layered like D1/Track E and
+with TDD call sites named at each layer, written into `docs/ROADMAP.md`'s D2
+entry in place of the "NOT CLAIMABLE YET" text.
+
+**Scope, stated plainly:** this is a design-only increment (`docs/ROADMAP.md`
+updated; no `rust/` file touched), matching how Track E's own design spike
+(`docs/PRINCIPALS-DESIGN.md`) was treated as its own complete session before
+implementation followed later — the full change (client method + a new
+`jmap-cal-sync` decision module + the vtable install + instance-state
+locking + TDD across three crates) is sized like D1's each single vfunc
+(create OR delete), which were each their own session. Flagged in the roadmap
+as NOT escalation-worthy the way D1/Track E's vfuncs were, since
+`source_changed` takes no parameters and returns nothing — no transfer-full
+list/string marshaling, no chain-up ambiguity — so the next session should be
+able to implement and TDD it on Sonnet directly. D2 write-back is now
+CLAIMABLE.
+
+**Also checked and logged, not chased further (~10 min, then dropped per the
+standing "blocked >20 min, switch" rule):** whether this session's newer
+`infra/live-server/live-server-env.sh` (added 2026-08-18, granting the runner
+internal-VPC access to the real Stalwart test server) would reopen "real-server
+readiness" as claimable work. It does not work from this session's actual
+runner: `source infra/live-server/live-server-env.sh` resolves `STALWART_URL`
+to `stalwart-1.europe-west3-c.c.evolution-jmap-ci-18696.internal`, which does
+not resolve (`resolvectl query` fails), and `gcloud compute instances describe
+stalwart-1` 403s with "insufficient authentication scopes" — the runner
+(`gha-runner-1`, europe-west1-b) can't even check whether Stalwart is running.
+General internet egress and the GCP metadata server both resolve fine, so this
+is not a broken resolver generally; most likely a per-zone (not project-wide)
+internal DNS scope on this VPC, cross-region from this runner's own zone.
+Infra-level fact, not fixable from here (infra/ stays off-limits beyond
+reading that one script, and granting the runner's service account more
+`gcloud` scope isn't this agent's call) — flagged here for the operator, not
+pursued as a client-side finding since there is nothing client-side to find
+yet.
+
+Full gate: docs-only change, nothing to build or test; `docs/ROADMAP.md` and
+`docs/NIGHT-LOG.md` are the only files touched, no new file, so no `reuse
+lint` action.
+
+NIGHT-SHIFT: Track D2's design blocker is resolved and pushed — `ECalMetaBackend`
+already provides the exact worker-thread signal bridge the item was waiting
+on, so D2 write-back is now a concrete, CLAIMABLE, non-escalation-worthy
+implementation plan for the next session. Also logged (not fixed, not this
+session's to fix) that the new Stalwart-VPC-access capability does not
+currently work from this runner. Ending the session here per the standing
+rule against starting a second large item — the actual `source_changed`
+vfunc implementation is that next item, not this one.
