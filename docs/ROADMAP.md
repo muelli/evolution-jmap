@@ -520,6 +520,50 @@ they close, prioritise in this order:
    confirms book/cal appear and the prompt loop stops. Reasonable to escalate
    (EDS collection-backend + credentials machinery). Not the client, SRV, token,
    or mail store — those are proven; keep the fix inside the collection backend.
+   - **DONE 2026-08-20 (code side; pending operator verification) — the root
+     cause named above ("diff the two connect paths") is exactly what it was:
+     found by inspection, no live Evolution needed, so this did not need the
+     escalation flagged above.** `jmap-backend-core/src/connect.rs::connect_with`
+     (used by the address book, calendar and mail backends' `connect_sync`)
+     already picks credentials with three branches — `source_uses_oauth2` →
+     OAuth2 bearer, `source_uses_api_token` → `bearer_credentials` (item 6),
+     else Basic — but `jmap-backend-collection/src/authenticate.rs::login_of`
+     (what `authenticate_sync` uses, the vfunc that gates the whole fan-out)
+     only had the first and third: `source_uses_api_token` was never checked,
+     so an API-token account had its stored token sent to the collection
+     backend as a **Basic** password (`Credentials::Basic { user, password:
+     <token> }`). A Bearer-only JMAP endpoint 401s that; `ConnectError::
+     auth_result`'s existing 401-is-`REJECTED` rule then makes EDS discard the
+     "password" and re-prompt — a complete, headless explanation for both (a)
+     (fan-out, and so book/cal creation, never runs) and (b) (the ~6-second
+     auth-retry loop). The book/cal/mail backends on the same account
+     authenticate fine because their `connect_sync` already goes through the
+     three-branch `connect_with`; only the collection backend's separate
+     `login_of` was left on the pre-item-6 two-branch shape — item 6's own
+     text scoped itself to "the connect path" and `jmap-mail`'s Camel side and
+     never named this third site, so it was missed then, not regressed since.
+     **Fix:** added the missing `source_uses_api_token` → `bearer_credentials`
+     branch to `login_of`, mirroring `connect_with`'s exact shape — a
+     same-crate-family port of an already-tested pattern, not new design.
+     TDD: red first — `jmap-backend-collection/tests/authenticate.rs` gained a
+     `TestSource::api_token()` builder (mirroring the existing `.oauth2()`) and
+     two new tests, `an_api_token_account_is_sent_as_bearer_not_basic` (failed
+     against the two-branch code with `Some(Basic { user, password: "t0k3n"
+     })`, confirming the exact bug) and `an_api_token_account_with_no_stored_
+     token_asks_for_one`; both green after the fix, all 15 tests in the file
+     passing. No new dependency, no new user-facing string. Full gate green:
+     `cargo fmt --check`; `cargo clippy --all-targets --locked -- -D warnings`
+     (default-members) and the seven-crate EDS-gated clippy both clean; `cargo
+     test --locked` (default-members) and the same seven-crate `cargo test
+     --locked` both green, 0 failed throughout.
+     **Scope, stated plainly:** this closes the code-side root cause; it does
+     not by itself prove the fix against a real Fastmail account in real
+     Evolution — **still needs operator confirmation** that book/cal now
+     appear and the prompt loop stops, unchanged from this item's own text.
+     If the operator's trace finds a *different* or *additional* cause, this
+     fix stays correct regardless (Basic-for-a-Bearer-only-endpoint is a real
+     bug on its own merits) but item 7 should not be tagged complete until
+     that confirmation lands.
 
 8. **CI is RED — the OAuth-lookup RUNPATH regressed the lintian-clean .deb.
    CLAIMABLE NOW (operator-found 2026-08-19, HIGH — unblocks CI).** The `build`

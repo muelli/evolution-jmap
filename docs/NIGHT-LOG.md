@@ -40074,3 +40074,60 @@ account in real Evolution (still the operator's step, unchanged from item
 7's own text) — but it is a positive, testable finding rather than another
 "needs the operator" report, and worth landing regardless of what the
 operator's own trace eventually shows.
+
+## 2026-08-20 — Delivered: CURRENT PRIORITY item 7's code-side root cause (collection backend now sends API-token accounts as Bearer)
+
+Delivered the increment claimed above. `jmap-backend-collection/src/
+authenticate.rs::login_of` gained the missing third branch:
+`source_uses_api_token(source)` → `bearer_credentials(password)`, imported
+from `jmap_backend_core::api_token`/`connect` exactly as `connect_with`
+already imports and uses them for the address book, calendar and mail
+backends. Placed between the existing `source_uses_oauth2` branch and the
+plain-Basic fallback, matching `connect_with`'s order verbatim.
+
+**TDD.** `jmap-backend-collection/tests/authenticate.rs` gained a
+`TestSource::api_token()` builder (`e_source_authentication_set_method` to
+`jmap_backend_core::api_token::API_TOKEN_METHOD`, mirroring the file's
+existing `.oauth2()`) and two tests:
+`an_api_token_account_is_sent_as_bearer_not_basic` (an account with the
+API-token method and a stored secret must reach the fan-out as
+`Credentials::Bearer`, never `Basic`) and
+`an_api_token_account_with_no_stored_token_asks_for_one` (mirrors the
+existing no-password case, `REQUIRED` not a silent empty-Bearer fan-out).
+Ran red first against the unmodified two-branch code:
+`an_api_token_account_is_sent_as_bearer_not_basic` failed with `Some(Basic
+{ user: "vera@example.com", password: "t0k3n" })` — the exact bug the
+claim entry diagnosed, not a guess. After the one-branch fix, both new
+tests and the file's existing 13 pass, 15/15.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) and `cargo clippy -p
+evolution-jmap-client -p jmap-backend-core -p jmap-backend-book -p
+jmap-backend-cal -p jmap-mail -p jmap-backend-collection -p jmap-config
+--all-targets --locked -- -D warnings` (the seven EDS-gated crates) both
+clean. `cargo test --locked` (default-members) and the same seven-crate
+`cargo test --locked` both green, 0 failed throughout (checked every
+`test result:` line, not just exit code). No new dependency; no new
+user-facing string; no new file (no REUSE/SPDX concern).
+
+**Why this is not the same shape as the rest of item 7.** The root cause
+was findable and fixable by reading code and diffing two same-crate-family
+functions — exactly what the roadmap's own text suggested — with no live
+`evolution-source-registry`, no Fastmail account, and no GObject-vtable
+design question involved (`bearer_credentials`/`source_uses_api_token`
+already existed, tested, from item 6; this was a call site that missed
+them, not a new abstraction). That is why it did not need the escalation
+item 7's text flagged. What is genuinely still open, and still needs the
+operator: whether this is the *only* cause of the auth-retry loop and the
+missing book/cal children, or whether the operator's live trace turns up
+something else alongside it. `docs/ROADMAP.md`'s item 7 updated in place
+with a `DONE (code side; pending operator verification)` sub-bullet,
+following items 1/2/5/6's own established pattern, rather than tagging
+item 7 complete.
+
+`ci/checks.sh` still cannot run on this VM
+([[checks-sh-blocked-on-vm]]).
+
+NIGHT-SHIFT: item 7's code-side root cause delivered and pushed. Ending
+the session here per the standing rule against starting a second large
+item.
