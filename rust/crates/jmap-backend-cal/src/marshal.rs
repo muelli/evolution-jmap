@@ -19,17 +19,18 @@ use std::ffi::CStr;
 use std::ptr;
 
 use eds_sys::{
-    ECalComponent, ETimezoneCache, I_CAL_ANY_PROPERTY, I_CAL_RECURRENCEID_PROPERTY,
-    I_CAL_TZID_PARAMETER, I_CAL_TZID_PROPERTY, I_CAL_VCALENDAR_COMPONENT, I_CAL_VEVENT_COMPONENT,
-    ICalComponent, ICalComponentKind, ICalTimezone, e_cal_component_get_icalcomponent,
-    e_cal_meta_backend_info_new, e_timezone_cache_get_timezone, i_cal_component_as_ical_string,
-    i_cal_component_clone, i_cal_component_get_first_component, i_cal_component_get_first_property,
-    i_cal_component_get_next_component, i_cal_component_get_next_property,
-    i_cal_component_get_timezone, i_cal_component_get_uid, i_cal_component_isa,
-    i_cal_component_new_from_string, i_cal_component_new_vcalendar, i_cal_component_take_component,
-    i_cal_parameter_get_tzid, i_cal_property_get_first_parameter, i_cal_property_set_tzid,
-    i_cal_timezone_get_builtin_timezone, i_cal_timezone_get_builtin_timezone_from_tzid,
-    i_cal_timezone_get_component, time_t,
+    E_SOURCE_EXTENSION_CALENDAR, ECalComponent, ESource, ESourceSelectable, ETimezoneCache,
+    I_CAL_ANY_PROPERTY, I_CAL_RECURRENCEID_PROPERTY, I_CAL_TZID_PARAMETER, I_CAL_TZID_PROPERTY,
+    I_CAL_VCALENDAR_COMPONENT, I_CAL_VEVENT_COMPONENT, ICalComponent, ICalComponentKind,
+    ICalTimezone, e_cal_component_get_icalcomponent, e_cal_meta_backend_info_new,
+    e_source_get_extension, e_source_selectable_get_color, e_timezone_cache_get_timezone,
+    i_cal_component_as_ical_string, i_cal_component_clone, i_cal_component_get_first_component,
+    i_cal_component_get_first_property, i_cal_component_get_next_component,
+    i_cal_component_get_next_property, i_cal_component_get_timezone, i_cal_component_get_uid,
+    i_cal_component_isa, i_cal_component_new_from_string, i_cal_component_new_vcalendar,
+    i_cal_component_take_component, i_cal_parameter_get_tzid, i_cal_property_get_first_parameter,
+    i_cal_property_set_tzid, i_cal_timezone_get_builtin_timezone,
+    i_cal_timezone_get_builtin_timezone_from_tzid, i_cal_timezone_get_component, time_t,
 };
 use glib_sys::{
     GSList, g_date_time_format, g_date_time_new_from_unix_utc, g_date_time_unref, g_free,
@@ -701,6 +702,39 @@ pub fn free_busy_list(answers: &[FreeBusy]) -> *mut GSList {
         list = unsafe { g_slist_prepend(list, node.cast()) };
     }
     list
+}
+
+// ---------------------------------------------------------------------------
+// the ESource itself
+
+/// The colour currently on `source`'s "Calendar" extension —
+/// `source_changed`'s read of the value a local colour-picker edit left
+/// behind.
+///
+/// `ESourceCalendar` derives from `ESourceSelectable`, so the same extension
+/// that carries `BackendName` answers this too — no second extension to look
+/// up. Practically never `None`: `ESourceSelectable:color`'s own GParamSpec
+/// gives it a built-in default (`#62a0ea`, GNOME's accent blue) rather than
+/// leaving it NULL the way a freshly created extension's other properties
+/// are, so an uncoloured source still answers `Some`, matching the read
+/// path's own finding (`jmap-collection-sync`'s `child_source` write) that a
+/// server naming no colour is not the same state as one that has never been
+/// asked.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource` carrying a "Calendar" extension —
+/// `ECalMetaBackend` never calls `source_changed` before `connect_sync` has
+/// succeeded once, by which point this backend's own `child_source` write
+/// path has already created it.
+pub unsafe fn selectable_color(source: *mut ESource) -> Option<String> {
+    // SAFETY: the caller guarantees `source` carries the extension; the
+    // string handed back is borrowed from it and outlives this call.
+    unsafe {
+        let selectable: *mut ESourceSelectable =
+            e_source_get_extension(source, E_SOURCE_EXTENSION_CALENDAR.as_ptr()).cast();
+        read_string(e_source_selectable_get_color(selectable))
+    }
 }
 
 /// A `time_t` as the JMAP `UTCDate` (RFC 3339, `Z`) that

@@ -57,11 +57,10 @@ use std::ffi::CStr;
 use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
-    E_CLIENT_ERROR_REPOSITORY_OFFLINE, E_SOURCE_EXTENSION_CALENDAR, ECalBackendSync,
-    ECalMetaBackend, ECalMetaBackendClass, ECalOperationFlags, EConflictResolution, EDataCal,
-    ENamedParameters, ESourceAuthenticationResult, ESourceSelectable, GTlsCertificateFlags,
-    ICalComponent, e_backend_get_source, e_cal_backend_set_writable, e_cal_meta_backend_get_type,
-    e_client_error_create, e_source_get_extension, e_source_selectable_get_color, time_t,
+    E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalBackendSync, ECalMetaBackend, ECalMetaBackendClass,
+    ECalOperationFlags, EConflictResolution, EDataCal, ENamedParameters,
+    ESourceAuthenticationResult, GTlsCertificateFlags, ICalComponent, e_backend_get_source,
+    e_cal_backend_set_writable, e_cal_meta_backend_get_type, e_client_error_create, time_t,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar};
@@ -71,12 +70,12 @@ use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
-use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, guard_bool, guard_value};
 use jmap_cal_sync::CalSync;
 
 use crate::connect::{self, ACCEPTED_AUTH_RESULT, write_auth_result};
+use crate::marshal;
 use crate::ops::{self, Outcome};
 
 /// The JMAP calendar backend.
@@ -542,11 +541,9 @@ unsafe extern "C" fn source_changed(meta_backend: *mut ECalMetaBackend) {
             };
 
             let source = e_backend_get_source(meta_backend.cast());
-            let selectable: *mut ESourceSelectable =
-                e_source_get_extension(source, E_SOURCE_EXTENSION_CALENDAR.as_ptr()).cast();
-            // SAFETY: `selectable` is the "Calendar" extension of a valid
-            // `ESource`, and the string it hands back outlives this call.
-            let current = read_string(e_source_selectable_get_color(selectable));
+            // SAFETY: `source` is the `ESource` of a valid instance, per this
+            // function's own safety contract.
+            let current = marshal::selectable_color(source);
 
             let mut baseline = write(baseline_slot);
             match ops::on_source_changed(sync, current.as_deref(), baseline.as_deref()) {
