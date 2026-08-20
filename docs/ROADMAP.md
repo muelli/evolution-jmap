@@ -1149,8 +1149,29 @@ tracks follow; the maintainer may reorder anytime.
     (default-members) and the seven-crate EDS-gated clippy both clean;
     `cargo test --locked` (default-members) and all seven EDS-gated crates'
     own `cargo test --locked` green, 0 failed. **A6's Pattern C item is now
-    fully closed** (see `docs/UNSAFE-AUDIT.md`); what remains open on A6
-    generally is the rest of its IMPROVE list beyond Pattern C.
+    fully closed** (see `docs/UNSAFE-AUDIT.md`); what remained open on A6
+    generally was the rest of its IMPROVE list beyond Pattern C.
+  - **DONE 2026-08-20 — the last open item, Pattern D's
+    `SourceConfig::from_source` gap, closed. Track A6 is now fully closed.**
+    `from_source`'s `AUTHENTICATION`/`RESOURCE` reads (`jmap-backend-core/src/
+    source.rs`) went through the same `extension_if_present` guard the
+    sibling `SECURITY` read already used, so reading a source that lacks
+    those groups no longer creates them — an absent extension now yields the
+    same defaults a freshly-created empty one would have (`None`/`0`), so no
+    observable read result changes, only the persistent side effect on
+    someone else's `.source` keyfile goes away. TDD: two new tests in
+    `jmap-backend-core/tests/source.rs`, red confirmed first against the
+    unmodified code. Full gate green: `cargo fmt --check`; `cargo clippy
+    --all-targets --locked -- -D warnings` (default-members) and the
+    seven-crate EDS-gated clippy both clean; `cargo test --locked`
+    (default-members) and the seven-crate `cargo test --locked` both green, 0
+    failed throughout (disk filled mid-session on the seven-crate run —
+    `cargo clean --profile dev` recovered it, the same standing issue prior
+    sessions have logged); the packaging `.deb` ctest per item 8's standing
+    note, all three green. No new dependency, no new user-facing string. See
+    `docs/UNSAFE-AUDIT.md`'s Pattern D entry and NIGHT-LOG's "`SourceConfig::
+    from_source` stops creating `[Authentication]`/`[Resource]` groups merely
+    by reading them".
 - **A7 `[claude]` Stale-comments audit.** Deliverable
   `docs/STALE-COMMENTS-AUDIT.md`: comments that no longer match the code —
   renamed/removed items, changed behaviour, done TODOs, resolved-milestone refs
