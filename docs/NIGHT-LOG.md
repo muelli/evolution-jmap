@@ -39854,3 +39854,66 @@ question) are now closed; every remaining CURRENT PRIORITY / Round 2 `[claude]`
 item needs either a maintainer decision, an operator's real-Evolution/real-
 consent session, or Stalwart reachability this runner does not have this
 session.
+
+## 2026-08-20 (claim) — Claiming CURRENT PRIORITY item 8: CI RED, lintian-clean .deb regressed by the RUNPATH fix
+
+Fresh survey (`git fetch`: `origin/master` unchanged at `174ea73`, the agy
+lane's vCard 3.0 fidelity batch 2 merge — `[agy]`-lane polish, not this
+lane's work, and CURRENT PRIORITY's own no-reopen directive keeps that
+backend closed). Confirmed via the GitHub Actions API
+(`api.github.com/repos/.../actions/runs`) that CI's `build` job has failed on
+every run since `e21f97d` (2026-08-19), all failing at the `Run ci/build.sh`
+step — consistent with item 8's own diagnosis.
+
+**Why this and not something else:** the last several sessions' surveys
+(logged immediately above, ending "NIGHT-SHIFT: BLOCKED") explicitly scoped
+themselves to "CURRENT PRIORITY items 1-6" and Round 2 Tracks A-F — item 8
+(added by `553d6a2`, the same day) and item 7 (added by `e892ffa`) were never
+walked by that survey and carry no DONE marker or claim/delivery pair
+anywhere in this log. Item 8 is HIGH priority ("unblocks CI"), concrete,
+tool-verifiable, no FFI, no maintainer/operator step needed — reproduced
+locally in under a minute (`ctest --test-dir build -R lintian`):
+
+    E: evolution-jmap: custom-library-search-path RUNPATH /usr/lib
+    [usr/lib/evolution/modules/module-jmap-configuration.so]
+    E: evolution-jmap: custom-library-search-path RUNPATH /usr/lib/evolution
+    [usr/lib/evolution/modules/module-jmap-configuration.so]
+    E: evolution-jmap: custom-library-search-path RUNPATH
+    /usr/lib/x86_64-linux-gnu
+    [usr/lib/evolution/modules/module-jmap-configuration.so]
+
+Item 7 (collection-backend discovery + auth-retry loop) needs a real
+Fastmail API-token account in real Evolution to reproduce or verify at all —
+not headlessly tractable this session — so item 8 is the one to claim.
+
+**Root cause traced past what item 8's own text says.** `readelf -d` on the
+built `module-jmap-configuration.so` shows all three paths in one RUNPATH:
+`/usr/lib/evolution:/usr/lib/x86_64-linux-gnu:/usr/lib`. Only the first is
+the deliberate one item 2(a)/`ac00396` added (Evolution's own `privlibdir`,
+confirmed via `pkg-config --variable=privlibdir evolution-shell-3.0`). The
+other two are *not* deliberate: `evo-sys/build.rs` (the shared source both
+`jmap-config` and `jmap-config-module`'s own `build.rs` read
+`DEP_EVOLUTION_SHELL_LIBDIRS` from) builds its published `cargo:libdirs` from
+`pkg_config::Library::link_paths` (every `-L` search directory pkg-config's
+recursive `Requires:` resolution turns up for `evolution-shell-3.0` +
+`evolution-mail-3.0` — confirmed with `pkg-config --libs-only-L`, which
+pulls in dependencies' own libdirs), not from the `-Wl,-R` flags the two
+`.pc` files actually declare (confirmed both files verbatim: each has
+exactly one `-Wl,-R${privlibdir}`, nothing else). The `pkg_config` crate
+exposes exactly that narrower list separately as `Library::ld_args`
+("Linker options specified by -Wl"), which a probe of both packages shows
+contains only `-R/usr/lib/evolution` — nothing else. So the extra two
+RUNPATH entries are incidental noise from using the wrong field, not
+anything -Wl,-R-declared or deliberate; narrowing to `ld_args` removes them
+at the source rather than merely overriding lintian about them, and doesn't
+touch the one deliberate entry `ac00396` was for.
+
+**Claiming:** change `evo-sys/build.rs`'s `cargo:libdirs` construction to
+read `-R<dir>`/`-rpath[=,]<dir>` directories out of `Library::ld_args`
+instead of blanket `Library::link_paths`, verify with `readelf -d` that the
+built module's RUNPATH narrows to exactly `/usr/lib/evolution`, and confirm
+`ctest --test-dir build -R lintian` goes green. Scoped to `evo-sys/build.rs`
+only; `jmap-config`'s and `jmap-config-module`'s own `build.rs` files already
+just forward whatever `DEP_EVOLUTION_SHELL_LIBDIRS` says, unchanged. Full
+cargo fmt/clippy/test gate (default-members + the seven EDS-gated crates)
+before pushing, per the standing rule.
