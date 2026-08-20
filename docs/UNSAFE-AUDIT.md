@@ -529,6 +529,16 @@ point, so its gaps aren't copied forward.
   mutation" argument is plausible (matches EDS's own single-threaded
   extension-access convention) but not pinned by a test the way most other
   invariants in this file are — worth a second look, not urgent.
+  **RESOLVED 2026-08-20 — the second look found it wrong, and it is fixed.**
+  The argument did not hold: the lock was released before the raw pointer
+  was returned, and a later write (in production, EDS's own
+  `source_parse_dbus_data` → `g_object_set_property` reload) freed the
+  `CString` the pointer aimed at. `docs/FFI-SOUNDNESS-AUDIT.md`'s Finding 3
+  has the full write-up; the fix makes the documented "valid as long as the
+  extension is" lifetime true by never freeing a handed-out value, and
+  `jmap-config/tests/oauth2.rs` now pins it with three tests — including
+  one that demonstrated the use-after-free concretely before the fix, the
+  test this entry correctly noted was missing.
   `backend.rs::insert_entries` (the account-setup GTK page) is the single
   largest concentration of unsafe blocks in the crate (~25 in one function)
   but each is individually justified GTK widget wiring, not unsound;

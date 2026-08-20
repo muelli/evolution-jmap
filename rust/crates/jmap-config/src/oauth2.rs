@@ -51,8 +51,8 @@
 //! `set_property`, which is what EDS's serialisation calls.
 
 use std::ffi::{CStr, CString, c_char};
-use std::ptr;
 use std::sync::{Mutex, PoisonError};
+use std::{mem, ptr};
 
 use eds_sys::{
     ESource, ESourceExtension, ESourceExtensionClass, e_source_extension_get_type,
@@ -123,7 +123,9 @@ pub struct ExtensionClass {
 
 /// The five values, owned as `CString`s so `get_property` can hand a borrowed
 /// pointer straight to `g_value_set_string` (which copies it) without an
-/// allocation on every read.
+/// allocation on every read — and so [`borrowed`] can hand one to an
+/// `EOAuth2Service` vfunc's caller, which is what [`retired`](Self::retired)
+/// exists for.
 #[derive(Default)]
 struct Fields {
     client_id: Option<CString>,
@@ -131,6 +133,71 @@ struct Fields {
     authorization_endpoint: Option<CString>,
     token_endpoint: Option<CString>,
     redirect_uri: Option<CString>,
+    /// Values a later write replaced, kept alive rather than freed.
+    ///
+    /// [`borrowed`] hands an `EOAuth2Service` vfunc's caller a `const gchar
+    /// *` into one of the five fields above, and that caller has no way to
+    /// tell us when it is done with it — EDS's own users of those vfuncs
+    /// (`e-oauth2-service.c`) copy the string a few instructions later, with
+    /// no lock held and no callback we could hang a free on. So the only
+    /// lifetime this storage can promise is the one [`borrowed`]'s doc
+    /// states: valid for as long as the extension is. Freeing a replaced
+    /// value would break that promise for any pointer already in flight, so
+    /// replaced values move here instead and are dropped together with the
+    /// extension, in [`ObjectSubclass::finalize`].
+    ///
+    /// The growth this trades for is bounded by the number of writes that
+    /// actually *change* a field ([`Self::set`] leaves an unchanged one
+    /// alone), each of which corresponds to a real change of an account's
+    /// discovered OAuth 2.0 configuration — a human-paced event, and one
+    /// EDS's own `source_set_property_from_key_file` already declines to
+    /// perform when the value did not differ.
+    retired: Vec<CString>,
+}
+
+impl Fields {
+    /// Writes one field by property id, answering `false` for an id this
+    /// class never installed.
+    ///
+    /// Never frees the value it displaces: an unchanged write is not
+    /// performed at all, keeping the existing allocation — and so any
+    /// pointer [`borrowed`] handed out of it — exactly where it was, and a
+    /// changed write moves the old value to [`Self::retired`]. Both halves
+    /// are what make [`borrowed`]'s documented lifetime true.
+    fn set(&mut self, id: u32, value: Option<CString>) -> bool {
+        let replaced = {
+            let slot = match id {
+                PROP_CLIENT_ID => &mut self.client_id,
+                PROP_CLIENT_SECRET => &mut self.client_secret,
+                PROP_AUTHORIZATION_ENDPOINT => &mut self.authorization_endpoint,
+                PROP_TOKEN_ENDPOINT => &mut self.token_endpoint,
+                PROP_REDIRECT_URI => &mut self.redirect_uri,
+                _ => return false,
+            };
+            if *slot == value {
+                return true;
+            }
+            mem::replace(slot, value)
+        };
+        // Moving a `CString` moves the pointer, not the bytes it points at,
+        // so a pointer into `replaced` stays valid across this push and
+        // across any later reallocation of the vector itself.
+        self.retired.extend(replaced);
+        true
+    }
+
+    /// One field, by property id — `None` for an id this class never
+    /// installed, which is distinct from a field that is installed and unset.
+    fn get(&self, id: u32) -> Option<&Option<CString>> {
+        match id {
+            PROP_CLIENT_ID => Some(&self.client_id),
+            PROP_CLIENT_SECRET => Some(&self.client_secret),
+            PROP_AUTHORIZATION_ENDPOINT => Some(&self.authorization_endpoint),
+            PROP_TOKEN_ENDPOINT => Some(&self.token_endpoint),
+            PROP_REDIRECT_URI => Some(&self.redirect_uri),
+            _ => None,
+        }
+    }
 }
 
 /// The five properties' ids and the names `class_init` installs them under —
@@ -227,15 +294,10 @@ unsafe extern "C" fn set_property(
         let mut fields = fields.lock().unwrap_or_else(PoisonError::into_inner);
         // SAFETY: `value` holds the string type every pspec above declares.
         let text = unsafe { read_cstring(value) };
-        match id {
-            PROP_CLIENT_ID => fields.client_id = text,
-            PROP_CLIENT_SECRET => fields.client_secret = text,
-            PROP_AUTHORIZATION_ENDPOINT => fields.authorization_endpoint = text,
-            PROP_TOKEN_ENDPOINT => fields.token_endpoint = text,
-            PROP_REDIRECT_URI => fields.redirect_uri = text,
-            _ => log_critical(&format!(
+        if !fields.set(id, text) {
+            log_critical(&format!(
                 "JmapOAuth2Extension has no property with id {id}; the value is dropped"
-            )),
+            ));
         }
     });
 }
@@ -254,18 +316,11 @@ unsafe extern "C" fn get_property(
             .get()
             .expect("get_property dispatched before instance_init ran");
         let fields = fields.lock().unwrap_or_else(PoisonError::into_inner);
-        let text = match id {
-            PROP_CLIENT_ID => fields.client_id.as_deref(),
-            PROP_CLIENT_SECRET => fields.client_secret.as_deref(),
-            PROP_AUTHORIZATION_ENDPOINT => fields.authorization_endpoint.as_deref(),
-            PROP_TOKEN_ENDPOINT => fields.token_endpoint.as_deref(),
-            PROP_REDIRECT_URI => fields.redirect_uri.as_deref(),
-            _ => {
-                log_critical(&format!(
-                    "JmapOAuth2Extension has no property with id {id}; nothing is read"
-                ));
-                return;
-            }
+        let Some(text) = fields.get(id).map(Option::as_deref) else {
+            log_critical(&format!(
+                "JmapOAuth2Extension has no property with id {id}; nothing is read"
+            ));
+            return;
         };
         // SAFETY: `value` is the `GValue` GObject is filling for this get;
         // `g_value_set_string` copies whatever `text` points at before this
@@ -334,6 +389,11 @@ unsafe fn extension_of(source: *mut ESource) -> *mut Extension {
 /// [`crate::account::apply`] follows, and for the same reason: this runs
 /// again whenever discovery or registration is redone, not only once.
 ///
+/// Because of that rule, a field this rewrite does not actually change keeps
+/// the allocation it already had, rather than being re-seated under any
+/// pointer [`borrowed`] has handed out of it — see [`Fields::set`], which is
+/// the one path this and [`set_property`] both write through.
+///
 /// # Safety
 ///
 /// `source` must be a valid `ESource`.
@@ -346,13 +406,17 @@ pub unsafe fn apply(source: *mut ESource, config: &Config) {
         .fields
         .get()
         .expect("e_source_get_extension returned an instance instance_init did not run on");
-    *fields.lock().unwrap_or_else(PoisonError::into_inner) = Fields {
-        client_id: config.client_id.as_deref().map(cstring_lossy),
-        client_secret: config.client_secret.as_deref().map(cstring_lossy),
-        authorization_endpoint: config.authorization_endpoint.as_deref().map(cstring_lossy),
-        token_endpoint: config.token_endpoint.as_deref().map(cstring_lossy),
-        redirect_uri: config.redirect_uri.as_deref().map(cstring_lossy),
-    };
+    let mut fields = fields.lock().unwrap_or_else(PoisonError::into_inner);
+    for (id, value) in [
+        (PROP_CLIENT_ID, &config.client_id),
+        (PROP_CLIENT_SECRET, &config.client_secret),
+        (PROP_AUTHORIZATION_ENDPOINT, &config.authorization_endpoint),
+        (PROP_TOKEN_ENDPOINT, &config.token_endpoint),
+        (PROP_REDIRECT_URI, &config.redirect_uri),
+    ] {
+        // Every id here is one of `PROPERTIES`' own, so `set` cannot decline.
+        fields.set(id, value.as_deref().map(cstring_lossy));
+    }
 }
 
 /// The config `source`'s `[JMAP OAuth2]` extension currently says — every
@@ -417,11 +481,33 @@ pub unsafe fn read(source: *mut ESource) -> Config {
 /// instant it looked at it. What is returned here instead is a pointer into
 /// the `CString` [`Fields`] already owns: stable for as long as the
 /// extension is, i.e. for as long as the account's `ESource` is, which is far
-/// longer than any single vfunc dispatch needs. That is the same contract
-/// EDS's own extensions keep for their string accessors (`
-/// e_source_authentication_get_host` and the rest) with no lock of their own
-/// either — mutating a source concurrently with reading it is a caller error
-/// generally, not a hazard specific to this one.
+/// longer than any single vfunc dispatch needs.
+///
+/// ## Why the lock is not what upholds that
+///
+/// The mutex below is released before this function returns, so it orders
+/// this module's own readers and writers against each other but cannot cover
+/// the caller's *use* of the pointer — and there is nowhere to hold it until
+/// then, because a `const gchar *`-returning vfunc has no "done with it"
+/// callback. EDS's own callers (`e-oauth2-service.c`) copy the string a few
+/// instructions later, into a form table or a `SoupMessage`'s URI, taking no
+/// lock of ours on the way. So what makes the pointer safe is that nothing
+/// ever frees a value this has handed out: [`Fields::set`] leaves an
+/// unchanged write alone and retires a changed one into
+/// [`Fields::retired`](Fields#structfield.retired), which is dropped only
+/// when the extension itself is finalized.
+///
+/// That is the discipline EDS's own `EOAuth2Service` implementations keep for
+/// these same five vfuncs, read from `e-oauth2-service-google.c` rather than
+/// assumed: `eos_google_get_client_id` answers either a `static gchar
+/// glob_buff[128]` or a value `eos_google_read_settings` caches with
+/// `g_object_set_data_full` behind an `if (!value)` guard — written once and
+/// never replaced or freed while the service lives. It is *not* the same as
+/// the contract EDS's plain extension accessors keep
+/// (`e_source_authentication_get_host` and the rest): those are lock-free
+/// too, but each is paired with a `dup_` variant that takes
+/// `e_source_extension_property_lock`, an escape hatch a vfunc with a fixed
+/// `const gchar *` signature does not have.
 ///
 /// # Safety
 ///
