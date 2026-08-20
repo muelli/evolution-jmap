@@ -114,6 +114,11 @@ pub struct ServerState {
     /// nothing routes to). `None` advertises the real origin, matching every
     /// other test.
     pub advertise_origin: Option<String>,
+    /// Answer `GET /download/...` with a `302` to the same path on this
+    /// origin instead of serving the blob, as
+    /// [`crate::MockServerBuilder::download_via_redirect_to`] asked. `None`
+    /// serves the blob directly, matching every other test.
+    pub download_via_redirect_to: Option<String>,
     /// Omit `identityId`/`emailId` from a created `EmailSubmission`, as
     /// [`crate::MockServerBuilder::terse_submission_create`] asked — RFC 8620
     /// §5.3 says the `created` map need only contain properties "that were
@@ -143,6 +148,7 @@ impl ServerState {
             size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,
             advertise_origin: None,
+            download_via_redirect_to: None,
             terse_submission_create: false,
         }
     }

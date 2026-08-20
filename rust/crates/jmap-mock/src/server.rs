@@ -96,6 +96,7 @@ pub struct MockServerBuilder {
     size_upload: Option<u64>,
     session_via_redirect: bool,
     advertise_origin: Option<String>,
+    download_via_redirect_to: Option<String>,
     terse_submission_create: bool,
 }
 
@@ -335,6 +336,21 @@ impl MockServerBuilder {
         self
     }
 
+    /// Answer every `GET /download/...` with a `302` to the same path on
+    /// `origin`, instead of serving the blob — reproducing a real deployment
+    /// whose blob host redirects the download elsewhere (see
+    /// `docs/ROADMAP.md`, CURRENT PRIORITY item 9: a real Fastmail account's
+    /// blob download came back as the redirect target's own unrelated
+    /// content, not the message). Distinct from [`Self::advertise_origin`],
+    /// which changes what the *session document* names without changing what
+    /// answers a request — this changes what answers the request while the
+    /// session still calls this server the download host, matching the
+    /// shape of a redirect the client did not ask the session about.
+    pub fn download_via_redirect_to(mut self, origin: impl Into<String>) -> Self {
+        self.download_via_redirect_to = Some(origin.into());
+        self
+    }
+
     /// Omit `identityId`/`emailId` from a created `EmailSubmission`, as a
     /// server that reads RFC 8620 §5.3 literally does: the `created` map
     /// need only contain properties "that were not sent by the client", and
@@ -365,6 +381,7 @@ impl MockServerBuilder {
         state.size_upload = self.size_upload;
         state.session_via_redirect = self.session_via_redirect;
         state.advertise_origin = self.advertise_origin.clone();
+        state.download_via_redirect_to = self.download_via_redirect_to.clone();
         state.terse_submission_create = self.terse_submission_create;
         let state = Arc::new(Mutex::new(state));
 
@@ -425,6 +442,7 @@ impl MockServer {
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,
             advertise_origin: None,
+            download_via_redirect_to: None,
             terse_submission_create: false,
         }
     }
@@ -727,6 +745,20 @@ fn handle_request(
             );
         }
         (tiny_http::Method::Get, _) if path.starts_with("/download/") => {
+            let redirect_to = state
+                .lock()
+                .expect("mock state lock")
+                .download_via_redirect_to
+                .clone();
+            if let Some(redirect_to) = redirect_to {
+                let location = format!("{redirect_to}{url}");
+                let response = tiny_http::Response::empty(302).with_header(
+                    tiny_http::Header::from_bytes(&b"Location"[..], location.as_bytes())
+                        .expect("location header"),
+                );
+                let _ = request.respond(response);
+                return;
+            }
             // /download/{accountId}/{blobId}/{name}
             let decoded = path_segments(&path);
             let segments: Vec<&str> = decoded.iter().map(String::as_str).collect();
