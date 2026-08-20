@@ -302,6 +302,126 @@ Running record of headless polish increments on the `antigravity` branch.
 - **Calcard behaviour-difference findings:** None. All 199 unit, proptest fuzz, and roundtrip tests in `jmap-vcard` pass with 100% compliance.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-19 — Line folding / unfolding fidelity & UTF-8 multi-byte protection (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 1. Line folding / unfolding (RFC 2426 §2.6): test round-trip of long `NOTE` and inline base64 `PHOTO`, pre-folded input (CRLF + leading space/tab continuations), multi-byte UTF-8 fold protection, and fixed-point convergence.
+- **Changes:**
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip`: tests emission of long single-line `NOTE` (200+ octets) and inline base64-encoded `PHOTO;ENCODING=b;TYPE=...` (350+ raw bytes / 468+ base64 chars), verifying physical lines target 75 octets and fold with `\r\n `, lossless parsing back to `Note` and `Media` (`kind: Some("photo")`, `media_type: Some("image/jpeg")`, exact data URI payload), and fixed-point stability (`vcard2 == vcard`).
+    - `rfc2426_prefolded_vcard_unfolding_with_crlf_spaces_and_tabs`: verifies parsing of pre-folded vCards with space (`\r\n `), tab (`\r\n\t`), multiple continuation spaces (distinguishing folding marker from content indentation), and mixed folding across `FN`, `NICKNAME`, `EMAIL`, `TEL`, `ORG`, `TITLE`, `ROLE`, `ADR`, `LABEL`, `NOTE`, `CATEGORIES`, `URL`, and `PHOTO`.
+    - `rfc2426_line_folding_never_splits_multibyte_utf8_sequences`: systematically tests 2-byte (German umlauts, Cyrillic), 3-byte (CJK Kanji, Japanese Hiragana, Devanagari), and 4-byte (Emoji, math symbols) UTF-8 sequences placed across boundary offsets 40..=85, confirming that no line fold ever splits a multi-byte code point, all line slices remain valid UTF-8, and parsing produces zero replacement characters (`\u{FFFD}`).
+    - `rfc2426_line_folding_exact_boundary_lengths_around_75_octets`: tests boundary threshold conditions (70, 73, 74, 75 octets without folding; 78, 80, 100 octets with folding).
+    - `rfc2426_line_folding_with_escaped_delimiters_and_backslashes`: tests interaction of line folding with multiline text containing escaped `\n`, `\;`, `\,`, `\\`.
+  - Added property test `prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` asserting line length limits (<= 77 octets) and valid UTF-8 slices across arbitrary generated cards.
+  - Updated Section 4.5 of `docs/VCARD-MAPPING.md` documenting RFC 2426 §2.6 line folding/unfolding architecture, boundary semantics, and multi-byte UTF-8 protection.
+- **Calcard behaviour-difference findings:**
+  1. `calcard` automatically handles RFC 2426 §2.6 line folding at 75 octets with CRLF-space continuations. Because `calcard` iterates over Rust `char` (Unicode scalar values) and evaluates `char::len_utf8()` before outputting characters, multi-byte UTF-8 sequences are never split across fold boundaries.
+  2. In `calcard`, physical lines on the wire may measure up to 76–77 octets before folding when an escape sequence (e.g. `\n`, `\\`, `\;`) or property parameter separator (`:`) occurs at the 74th/75th byte boundary, which is fully compliant with RFC 2426 §2.6 ("lines of more than 75 characters SHOULD be folded").
+  3. `calcard`'s parser losslessly unfolds both CRLF + space (`\r\n `) and CRLF + tab (`\r\n\t`), stripping the CRLF and the first whitespace continuation character while preserving any subsequent whitespace characters as part of the field data.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+## 2026-08-19 — Value escaping (RFC 2426 §2) & fixed-point convergence (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 2. Value escaping (RFC 2426 §2): `\n`, `\,`, `\;`, `\\` in text values must escape on write and unescape on read with no loss and no double-escaping; test `NOTE` containing all four, comma inside `ORG` unit, and semicolon inside `ADR` component; assert fixed-point convergence.
+- **Changes:**
+  - Added comprehensive characterization, boundary, and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `rfc2426_value_escaping_note_with_all_four_special_characters_roundtrip`: tests a `NOTE` containing all four special characters (`\n`, `\,`, `\;`, `\\`) and literal escape sequences (`\\n`, `\\,`, `\\;`, `\\\\`), verifying wire format serialization, exact unescaped string parsing, and fixed-point stability across multiple successive roundtrips (`vcard3 == vcard`).
+    - `rfc2426_value_escaping_comma_inside_org_unit_roundtrip`: tests structured `ORG` properties containing commas in employer name (`"Acme, Inc."` -> `Acme\, Inc.`) and units (`"Research, Development & Innovation"`, `"Optics, Lasers & Sensors"`), semicolons in units (`"Hardware; Systems Division"` -> `Hardware\; Systems Division`), and backslashes/newlines, confirming that semicolons delimit organizational units without splitting on escaped semicolons/commas; tests nameless organizations (`ORG:;Engineering, Core Team;Architecture\; Infrastructure`) retaining the leading positional semicolon.
+    - `rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip`: tests all 7 structured RFC 2426 §3.2.1 `ADR` components (`postOfficeBox`, `apartment`, `name`, `locality`, `region`, `postcode`, `country`) and paired `LABEL` containing embedded semicolons (`\;`), commas (`\,`), backslashes (`\\`), and newlines (`\n`), verifying that semicolons inside components do not shift subsequent components into wrong positional slots and reach fixed-point stability.
+    - `rfc2426_value_escaping_across_all_vcard_properties_roundtrip`: tests delimiter and backslash escaping across all mapped properties (`FN`, structured `N`, `NICKNAME`, `TITLE`, `ROLE`, `X-EVOLUTION-SPOUSE`, `CATEGORIES`, `TEL`, `EMAIL`, `URL`).
+    - `rfc2426_value_escaping_no_double_escaping_multiroundtrip`: performs 3 sequential serialization/deserialization passes on text with mixed literal escapes and backslashes, asserting that backslashes never accumulate or double-escape (`\\` remains `\\`).
+    - `rfc2426_inbound_unescaping_variants_and_boundary_cases`: tests inbound vCard parsing with uppercase `\N` (RFC 2426 §2.4.2), trailing backslashes, consecutive backslashes (`\\\\` -> `\\`), and escaped backslashes preceding delimiters (`\\;` -> `\;`).
+  - Added property test `prop_value_escaping_never_double_escapes_or_loses_characters` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` asserting 100% lossless text recovery and fixed-point convergence under randomized escape sequence combinations.
+  - Updated Section 4.6 of `docs/VCARD-MAPPING.md` documenting RFC 2426 §2 value escaping and unescaping semantics, structured delimiter protection, and the no-double-escaping invariant.
+- **Calcard behaviour-difference findings:**
+  1. `calcard` automatically escapes commas (`,`), semicolons (`;`), newlines (`\n` and `\r`), and backslashes (`\`) on emission as `\,`, `\;`, `\n`, `\r`, `\\` according to property value types, and unescapes both lowercase `\n` and uppercase `\N` (RFC 2426 §2.4.2) on parsing.
+  2. `calcard` preserves carriage returns (`\r`) as `\r` rather than stripping them, enabling lossless CRLF text roundtrips.
+  3. `calcard` handles escaped backslashes preceding delimiters (`\\;`, `\\,`) cleanly without misinterpreting the backslash as escaping the delimiter.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+## 2026-08-19 — CATEGORIES ↔ E_CONTACT_CATEGORY_LIST fidelity & roundtrip (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 3. `CATEGORIES` ↔ `E_CONTACT_CATEGORY_LIST`: comma-separated categories round-trip — order preserved, commas within a category escaped — for empty, single, and multiple; pin with tests, else log a finding.
+- **Changes:**
+  - Added comprehensive characterization, boundary, and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `categories_empty_absent_and_refused_permutations_roundtrip`: tests empty, absent, and refused keyword combinations (`keywords: None`, empty `BTreeMap`, inbound `CATEGORIES:`, inbound consecutive commas `CATEGORIES:,,,`, and tags refused by `states_keyword`), verifying that no empty `CATEGORIES` lines are emitted and roundtrips evaluate cleanly to `keywords: None`.
+    - `categories_single_tag_variations_and_escaped_delimiters_roundtrip`: tests single tags containing plain text (`"Work"`), interior spaces (`"Project Alpha"`), embedded commas (`"Acme, Inc."`, `"One, Two, Three"`), semicolons (`"Project;Alpha"`, `"Architecture; Core; Platform"`), backslashes (`"Dept\\Core"`, `"Path\\\\To\\\\Tag"`), newlines (`"Line 1\nLine 2"`), and combinations with all special characters, verifying exact value preservation and fixed-point convergence (`reemitted == vcard`).
+    - `categories_multiple_tags_sorted_order_and_escaping_roundtrip`: tests multiple tags emitted on a single line in lexicographically sorted order (`drawn_tags`), verifying that embedded commas and semicolons inside tags do not cause spurious item splits and roundtrip with fixed-point stability.
+    - `categories_multiple_inbound_lines_merging_deduplication_and_fixed_point`: tests merging and deduplication of multiple inbound `CATEGORIES` lines (e.g. from vCard imports / multiple sources) into a unified `keywords` map by `read_keywords`, and consolidation into a single sorted `CATEGORIES` line on outbound serialization.
+    - `categories_inbound_delimiter_variations_and_empty_item_skipping`: tests inbound vCards with empty items between/around commas (`CATEGORIES:Alpha,,Beta,,,Gamma,`), mixed-case property names (`categories:`, `Categories:`), and parameters (`ALTID`, `LANGUAGE`, custom `X-` parameters).
+    - `categories_unicode_and_multibyte_utf8_roundtrip`: tests non-ASCII and multi-byte UTF-8 categories across various languages (German umlauts, French accents, Japanese Kanji/Kana, Arabic RTL, and emoji tags), verifying lossless round-trips and RFC 2426 line folding without UTF-8 splitting.
+    - `categories_eds_category_list_fidelity_and_states_keyword_invariants`: validates `states_keyword` against exhaustive matrix of valid and refused inputs (empty tags, `\r`, leading/trailing ASCII whitespace, non-boolean values) and tests mixed cards to ensure unstated tags are omitted from emission to protect against EDS whitespace trimming corruption.
+  - Enhanced `arb_card_resources` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` with `arb_keyword_tag` strategy generating tags with spaces, commas, semicolons, backslashes, newlines, UTF-8 unicode, and boundary edge cases.
+  - Updated `docs/VCARD-MAPPING.md` with Section 3.8 documenting `CATEGORIES` ↔ `E_CONTACT_CATEGORY_LIST` architecture, set-vs-list mapping, lexicographical sorting, delimiter escaping, multi-line merging, whitespace defense, and empty tag invariants.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `calcard` automatically handles comma-separated list serialization for `CATEGORIES` (mapping multiple `VCardValue::Text` values into comma-separated items on a single line) and escapes literal commas within individual values as `\,` per RFC 2426 §2.4.2 and §3.7.1.
+  2. `calcard` automatically escapes semicolons as `\;`, newlines as `\n`, carriage returns as `\r`, and backslashes as `\\`, unescaping both lowercase `\n` and uppercase `\N` on parse.
+  3. In `jmap-vcard`, JSContact `keywords` Set is sorted lexicographically by `drawn_tags` before emitting the `CATEGORIES` line, guaranteeing deterministic serialization across passes.
+  4. Multiple inbound `CATEGORIES` lines are merged into a unified set by `read_keywords` so tags on subsequent lines are never lost during sync, while emission produces a single consolidated `CATEGORIES` line matching Evolution's UI display (`E_CONTACT_CATEGORY_LIST`).
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+## 2026-08-19 — NICKNAME & URL fidelity, EDS slotting & characterization (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 4. `NICKNAME` and `URL`: Characterize `NICKNAME` (single and multiple) and one-or-more `URL` properties into their EDS fields (`E_CONTACT_NICKNAME`, homepage/blog/etc.); pin round-trips; log a finding where the slotting is a product decision rather than obvious.
+- **Changes:**
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `nickname_single_and_multiple_entries_eds_slotting_and_roundtrip`: verifies single and multiple keyed JSContact `nicknames` emitting individual `NICKNAME;X-JMAP-KEY=...` lines to preserve keys, EDS in-place editing of the primary `E_CONTACT_NICKNAME` line, inbound unkeyed line key allocation, and fixed-point stability.
+    - `nickname_comma_separated_text_list_inbound_and_escaping_fidelity`: verifies inbound comma-separated lists on a single line (`NICKNAME:Rob,Robbie,Boss` per RFC 2426 §3.1.3 text-list) parsing into a single `Nickname` struct (`"Rob,Robbie,Boss"`) because EDS 3.52 treats the line as a single string, outbound comma escaping (`\,`), and roundtrip fixed-point convergence.
+    - `nickname_special_characters_escaping_unicode_and_parameters`: tests nicknames containing semicolons, backslashes, newlines, double quotes, non-ASCII/multi-byte UTF-8 (Japanese, Cyrillic, emoji), and parameters (`TYPE`, `ALTID`, `LANGUAGE`).
+    - `nickname_empty_absent_and_predicate_fidelity`: validates `states_nickname` predicate and verifies empty/whitespace nickname omission on emission and parse.
+    - `url_single_and_multiple_properties_eds_slotting_and_roundtrip`: verifies single and multiple `links` (`kind: None`) emitting distinct `URL;X-JMAP-KEY=...` lines, EDS `E_CONTACT_HOMEPAGE_URL` slotting onto the first `URL` line with subsequent lines preserved, unkeyed key allocation, and fixed-point convergence.
+    - `url_kind_filtering_and_contact_uri_omission`: characterizes link kind filtering, verifying that RFC 9553 `kind: "contact"` (vCard 4.0 `CONTACT-URI`) and vendor kinds (`kind: "blog"`, `"video"`, `"feed"`, `"custom"`) are omitted from vCard 3.0 `URL` lines to prevent populating EDS `E_CONTACT_HOMEPAGE_URL` with non-homepage URLs.
+    - `url_eds_blog_video_and_custom_extensions_characterization`: characterizes unmapped EDS `X-EVOLUTION-BLOG-URL` (`E_CONTACT_BLOG_URL`) and `X-EVOLUTION-VIDEO-URL` (`E_CONTACT_VIDEO_URL`), verifying they are safely ignored on parse without corrupting JSContact models.
+    - `url_query_parameters_punctuation_and_encoding_fidelity`: tests complex URIs containing query semicolons, commas, hashes, credentials, ports, IPv6 literals, and percent-encodings without backslash escaping per RFC 3986 and RFC 2426 §3.6.8.
+    - `url_empty_absent_and_predicate_fidelity`: validates `states_link` and `maps_link_kind` predicates, empty URL line skipping, and unmodeled field preservation in `Link.extra`.
+    - `url_and_calendar_properties_coexistence_and_slotting`: tests coexistence of `URL` (`E_CONTACT_HOMEPAGE_URL`), `CALURI` (`E_CONTACT_CALENDAR_URI`), and `FBURL` (`E_CONTACT_FREEBUSY_URL`) on the same card with distinct keys and clean roundtrips.
+  - Enhanced property-based fuzzing strategies `arb_nickname` and `arb_link` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`.
+  - Updated `docs/VCARD-MAPPING.md` with Section 3.9 detailing `NICKNAME` and `URL` mapping architecture, cardinality decision, comma escaping vs text-list parsing, EDS slotting, and link kind filtering.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `NICKNAME` Cardinality & Comma Handling:
+     - RFC 2426 §3.1.3 defines `NICKNAME` as a comma-separated text-list, but JSContact (RFC 9553 §2.2.2) models nicknames as a keyed map. `jmap-vcard` emits one line per entry so each entry carries its `X-JMAP-KEY`.
+     - Inbound comma-separated lists (`NICKNAME:Rob,Robbie,Boss`) are parsed via `entry_text_list` into a single `Nickname` struct (`"Rob,Robbie,Boss"`). This matches EDS 3.52's behavior, which hands the whole value back as one string (`E_CONTACT_NICKNAME`) without splitting on commas. Re-emission escapes commas as `\,`, converging to a fixed point.
+  2. `URL` (Links) Slotting & Kind Filtering:
+     - In EDS, `E_CONTACT_HOMEPAGE_URL` maps to the first `URL` line in document order. Subsequent `URL` lines pass through intact in the raw vCard.
+     - `jmap-vcard` strictly restricts vCard 3.0 `URL` emission to `kind: None` (plain website). RFC 9553 `kind: "contact"` (vCard 4.0 `CONTACT-URI`) and vendor kinds (`kind: "blog"`, `"video"`, `"feed"`) emit no `URL` line by design to prevent misrepresenting them as the contact's homepage in Evolution's UI.
+     - `X-EVOLUTION-BLOG-URL` (`E_CONTACT_BLOG_URL`) and `X-EVOLUTION-VIDEO-URL` (`E_CONTACT_VIDEO_URL`) are EDS-specific extensions and remain unmapped by design in `jmap-vcard`.
+  3. `calcard` preserves raw RFC 3986 URI punctuation (e.g. `;`, `,` in query parameters) without backslash-escaping, ensuring valid URIs on the wire format.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+## 2026-08-19 — Non-ASCII and CHARSET / ENCODING params fidelity & characterization (jmap-vcard)
+
+- **AGY-TASKS sub-step:** 5. Non-ASCII and `CHARSET`/`ENCODING` params: verify non-ASCII names/values round-trip; characterize and pin `CHARSET=UTF-8` and legacy `ENCODING=QUOTED-PRINTABLE` values; log contract findings.
+- **Changes:**
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `non_ascii_multilingual_names_and_components_roundtrip`: verifies round-trip fidelity across diverse world writing systems and scripts (French accents, German umlauts/eszett, Spanish tildes, Icelandic thorn/eth, Polish crossed-L, Russian Cyrillic, Greek, Hebrew, Arabic RTL, Chinese Hanzi, Japanese Kanji/Kana, Korean Hangul, Hindi Devanagari, Vietnamese, and Emoji/symbols), confirming exact component extraction, valid line folding without UTF-8 code point splitting, and fixed-point roundtrip stability (`vcard2 == vcard3`).
+    - `non_ascii_multilingual_organization_title_and_role_roundtrip`: tests multi-component `ORG` and `TITLE`/`ROLE` with non-ASCII text across French, German, Russian, and Japanese, verifying unit retention and default title kind normalization.
+    - `non_ascii_structured_addresses_and_labels_roundtrip`: tests all 7 structured RFC 2426 `ADR` components and multi-line `LABEL` with non-ASCII characters across French, German, and Japanese addresses, verifying delimiter escaping and label pairing.
+    - `non_ascii_notes_nicknames_categories_and_spouse_roundtrip`: tests multilingual paragraphs with special mathematical symbols (`∀x ∈ ℝ`), non-ASCII single/multiple nicknames, keyword tags, and spouse relations.
+    - `inbound_vcard_charset_parameter_variations_and_normalization`: tests inbound vCards carrying `;CHARSET=UTF-8`, `;CHARSET=utf-8`, `;charset=UTF-8` across all properties, verifying accurate extraction into JSContact fields, outbound normalization to clean vCard 3.0 without redundant `CHARSET` parameters, and fixed-point convergence.
+    - `inbound_vcard_quoted_printable_encoding_with_charset_utf8_and_latin1`: tests legacy vCard 2.1 / 3.0 `ENCODING=QUOTED-PRINTABLE` with `CHARSET=UTF-8`, `CHARSET=ISO-8859-1`, `CHARSET=WINDOWS-1252`, and without `CHARSET` (default Latin-1), verifying lossless hex octet decoding into JSContact fields, outbound normalization to clean vCard 3.0 UTF-8 format, and fixed-point stability.
+    - `inbound_vcard_quoted_printable_soft_line_breaks_and_escaped_delimiters`: tests QP soft line breaks (`=\r\n` and `=\n`) and encoded delimiters (`=3D`, `=3B`, `=2C`, `=0D=0A`).
+    - `inbound_vcard_encoding_parameter_8bit_7bit_and_base64_fidelity`: tests `ENCODING=8BIT` and `ENCODING=7BIT` text properties and `PHOTO;ENCODING=b;TYPE=JPEG:...` inline images.
+  - Enhanced `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`:
+    - Added `CHARSET` (`UTF-8`, `utf-8`, `ISO-8859-1`, `WINDOWS-1252`) and `ENCODING` (`QUOTED-PRINTABLE`, `8BIT`, `7BIT`, `BASE64`) parameter variations to `arb_vcard_property_line`.
+    - Added `prop_non_ascii_unicode_card_roundtrips_without_corruption` property test verifying fuzzing roundtrips of arbitrary non-ASCII names and notes.
+  - Updated `docs/VCARD-MAPPING.md` with Section 4.7 documenting RFC 2426 §2.1.2 & §2.1.3 character set and transport contracts, Postel's law legacy compatibility, QUOTED-PRINTABLE decoding rules, and outbound normalization.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **vCard 3.0 Standard Contract (RFC 2426 §2.1.2 & §2.1.3)**:
+     - RFC 2426 §2.1.2 mandates that vCard 3.0 is unconditionally UTF-8; the `CHARSET` parameter is not supported / deprecated for text properties.
+     - RFC 2426 §2.1.3 mandates that vCard 3.0 uses 8-bit MIME transport encoding; `ENCODING=QUOTED-PRINTABLE`, `ENCODING=8BIT`, and `ENCODING=7BIT` are not supported on text properties. Binary properties (`PHOTO`) use `ENCODING=b` (or `b`).
+     - `card_to_vcard` strictly adheres to RFC 2426 by emitting native UTF-8 strings directly without redundant `CHARSET` or `ENCODING` parameters on text properties.
+  2. **Inbound Compatibility & Postel's Law**:
+     - `calcard` automatically recognizes and accepts `CHARSET` (case-insensitively, including `UTF-8`, `ISO-8859-1`, `WINDOWS-1252`) on input.
+     - `calcard` automatically decodes `ENCODING=QUOTED-PRINTABLE` byte sequences according to the specified `CHARSET` (or ISO-8859-1 default per RFC 2045) and unfolds soft line breaks (`=\r\n`), translating legacy vCard 2.1 data losslessly into standard JSContact strings.
+  3. **Outbound Normalization & Convergence**:
+     - Cards parsed from legacy `CHARSET` or `ENCODING=QUOTED-PRINTABLE` inputs are normalized on output into standard vCard 3.0 UTF-8 format, achieving fixed-point convergence (`vcard2 == vcard3`) on subsequent passes.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
+
+
+
+
+
+
 
 
 
