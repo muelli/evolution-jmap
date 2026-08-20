@@ -128,7 +128,7 @@ crate taking a cancellable and it is correctly bridged.
 |---|---|---|---|---|
 | 1 | `jmap-backend-core/src/error.rs::set_raw_gerror` | transfer/precondition enforcement | LOW (no live bug; hardening) | **fixed 2026-08-20** |
 | 2 | `jmap-config/src/oauth2_service.rs::get_name`/`get_display_name`, `config_lookup.rs::get_display_name` | catch_unwind coverage | LOW (theoretical; both bodies are currently infallible) | **fixed this session** |
-| 3 | `jmap-config/src/oauth2.rs::borrowed` | concurrency / pointer lifetime | MEDIUM (see below) | logged, not fixed — needs deliberate design |
+| 3 | `jmap-config/src/oauth2.rs::borrowed` | concurrency / pointer lifetime | **CONFIRMED — use-after-free demonstrated** | **fixed 2026-08-20** |
 | 4 | `jmap-config/src/backend.rs::insert_entries` | nullability consistency | LOW (cosmetic) | logged, not fixed |
 
 ### Finding 2 — fixed: three vtable functions were not routed through `guard`
@@ -184,6 +184,84 @@ determine from the EDS 3.52 source whether `EOAuth2Service` vtable calls and
 race on the same source in practice — if EDS's own threading model rules it
 out, this becomes a KEEP with a documented reason instead of an IMPROVE.
 
+#### Resolution 2026-08-20 (on opus, per the escalation at `0db0438`) — CONFIRMED and fixed
+
+The recommended next step was taken: the EDS 3.52.3 sources (the installed
+version — `dpkg -l` → `3.52.3-0ubuntu1.2`) were read rather than reasoned
+about. EDS's threading model does **not** rule the race out, and the read
+corrected this section's account of it in three ways.
+
+**1. The racing writer in production is `set_property`, not `apply()`.**
+Nothing outside `jmap-config/tests/backend.rs` calls `oauth2::apply` at all.
+The production writer is `config_lookup::add_result`, which publishes
+`[JMAP OAuth2]` as `EConfigLookupResult` string properties — and, more
+importantly, `e-source.c`'s `source_parse_dbus_data` →
+`source_load_from_key_file` → `g_object_set_property`, which re-runs every
+`E_SOURCE_PARAM_SETTING` property whenever the registry pushes new source
+data over D-Bus, on whatever thread the `GDBusProxy` notify lands on. That
+is a more frequent and more certainly concurrent writer than the
+GTK-signal-driven `apply()` this section hypothesised, not a less likely
+one.
+
+**2. EDS's own OAuth2 services avoid the hazard by never freeing what they
+hand out — which is the fix.** `e-oauth2-service.c`'s five `const gchar *`
+wrappers carry no transfer or threading annotation at all, and every EDS use
+of the result copies it a few instructions later
+(`e_oauth2_service_util_set_to_form`, `eos_create_soup_message`) with no
+lock held. So no lock *can* cover the caller's use of the pointer: the only
+workable contract is the lifetime `borrowed()`'s doc already claimed.
+`e-oauth2-service-google.c` shows EDS keeping exactly that contract —
+`eos_google_get_client_id` answers either a `static gchar glob_buff[128]` or
+a value `eos_google_read_settings` caches via `g_object_set_data_full`
+behind an `if (!value)` guard, i.e. written once and never replaced or freed
+while the service lives.
+
+**3. The "same contract as EDS's own extension accessors" defence was the
+wrong comparison.** `e_source_authentication_get_host` and friends are
+indeed lock-free, but EDS pairs each with a `dup_` variant taking
+`e_source_extension_property_lock`. A vfunc with a fixed `const gchar *`
+signature has no such escape hatch, which is why EDS's OAuth2 impls use
+write-once storage instead.
+
+**The fix**, therefore, adopts EDS's own discipline rather than adding a
+lock that could not help: a `Fields` value is never freed once written.
+`Fields::set` is now the single path both writing doors (`apply` and
+`set_property`) go through; it performs no write at all when the value is
+unchanged — keeping the existing allocation, and so any pointer already
+handed out of it, exactly where it was, the same compare-then-skip
+`source_set_property_from_key_file` already does one frame up — and moves a
+replaced value into a `Fields::retired` vector dropped only in `finalize`.
+Moving a `CString` moves the pointer, not the bytes, so retiring and any
+later vector reallocation both leave an outstanding `const gchar *` valid.
+The zero-allocation read shape `borrowed()` exists for is untouched. The
+growth traded for this is bounded by the number of writes that actually
+change a field — a human-paced event (an account's discovered OAuth 2.0
+configuration changing), and one EDS itself already declines to perform when
+the value did not differ.
+
+**It was a real use-after-free, not a theoretical one.** The red test
+`a_pointer_handed_out_before_a_changed_write_still_reads_its_original_bytes`
+takes the pointer `get_client_id` would return, performs the changed
+`set_property` write EDS's reload path performs, churns the allocator with
+same-sized allocations, and reads the pointer back. Against the unfixed
+code it returned `Some("XXXXXXXXXXXXX")` — the churn's own bytes, in the
+reused heap block — instead of `Some("client-abc123")`. Two further tests
+pin the pointer-stability half through both writing doors
+(`rewriting_a_field_with_the_same_value_keeps_the_pointer_it_handed_out`,
+`setting_a_property_to_the_value_it_already_has_keeps_the_pointer_it_handed_out`);
+both failed on the unfixed code with two distinct addresses. All three are
+in `jmap-config/tests/oauth2.rs`, and answer `docs/UNSAFE-AUDIT.md`'s
+original complaint that this invariant was "not pinned by a test the way
+most other invariants in this file are".
+
+**One narrower thing deliberately left:** the retained `client_secret`
+values now live until the extension is finalized rather than being freed at
+the moment they are replaced. That is not a new exposure class — the same
+secret is persisted to the account's `.source` file on disk by
+`E_SOURCE_PARAM_SETTING`, which is the whole point of the property — so no
+zeroization was added here; noting it so a future secrets-hygiene pass has
+it recorded rather than having to rediscover it.
+
 ### Finding 4 — logged, not fixed: `insert_entries`'s asymmetric NULL guards
 
 See "Question 3" above. Cosmetic; not scheduled.
@@ -203,3 +281,17 @@ either rule it out from EDS's own threading contract or design and TDD a
 real fix; forcing a guess into this audit would risk exactly the
 plausible-but-wrong outcome the night-shift escalation criteria exist to
 avoid.
+
+**Amended 2026-08-20.** That last sentence's caution was right, and the
+session it deferred to has now run (on opus): Finding 3 was **not** merely a
+design question. Reading the EDS 3.52.3 sources instead of reasoning about
+them confirmed the race, identified a *different* and more frequent racing
+writer than this audit had hypothesised (EDS's own D-Bus source reload, not
+`apply()`), and a red test demonstrated the use-after-free concretely — it
+read the churned heap block's bytes back through the handed-out pointer. See
+Finding 3's "Resolution" subsection. So the audit's verdict now reads: sound
+on all four named questions, with all three actionable findings (1, 2, 3)
+fixed and one cosmetic one (4) unscheduled. The deferral cost nothing except
+time, but the finding it deferred was a real memory-safety bug rather than
+the "MEDIUM confidence, may be a KEEP" this table first recorded — worth
+noting for how the next audit calibrates a lifetime argument nothing tests.

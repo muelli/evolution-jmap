@@ -40377,3 +40377,117 @@ today because both rebuild the `CString` unconditionally), and a pointer
 taken before a *changed* write must still read its original bytes after
 allocator churn (fails today by reading freed memory, which is the defect
 itself).
+
+## 2026-08-20 — Delivered: FFI-SOUNDNESS-AUDIT Finding 3 (`oauth2.rs::borrowed` no longer hands out a pointer a later write frees)
+
+Delivered the increment claimed above. **The finding was real, and worse
+than the audit recorded it: a demonstrated use-after-free, not a MEDIUM-
+confidence design question.**
+
+**What the red test showed.** `jmap-config/tests/oauth2.rs` gained three
+tests. The decisive one,
+`a_pointer_handed_out_before_a_changed_write_still_reads_its_original_bytes`,
+takes the `const gchar *` `EOAuth2Service::get_client_id` would return,
+performs the changed `set_property` write EDS's own reload path performs,
+churns the allocator with same-sized allocations so a reused block shows as
+changed bytes rather than passing on an undisturbed one, and reads the
+pointer back. Against unmodified `master` it returned
+`Some("XXXXXXXXXXXXX")` — the churn's own filler, in the reused heap
+block — where `Some("client-abc123")` was expected. That is the
+use-after-free, observed rather than argued. The two pointer-stability tests
+(`rewriting_a_field_with_the_same_value_keeps_the_pointer_it_handed_out`
+through `apply`, and
+`setting_a_property_to_the_value_it_already_has_keeps_the_pointer_it_handed_out`
+through `g_object_set_property`) each failed with two distinct addresses.
+All three green after the fix; all 9 tests in the file pass.
+
+**What the EDS 3.52.3 source read changed** (fetched from upstream at the
+installed version, `dpkg -l` → `3.52.3-0ubuntu1.2`; three of the four files
+are quoted in the audit doc):
+
+- **The racing writer is `set_property`, not `apply()`.** The audit named
+  `apply()`; nothing outside `jmap-config/tests/backend.rs` calls it.
+  `e-source.c`'s `source_parse_dbus_data` → `source_load_from_key_file` →
+  `g_object_set_property` re-runs every `E_SOURCE_PARAM_SETTING` property
+  whenever the registry pushes new source data over D-Bus. So the writer is
+  more frequent and more certainly concurrent than hypothesised.
+- **No lock can fix it, and EDS shows what does.** `e-oauth2-service.c`'s
+  five `const gchar *` wrappers carry no transfer or threading annotation,
+  and every EDS use copies the string a few instructions later
+  (`e_oauth2_service_util_set_to_form`, `eos_create_soup_message`) holding
+  nothing of ours — a vfunc of that signature has no "done with it" hook to
+  hang a free or an unlock on. `e-oauth2-service-google.c` is how EDS's own
+  implementations cope: `eos_google_get_client_id` answers either a `static
+  gchar glob_buff[128]` or a value `eos_google_read_settings` caches via
+  `g_object_set_data_full` behind an `if (!value)` guard — **written once,
+  never replaced or freed while the service lives.**
+- **The old justification's comparison was wrong.**
+  `borrowed()`'s doc claimed "the same contract EDS's own extensions keep
+  for their string accessors ... with no lock of their own either".
+  `e_source_authentication_get_host` is lock-free, but EDS pairs each such
+  getter with a `dup_` variant taking `e_source_extension_property_lock` —
+  an escape hatch a fixed-signature vfunc does not have, which is exactly
+  why EDS's OAuth2 impls use write-once storage instead.
+
+**The fix** adopts that discipline rather than adding a lock that could not
+help. `Fields::set` is now the one path both writing doors (`apply` and
+`set_property`) go through: an unchanged write is not performed at all,
+keeping the existing allocation and so any pointer already handed out of it
+(the same compare-then-skip `source_set_property_from_key_file` already does
+one frame up), and a changed write moves the replaced value into a
+`Fields::retired` vector dropped only in `finalize`. Moving a `CString`
+moves the pointer, not the bytes, so retiring and any later vector
+reallocation both leave an outstanding `const gchar *` valid. `borrowed()`'s
+documented "valid for as long as the extension is" is now true as written,
+with the zero-allocation read shape it exists for untouched. Growth traded
+for this is bounded by writes that actually *change* a field — an account's
+discovered OAuth 2.0 config changing, a human-paced event EDS itself already
+declines to re-apply when the value did not differ. A `get(id)` helper
+replaced `get_property`'s parallel match, so the five properties are now
+enumerated in exactly two places instead of four.
+
+**Why this needed the opus escalation, honestly assessed:** the escalation
+was right, but for a different reason than predicted. The hard part was not
+concurrency reasoning about a fix — it was that the *cheap* answers were both
+wrong and both looked right. Shrinking or extending the mutex's scope cannot
+work (the caller's use is outside any lock we could hold), and the "EDS does
+this too" argument that had stood in two audits inverted once EDS's actual
+OAuth2 implementations were read instead of its plain extension accessors.
+A session that reasoned from the header and the existing comment would
+plausibly have closed this as a documented KEEP.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy both
+clean. `cargo test --locked` (default-members) green, 0 failed. The seven
+EDS-gated crates run per-crate (the standing multi-package hang):
+`evolution-jmap-client` 174, `jmap-backend-core` 115, `jmap-backend-book`
+69, `jmap-backend-cal` 131, `jmap-config` 149, `jmap-backend-collection`
+159, `jmap-mail` 440 — **1237 passed, 0 failed.** Disk filled at 980 MB
+before `jmap-mail`; `cargo clean --profile dev` recovered 23.3 GB, the
+standing note again ([[disk-fills-from-cargo-target]]).
+
+**Also ran the packaging leg, per item 8's "standing fix" note** — the check
+no night session was watching when CI went red. `ninja -C build` first
+([[ninja-before-ctest]]), then the full `ctest --test-dir build`:
+**18/18 passed**, including `package-deb-lintian`,
+`package-deb-reproducible` and all five functional legs. This change is
+packaging-neutral (pure Rust logic in one crate, no build script, no install
+rule), so this confirms rather than fixes — but it is the gate item 8 asked
+future sessions to actually run, so it was run.
+
+No new dependency, no new file (so no REUSE/SPDX concern), no new
+user-facing string (so no `po/` regeneration).
+`docs/FFI-SOUNDNESS-AUDIT.md`'s findings table, Finding 3's own section (a
+new "Resolution" subsection) and the overall verdict are updated, as is
+`docs/UNSAFE-AUDIT.md`'s INVESTIGATE entry — which had flagged precisely
+this argument as "not pinned by a test", and was right.
+
+`ci/checks.sh` still cannot run on this VM ([[checks-sh-blocked-on-vm]]).
+
+**FFI-SOUNDNESS-AUDIT is now closed** except Finding 4, which its own text
+calls cosmetic and unscheduled.
+
+NIGHT-SHIFT: FFI-SOUNDNESS-AUDIT Finding 3 delivered and pushed — a
+demonstrated use-after-free on the `EOAuth2Service` borrowed-pointer path,
+fixed and pinned by three tests. Ending the session here per the standing
+rule against starting a second large item.
