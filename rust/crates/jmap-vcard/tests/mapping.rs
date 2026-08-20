@@ -10875,3 +10875,561 @@ fn inbound_vcard_encoding_parameter_8bit_7bit_and_base64_fidelity() {
     let vcard_out2 = card_to_vcard(&parsed2);
     assert_eq!(vcard_out, vcard_out2);
 }
+
+#[test]
+fn photo_inline_base64_media_type_variants_and_roundtrip() {
+    // Characterizes inline base64 PHOTO roundtrip fidelity across 10 image formats:
+    // JPEG, PNG, GIF, WebP, SVG, BMP, TIFF, AVIF, HEIC, Icon.
+    let subtypes = [
+        ("image/jpeg", "jpeg"),
+        ("image/png", "png"),
+        ("image/gif", "gif"),
+        ("image/webp", "webp"),
+        ("image/svg+xml", "svg+xml"),
+        ("image/bmp", "bmp"),
+        ("image/tiff", "tiff"),
+        ("image/avif", "avif"),
+        ("image/heic", "heic"),
+        ("image/x-icon", "x-icon"),
+    ];
+
+    for (media_type, expected_subtype) in subtypes {
+        let card = one_photo(
+            &format!("data:{media_type};base64,{PAYLOAD}"),
+            Some(media_type),
+        );
+        let vcard = card_to_vcard(&card);
+        let photo_str = line(&vcard, "PHOTO;");
+        assert!(
+            photo_str.contains(&format!("TYPE={expected_subtype}")),
+            "{media_type} must state TYPE={expected_subtype} on line: {photo_str}"
+        );
+        assert!(
+            photo_str.contains("ENCODING=b"),
+            "Inline photo must state ENCODING=b: {photo_str}"
+        );
+        assert!(
+            photo_str.contains("X-JMAP-KEY=m1"),
+            "Inline photo must state X-JMAP-KEY: {photo_str}"
+        );
+        assert!(
+            photo_str.ends_with(&format!(":{PAYLOAD}")),
+            "Inline photo must end with payload: {photo_str}"
+        );
+
+        // Parse back and verify exact media_type and URI reconstruction
+        let parsed = vcard_to_card(&vcard).expect("parse emitted photo vcard");
+        let media = parsed.media.as_ref().expect("media present");
+        let entry = &media["m1"];
+        assert_eq!(entry.kind.as_deref(), Some("photo"));
+        assert_eq!(
+            entry.media_type.as_deref(),
+            Some(media_type),
+            "media_type must roundtrip intact for {media_type}"
+        );
+        assert_eq!(
+            entry.uri,
+            format!("data:{media_type};base64,{PAYLOAD}"),
+            "URI must be reconstructed with exact media_type for {media_type}"
+        );
+
+        // Fixed-point convergence
+        let vcard2 = card_to_vcard(&parsed);
+        let parsed2 = vcard_to_card(&vcard2).expect("second parse");
+        let vcard3 = card_to_vcard(&parsed2);
+        assert_eq!(
+            vcard2, vcard3,
+            "vCard must reach fixed point for {media_type}"
+        );
+    }
+
+    // Inbound uppercase / mixed-case parameters and legacy ENCODING=BASE64
+    let vcard_casing = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Photo Case\r\n",
+        "PHOTO;TYPE=JPEG;ENCODING=b;X-JMAP-KEY=m1:aGVsbG8tcGhvdG8=\r\n",
+        "PHOTO;ENCODING=BASE64;TYPE=PNG;X-JMAP-KEY=m2:aGVsbG8tcGhvdG8=\r\n",
+        "PHOTO;encoding=b;type=gif;x-jmap-key=m3:aGVsbG8tcGhvdG8=\r\n",
+        "END:VCARD\r\n",
+    );
+    let parsed_casing = vcard_to_card(vcard_casing).expect("parse casing vcard");
+    let media_casing = parsed_casing.media.as_ref().expect("media present");
+    assert_eq!(media_casing["m1"].media_type.as_deref(), Some("image/JPEG"));
+    assert_eq!(media_casing["m2"].media_type.as_deref(), Some("image/PNG"));
+    assert_eq!(media_casing["m3"].media_type.as_deref(), Some("image/gif"));
+
+    let vcard_casing_out = card_to_vcard(&parsed_casing);
+    let parsed_casing2 = vcard_to_card(&vcard_casing_out).expect("reparse casing");
+    let vcard_casing_out2 = card_to_vcard(&parsed_casing2);
+    assert_eq!(vcard_casing_out, vcard_casing_out2);
+}
+
+#[test]
+fn photo_uri_variant_and_lossy_media_type_characterization() {
+    // 1. Valid URI variants: HTTPS, HTTP, file://, URN
+    let test_uris = [
+        "https://example.com/alice.jpg",
+        "http://photos.org/pic.png?size=large&format=raw",
+        "file:///home/user/.face",
+        "urn:uuid:6a2f7965-728b-47e2-8924-d2e7d7ffba44",
+    ];
+
+    for uri in test_uris {
+        let card = one_photo(uri, None);
+        let vcard = card_to_vcard(&card);
+        let unf = unfolded(&vcard);
+        let photo_str = line(&unf, "PHOTO;");
+        assert_eq!(
+            photo_str,
+            format!("PHOTO;X-JMAP-KEY=m1;VALUE=uri:{uri}"),
+            "URI photo must emit VALUE=uri and key without TYPE or ENCODING"
+        );
+        assert!(
+            !vcard.contains("ENCODING="),
+            "URI photo must not have ENCODING: {vcard}"
+        );
+        assert!(
+            !vcard.contains("TYPE="),
+            "URI photo must not have TYPE: {vcard}"
+        );
+
+        // Parse back
+        let parsed = vcard_to_card(&vcard).expect("parse URI photo");
+        let media = parsed.media.as_ref().expect("media present");
+        let entry = &media["m1"];
+        assert_eq!(entry.kind.as_deref(), Some("photo"));
+        assert_eq!(entry.uri, uri);
+        assert_eq!(entry.media_type, None);
+
+        // Fixed-point convergence
+        let vcard2 = card_to_vcard(&parsed);
+        assert_eq!(vcard, vcard2);
+    }
+
+    // 2. Inbound parameter variations: VALUE=URI, value=uri, mixed case
+    for val_param in ["VALUE=URI", "value=uri", "Value=Uri", "VALUE=uri"] {
+        let vcard_in = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Uri Photo\r\nPHOTO;{val_param};X-JMAP-KEY=m1:https://cdn.example.com/avatar.webp\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard_in).expect("parse uri photo variation");
+        let media = parsed.media.as_ref().expect("media present");
+        assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+        assert_eq!(media["m1"].uri, "https://cdn.example.com/avatar.webp");
+        assert_eq!(media["m1"].media_type, None);
+
+        let vcard_out = card_to_vcard(&parsed);
+        assert_eq!(
+            line(&vcard_out, "PHOTO;"),
+            "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://cdn.example.com/avatar.webp"
+        );
+    }
+
+    // 3. Lossy-by-design characterization: media_type on remote URI
+    // In JSContact, a remote URI may specify media_type: Some("image/jpeg").
+    // But RFC 2426 §3.1.4 states no TYPE on URI references, and EDS reads no TYPE off URI lines.
+    // Therefore, card_to_vcard omits TYPE by design, which reads back as media_type: None.
+    let card_with_media_type = one_photo("https://example.org/photo.jpg", Some("image/jpeg"));
+    let vcard_lossy = card_to_vcard(&card_with_media_type);
+    assert_eq!(
+        line(&vcard_lossy, "PHOTO;"),
+        "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://example.org/photo.jpg"
+    );
+    assert!(
+        !vcard_lossy.contains("TYPE="),
+        "TYPE omitted on URI by design"
+    );
+
+    let parsed_lossy = vcard_to_card(&vcard_lossy).expect("parse lossy vcard");
+    let entry_lossy = &parsed_lossy.media.as_ref().unwrap()["m1"];
+    assert_eq!(
+        entry_lossy.media_type, None,
+        "media_type on remote URI is unstated across vCard 3.0"
+    );
+    assert_eq!(entry_lossy.uri, "https://example.org/photo.jpg");
+
+    // Subsequent roundtrips reach fixed point
+    let vcard_lossy2 = card_to_vcard(&parsed_lossy);
+    assert_eq!(vcard_lossy, vcard_lossy2);
+}
+
+#[test]
+fn photo_eds_photo_field_replacements_and_same_photo_equality() {
+    // 1. same_photo equality comparisons:
+    let inline_jpeg = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
+        media_type: Some("image/jpeg".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let inline_jpeg_caps = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/JPEG;base64,{PAYLOAD}"),
+        media_type: Some("image/JPEG".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let inline_jpeg_unpadded = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/jpeg;base64,{}", PAYLOAD.trim_end_matches('=')),
+        media_type: Some("image/jpeg".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let inline_png = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/png;base64,{PAYLOAD}"),
+        media_type: Some("image/png".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let inline_diff_payload = Media {
+        kind: Some("photo".to_owned()),
+        uri: "data:image/jpeg;base64,AQIDBA==".to_owned(),
+        media_type: Some("image/jpeg".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let uri_photo1 = Media {
+        kind: Some("photo".to_owned()),
+        uri: "https://example.com/alice.jpg".to_owned(),
+        media_type: None,
+        extra: BTreeMap::new(),
+    };
+    let uri_photo2 = Media {
+        kind: Some("photo".to_owned()),
+        uri: "https://example.com/bob.jpg".to_owned(),
+        media_type: None,
+        extra: BTreeMap::new(),
+    };
+    let non_photo = Media {
+        kind: Some("logo".to_owned()),
+        uri: "https://example.com/logo.png".to_owned(),
+        media_type: None,
+        extra: BTreeMap::new(),
+    };
+
+    // Inline comparisons
+    assert!(same_photo(&inline_jpeg, &inline_jpeg), "identical inline");
+    assert!(
+        same_photo(&inline_jpeg, &inline_jpeg_caps),
+        "case-insensitive subtype"
+    );
+    assert!(
+        same_photo(&inline_jpeg, &inline_jpeg_unpadded),
+        "unpadded vs padded base64"
+    );
+    assert!(!same_photo(&inline_jpeg, &inline_png), "different subtypes");
+    assert!(
+        !same_photo(&inline_jpeg, &inline_diff_payload),
+        "different payload"
+    );
+
+    // URI comparisons
+    assert!(same_photo(&uri_photo1, &uri_photo1), "identical URI");
+    assert!(!same_photo(&uri_photo1, &uri_photo2), "different URI");
+
+    // Cross-variant and non-photo comparisons
+    assert!(!same_photo(&inline_jpeg, &uri_photo1), "inline vs URI");
+    assert!(
+        same_photo(&non_photo, &non_photo),
+        "both non-photos evaluate to None"
+    );
+    assert!(
+        !same_photo(&inline_jpeg, &non_photo),
+        "inline photo vs non-photo"
+    );
+
+    // 2. EDS photo replacement simulation:
+    // When a user changes photo in Evolution UI, EDS rewrites the PHOTO line with no X-JMAP-KEY.
+    let initial_card = one_photo(
+        &format!("data:image/jpeg;base64,{PAYLOAD}"),
+        Some("image/jpeg"),
+    );
+    let initial_vcard = card_to_vcard(&initial_card);
+    assert!(initial_vcard.contains("X-JMAP-KEY=m1"));
+
+    // User chooses a new PNG photo in Evolution
+    let eds_edited_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera\r\n",
+        "PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n",
+        "END:VCARD\r\n",
+    );
+    let parsed_eds = vcard_to_card(eds_edited_vcard).expect("parse EDS photo change");
+    let media = parsed_eds.media.as_ref().expect("media present");
+    let new_entry = &media["m1"];
+    assert_eq!(new_entry.media_type.as_deref(), Some("image/png"));
+
+    // same_photo correctly identifies that the user changed the photo
+    assert!(
+        !same_photo(&initial_card.media.unwrap()["m1"], new_entry),
+        "same_photo detects photo update"
+    );
+}
+
+#[test]
+fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
+    // 1. Multiple PHOTO entries on one card (e.g. inline avatar + remote full picture + inline thumbnail)
+    let mut media_map = BTreeMap::new();
+    media_map.insert(
+        "m1".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
+            media_type: Some("image/jpeg".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    media_map.insert(
+        "m2".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: "https://example.com/profile-large.jpg".to_owned(),
+            media_type: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    media_map.insert(
+        "m3".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: "data:image/png;base64,AQIDBA==".to_owned(),
+            media_type: Some("image/png".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let multi_card = ContactCard {
+        id: Some("C-MULTI-PHOTO".into()),
+        media: Some(media_map),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&multi_card);
+    let photo_lines: Vec<&str> = vcard
+        .split("\r\n")
+        .filter(|l| l.starts_with("PHOTO;"))
+        .collect();
+    assert_eq!(
+        photo_lines.len(),
+        3,
+        "All 3 PHOTO lines must be emitted: {vcard}"
+    );
+    assert!(
+        photo_lines
+            .iter()
+            .any(|l| l.contains("X-JMAP-KEY=m1") && l.contains("TYPE=jpeg"))
+    );
+    assert!(
+        photo_lines
+            .iter()
+            .any(|l| l.contains("X-JMAP-KEY=m2") && l.contains("VALUE=uri"))
+    );
+    assert!(
+        photo_lines
+            .iter()
+            .any(|l| l.contains("X-JMAP-KEY=m3") && l.contains("TYPE=png"))
+    );
+
+    // Parse back
+    let parsed = vcard_to_card(&vcard).expect("parse multi-photo vcard");
+    let parsed_media = parsed.media.as_ref().expect("media present");
+    assert_eq!(parsed_media.len(), 3);
+    assert_eq!(parsed_media["m1"].media_type.as_deref(), Some("image/jpeg"));
+    assert_eq!(
+        parsed_media["m2"].uri,
+        "https://example.com/profile-large.jpg"
+    );
+    assert_eq!(parsed_media["m3"].media_type.as_deref(), Some("image/png"));
+
+    // 2. Non-photo media filtering: logos, sounds, documents, and unmapped kinds
+    let mut mixed_media = BTreeMap::new();
+    mixed_media.insert(
+        "m1".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
+            media_type: Some("image/jpeg".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    mixed_media.insert(
+        "m2".to_owned(),
+        Media {
+            kind: Some("logo".to_owned()),
+            uri: "https://example.com/corp-logo.png".to_owned(),
+            media_type: Some("image/png".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    mixed_media.insert(
+        "m3".to_owned(),
+        Media {
+            kind: Some("sound".to_owned()),
+            uri: "https://example.com/pronunciation.ogg".to_owned(),
+            media_type: Some("audio/ogg".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    mixed_media.insert(
+        "m4".to_owned(),
+        Media {
+            kind: Some("document".to_owned()),
+            uri: "https://example.com/resume.pdf".to_owned(),
+            media_type: Some("application/pdf".to_owned()),
+            extra: BTreeMap::new(),
+        },
+    );
+    mixed_media.insert(
+        "m5".to_owned(),
+        Media {
+            kind: None,
+            uri: "https://example.com/unknown.dat".to_owned(),
+            media_type: None,
+            extra: BTreeMap::new(),
+        },
+    );
+
+    // Predicates
+    assert!(states_media(&mixed_media["m1"]), "photo is stateable");
+    assert!(
+        !states_media(&mixed_media["m2"]),
+        "logo is not stateable on PHOTO"
+    );
+    assert!(
+        !states_media(&mixed_media["m3"]),
+        "sound is not stateable on PHOTO"
+    );
+    assert!(
+        !states_media(&mixed_media["m4"]),
+        "document is not stateable on PHOTO"
+    );
+    assert!(
+        !states_media(&mixed_media["m5"]),
+        "none kind is not stateable"
+    );
+
+    let mixed_card = ContactCard {
+        id: Some("C-MIXED-MEDIA".into()),
+        media: Some(mixed_media),
+        ..ContactCard::default()
+    };
+    let mixed_vcard = card_to_vcard(&mixed_card);
+    assert_eq!(
+        mixed_vcard.matches("\r\nPHOTO").count(),
+        1,
+        "Only the photo entry must emit a PHOTO line: {mixed_vcard}"
+    );
+    assert!(mixed_vcard.contains("X-JMAP-KEY=m1"));
+    assert!(!mixed_vcard.contains("corp-logo.png"));
+    assert!(!mixed_vcard.contains("pronunciation.ogg"));
+    assert!(!mixed_vcard.contains("resume.pdf"));
+}
+
+#[test]
+fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
+    // 1. Non-image data URIs: data:application/pdf;base64,... and data:;base64,...
+    let pdf_card = one_photo(
+        &format!("data:application/pdf;base64,{PAYLOAD}"),
+        Some("application/pdf"),
+    );
+    let pdf_vcard = card_to_vcard(&pdf_card);
+    assert_eq!(
+        line(&pdf_vcard, "PHOTO;"),
+        format!("PHOTO;X-JMAP-KEY=m1;ENCODING=b:{PAYLOAD}"),
+        "Non-image data URI emits without TYPE parameter"
+    );
+    let parsed_pdf = vcard_to_card(&pdf_vcard).expect("parse non-image photo");
+    let pdf_entry = &parsed_pdf.media.as_ref().unwrap()["m1"];
+    assert_eq!(pdf_entry.media_type, None);
+    assert_eq!(pdf_entry.uri, format!("data:;base64,{PAYLOAD}"));
+
+    // 2. EDS TYPE="X-EVOLUTION-UNKNOWN" parsing
+    let eds_unknown_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Unknown MIME\r\n",
+        "PHOTO;TYPE=\"X-EVOLUTION-UNKNOWN\";ENCODING=b:AQIDBA==\r\n",
+        "END:VCARD\r\n",
+    );
+    let parsed_unknown = vcard_to_card(eds_unknown_vcard).expect("parse X-EVOLUTION-UNKNOWN");
+    let unk_entry = &parsed_unknown.media.as_ref().unwrap()["m1"];
+    assert_eq!(unk_entry.media_type, None);
+    assert_eq!(unk_entry.uri, "data:;base64,AQIDBA==");
+
+    // 3. Inbound empty / degenerate PHOTO lines produce no media entries
+    for empty_line in [
+        "PHOTO:",
+        "PHOTO;ENCODING=b:",
+        "PHOTO;VALUE=uri:",
+        "PHOTO;TYPE=jpeg;ENCODING=b:",
+        "PHOTO;X-JMAP-KEY=m1:",
+    ] {
+        let vcard_empty = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Empty Photo\r\n{empty_line}\r\nEND:VCARD\r\n"
+        );
+        let parsed_empty = vcard_to_card(&vcard_empty).expect("parse empty photo line");
+        assert!(
+            parsed_empty.media.is_none() || parsed_empty.media.as_ref().unwrap().is_empty(),
+            "Degenerate line {empty_line:?} must produce no media entries"
+        );
+    }
+
+    // 4. Invalid data URIs in JSContact are rejected by states_media and emit no line
+    for invalid_uri in [
+        "data:image/jpeg,%89PNG%0D%0A",
+        "data:image/jpeg;base64,invalid base64!@#$",
+        "data:image/jpeg",
+        "data:",
+        "",
+    ] {
+        let invalid_card = one_photo(invalid_uri, None);
+        assert!(
+            !states_media(&invalid_card.media.as_ref().unwrap()["m1"]),
+            "{invalid_uri:?} must not be stateable"
+        );
+        let vcard_invalid = card_to_vcard(&invalid_card);
+        assert!(
+            !vcard_invalid.contains("PHOTO"),
+            "{invalid_uri:?} must state no PHOTO line"
+        );
+    }
+
+    // 5. Large 2KB binary image with multi-line 75-octet folding
+    let mut raw_bytes = Vec::with_capacity(2048);
+    // Construct simulated PNG binary payload
+    raw_bytes.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+    for i in 0..2040 {
+        raw_bytes.push(((i * 37 + 13) % 256) as u8);
+    }
+    let encoded_payload = base64::engine::general_purpose::STANDARD.encode(&raw_bytes);
+    let large_card = one_photo(
+        &format!("data:image/png;base64,{encoded_payload}"),
+        Some("image/png"),
+    );
+
+    let large_vcard = card_to_vcard(&large_card);
+    let fold_count = large_vcard.matches("\r\n ").count();
+    assert!(
+        fold_count > 30,
+        "2KB payload must fold across 30+ continuation lines (fold_count = {fold_count})"
+    );
+
+    let parsed_large = vcard_to_card(&large_vcard).expect("parse folded large photo");
+    let large_entry = &parsed_large.media.as_ref().unwrap()["m1"];
+    assert_eq!(large_entry.media_type.as_deref(), Some("image/png"));
+
+    let parsed_bytes = base64::engine::general_purpose::STANDARD
+        .decode(
+            large_entry
+                .uri
+                .strip_prefix("data:image/png;base64,")
+                .unwrap(),
+        )
+        .expect("decode reconstructed payload");
+    assert_eq!(
+        parsed_bytes, raw_bytes,
+        "Binary payload must roundtrip byte-for-byte"
+    );
+
+    // Fixed-point stability
+    let large_vcard2 = card_to_vcard(&parsed_large);
+    let parsed_large2 = vcard_to_card(&large_vcard2).expect("second parse");
+    let large_vcard3 = card_to_vcard(&parsed_large2);
+    assert_eq!(
+        large_vcard2, large_vcard3,
+        "Large folded photo reaches fixed point"
+    );
+}

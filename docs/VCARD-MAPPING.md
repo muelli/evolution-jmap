@@ -189,6 +189,20 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 - **Unmodeled `Link` Properties**:
   - JSContact `Link` fields `mediaType`, `contexts`, `pref`, and `label` ride in `extra` and are untouched during `jmap-book-sync`'s `PatchObject` synchronization.
 
+### 3.10 Photos & Media (`PHOTO` ↔ `E_CONTACT_PHOTO`)
+- **Inline Binary Data (`ENCODING=b`)**:
+  - Encoded using standard base64 per RFC 2426 §3.1.4.
+  - The MIME subtype is extracted by `image_subtype` (e.g. `image/jpeg` -> `TYPE=jpeg`, `image/png` -> `TYPE=png`, `image/svg+xml` -> `TYPE=svg+xml`) and emitted via `VCardParameter::typ`.
+  - Non-image data URIs (e.g. `data:application/pdf;base64,...` or `data:;base64,...`) are emitted without a `TYPE` parameter (`PHOTO;ENCODING=b:...`), which EDS accepts and reports without a MIME type.
+- **Remote URI References (`VALUE=uri`)**:
+  - Emitted as `PHOTO;X-JMAP-KEY=m1;VALUE=uri:<uri>`.
+  - In vCard 3.0, the `VALUE=uri` parameter is mandatory for EDS to populate `E_CONTACT_PHOTO` (`EContactPhotoType::URI`). Lines omitting `VALUE=uri` are not recognized by EDS as URI photos.
+  - No `TYPE` or `ENCODING` parameter is emitted on URI lines (RFC 2426 §3.1.4).
+- **Non-Photo Media Filtering**:
+  - JSContact (RFC 9553 §2.6.4) groups `photo`, `logo`, and `sound` under `card.media`.
+  - [`states_media`] and `photo` filter strictly for `kind: Some("photo")`. Logos, sounds, documents, and unmapped kinds get no `PHOTO` line, preserving UI separation in Evolution.
+  - Unmapped media entries remain safe on the server because `jmap-book-sync` patches only mapped/edited properties.
+
 ---
 
 ## 4. Special Semantics & Product Decision Catalog
@@ -245,6 +259,25 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 - **Multilingual Script Coverage**:
   - Full roundtrip fidelity is verified across diverse world writing systems: Latin with diacritics (French, German, Spanish, Icelandic, Polish), Cyrillic, Greek, Hebrew, Arabic (RTL), East Asian (Chinese Hanzi, Japanese Kanji/Kana, Korean Hangul), South Asian (Hindi Devanagari), Southeast Asian (Vietnamese), and Emoji/symbols (`🧑‍💻`, `🚀`, `🌟`).
 
+### 4.8 Inline `PHOTO` (base64) vs URI Semantics, Media Type Lossy-by-Design Finding & EDS Contract
+- **Inline Photo Media Type Normalization**:
+  - EDS 3.52 prepends `image/` to the `TYPE` parameter value (e.g. `TYPE=jpeg` -> `image/jpeg`).
+  - [`image_subtype`] strips `image/` prefixes to ensure `TYPE` contains only the subtype.
+  - When EDS exports a photo without a known MIME type, it emits `TYPE="X-EVOLUTION-UNKNOWN"`. `read_photo` filters this out so `media_type` becomes `None` and the URI becomes `data:;base64,...`, preventing phantom MIME types like `image/X-EVOLUTION-UNKNOWN`.
+- **Remote URI Media Type (Lossy by Design across vCard 3.0)**:
+  - RFC 2426 §3.1.4 does not define `TYPE` on URI-valued `PHOTO` properties (`PHOTO;VALUE=uri:...`).
+  - EDS 3.52 neither writes nor reads `TYPE` on URI photo lines (`E_CONTACT_PHOTO` stores `EContactPhotoType::URI` with just the URI string).
+  - Therefore, if a JSContact `Media` entry specifies a remote URI *and* a `media_type` (e.g. `uri: "https://example.com/avatar.jpg"`, `media_type: Some("image/jpeg")`), `card_to_vcard` intentionally omits `TYPE` to conform to RFC 2426 and EDS contracts.
+  - Reading the vCard back via `vcard_to_card` results in `media_type: None`.
+  - *Sync Safety*: Untouched remote URIs on the JMAP server preserve their original `mediaType` because `jmap-book-sync`'s `PatchObject` issues patches only for modified paths.
+- **EDS Photo Field Replacements & Semantic Equality ([`same_photo`])**:
+  - When a user changes or crops a photo in Evolution, EDS rewrites the `PHOTO` line and drops the `X-JMAP-KEY` parameter.
+  - `vcard_to_card` allocates a new key (`m1`, `m2`), and [`same_photo`] compares image payloads:
+    - Normalizes base64 padding (unpadded `data:` URIs match padded vCard base64).
+    - Compares MIME subtypes case-insensitively (`image/jpeg` == `image/JPEG`).
+    - Compares URI strings directly.
+  - This allows the sync layer to detect whether the photo was actually edited by the user, avoiding redundant image re-uploads on every sync.
+
 ---
 
 ## 5. Function & Predicate Index
@@ -277,6 +310,10 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 | [`states_calendar`] | `pub` | Checks if calendar has non-empty URI and mapped kind (`calendar` or `freeBusy`). |
 | [`states_media`] | `pub` | Evaluates if media entry is a valid photo with supported inline/URI payload. |
 | [`same_photo`] | `pub` | Compares two media entries for semantic image equality across base64/MIME representations. |
+| `photo` | `private` | Resolves `Media` into inline base64 or URI variant, validating format and media type. |
+| `read_photo` | `private` | Parses vCard `PHOTO` entry into JSContact `Media`, extracting subtype and decoding base64 data. |
+| `image_subtype` | `private` | Extracts image subtype from `image/*` MIME string (stripping prefix and parameters). |
+| `photo_entry` | `private` | Constructs standard `Media` struct for `kind: "photo"`. |
 | [`states_online_service`] | `pub` | Checks if online service has an EDS slot, valid handle, and safe whitespace. |
 | [`online_service_handle`] | `pub` | Extracts bare handle from `user` field or URI scheme. |
 | [`online_service_uri`] | `pub` | Formats canonical URI for a supported service and handle. |
@@ -287,3 +324,4 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 | [`states_spouse`] | `pub` | Checks if relation is `spouse` and key names a printable person (not a URI). |
 | [`states_nothing_but_the_marriage`] | `pub` | Checks if relation entry contains only the `spouse` relation type. |
 | [`states_keyword`] | `pub` | Validates keyword tag for boolean `true`, non-emptiness, and whitespace safety. |
+
