@@ -827,6 +827,13 @@ impl Client {
     /// blob is raw bytes, with no shape a wrong answer could fail to match,
     /// so nothing else here would catch a redirect target's own unrelated 200
     /// being handed back as if it were the message.
+    ///
+    /// Declares `Accept: */*`, not `application/json` — every other request
+    /// this client makes answers with JSON, but a blob download never does,
+    /// and RFC 8620 §6.2 gives it no reason to claim otherwise; a server
+    /// doing content negotiation on that header is free to refuse or
+    /// redirect a request that says it only accepts JSON for a response that
+    /// is not.
     pub fn download_blob(
         &self,
         account_id: &Id,
@@ -841,7 +848,7 @@ impl Client {
             .replace("{blobId}", &encode_template_value(blob_id.as_str()))
             .replace("{name}", &encode_template_value(name))
             .replace("{type}", &encode_template_value("application/octet-stream"));
-        let response = self.execute_within(HttpMethod::Get, &url, None, None, max_bytes)?;
+        let response = self.execute_within(HttpMethod::Get, &url, None, None, "*/*", max_bytes)?;
         if crate::url::origin_of(&response.final_url) != crate::url::origin_of(&url) {
             return Err(Error::CrossOriginRedirect {
                 requested: crate::url::origin_of(&url).to_owned(),

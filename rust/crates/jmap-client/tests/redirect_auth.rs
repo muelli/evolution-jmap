@@ -161,3 +161,43 @@ fn a_cross_host_redirect_on_download_is_not_trusted_as_the_blob() {
         other => panic!("expected Error::CrossOriginRedirect, got {other:?}"),
     }
 }
+
+/// The `Accept` smell named in `docs/ROADMAP.md` CURRENT PRIORITY item 9: a
+/// blob is never JSON, so a download declaring `Accept: application/json`
+/// (as every other request this client makes correctly does) gives a server
+/// doing RFC 7231 §5.3.2 content negotiation a legitimate reason to refuse
+/// or redirect it. `download_blob` must declare something else instead.
+#[test]
+fn download_blob_does_not_declare_accept_application_json() {
+    let server = MockServer::builder()
+        .basic_auth("agent", "sekret")
+        .reject_download_accept_json()
+        .start();
+    let account_id = server.account_id();
+    let blob_id = Id::new("b1");
+    let real_blob = b"the actual message".to_vec();
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.blobs.insert(
+            blob_id.clone(),
+            Blob {
+                content_type: "message/rfc822".to_owned(),
+                data: real_blob.clone(),
+            },
+        );
+    }
+
+    let client = Client::connect(server.origin(), Credentials::basic("agent", "sekret"))
+        .expect("session discovery succeeds");
+
+    let body = client
+        .download_blob(&account_id, &blob_id, "message.eml", limits::MAX_BLOB_BYTES)
+        .expect(
+            "a download that does not claim Accept: application/json should \
+             not be refused by a server doing content negotiation on it",
+        );
+
+    assert_eq!(body, real_blob);
+}

@@ -97,6 +97,7 @@ pub struct MockServerBuilder {
     session_via_redirect: bool,
     advertise_origin: Option<String>,
     download_via_redirect_to: Option<String>,
+    reject_download_accept_json: bool,
     terse_submission_create: bool,
 }
 
@@ -351,6 +352,17 @@ impl MockServerBuilder {
         self
     }
 
+    /// Answer `GET /download/...` with a `406` instead of the blob when the
+    /// request's `Accept` header is exactly `application/json` — reproducing
+    /// a server that does content negotiation on a blob download and refuses
+    /// a request that (wrongly) claims JSON is the only acceptable answer
+    /// (see `docs/ROADMAP.md`, CURRENT PRIORITY item 9's `Accept` smell).
+    /// Serves the blob for any other `Accept`, including none at all.
+    pub fn reject_download_accept_json(mut self) -> Self {
+        self.reject_download_accept_json = true;
+        self
+    }
+
     /// Omit `identityId`/`emailId` from a created `EmailSubmission`, as a
     /// server that reads RFC 8620 §5.3 literally does: the `created` map
     /// need only contain properties "that were not sent by the client", and
@@ -382,6 +394,7 @@ impl MockServerBuilder {
         state.session_via_redirect = self.session_via_redirect;
         state.advertise_origin = self.advertise_origin.clone();
         state.download_via_redirect_to = self.download_via_redirect_to.clone();
+        state.reject_download_accept_json = self.reject_download_accept_json;
         state.terse_submission_create = self.terse_submission_create;
         let state = Arc::new(Mutex::new(state));
 
@@ -443,6 +456,7 @@ impl MockServer {
             session_via_redirect: false,
             advertise_origin: None,
             download_via_redirect_to: None,
+            reject_download_accept_json: false,
             terse_submission_create: false,
         }
     }
@@ -745,11 +759,28 @@ fn handle_request(
             );
         }
         (tiny_http::Method::Get, _) if path.starts_with("/download/") => {
-            let redirect_to = state
-                .lock()
-                .expect("mock state lock")
-                .download_via_redirect_to
-                .clone();
+            let (redirect_to, reject_accept_json) = {
+                let state = state.lock().expect("mock state lock");
+                (
+                    state.download_via_redirect_to.clone(),
+                    state.reject_download_accept_json,
+                )
+            };
+            if reject_accept_json {
+                let accept = request
+                    .headers()
+                    .iter()
+                    .find(|header| header.field.equiv("Accept"))
+                    .map(|header| header.value.as_str());
+                if accept == Some("application/json") {
+                    respond_json(
+                        request,
+                        406,
+                        &json!({"status": 406, "detail": "blob download does not answer JSON"}),
+                    );
+                    return;
+                }
+            }
             if let Some(redirect_to) = redirect_to {
                 let location = format!("{redirect_to}{url}");
                 let response = tiny_http::Response::empty(302).with_header(
