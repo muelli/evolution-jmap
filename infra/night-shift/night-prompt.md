@@ -1,6 +1,6 @@
 Autonomous night session. Repo: ~/evolution-jmap (cwd).
 
-Task: read docs/ROADMAP.md, docs/NIGHT-LOG.md (if present), git log --oneline -15. 
+Task: read docs/ROADMAP.md, the **tail** of docs/NIGHT-LOG.md (`tail -n 200 docs/NIGHT-LOG.md` — do NOT read the whole file: it is a rolling recent window, and everything older is in docs/NIGHT-LOG-archive.md, which you never need to open), and `git log --oneline -20`. The git log of claim/lock and "Delivered" commits is the authoritative record of what has already been claimed or done — trust it over log prose; the NIGHT-LOG tail is only for recent decisions and context. 
 0. Priority (see ROADMAP "CURRENT PRIORITY"): work on what makes the plugin usable — M7 (account-setup UI) first, then real-server readiness (OAuth2, --features live-server harness), then M9/M10. Do NOT reopen completed backends (M1–M6, M8) to polish edge cases; log any such idea to docs/BACKLOG.md and pick priority work instead. If the only thing you can find to do is edge-case polish of a done backend, that is a signal to switch to M7/real-server work, not to do the polish.
 1. Dependency Analysis: Treat ROADMAP.md as a dependency graph (e.g. M3, M4, M5 can be built in parallel after M2). Identify all currently unblocked and incomplete milestones.
 2. Claiming: Select ONE unblocked task. Before writing code, append a lock entry to `docs/NIGHT-LOG.md` (e.g., "Claiming M3 increment: [description]") and `git push` it. If the push fails, another agent claimed it; pull, rebase, and pick a different unblocked task. **Deadlock handling**: If a task was claimed more than 24 hours ago (check git log for the lock commit timestamp) and shows no subsequent progress, consider the lock expired and claim it.
@@ -13,7 +13,7 @@ Hard rules (ROADMAP "Rules for autonomous work sessions" applies in full):
 - Small commits, imperative subject, NO Co-Authored-By trailer. Plain git push, never force, never rewrite history.
 - Crates needing EDS headers stay OUT of default-members in rust/Cargo.toml.
 - Never touch infra/ or .github/workflows/ci-image.yml.
-- Append a session entry to docs/NIGHT-LOG.md (UTC date, what was done, decisions, blockers); commit it with the work.
+- Append a session entry to docs/NIGHT-LOG.md (UTC date, what was done, decisions, blockers); keep it concise — a few short paragraphs, not an essay (the log is read by `tail` each iteration, so brevity keeps recent context dense). Commit it with the work.
 - Blocked >20 min on one approach: log the blocker, switch to the next tractable item.
 - End the session promptly once the increment is pushed. Do not start a second large item.
 
