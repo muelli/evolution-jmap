@@ -201,3 +201,24 @@ fn nested(depth: usize) -> String {
     ics.push_str("END:VCALENDAR\r\n");
     ics
 }
+
+/// A `DTEND` (or any DATE-TIME value) with a multi-byte UTF-8 character
+/// straddling byte offset 6 of its time part used to panic: the length check
+/// only counted bytes, so slicing `time[..6]` landed mid-character before the
+/// ASCII-digit check three lines down ever got a chance to reject the value
+/// cleanly. Found by `proptest_fuzz.rs`'s hostile-input fuzzer (see
+/// `docs/BACKLOG.md`); pinned here as the exact minimal input it found, now
+/// that `to_local_date_time` checks `is_char_boundary` before slicing.
+#[test]
+fn a_dtend_with_a_multibyte_character_at_the_slice_boundary_does_not_panic() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nDTEND: A\u{ac0}\u{20}\u{ae}T\u{10397}\u{fffc}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    let event = jmap_ical::ical_to_event(ics).expect("the rest of the event still parses");
+
+    assert_eq!(event.id.as_ref().map(|id| id.as_str()), Some("evt1"));
+    assert_eq!(event.start.as_deref(), Some("2026-01-15T13:00:00"));
+    assert_eq!(
+        event.duration, None,
+        "an unreadable DTEND must be dropped, not panic or invent a duration"
+    );
+}
