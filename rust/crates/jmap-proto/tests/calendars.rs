@@ -6,7 +6,7 @@
 
 #![cfg(feature = "calendars")]
 
-use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
+use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter, NDay, RecurrenceRule};
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -255,4 +255,40 @@ fn recurrence_rule_first_day_of_week_roundtrip() {
     assert_eq!(rule.frequency, "weekly");
     assert_eq!(rule.first_day_of_week.as_deref(), Some("su"));
     assert!(rule.extra.is_empty());
+}
+
+#[test]
+fn calendar_event_simple_sets_every_field() {
+    let event = CalendarEvent::simple("C1", "Team sync", "2026-01-15T13:00:00", "PT1H");
+    let calendar_ids: Vec<_> = event
+        .calendar_ids
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|(id, included)| (id.as_str(), *included))
+        .collect();
+    assert_eq!(calendar_ids, [("C1", true)]);
+    assert_eq!(event.event_type.as_deref(), Some("Event"));
+    assert_eq!(event.title.as_deref(), Some("Team sync"));
+    assert_eq!(event.start.as_deref(), Some("2026-01-15T13:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Etc/UTC"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H"));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+}
+
+#[test]
+fn calendar_event_query_filter_in_calendar_sets_only_that_field() {
+    let filter = CalendarEventQueryFilter::in_calendar("C1");
+    assert_eq!(filter.in_calendar.as_ref().unwrap().as_str(), "C1");
+    assert_eq!(filter.after, None);
+    assert_eq!(filter.before, None);
+}
+
+#[test]
+fn calendar_event_query_filter_time_range_sets_after_and_before() {
+    let filter =
+        CalendarEventQueryFilter::time_range("2026-01-01T00:00:00Z", "2026-02-01T00:00:00Z");
+    assert_eq!(filter.after.as_deref(), Some("2026-01-01T00:00:00Z"));
+    assert_eq!(filter.before.as_deref(), Some("2026-02-01T00:00:00Z"));
+    assert_eq!(filter.in_calendar, None);
 }

@@ -5,7 +5,7 @@
 
 #![cfg(feature = "mail")]
 
-use jmap_proto::mail::{Email, EmailSubmission, Mailbox};
+use jmap_proto::mail::{Email, EmailImport, EmailQueryFilter, EmailSubmission, Mailbox};
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -67,4 +67,34 @@ fn email_submission_roundtrip() {
     let envelope = submission.envelope.unwrap();
     assert_eq!(envelope.mail_from.email, "alice@example.com");
     assert_eq!(envelope.rcpt_to[0].email, "bob@example.com");
+}
+
+#[test]
+fn email_import_keyword_and_received_at_set_only_those_fields() {
+    let import = EmailImport::new("B1", "M1")
+        .keyword("$seen")
+        .received_at("2026-01-15T13:00:00Z");
+    assert_eq!(import.blob_id.as_ref().unwrap().as_str(), "B1");
+    let mailbox_ids: Vec<_> = import
+        .mailbox_ids
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|(id, included)| (id.as_str(), *included))
+        .collect();
+    assert_eq!(mailbox_ids, [("M1", true)]);
+    assert_eq!(import.keywords.as_ref().unwrap().get("$seen"), Some(&true));
+    assert_eq!(
+        import.received_at.as_ref().unwrap().as_str(),
+        "2026-01-15T13:00:00Z"
+    );
+}
+
+#[test]
+fn email_query_filter_in_mailbox_sets_only_that_field() {
+    let filter = EmailQueryFilter::in_mailbox("M1");
+    assert_eq!(filter.in_mailbox.as_ref().unwrap().as_str(), "M1");
+    assert_eq!(filter.subject, None);
+    assert_eq!(filter.before, None);
+    assert_eq!(filter.after, None);
 }
