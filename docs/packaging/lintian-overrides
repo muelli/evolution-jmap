@@ -1,0 +1,10 @@
+# Evolution keeps its own libraries in a private directory of its own
+# (privlibdir, /usr/lib/evolution) rather than on the loader's default
+# search path, so a module that dlopens libevolution-mail.so/
+# libevolution-shell.so has to record that directory in its own RUNPATH or
+# it cannot load at all outside a process that already has them resident —
+# every module Evolution installs under /usr/lib/evolution/modules/*.so
+# already carries exactly this RUNPATH, this one included. See
+# docs/ROADMAP.md's CURRENT PRIORITY item 2(a) (why the module needs it)
+# and item 8 (why this override, and not the RUNPATH itself, is the fix).
+evolution-jmap: custom-library-search-path RUNPATH /usr/lib/evolution [usr/lib/evolution/modules/module-jmap-configuration.so]

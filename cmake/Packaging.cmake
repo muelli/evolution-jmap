@@ -117,6 +117,18 @@ install(FILES "${CMAKE_SOURCE_DIR}/docs/packaging/copyright"
 	COMPONENT config-module
 )
 
+# Track C1/item 8: the one RUNPATH entry this package ships
+# (/usr/lib/evolution, item 2(a)'s fix for module-jmap-configuration.so) is
+# deliberate — Evolution's own modules all carry it — so lintian's
+# custom-library-search-path is satisfied with a written justification
+# rather than by removing the RUNPATH the module needs to load. Debian
+# policy names the override file after the package, with no extension.
+install(FILES "${CMAKE_SOURCE_DIR}/docs/packaging/lintian-overrides"
+	DESTINATION "/usr/share/lintian/overrides"
+	RENAME "${PACKAGE_NAME}"
+	COMPONENT config-module
+)
+
 # The *extended* description only: CPack puts
 # CPACK_PACKAGE_DESCRIPTION_SUMMARY on the synopsis line and indents each line
 # below by the one space Debian policy asks for. Repeating the summary here, or
@@ -163,6 +175,7 @@ set(EXPECTED_PACKAGE_FILES
 	${EVOLUTION_MODULE_DIR}/module-jmap-configuration.so
 	/usr/share/doc/${PACKAGE_NAME}/changelog.gz
 	/usr/share/doc/${PACKAGE_NAME}/copyright
+	/usr/share/lintian/overrides/${PACKAGE_NAME}
 )
 
 # Named by add_translations() rather than spelled out again, so a catalogue

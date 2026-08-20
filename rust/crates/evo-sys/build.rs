@@ -326,8 +326,7 @@ fn main() {
         // `-Wl,-R<libdir>` in their `Libs:` for exactly this reason, and the
         // `pkg_config` crate forwards it as a link argument — the test binaries
         // come out with the directory in their `RUNPATH`, checked with
-        // `readelf -d`. Emitting a second copy from `lib.link_paths` here was
-        // tried and only duplicated the entry.
+        // `readelf -d`.
         //
         // That forwarding stops at this package, though: Cargo scopes
         // `rustc-link-arg` to the crate whose build script emitted it, while
@@ -338,10 +337,36 @@ fn main() {
         // dependent as `DEP_EVOLUTION_SHELL_LIBDIRS`, by way of this crate's
         // `links` key — and `jmap-config`'s own `build.rs` turns them back into
         // an rpath for the binaries it produces.
-        for path in &lib.link_paths {
-            let path = path.display().to_string();
-            if !link_paths.contains(&path) {
-                link_paths.push(path);
+        //
+        // Read from `lib.ld_args` (the `-Wl,...` linker options the `.pc`
+        // files actually spell out), not `lib.link_paths` (every `-L` search
+        // directory pkg-config's recursive `Requires:` resolution turns up,
+        // most of it standard system dirs the two `.pc` files never asked to
+        // be rpathed at all) — `lib.link_paths` was tried first and made a
+        // lintian-clean `.deb` (cmake/tests/check-deb-lintian.cmake) impossible:
+        // the installed module came out with `/usr/lib` and
+        // `/usr/lib/x86_64-linux-gnu` in its `RUNPATH` alongside the one
+        // directory anything here is actually for, and lintian's
+        // `custom-library-search-path` flags a RUNPATH entry regardless of
+        // whether the directory is also a default one.
+        for arg in &lib.ld_args {
+            let mut words = arg.iter();
+            while let Some(word) = words.next() {
+                let dir = if let Some(dir) = word.strip_prefix("-R") {
+                    Some(dir)
+                } else if let Some(dir) = word.strip_prefix("-rpath=") {
+                    Some(dir)
+                } else if word == "-rpath" {
+                    words.next().map(String::as_str)
+                } else {
+                    None
+                };
+                if let Some(dir) = dir.filter(|dir| !dir.is_empty()) {
+                    let dir = dir.to_string();
+                    if !link_paths.contains(&dir) {
+                        link_paths.push(dir);
+                    }
+                }
             }
         }
     }
