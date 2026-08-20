@@ -40491,3 +40491,46 @@ NIGHT-SHIFT: FFI-SOUNDNESS-AUDIT Finding 3 delivered and pushed — a
 demonstrated use-after-free on the `EOAuth2Service` borrowed-pointer path,
 fixed and pinned by three tests. Ending the session here per the standing
 rule against starting a second large item.
+
+## 2026-08-20 (claim) — Claiming CURRENT PRIORITY item 8's standing fix: wire the packaging `.deb` ctest into `ci/checks.sh`
+
+Fresh survey first, against `origin/master` at `dab9348` (unchanged since the
+last session's Finding 3 delivery): walked `docs/ROADMAP.md` end to end again,
+including every sub-item's status text. CURRENT PRIORITY items 1-8 are all
+code-complete, each blocked only on an operator/maintainer step already logged
+as such (M7, item 5's SRV resolver, item 6's API-token method, item 7's
+collection-backend fix, item 8's CI fix itself — all pending a real Evolution
+session or a live-CI confirmation this runner cannot produce). Confirmed via
+the GitHub Actions API that CI is green at `dab9348` (the head commit), so
+item 8's own fix holds. Round 2 Track A is fully closed; Track B1/C2/C4 are
+explicit NEEDS-DECISION; Track D1 and Track E Phase 0/Path A are code-complete
+pending operator confirmation, D2 and Track E Phase B/C explicitly need a
+fresh design/maintainer decision before they are claimable.
+`docs/UNSAFE-AUDIT.md`/`docs/FFI-SOUNDNESS-AUDIT.md` are closed except items
+their own text calls cosmetic/deprioritized/needing a fresh design. The two
+BACKLOG.md findings (jmap-vcard trailing-whitespace nit, jmap-ical DATE-TIME
+panic) are both closed-backend (M3/M4) polish the CURRENT PRIORITY directive
+says not to reopen. This matches many prior sessions' independent surveys.
+
+No M7/real-server/M9/M10 work remains unblocked. Per the standing rule, that
+is a signal to stop looking for backend polish, not to invent some — but item
+8's own text names one concrete, still-open, non-backend task: **"make the
+agents' pre-push gate run the packaging ctest (or at least lintian) so a red
+`.deb` cannot land unseen again."** Confirmed unaddressed: `ci/checks.sh`
+(the cargo-only gate every agent runs before pushing) has no packaging/ctest
+step; the `.deb`'s lintian check only runs in CI's separate `build` job,
+which is exactly why the RUNPATH regression sat red for days before a session
+noticed the mismatch. This is a tooling/CI-gate fix, not M1-M8 backend code,
+so it does not fall under "do not reopen completed backends."
+
+**Claiming this.** Increment: add a best-effort packaging-ctest step to
+`ci/checks.sh`, gated on `cmake`/`ninja`/the EDS pkg-config modules being
+present (skip with a message otherwise, preserving the script's documented
+"works on a bare Rust-only machine" property), scoped to just the
+`package-deb*` ctest tests (not the functional/gui-smoke legs, which need a
+live D-Bus/Xvfb registry `ci/checks.sh` has never assumed). Verification plan:
+confirm the new step passes on current `master`, then temporarily
+(uncommitted) reintroduce the exact RUNPATH regression `ac00396`/item 8 fixed
+and confirm the new step fails on it, then revert the temporary change and
+confirm green again — proving the gate actually catches the regression class
+it exists for, not just that it runs.
