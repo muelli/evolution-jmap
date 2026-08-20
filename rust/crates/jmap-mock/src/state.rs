@@ -119,6 +119,14 @@ pub struct ServerState {
     /// [`crate::MockServerBuilder::download_via_redirect_to`] asked. `None`
     /// serves the blob directly, matching every other test.
     pub download_via_redirect_to: Option<String>,
+    /// Answer `GET /download/...` with a `406` instead of the blob when the
+    /// request's `Accept` header is exactly `application/json`, as
+    /// [`crate::MockServerBuilder::reject_download_accept_json`] asked —
+    /// reproducing a server doing RFC 7231 §5.3.2 content negotiation on a
+    /// download request that (wrongly) claims to accept only JSON for an
+    /// answer that never is JSON. `false` serves the blob regardless of
+    /// `Accept`, matching every other test.
+    pub reject_download_accept_json: bool,
     /// Omit `identityId`/`emailId` from a created `EmailSubmission`, as
     /// [`crate::MockServerBuilder::terse_submission_create`] asked — RFC 8620
     /// §5.3 says the `created` map need only contain properties "that were
@@ -149,6 +157,7 @@ impl ServerState {
             session_via_redirect: false,
             advertise_origin: None,
             download_via_redirect_to: None,
+            reject_download_accept_json: false,
             terse_submission_create: false,
         }
     }

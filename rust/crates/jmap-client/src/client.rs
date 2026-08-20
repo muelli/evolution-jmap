@@ -381,6 +381,7 @@ impl Client {
             url,
             body,
             content_type,
+            "application/json",
             limits::MAX_API_RESPONSE_BYTES,
         )
     }
@@ -393,12 +394,20 @@ impl Client {
     /// response is bounded by the question that was asked, and a blob download
     /// is bounded by what the account said the blob weighs. See
     /// [`crate::limits`].
+    ///
+    /// `accept` is a caller's choice rather than a constant for the same
+    /// reason: every JMAP API call answers with JSON, but a blob download
+    /// does not, and RFC 8620 §6.2 gives it no reason to declare
+    /// `application/json` acceptable — a server doing content negotiation on
+    /// that header could legitimately refuse or redirect a download that
+    /// claims to accept only JSON for a response that never is.
     pub(crate) fn execute_within(
         &self,
         method: HttpMethod,
         url: &str,
         body: Option<&[u8]>,
         content_type: Option<&str>,
+        accept: &str,
         max_response_bytes: u64,
     ) -> Result<HttpResponse, Error> {
         let cancel = self.cancel_for_request();
@@ -406,8 +415,7 @@ impl Client {
             return Err(Error::Cancelled);
         }
 
-        let mut headers: Vec<(String, String)> =
-            vec![("Accept".to_owned(), "application/json".to_owned())];
+        let mut headers: Vec<(String, String)> = vec![("Accept".to_owned(), accept.to_owned())];
         if let Some(content_type) = content_type {
             headers.push(("Content-Type".to_owned(), content_type.to_owned()));
         }
