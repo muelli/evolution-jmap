@@ -738,3 +738,40 @@ NIGHT-SHIFT: item 8's standing fix delivered and pushed — `ci/checks.sh` now
 runs the packaging `.deb` ctest, demonstrated to catch the exact RUNPATH
 regression class item 8 closed. Ending the session here; no priority-lane
 (M7/real-server/M9/M10) work remained unblocked to start a second item.
+
+## 2026-08-20 — Claiming CURRENT PRIORITY item 9: blob download trusts an unauthenticated cross-host redirect as if it were the message
+
+Fresh survey against `origin/master` at `3e5c0e9` (unchanged since the log
+rotation). Items 1-8 are exactly where the last several sessions left them —
+code-complete, each blocked on an operator/maintainer step this runner cannot
+produce. Item 9 (queued by `680be1e` right after item 7's operator
+verification) is the one CURRENT PRIORITY gap with no such block: "reproduce
+with a jmap-mock mode that serves downloadUrl from a different host and/or
+302-redirects the blob GET… (2) Fix the blob-download auth/host handling in
+jmap-client" is headless, TDD-able work, exactly the item's own text says so.
+Claiming it.
+
+The item's three hypotheses for *why* Fastmail's live download returns its
+marketing homepage (cross-host redirect stripping auth, a different
+credential scheme entirely, a `downloadUrl` template bug) are explicitly not
+resolvable from here — no live Fastmail token, and the item's own text defers
+that to an operator probe. What *is* resolvable headlessly is the shape of
+client-side defect the first hypothesis implies and that a mock can
+reproduce byte-for-byte: `UreqTransport` already strips `Authorization` on a
+cross-host redirect (`86fea00`'s `SameHost` policy, correct per RFC 7235 —
+the item's own text says not to weaken this), but nothing stops the client
+from then treating whatever the *unauthenticated* redirect target answers
+with as the blob. A JSON response with the wrong shape fails to parse and
+surfaces as an error; a blob is raw bytes with no shape to be wrong, so nothing
+in the existing code would notice the switch — confirmed by writing the
+failing test first (below) against unmodified code.
+
+**Increment:** give `jmap-mock` a `download_via_redirect_to(origin)` mode
+(mirrors `session_via_redirect`'s shape, on the download route instead of
+session discovery); write a red test using a second, genuinely
+different-host listener (127.0.0.2, not another port on 127.0.0.1 — `ureq`'s
+own `SameHost` check compares hostname only, via `http::uri::Authority::
+host()`, confirmed against `ureq-proto`'s `can_redirect_auth_header` source,
+so two ports on the same loopback address would not exercise cross-host at
+all); fix `jmap-client` to refuse a download whose response came from a
+different origin than requested.
