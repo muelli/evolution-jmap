@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use base64::Engine;
 use jmap_proto::contacts::{
     Address, AddressComponent, Anniversary, Calendar, ContactCard, ContactEmail, ContactPhone,
     Link, Media, Name, NameComponent, Nickname, Note, OnlineService, OrgUnit, Organization,
@@ -805,5 +806,84 @@ proptest! {
         let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip");
         let vcard3 = card_to_vcard(&parsed2);
         prop_assert_eq!(vcard2, vcard3, "Unicode card must reach fixed point");
+    }
+
+    #[test]
+    fn prop_photo_inline_and_uri_roundtrip_stability(
+        is_uri in any::<bool>(),
+        subtype in prop_oneof![
+            Just("jpeg".to_string()),
+            Just("png".to_string()),
+            Just("gif".to_string()),
+            Just("webp".to_string()),
+            Just("svg+xml".to_string()),
+            Just("bmp".to_string()),
+            Just("tiff".to_string()),
+            Just("avif".to_string()),
+            Just("heic".to_string()),
+            Just("x-icon".to_string()),
+        ],
+        raw_bytes in prop::collection::vec(any::<u8>(), 1..256),
+        uri_str in prop_oneof![
+            Just("https://example.com/avatar.jpg".to_string()),
+            Just("http://cdn.org/pic.png?w=100&h=100".to_string()),
+            Just("file:///home/user/.face".to_string()),
+            Just("https://photos.example.org/image.webp#top".to_string()),
+        ],
+    ) {
+        let (uri, media_type) = if is_uri {
+            (uri_str, None)
+        } else {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&raw_bytes);
+            (
+                format!("data:image/{subtype};base64,{encoded}"),
+                Some(format!("image/{subtype}")),
+            )
+        };
+
+        let card = ContactCard {
+            id: Some("C-PROP-PHOTO".into()),
+            media: Some([(
+                "m1".to_owned(),
+                Media {
+                    kind: Some("photo".to_owned()),
+                    uri: uri.clone(),
+                    media_type: media_type.clone(),
+                    extra: BTreeMap::new(),
+                },
+            )].into()),
+            ..ContactCard::default()
+        };
+
+        let vcard1 = card_to_vcard(&card);
+        prop_assert!(vcard1.contains("PHOTO;"));
+        if is_uri {
+            prop_assert!(vcard1.contains("VALUE=uri"));
+            prop_assert!(!vcard1.contains("ENCODING="));
+        } else {
+            let expected_type = format!("TYPE={subtype}");
+            prop_assert!(vcard1.contains("ENCODING=b"));
+            prop_assert!(vcard1.contains(&expected_type));
+        }
+
+        let parsed1 = vcard_to_card(&vcard1).expect("parse emitted photo vcard");
+        let entry1 = &parsed1.media.as_ref().expect("media present")["m1"];
+        prop_assert_eq!(entry1.kind.as_deref(), Some("photo"));
+
+        if is_uri {
+            prop_assert_eq!(&entry1.uri, &uri);
+            prop_assert_eq!(entry1.media_type.as_ref(), None);
+        } else {
+            prop_assert_eq!(entry1.media_type.as_deref(), media_type.as_deref());
+            let prefix = format!("data:image/{subtype};base64,");
+            let payload = entry1.uri.strip_prefix(&prefix).expect("data prefix");
+            let decoded_bytes = base64::engine::general_purpose::STANDARD.decode(payload).expect("decode base64");
+            prop_assert_eq!(decoded_bytes, raw_bytes);
+        }
+
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip");
+        let vcard3 = card_to_vcard(&parsed2);
+        prop_assert_eq!(vcard2, vcard3, "Photo roundtrip must reach fixed point");
     }
 }
