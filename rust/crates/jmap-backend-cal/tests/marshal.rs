@@ -7,15 +7,16 @@
 //! caller — so a wrong node type, a missing copy or a stolen reference shows up
 //! here rather than as a crash in `evolution-calendar-factory`.
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use eds_sys::{
-    ECalComponent, ECalMetaBackendInfo, ETimezoneCache, I_CAL_VCALENDAR_COMPONENT, e_cal_cache_new,
-    e_cal_component_new_from_string, e_cal_meta_backend_info_free, e_timezone_cache_add_timezone,
-    i_cal_component_get_timezone, i_cal_component_isa, i_cal_component_new_from_string,
-    i_cal_timezone_get_component,
+    E_SOURCE_EXTENSION_CALENDAR, ECalComponent, ECalMetaBackendInfo, ESource, ESourceSelectable,
+    ETimezoneCache, I_CAL_VCALENDAR_COMPONENT, e_cal_cache_new, e_cal_component_new_from_string,
+    e_cal_meta_backend_info_free, e_source_get_extension, e_source_new_with_uid,
+    e_source_selectable_set_color, e_timezone_cache_add_timezone, i_cal_component_get_timezone,
+    i_cal_component_isa, i_cal_component_new_from_string, i_cal_timezone_get_component,
 };
 use glib_sys::{GError, GSList, g_slist_length, g_slist_nth_data};
 use gobject_sys::g_object_unref;
@@ -2173,4 +2174,83 @@ fn libical_keeps_the_reminder_this_mapping_writes() {
         Some("end"),
         "{object}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// source_changed's colour read
+
+/// A distinct uid per source, so two sources in one test process never
+/// collide — EDS derives the uid from what it is given, and this is the
+/// literal that stands in for it here.
+static NEXT_SOURCE: AtomicU32 = AtomicU32::new(0);
+
+/// A bare `ESource`, built directly the way `tests/connect.rs` and
+/// `jmap-backend-collection/tests/child_source.rs`'s `TestSource` do — not
+/// through a registry, which `tests/backend.rs`'s own module comment says
+/// neither this VM nor CI has running. [`marshal::selectable_color`] only
+/// reads the "Calendar" extension off whatever `ESource` it is handed, so
+/// this is the whole fixture it needs.
+struct TestSource(*mut ESource);
+
+impl TestSource {
+    fn new() -> Self {
+        let uid = CString::new(format!(
+            "jmap-cal-selectable-color-{}",
+            NEXT_SOURCE.fetch_add(1, Ordering::Relaxed)
+        ))
+        .expect("no NUL in a generated uid");
+        let mut error = ptr::null_mut();
+        // SAFETY: a NUL-terminated uid, the default main context and a GError
+        // out-parameter are the documented arguments.
+        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
+        assert!(!source.is_null(), "e_source_new_with_uid failed");
+        Self(source)
+    }
+
+    fn set_color(&self, color: &str) {
+        let color = CString::new(color).unwrap();
+        // SAFETY: `self.0` is a live source; the "Calendar" extension is
+        // created on demand and owned by it, and `set_color` copies the
+        // string.
+        unsafe {
+            let selectable: *mut ESourceSelectable =
+                e_source_get_extension(self.0, E_SOURCE_EXTENSION_CALENDAR.as_ptr()).cast();
+            e_source_selectable_set_color(selectable, color.as_ptr());
+        }
+    }
+}
+
+impl Drop for TestSource {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` is a live source with no other reference to it.
+        unsafe { g_object_unref(self.0.cast()) };
+    }
+}
+
+/// The round trip `source_changed` depends on: a colour written onto the
+/// "Calendar" extension the way Evolution's colour picker would (via
+/// `ESourceSelectable:color`) comes back out unchanged.
+#[test]
+fn selectable_color_reads_the_calendar_extensions_color() {
+    let source = TestSource::new();
+    source.set_color("#ff0000");
+
+    // SAFETY: `source.0` is a live source carrying a "Calendar" extension.
+    let color = unsafe { marshal::selectable_color(source.0) };
+    assert_eq!(color.as_deref(), Some("#ff0000"));
+}
+
+/// `ESourceSelectable:color` is not NULL-by-default the way a freshly created
+/// extension's other properties are: EDS's own GParamSpec gives it a built-in
+/// default (`#62a0ea`, GNOME's accent blue). A source nobody has coloured
+/// therefore still answers `Some`, not `None` — which is exactly why
+/// `source_changed`'s diff needs a real baseline rather than treating "no
+/// colour yet" as the same as "matches the baseline".
+#[test]
+fn selectable_color_of_an_uncoloured_source_is_the_built_in_default_not_none() {
+    let source = TestSource::new();
+
+    // SAFETY: as above.
+    let color = unsafe { marshal::selectable_color(source.0) };
+    assert_eq!(color.as_deref(), Some("#62a0ea"));
 }

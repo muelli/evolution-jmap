@@ -1578,3 +1578,73 @@ closes the exact gap D2's own text flagged, is headless, is not a new
 feature or a decision, and does not touch the parts of D2 that already
 needed the unavailable registry (installing the vfunc slot itself, which
 `tests/backend.rs` already covers via the class struct). Claiming it.
+
+## 2026-08-20 — Delivered: `source_changed`'s `ESourceSelectable` colour read tested one layer down
+
+Extracted `source_changed`'s three-line colour read (`e_backend_get_source`'s
+result fed through `e_source_get_extension(… "Calendar" …)` +
+`e_source_selectable_get_color`) into `jmap_backend_cal::marshal::
+selectable_color(source: *mut ESource) -> Option<String>`, mirroring every
+other C-boundary conversion already collected in that module.
+`backend.rs::source_changed` now calls it instead of inlining the extension
+lookup, and its own `E_SOURCE_EXTENSION_CALENDAR`/`ESourceSelectable`/
+`e_source_get_extension`/`e_source_selectable_get_color`/`read_string`
+imports — now unused there — are gone.
+
+This closes the exact gap D2's own text named ("the FFI glue that reads a
+live `ESourceSelectable` off a real `ESource` inside the vfunc body") without
+needing the fuller `EBackend`-instance harness that same text also asked
+for, which `tests/backend.rs`'s own module comment says plainly is not
+buildable here: "constructing one needs an `ESourceRegistry` and so a
+running `evolution-source-registry` on the session bus, which neither this
+VM nor CI has." The same "test one layer down" move `connect_sync`'s equally
+real-`ESource`-reading line already uses (`tests/connect.rs`,
+`connect::connect(source, …)` against an `ESource` built directly with
+`e_source_new_with_uid`, no backend instance around it) applies here too,
+because `selectable_color` only ever needs a real `ESource`, never
+`e_backend_get_source` or a real backend instance — that boundary (getting
+`ESource*` out of the GObject `"source"` property) stays untested for the
+same reason it already does on every other vfunc in this file.
+
+TDD: `jmap-backend-cal/tests/marshal.rs` gained a `TestSource`, built the
+same way `jmap-backend-collection/tests/child_source.rs`'s own `TestSource`
+already builds one for the identical "Calendar" extension, and two tests —
+red first (`cannot find function 'selectable_color' in module 'marshal'`)
+against the unmodified crate: a colour written via `e_source_selectable_
+set_color` reads back unchanged, and an untouched source answers `Some
+("#62a0ea")`, not `None` — `ESourceSelectable:color`'s own GParamSpec default
+(GNOME's accent blue), the same finding D2's read-path session already made
+for `jmap-backend-collection`'s side of this, now pinned on the calendar
+backend's own read of it too. Both green after the extraction.
+
+Full gate green: `cargo fmt --check`; `cargo clippy --all-targets --locked --
+-D warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean. `cargo test --locked` (default-members) green; the seven-crate
+`cargo test --locked` run per-crate (the standing multi-package-hang
+workaround prior sessions logged — confirmed again this session, the
+combined invocation hung and was killed after 2+ minutes while every crate
+passed individually in seconds) all green, 0 failed throughout. Packaging
+leg: `ninja -C build && ctest --test-dir build -R 'package-deb'` — all three
+packaging tests green. No new dependency; no new user-facing string, so no
+`po/` action; no new file, so no `reuse lint` action.
+
+**Scope, stated plainly:** this does not change D2's own "NEEDS HUMAN
+VERIFICATION" status — the vfunc-installed fact and the decision logic were
+already tested (`tests/backend.rs`, `tests/ops.rs`), and what a real
+colour-picker edit does end to end in a live registry still needs the
+operator, unchanged. What this closes is narrower and already named: the one
+untested conversion inside the vfunc body that a real `ESource` fixture,
+without a registry, was always enough to cover.
+
+NIGHT-SHIFT: closed Track D2's one remaining named test gap (the
+`ESourceSelectable` colour-read glue) with a headless, real-`ESource` test,
+mirroring the existing "connect_sync tested one layer down" pattern rather
+than attempting the full `EBackend`-instance harness the design text also
+mentioned, which this VM cannot build (needs a running
+`evolution-source-registry` on the session bus). Full survey found no other
+unblocked, non-decision-gated, non-operator-blocked item across CURRENT
+PRIORITY or Round 2 Tracks A-F — everything else is pending operator
+verification in real Evolution or a maintainer decision (Track B, C2, C4,
+Track E Phase B/C). Ending the session here.
