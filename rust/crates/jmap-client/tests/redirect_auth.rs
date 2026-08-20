@@ -162,6 +162,57 @@ fn a_cross_host_redirect_on_download_is_not_trusted_as_the_blob() {
     }
 }
 
+/// A rebase that actually changes `downloadUrl`'s origin (the advertised
+/// origin differs from the one the client connected through) followed by a
+/// cross-origin-redirect refusal must name
+/// `JMAP_LIVE_SERVER_REBASE_URLS` in the error — otherwise a poisoned
+/// account's rebase looks like an ordinary client bug, which is exactly what
+/// cost a full debugging session before the env var was found by hand (see
+/// `docs/NIGHT-LOG.md`, "leftover `JMAP_LIVE_SERVER_REBASE_URLS=1`").
+#[test]
+fn a_rebased_then_refused_download_names_the_rebase_env_var() {
+    let foreign = ForeignHost::start();
+    let server = MockServer::builder()
+        .basic_auth("agent", "sekret")
+        .advertise_origin("https://stale-advertised-host.example")
+        .download_via_redirect_to(foreign.origin())
+        .start();
+    let account_id = server.account_id();
+    let blob_id = Id::new("b1");
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.blobs.insert(
+            blob_id.clone(),
+            Blob {
+                content_type: "message/rfc822".to_owned(),
+                data: b"the actual message, never reached here".to_vec(),
+            },
+        );
+    }
+
+    let client = Client::builder()
+        .rebase_urls_to_origin(true)
+        .connect(server.origin(), Credentials::basic("agent", "sekret"))
+        .expect("connect through the real origin, session names a different one");
+
+    let result = client.download_blob(&account_id, &blob_id, "message.eml", limits::MAX_BLOB_BYTES);
+
+    match result {
+        Err(err @ Error::CrossOriginRedirect { .. }) => {
+            let message = err.to_string();
+            assert!(
+                message.contains("JMAP_LIVE_SERVER_REBASE_URLS"),
+                "a rebased-then-refused download's error should name the env \
+                 var responsible, not look like an ordinary cross-origin- \
+                 redirect bug: {message}"
+            );
+        }
+        other => panic!("expected Error::CrossOriginRedirect, got {other:?}"),
+    }
+}
+
 /// The `Accept` smell named in `docs/ROADMAP.md` CURRENT PRIORITY item 9: a
 /// blob is never JSON, so a download declaring `Accept: application/json`
 /// (as every other request this client makes correctly does) gives a server
