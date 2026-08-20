@@ -458,3 +458,42 @@ pub unsafe fn get_free_busy(
     unsafe { set_out_list(out_freebusy, || marshal::free_busy_list(&answers)) };
     FreeBusyOutcome::Reported
 }
+
+/// What `source_changed` decided.
+#[derive(Debug)]
+pub enum ColorOutcome {
+    /// The colour matched the baseline; nothing was sent.
+    Unchanged,
+    /// The colour differed from the baseline and was pushed; carries the
+    /// value the caller's baseline should now hold.
+    Pushed(Option<String>),
+    /// The colour differed from the baseline, but the push failed; the
+    /// caller's baseline should be left as it was.
+    Failed,
+}
+
+/// Decides whether a local colour edit needs to reach the server —
+/// `source_changed`.
+///
+/// `source_changed` fires for any change to the account's `ESource`, not just
+/// the colour — a refresh-interval or auth edit reaches here too — and also
+/// fires, harmlessly, every time the periodic refresh EDS schedules on top of
+/// it runs. Comparing against a baseline rather than pushing on every firing
+/// is what tells an actual colour edit apart from both: the read path's own
+/// rewrite of an unchanged colour never gets this far (`ESource`'s "changed"
+/// signal does not fire for a `g_object_notify`-suppressed no-op write), so
+/// the only way `current` differs from `baseline` here is a real local edit or
+/// a previous push having failed and left the diff standing.
+pub fn on_source_changed(
+    sync: &CalSync,
+    current: Option<&str>,
+    baseline: Option<&str>,
+) -> ColorOutcome {
+    if current == baseline {
+        return ColorOutcome::Unchanged;
+    }
+    match sync.set_color(current) {
+        Ok(()) => ColorOutcome::Pushed(current.map(str::to_owned)),
+        Err(_) => ColorOutcome::Failed,
+    }
+}

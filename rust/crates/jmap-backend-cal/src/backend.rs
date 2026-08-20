@@ -57,10 +57,11 @@ use std::ffi::CStr;
 use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
-    E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalBackendSync, ECalMetaBackend, ECalMetaBackendClass,
-    ECalOperationFlags, EConflictResolution, EDataCal, ENamedParameters,
-    ESourceAuthenticationResult, GTlsCertificateFlags, ICalComponent, e_backend_get_source,
-    e_cal_backend_set_writable, e_cal_meta_backend_get_type, e_client_error_create, time_t,
+    E_CLIENT_ERROR_REPOSITORY_OFFLINE, E_SOURCE_EXTENSION_CALENDAR, ECalBackendSync,
+    ECalMetaBackend, ECalMetaBackendClass, ECalOperationFlags, EConflictResolution, EDataCal,
+    ENamedParameters, ESourceAuthenticationResult, ESourceSelectable, GTlsCertificateFlags,
+    ICalComponent, e_backend_get_source, e_cal_backend_set_writable, e_cal_meta_backend_get_type,
+    e_client_error_create, e_source_get_extension, e_source_selectable_get_color, time_t,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar};
@@ -70,8 +71,9 @@ use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
+use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::ObjectSubclass;
-use jmap_backend_core::trampoline::{guard_bool, guard_value};
+use jmap_backend_core::trampoline::{guard, guard_bool, guard_value};
 use jmap_cal_sync::CalSync;
 
 use crate::connect::{self, ACCEPTED_AUTH_RESULT, write_auth_result};
@@ -96,6 +98,12 @@ pub struct JmapCalBackend {
     /// behind it. Only connect and disconnect, which replace the value, need
     /// exclusive access.
     session: Slot<RwLock<Option<CalSync>>>,
+    /// The colour last read from, or pushed to, the server — `source_changed`'s
+    /// baseline. `source_changed` is EDS's own single-flight, worker-thread
+    /// signal (see the module comment), never a concurrent one, so a plain
+    /// `RwLock` (not contended, but matching `session`'s discipline rather than
+    /// introducing a second one) is enough.
+    last_known_color: Slot<RwLock<Option<String>>>,
 }
 
 /// The class struct. Nothing of ours lives in it yet; it exists because
@@ -150,6 +158,7 @@ impl JmapCalBackend {
         // documented empty state.
         let backend: Box<Self> = unsafe { zeroed_box() };
         backend.session.init(RwLock::new(None));
+        backend.last_known_color.init(RwLock::new(None));
         backend
     }
 
@@ -157,6 +166,12 @@ impl JmapCalBackend {
     /// not run or whose `finalize` already has.
     fn session(&self) -> Option<&RwLock<Option<CalSync>>> {
         self.session.get()
+    }
+
+    /// The `source_changed` baseline slot, or `None` under the same
+    /// circumstances as [`JmapCalBackend::session`].
+    fn last_known_color(&self) -> Option<&RwLock<Option<String>>> {
+        self.last_known_color.get()
     }
 }
 
@@ -184,6 +199,7 @@ unsafe impl ObjectSubclass for JmapCalBackend {
         vfuncs.load_component_sync = Some(load_component_sync);
         vfuncs.save_component_sync = Some(save_component_sync);
         vfuncs.remove_component_sync = Some(remove_component_sync);
+        vfuncs.source_changed = Some(source_changed);
 
         // Two levels up rather than one. `get_free_busy_sync` is declared on
         // `ECalBackendSyncClass`, which `ECalMetaBackend` merely fills in like
@@ -196,14 +212,20 @@ unsafe impl ObjectSubclass for JmapCalBackend {
     unsafe fn instance_init(instance: *mut Self::Instance) {
         // SAFETY: `instance` points at a zeroed instance struct of ours, and a
         // zeroed `Slot` is an empty one.
-        unsafe { (*instance).session.init(RwLock::new(None)) };
+        unsafe {
+            (*instance).session.init(RwLock::new(None));
+            (*instance).last_known_color.init(RwLock::new(None));
+        }
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
         // SAFETY: the instance is being finalized, so nothing can still reach
         // it and no borrow handed out by `get` is alive. Without this the
         // connection — and its socket — outlives the calendar.
-        unsafe { (*instance).session.clear() };
+        unsafe {
+            (*instance).session.clear();
+            (*instance).last_known_color.clear();
+        }
     }
 }
 
@@ -476,6 +498,65 @@ unsafe extern "C" fn remove_component_sync(
     }
 }
 
+/// Pushes a local colour edit — `source_changed`.
+///
+/// EDS already does the work the module comment describes as the hard part:
+/// this is called on `ECalMetaBackend`'s own dedicated worker thread,
+/// single-flight-guarded against a second firing while one is in flight, for
+/// every change to the account's `ESource` — not just the colour, and not
+/// just once per real edit, since the periodic refresh EDS schedules on top
+/// of it fires it again regardless. [`ops::on_source_changed`] is what turns
+/// that into "push only a genuine difference", against a baseline held in
+/// this instance rather than recomputed from nothing each time.
+///
+/// No connection is not a failure here — unlike every other vfunc in this
+/// file there is nothing to report back to EDS (the slot is `void`), and a
+/// disconnected account's next successful connect starts this baseline over
+/// from whatever colour that reconnect's own populate leaves on the
+/// `ESource`, which is the same "diff from what is there" rule this vfunc
+/// always follows.
+///
+/// # Safety
+///
+/// `meta_backend` must be NULL or a valid instance of this type, whose
+/// `ESource` carries a "Calendar" extension — `ECalMetaBackend` never calls
+/// this before `connect_sync` has succeeded once, by which point this
+/// backend's own `child_source` write path has already created it.
+unsafe extern "C" fn source_changed(meta_backend: *mut ECalMetaBackend) {
+    // SAFETY: EDS's own contract for the vfunc: a valid instance of ours.
+    unsafe {
+        guard("source_changed", (), || {
+            let Some(backend) = instance(meta_backend) else {
+                return;
+            };
+            let Some(session) = backend.session() else {
+                return;
+            };
+            let Some(baseline_slot) = backend.last_known_color() else {
+                return;
+            };
+
+            let guard = read(session);
+            let Some(sync) = guard.as_ref() else {
+                return;
+            };
+
+            let source = e_backend_get_source(meta_backend.cast());
+            let selectable: *mut ESourceSelectable =
+                e_source_get_extension(source, E_SOURCE_EXTENSION_CALENDAR.as_ptr()).cast();
+            // SAFETY: `selectable` is the "Calendar" extension of a valid
+            // `ESource`, and the string it hands back outlives this call.
+            let current = read_string(e_source_selectable_get_color(selectable));
+
+            let mut baseline = write(baseline_slot);
+            match ops::on_source_changed(sync, current.as_deref(), baseline.as_deref()) {
+                ops::ColorOutcome::Unchanged | ops::ColorOutcome::Failed => {}
+                ops::ColorOutcome::Pushed(pushed) => *baseline = pushed,
+            }
+        });
+    }
+}
+
 /// The one vfunc here that is not an `ECalMetaBackend` slot, does not return a
 /// `gboolean`, and does not go through [`with_connection`].
 ///
@@ -626,13 +707,14 @@ unsafe fn fail_offline(error: *mut *mut GError) -> gboolean {
 }
 
 /// A poisoned lock means an earlier operation panicked inside the guard; the
-/// connection itself is untouched by that, so carry on rather than panic in
+/// value it guards is untouched by that, so carry on rather than panic in
 /// turn — the alternative is a calendar that stays broken for the rest of the
-/// session.
-fn read(session: &RwLock<Option<CalSync>>) -> RwLockReadGuard<'_, Option<CalSync>> {
-    session.read().unwrap_or_else(PoisonError::into_inner)
+/// session. Generic over both slots this file keeps behind an `RwLock`: the
+/// connection and the colour baseline.
+fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn write(session: &RwLock<Option<CalSync>>) -> RwLockWriteGuard<'_, Option<CalSync>> {
-    session.write().unwrap_or_else(PoisonError::into_inner)
+fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(PoisonError::into_inner)
 }

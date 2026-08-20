@@ -59,6 +59,22 @@ impl Client {
         ))
     }
 
+    /// Apply a patch to a calendar (RFC 8620 PatchObject).
+    pub fn calendar_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
+        let request = SetRequest::<Calendar>::new(account_id.clone()).update(id.clone(), patch);
+        let response = self.calendar_set(&request)?;
+        if response
+            .updated
+            .as_ref()
+            .is_some_and(|updated| updated.contains_key(id))
+        {
+            return Ok(());
+        }
+        Err(set_failure(
+            response.not_updated.as_ref().and_then(|map| map.get(id)),
+        ))
+    }
+
     fn calendar_set(&self, request: &SetRequest<Calendar>) -> Result<SetResponse<Calendar>, Error> {
         let arguments = self.single_call(USING, "Calendar/set", request)?;
         Ok(serde_json::from_value(arguments)?)
