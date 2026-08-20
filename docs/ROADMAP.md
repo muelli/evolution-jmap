@@ -779,6 +779,64 @@ they close, prioritise in this order:
      instead of the observed 302 — this closes a real, independently-correct
      spec smell regardless of that answer, but does not by itself prove
      Fastmail mail bodies now render.
+   - **DONE 2026-08-20 — plan step (2), reference-client comparison, done;
+     confirms step (1)'s fix rather than finding a new defect.** Read the
+     blob-download code of both candidates the item's own text named, at
+     their current `master`/`main` (no local checkout needed — both are
+     public GitHub repos, read via the raw-content API):
+     - **`mujmap`** (Rust, `elizagamedev/mujmap`, syncs Fastmail↔maildir —
+       its request shape is Fastmail-proven in production).
+       `HttpWrapper::get_reader` (`src/remote.rs`) issues the blob GET as
+       `self.agent.get(url).call()` with only `Authorization` applied
+       (`apply_authorization`) — no `.set("Accept", …)` call anywhere on
+       that path, so it sends **no explicit `Accept` header at all** (ureq
+       adds none by default absent an explicit `.set`). It also builds
+       `downloadUrl`'s `{type}` as the literal string `"text/plain"`
+       (`read_email_blob`), not `"application/octet-stream"` — a second,
+       smaller difference from this project's call site. It uses the same
+       `redirect_auth_headers(SameHost)` ureq policy this project's
+       `UreqTransport` already uses, and — notably — has **no cross-origin
+       or content-type validation on the downloaded bytes at all**: if
+       Fastmail ever did redirect it to the marketing page the way it did
+       here, `mujmap` would silently write that HTML into a maildir file as
+       if it were the message. So `mujmap`'s design gives no positive
+       assurance about the redirect *by construction*, only by the absence
+       of evidence that it happens to it in practice — this project's own
+       `CrossOriginRedirect` guardrail (item 9 step 1's session) is strictly
+       more defensive than the reference client, not something to weaken to
+       match it.
+     - **`jmapc`** (Python, `smkent/jmapc`, ships a `.fastmail` submodule).
+       `Client.download_attachment` (`jmapc/client.py`) calls
+       `self.requests_session.get(blob_url, stream=True, timeout=…)` with no
+       header override — Python's `requests` library defaults an
+       unset-`Accept` GET to `Accept: */*`, matching this project's fixed
+       behaviour exactly, not merely "no header" like `mujmap`. Its `{type}`
+       substitution passes the attachment's **real** MIME type
+       (`type=attachment.type`), a third distinct choice from both this
+       project's hardcoded `application/octet-stream` and `mujmap`'s
+       hardcoded `text/plain`.
+     **Reading:** two independent, Fastmail-proven reference clients agree on
+     the one thing plan step (1) already changed — neither declares
+     `Accept: application/json` on a blob GET, and `jmapc`'s effective
+     header (`*/*`) is exactly what this project's `download_blob` now
+     sends. This is corroborating evidence (not proof — neither client's
+     author documented *why*, and no reference client hits this from the
+     `apiUrl` host the way a session-relative redirect would) that removing
+     the `application/json` `Accept` claim is the right fix. **New
+     candidate variable surfaced, not previously named by this item:** all
+     three clients disagree on the `{type}` template parameter
+     (`application/octet-stream` here, `text/plain` in `mujmap`, the real
+     MIME type in `jmapc`), so if the operator's step (3) probe finds
+     `Accept: */*` alone insufficient, `{type}` is the next thing to vary —
+     recorded here rather than guessed at or changed blindly, since RFC 8620
+     §6.2 documents it as advisory (filename/`Content-Type` hint) with no
+     stated bearing on redirect behaviour, and no test here can confirm or
+     rule that out without the live server. No code change this step —
+     research-only, matching the item's own "headless" framing for step
+     (2); nothing to gate (no files touched).
+     **Still open:** step (3), the operator's live, token-gated probe of the
+     real Fastmail exchange — unchanged, still the only thing that can
+     settle whether Fastmail mail bodies now render.
 
 **Do NOT reopen completed backends (M1–M6, M8) to polish edge cases.** They
 are closed. The contact-editor fidelity items, extra vCard/iCal corner

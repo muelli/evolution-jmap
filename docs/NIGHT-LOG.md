@@ -1029,3 +1029,60 @@ push, step (1)). That entry's own plan step (2) — "compare our download
 request to a known-good JMAP client's — candidate `mujmap` (Rust, syncs
 Fastmail↔maildir) or `jmapc` (Python)" — is headless and claimable now.
 Claiming it.
+
+## 2026-08-20 — Delivered: item 9 plan step (2), reference-client comparison
+
+Read both candidates' blob-download code at their current public `master`/
+`main` (this runner has ordinary internet egress; used `curl` against
+`raw.githubusercontent.com`, no local checkout):
+
+- **`mujmap`** (`elizagamedev/mujmap`, Rust, Fastmail↔maildir sync).
+  `HttpWrapper::get_reader` (`src/remote.rs`) issues the blob GET via
+  `self.agent.get(url).call()` with only `Authorization` applied — no
+  explicit `Accept` header at all (ureq sets none unless told to). Its
+  `downloadUrl` `{type}` substitution is the hardcoded literal
+  `"text/plain"` (`read_email_blob`), not `"application/octet-stream"`.
+  Same `redirect_auth_headers(SameHost)` ureq policy as this project. No
+  cross-origin or content-type check on the downloaded bytes at all — if
+  Fastmail ever redirected it the way it redirected us, `mujmap` would
+  silently accept the redirect target's body as the message; its design
+  gives no positive assurance the redirect doesn't happen to it, only an
+  absence of reported evidence that it does.
+- **`jmapc`** (`smkent/jmapc`, Python, ships a `.fastmail` submodule).
+  `Client.download_attachment` (`jmapc/client.py`) calls
+  `self.requests_session.get(blob_url, stream=True, timeout=…)` with no
+  header override — Python `requests`' default for an unset `Accept` on a
+  GET is `*/*`, which is exactly what this project's `download_blob` now
+  sends after step (1)'s fix, not merely "absent" like `mujmap`. Its
+  `{type}` substitution passes the attachment's real MIME type
+  (`type=attachment.type`) — a third distinct choice again.
+
+**Reading:** both Fastmail-proven reference clients avoid declaring
+`Accept: application/json` on a blob GET, and `jmapc`'s effective header
+(`*/*`) matches this project's fixed behaviour exactly. That corroborates
+(does not prove — neither client documents *why*, and reading source is not
+the same as an actual Fastmail exchange) that step (1)'s fix is the right
+shape. **New variable surfaced, not previously named by this item:** all
+three clients disagree on the `{type}` template parameter
+(`application/octet-stream` here, `text/plain` in `mujmap`, the real MIME
+type in `jmapc`) — RFC 8620 §6.2 documents `{type}` as advisory
+(filename/`Content-Type` hint) with no stated bearing on redirects, but
+nothing here can confirm that without the live server, so it is recorded as
+the next thing to vary if step (3) finds `Accept: */*` alone insufficient,
+rather than changed blindly now.
+
+Research-only step, matching the item's own "headless" framing for (2); no
+code touched, so nothing to gate and no push-blocking checks apply beyond
+the doc edits themselves. Updated `docs/ROADMAP.md`'s item 9 with the same
+write-up.
+
+**Still open:** step (3), the operator's live, token-gated probe of the
+real Fastmail `downloadUrl` exchange — the only thing that can settle
+whether Fastmail mail bodies now render. No further headless work remains
+on item 9 until that lands.
+
+NIGHT-SHIFT: item 9 plan step (2) delivered and pushed — reference-client
+comparison against `mujmap` and `jmapc` corroborates step (1)'s `Accept`
+fix and surfaces the `{type}` template parameter as the next variable to
+try if step (3)'s live probe finds the fix alone insufficient. Ending the
+session here; step (3) needs the operator's Fastmail credentials.
