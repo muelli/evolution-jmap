@@ -1465,3 +1465,16 @@ session's to fix) that the new Stalwart-VPC-access capability does not
 currently work from this runner. Ending the session here per the standing
 rule against starting a second large item — the actual `source_changed`
 vfunc implementation is that next item, not this one.
+
+## 2026-08-20 (claim) — Claiming Round 2 Track D2 implementation: calendar-colour write-back
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `1f2bd37` (this
+thread's own last-visible commit, the D2 design delivery). CURRENT PRIORITY
+items 1-9 are all DONE or blocked on operator-only live steps; Track A is
+fully closed; Track D leads Round 2 next, and D2's write-back design landed
+last session with an explicit, non-escalation-worthy implementation plan
+(`docs/ROADMAP.md`'s D2 entry: `jmap-client::calendars::calendar_update`,
+a `jmap-cal-sync` decision module mirroring `freebusy.rs`, and installing
+`ECalMetaBackendClass::source_changed` with a `last_known_color` diff
+baseline, no chain-up). Claiming that implementation now, exactly as scoped
+there.
