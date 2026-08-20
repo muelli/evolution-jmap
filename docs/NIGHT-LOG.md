@@ -1254,3 +1254,20 @@ side effect of reading a source that lacks them, closing Track A6's IMPROVE
 list (Patterns A-E all now fully closed, per `docs/UNSAFE-AUDIT.md`'s own
 prioritized list). Ending the session here per the standing rule against
 starting a second large item.
+
+## 2026-08-20 (claim) — Claiming Track A8: make `JMAP_LIVE_SERVER_REBASE_URLS` self-incriminating
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `44af796` (this
+thread's own last push). CURRENT PRIORITY items 1-9 are all DONE/operator-
+verified; M7/M9/M10 are all complete per `docs/MILESTONES.md`; Round 2 leads
+with Track A, and A1-A7 are all fully closed (A6's last item, Pattern D,
+closed by the immediately preceding session). A8 is explicitly tagged
+"CLAIMABLE NOW" — headless, jmap-mock-testable, no product decision — and is
+the natural next item in lead order. No other track has an unclaimed,
+unblocked, non-NEEDS-DECISION item ahead of it (Track B is NEEDS-DECISION on
+approach; Track C's remaining items are NEEDS-DECISION or already done; Track
+D/E have their own claimable items but A is still the lead track and A8 is
+its last open item). Claiming it: attach a note naming
+`JMAP_LIVE_SERVER_REBASE_URLS` to `Error::CrossOriginRedirect`'s `Display`
+when the rebase actually changed `downloadUrl`'s origin, and log the rewrite
+once at connect time.
