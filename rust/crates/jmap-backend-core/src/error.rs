@@ -80,6 +80,12 @@ pub unsafe fn set_gerror(dest: *mut *mut GError, err: &Error) {
 /// Same, for an already-built `GError`. Takes ownership of `error`: if the
 /// caller did not ask for an error, it is freed rather than leaked.
 ///
+/// If `*dest` is already set, the caller violated the contract above; rather
+/// than overwrite (leaking the first `GError`) this keeps the first error and
+/// frees `error` instead, matching GLib's own `g_set_error()` family, which
+/// refuses the same way (`g_return_if_fail (err == NULL || *err == NULL)`) —
+/// a real runtime check there, not merely a debug one.
+///
 /// # Safety
 ///
 /// As [`set_gerror`], and `error` must be a `GError` this call may consume.
@@ -87,9 +93,13 @@ pub unsafe fn set_raw_gerror(dest: *mut *mut GError, error: *mut GError) {
     unsafe {
         if dest.is_null() {
             glib_sys::g_error_free(error);
-        } else {
-            debug_assert!((*dest).is_null(), "overwriting an already-set GError");
+        } else if (*dest).is_null() {
             *dest = error;
+        } else {
+            crate::trampoline::log_critical(
+                "set_raw_gerror: *dest was already set; keeping the first GError",
+            );
+            glib_sys::g_error_free(error);
         }
     }
 }

@@ -40200,3 +40200,58 @@ EDS-gated crates, `cargo test --locked` both scopes) before pushing, per the
 standing rule. No new dependency, no new user-facing string (a `g_critical`
 line is developer-facing, not user-facing, per the project's own
 "Mark UI strings translatable" directive's own carve-out).
+
+## 2026-08-20 — Delivered: FFI-SOUNDNESS-AUDIT Finding 1 (`set_raw_gerror` no longer overwrites a set `GError` in release builds)
+
+Delivered the increment claimed above. `jmap-backend-core/src/error.rs::
+set_raw_gerror` now has three branches instead of two: `dest` NULL (free
+`error`, unchanged), `*dest` NULL (write `error`, unchanged), and — new —
+`*dest` already set: log a critical via the crate's existing
+`trampoline::log_critical` ("this cannot happen" idiom already used by
+`subclass.rs`/`instance.rs`) and free the incoming `error`, keeping the
+first one in place. Matches GLib's own `g_set_error()` family, which
+refuses the same way at runtime, not just in debug builds.
+
+**TDD.** Red first: `jmap-backend-core/tests/error.rs` gained
+`overwriting_an_already_set_gerror_keeps_the_first_and_frees_the_second`,
+which calls `set_gerror` twice into the same out-parameter and asserts the
+first message survives. Run against the unmodified `debug_assert!`, it
+panicked at `error.rs:91` ("overwriting an already-set GError") — the red
+state doubling as confirmation that the precondition is real and, before
+this fix, only checked in a debug build. Green after the fix, with the
+expected `evolution-jmap-CRITICAL` log line observed on stderr during the
+run, confirming the new path executes and not just that the assertion is
+gone.
+
+**Why this one and not Finding 3.** `docs/FFI-SOUNDNESS-AUDIT.md`'s other
+open finding (`oauth2.rs::borrowed`'s pointer lifetime under concurrent
+`apply()`) is explicitly named in that doc as "exactly the kind of subtle
+cross-thread pointer-lifetime reasoning the night-shift escalation criteria
+name explicitly" — not attempted here, consistent with that flag. This
+finding had no such concurrency dimension: the only open question was which
+of two well-precedented behaviours to pick on an already-impossible-today
+precondition violation, and this crate already has the matching idiom
+(`log_critical`) for exactly that class of "cannot happen, but must not be
+UB if it somehow does" case, so the choice was a precedent-following one,
+not new design.
+
+**Gate.** `cargo fmt --check` clean. `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean. `cargo test --locked` (default-members) and the same
+seven-crate `cargo test --locked` both green, every `test result: ok`, 0
+failed throughout both runs. No new dependency; no new user-facing string
+(the added log line is developer-facing, not user-facing, per the
+project's own "Mark UI strings translatable" directive's own carve-out for
+developer-facing errors); no new file, so no REUSE/SPDX concern.
+`docs/FFI-SOUNDNESS-AUDIT.md`'s findings table and Finding 1's own section
+updated in place to mark it fixed rather than "logged, not fixed."
+
+`ci/checks.sh` still cannot run on this VM ([[checks-sh-blocked-on-vm]]).
+
+NIGHT-SHIFT: FFI-SOUNDNESS-AUDIT Finding 1 delivered and pushed. Ending the
+session here per the standing rule against starting a second large item —
+the remaining open item in that audit (Finding 3, `oauth2.rs::borrowed`) is
+concurrency/pointer-lifetime design work the audit itself flags as
+escalation-worthy, not a Sonnet-sized next step from here.
