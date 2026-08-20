@@ -162,6 +162,7 @@ impl ClientBuilder {
             session: None,
             next_call_id: AtomicU64::new(0),
             rebase_origin: self.rebase_urls_to_origin.then_some(origin),
+            rebase_note: None,
         };
         client.refresh_session()?;
         Ok(client)
@@ -189,6 +190,11 @@ pub struct Client {
     session: Option<Session>,
     next_call_id: AtomicU64,
     rebase_origin: Option<String>,
+    /// Set once `refresh_session` actually rewrites `downloadUrl`'s origin —
+    /// distinct from `rebase_origin.is_some()`, which is true whenever the
+    /// opt-in is on even if the advertised and connected origins already
+    /// happen to match. See [`Error::CrossOriginRedirect`].
+    rebase_note: Option<String>,
 }
 
 impl std::fmt::Debug for Client {
@@ -234,13 +240,31 @@ impl Client {
         let response = self.execute(HttpMethod::Get, &self.session_url.clone(), None)?;
         let mut session: Session = serde_json::from_slice(&response.body)?;
         if let Some(origin) = &self.rebase_origin {
+            let advertised_download_origin =
+                crate::url::origin_of(&session.download_url).to_owned();
             session.api_url = crate::url::rebase_origin(&session.api_url, origin);
             session.download_url = crate::url::rebase_origin(&session.download_url, origin);
             session.upload_url = crate::url::rebase_origin(&session.upload_url, origin);
             session.event_source_url = crate::url::rebase_origin(&session.event_source_url, origin);
+            self.rebase_note = if advertised_download_origin == *origin {
+                None
+            } else {
+                let note = format!(
+                    "note: JMAP_LIVE_SERVER_REBASE_URLS is active and rewrote \
+                     {advertised_download_origin} to {origin}"
+                );
+                eprintln!("{note}");
+                Some(note)
+            };
         }
         self.session = Some(session);
         Ok(())
+    }
+
+    /// The note explaining a `downloadUrl` rewrite, if the rebase opt-in
+    /// actually changed its origin — see [`Error::CrossOriginRedirect`].
+    pub(crate) fn rebase_note(&self) -> Option<&str> {
+        self.rebase_note.as_deref()
     }
 
     /// The account id serving a capability URN — `primaryAccounts` where the

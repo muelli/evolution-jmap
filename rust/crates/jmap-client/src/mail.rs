@@ -853,6 +853,7 @@ impl Client {
             return Err(Error::CrossOriginRedirect {
                 requested: crate::url::origin_of(&url).to_owned(),
                 followed: crate::url::origin_of(&response.final_url).to_owned(),
+                rebase_note: self.rebase_note().map(str::to_owned),
             });
         }
         Ok(response.body)

@@ -83,7 +83,20 @@ pub enum Error {
     /// the case that found this) would otherwise be stored as if it were the
     /// message. `download_blob` checks the origin actually reached against
     /// the one it requested and refuses to treat a mismatch as data.
-    CrossOriginRedirect { requested: String, followed: String },
+    ///
+    /// `rebase_note` is set when `ClientBuilder::rebase_urls_to_origin` (the
+    /// `JMAP_LIVE_SERVER_REBASE_URLS` opt-in) actually rewrote `downloadUrl`'s
+    /// origin before this request: a rebase silently pointed *this* request
+    /// somewhere other than the server's own advertised host, so an operator
+    /// reading this error needs to know that before chasing it as an
+    /// ordinary redirect bug — a leftover, process-global rebase env var
+    /// poisoning an unrelated account already cost one full debugging
+    /// session by leaving no trace of itself in the error it produced.
+    CrossOriginRedirect {
+        requested: String,
+        followed: String,
+        rebase_note: Option<String>,
+    },
 }
 
 impl Error {
@@ -150,11 +163,18 @@ impl std::fmt::Display for Error {
             Error::CrossOriginRedirect {
                 requested,
                 followed,
-            } => write!(
-                f,
-                "download redirected from {requested} to a different origin \
-                 ({followed}); refusing to treat its answer as the blob"
-            ),
+                rebase_note,
+            } => {
+                write!(
+                    f,
+                    "download redirected from {requested} to a different origin \
+                     ({followed}); refusing to treat its answer as the blob"
+                )?;
+                if let Some(note) = rebase_note {
+                    write!(f, " ({note})")?;
+                }
+                Ok(())
+            }
         }
     }
 }
