@@ -40321,3 +40321,59 @@ any work — no source changed this session, only this log entry.
 NIGHT-SHIFT: escalating FFI-SOUNDNESS-AUDIT Finding 3 to opus (see
 `~/.night-shift-escalate`); no tractable Sonnet-sized item remained this
 iteration.
+
+## 2026-08-20 (on opus, per the escalation at `0db0438`) — Claiming: FFI-SOUNDNESS-AUDIT Finding 3 (`oauth2.rs::borrowed`'s pointer lifetime)
+
+Claiming the item the previous session escalated. Scoping read done first,
+against the EDS 3.52.3 sources fetched from upstream (the installed version,
+`dpkg -l` → `3.52.3-0ubuntu1.2`) rather than inferred — which already
+changed the shape of the finding in three ways worth recording before any
+code moves:
+
+1. **The racing writer in production is `set_property`, not `apply()`.** The
+   audit named `apply()`; nothing outside `jmap-config/tests/backend.rs`
+   calls it. `config_lookup::add_result` writes `[JMAP OAuth2]` as
+   `EConfigLookupResult` string properties, and `e-source.c`'s
+   `source_parse_dbus_data` → `source_load_from_key_file` →
+   `g_object_set_property` re-runs every `E_SOURCE_PARAM_SETTING` property
+   whenever the registry pushes new source data over D-Bus. So the write
+   that frees a handed-out `CString` is EDS's own reload path, on whatever
+   thread the `GDBusProxy` notify lands on — more frequent and more
+   certainly concurrent than the `apply()` the audit hypothesised, not less.
+2. **EDS's threading model does not rule it out — and EDS's own OAuth2
+   services avoid the hazard by construction.** `e-oauth2-service.c`'s five
+   `const gchar *` wrappers carry no transfer or threading annotation, and
+   every use is an immediate `g_strdup` into a form/URI a few instructions
+   later. But `e-oauth2-service-google.c` never returns a pointer into
+   per-source storage: `eos_google_get_client_id` answers either a
+   `static gchar glob_buff[128]` or `eos_google_read_settings`, which caches
+   with `g_object_set_data_full` under an `if (!value)` guard — **written
+   once and never replaced or freed while the service lives**. So the
+   contract EDS's own implementations actually keep is "valid for the
+   object's lifetime, never invalidated by a later write", which is
+   precisely what this module's `borrowed()` doc *claims* ("stable for as
+   long as the extension is") and does not currently deliver.
+3. **The `borrowed()` doc's justification is the part that is wrong.** It
+   argues this is "the same contract EDS's own extensions keep for their
+   string accessors ... with no lock of their own either". EDS's
+   `e_source_authentication_get_host` is indeed lock-free, but EDS pairs
+   every such getter with a `dup_` variant that takes
+   `e_source_extension_property_lock`, and its *OAuth2* vfunc
+   implementations use the write-once storage above precisely because a
+   vfunc returning `const gchar *` has no `dup_` escape hatch.
+
+**Increment:** adopt EDS's own discipline instead of a lock that cannot
+cover the caller's use of the pointer. A field's `CString` is never freed
+once written; a write that changes it retires the old value into storage
+dropped only at `finalize`, and a write that does *not* change it leaves the
+existing allocation (and so the existing pointer) in place — the same
+compare-then-skip `source_set_property_from_key_file` already does one frame
+up. That makes `borrowed()`'s documented lifetime true as written, with the
+zero-allocation shape it exists for intact.
+
+**TDD plan:** red first, two tests — `apply`/`set_property` writing an
+unchanged value must return the *same* pointer (deterministic, no UB, fails
+today because both rebuild the `CString` unconditionally), and a pointer
+taken before a *changed* write must still read its original bytes after
+allocator churn (fails today by reading freed memory, which is the defect
+itself).
