@@ -1165,3 +1165,35 @@ undecided, non-backend-reopening increment the survey found after CURRENT
 PRIORITY items 1-9 all came up DONE or operator-blocked and Round 2 Track D
 had nothing left either. Ending the session here per the standing rule
 against starting a second large item.
+
+## 2026-08-20 (claim) — Claiming Round 2 Track A6 Pattern D's last open item: `SourceConfig::from_source`'s unguarded AUTHENTICATION/RESOURCE reads
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `0ffbbb8` (this
+thread's own last push, Track A2's follow-up). CURRENT PRIORITY items 1-9 are
+all DONE or blocked on the operator's live/token-gated steps; M9/M10 are
+complete; Round 2 Track D (D1 code-complete pending human verification, D2
+NEEDS-DECISION) and Track E (Path A code-complete pending human verification,
+Phase B/C need maintainer approval before starting) have nothing headless
+left; Track B and Track C's C2/C4 are NEEDS-DECISION; Track A1/A2/A3/A4/A5/A7
+are all DONE.
+
+`docs/UNSAFE-AUDIT.md`'s Pattern D entry (and its own "Prioritized follow-up
+list" item 2) names exactly one thing still open in Track A6, after the
+"clean sites" and the two composed sites (`follow_collection`/
+`follow_server`) both landed: `jmap-backend-core/src/source.rs::
+SourceConfig::from_source`'s `AUTHENTICATION`/`RESOURCE` reads call
+`e_source_get_extension` directly, unlike the sibling `SECURITY` read in the
+same function (already converted to `extension_if_present`, precisely to
+avoid `e_source_get_extension`'s documented side effect of *creating* the
+extension it can't find). The audit flagged this as "a behaviour decision,
+not a mechanical port" — but reading the function shows the decision is
+already made by precedent: an absent extension's fields (host/user/port/
+resource_id) read identically whether from a freshly-created empty extension
+or from `extension_if_present`'s `None` case (NULL/0 either way), so the
+*read* result is unchanged; only the persistent side effect (silently adding
+empty `[Authentication]`/`[Resource]` groups to a source that never had them,
+the same latent bug already fixed for `[Security]`) goes away. This is
+headless, no product decision needed beyond the one `SECURITY` already set,
+and does not touch a closed M1-M6/M8 backend (`jmap-backend-core` is the
+shared foundation crate, same class as `jmap-proto` in the A2 precedent).
+Claiming it.
