@@ -1197,3 +1197,60 @@ headless, no product decision needed beyond the one `SECURITY` already set,
 and does not touch a closed M1-M6/M8 backend (`jmap-backend-core` is the
 shared foundation crate, same class as `jmap-proto` in the A2 precedent).
 Claiming it.
+
+## 2026-08-20 — Delivered: `SourceConfig::from_source` stops creating `[Authentication]`/`[Resource]` groups merely by reading them
+
+**Fix:** `jmap-backend-core/src/source.rs::SourceConfig::from_source` read the
+`AUTHENTICATION` and `RESOURCE` extensions via a direct `e_source_get_extension`
+call, which *creates* the extension it cannot find — the exact side effect the
+same function's `SECURITY` read was already guarded against
+(`extension_if_present`), for the same reason: a source read for validation or
+diagnostics, not owned by the caller, must not gain an empty
+`[Authentication]`/`[Resource]` group in its keyfile merely because something
+looked at it. Converted both reads to the same `extension_if_present` guard;
+an absent extension now yields the same defaults a freshly-created empty one
+would have (`None` host/user/resource_id, port `0`), so no observable read
+result changes — only the persistent side effect goes away. `e_source_get_
+extension` dropped from the module's imports (no remaining use).
+
+**TDD:** two new tests in `jmap-backend-core/tests/source.rs`:
+`reading_a_source_with_no_authentication_group_does_not_create_one` (a bare
+source with no host is `MissingHost`, and must not gain an `[Authentication]`
+group by being asked) and `reading_a_source_with_no_resource_group_does_not_
+create_one` (a source with a host but no `[Resource]` group reads
+`resource_id: None` and must not gain the group either). Both call a new
+`TestSource::has_extension` helper (mirrors the same-named helper already
+used in sibling test files, e.g. `jmap-backend-collection/tests/
+collection_source.rs`). Red confirmed first — both failed against the
+unmodified `e_source_get_extension` call, the extension having been silently
+created; green after the fix.
+
+**Scope note:** this is `docs/UNSAFE-AUDIT.md`'s Pattern D — the one item its
+own "Prioritized follow-up list" flagged as still open after the clean sites
+and the two composed sites (`follow_collection`/`follow_server`) landed,
+closing Track A6's IMPROVE list. Not a closed-backend edge case:
+`jmap-backend-core` is the shared foundation crate every backend depends on,
+the same class this thread already treated `jmap-proto` as in the Track A2
+follow-up two sessions ago.
+
+**Gate.** `cargo fmt` (2 files reformatted, mechanical — a `match` arm's line
+wrap); `cargo clippy --all-targets --locked -- -D warnings` (default-members)
+clean; the seven-crate EDS-gated clippy (`evolution-jmap-client`,
+`jmap-backend-core`, `jmap-backend-book`, `jmap-backend-cal`, `jmap-mail`,
+`jmap-backend-collection`, `jmap-config`) clean. `cargo test --locked`
+(default-members) green, 0 failed. The seven-crate run hit the standing
+disk-fill issue mid-run (`rust/target/debug` at 24G, "No space left on
+device" on `jmap-backend-collection`/`jmap-config`'s linker step) —
+`cargo clean --profile dev` recovered it
+([[disk-fills-from-cargo-target]]), and a clean re-run of all seven crates
+passed, 0 failed throughout. Packaging leg per item 8's standing note:
+`ninja -C build && ctest --test-dir build -R 'package-deb'` — all three
+packaging tests green. No new dependency; no new user-facing string, so no
+`po/` action; no new file, so no `reuse lint` action needed.
+
+NIGHT-SHIFT: Track A6 Pattern D's last open item delivered and pushed —
+`from_source` no longer creates `[Authentication]`/`[Resource]` groups as a
+side effect of reading a source that lacks them, closing Track A6's IMPROVE
+list (Patterns A-E all now fully closed, per `docs/UNSAFE-AUDIT.md`'s own
+prioritized list). Ending the session here per the standing rule against
+starting a second large item.
