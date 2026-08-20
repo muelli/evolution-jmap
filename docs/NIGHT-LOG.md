@@ -1086,3 +1086,27 @@ comparison against `mujmap` and `jmapc` corroborates step (1)'s `Accept`
 fix and surfaces the `{type}` template parameter as the next variable to
 try if step (3)'s live probe finds the fix alone insufficient. Ending the
 session here; step (3) needs the operator's Fastmail credentials.
+
+## 2026-08-20 (claim) — Claiming Round 2 Track A2 follow-up: jmap-proto's remaining mutation-testing survivors
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `1a30bbc` (this
+thread's own last push, item 9 step (2)). CURRENT PRIORITY items 1-9 are all
+either DONE or blocked on the operator's live/token-gated steps (item 2's
+consent round-trip, item 5/6's real-Fastmail confirmation, item 9 step (3))
+— no headless increment remains there. M9/M10 are COMPLETE
+(`docs/MILESTONES.md`). Round 2 Track D (next in the maintainer's stated lead
+order) has nothing headless left either: D1 is code-complete pending only
+human verification, D2's write-back is explicitly "NOT CLAIMABLE YET" without
+a maintainer-unblocked concurrency design.
+
+Track A2 (`d5cf563`, 2026-08-19) left a named, unaddressed follow-up: after
+new tests dropped `jmap-proto`'s surviving mutants from 54 to 27, the
+remaining 27 were "one uniform, non-equivalent, mechanical category
+(convenience-constructor fields unasserted in-crate, though covered
+end-to-end by `jmap-client`'s integration tests) — logged as a small
+follow-up, not equivalent mutants, not silently dropped." This is headless,
+no decision needed, and does not touch a closed M1-M6/M8 backend (`jmap-proto`
+is the wire-protocol crate all backends share, not one of them). Claiming it:
+re-running `cargo mutants -p evolution-jmap-proto` to get the current survivor
+list, then adding in-crate assertions on each constructor's fields until they
+are killed.
