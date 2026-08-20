@@ -40131,3 +40131,72 @@ item 7 complete.
 NIGHT-SHIFT: item 7's code-side root cause delivered and pushed. Ending
 the session here per the standing rule against starting a second large
 item.
+
+## 2026-08-20 (claim) — Claiming FFI-SOUNDNESS-AUDIT Finding 1: `set_raw_gerror`'s overwrite-on-violation is a `debug_assert` only
+
+Fresh survey (`git fetch`: `origin/master` unchanged at `d318dc2`, the
+previous session's item-7 delivery). Walked `docs/ROADMAP.md` end to end:
+CURRENT PRIORITY items 1–8 are all code-complete (several pending only
+operator/maintainer confirmation, already logged as such); Round 2 Track A
+(A1–A7) is fully closed, including every IMPROVE pattern in
+`docs/UNSAFE-AUDIT.md` except one that itself needs a behaviour decision
+(`SourceConfig::from_source`'s unguarded extension reads) and is not
+mechanical; Track B1/C2's third-party half/C4 remain NEEDS-DECISION; Track D1
+is DONE pending operator verification, D2's write-back is explicitly "NOT
+CLAIMABLE YET" (needs a signal-lifecycle/concurrency design first); Track E
+Path A is DONE pending operator verification, Phase B/C need a fresh
+maintainer decision before starting; Track F is closed. M7/M9/M10 are all
+COMPLETE per `docs/MILESTONES.md`. No new unblocked, no-decision-needed,
+non-backend-polish milestone/track item exists beyond what is already
+claimed or gated.
+
+`docs/FFI-SOUNDNESS-AUDIT.md`'s own findings table still lists two
+"logged, not fixed" items: Finding 3 (`oauth2.rs::borrowed`'s pointer
+lifetime under concurrent `apply()`) is explicitly named as "exactly the
+kind of subtle cross-thread pointer-lifetime reasoning the night-shift
+escalation criteria name explicitly" — not claiming that one. Finding 1
+(`jmap-backend-core/src/error.rs::set_raw_gerror`) is different in kind: no
+concurrency, no design question about *whether* to change behaviour, only
+*which* of two well-precedented behaviours to pick, and the audit text
+itself calls it "a small, real design choice" rather than escalation-worthy.
+
+**The gap, read from the source (`error.rs:86-95`):** `set_raw_gerror`'s
+contract is "`*dest` must already be NULL" (the standard GLib `GError**`
+out-parameter contract every EDS vfunc caller obeys), enforced today only by
+`debug_assert!`, which compiles out entirely in a release build — so a
+future caller that violates it would silently overwrite `*dest` in release,
+leaking the `GError` that was already there, with no build catching the bug
+short of running the debug-asserted test suite against exactly that call
+path. Every call site in the workspace today obeys the contract (confirmed
+by the audit; not a live bug), but nothing beyond `debug_assert!` protects
+against tomorrow's.
+
+**Fix, following existing precedent in this crate rather than inventing
+one:** GLib's own `g_set_error()` family refuses to overwrite a non-NULL
+`*error` (`g_return_if_fail (err == NULL || *err == NULL)`), which is a
+*runtime* check in ordinary (non-`G_DISABLE_CHECKS`) GLib builds, not a
+debug-only one — logs and keeps the first error, dropping the second. This
+crate already has the matching idiom for "a caller violated an
+un-recoverable-here precondition" in the exact same crate:
+`jmap_backend_core::trampoline::log_critical` — "for the cases a vfunc
+cannot report any other way… a critical is for 'this cannot happen'" —
+already used by `subclass.rs`/`instance.rs` for analogous impossible-callee
+states. Applying that same idiom here (log a critical, free the incoming
+`error`, leave `*dest` and its existing `GError` untouched) both matches
+GLib's own convention and this crate's own, rather than picking a third,
+novel behaviour (e.g. free-then-set, which nothing else in the tree does).
+
+**TDD:** red test first in `jmap-backend-core/tests/error.rs` —
+`overwriting_an_already_set_gerror_keeps_the_first_and_frees_the_second`
+calls `set_gerror` twice into the same out-parameter and asserts the first
+message survives unchanged; against the current `debug_assert!`, this panics
+the test (confirming the precondition is real and currently only
+debug-checked) rather than silently passing, so the red state itself is the
+evidence for the finding, not merely a compile failure. Then green after
+swapping the `debug_assert!` for the `log_critical`-and-drop path.
+
+Full cargo gate (fmt, clippy `-D warnings` default-members + the seven
+EDS-gated crates, `cargo test --locked` both scopes) before pushing, per the
+standing rule. No new dependency, no new user-facing string (a `g_critical`
+line is developer-facing, not user-facing, per the project's own
+"Mark UI strings translatable" directive's own carve-out).
