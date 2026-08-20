@@ -81,8 +81,11 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::GError;
+use jmap_backend_core::api_token::source_uses_api_token;
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::connect::{ACCEPTED_AUTH_RESULT, ConnectError, credentials as login_as};
+use jmap_backend_core::connect::{
+    ACCEPTED_AUTH_RESULT, ConnectError, bearer_credentials, credentials as login_as,
+};
 use jmap_backend_core::error::{invalid_arg_gerror, set_raw_gerror};
 use jmap_backend_core::marshal::password as stored_password;
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
@@ -256,6 +259,8 @@ pub unsafe fn login_of(
     let credentials = unsafe {
         if source_uses_oauth2(source) {
             access_token(source, cancellable).map(Credentials::bearer)
+        } else if source_uses_api_token(source) {
+            bearer_credentials(password)
         } else {
             login_as(server.connection.user.as_deref(), password)
         }

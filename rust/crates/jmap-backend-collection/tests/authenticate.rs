@@ -122,6 +122,20 @@ impl TestSource {
         }
         self
     }
+
+    /// Marks the account as authenticating with a pasted API token, the same
+    /// field `jmap_backend_core::api_token::source_uses_api_token` reads.
+    fn api_token(self) -> Self {
+        let method = CString::new(jmap_backend_core::api_token::API_TOKEN_METHOD.to_bytes())
+            .expect("no NUL in a literal");
+        // SAFETY: as above.
+        unsafe {
+            let auth: *mut ESourceAuthentication =
+                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+            e_source_authentication_set_method(auth, method.as_ptr());
+        }
+        self
+    }
 }
 
 impl Drop for TestSource {
@@ -338,6 +352,45 @@ fn an_oauth2_account_is_never_treated_as_anonymous() {
         error.message, "the account has no password yet",
         "an OAuth 2.0 account was routed through the Basic-auth path"
     );
+}
+
+#[test]
+fn an_api_token_account_is_sent_as_bearer_not_basic() {
+    // The item-6 "API Token" method: a stored secret that must reach the
+    // fan-out as `Credentials::Bearer`, exactly like `connect_with` already
+    // sends it for the address book, calendar and mail backends — never
+    // as `Credentials::Basic`, which a Bearer-only JMAP endpoint 401s (and a
+    // 401 is what turns into the account's stuck auth-retry loop, since
+    // `ConnectError::auth_result` reads it as a wrong password).
+    let source = account().api_token();
+    let stored = StoredPassword::new("t0k3n");
+    let seen = RefCell::new(None);
+
+    let (result, error) = run(source.0, stored.0, ptr::null_mut(), |login| {
+        *seen.borrow_mut() = Some(login.credentials);
+        Ok(())
+    });
+
+    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+    assert!(error.is_none());
+    match seen.into_inner() {
+        Some(Credentials::Bearer(token)) => assert_eq!(token, "t0k3n"),
+        other => panic!("an API-token account was not sent as Bearer: {other:?}"),
+    }
+}
+
+#[test]
+fn an_api_token_account_with_no_stored_token_asks_for_one() {
+    // Mirrors `an_account_with_a_user_and_no_stored_password_asks_for_one`:
+    // an API-token account with nothing in libsecret yet must prompt, not
+    // silently fan out with an empty Bearer token.
+    let source = account().api_token();
+
+    let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+
+    assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
+    let error = error.expect("the prompt is worth a reason");
+    assert_eq!(error.code, E_CLIENT_ERROR_AUTHENTICATION_REQUIRED as i32);
 }
 
 #[test]
