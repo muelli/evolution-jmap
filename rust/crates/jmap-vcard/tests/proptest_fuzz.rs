@@ -575,6 +575,9 @@ prop_compose! {
             Just("X-EVOLUTION-BLOG-URL".to_string()),
             Just("X-EVOLUTION-VIDEO-URL".to_string()),
             Just("X-EVOLUTION-FILE-AS".to_string()),
+            Just("X-ABLabel".to_string()),
+            Just("X-ABRELATEDNAMES".to_string()),
+            Just("X-ABDATE".to_string()),
             Just("X-MOZILLA-HTML".to_string()),
             Just("X-PHONETIC-FIRST-NAME".to_string()),
             Just("X-ABShowAs".to_string()),
@@ -584,6 +587,12 @@ prop_compose! {
             Just("X-TELEGRAM".to_string()),
             Just("X-CUSTOM".to_string()),
             "[A-Z0-9-]{1,12}",
+        ],
+        group in prop_oneof![
+            Just("".to_string()),
+            Just("item1.".to_string()),
+            Just("item2.".to_string()),
+            Just("itemA.".to_string()),
         ],
         params in prop::collection::vec(
             prop_oneof![
@@ -647,10 +656,19 @@ prop_compose! {
             ],
             0..3,
         ),
-        value in "\\PC*",
+        value in prop_oneof![
+            "\\PC*",
+            Just("_$!<Work>!$_".to_string()),
+            Just("_$!<Home>!$_".to_string()),
+            Just("_$!<Mobile>!$_".to_string()),
+            Just("_$!<Spouse>!$_".to_string()),
+            Just("_$!<Manager>!$_".to_string()),
+            Just("_$!<Assistant>!$_".to_string()),
+            Just("_$!<Anniversary>!$_".to_string()),
+        ],
     ) -> String {
         let param_str = params.join("");
-        format!("{name}{param_str}:{value}")
+        format!("{group}{name}{param_str}:{value}")
     }
 }
 

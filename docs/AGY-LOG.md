@@ -613,7 +613,40 @@ Running record of headless polish increments on the `antigravity` branch.
      - Evolution's "File Under" field maps to `E_CONTACT_FILE_AS` and is serialized as `X-EVOLUTION-FILE-AS`.
      - In JSContact, `fileAs` is stored on `Name.extra["fileAs"]`. Standard vCard 3.0 `SORT-STRING` (family sort string) corresponds to JSContact `sortAs` (`Name.extra["sortAs"]`).
      - Because they reside under distinct keys on the JSContact layer (`fileAs` vs `sortAs`), neither clobbers the other during synchronization or vCard import/export.
+## 2026-08-22 — Apple-style property groups & X-ABLabel semantic mapping (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 4, Item 6. Apple-style property groups (`item1.TEL` + `item1.X-ABLabel`, as iCloud and macOS exporters emit): grouped properties import without loss, labels map to the closest TYPE/EDS slot or extra["label"], extended relations (X-ABRELATEDNAMES) and dates (X-ABDATE) map cleanly, and round-trips reach fixed-point stability.
+- **Changes:**
+  - Added helper `clean_apple_label(raw: &str) -> &str` in `rust/crates/jmap-vcard/src/contact.rs` to unwrap Apple-style `_$!<LabelName>!$_` markers into clean label names or trim custom labels.
+  - Adapted `vcard_to_card` in `rust/crates/jmap-vcard/src/contact.rs`:
+    - Collects group labels from `entry.group` with `X-ABLabel` properties in an initial scan.
+    - `EMAIL`: maps group labels (`Work`/`School` -> `contexts: {"work": true}`, `Home` -> `contexts: {"private": true}`, custom -> `email.extra["label"]`).
+    - `TEL`: maps group labels (`Mobile`/`Cell`/`iPhone` -> `mobile`, `Pager` -> `pager`, `WorkFAX`/`HomeFAX`/`Fax` -> `fax`, `Main` -> `voice` + `work`, `Work`/`Home` -> contexts, custom -> `phone.extra["label"]`).
+    - `ADR`: updated `read_address` to consume `group_label` and map `Work`/`Home` contexts and custom `extra["label"]`.
+    - `URL`: maps group labels (`HomePage` -> `kind: None`, `Blog` -> `kind: Some("blog")`, `Work`/`Home` -> contexts, custom -> `link.extra["label"]`).
+    - Extended relations: added support for `X-ABRELATEDNAMES` / `X-AB-RELATED-NAMES` with companion group label mapping to `spouse`/`partner`, `manager`, `assistant`, or custom relations in `card.related_to`. Ungrouped/unlabelled `X-ABRelatedNames` are safely skipped.
+    - Extended dates: added support for `X-ABDATE` / `X-AB-DATE` with companion group label mapping to `wedding` (anniversary), `birth`, or custom anniversary kinds in `card.anniversaries`.
+  - Added comprehensive fixture-driven unit and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `apple_property_groups_representative_icloud_fixture_import_and_roundtrip`: verifies full representative iCloud/macOS contact card with multi-type emails, mobile/work/fax/main phones, work/home addresses, homepage link, spouse/manager/assistant relations, anniversary dates, notes, and categories.
+    - `apple_property_groups_custom_labels_and_extended_relations`: verifies custom label preservation in `extra["label"]`, WorkFAX, Pager, custom relation types (`Partner`, `Colleague`), custom date kinds (`First Met`).
+    - `apple_property_groups_variations_and_boundary_cases`: verifies case-insensitivity in labels (`x-ablabel`, `X-ABLABEL`), unescaped labels, orphaned `X-ABLabel` lines, and fixed-point roundtrip stability.
+  - Enhanced proptest structure-aware fuzzing in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`:
+    - Added group prefixes (`item1.`, `item2.`, `itemA.`) and Apple properties (`X-ABLabel`, `X-ABRELATEDNAMES`, `X-ABDATE`) to `arb_vcard_property_line`.
+  - Updated `docs/VCARD-MAPPING.md`:
+    - Added Master Property Mapping Table rows for `itemN.PROPERTY`, `X-ABLabel`, `X-ABRELATEDNAMES`, `X-ABDATE`.
+    - Added Section 4.11 detailing Apple Property Groups & `X-ABLabel` Semantic Mapping.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **Apple Group Grammar (RFC 2426 §2.1.1)**:
+     - `calcard::vcard::parser` parses property group prefixes (`itemN.PROPERTY`) into `entry.group: Some("itemN")` and sets `entry.name` to the standard property name (e.g. `VCardProperty::Tel`, `VCardProperty::Email`, `VCardProperty::Other("X-ABLabel")`).
+     - This clean separation allows `jmap-vcard` to collect `X-ABLabel` annotations indexed by group name and pair them with standard properties, extended relations (`X-ABRELATEDNAMES`), and extended dates (`X-ABDATE`).
+  2. **Standard vs. Custom Label Mapping**:
+     - Standard Apple markers (`_$!<Work>!$_`, `_$!<Home>!$_`, `_$!<Mobile>!$_`, `_$!<WorkFAX>!$_`, `_$!<Main>!$_`, `_$!<HomePage>!$_`, `_$!<Spouse>!$_`, `_$!<Anniversary>!$_`) map directly to native JSContact context/feature/relation fields and EDS slots.
+     - Custom/user-defined labels (e.g. `item1.X-ABLabel:Direct Line`) are preserved in `extra["label"]` on JSContact `ContactPhone`, `ContactEmail`, `Address`, `Link`, and as named relation/anniversary types.
+  3. **Outbound Normalization & Round-Trip Fixpoint**:
+     - Outbound vCard serialization emits canonical RFC 2426 vCard 3.0 properties (`TYPE=WORK,CELL`, `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-ANNIVERSARY`).
+     - Re-parsing emitted vCards achieves exact byte-identical and structural fixed-point convergence (`Export₂ == Export₃` and `Card₂ == Card₃`).
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
 
 
 
