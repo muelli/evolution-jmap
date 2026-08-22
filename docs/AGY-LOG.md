@@ -519,6 +519,31 @@ Running record of headless polish increments on the `antigravity` branch.
      - Outbound emission pairs each structured `ADR` with its matching standalone `LABEL` in sorted `(address_pref, key)` order, ensuring primary preferred addresses and labels land in the appropriate Evolution editor slots.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
 
+## 2026-08-22 — vCard 2.1 legacy import tolerance & asymmetric compatibility (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 5. vCard 2.1 legacy import tolerance (ENCODING=QUOTED-PRINTABLE values, bare type words, CHARSET= params, import tolerance vs strict 3.0 export).
+- **Changes:**
+  - Enhanced `entry_has_type` in `rust/crates/jmap-vcard/src/contact.rs` to recognize both standard `TYPE=value` parameters and bare vCard 2.1 type parameter names (e.g. bare `WORK`, `HOME`, `CELL`, `MOBILE`, `VOICE`, `FAX`, `PAGER`, `PREF`, `POSTAL`, etc.) matching the token case-insensitively.
+  - Enhanced `read_photo` in `rust/crates/jmap-vcard/src/contact.rs` with `is_known_image_subtype` to infer image format subtypes (`JPEG`, `GIF`, `PNG`, `BMP`, `TIFF`, `WEBP`) from bare parameter names when explicit `TYPE=` is omitted (e.g. `PHOTO;JPEG;ENCODING=BASE64:`), constructing standard `data:image/<subtype>;base64,...` data URIs.
+  - Extended `arb_vcard_property_line` and `arb_raw_vcard` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to fuzz vCard 2.1 bare parameters and `VERSION:2.1` envelopes during property-based fuzzing.
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `vcard_21_outlook_representative_fixture_import_and_normalization`: tests representative real-world vCard 2.1 exported by legacy Microsoft Outlook (`VERSION:2.1`, bare `TEL;WORK;VOICE`, `TEL;HOME;VOICE`, `TEL;CELL;VOICE`, `TEL;WORK;FAX`, `EMAIL;PREF;INTERNET`, `ADR;WORK;PREF` / `LABEL;WORK;PREF` in QP, `NOTE;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE` with German umlauts and soft breaks, `PHOTO;JPEG;ENCODING=BASE64`, `BDAY`, `URL`, `REV`), verifying 100% extraction, outbound normalization to strict vCard 3.0 UTF-8, and fixed-point roundtrip stability (`export2 == export3` and `card2 == card3`).
+    - `vcard_21_feature_phone_nokia_sony_ericsson_fixtures_import`: tests feature phone fixtures with bare `TEL` types (`HOME`, `WORK`, `CELL`, `MOBILE`, `FAX`, `PAGER`), `EMAIL;INTERNET`, soft-wrapped QP notes, and safe omission of unmapped `SOUND;WAVE;BASE64` audio entries.
+    - `vcard_21_legacy_charsets_iso_8859_1_and_windows_1252_import`: tests legacy character set decoding across German (`CHARSET=ISO-8859-1`) and French (`CHARSET=WINDOWS-1252` with Euro sign `=80`) into native UTF-8 strings, verifying outbound normalization to clean vCard 3.0 with no redundant `CHARSET` or `ENCODING` parameters.
+    - `vcard_21_bare_type_words_and_combinations_matrix`: tests exhaustive matrix of bare parameter type combinations across telephony, email, and postal address contexts, features, and preference flags.
+    - `vcard_21_photo_formats_and_encoding_permutations`: tests `PHOTO;JPEG;ENCODING=BASE64`, `PHOTO;GIF;BASE64`, `PHOTO;PNG;ENCODING=BASE64`, and `PHOTO;TYPE=JPEG;ENCODING=BASE64`, verifying subtype inference and standard vCard 3.0 `PHOTO;ENCODING=b;TYPE=...` re-emission.
+    - `vcard_21_quoted_printable_soft_line_breaks_and_continuation`: tests QP soft line wrapping (`=\r\n`, `=\n`) and hex byte decoding (`=3D`, `=3B`, `=2C`, `=0D=0A`) across multi-line notes and structured name/organization fields.
+  - Updated `docs/VCARD-MAPPING.md` with Section 4.10 documenting the accepted vCard 2.1 subset, Postel's law asymmetric compatibility contract, and fixed-point stability invariants.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **vCard 2.1 Asymmetric Import Tolerance Contract**:
+     - Inbound parsing (`vcard_to_card`) adopts Postel's Law: accepts legacy `VERSION:2.1`, bare type parameter words (`TEL;HOME:`), legacy character sets (`CHARSET=ISO-8859-1`, `CHARSET=WINDOWS-1252`), and `ENCODING=QUOTED-PRINTABLE` byte sequences.
+     - Outbound serialization (`card_to_vcard`) is strictly canonical RFC 2426 vCard 3.0 in native UTF-8, with 75-octet folding, standard `TYPE=` parameter grouping, and RFC 2426 §2.4.2 delimiter escaping (`\n`, `\,`, `\;`, `\\`).
+     - Legacy parameters (`CHARSET`, `ENCODING=QUOTED-PRINTABLE`, `INTERNET`) are never emitted.
+  2. `calcard` automatically decodes Quoted-Printable byte sequences according to the declared `CHARSET` (or ISO-8859-1 default) and unfolds QP soft line breaks (`=\r\n`) seamlessly.
+  3. `entry_has_type` evaluates both `TYPE=value` parameters and bare parameter names matching the target type name, enabling seamless interoperability with 2.1 exporters without breaking standard 3.0 parameter matching.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+
 
 
 

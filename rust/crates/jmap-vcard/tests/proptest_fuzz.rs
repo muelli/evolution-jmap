@@ -620,6 +620,23 @@ prop_compose! {
                 Just(";ALTID=group1;LANGUAGE=ja".to_string()),
                 Just(";X-CUSTOM-PARAM=val1".to_string()),
                 Just(";X-VENDOR-STATUS=ACTIVE".to_string()),
+                // vCard 2.1 bare parameter names
+                Just(";WORK".to_string()),
+                Just(";HOME".to_string()),
+                Just(";CELL".to_string()),
+                Just(";MOBILE".to_string()),
+                Just(";VOICE".to_string()),
+                Just(";FAX".to_string()),
+                Just(";PAGER".to_string()),
+                Just(";PREF".to_string()),
+                Just(";INTERNET".to_string()),
+                Just(";BASE64".to_string()),
+                Just(";JPEG".to_string()),
+                Just(";GIF".to_string()),
+                Just(";PNG".to_string()),
+                Just(";POSTAL".to_string()),
+                Just(";PARCEL".to_string()),
+                Just(";DOM".to_string()),
                 ";[A-Z-]+=[A-Za-z0-9-]+",
             ],
             0..3,
@@ -633,10 +650,11 @@ prop_compose! {
 
 prop_compose! {
     fn arb_raw_vcard()(
+        version in prop_oneof![Just("3.0"), Just("2.1"), Just("4.0")],
         lines in prop::collection::vec(arb_vcard_property_line(), 0..10),
         trailing in prop::option::of("\\PC*"),
     ) -> String {
-        let mut out = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\n");
+        let mut out = format!("BEGIN:VCARD\r\nVERSION:{version}\r\n");
         for line in lines {
             out.push_str(&line);
             out.push_str("\r\n");
