@@ -61,8 +61,8 @@
 use std::env;
 
 use jmap_client::{Client, Credentials};
-use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter};
-use jmap_proto::contacts::{ContactCard, ContactCardQueryFilter};
+use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter};
+use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
     keyword, role,
@@ -401,6 +401,73 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
     );
 }
 
+/// `AddressBook/set` create then destroy — the JMAP calls the collection
+/// backend's `create_resource_sync`/`delete_resource_sync` vfuncs
+/// (`docs/ROADMAP.md` Track D1) issue when a user does "New Address Book" or
+/// deletes one, as opposed to [`contact_card_create_update_then_destroy_round_trips_through_the_real_api`]
+/// below, which creates a *card inside* the account's existing default
+/// address book. `Client::address_book_create`/`address_book_destroy` are
+/// mock-tested (`jmap-client/tests/contacts.rs`) but had never been run
+/// against a real server before this test: does the server actually let a
+/// non-default address book be created this way, and does the created id
+/// show up in the collection's own `AddressBook/get` list.
+///
+/// Confirmed via `Client::address_books` (a list check) rather than
+/// `Client::all_changes`, unlike the mailbox/contact/event tests: this crate
+/// has no `address_book_get`-style method that exposes a `state` token for
+/// this type (`address_books` discards it, matching what D1's own mock tests
+/// needed), and adding one is out of scope for a coverage-only increment.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn address_book_create_then_destroy_round_trips_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+
+    let name = format!("agent-livewrite-{}", unique_suffix());
+    let book = AddressBook {
+        name: name.clone(),
+        ..AddressBook::default()
+    };
+
+    let created = client
+        .address_book_create(&account_id, &book)
+        .expect("AddressBook/set create failed against the real server");
+    let id = created
+        .id
+        .clone()
+        .expect("the server named the new address book");
+
+    let round_tripped = client
+        .address_books(&account_id)
+        .expect("AddressBook/get failed against the real server")
+        .into_iter()
+        .find(|book| book.id.as_ref() == Some(&id));
+    assert_eq!(
+        round_tripped.map(|book| book.name),
+        Some(name),
+        "the created address book does not show up in AddressBook/get afterwards"
+    );
+
+    client
+        .address_book_destroy(&account_id, &id)
+        .expect("AddressBook/set destroy failed against the real server");
+
+    let still_present = client
+        .address_books(&account_id)
+        .expect("AddressBook/get failed against the real server")
+        .into_iter()
+        .any(|book| book.id.as_ref() == Some(&id));
+    assert!(
+        !still_present,
+        "the destroyed address book still shows up in AddressBook/get afterwards"
+    );
+}
+
 /// The contacts capability's half of the write-path proof: `ContactCard/set`
 /// creates a card in the account's default address book, reads it back
 /// through `ContactCard/get`, renames it (`contact_update`'s `PatchObject`
@@ -542,6 +609,63 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
     assert!(
         !query_after_destroy.ids.contains(&id),
         "ContactCard/query for the address book still lists the destroyed card"
+    );
+}
+
+/// `Calendar/set` create then destroy — the calendar counterpart of
+/// [`address_book_create_then_destroy_round_trips_through_the_real_api`]
+/// above, for the other half of Track D1's collection-creation vfuncs.
+/// `Client::calendar_create`/`calendar_destroy` are mock-tested
+/// (`jmap-client/tests/calendars.rs`) but had never run against a real
+/// server before this test.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn calendar_create_then_destroy_round_trips_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+
+    let name = format!("agent-livewrite-{}", unique_suffix());
+    let calendar = Calendar {
+        name: name.clone(),
+        ..Calendar::default()
+    };
+
+    let created = client
+        .calendar_create(&account_id, &calendar)
+        .expect("Calendar/set create failed against the real server");
+    let id = created
+        .id
+        .clone()
+        .expect("the server named the new calendar");
+
+    let round_tripped = client
+        .calendars(&account_id)
+        .expect("Calendar/get failed against the real server")
+        .into_iter()
+        .find(|calendar| calendar.id.as_ref() == Some(&id));
+    assert_eq!(
+        round_tripped.map(|calendar| calendar.name),
+        Some(name),
+        "the created calendar does not show up in Calendar/get afterwards"
+    );
+
+    client
+        .calendar_destroy(&account_id, &id)
+        .expect("Calendar/set destroy failed against the real server");
+
+    let still_present = client
+        .calendars(&account_id)
+        .expect("Calendar/get failed against the real server")
+        .into_iter()
+        .any(|calendar| calendar.id.as_ref() == Some(&id));
+    assert!(
+        !still_present,
+        "the destroyed calendar still shows up in Calendar/get afterwards"
     );
 }
 
