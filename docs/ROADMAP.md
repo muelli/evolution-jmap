@@ -1254,8 +1254,10 @@ tracks follow; the maintainer may reorder anytime.
     string, no new file (reuse lint unaffected). **Track A is now fully
     closed** (A1-A8 all DONE).
 
-### Track B — Observability (NEEDS-DECISION on approach, then CLAIMABLE)
-- **B1 `[claude]` journald structured logging, TRACE→ERROR.** Replace the ~54
+### Track B — Observability (DECIDED 2026-08-22 → CLAIMABLE)
+- **B1 `[claude]` journald structured logging, TRACE→ERROR. DECIDED 2026-08-22
+  (maintainer): option (a) — `tracing` + `tracing-journald`. CLAIMABLE NOW.**
+  Replace the ~54
   ad-hoc `println!`/`eprintln!`/`g_message` sites with the `tracing` crate.
   Recommended sink: `tracing-journald` (writes the journal native protocol
   directly — no libsystemd FFI, keeps the dep/repro posture clean; MIT/Apache,
@@ -1290,6 +1292,13 @@ tracks follow; the maintainer may reorder anytime.
     shipped in the `.deb`) — pick (a) a non-`Files` third-party-notices
     appendix, or (b) full `dh-cargo` vendoring under Track C3, before a
     future session attempts the enumeration.
+  - **DECIDED 2026-08-22 (maintainer): option (a) — the third-party-notices
+    appendix. CLAIMABLE NOW.** Generate the appendix from `cargo metadata`
+    (crate, version, license expression, upstream URL) for exactly the crates
+    statically linked into the shipped `.so`s; keep it in sync the same way
+    the own-source half is (extend `tools/generate-debian-copyright.py` + the
+    `debian-copyright-in-sync` CTest). Do NOT vendor (option (b) declined for
+    now; revisit only if a real Debian upload is pursued under C4).
 - **C3 `[claude]` `debian/` skeleton** (control, rules using `dh` over the
   cmake/cargo build, watch file) so a Debian packager starts from a working tree.
   Document the Rust-in-Debian reality (dh-cargo wants every crate dep packaged /
@@ -1752,7 +1761,8 @@ in design §4–§6; the ordered increments:
    `Principal/query` (design §4.2–4.4). That vfunc is **L / escalation-worthy**
    (unsafe FFI, EDS-only testing); everything above it is ordinary additive work.
    **Build and test against the mock — it is fully headless-testable that way.**
-   - **PARTIAL 2026-08-19 (proto/client/mock slice DONE, vfunc still open)** —
+   - **PARTIAL 2026-08-19 (proto/client/mock slice DONE, vfunc still open —
+     the vfunc slice is CLAIMABLE NOW, maintainer 2026-08-22)** —
      landed exactly the non-FFI half: `jmap-proto::principals` gained
      `GetAvailabilityRequest`/`GetAvailabilityResponse`/`BusyPeriod` (bespoke
      shapes per design §4.1, `principals` feature now pulls in `calendars` for
@@ -1877,14 +1887,19 @@ in design §4–§6; the ordered increments:
      severity, and committing the persisted seed would have turned an
      intermittent red into a permanent one for every lane).
 
-**OPERATOR CONFIRMATION (you-task, like the OAuth Fastmail test).** The runner
-cannot reach Stalwart (MAINTAINER DECISIONS #3), so the design's "half-day probe:
-fire `Principal/getAvailability` at Stalwart and record the draft field spelling"
-is an **operator** step, not a blocker on the mock-side build. Run it when
-convenient to confirm the real field names match the proto/mock; if Stalwart does
-not implement `getAvailability`, report it and we reorder to Phase B.
+**~~OPERATOR CONFIRMATION~~ now RUNNER-CLAIMABLE (2026-08-22).** The runner now
+reaches Stalwart (MAINTAINER DECISIONS #3, revised), so the design's "half-day
+probe: fire `Principal/getAvailability` at Stalwart and record the draft field
+spelling" is an ordinary headless task: run it from the runner, confirm the real
+field names match the proto/mock; if Stalwart does not implement
+`getAvailability`, report the finding and the maintainer reorders the phases.
 
 **FUTURE WORK — recorded for a future agent (do NOT start until Path A lands + maintainer OK):**
+**MAINTAINER DECISION 2026-08-22: Phase B and Phase C stay PARKED until the
+basic functionality (Path A availability + the core mail/contacts/calendar
+flows) is known to work well — i.e. operator-verified in real Evolution, not
+just green in CI. Do not queue or claim Phase B/C work before an explicit
+go-ahead recorded here.**
 - **Phase B — per-source permissions.** Typed `myRights`/`shareWith` on
   Mailbox/AddressBook/Calendar (design §4.1) + rewire `children.rs`/`layout.rs` so
   per-source read-only derives from `myRights.mayWrite` — **narrows, never widens**;
@@ -1972,6 +1987,20 @@ decide. All three are now answered:
    **operator-side**, not from the night runner. Do NOT attempt to reach
    Stalwart from the runner; keep the harness mock-green as before and leave
    real-server runs to the operator.
+   - **REVISED 2026-08-22 (maintainer): the runner NOW REACHES Stalwart —
+     live-server work is runner-side CLAIMABLE.** The earlier unreachability
+     was availability, not firewall (`default-allow-internal` always admitted
+     VPC-internal traffic; a *stopped* `stalwart-1` simply has no internal
+     DNS/IP — hence the NXDOMAIN a survey once hit). Fixed by attaching an
+     hourly-start instance schedule (`stalwart-hourly-start`, europe-west3,
+     same `7 * * * *` cron as the runner's self-heal) and starting the VM;
+     verified from the runner: `$STALWART_URL/.well-known/jmap` answers
+     HTTP 307 via the internal DNS name. Standing rules stay: source
+     `infra/live-server/live-server-env.sh`, create your own distinctive
+     `agent-*` test domain/accounts, never touch `alice@example.com`, and if
+     Stalwart is unreachable in a given session (it may be within an hourly
+     start window), fall back to the mock and note it — do NOT report BLOCKED
+     for that alone.
 
 ## Milestones (in order)
 
