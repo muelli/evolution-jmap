@@ -461,6 +461,41 @@ Running record of headless polish increments on the `antigravity` branch.
   3. `MOBILE` vs `CELL` normalization: `TYPE=MOBILE` is widely used in the wild by Android, iOS, and Outlook vCard exporters. `jmap-vcard` accepts `MOBILE` on import as JSContact `mobile` feature and normalizes to standard RFC 2426 `TYPE=CELL` on export, ensuring lossless round-trips and fixed-point convergence.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
 
+## 2026-08-22 — Remaining X-EVOLUTION-* fields mapping & CALURI/FBURL audit (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 3. Remaining X-EVOLUTION-* fields (`X-EVOLUTION-{MANAGER, ASSISTANT, BLOG-URL, VIDEO-URL}`) and `CALURI`/`FBURL` audit.
+- **Changes:**
+  - Audited `FBURL` and `CALURI`: Confirmed they are already fully mapped and tested in `jmap-vcard` to/from `card.calendars` with `kind: "calendar"` (`CALURI` ↔ `E_CONTACT_CALENDAR_URI`) and `kind: "freeBusy"` (`FBURL` ↔ `E_CONTACT_FREEBUSY_URL`).
+  - Added constants `X_EVOLUTION_MANAGER`, `X_EVOLUTION_ASSISTANT`, `MANAGER_RELATION = "manager"`, `ASSISTANT_RELATION = "assistant"`, `X_EVOLUTION_BLOG_URL`, `X_EVOLUTION_VIDEO_URL` in `rust/crates/jmap-vcard/src/contact.rs`.
+  - Added public predicates `states_manager` and `states_assistant` and exported them in `rust/crates/jmap-vcard/src/lib.rs`.
+  - Updated `states_link` and `maps_link_kind` in `rust/crates/jmap-vcard/src/contact.rs` to support `None` (`URL`), `Some("blog")` (`X-EVOLUTION-BLOG-URL`), and `Some("video")` (`X-EVOLUTION-VIDEO-URL`), with leading/trailing whitespace and CR defense.
+  - Adapted `card_to_vcard` in `rust/crates/jmap-vcard/src/contact.rs` to:
+    - Emit `URL` (`kind: None`), `X-EVOLUTION-BLOG-URL` (`kind: Some("blog")`), and `X-EVOLUTION-VIDEO-URL` (`kind: Some("video")`) for links carrying `X-JMAP-KEY`.
+    - Emit `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, and `X-EVOLUTION-ASSISTANT` lines for entries in `related_to` matching `states_spouse`, `states_manager`, and `states_assistant`.
+  - Adapted `vcard_to_card` in `rust/crates/jmap-vcard/src/contact.rs` to:
+    - Parse `"URL" | X_EVOLUTION_BLOG_URL | X_EVOLUTION_VIDEO_URL` into `card.links` with respective `kind` (`None`, `Some("blog")`, `Some("video")`).
+    - Parse `X_EVOLUTION_SPOUSE | X_EVOLUTION_MANAGER | X_EVOLUTION_ASSISTANT` into `card.related_to[name]` with `relation: {"spouse": true}`, `{"manager": true}`, or `{"assistant": true}` when `names_a_person` holds. Multiple roles on a single person merge cleanly into one `Relation.relation` map.
+  - Added comprehensive characterization, predicate, and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `evolution_manager_and_assistant_relations_roundtrip`: tests roundtrips of cards with spouse, manager, and assistant relations.
+    - `evolution_blog_and_video_urls_links_roundtrip`: tests roundtrips of website, blog, and video links.
+    - `evolution_remaining_x_properties_coexistence_and_predicates`: validates `states_manager`, `states_assistant`, `states_spouse`, `states_link` against valid person names (including non-ASCII), rejected names (empty, whitespace-padded, URIs, CR), and relation types.
+    - `multiple_relations_on_single_person_and_multi_relation_cards`: tests individuals holding multiple simultaneous relations (e.g. manager + assistant, spouse + manager) merging on parse and roundtripping with 100% fidelity.
+    - `evolution_links_and_relations_case_insensitivity_and_whitespace`: tests mixed-case property names (`x-evolution-manager:`, `X-Evolution-Blog-Url:`) and empty/whitespace line filtering.
+  - Enhanced `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`:
+    - Updated `arb_link` to generate `video` link kinds.
+    - Updated `arb_relation` to generate `manager` and `assistant` relation types.
+    - Updated `arb_vcard_property_line` to generate `X-EVOLUTION-VIDEO-URL`.
+  - Updated `docs/VCARD-MAPPING.md`:
+    - Section 2 Master Property Mapping Table rows for `URL`, `X-EVOLUTION-BLOG-URL`, `X-EVOLUTION-VIDEO-URL`, `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, `X-EVOLUTION-ASSISTANT`.
+    - Section 3.9 & Section 3.11 documenting relationship and link mappings, multiple-role merging, and URI identifier defenses.
+    - Section 4.1 updating dropped-by-design unknown property list.
+    - Section 5 Function Index with `states_manager` and `states_assistant`.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `calcard` correctly passes through custom `X-EVOLUTION-*` properties and parameter keys (`X-JMAP-KEY`) without mangling or dropping values.
+  2. `X-EVOLUTION-BLOG-URL` and `X-EVOLUTION-VIDEO-URL` map naturally to JSContact `links` with standard kinds `"blog"` and `"video"` (RFC 9553 §2.6.3), preserving separation between personal homepages (`URL` / `E_CONTACT_HOMEPAGE_URL`) and multimedia links. Generic vendor properties (`X-BLOG-URL`, `X-VIDEO-URL`) without `X-EVOLUTION-` prefix remain safely ignored to avoid vendor drift.
+  3. `X-EVOLUTION-MANAGER` and `X-EVOLUTION-ASSISTANT` map cleanly to JSContact `related_to` with standard relation types `"manager"` and `"assistant"` (RFC 9553 §2.1.8). The entity name serves as the map key (RFC 9555 §2.9.5). `names_a_person` prevents URN/URI identifiers from being rendered into Evolution's text fields. Multiple relations for the same person round-trip into separate lines and re-merge deterministically.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
 
 
 
