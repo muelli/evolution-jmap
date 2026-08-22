@@ -68,16 +68,17 @@ use jmap_backend_core::trampoline::guard;
 use crate::backend::JmapCollectionBackend;
 use crate::factory::{JmapCollectionFactory, remember_backend_type};
 
-/// Binds this project's gettext domain, and registers the backend and its
-/// factory against `type_module`.
+/// Sets up this project's `tracing` dispatcher and gettext domain, and
+/// registers the backend and its factory against `type_module`.
 ///
 /// Called once per use of the module, not once per process: the registry unuses
 /// a module when the last backend it provided goes away, which marks every type
 /// it registered as unloaded, and calls this again when the next account wants
 /// one. So registering is what happens on *every* call, and `register_dynamic`
-/// is idempotent for exactly that reason. [`bind`] is idempotent too, and for
-/// one more: a process can hold several of this repository's modules at once,
-/// and each has to assume it might be the first.
+/// is idempotent for exactly that reason. [`jmap_backend_core::logging::init`]
+/// and [`bind`] are idempotent too, and for one more: a process can hold
+/// several of this repository's modules at once, and each has to assume it
+/// might be the first.
 ///
 /// The binding comes first because it has to be in place before anything can
 /// ask for a translated string, and this is the only code of ours the registry
@@ -106,6 +107,7 @@ use crate::factory::{JmapCollectionFactory, remember_backend_type};
 /// `e_module_load`; it has to stay alive for the duration of the call.
 pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
     guard("e_module_load", (), || {
+        jmap_backend_core::logging::init();
         bind();
         // SAFETY: the module is the registry's, by this function's contract.
         unsafe {

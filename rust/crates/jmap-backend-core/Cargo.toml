@@ -28,6 +28,9 @@ evolution-jmap-proto = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 gio-sys = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-journald = { workspace = true }
 
 [dev-dependencies]
 libc = "0.2.189"
