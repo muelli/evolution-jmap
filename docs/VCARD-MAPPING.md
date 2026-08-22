@@ -103,6 +103,10 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`CLASS`** | — | `card.privacy` (RFC 9553) | — | — | Dropped by design. Deprecated/removed in RFC 6350. Legacy access classification with no Evolution editor UI. |
 | **`SOUND`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "sound"`) | — | [`states_media`] | Dropped by design from vCard 3.0. [`states_media`] permits only `kind: "photo"`. Server `sound` media entries preserved by `PatchObject`. |
 | **`LOGO`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "logo"`) | `E_CONTACT_LOGO` (no UI) | [`states_media`] | Dropped by design from vCard 3.0. Evolution editor supports only personal photo (`E_CONTACT_PHOTO`). Server `logo` entries preserved by `PatchObject`. |
+| **`itemN.PROPERTY`** | `X-ABLabel` companion | (associated property) | (associated EDS slot) | `clean_apple_label`, `vcard_to_card` | Apple property groups (RFC 2426 §2.1.1). Group prefix is parsed by `calcard`; companion `X-ABLabel` maps contexts (`Work`, `Home`), features (`Mobile`, `Pager`, `Fax`), or custom labels. |
+| **`X-ABLabel`** | — | `extra["label"]` or mapped context/feature | — | `clean_apple_label`, `vcard_to_card` | Apple label annotation. Markers (`_$!<Label>!$_`) unwrapped. Standard labels map to JSContact contexts/features; custom labels preserved in `extra["label"]`. |
+| **`X-ABRELATEDNAMES`** | `X-ABLabel` | `card.related_to` (Key = Person Name) | `E_CONTACT_SPOUSE`, `_MANAGER`, `_ASSISTANT` | `clean_apple_label`, `vcard_to_card` | Apple relationship property. Group companion `X-ABLabel` selects relation type (`spouse`, `manager`, `assistant`, custom). Outbound normalizes to standard `X-EVOLUTION-*`. |
+| **`X-ABDATE`** | `X-ABLabel` | `card.anniversaries` (`kind`, `date`) | `E_CONTACT_ANNIVERSARY` | `clean_apple_label`, `read_day` | Apple date property. Group companion `X-ABLabel` selects anniversary kind (`wedding`, `birth`, custom). Outbound normalizes to `X-EVOLUTION-ANNIVERSARY` / `BDAY`. |
 
 ---
 
@@ -437,6 +441,65 @@ Real-world contact exporters (such as older versions of Microsoft Outlook, featu
    - Outbound serialization via [`card_to_vcard`] is unconditionally RFC 2426 vCard 3.0 in native UTF-8 with standard line folding (75 octets) and backslash value escaping (`\n`, `\,`, `\;`, `\\`).
    - Legacy parameters (`CHARSET`, `QUOTED-PRINTABLE`, `INTERNET`, bare types) are never emitted.
    - Fixed-point stability is guaranteed: importing a 2.1 vCard, emitting as 3.0, and re-parsing reaches exact fixed-point equality (`export2 == export3` and `card2 == card3`).
+
+### 4.11 Apple Property Groups & `X-ABLabel` Semantic Mapping
+
+vCards exported from macOS AddressBook, iOS Contacts, and iCloud use property grouping (RFC 2426 §2.1.1) combined with companion `X-ABLabel` lines to attach custom and localized labels to standard and extended contact properties:
+
+```vcard
+item1.TEL:(555) 555-0100
+item1.X-ABLabel:_$!<Mobile>!$_
+item2.EMAIL;type=INTERNET;type=pref:john.appleseed@work.example.com
+item2.X-ABLabel:_$!<Work>!$_
+item3.ADR;type=pref:;;1 Infinite Loop;Cupertino;CA;95014;USA
+item3.X-ABLabel:_$!<Work>!$_
+item4.URL:https://johnappleseed.example.com
+item4.X-ABLabel:_$!<HomePage>!$_
+item5.X-ABRELATEDNAMES:Jane Appleseed
+item5.X-ABLabel:_$!<Spouse>!$_
+item6.X-ABDATE:2018-06-20
+item6.X-ABLabel:_$!<Anniversary>!$_
+```
+
+`jmap-vcard` parses and maps grouped properties with full semantic fidelity:
+
+1. **Apple Label Marker Unwrapping (`clean_apple_label`)**:
+   - Strips Apple localization delimiters `_$!<` and `>!$_` from raw label strings (e.g. `_$!<Work>!$_` -> `Work`, `_$!<Mobile>!$_` -> `Mobile`).
+   - Custom / user-defined labels without delimiters (e.g. `Direct Line`, `HQ Office`) are trimmed and preserved.
+2. **Context & Feature Slot Resolution**:
+   - **Emails (`EMAIL`)**:
+     - `Work` / `School` -> `contexts: {"work": true}` (filed to `E_CONTACT_EMAIL_1` / `EMAIL_3`).
+     - `Home` -> `contexts: {"private": true}` (filed to `E_CONTACT_EMAIL_2` / `EMAIL_4`).
+     - Custom labels -> `email.extra["label"] = "<custom>"`.
+   - **Telephony (`TEL`)**:
+     - `Mobile` / `Cell` / `iPhone` -> `features: {"mobile": true}` (`E_CONTACT_PHONE_MOBILE`).
+     - `Pager` -> `features: {"pager": true}` (`E_CONTACT_PHONE_PAGER`).
+     - `WorkFAX` / `Work FAX` -> `features: {"fax": true}`, `contexts: {"work": true}` (`E_CONTACT_PHONE_BUSINESS_FAX`).
+     - `HomeFAX` / `Home FAX` -> `features: {"fax": true}`, `contexts: {"private": true}` (`E_CONTACT_PHONE_HOME_FAX`).
+     - `Main` -> `features: {"voice": true}`, `contexts: {"work": true}` (`E_CONTACT_PHONE_BUSINESS` / `PRIMARY`).
+     - `Work` / `Home` -> `contexts: {"work": true}` / `contexts: {"private": true}`.
+     - Custom labels -> `phone.extra["label"] = "<custom>"`.
+   - **Addresses (`ADR`)**:
+     - `Work` / `School` -> `contexts: {"work": true}` (`E_CONTACT_ADDRESS_WORK`).
+     - `Home` -> `contexts: {"private": true}` (`E_CONTACT_ADDRESS_HOME`).
+     - Custom labels -> `address.extra["label"] = "<custom>"`.
+   - **Links (`URL`)**:
+     - `HomePage` / `Home Page` -> `kind: None` (`E_CONTACT_HOMEPAGE_URL`).
+     - `Blog` -> `kind: Some("blog")` (`E_CONTACT_BLOG_URL`).
+     - `Work` / `Home` -> `link.extra["contexts"] = {"work": true}` / `{"private": true}`.
+     - Custom labels -> `link.extra["label"] = "<custom>"`.
+3. **Apple Extended Relations (`X-ABRELATEDNAMES`)**:
+   - `spouse` / `partner` -> `card.related_to[name]` with `relation: {"spouse": true}` (`E_CONTACT_SPOUSE` / `X-EVOLUTION-SPOUSE`).
+   - `manager` -> `card.related_to[name]` with `relation: {"manager": true}` (`E_CONTACT_MANAGER` / `X-EVOLUTION-MANAGER`).
+   - `assistant` -> `card.related_to[name]` with `relation: {"assistant": true}` (`E_CONTACT_ASSISTANT` / `X-EVOLUTION-ASSISTANT`).
+   - Custom relations -> `card.related_to[name]` with `relation: {"<custom>": true}`.
+4. **Apple Extended Dates (`X-ABDATE`)**:
+   - `anniversary` / `wedding` -> `card.anniversaries` with `kind: "wedding"` (`E_CONTACT_ANNIVERSARY` / `X-EVOLUTION-ANNIVERSARY`).
+   - `birthday` / `birth` -> `card.anniversaries` with `kind: "birth"` (`E_CONTACT_BIRTH_DATE` / `BDAY`).
+   - Custom dates -> `card.anniversaries` with `kind: "<custom>"`.
+5. **Outbound Normalization & Fixed-Point Stability**:
+   - Outbound emission normalizes to standard RFC 2426 vCard 3.0 lines (`TYPE=WORK,CELL`, `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-ANNIVERSARY`).
+   - Re-parsing emitted vCards achieves byte-identical fixpoints (`Export₂ == Export₃`).
 
 ---
 
