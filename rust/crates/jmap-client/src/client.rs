@@ -314,10 +314,25 @@ impl Client {
         arguments: &impl serde::Serialize,
     ) -> Result<Value, Error> {
         let call_id = self.next_call_id();
-        let request = Request::new(using.iter().copied()).call(method, arguments, &call_id)?;
+        tracing::debug!(method, call_id, "sending JMAP method call");
+        let result = self.single_call_inner(using, method, arguments, &call_id);
+        if let Err(error) = &result {
+            tracing::warn!(method, call_id, %error, "JMAP method call failed");
+        }
+        result
+    }
+
+    fn single_call_inner(
+        &self,
+        using: &[&str],
+        method: &str,
+        arguments: &impl serde::Serialize,
+        call_id: &str,
+    ) -> Result<Value, Error> {
+        let request = Request::new(using.iter().copied()).call(method, arguments, call_id)?;
         let response = self.api_call(&request)?;
         let invocation = response
-            .responses_for(&call_id)
+            .responses_for(call_id)
             .next()
             .ok_or_else(|| Error::Protocol(format!("no response for call id {call_id}")))?;
         Self::unwrap_invocation(invocation, method)
@@ -476,6 +491,12 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Level, Metadata, Subscriber};
+
     use super::*;
 
     /// White-box: `timeout`'s field is private, so only an in-crate test can
@@ -486,5 +507,136 @@ mod tests {
     fn timeout_replaces_the_default() {
         let builder = ClientBuilder::default().timeout(Duration::from_secs(5));
         assert_eq!(builder.timeout, Duration::from_secs(5));
+    }
+
+    /// Records every event this crate emits (level + fields), so a test can
+    /// assert a call attached structured fields rather than only a free-text
+    /// message — the same minimal harness `jmap-backend-core::trampoline`'s
+    /// own tests use, duplicated here because this crate depends on
+    /// `tracing`, not `tracing-subscriber`.
+    struct CapturingSubscriber {
+        captured: Arc<Mutex<Vec<(Level, String, String)>>>,
+    }
+
+    struct Recorder<'a> {
+        level: Level,
+        sink: &'a Mutex<Vec<(Level, String, String)>>,
+    }
+
+    impl Visit for Recorder<'_> {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.sink.lock().unwrap().push((
+                self.level,
+                field.name().to_owned(),
+                format!("{value:?}"),
+            ));
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.sink
+                .lock()
+                .unwrap()
+                .push((self.level, field.name().to_owned(), value.to_owned()));
+        }
+    }
+
+    impl Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            event.record(&mut Recorder {
+                level: *event.metadata().level(),
+                sink: &self.captured,
+            });
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    #[test]
+    fn single_call_traces_the_method_and_call_id_on_success() {
+        let server = jmap_mock::MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none())
+            .expect("mock server should accept an anonymous connection");
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            client
+                .echo(serde_json::json!({}))
+                .expect("Core/echo should succeed");
+        });
+
+        let captured = captured.lock().unwrap();
+        assert!(
+            captured
+                .iter()
+                .any(|(level, name, value)| *level == Level::DEBUG
+                    && name == "method"
+                    && value == "Core/echo"),
+            "expected a DEBUG method=Core/echo field, got {captured:?}"
+        );
+        assert!(
+            captured
+                .iter()
+                .any(|(level, name, _)| *level == Level::DEBUG && name == "call_id"),
+            "expected a DEBUG call_id field, got {captured:?}"
+        );
+        assert!(
+            captured.iter().all(|(_, name, _)| name != "error"),
+            "a successful call should not log an error field, got {captured:?}"
+        );
+    }
+
+    #[test]
+    fn single_call_traces_the_failure_when_the_method_errors() {
+        let server = jmap_mock::MockServer::builder().start();
+        let client = Client::connect(server.origin(), Credentials::none())
+            .expect("mock server should accept an anonymous connection");
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            // A method name the mock never registered: it answers with an
+            // `unknownMethod` error invocation rather than a transport
+            // failure, which is the failure path this test targets.
+            let _ = client.single_call(
+                &[session::CAPABILITY_CORE],
+                "Nonexistent/thing",
+                &Value::Null,
+            );
+        });
+
+        let captured = captured.lock().unwrap();
+        assert!(
+            captured
+                .iter()
+                .any(|(level, name, value)| *level == Level::WARN
+                    && name == "method"
+                    && value == "Nonexistent/thing"),
+            "expected a WARN method=Nonexistent/thing field, got {captured:?}"
+        );
+        assert!(
+            captured
+                .iter()
+                .any(|(level, name, _)| *level == Level::WARN && name == "error"),
+            "expected a WARN error field, got {captured:?}"
+        );
     }
 }
