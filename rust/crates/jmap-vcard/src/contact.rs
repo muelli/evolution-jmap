@@ -1427,7 +1427,13 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     if let Some(name) = &card.name {
-        if let Some(full) = name.full.clone().or_else(|| derive_full(name)) {
+        if let Some(full) = name
+            .full
+            .as_ref()
+            .filter(|f| !f.is_empty())
+            .cloned()
+            .or_else(|| derive_full(name))
+        {
             entries.push(VCardEntry::new(VCardProperty::Fn).with_value(full));
         }
         if let Some(fields) = name_fields(name) {

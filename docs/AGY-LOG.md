@@ -566,6 +566,28 @@ Running record of headless polish increments on the `antigravity` branch.
      - The `identify_oscillating_vcard_property` / `identify_oscillating_card_field` helpers inspect line-by-line diffs during proptest shrinkage, immediately naming the property name (`TEL`, `ADR`, `ORG`, `CATEGORIES`, `NOTE`, etc.) that oscillates.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
 
+## 2026-08-22 — Round-trip fixpoint bug fix & trailing whitespace regression suite (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 4, Item 1. Fix the filed round-trip fixpoint bug (`docs/BACKLOG.md` trailing-whitespace round-trip nit reproduction & pin minimal input regression).
+- **Changes:**
+  - Fixed full name emission oscillation in `rust/crates/jmap-vcard/src/contact.rs`: filtered empty string `name.full` in `card_to_vcard` before calling `derive_full`, preventing oscillation between `full: None` and `full: Some("...")` across roundtrip passes when structured components are present alongside an empty full name string.
+  - Added comprehensive characterization and named regression test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `trailing_whitespace_filed_bug_minimal_input_named_regression`: pins the exact minimal reproduction input recorded in `docs/BACKLOG.md` (`BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n`), asserting 100% fixed-point convergence (`Export₂ == Export₃` and `Card₂ == Card₃`).
+    - `trailing_whitespace_on_property_values_across_all_domains_fixpoint`: tests trailing whitespace across all property domains (`FN`, structured `N`, `NICKNAME`, `EMAIL`, `TEL`, `ADR`, `LABEL`, `ORG`, `TITLE`, `ROLE`, `NOTE`, `URL`, `CATEGORIES`, `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, `X-EVOLUTION-ASSISTANT`, `X-EVOLUTION-BLOG-URL`, `X-EVOLUTION-VIDEO-URL`), validating fixed-point stability without loss or whitespace oscillation.
+    - `trailing_whitespace_only_property_values_fixpoint_and_filtering`: tests cards with whitespace-only values across all mapped properties, ensuring clean parsing, safe emission without property corruption, and fixed-point convergence.
+    - `trailing_whitespace_with_vcard_21_and_quoted_printable_fixpoint`: tests vCard 2.1 envelopes and Quoted-Printable values with trailing whitespace, verifying outbound normalization to vCard 3.0 and fixed-point stability.
+    - `name_with_empty_full_string_and_components_reaches_fixed_point`: verifies that a contact card containing an empty `name.full` string (`Some("")`) alongside structured name components derives the full name consistently on export without oscillating.
+  - Updated `docs/VCARD-MAPPING.md` with Section 6.3 documenting trailing whitespace significance, whitespace-only filtering, and legacy parameter handling.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **Trailing Whitespace Significance (RFC 6350 §3.3 / RFC 2426 §2)**:
+     - Trailing whitespace within text property values is preserved verbatim during vCard parsing and emission, preventing data truncation while reaching exact byte-identical fixpoints (`Export₂ == Export₃`).
+  2. **Empty String Full Name Normalization**:
+     - JSContact cards with `name.full: Some("")` and structured components normalize to the derived full name on initial export, stabilizing immediately on Pass 1 and guaranteeing structural fixed-point equality (`Card₂ == Card₃`).
+  3. **Minimal BACKLOG Bug Resolution**:
+     - The minimal input recorded in `docs/BACKLOG.md` (`NICKNAME;ENCODING=b:! `) is parsed safely: binary text values on non-binary properties are filtered out by `entry_text_list`, producing a normalized vCard on Export₁ that reaches byte-identical fixed-point stability on Export₂ (`Export₂ == Export₃`).
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+
 
 
 
