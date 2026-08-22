@@ -74,17 +74,17 @@ use jmap_backend_core::trampoline::guard;
 use crate::backend::JmapConfigServiceBackend;
 use crate::config_lookup::JmapConfigLookup;
 
-/// Binds this project's gettext domain, and registers the setup backend against
-/// `type_module`.
+/// Sets up this project's `tracing` dispatcher and gettext domain, and
+/// registers the setup backend against `type_module`.
 ///
 /// Called once per use of the module, not once per process: GLib marks every
 /// type a module registered as unloaded when the last user goes away, and calls
 /// this again when the next one arrives. So registering is what happens on
 /// *every* call, and [`register_dynamic`] is idempotent for exactly that
-/// reason. [`bind`] is idempotent too, and for one more: a process can hold
-/// several of this repository's modules at once — Evolution loads this one and
-/// uses the Camel provider in the same address space — and each has to assume
-/// it might be the first.
+/// reason. [`jmap_backend_core::logging::init`] and [`bind`] are idempotent
+/// too, and for one more: a process can hold several of this repository's
+/// modules at once — Evolution loads this one and uses the Camel provider in
+/// the same address space — and each has to assume it might be the first.
 ///
 /// The binding comes first because it has to be in place before anything can
 /// ask for a translated string, and this is the only code of ours Evolution's
@@ -112,6 +112,7 @@ use crate::config_lookup::JmapConfigLookup;
 /// `e_module_load`; it has to stay alive for the duration of the call.
 pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
     guard("e_module_load", (), || {
+        jmap_backend_core::logging::init();
         bind();
         // SAFETY: the module is Evolution's, by this function's contract.
         unsafe {

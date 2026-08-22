@@ -41,6 +41,7 @@ pub mod connect;
 pub mod error;
 pub mod i18n;
 pub mod instance;
+pub mod logging;
 pub mod marshal;
 pub mod oauth2;
 pub mod owned;
