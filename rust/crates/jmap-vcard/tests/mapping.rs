@@ -19,10 +19,10 @@ use jmap_vcard::{
     online_service_handle, online_service_uri, restore_address_components, restore_name_components,
     same_photo, same_service, states_a_point_in_time, states_address, states_address_component,
     states_anniversary, states_assistant, states_calendar, states_context, states_email,
-    states_keyword, states_link, states_manager, states_media, states_name_component,
-    states_nickname, states_note, states_nothing_but_the_marriage, states_online_service,
-    states_org_unit, states_organization, states_phone, states_phone_feature, states_spouse,
-    states_title, title_kind, vcard_to_card,
+    states_file_as, states_keyword, states_link, states_manager, states_media,
+    states_name_component, states_nickname, states_note, states_nothing_but_the_marriage,
+    states_online_service, states_org_unit, states_organization, states_phone,
+    states_phone_feature, states_spouse, states_title, title_kind, vcard_to_card,
 };
 use serde_json::{Value, json};
 
@@ -7646,6 +7646,10 @@ fn unmapped_eds_specific_x_properties_characterization_and_rationale() {
         Some("EDS Custom Contact")
     );
     assert_eq!(
+        card.name.as_ref().unwrap().extra.get("fileAs"),
+        Some(&json!("Custom, Contact"))
+    );
+    assert_eq!(
         card.emails.as_ref().map(|e| e["e1"].address.as_str()),
         Some("eds.user@example.com")
     );
@@ -7657,15 +7661,15 @@ fn unmapped_eds_specific_x_properties_characterization_and_rationale() {
     assert_eq!(card.phones, None);
     assert!(card.extra.is_empty());
 
-    // Outbound emission contains only standard modeled properties
+    // Outbound emission contains standard modeled properties and mapped X-EVOLUTION-FILE-AS
     let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("X-EVOLUTION-FILE-AS:Custom\\, Contact"));
     assert!(!emitted.contains("X-TWITTER"));
     assert!(!emitted.contains("X-SIP"));
     assert!(!emitted.contains("X-MANAGER"));
     assert!(!emitted.contains("X-ASSISTANT"));
     assert!(!emitted.contains("X-BLOG-URL"));
     assert!(!emitted.contains("X-VIDEO-URL"));
-    assert!(!emitted.contains("X-EVOLUTION-FILE-AS"));
     assert!(!emitted.contains("X-EVOLUTION-CALLBACK"));
     assert!(!emitted.contains("X-EVOLUTION-RADIO"));
     assert!(!emitted.contains("X-EVOLUTION-TELEX"));
@@ -14256,4 +14260,253 @@ fn name_with_empty_full_string_and_components_reaches_fixed_point() {
         card2, card3,
         "JSContact fixpoint failure for empty full name with components (Card₂ != Card₃)"
     );
+}
+
+#[test]
+fn file_as_basic_evolution_x_property_roundtrip() {
+    let input = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:file-as-001\r\n",
+        "FN:John Doe\r\n",
+        "N:Doe;John;;;\r\n",
+        "X-EVOLUTION-FILE-AS:Doe\\, John (Personal)\r\n",
+        "EMAIL;X-JMAP-KEY=e1:john@example.com\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse vcard with file-as");
+    let name = card.name.as_ref().expect("name object present");
+    assert_eq!(name.full, Some("John Doe".to_string()));
+    assert_eq!(
+        name.extra.get("fileAs"),
+        Some(&json!("Doe, John (Personal)"))
+    );
+    assert!(states_file_as(card.name.as_ref()));
+
+    let emitted = card_to_vcard(&card);
+    assert!(
+        emitted.contains("X-EVOLUTION-FILE-AS:Doe\\, John (Personal)"),
+        "emitted vCard must contain X-EVOLUTION-FILE-AS: {emitted}"
+    );
+
+    let card2 = vcard_to_card(&emitted).expect("second parse");
+    let emitted2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&emitted2).expect("third parse");
+    let emitted3 = card_to_vcard(&card3);
+
+    assert_eq!(emitted, emitted2, "Fixpoint convergence Export₁ == Export₂");
+    assert_eq!(
+        emitted2, emitted3,
+        "Fixpoint convergence Export₂ == Export₃"
+    );
+    assert_eq!(card2, card3, "Fixpoint convergence Card₂ == Card₃");
+}
+
+#[test]
+fn file_as_inbound_synonyms_file_as_and_x_file_as() {
+    // 1. FILE-AS (vCard 4.0 / RFC 6350 / alternative extension)
+    let vcard1 = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:file-as-syn-001\r\n",
+        "FN:Alice Smith\r\n",
+        "FILE-AS:Smith\\, Alice\r\n",
+        "END:VCARD\r\n"
+    );
+    let card1 = vcard_to_card(vcard1).expect("parse FILE-AS");
+    assert_eq!(
+        card1.name.as_ref().unwrap().extra.get("fileAs"),
+        Some(&json!("Smith, Alice"))
+    );
+    let emitted1 = card_to_vcard(&card1);
+    assert!(
+        emitted1.contains("X-EVOLUTION-FILE-AS:Smith\\, Alice"),
+        "Outbound normalizes to X-EVOLUTION-FILE-AS: {emitted1}"
+    );
+
+    // 2. X-FILE-AS (Outlook / generic extension)
+    let vcard2 = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:file-as-syn-002\r\n",
+        "FN:Bob Jones\r\n",
+        "X-FILE-AS:Jones\\, Bob (Work)\r\n",
+        "END:VCARD\r\n"
+    );
+    let card2 = vcard_to_card(vcard2).expect("parse X-FILE-AS");
+    assert_eq!(
+        card2.name.as_ref().unwrap().extra.get("fileAs"),
+        Some(&json!("Jones, Bob (Work)"))
+    );
+    let emitted2 = card_to_vcard(&card2);
+    assert!(
+        emitted2.contains("X-EVOLUTION-FILE-AS:Jones\\, Bob (Work)"),
+        "Outbound normalizes to X-EVOLUTION-FILE-AS: {emitted2}"
+    );
+
+    // 3. Case-insensitivity: lowercase and mixed-case property names
+    let vcard3 = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:file-as-syn-003\r\n",
+        "FN:Charlie Brown\r\n",
+        "x-evolution-file-as:Brown\\, Charlie\r\n",
+        "END:VCARD\r\n"
+    );
+    let card3 = vcard_to_card(vcard3).expect("parse lowercase x-evolution-file-as");
+    assert_eq!(
+        card3.name.as_ref().unwrap().extra.get("fileAs"),
+        Some(&json!("Brown, Charlie"))
+    );
+    let emitted3 = card_to_vcard(&card3);
+    assert!(emitted3.contains("X-EVOLUTION-FILE-AS:Brown\\, Charlie"));
+}
+
+#[test]
+fn file_as_and_sort_string_coexistence_without_clobbering() {
+    // Both X-EVOLUTION-FILE-AS and SORT-STRING present in input:
+    // X-EVOLUTION-FILE-AS maps to name.extra["fileAs"], while SORT-STRING is dropped
+    // from vCard 3.0 output and does NOT clobber fileAs.
+    let input = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:file-as-sort-001\r\n",
+        "FN:Albert Einstein\r\n",
+        "N:Einstein;Albert;;;\r\n",
+        "SORT-STRING:Einstein\r\n",
+        "X-EVOLUTION-FILE-AS:Einstein\\, Prof. Albert (IAS)\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse vcard with file-as and sort-string");
+    let name = card.name.as_ref().expect("name object present");
+    assert_eq!(
+        name.extra.get("fileAs"),
+        Some(&json!("Einstein, Prof. Albert (IAS)"))
+    );
+
+    let emitted = card_to_vcard(&card);
+    assert!(
+        emitted.contains("X-EVOLUTION-FILE-AS:Einstein\\, Prof. Albert (IAS)"),
+        "emitted vCard must contain X-EVOLUTION-FILE-AS: {emitted}"
+    );
+    assert!(
+        !emitted.contains("SORT-STRING"),
+        "emitted vCard must NOT contain SORT-STRING: {emitted}"
+    );
+
+    // If JSContact Name contains both sortAs and fileAs in extra, both survive in memory
+    let mut extra = BTreeMap::new();
+    extra.insert("fileAs".to_string(), json!("Einstein, Albert"));
+    extra.insert("sortAs".to_string(), json!("Einstein"));
+    let card_dual = ContactCard {
+        uid: Some("dual-sort-file-01".to_string()),
+        name: Some(Name {
+            full: Some("Albert Einstein".to_string()),
+            components: None,
+            extra,
+        }),
+        ..Default::default()
+    };
+
+    let emitted_dual = card_to_vcard(&card_dual);
+    assert!(emitted_dual.contains("X-EVOLUTION-FILE-AS:Einstein\\, Albert"));
+    assert!(!emitted_dual.contains("SORT-STRING"));
+
+    let card_reparsed = vcard_to_card(&emitted_dual).expect("re-parse dual");
+    assert_eq!(
+        card_reparsed.name.as_ref().unwrap().extra.get("fileAs"),
+        Some(&json!("Einstein, Albert"))
+    );
+}
+
+#[test]
+fn file_as_escaping_special_characters_and_unicode() {
+    let input = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:file-as-esc-001\r\n",
+        "FN:Hans Müller\r\n",
+        "X-EVOLUTION-FILE-AS:Müller\\, Dr. Hans \\; (Büro / Zürich)\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse escaped file-as");
+    assert_eq!(
+        card.name.as_ref().unwrap().extra.get("fileAs"),
+        Some(&json!("Müller, Dr. Hans ; (Büro / Zürich)"))
+    );
+
+    let emitted = card_to_vcard(&card);
+    assert!(
+        emitted.contains("X-EVOLUTION-FILE-AS:Müller\\, Dr. Hans \\; (Büro / Zürich)"),
+        "escaped special characters preserved: {emitted}"
+    );
+
+    let card2 = vcard_to_card(&emitted).expect("second parse");
+    assert_eq!(card, card2);
+}
+
+#[test]
+fn file_as_card_level_and_name_level_emission() {
+    // 1. file_as in card.name.extra with "file_as" underscore key
+    let card1 = ContactCard {
+        uid: Some("fa-001".to_string()),
+        name: Some(Name {
+            full: Some("John Doe".to_string()),
+            components: None,
+            extra: {
+                let mut m = BTreeMap::new();
+                m.insert("file_as".to_string(), json!("Doe, John (Name Extra)"));
+                m
+            },
+        }),
+        ..Default::default()
+    };
+    let emitted1 = card_to_vcard(&card1);
+    assert!(emitted1.contains("X-EVOLUTION-FILE-AS:Doe\\, John (Name Extra)"));
+    assert!(states_file_as(card1.name.as_ref()));
+
+    // 2. fileAs in card.extra
+    let card2 = ContactCard {
+        uid: Some("fa-002".to_string()),
+        name: None,
+        extra: {
+            let mut m = BTreeMap::new();
+            m.insert("fileAs".to_string(), json!("Doe, John (Card Extra)"));
+            m
+        },
+        ..Default::default()
+    };
+    let emitted2 = card_to_vcard(&card2);
+    assert!(emitted2.contains("X-EVOLUTION-FILE-AS:Doe\\, John (Card Extra)"));
+
+    // 3. Empty string / whitespace-only fileAs is filtered and states_file_as is false
+    let card3 = ContactCard {
+        uid: Some("fa-003".to_string()),
+        name: Some(Name {
+            full: Some("John Doe".to_string()),
+            components: None,
+            extra: {
+                let mut m = BTreeMap::new();
+                m.insert("fileAs".to_string(), json!("   "));
+                m
+            },
+        }),
+        ..Default::default()
+    };
+    let emitted3 = card_to_vcard(&card3);
+    assert!(!emitted3.contains("X-EVOLUTION-FILE-AS"));
+    assert!(!states_file_as(card3.name.as_ref()));
+    assert!(!states_file_as(None));
+
+    // 4. Card with ONLY X-EVOLUTION-FILE-AS (no FN or N)
+    let vcard4 = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:fa-only-004\r\n",
+        "X-EVOLUTION-FILE-AS:Anonymous Entity\r\n",
+        "END:VCARD\r\n"
+    );
+    let card4 = vcard_to_card(vcard4).expect("parse file-as only vcard");
+    assert_eq!(
+        card4.name.as_ref().unwrap().extra.get("fileAs"),
+        Some(&json!("Anonymous Entity"))
+    );
+    let emitted4 = card_to_vcard(&card4);
+    assert!(emitted4.contains("X-EVOLUTION-FILE-AS:Anonymous Entity"));
 }
