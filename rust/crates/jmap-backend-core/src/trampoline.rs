@@ -134,13 +134,16 @@ fn panic_message(payload: &Box<dyn Any + Send>) -> &str {
 
 /// Reports a bug in this code to whatever is reading the process's GLib log —
 /// `evolution-data-server`'s journal, or a developer's terminal with
-/// `G_DEBUG=fatal-criticals`.
+/// `G_DEBUG=fatal-criticals` — and, if a module has called
+/// [`crate::logging::init`], as a `tracing::error!` event too, so it also
+/// reaches journald down that path with the rest of this project's events.
 ///
 /// For the cases a vfunc cannot report any other way: it has no `GError`
 /// out-parameter, or the caller is GObject itself and there is nothing to hand
 /// an error to. Anything a *user* could act on belongs in a `GError` instead —
 /// a critical is for "this cannot happen", not for a misconfigured account.
 pub fn log_critical(message: &str) {
+    tracing::error!("{message}");
     let message = cstring_lossy(message);
     // SAFETY: g_log is variadic and takes a printf format; passing the text
     // as an argument to "%s" rather than as the format itself keeps a stray

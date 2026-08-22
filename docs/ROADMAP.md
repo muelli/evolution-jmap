@@ -1268,6 +1268,54 @@ tracks follow; the maintainer may reorder anytime.
   id. DECISION: `tracing`+`tracing-journald` vs. routing through glib `g_log`
   (EDS already funnels g_log to the journal, but that loses Rust-side structured
   fields and TRACE granularity). Recommend the former.
+  - **PARTIAL 2026-08-22 — the init plumbing landed; the ~23 call-site
+    conversion to structured fields is still open.** `jmap_backend_core::
+    logging::init()` (new `logging.rs`) sets up a `tracing_subscriber::
+    registry()` filtered by `EVOLUTION_JMAP_LOG` (default `warn`), preferring
+    `tracing_journald::layer()` and falling back to a stderr `fmt::layer()`
+    when there is no journald socket to connect to (a container, a dev shell);
+    guarded by a `OnceLock`, mirroring `i18n::bind`'s exact idiom and reasoning
+    — each cdylib is its own linked copy of `tracing`'s global dispatcher, so
+    "once per process" really means "once per module's own copy," and `init`
+    is written to tolerate being called again the same way `bind` already is.
+    Wired into all five module entry points (`jmap-backend-book`/`cal`/
+    `collection`/`config`'s `load()`, `jmap-mail`'s
+    `camel_provider_module_init`), right alongside the existing `bind()` call.
+    A survey for this increment found no literal `println!`/`eprintln!`/
+    `g_message` call in production module code — every one of the ~23 sites
+    this item's "~54" estimate was counting already funnels through
+    `jmap_backend_core::trampoline::log_critical` (a `g_log` wrapper), so
+    `log_critical` now also emits `tracing::error!("{message}")`, putting
+    every existing call site on the journald path (once a module has called
+    `init`) with no per-site edit. TDD: `logging.rs`'s own tests split the
+    pure decision (`directive(env_value) -> &str`: unset/empty/blank falls
+    back to `warn`, a bare level or a per-target directive is passed through
+    verbatim) from the process-global side effect, which a test can only
+    assert is panic-free, not what it did (`init_twice_does_not_panic`).
+    **Still open, and the larger remaining share of this item:** giving any
+    of those ~23 sites their own structured fields (account id, JMAP method,
+    object type, request id) instead of the one bare `{message}` string
+    `log_critical` forwards today — genuinely per-site work, not something
+    the plumbing alone can close. Full gate green: `cargo fmt --check`;
+    `cargo clippy --all-targets --locked -- -D warnings` (default-members) and
+    the seven-crate EDS-gated clippy both clean; `cargo test --locked`
+    (default-members) and the same seven crates' own `cargo test --locked`
+    both green, 0 failed, except the pre-existing, already-filed
+    `jmap-vcard` `prop_card_roundtrip_reaches_fixed_point_stability` failure
+    (`docs/BACKLOG.md`, "round trip is not a fixed point for a value with
+    trailing whitespace", found 2026-08-19) — untouched by this change and
+    left as filed, not fixed, per the standing directive against reopening a
+    closed backend for this. Packaging leg: `ninja -C build && ctest
+    --test-dir build -R 'package-deb'` (all three) green;
+    `debian-copyright-in-sync` also green with the three new dependencies
+    (`tracing`, `tracing-subscriber`, `tracing-journald`) in the tree — Track
+    C2's own-source generator only tracks this project's files, so a new
+    Cargo dependency does not need to touch it (that crate's *licence* still
+    needs enumerating once C2's second half, the third-party-notices
+    appendix, is claimed). Disk filled mid-session on the packaging build
+    (`rust/target` at 24G, `ld` dying with a `Bus error` on the two crates
+    that happened to link last) — `cargo clean --profile dev` recovered it,
+    the same standing issue prior sessions have logged.
 
 ### Track C — Packaging (mostly CLAIMABLE; official Debian is a human process)
 - **C1 `[claude]` Lintian-clean .deb.** Run `lintian` on the CPack `.deb`; fix
