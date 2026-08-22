@@ -374,12 +374,12 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
 /// without it the handle would have to be guessed out of the URI, and the guess
 /// would be written back on the next save.
 ///
-/// - `aim` for AIM (`aim:<screenname>`).
-/// - `gg` is the provisional IANA scheme (RFC 7595 template `gg:<userid>`) for
-///   Gadu-Gadu, whose path is the numerical user identifier (UIN).
-/// - `xmpp` is RFC 5122 §2.1's, whose path is a JID. Google Talk ran on XMPP,
-///   so its handles are JIDs too, and one scheme serves both.
-/// - `groupwise` for GroupWise.
+/// - `aim` and `aol` for AIM (`aim:<screenname>` or `aol:<screenname>`).
+/// - `gg`, `gadugadu`, and `gadu` for Gadu-Gadu (RFC 7595 template `gg:<userid>`,
+///   whose path is the numerical user identifier / UIN).
+/// - `xmpp` (RFC 5122 §2.1) and `jabber` for Jabber / XMPP JIDs.
+/// - `xmpp` and `gtalk` for Google Talk JIDs.
+/// - `groupwise` and `novell` for GroupWise.
 /// - `icq` for ICQ (`icq:<uin>`).
 /// - `msn` and `msnim` for MSN Messenger (`msn:<user>` or `msnim:<user>`).
 /// - `matrix` for Matrix bare handle URIs (`matrix:<handle>`).
@@ -395,13 +395,19 @@ const ONLINE_SERVICES: [(&str, &str); 10] = [
 ///
 /// Getting a scheme *wrong* is bounded the same way: a URI whose scheme does not
 /// match is not drawn, which is the behaviour of every service missing here.
-const SERVICE_SCHEMES: [(&str, &str); 12] = [
+const SERVICE_SCHEMES: [(&str, &str); 18] = [
     ("AIM", "aim"),
+    ("AIM", "aol"),
     ("Gadu-Gadu", "gg"),
+    ("Gadu-Gadu", "gadugadu"),
+    ("Gadu-Gadu", "gadu"),
     ("Google Talk", "xmpp"),
+    ("Google Talk", "gtalk"),
     ("GroupWise", "groupwise"),
+    ("GroupWise", "novell"),
     ("ICQ", "icq"),
     ("Jabber", "xmpp"),
+    ("Jabber", "jabber"),
     ("MSN", "msn"),
     ("MSN", "msnim"),
     ("Matrix", "matrix"),

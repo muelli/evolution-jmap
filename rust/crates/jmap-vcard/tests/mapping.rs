@@ -14906,3 +14906,254 @@ fn apple_property_groups_variations_and_boundary_cases() {
     let emitted_re = card_to_vcard(&card1_re);
     assert_eq!(emitted, emitted_re);
 }
+
+#[test]
+fn im_scheme_long_tail_aliases_and_canonical_uri_resolution() {
+    use jmap_vcard::contact::{online_service_handle, online_service_uri};
+
+    // 1. Verify canonical URI generation for all 10 mapped services
+    for (service, handle, expected_uri) in [
+        ("AIM", "alice", "aim:alice"),
+        ("Gadu-Gadu", "12345", "gg:12345"),
+        ("Google Talk", "bob@example.com", "xmpp:bob@example.com"),
+        ("GroupWise", "carol", "groupwise:carol"),
+        ("ICQ", "67890", "icq:67890"),
+        ("Jabber", "dave@example.com", "xmpp:dave@example.com"),
+        ("MSN", "elena@example.com", "msn:elena@example.com"),
+        ("Matrix", "frank", "matrix:frank"),
+        ("Skype", "grace", "skype:grace"),
+        ("Yahoo", "heidi", "yahoo:heidi"),
+    ] {
+        assert_eq!(
+            online_service_uri(service, handle).as_deref(),
+            Some(expected_uri),
+            "canonical URI for {service}"
+        );
+    }
+
+    // 2. Verify handle extraction and roundtrip across all 18 supported URI scheme aliases
+    for (service, uri, expected_handle, header) in [
+        ("AIM", "aim:alice_aim", "alice_aim", "X-AIM"),
+        ("AIM", "aol:alice_aol", "alice_aol", "X-AIM"),
+        ("Gadu-Gadu", "gg:123456", "123456", "X-GADUGADU"),
+        ("Gadu-Gadu", "gadugadu:123456", "123456", "X-GADUGADU"),
+        ("Gadu-Gadu", "gadu:123456", "123456", "X-GADUGADU"),
+        (
+            "Google Talk",
+            "xmpp:gtalk_user@example.com",
+            "gtalk_user@example.com",
+            "X-GOOGLE-TALK",
+        ),
+        (
+            "Google Talk",
+            "gtalk:gtalk_user2@example.com",
+            "gtalk_user2@example.com",
+            "X-GOOGLE-TALK",
+        ),
+        ("GroupWise", "groupwise:dave_gw", "dave_gw", "X-GROUPWISE"),
+        (
+            "GroupWise",
+            "novell:dave_novell",
+            "dave_novell",
+            "X-GROUPWISE",
+        ),
+        ("ICQ", "icq:67890123", "67890123", "X-ICQ"),
+        (
+            "Jabber",
+            "xmpp:dave_xmpp@example.com",
+            "dave_xmpp@example.com",
+            "X-JABBER",
+        ),
+        (
+            "Jabber",
+            "jabber:dave_jabber@example.com",
+            "dave_jabber@example.com",
+            "X-JABBER",
+        ),
+        ("MSN", "msn:bob@example.com", "bob@example.com", "X-MSN"),
+        ("MSN", "msnim:bob@example.com", "bob@example.com", "X-MSN"),
+        (
+            "Matrix",
+            "matrix:@elena:matrix.example",
+            "@elena:matrix.example",
+            "X-MATRIX",
+        ),
+        ("Skype", "skype:grace_skype", "grace_skype", "X-SKYPE"),
+        ("Yahoo", "yahoo:carol_yahoo", "carol_yahoo", "X-YAHOO"),
+        ("Yahoo", "ymsgr:carol_ymsgr", "carol_ymsgr", "X-YAHOO"),
+    ] {
+        let card = at_uri(Some(service), uri);
+        let vcard = card_to_vcard(&card);
+        assert_eq!(
+            line(&vcard, header),
+            format!("{header};X-JMAP-KEY=s1;TYPE=HOME:{expected_handle}"),
+            "service: {service}, uri: {uri}"
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse");
+        let services = parsed.online_services.expect("online services");
+        assert_eq!(services["s1"].user.as_deref(), Some(expected_handle));
+        assert_eq!(services["s1"].uri, None);
+        assert_eq!(services["s1"].service.as_deref(), Some(service));
+
+        let service_entry = OnlineService {
+            service: Some(service.to_owned()),
+            uri: Some(uri.to_owned()),
+            user: None,
+            extra: BTreeMap::new(),
+        };
+        assert_eq!(
+            online_service_handle(&service_entry),
+            Some(expected_handle),
+            "handle extraction for {service} with uri {uri}"
+        );
+    }
+}
+
+#[test]
+fn im_scheme_action_query_and_invalid_handle_rejection() {
+    use jmap_vcard::contact::states_online_service;
+
+    for (service, uri, header) in [
+        ("AIM", "aim:goim?screenname=alice", "X-AIM"),
+        ("AIM", "aol:chat?user=alice", "X-AIM"),
+        ("Gadu-Gadu", "gg:chat?uin=12345", "X-GADUGADU"),
+        (
+            "Google Talk",
+            "gtalk:chat?jid=bob@example.com",
+            "X-GOOGLE-TALK",
+        ),
+        ("GroupWise", "novell:message?user=carol", "X-GROUPWISE"),
+        ("ICQ", "icq:message?uin=12345678", "X-ICQ"),
+        ("Jabber", "jabber:user@example.com?message", "X-JABBER"),
+        ("MSN", "msnim:add?contact=elena@example.com", "X-MSN"),
+        ("Matrix", "matrix:u/frank:matrix.org", "X-MATRIX"),
+        ("Skype", "skype:echo123?call", "X-SKYPE"),
+        ("Yahoo", "ymsgr:sendim?heidi", "X-YAHOO"),
+        ("Yahoo", "ymsgr:chat?heidi", "X-YAHOO"),
+    ] {
+        let card = at_uri(Some(service), uri);
+        let vcard = card_to_vcard(&card);
+        assert!(
+            !vcard.contains(header),
+            "{service} uri '{uri}' was unexpectedly drawn on {header}: {vcard}"
+        );
+
+        let service_entry = OnlineService {
+            service: Some(service.to_owned()),
+            uri: Some(uri.to_owned()),
+            user: None,
+            extra: BTreeMap::new(),
+        };
+        assert!(
+            !states_online_service(&service_entry),
+            "{service} uri '{uri}' should be rejected by states_online_service"
+        );
+    }
+}
+
+#[test]
+fn twitter_sip_and_unslotted_social_services_characterization_and_rationale() {
+    // 1. Contact on server with slotted and unslotted/unmodeled onlineServices
+    let mut card = ContactCard::default();
+    let mut services = BTreeMap::new();
+    services.insert(
+        "s_jabber".to_owned(),
+        OnlineService {
+            service: Some("Jabber".to_owned()),
+            user: Some("vera@jabber.example".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_twitter".to_owned(),
+        OnlineService {
+            service: Some("Twitter".to_owned()),
+            user: Some("@vera_tw".to_owned()),
+            uri: Some("https://twitter.com/vera_tw".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_sip".to_owned(),
+        OnlineService {
+            service: Some("SIP".to_owned()),
+            uri: Some("sip:vera@example.com".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_telegram".to_owned(),
+        OnlineService {
+            service: Some("Telegram".to_owned()),
+            user: Some("vera_tg".to_owned()),
+            uri: Some("tg://resolve?domain=vera_tg".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_discord".to_owned(),
+        OnlineService {
+            service: Some("Discord".to_owned()),
+            user: Some("vera#1234".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_signal".to_owned(),
+        OnlineService {
+            service: Some("Signal".to_owned()),
+            user: Some("+1555123456".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_mastodon".to_owned(),
+        OnlineService {
+            service: Some("Mastodon".to_owned()),
+            user: Some("@vera@social.example".to_owned()),
+            uri: Some("acct:vera@social.example".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    card.online_services = Some(services);
+
+    // 2. Outbound vCard contains ONLY mapped slotted services (Jabber)
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("X-JABBER;X-JMAP-KEY=s_jabber;TYPE=HOME:vera@jabber.example\r\n"),
+        "{vcard}"
+    );
+    assert!(!vcard.contains("X-TWITTER"), "{vcard}");
+    assert!(!vcard.contains("X-SIP"), "{vcard}");
+    assert!(!vcard.contains("X-TELEGRAM"), "{vcard}");
+    assert!(!vcard.contains("X-DISCORD"), "{vcard}");
+    assert!(!vcard.contains("X-SIGNAL"), "{vcard}");
+    assert!(!vcard.contains("X-MASTODON"), "{vcard}");
+
+    // 3. Inbound vCard with unslotted lines parses safely without corrupting mapped services
+    let vcard_with_unslotted = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Test User\r\n",
+        "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example\r\n",
+        "X-TWITTER:@vera_tw\r\n",
+        "X-SIP:sip:vera@example.com\r\n",
+        "X-TELEGRAM:vera_tg\r\n",
+        "X-DISCORD:vera#1234\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed = vcard_to_card(vcard_with_unslotted).expect("parse vcard");
+    let parsed_services = parsed.online_services.as_ref().expect("online_services");
+    assert_eq!(parsed_services.len(), 1);
+    assert_eq!(
+        parsed_services["s1"].user.as_deref(),
+        Some("vera@jabber.example")
+    );
+    assert_eq!(parsed_services["s1"].service.as_deref(), Some("Jabber"));
+
+    // 4. Fixed-point stability across round-trips
+    let export1 = card_to_vcard(&parsed);
+    let card2 = vcard_to_card(&export1).expect("re-parse");
+    let export2 = card_to_vcard(&card2);
+    assert_eq!(export1, export2);
+}
