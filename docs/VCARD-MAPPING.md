@@ -121,7 +121,22 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
   - `phonetic` name components (RFC 9553 §2.2.1) are omitted on vCard 3.0 and kept intact on the server.
 
 ### 3.3 Electronic Communication (`EMAIL`, `TEL`)
-- **`EMAIL` Positional Filing**: Evolution files `EMAIL` lines by position into `E_CONTACT_EMAIL_1` .. `_4`. `card_to_vcard` sorts emails by `(pref.unwrap_or(u32::MAX), key)` to guarantee the primary preferred address lands in `EMAIL_1`.
+- **`EMAIL` Positional Filing & Attribute List**:
+  - Evolution files `EMAIL` lines by position into `E_CONTACT_EMAIL_1` .. `_4` (fields 8..11), with additional lines (5+) and all entries maintained in the `E_CONTACT_EMAIL` (field 97) `GList` attribute list.
+  - `card_to_vcard` sorts emails by `(pref.unwrap_or(u32::MAX), key)` to guarantee the primary preferred address (`pref: 1` or lowest rank) lands on the first `EMAIL` line (`E_CONTACT_EMAIL_1`).
+  - Unranked emails (`pref: None`) follow preferred emails in deterministic key order.
+  - Inbound unkeyed vCards allocate sequential keys `e1`, `e2`, `e3`, `e4`, `e5`, ... preserving document order.
+
+#### Master EDS Email Mapping Matrix (4 Slots + Attribute List)
+
+| EDS `EContactField` (ID) | Evolution UI Slot | Inbound vCard `EMAIL` | JSContact `ContactEmail` | Outbound vCard 3.0 | Slot Resolution & Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `E_CONTACT_EMAIL_1` (8) | Primary Email | 1st `EMAIL` line | Lowest `pref` (e.g. `pref: 1`) or 1st key | `EMAIL;X-JMAP-KEY=...;TYPE=PREF:...` | Primary email in Evolution editor. Promoted by `(pref, key)` sorting. |
+| `E_CONTACT_EMAIL_2` (9) | Email 2 | 2nd `EMAIL` line | 2nd `emails` entry | `EMAIL;X-JMAP-KEY=...:...` | Secondary email field in Evolution editor. |
+| `E_CONTACT_EMAIL_3` (10) | Email 3 | 3rd `EMAIL` line | 3rd `emails` entry | `EMAIL;X-JMAP-KEY=...:...` | Tertiary email field in Evolution editor. |
+| `E_CONTACT_EMAIL_4` (11) | Email 4 | 4th `EMAIL` line | 4th `emails` entry | `EMAIL;X-JMAP-KEY=...:...` | Quaternary email field in Evolution editor. |
+| `E_CONTACT_EMAIL` (97) | Email Attribute List | All `EMAIL` lines (1..=4 and 5+) | `card.emails` (`BTreeMap`) | All `EMAIL;X-JMAP-KEY=...` lines | Full list of all email addresses. Lines beyond 4 are safely preserved on wire format and server. |
+
 - **`TEL` Slot Narrowing & Complete EDS Phone Matrix**:
   - EDS defines 19 distinct phone fields (`E_CONTACT_FIRST_PHONE_ID` 16 to `E_CONTACT_LAST_PHONE_ID` 34) in `libebook-contacts`. EDS matches incoming vCard lines to fields by evaluating their `TYPE` parameters.
   - **Context Narrowing**: EDS matches `TYPE` sets to fields. A line carrying `TYPE=WORK,HOME` would satisfy both `E_CONTACT_PHONE_BUSINESS` and `E_CONTACT_PHONE_HOME`, causing one phone number to occupy two separate UI blocks that overwrite each other on edit. `context_slot` chooses exactly one slot: `WORK` > `HOME` -> `DEFAULT_SLOT` (`HOME`).
@@ -164,7 +179,20 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
   - `5`: Postal Code (`postcode`) -> `E_CONTACT_ADDRESS_*_CODE`
   - `6`: Country (`country`) -> `E_CONTACT_ADDRESS_*_COUNTRY`
 - **Street & Number Joining**: `JOINED_COMPONENTS` pairs `number` with `name`. `restore_address_components` restores discrete street and number components if the joined string was not altered in Evolution.
-- **`LABEL` Pairing**: In vCard 3.0, `LABEL` is a standalone property; in vCard 4.0, it is a parameter on `ADR`. `read_address` parses `ADR;LABEL=...` parameters directly, and `label_entry` pairs standalone `LABEL` lines with their preceding `ADR` entries using `X-JMAP-KEY` or context matching.
+- **`LABEL` Pairing & Synthetic EDS Fields**:
+  - In vCard 3.0, `LABEL` is a standalone property; in vCard 4.0, it is a parameter on `ADR`. `read_address` parses `ADR;LABEL=...` parameters directly, and `label_entry` pairs standalone `LABEL` lines with their preceding `ADR` entries using `X-JMAP-KEY` or context matching.
+  - EDS models address labels as synthetic string fields (`E_CONTACT_ADDRESS_LABEL_WORK`, `_HOME`, `_OTHER`). When EDS serializes a contact, it emits standalone `LABEL;TYPE=...` lines matching the address slots.
+  - In-place modifications to synthetic label fields in EDS update the label text while retaining `X-JMAP-KEY` and context pairing.
+
+#### Master EDS Address & Label Mapping Matrix (3 Slots + 3 Synthetic Labels)
+
+| EDS Address Slot | Structured `EContactField` (ID) | Synthetic Label Field (ID) | Inbound `ADR` / `LABEL` | JSContact `Address` | Outbound vCard 3.0 | Resolution & Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Work Address** | `E_CONTACT_ADDRESS_WORK` (5) + Subfields 42..48 | `E_CONTACT_ADDRESS_LABEL_WORK` (14) | `ADR;TYPE=WORK:...` / `LABEL;TYPE=WORK:...` | `contexts: {"work": true}`, `components`, `full` | `ADR;TYPE=WORK` + `LABEL;TYPE=WORK` | Primary business postal address and envelope label. |
+| **Home Address** | `E_CONTACT_ADDRESS_HOME` (4) + Subfields 35..41 | `E_CONTACT_ADDRESS_LABEL_HOME` (13) | `ADR;TYPE=HOME:...` / `LABEL;TYPE=HOME:...` | `contexts: {"private": true}`, `components`, `full` | `ADR;TYPE=HOME` + `LABEL;TYPE=HOME` | Primary private postal address and envelope label. |
+| **Other Address** | `E_CONTACT_ADDRESS_OTHER` (6) + Subfields 49..55 | `E_CONTACT_ADDRESS_LABEL_OTHER` (15) | `ADR;TYPE=OTHER:...` (or bare) / `LABEL;TYPE=OTHER:...` | `contexts: None`, `components`, `full` | `ADR` (unslotted) + `LABEL` (unslotted) | Unqualified postal address and label slot. |
+
+
 
 ### 3.5 Organizations, Titles & Roles (`ORG`, `TITLE`, `ROLE`)
 - **`ORG` Component Hierarchy**:
