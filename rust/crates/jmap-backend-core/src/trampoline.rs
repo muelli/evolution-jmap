@@ -158,6 +158,17 @@ pub fn log_critical_for_message(message_uid: &str, message: &str) {
     g_log_critical(message);
 }
 
+/// Like [`log_critical`], but also attaches `resource_id` as a structured
+/// `tracing` field, so a failure in one child of a collection account (a
+/// mailbox, address book or calendar EDS refused to create, abandon, or
+/// remove) can be picked out by `journalctl
+/// EVOLUTION_JMAP_RESOURCE_ID=<resource_id>` rather than only by grepping the
+/// free-text message. The `GError`/`g_log` side is unchanged.
+pub fn log_critical_for_resource(resource_id: &str, message: &str) {
+    tracing::error!(resource_id, "{message}");
+    g_log_critical(message);
+}
+
 /// The `g_log` half [`log_critical`] and [`log_critical_for_message`] share.
 fn g_log_critical(message: &str) {
     let message = cstring_lossy(message);
@@ -298,6 +309,52 @@ mod tests {
                 .iter()
                 .all(|(name, _)| name != "message_uid"),
             "did not expect a message_uid field, got {:?}",
+            captured.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn log_critical_for_resource_attaches_the_resource_id_as_a_structured_field() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            log_critical_for_resource(
+                "addressbook-1",
+                "EDS would not create a child source for it",
+            );
+        });
+
+        assert!(
+            captured
+                .lock()
+                .unwrap()
+                .contains(&("resource_id".to_owned(), "addressbook-1".to_owned())),
+            "expected a resource_id=addressbook-1 field, got {:?}",
+            captured.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn log_critical_does_not_attach_a_resource_id_field() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            log_critical("no resource id in this one");
+        });
+
+        assert!(
+            captured
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(name, _)| name != "resource_id"),
+            "did not expect a resource_id field, got {:?}",
             captured.lock().unwrap()
         );
     }
