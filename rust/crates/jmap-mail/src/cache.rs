@@ -128,7 +128,7 @@ use gio_sys::{
 };
 use glib_sys::{GError, GFALSE, GTRUE, g_clear_error};
 use jmap_backend_core::owned::Owned;
-use jmap_backend_core::trampoline::log_critical;
+use jmap_backend_core::trampoline::{log_critical, log_critical_for_message};
 
 /// The subdirectory entries live in, below the account's cache directory.
 ///
@@ -308,9 +308,10 @@ impl MessageCache {
             return Some(source);
         };
 
-        log_critical(&format!(
-            "the cached copy of message {uid} was dropped: {damage}"
-        ));
+        log_critical_for_message(
+            uid,
+            &format!("the cached copy of message {uid} was dropped: {damage}"),
+        );
         // Dropped rather than merely refused: nothing will ever serve it, so
         // leaving it is leaving a file that costs disk and produces this log
         // line at every open until the bound gets round to it — and the bound is
@@ -359,10 +360,13 @@ impl MessageCache {
             // server with itself, rather than a file with a crash. Worth a line
             // either way, because the visible symptom is a message that is
             // downloaded again every single time it is opened.
-            log_critical(&format!(
-                "message {uid} arrived as {} octets where its row says {listed}, and is not cached",
-                source.len()
-            ));
+            log_critical_for_message(
+                uid,
+                &format!(
+                    "message {uid} arrived as {} octets where its row says {listed}, and is not cached",
+                    source.len()
+                ),
+            );
             return false;
         }
         let cache = self.lock();
@@ -379,9 +383,12 @@ impl MessageCache {
                 &mut error,
             ))
         }) else {
-            log_critical(&format!("message {uid} could not be cached: {}", unsafe {
-                describe(error)
-            }));
+            log_critical_for_message(
+                uid,
+                &format!("message {uid} could not be cached: {}", unsafe {
+                    describe(error)
+                }),
+            );
             // SAFETY: an owned GError or NULL.
             unsafe { g_clear_error(&mut error) };
             return false;
@@ -420,12 +427,15 @@ impl MessageCache {
         };
 
         if !stored {
-            log_critical(&format!(
-                "message {uid} was cached incompletely and has been dropped: {}",
-                // SAFETY: `error` is NULL or an owned GError from one of the two
-                // calls above.
-                unsafe { describe(error) }
-            ));
+            log_critical_for_message(
+                uid,
+                &format!(
+                    "message {uid} was cached incompletely and has been dropped: {}",
+                    // SAFETY: `error` is NULL or an owned GError from one of the
+                    // two calls above.
+                    unsafe { describe(error) }
+                ),
+            );
             // SAFETY: as in `load`, and the removal's own failure is nothing
             // this can act on.
             unsafe {
@@ -445,9 +455,10 @@ impl MessageCache {
     /// A uid as the file name it is about to become, or `None` if it is not one.
     fn key(&self, uid: &str) -> Option<CString> {
         if !valid_key(uid) {
-            log_critical(&format!(
-                "message id {uid:?} is not a JMAP id and will not be cached"
-            ));
+            log_critical_for_message(
+                uid,
+                &format!("message id {uid:?} is not a JMAP id and will not be cached"),
+            );
             return None;
         }
         // Unreachable given the check — a NUL is not URL-safe — and still not
