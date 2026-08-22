@@ -289,7 +289,19 @@ unsafe extern "C" fn child_added(backend: *mut ECollectionBackend, child_source:
         // `ECollectionBackend` derives from `EBackend`.
         let source = unsafe { e_backend_get_source(backend.cast()) };
         if source.is_null() {
-            log_critical("child_added: the collection backend has no account source");
+            // The account is gone, but `child_source` is not — the same shape
+            // as `Live::export`'s unexported-child branch — so an address book
+            // or calendar child among the mail sources this fires for still has
+            // a resource id to log against.
+            // SAFETY: a child source of a collection, alive for the length of
+            // the vfunc, as documented above.
+            match unsafe { resource_id_of(child_source) } {
+                Some(id) => log_critical_for_resource(
+                    &id,
+                    "child_added: the collection backend has no account source",
+                ),
+                None => log_critical("child_added: the collection backend has no account source"),
+            }
             return;
         }
 
