@@ -587,6 +587,35 @@ Running record of headless polish increments on the `antigravity` branch.
      - The minimal input recorded in `docs/BACKLOG.md` (`NICKNAME;ENCODING=b:! `) is parsed safely: binary text values on non-binary properties are filtered out by `entry_text_list`, producing a normalized vCard on Export₁ that reaches byte-identical fixed-point stability on Export₂ (`Export₂ == Export₃`).
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
 
+## 2026-08-22 — FILE-AS and X-EVOLUTION-FILE-AS mapping & SORT-STRING relationship (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 4, Item 4. `FILE-AS` mapping (EDS `E_CONTACT_FILE_AS` / `X-EVOLUTION-FILE-AS`, inbound `FILE-AS` and `X-FILE-AS` synonyms, `states_file_as` predicate, and documented relationship to `SORT-STRING` without round-trip clobbering).
+- **Changes:**
+  - Implemented `X-EVOLUTION-FILE-AS` mapping in `rust/crates/jmap-vcard/src/contact.rs`:
+    - Inbound: `read_name` extracts `X-EVOLUTION-FILE-AS`, `FILE-AS`, or `X-FILE-AS` text into `Name.extra["fileAs"]` (or creates `Name` if absent).
+    - Outbound: `card_to_vcard` emits `X-EVOLUTION-FILE-AS: <fileAs>` if `fileAs` / `file_as` is present on `Name.extra` or `ContactCard.extra` and non-empty.
+    - Predicate: Added and exported `states_file_as(name: Option<&Name>) -> bool` to check if a valid, non-empty file-as string is stated.
+  - Re-exported `states_file_as` in `rust/crates/jmap-vcard/src/lib.rs`.
+  - Added comprehensive unit and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `file_as_basic_evolution_x_property_roundtrip`: verifies `X-EVOLUTION-FILE-AS` parsing, emission, predicate evaluations, and multi-pass fixed-point convergence (`Export₁ == Export₂`, `Export₂ == Export₃`, `Card₂ == Card₃`).
+    - `file_as_inbound_synonyms_file_as_and_x_file_as`: tests `FILE-AS`, `X-FILE-AS`, and case-insensitive property names normalizing outbound to `X-EVOLUTION-FILE-AS`.
+    - `file_as_and_sort_string_coexistence_without_clobbering`: validates coexistence of `fileAs` (`X-EVOLUTION-FILE-AS`) and `sortAs` (`SORT-STRING`) without mutual clobbering.
+    - `file_as_escaping_special_characters_and_unicode`: asserts delimiter escaping (commas, semicolons, backslashes) and Unicode preservation on round-trips.
+    - `file_as_card_level_and_name_level_emission`: tests name-level and card-level `fileAs`/`file_as`, whitespace filtering, and standalone cards with only file-as.
+  - Updated `docs/VCARD-MAPPING.md`:
+    - Section 2 Master Property Mapping Table row for `X-EVOLUTION-FILE-AS` / `FILE-AS` / `X-FILE-AS`.
+    - Section 4.9 Item 6 clarifying `SORT-STRING` vs `X-EVOLUTION-FILE-AS` storage and round-trip coexistence.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **Batch 4 Item 2 Lane Collision Discovery**:
+     - Attempting to change `TEL;TYPE=WORK,VOICE,FAX` emission in `jmap-vcard` revealed a direct coupling in `jmap-book-sync/tests/save.rs` (`editing_preserves_the_feature_a_line_could_state_only_one_of` and `moving_a_number_to_another_kind_of_phone_field_reclassifies_it`), which explicitly assert `vcard.contains("TEL;X-JMAP-KEY=p1;TYPE=WORK,FAX:")`.
+     - Because `jmap-book-sync` is outside the Antigravity lane (owned by Claude on master), modifying `jmap-vcard` to emit dual-role `WORK,VOICE,FAX` causes cross-crate test breakage unless `jmap-book-sync` is modified. In accordance with the lane collision rules ("If a task would need a file outside jmap-vcard, log it as a finding in docs/AGY-LOG.md and skip it"), Item 2 is logged and deferred to a coordinated master merge, and Item 4 was worked instead.
+  2. **`FILE-AS` and `SORT-STRING` Coexistence**:
+     - Evolution's "File Under" field maps to `E_CONTACT_FILE_AS` and is serialized as `X-EVOLUTION-FILE-AS`.
+     - In JSContact, `fileAs` is stored on `Name.extra["fileAs"]`. Standard vCard 3.0 `SORT-STRING` (family sort string) corresponds to JSContact `sortAs` (`Name.extra["sortAs"]`).
+     - Because they reside under distinct keys on the JSContact layer (`fileAs` vs `sortAs`), neither clobbers the other during synchronization or vCard import/export.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+
 
 
 
