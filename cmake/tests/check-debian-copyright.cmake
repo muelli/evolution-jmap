@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Track C2: docs/packaging/copyright's own-source stanzas are generated from
-# REUSE.toml by tools/generate-debian-copyright.py, not hand-maintained. This
-# keeps the committed file from drifting out of sync with the generator (or
-# with REUSE.toml) the way a hand-edited copy silently could. Run with
-# `cmake -P`; the caller sets:
+# REUSE.toml, and docs/packaging/third-party-notices from `cargo metadata`,
+# both by tools/generate-debian-copyright.py, not hand-maintained. This keeps
+# the committed files from drifting out of sync with the generator (or with
+# REUSE.toml / Cargo.lock) the way hand-edited copies silently could. Run
+# with `cmake -P`; the caller sets:
 #
 #   SOURCE_DIR         the repository root
 #   PYTHON3_EXECUTABLE the python3 binary
@@ -38,3 +39,24 @@ if(NOT _generated STREQUAL _committed)
 endif()
 
 message(STATUS "docs/packaging/copyright: in sync with REUSE.toml")
+
+execute_process(
+	COMMAND "${PYTHON3_EXECUTABLE}" "${SOURCE_DIR}/tools/generate-debian-copyright.py" --third-party-notices
+	OUTPUT_VARIABLE _generated_tpn
+	ERROR_VARIABLE _error_tpn
+	RESULT_VARIABLE _result_tpn
+)
+if(NOT _result_tpn EQUAL 0)
+	message(FATAL_ERROR "generate-debian-copyright.py --third-party-notices failed (${_result_tpn}):\n${_error_tpn}")
+endif()
+
+file(READ "${SOURCE_DIR}/docs/packaging/third-party-notices" _committed_tpn)
+
+if(NOT _generated_tpn STREQUAL _committed_tpn)
+	message(FATAL_ERROR
+		"docs/packaging/third-party-notices is out of sync with `cargo metadata`. Run:\n"
+		"  python3 tools/generate-debian-copyright.py --third-party-notices > docs/packaging/third-party-notices\n"
+		"and commit the result.")
+endif()
+
+message(STATUS "docs/packaging/third-party-notices: in sync with cargo metadata")
