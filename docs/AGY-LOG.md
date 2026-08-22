@@ -647,6 +647,34 @@ Running record of headless polish increments on the `antigravity` branch.
      - Re-parsing emitted vCards achieves exact byte-identical and structural fixed-point convergence (`Export₂ == Export₃` and `Card₂ == Card₃`).
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
 
+## 2026-08-22 — X-TWITTER, X-SIP & IM URI-scheme long tail mapping (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 4, Item 3. `X-TWITTER`, `X-SIP`, and IM URI-scheme long tail (audit scheme table, add missing scheme aliases for mapped IM services, canonical URI resolution, action query rejection, and X-TWITTER / X-SIP unslotted attribute list characterization and server-side preservation).
+- **Changes:**
+  - Extended `SERVICE_SCHEMES` in `rust/crates/jmap-vcard/src/contact.rs` with recognized URI scheme aliases for mapped IM services: `Jabber` (`xmpp`, `jabber`), `Google Talk` (`xmpp`, `gtalk`), `AIM` (`aim`, `aol`), `Gadu-Gadu` (`gg`, `gadugadu`, `gadu`), `GroupWise` (`groupwise`, `novell`), `ICQ` (`icq`), `MSN` (`msn`, `msnim`), `Matrix` (`matrix`), `Skype` (`skype`), `Yahoo` (`yahoo`, `ymsgr`).
+  - Audited `online_service_uri` to ensure canonical URI scheme selection for all 10 mapped services.
+  - Hardened and characterized `plain_handle` action/query URI rejection (`aim:goim?screenname=...`, `msnim:chat?contact=...`, `ymsgr:sendim?...`, `icq:message?uin=...`, `skype:echo123?call`, `gtalk:chat?jid=...`, `matrix:u/vera:...`).
+  - Added characterization and TDD test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `im_scheme_long_tail_aliases_and_canonical_uri_resolution`: verifies canonical URI generation across all 10 services and handle extraction across all 18 URI scheme aliases with 100% roundtrip fidelity.
+    - `im_scheme_action_query_and_invalid_handle_rejection`: validates refusal of action/query URIs across all services.
+    - `twitter_sip_and_unslotted_social_services_characterization_and_rationale`: characterizes `X-TWITTER` and `X-SIP` unslotted attribute list semantics in EDS (`E_CONTACT_IM_TWITTER` 135 and `E_CONTACT_SIP` 127) alongside unslotted social platforms (Telegram, Discord, Signal, WhatsApp, Mastodon, IRC), verifying they are safely omitted on vCard 3.0 emission to protect server-side state via `PatchObject`, and safely ignored on vCard import without corrupting mapped services.
+  - Enhanced `arb_online_service` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to fuzz all 18 URI scheme aliases during property testing.
+  - Updated `docs/VCARD-MAPPING.md`:
+    - Section 3.7 Master EDS Instant Messaging Mapping Matrix with 10 services, 60 slots, 18 URI schemes, handle grammar, and resolution notes.
+    - Section 4.12 detailing IM, social networks, `X-TWITTER`/`X-SIP` unslotted architecture, and action rejection.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **EDS IM Slotting Architecture vs Unslotted Lists (`EContactAttrList`)**:
+     - Slotted IM services (`AIM`, `GADUGADU`, `GOOGLE_TALK`, `GROUPWISE`, `ICQ`, `JABBER`, `MSN`, `MATRIX`, `SKYPE`, `YAHOO`) map onto 60 discrete per-slot string fields in EDS (`_HOME_1..3`, `_WORK_1..3`).
+     - `E_CONTACT_IM_TWITTER` (135) and `E_CONTACT_SIP` (127) are modeled in EDS as `EContactAttrList` (`GList*` of `char*`) without `HOME`/`WORK` slotting.
+     - Evolution's contact editor provides UI exclusively for slotted services. In `jmap-vcard`, `Twitter` and `SIP` are deliberately unmapped on vCard 3.0 emission, ensuring they remain safely preserved on the server via `jmap-book-sync`'s `PatchObject` (verified by `unmapped_or_unslotted_services_are_preserved_across_saves`).
+  2. **Canonical Schemes & URI Scheme Aliases**:
+     - `online_service_uri` deterministically selects the primary IANA/RFC scheme for each service (`xmpp:`, `aim:`, `gg:`, `groupwise:`, `icq:`, `msn:`, `matrix:`, `skype:`, `yahoo:`).
+     - `online_service_handle` recognizes legacy and proprietary aliases (`jabber:`, `gtalk:`, `aol:`, `gadugadu:`, `gadu:`, `novell:`, `msnim:`, `ymsgr:`) to extract bare handles seamlessly from third-party vCards and JMAP `uri` fields.
+  3. **Action and Query URI Rejection**:
+     - URIs containing action verbs or parameters (`?call`, `?chat`, `?screenname=...`, `/u/...`) are rejected by `plain_handle` to prevent corrupting handle fields or creating fake handles.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+
 
 
 
