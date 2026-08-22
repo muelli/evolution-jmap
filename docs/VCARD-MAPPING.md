@@ -64,21 +64,25 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`N`** | `ALTID`, `LANGUAGE` | `card.name.components` (`surname`, `given`, `given2`, `title`, `credential`) | `E_CONTACT_FAMILY_NAME`, `E_CONTACT_GIVEN_NAME`, `E_CONTACT_ADDITIONAL_NAME`, `E_CONTACT_NAME_PREFIX`, `E_CONTACT_NAME_SUFFIX` | `name_fields`, `read_name`, [`states_name_component`], [`restore_name_components`] | 5-component structured name. Double-barrelled given names share index 1 and are reconstructed via `restore_name_components`. Name `phonetic` is dropped. |
 | **`NICKNAME`** | `X-JMAP-KEY`, `ALTID` | `card.nicknames` (`Nickname.name`) | `E_CONTACT_NICKNAME` | `states_nickname`, `entry_text_list` | Emitted as one line per keyed entry (not comma-separated) to preserve `X-JMAP-KEY`. Commas in nicknames are preserved literally. |
 | **`EMAIL`** | `TYPE` (`WORK`, `HOME`, `PREF`), `X-JMAP-KEY` | `card.emails` (`ContactEmail.address`, `contexts`, `pref`) | `E_CONTACT_EMAIL_1` .. `_4` | `states_email`, `type_names`, `read_flags` | Positional filing in EDS (`EMAIL_1` is primary). Sorted on emission by `(pref, key)` so lowest `pref` lands in `EMAIL_1`. Multiple contexts allowed. |
-| **`TEL`** | `TYPE` (`WORK`, `HOME`, `CELL`, `PAGER`, `FAX`, `VOICE`, `VIDEO`, `PREF`), `X-JMAP-KEY` | `card.phones` (`ContactPhone.number`, `contexts`, `features`, `pref`) | `E_CONTACT_PHONE_BUSINESS`, `_HOME`, `_MOBILE`, `_BUSINESS_FAX`, `_HOME_FAX`, `_PAGER`, `_OTHER`, `_OTHER_FAX`, `_PRIMARY` | `states_phone`, `context_slot`, [`states_context`], `feature_slot`, [`states_phone_feature`] | Slot narrowing: EDS matches `TYPE` to slots. Context narrowed to at most 1 (`WORK` > `HOME` -> `DEFAULT_SLOT`); feature narrowed to at most 1 (`CELL` > `PAGER` > `FAX` > `VOICE` > `VIDEO`). Unstated features preserved by predicates. |
+| **`TEL`** | `TYPE` (`WORK`, `HOME`, `CELL`, `MOBILE`, `PAGER`, `FAX`, `VOICE`, `VIDEO`, `PREF`), `X-JMAP-KEY` | `card.phones` (`ContactPhone.number`, `contexts`, `features`, `pref`) | `E_CONTACT_PHONE_PRIMARY`, `_BUSINESS`, `_BUSINESS_2`, `_BUSINESS_FAX`, `_HOME`, `_HOME_2`, `_HOME_FAX`, `_MOBILE`, `_PAGER`, `_OTHER`, `_OTHER_FAX`, `_CAR`, `_ISDN`, `_CALLBACK`, `_COMPANY`, `_RADIO`, `_TELEX`, `_TTYTDD`, `_ASSISTANT` | `states_phone`, `context_slot`, [`states_context`], `feature_slot`, [`states_phone_feature`] | Full 19-field EDS matrix. Inbound accepts `MOBILE` synonym for `CELL`; outbound normalizes to `CELL`. Context narrowed to at most 1 (`WORK` > `HOME` -> `DEFAULT_SLOT`); feature narrowed to at most 1 (`CELL`/`MOBILE` > `PAGER` > `FAX` > `VOICE` > `VIDEO`). Unstated features preserved by predicates. |
 | **`ADR`** | `TYPE` (`WORK`, `HOME`, `PREF`), `LABEL`, `X-JMAP-KEY` | `card.addresses` (`Address.components`, `contexts`, `extra["pref"]`) | `E_CONTACT_ADDRESS_WORK`, `_HOME`, `_OTHER` (+ 7 subfields per slot) | `address_fields`, `read_address`, `states_address`, [`states_address_component`], [`restore_address_components`] | 7 components: PO Box, Ext, Street, Locality, Region, Postcode, Country. House `number` joins street `name`. `restore_address_components` reconstructs split components. Unmapped kinds (`floor`, `room`) dropped. |
 | **`LABEL`** | `TYPE` (`WORK`, `HOME`, `PREF`), `X-JMAP-KEY` | `card.addresses` (`Address.full`) | `E_CONTACT_ADDRESS_LABEL_WORK`, `_HOME`, `_OTHER` | `address_label`, `label_entry`, `read_address` | Standalone line emitted after `ADR` or on its own. Inbound matched by `X-JMAP-KEY` or context/text fallback to prevent duplicate addresses. |
 | **`ORG`** | `X-JMAP-KEY` | `card.organizations` (`Organization.name`, `units`) | `E_CONTACT_ORG` (name), `E_CONTACT_ORG_UNIT` (dept), `E_CONTACT_OFFICE` (office) | `organization_components`, `read_organization`, [`states_organization`], [`states_org_unit`] | Semicolon-delimited list. Index 0 = Name; Index 1 = Department; Index 2 = Office; Index 3+ = trailing units. Nameless orgs retain leading semicolon (`ORG:;Unit`). `sortAs` and `contexts` unmapped on vCard 3.0. |
 | **`TITLE`** | `X-JMAP-KEY` | `card.titles` (`Title.name`, `kind: "title"`) | `E_CONTACT_TITLE` | `read_title`, [`states_title`], [`title_kind`] | `kind: "title"` (or `None`) maps to `TITLE`. Vendor kinds dropped. |
 | **`ROLE`** | `X-JMAP-KEY` | `card.titles` (`Title.name`, `kind: "role"`) | `E_CONTACT_ROLE` | `read_title`, [`states_title`], [`title_kind`] | `kind: "role"` maps to `ROLE`. |
 | **`NOTE`** | `X-JMAP-KEY` | `card.notes` (`Note.note`) | `E_CONTACT_NOTE` | `states_note` | Free text. First line lands in EDS `E_CONTACT_NOTE`. RFC 9553 `created` and `author` ride in `extra` and are untouched during sync. |
-| **`URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: None`) | `E_CONTACT_HOMEPAGE_URL` | `states_link`, `maps_link_kind` | Only plain websites (`kind: None`) map to `URL`. `kind: "contact"` (`CONTACT-URI`) and vendor kinds dropped. `mediaType`, `label`, `contexts`, `pref` ride in `extra`. |
+| **`URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: None`) | `E_CONTACT_HOMEPAGE_URL` | `states_link`, `maps_link_kind` | Plain websites (`kind: None`) map to `URL`. `mediaType`, `label`, `contexts`, `pref` ride in `extra`. |
+| **`X-EVOLUTION-BLOG-URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: "blog"`) | `E_CONTACT_BLOG_URL` | `states_link`, `maps_link_kind` | EDS blog URL field. Maps to `links` with `kind: "blog"`. |
+| **`X-EVOLUTION-VIDEO-URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: "video"`) | `E_CONTACT_VIDEO_URL` | `states_link`, `maps_link_kind` | EDS video stream URL field. Maps to `links` with `kind: "video"`. |
 | **`CALURI`** | `X-JMAP-KEY` | `card.calendars` (`Calendar.uri`, `kind: "calendar"`) | `E_CONTACT_CALENDAR_URI` | `states_calendar`, `calendar_property`, `calendar_kind` | vCard 4.0 property emitted on vCard 3.0 for EDS 3.52 compatibility. `ICSCALENDAR` excluded. |
 | **`FBURL`** | `X-JMAP-KEY` | `card.calendars` (`Calendar.uri`, `kind: "freeBusy"`) | `E_CONTACT_FREEBUSY_URL` | `states_calendar`, `calendar_property`, `calendar_kind` | vCard 4.0 property emitted on vCard 3.0 for EDS 3.52 compatibility. |
 | **`PHOTO`** | `TYPE`, `ENCODING=b`, `VALUE=uri`, `X-JMAP-KEY` | `card.media` (`Media.uri`, `media_type`, `kind: "photo"`) | `E_CONTACT_PHOTO` | `photo`, `read_photo`, [`states_media`], [`same_photo`], `image_subtype` | Only `kind: "photo"` mapped. Inline data uses base64; `TYPE` states subtype only (e.g. `JPEG` -> `image/jpeg`). URI references use `VALUE=uri`. Re-paired via `same_photo` since EDS drops `X-JMAP-KEY` on photo edit. |
 | **`CATEGORIES`** | — | `card.keywords` (`Set<String>`) | `E_CONTACT_CATEGORY_LIST` | `drawn_tags`, `read_keywords`, [`states_keyword`] | Single sorted line emitted. Comma-separated on wire. Trimming protection: tags with leading/trailing whitespace or carriage returns omitted from emission to prevent EDS corruption. |
 | **`BDAY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "birth"`, `date`) | `E_CONTACT_BIRTH_DATE` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`], [`states_a_point_in_time`], `Day` | Single calendar day formatted `YYYY-MM-DD`. Truncated/bare years (`1984`) or years < 1000 omitted to prevent EDS clamping corruption (`1000..=9999`). `Timestamp` converted to UTC day. |
 | **`X-EVOLUTION-ANNIVERSARY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "wedding"`, `date`) | `E_CONTACT_ANNIVERSARY` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`] | EDS wedding anniversary field. Same date validation and year >= 1000 clamping rules as `BDAY`. `kind: "death"` dropped. |
-| **`X-EVOLUTION-SPOUSE`** | — | `card.related_to` (Key = Person Name, `relation: { "spouse": true }`) | `E_CONTACT_SPOUSE` | `spouse_named`, [`states_spouse`], [`states_nothing_but_the_marriage`], `names_a_person` | Key in JSContact `related_to` is the spouse name (RFC 9555 §2.9.5). No `X-JMAP-KEY` needed. 19 non-spouse relation types and URI keys dropped. |
+| **`X-EVOLUTION-SPOUSE`** | — | `card.related_to` (Key = Person Name, `relation: { "spouse": true }`) | `E_CONTACT_SPOUSE` | [`states_spouse`], [`states_nothing_but_the_marriage`], `names_a_person` | Key in JSContact `related_to` is the spouse name (RFC 9555 §2.9.5). No `X-JMAP-KEY` needed. Non-person/URI keys dropped. |
+| **`X-EVOLUTION-MANAGER`** | — | `card.related_to` (Key = Person Name, `relation: { "manager": true }`) | `E_CONTACT_MANAGER` | [`states_manager`], `names_a_person` | Key in JSContact `related_to` is the manager name (RFC 9553 §2.1.8). No `X-JMAP-KEY` needed. Non-person/URI keys dropped. |
+| **`X-EVOLUTION-ASSISTANT`** | — | `card.related_to` (Key = Person Name, `relation: { "assistant": true }`) | `E_CONTACT_ASSISTANT` | [`states_assistant`], `names_a_person` | Key in JSContact `related_to` is the assistant name (RFC 9553 §2.1.8). No `X-JMAP-KEY` needed. Non-person/URI keys dropped. |
 | **`X-AIM`** | `TYPE` (`WORK`, `HOME`), `X-JMAP-KEY` | `card.online_services` (`service: "AIM"`, `user`, `uri: "aim:..."`) | `E_CONTACT_IM_AIM_HOME_1..3`, `_WORK_1..3` | `drawn_service`, [`states_online_service`], [`online_service_handle`], [`online_service_uri`], `service_slot` | 6 EDS slots per service. Handles extracted from `user` or bare URI schemes (`SERVICE_SCHEMES`). Action/query URIs rejected. `TYPE` mandatory for EDS field visibility. |
 | **`X-GADUGADU`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Gadu-Gadu"`, `uri: "gg:..."`) | `E_CONTACT_IM_GADUGADU_HOME_1..3`, `_WORK_1..3` | (same as above) | Matched case/punctuation-insensitively (`same_service`). |
 | **`X-GOOGLE-TALK`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Google Talk"`, `uri: "xmpp:..."`) | `E_CONTACT_IM_GOOGLE_TALK_HOME_1..3`, `_WORK_1..3` | (same as above) | Handles use `xmpp` scheme. |
@@ -89,6 +93,15 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`X-MATRIX`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Matrix"`, `uri: "matrix:..."`) | `E_CONTACT_IM_MATRIX_HOME_1..3`, `_WORK_1..3` | (same as above) | Bare Matrix handles (`matrix:@user:domain` without action queries). |
 | **`X-SKYPE`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Skype"`, `uri: "skype:..."`) | `E_CONTACT_IM_SKYPE_HOME_1..3`, `_WORK_1..3` | (same as above) | Bare Skype usernames (`skype:echo123?call` action rejected). |
 | **`X-YAHOO`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Yahoo"`, `uri: "yahoo:... / ymsgr:..."`) | `E_CONTACT_IM_YAHOO_HOME_1..3`, `_WORK_1..3` | (same as above) | Supports `yahoo` and `ymsgr` schemes. |
+| **`GEO`** | — | `Address.coordinates` (RFC 9553) | `E_CONTACT_GEO` (no UI) | — | Dropped by design on vCard 3.0 import/export. Evolution has no UI for coordinates. Server-side `Address.coordinates` preserved by `PatchObject`. |
+| **`TZ`** | — | `card.time_zone` (RFC 9553) | — | — | Dropped by design on vCard 3.0 import/export. Evolution has no per-contact timezone field. Server `time_zone` preserved by `PatchObject`. |
+| **`MAILER`** | — | — | `E_CONTACT_MAILER` (legacy) | — | Dropped by design. Deprecated in RFC 6350 (vCard 4.0). Legacy email client software metadata. |
+| **`PRODID`** | — | `card.prod_id` (RFC 9553) | — | — | Dropped by design on import/export. Generator metadata belongs to serialization envelope; foreign `PRODID` not preserved across saves. |
+| **`REV`** | — | `card.updated` (RFC 9553) | `E_CONTACT_REV` | — | Dropped by design on import/export. Revision timestamp is strictly owned by the JMAP server upon commit. |
+| **`SORT-STRING`** | — | `Name.sortAs` / `Org.sortAs` | `E_CONTACT_FILE_AS` (via `X-EVOLUTION-FILE-AS`) | — | Dropped by design. Replaced in RFC 6350 by `SORT-AS` parameter. JSContact `sortAs` preserved on server by `PatchObject`. |
+| **`CLASS`** | — | `card.privacy` (RFC 9553) | — | — | Dropped by design. Deprecated/removed in RFC 6350. Legacy access classification with no Evolution editor UI. |
+| **`SOUND`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "sound"`) | — | [`states_media`] | Dropped by design from vCard 3.0. [`states_media`] permits only `kind: "photo"`. Server `sound` media entries preserved by `PatchObject`. |
+| **`LOGO`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "logo"`) | `E_CONTACT_LOGO` (no UI) | [`states_media`] | Dropped by design from vCard 3.0. Evolution editor supports only personal photo (`E_CONTACT_PHOTO`). Server `logo` entries preserved by `PatchObject`. |
 
 ---
 
@@ -108,11 +121,53 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
   - `phonetic` name components (RFC 9553 §2.2.1) are omitted on vCard 3.0 and kept intact on the server.
 
 ### 3.3 Electronic Communication (`EMAIL`, `TEL`)
-- **`EMAIL` Positional Filing**: Evolution files `EMAIL` lines by position into `E_CONTACT_EMAIL_1` .. `_4`. `card_to_vcard` sorts emails by `(pref.unwrap_or(u32::MAX), key)` to guarantee the primary preferred address lands in `EMAIL_1`.
-- **`TEL` Slot Narrowing**:
-  - Context narrowing: EDS matches `TYPE` sets to fields. A line carrying `TYPE=WORK,HOME` would occupy two separate UI blocks that overwrite each other. `context_slot` chooses exactly one slot: `WORK` > `HOME` -> `DEFAULT_SLOT` (`HOME`).
-  - Feature narrowing: `feature_slot` ranks phone features: `mobile` (`CELL`) > `pager` (`PAGER`) > `fax` (`FAX`) > `voice` (`VOICE`) > `video` (`VIDEO`).
-  - `states_context` and `states_phone_feature` ensure omitted contexts/features are not considered deleted by the user on sync.
+- **`EMAIL` Positional Filing & Attribute List**:
+  - Evolution files `EMAIL` lines by position into `E_CONTACT_EMAIL_1` .. `_4` (fields 8..11), with additional lines (5+) and all entries maintained in the `E_CONTACT_EMAIL` (field 97) `GList` attribute list.
+  - `card_to_vcard` sorts emails by `(pref.unwrap_or(u32::MAX), key)` to guarantee the primary preferred address (`pref: 1` or lowest rank) lands on the first `EMAIL` line (`E_CONTACT_EMAIL_1`).
+  - Unranked emails (`pref: None`) follow preferred emails in deterministic key order.
+  - Inbound unkeyed vCards allocate sequential keys `e1`, `e2`, `e3`, `e4`, `e5`, ... preserving document order.
+
+#### Master EDS Email Mapping Matrix (4 Slots + Attribute List)
+
+| EDS `EContactField` (ID) | Evolution UI Slot | Inbound vCard `EMAIL` | JSContact `ContactEmail` | Outbound vCard 3.0 | Slot Resolution & Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `E_CONTACT_EMAIL_1` (8) | Primary Email | 1st `EMAIL` line | Lowest `pref` (e.g. `pref: 1`) or 1st key | `EMAIL;X-JMAP-KEY=...;TYPE=PREF:...` | Primary email in Evolution editor. Promoted by `(pref, key)` sorting. |
+| `E_CONTACT_EMAIL_2` (9) | Email 2 | 2nd `EMAIL` line | 2nd `emails` entry | `EMAIL;X-JMAP-KEY=...:...` | Secondary email field in Evolution editor. |
+| `E_CONTACT_EMAIL_3` (10) | Email 3 | 3rd `EMAIL` line | 3rd `emails` entry | `EMAIL;X-JMAP-KEY=...:...` | Tertiary email field in Evolution editor. |
+| `E_CONTACT_EMAIL_4` (11) | Email 4 | 4th `EMAIL` line | 4th `emails` entry | `EMAIL;X-JMAP-KEY=...:...` | Quaternary email field in Evolution editor. |
+| `E_CONTACT_EMAIL` (97) | Email Attribute List | All `EMAIL` lines (1..=4 and 5+) | `card.emails` (`BTreeMap`) | All `EMAIL;X-JMAP-KEY=...` lines | Full list of all email addresses. Lines beyond 4 are safely preserved on wire format and server. |
+
+- **`TEL` Slot Narrowing & Complete EDS Phone Matrix**:
+  - EDS defines 19 distinct phone fields (`E_CONTACT_FIRST_PHONE_ID` 16 to `E_CONTACT_LAST_PHONE_ID` 34) in `libebook-contacts`. EDS matches incoming vCard lines to fields by evaluating their `TYPE` parameters.
+  - **Context Narrowing**: EDS matches `TYPE` sets to fields. A line carrying `TYPE=WORK,HOME` would satisfy both `E_CONTACT_PHONE_BUSINESS` and `E_CONTACT_PHONE_HOME`, causing one phone number to occupy two separate UI blocks that overwrite each other on edit. `context_slot` chooses exactly one slot: `WORK` > `HOME` -> `DEFAULT_SLOT` (`HOME`).
+  - **Feature Narrowing**: `feature_slot` ranks phone features: `mobile` (`CELL`/`MOBILE`) > `pager` (`PAGER`) > `fax` (`FAX`) > `voice` (`VOICE`) > `video` (`VIDEO`).
+  - **Synonym Normalization**: Real-world vCard generators (Android, iOS, Outlook, feature phones) widely emit `TYPE=MOBILE` in place of standard vCard 3.0 `TYPE=CELL`. Inbound parsing (`read_phone_flags`) accepts both `CELL` and `MOBILE` as `features: {"mobile": true}`; outbound emission normalizes to standard `TYPE=CELL`.
+  - **Predicate Safeguards**: `states_context` and `states_phone_feature` ensure omitted contexts/features are not considered deleted by the user when computing diffs (`jmap-book-sync`).
+
+#### Master EDS Phone Mapping Matrix (19 Fields)
+
+| EDS `EContactField` (ID) | Evolution UI Slot | Inbound vCard `TEL;TYPE=` | JSContact `ContactPhone` | Outbound vCard 3.0 | Slot Resolution & Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `E_CONTACT_PHONE_PRIMARY` (31) | Primary Phone | `TEL;TYPE=PREF` | `pref: Some(1)` | `TEL;...;TYPE=PREF` | Sorted first on emission by `(pref, key)` so lowest `pref` populates the primary slot. |
+| `E_CONTACT_PHONE_BUSINESS` (17) | Business Phone | `TEL;TYPE=WORK,VOICE` or `TEL;TYPE=WORK` | `contexts: {"work": true}`, `features: {"voice": true}` | `TEL;TYPE=WORK,VOICE` | Primary work voice number. Default feature when context is work and feature omitted. |
+| `E_CONTACT_PHONE_BUSINESS_2` (18) | Business Phone 2 | 2nd `TEL;TYPE=WORK` | 2nd `phones` entry with `contexts: {"work": true}` | 2nd `TEL;TYPE=WORK` | Positional secondary work phone; emitted in sorted key order. |
+| `E_CONTACT_PHONE_BUSINESS_FAX` (19) | Business Fax | `TEL;TYPE=WORK,FAX` | `contexts: {"work": true}`, `features: {"fax": true}` | `TEL;TYPE=WORK,FAX` | Work fax line. |
+| `E_CONTACT_PHONE_HOME` (23) | Home Phone | `TEL;TYPE=HOME,VOICE` or `TEL;TYPE=HOME` | `contexts: {"private": true}`, `features: {"voice": true}` | `TEL;TYPE=HOME,VOICE` | Primary private voice number. Default feature when context is private and feature omitted. |
+| `E_CONTACT_PHONE_HOME_2` (24) | Home Phone 2 | 2nd `TEL;TYPE=HOME` | 2nd `phones` entry with `contexts: {"private": true}` | 2nd `TEL;TYPE=HOME` | Positional secondary home phone; emitted in sorted key order. |
+| `E_CONTACT_PHONE_HOME_FAX` (25) | Home Fax | `TEL;TYPE=HOME,FAX` | `contexts: {"private": true}`, `features: {"fax": true}` | `TEL;TYPE=HOME,FAX` | Private fax line. |
+| `E_CONTACT_PHONE_MOBILE` (27) | Mobile Phone | `TEL;TYPE=CELL` or `TEL;TYPE=MOBILE` | `features: {"mobile": true}` (+ optional context) | `TEL;TYPE=CELL` (or `TYPE=WORK,CELL` / `HOME,CELL`) | Mobile phone. Inbound accepts `MOBILE` synonym; outbound normalizes to RFC 2426 `CELL`. |
+| `E_CONTACT_PHONE_PAGER` (30) | Pager | `TEL;TYPE=PAGER` | `features: {"pager": true}` (+ optional context) | `TEL;TYPE=PAGER` (or `TYPE=WORK,PAGER` / `HOME,PAGER`) | Pager device. Outranks `voice`/`fax` in feature slotting. |
+| `E_CONTACT_PHONE_OTHER` (28) | Other Phone | `TEL;TYPE=VOICE` or bare `TEL:` | `contexts: None`, `features: {"voice": true}` (or `None`) | `TEL;TYPE=VOICE` or bare `TEL:` | Unqualified voice line or bare phone without context/feature. |
+| `E_CONTACT_PHONE_OTHER_FAX` (29) | Other Fax | `TEL;TYPE=FAX` | `contexts: None`, `features: {"fax": true}` | `TEL;TYPE=FAX` | Unqualified fax line without work/private context. |
+| `E_CONTACT_PHONE_CAR` (21) | Car Phone | `TEL;TYPE=CAR` | `ContactPhone.number` | `TEL;X-JMAP-KEY=...` | RFC 2426 §3.3.1 car phone. Carried with key across round-trips; server properties untouched by `PatchObject`. |
+| `E_CONTACT_PHONE_ISDN` (26) | ISDN Phone | `TEL;TYPE=ISDN` | `ContactPhone.number` | `TEL;X-JMAP-KEY=...` | RFC 2426 §3.3.1 ISDN line. Carried with key across round-trips. |
+| `E_CONTACT_PHONE_CALLBACK` (20) | Callback Phone | `TEL;TYPE=CALLBACK` | `ContactPhone.number` | `TEL;X-JMAP-KEY=...` | EDS callback phone extension. Carried with key across round-trips. |
+| `E_CONTACT_PHONE_COMPANY` (22) | Company Phone | `TEL;TYPE=COMPANY` | `ContactPhone.number` | `TEL;X-JMAP-KEY=...` | Company switchboard main number. Carried with key across round-trips. |
+| `E_CONTACT_PHONE_RADIO` (32) | Radio Phone | `TEL;TYPE=RADIO` | `ContactPhone.number` | `TEL;X-JMAP-KEY=...` | EDS radio phone extension. Carried with key across round-trips. |
+| `E_CONTACT_PHONE_TELEX` (33) | Telex Phone | `TEL;TYPE=TELEX` | `ContactPhone.number` | `TEL;X-JMAP-KEY=...` | EDS telex terminal extension. Carried with key across round-trips. |
+| `E_CONTACT_PHONE_TTYTDD` (34) | TTY/TDD Phone | `TEL;TYPE=TTYTDD` or `TEL;TYPE=TTY` | `ContactPhone.number` | `TEL;X-JMAP-KEY=...` | TTY/TDD text telephone device for the hearing impaired. Carried with key. |
+| `E_CONTACT_PHONE_ASSISTANT` (16) | Assistant Phone | `TEL;TYPE=ASSISTANT` | `ContactPhone.number` | `TEL;X-JMAP-KEY=...` | Executive assistant telephone line. Carried with key across round-trips. |
+
 
 ### 3.4 Postal Addresses (`ADR`, `LABEL`)
 - **7 Structured Components**:
@@ -124,7 +179,20 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
   - `5`: Postal Code (`postcode`) -> `E_CONTACT_ADDRESS_*_CODE`
   - `6`: Country (`country`) -> `E_CONTACT_ADDRESS_*_COUNTRY`
 - **Street & Number Joining**: `JOINED_COMPONENTS` pairs `number` with `name`. `restore_address_components` restores discrete street and number components if the joined string was not altered in Evolution.
-- **`LABEL` Pairing**: In vCard 3.0, `LABEL` is a standalone property; in vCard 4.0, it is a parameter on `ADR`. `read_address` parses `ADR;LABEL=...` parameters directly, and `label_entry` pairs standalone `LABEL` lines with their preceding `ADR` entries using `X-JMAP-KEY` or context matching.
+- **`LABEL` Pairing & Synthetic EDS Fields**:
+  - In vCard 3.0, `LABEL` is a standalone property; in vCard 4.0, it is a parameter on `ADR`. `read_address` parses `ADR;LABEL=...` parameters directly, and `label_entry` pairs standalone `LABEL` lines with their preceding `ADR` entries using `X-JMAP-KEY` or context matching.
+  - EDS models address labels as synthetic string fields (`E_CONTACT_ADDRESS_LABEL_WORK`, `_HOME`, `_OTHER`). When EDS serializes a contact, it emits standalone `LABEL;TYPE=...` lines matching the address slots.
+  - In-place modifications to synthetic label fields in EDS update the label text while retaining `X-JMAP-KEY` and context pairing.
+
+#### Master EDS Address & Label Mapping Matrix (3 Slots + 3 Synthetic Labels)
+
+| EDS Address Slot | Structured `EContactField` (ID) | Synthetic Label Field (ID) | Inbound `ADR` / `LABEL` | JSContact `Address` | Outbound vCard 3.0 | Resolution & Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Work Address** | `E_CONTACT_ADDRESS_WORK` (5) + Subfields 42..48 | `E_CONTACT_ADDRESS_LABEL_WORK` (14) | `ADR;TYPE=WORK:...` / `LABEL;TYPE=WORK:...` | `contexts: {"work": true}`, `components`, `full` | `ADR;TYPE=WORK` + `LABEL;TYPE=WORK` | Primary business postal address and envelope label. |
+| **Home Address** | `E_CONTACT_ADDRESS_HOME` (4) + Subfields 35..41 | `E_CONTACT_ADDRESS_LABEL_HOME` (13) | `ADR;TYPE=HOME:...` / `LABEL;TYPE=HOME:...` | `contexts: {"private": true}`, `components`, `full` | `ADR;TYPE=HOME` + `LABEL;TYPE=HOME` | Primary private postal address and envelope label. |
+| **Other Address** | `E_CONTACT_ADDRESS_OTHER` (6) + Subfields 49..55 | `E_CONTACT_ADDRESS_LABEL_OTHER` (15) | `ADR;TYPE=OTHER:...` (or bare) / `LABEL;TYPE=OTHER:...` | `contexts: None`, `components`, `full` | `ADR` (unslotted) + `LABEL` (unslotted) | Unqualified postal address and label slot. |
+
+
 
 ### 3.5 Organizations, Titles & Roles (`ORG`, `TITLE`, `ROLE`)
 - **`ORG` Component Hierarchy**:
@@ -177,13 +245,14 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 - **`URL` Mapping & EDS Homepage Slotting**:
   - Plain website links (`kind: None` in JSContact `links`) map directly to RFC 2426 §3.6.8 `URL` lines carrying `X-JMAP-KEY`.
   - In EDS, `E_CONTACT_HOMEPAGE_URL` maps to the **first `URL` line** in the vCard. Subsequent `URL` lines pass through intact on the vCard stream and are parsed back into `card.links` with their respective keys (`l1`, `l2`, `l3`).
+- **EDS Blog & Video URLs Mapping**:
+  - EDS defines `E_CONTACT_BLOG_URL` (`X-EVOLUTION-BLOG-URL`) and `E_CONTACT_VIDEO_URL` (`X-EVOLUTION-VIDEO-URL`).
+  - `jmap-vcard` maps these directly to JSContact `links` entries with `kind: Some("blog")` and `kind: Some("video")` respectively, carrying `X-JMAP-KEY`.
+  - Generic vendor properties without the `X-EVOLUTION-` prefix (e.g. `X-BLOG-URL`, `X-VIDEO-URL`) are ignored on parse to avoid synthetic vendor drift.
 - **`URL` Kind Filtering & Contact URI Omission**:
   - RFC 9553 §2.6.3 defines `kind: "contact"` as a URI for communicating with the person (e.g. contact forms, mailto links), which RFC 9555 §2.6.3 states on vCard 4.0's `CONTACT-URI`.
-  - vCard 3.0 has no `CONTACT-URI` property. Emitting `kind: "contact"` or vendor kinds (`kind: "blog"`, `"video"`, `"feed"`) on a vCard 3.0 `URL` would populate Evolution's `E_CONTACT_HOMEPAGE_URL` and mislead the user into seeing a contact form or feed as the person's homepage.
-  - Therefore, [`states_link`] and [`maps_link_kind`] restrict vCard 3.0 emission **strictly to `kind: None`** (plain websites). All other kinds are omitted on the wire format and remain safely preserved on the server.
-- **EDS Blog & Video URLs vs JSContact Links**:
-  - EDS defines `E_CONTACT_BLOG_URL` (`X-EVOLUTION-BLOG-URL`) and `E_CONTACT_VIDEO_URL` (`X-EVOLUTION-VIDEO-URL`).
-  - `jmap-vcard` deliberately does NOT map these non-standard properties into `links` or `extra` to prevent polluting standard JSContact schemas. `vcard_to_card` safely ignores them on parse, leaving them as unmapped EDS extensions.
+  - vCard 3.0 has no `CONTACT-URI` property. Emitting `kind: "contact"` or unmapped vendor kinds (`kind: "feed"`, `"profile"`) on a vCard 3.0 `URL` would populate Evolution's `E_CONTACT_HOMEPAGE_URL` and mislead the user into seeing a contact form or feed as the person's homepage.
+  - Therefore, [`states_link`] and [`maps_link_kind`] restrict vCard emission strictly to `kind: None` (`URL`), `kind: Some("blog")` (`X-EVOLUTION-BLOG-URL`), and `kind: Some("video")` (`X-EVOLUTION-VIDEO-URL`). All other kinds are omitted on the wire format and remain safely preserved on the server.
 - **URI Punctuation & Escaping**:
   - URIs with query strings containing semicolons, commas, ampersands, hashes, and percent-encodings (e.g. `https://api.example.com/search?q=a,b;c#top`) are formatted without backslash escaping per RFC 3986 and RFC 2426 §3.6.8, round-tripping with 100% fidelity.
 - **Unmodeled `Link` Properties**:
@@ -203,6 +272,19 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
   - [`states_media`] and `photo` filter strictly for `kind: Some("photo")`. Logos, sounds, documents, and unmapped kinds get no `PHOTO` line, preserving UI separation in Evolution.
   - Unmapped media entries remain safe on the server because `jmap-book-sync` patches only mapped/edited properties.
 
+### 3.11 Relationships: Spouse, Manager, Assistant (`X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, `X-EVOLUTION-ASSISTANT`)
+- **EDS Relation Fields**:
+  - Evolution's contact editor provides dedicated text fields for **Spouse** (`E_CONTACT_SPOUSE`), **Manager** (`E_CONTACT_MANAGER`), and **Assistant** (`E_CONTACT_ASSISTANT`).
+  - In EDS vCard 3.0 representation, these are stored on `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, and `X-EVOLUTION-ASSISTANT` property lines.
+- **JSContact `relatedTo` Mapping (RFC 9553 §2.1.8 / RFC 9555 §2.9.5)**:
+  - JSContact models relationships in `card.related_to` as a map keyed by entity name (for free-text vCard entries) with a `relation` set (`{"spouse": true}`, `{"manager": true}`, `{"assistant": true}`).
+  - When parsing from vCard, `vcard_to_card` inserts or updates `related_to[name]` with the corresponding relation type if `names_a_person(name)` holds.
+  - Outbound serialization emits lines for each stated relation type: [`states_spouse`], [`states_manager`], and [`states_assistant`].
+  - If a single person holds multiple roles (e.g. both manager and assistant), multiple lines are emitted (`X-EVOLUTION-MANAGER:Alex`, `X-EVOLUTION-ASSISTANT:Alex`) and round-trip into a unified `Relation.relation` map.
+- **Name Validation & URI Identifier Defense**:
+  - `names_a_person` rejects empty names, URI scheme identifiers (`urn:uuid:...`, `mailto:...`, `http:...`), leading/trailing ASCII whitespace, and carriage returns.
+  - This ensures that entity UIDs are not mistakenly rendered as human person names in Evolution's text fields.
+
 ---
 
 ## 4. Special Semantics & Product Decision Catalog
@@ -210,7 +292,7 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 All product decisions and behavioral findings documented in `docs/AGY-LOG.md` are codified below:
 
 ### 4.1 Dropped-by-Design Rationale for Unknown `X-` Properties
-`jmap-vcard` deliberately ignores unmapped vendor `X-` properties (e.g., `X-MOZILLA-HTML`, `X-APPLE-*`, `X-MS-*`, `X-SIGNAL`, `X-DISCORD`, `X-TELEGRAM`, `X-SLACK`, `X-EVOLUTION-MANAGER`, `X-EVOLUTION-ASSISTANT`, `X-EVOLUTION-FILE-AS`):
+`jmap-vcard` deliberately ignores unmapped vendor `X-` properties (e.g., `X-MOZILLA-HTML`, `X-APPLE-*`, `X-MS-*`, `X-SIGNAL`, `X-DISCORD`, `X-TELEGRAM`, `X-SLACK`, `X-TWITTER`, `X-SIP`, `X-MANAGER`, `X-ASSISTANT`, `X-EVOLUTION-FILE-AS`, `X-EVOLUTION-CALLBACK`, `X-EVOLUTION-RADIO`, `X-EVOLUTION-TELEX`, `X-EVOLUTION-TTYTDD`):
 1. **Contract Integrity**: Prevents polluting standard JSContact (RFC 9553) models with raw non-standard vCard lines in `extra`.
 2. **Sync Safety**: `jmap-book-sync`'s `PatchObject` issues patches only for mapped/edited fields. Dropping unmapped properties on parse ensures the server's existing unmodeled attributes remain completely untouched.
 3. **UI Isolation**: Evolution has no UI fields for unsupported properties. Inventing fake mappings would confuse users and corrupt server records.
@@ -278,6 +360,83 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
     - Compares URI strings directly.
   - This allows the sync layer to detect whether the photo was actually edited by the user, avoiding redundant image re-uploads on every sync.
 
+### 4.9 Deliberate Drop Rationale for Standard vCard 3.0 Properties (`GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, `LOGO`)
+`jmap-vcard` deliberately ignores standard vCard 3.0 properties for which Evolution/EDS lacks active UI editing support or for which client-side preservation is architecturally incorrect:
+1. **`GEO` (RFC 2426 §3.4.2)**:
+   - Evolution's contact editor has no UI controls or display for geographical coordinates.
+   - JSContact (RFC 9553 §2.5.1) scopes coordinates to specific postal addresses (`Address.coordinates`), rather than top-level cards.
+   - *Rationale*: Dropping top-level `GEO` lines prevents polluting JSContact data with non-standard top-level coordinates or guessing which address the coordinate belongs to. Server-side `Address.coordinates` values are untouched during sync by `PatchObject`.
+2. **`TZ` (RFC 2426 §3.4.1)**:
+   - Evolution's contact editor has no contact-specific time zone field.
+   - JSContact (RFC 9553 §2.1.2) uses IANA Time Zone Database identifiers (`card.time_zone`), whereas vCard 3.0 `TZ` typically contains UTC offsets (`-05:00`) or non-standard abbreviations (`EST`).
+   - *Rationale*: Dropped on vCard parse/emission. Server-side `card.time_zone` is preserved untouched by `PatchObject`.
+3. **`MAILER` (RFC 2426 §3.6.3)**:
+   - Deprecated and removed in RFC 6350 (vCard 4.0 Appendix A.3).
+   - Identifies the email software agent of the sender. Evolution has no UI or storage for contact email agents.
+   - *Rationale*: Dropped by design. Deprecated legacy client metadata.
+4. **`PRODID` (RFC 2426 §3.6.4)**:
+   - Identifies the software that created the vCard stream (e.g. `PRODID:-//Apple Inc.//macOS 14.5//EN`).
+   - *Rationale*: Generator metadata belongs to the serializing exporter, not the contact record. Carrying over foreign `PRODID` strings across subsequent exports from Evolution/JMAP would misattribute the generator. Dropped by design.
+5. **`REV` (RFC 2426 §3.6.5)**:
+   - Timestamp of the vCard revision (RFC 9553 §1.4 `updated`).
+   - *Rationale*: Revision timestamps are strictly owned and managed by the authoritative store (the JMAP server) upon committing changes. Preserving or emitting stale client-side `REV` timestamps would corrupt server revision tracking. `PatchObject` leaves `updated` to the JMAP server.
+6. **`SORT-STRING` (RFC 2426 §3.6.7)**:
+   - Family name sort string, replaced in RFC 6350 / JSContact by `sortAs` parameters on `Name` and `Organization`.
+   - Evolution uses `X-EVOLUTION-FILE-AS` (`E_CONTACT_FILE_AS`) for filing display names.
+   - *Rationale*: Dropped by design. JSContact `sortAs` properties ride in `extra` on the JMAP layer and are left untouched by `PatchObject`.
+7. **`CLASS` (RFC 2426 §3.7.2)**:
+   - Access classification (`PUBLIC`, `PRIVATE`, `CONFIDENTIAL`). Deprecated/removed in vCard 4.0.
+   - Evolution contact editor has no access classification controls.
+   - *Rationale*: Dropped by design. Server-side privacy settings are preserved untouched by `PatchObject`.
+8. **`SOUND` (RFC 2426 §3.6.6)**:
+   - Digital audio clips / pronunciation guides (RFC 9553 §2.6.4 `media` with `kind: "sound"`).
+   - EDS has no `E_CONTACT_SOUND` field and Evolution has no audio playback in the contact editor.
+   - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `SOUND` lines are dropped on vCard parse to prevent misparsing as photos. Server-side `sound` media entries remain safe and untouched in `card.media` via `PatchObject`.
+9. **`LOGO` (RFC 2426 §3.5.3)**:
+   - Organization logo image (RFC 9553 §2.6.4 `media` with `kind: "logo"`).
+   - Although `E_CONTACT_LOGO` exists in EDS C enum definitions, Evolution's contact editor provides UI exclusively for personal photos (`E_CONTACT_PHOTO`).
+   - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `LOGO` lines are dropped on vCard parse to prevent colliding with or replacing the personal photo field. Server-side `logo` media entries remain safe and untouched in `card.media` via `PatchObject`.
+
+### 4.10 vCard 2.1 Legacy Import Tolerance (Asymmetric Compatibility Contract)
+
+Real-world contact exporters (such as older versions of Microsoft Outlook, feature phones from Nokia and Sony Ericsson, and legacy PBX systems) continue to emit vCard 2.1 data. To ensure robust interoperability without compromising modern standards, `jmap-vcard` implements an **asymmetric import tolerance contract**:
+
+```
+[ Inbound vCard 2.1 / 3.0 / 4.0 ]
+              │
+              ▼ vcard_to_card() (Postel's Law: liberal in what we accept)
+[ JSContact ContactCard (RFC 9553) ]
+              │
+              ▼ card_to_vcard() (Strict RFC 2426 vCard 3.0 UTF-8)
+[ Outbound Canonical vCard 3.0 ]
+```
+
+#### Accepted vCard 2.1 Subset:
+
+1. **Bare Parameter Type Names (No `TYPE=` Prefix)**:
+   - In vCard 2.1, parameter values were frequently written as bare words without the `TYPE=` parameter key (e.g. `TEL;WORK;VOICE:+12345` instead of `TEL;TYPE=WORK,VOICE:+12345`).
+   - [`vcard_to_card`] accepts all bare type names across telephony, email, and address properties:
+     - Phone contexts: `WORK`, `HOME`.
+     - Phone features: `VOICE`, `FAX`, `CELL`, `MOBILE`, `PAGER`, `VIDEO`, `CAR`, `ISDN`, `TTYTDD`.
+     - Email contexts and types: `INTERNET`, `WORK`, `HOME`, `PREF`.
+     - Address contexts and types: `WORK`, `HOME`, `POSTAL`, `PARCEL`, `DOM`, `INTL`, `PREF`.
+   - `entry_has_type` matches both standard `TYPE=value` parameters and bare parameter names matching the target token case-insensitively.
+2. **Preference Flags (`PREF`)**:
+   - Accepts bare `PREF` parameters (e.g. `EMAIL;PREF;INTERNET:alice@example.com`, `TEL;WORK;PREF:+12345`, `ADR;WORK;PREF:...`, `LABEL;WORK;PREF:...`) and maps them to `pref: Some(1)` or `extra["pref"] = 1`.
+   - Outbound emission sorts preferred entries to the top (`E_CONTACT_EMAIL_1`, primary phone) and emits standard vCard 3.0 `TYPE=PREF`.
+3. **Character Sets & Transport Encodings**:
+   - `CHARSET` parameter: Accepts legacy character set declarations (`CHARSET=UTF-8`, `CHARSET=ISO-8859-1`, `CHARSET=WINDOWS-1252`) case-insensitively on any property.
+   - `ENCODING=QUOTED-PRINTABLE`: Automatically decodes Quoted-Printable hexadecimal octets (`=C3=BC`, `=FC`, `=80`) into standard UTF-8 text strings according to the declared `CHARSET` (or ISO-8859-1 default per RFC 2045).
+   - Soft Line Breaks: Losslessly unfolds Quoted-Printable soft line breaks (`=\r\n` and `=\n`) without introducing extraneous whitespace.
+4. **Legacy Photo Formats & Subtype Inference**:
+   - Accepts bare image formats in photo parameters: `PHOTO;JPEG;ENCODING=BASE64:...`, `PHOTO;GIF;BASE64:...`, `PHOTO;PNG;ENCODING=BASE64:...`, and `PHOTO;TYPE=JPEG;ENCODING=BASE64:...`.
+   - Automatically identifies image subtypes from bare parameter names (`JPEG`, `GIF`, `PNG`, `BMP`, `TIFF`, `WEBP`) and constructs valid `data:image/<subtype>;base64,...` data URIs.
+   - Outbound serialization normalizes strictly to canonical vCard 3.0 format (`PHOTO;ENCODING=b;TYPE=<SUBTYPE>:...`).
+5. **Outbound Invariant & Fixed-Point Stability**:
+   - Outbound serialization via [`card_to_vcard`] is unconditionally RFC 2426 vCard 3.0 in native UTF-8 with standard line folding (75 octets) and backslash value escaping (`\n`, `\,`, `\;`, `\\`).
+   - Legacy parameters (`CHARSET`, `QUOTED-PRINTABLE`, `INTERNET`, bare types) are never emitted.
+   - Fixed-point stability is guaranteed: importing a 2.1 vCard, emitting as 3.0, and re-parsing reaches exact fixed-point equality (`export2 == export3` and `card2 == card3`).
+
 ---
 
 ## 5. Function & Predicate Index
@@ -304,8 +463,8 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 | [`title_kind`] | `pub` | Resolves title kind with fallback to `"title"`. |
 | [`states_title`] | `pub` | Checks if title has non-empty name and supported kind (`title` or `role`). |
 | [`states_note`] | `pub` | Checks if note contains non-empty text. |
-| [`states_link`] | `pub` | Checks if link contains non-empty URI and plain website kind (`None`). |
-| `maps_link_kind` | `private` | Filters link kind to allow only plain website links (`kind: None`) on vCard 3.0 `URL`. |
+| [`states_link`] | `pub` | Checks if link contains non-empty URI and mapped kind (`None`, `blog`, `video`). |
+| `maps_link_kind` | `private` | Checks if link kind is supported on vCard 3.0 / EDS (`None`, `blog`, `video`). |
 | `entry_text_list` | `private` | Reads parsed text values of a multi-valued property and joins them with commas. |
 | [`states_calendar`] | `pub` | Checks if calendar has non-empty URI and mapped kind (`calendar` or `freeBusy`). |
 | [`states_media`] | `pub` | Evaluates if media entry is a valid photo with supported inline/URI payload. |
@@ -322,6 +481,52 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 | [`anniversary_date`] | `pub` | Formats anniversary date as `YYYY-MM-DD` if valid and survives EDS clamping. |
 | [`states_a_point_in_time`] | `pub` | Checks if anniversary is dated by a UTC `Timestamp` rather than `PartialDate`. |
 | [`states_spouse`] | `pub` | Checks if relation is `spouse` and key names a printable person (not a URI). |
+| [`states_manager`] | `pub` | Checks if relation is `manager` and key names a printable person (not a URI). |
+| [`states_assistant`] | `pub` | Checks if relation is `assistant` and key names a printable person (not a URI). |
 | [`states_nothing_but_the_marriage`] | `pub` | Checks if relation entry contains only the `spouse` relation type. |
 | [`states_keyword`] | `pub` | Validates keyword tag for boolean `true`, non-emptiness, and whitespace safety. |
+
+---
+
+## 6. Round-Trip Fixpoint Stability & Regression Net
+
+### 6.1 The Multi-Stage Round-Trip Contract
+
+Every contact property mapping in `jmap-vcard` satisfies a strict multi-pass fixed-point stability invariant across the translation lifecycle:
+
+```
+vCard₁ (Inbound / Legacy 2.1 / Foreign Exporter)
+  │
+  ▼ vcard_to_card()
+Card₁ (JSContact representation)
+  │
+  ▼ card_to_vcard()
+vCard₂ (Export₁: Canonical RFC 2426 vCard 3.0)
+  │
+  ▼ vcard_to_card()
+Card₂ (EContact₂: In-Memory EDS representation)
+  │
+  ▼ card_to_vcard()
+vCard₃ (Export₂: Re-Emitted vCard 3.0)
+  │
+  ▼ vcard_to_card()
+Card₃ (EContact₃: Stabilized JSContact Card)
+  │
+  ▼ card_to_vcard()
+vCard₄ (Export₃: Stabilized vCard 3.0)
+```
+
+### 6.2 Standing Fixpoint Invariants
+
+1. **Byte-Identical vCard Fixpoint**:
+   $$\text{Export}_2 (\text{vCard}_3) \equiv \text{Export}_3 (\text{vCard}_4)$$
+   The second and third vCard 3.0 exports are guaranteed to be byte-identical. No line reordering, parameter drift, delimiter re-escaping, or whitespace fluctuation occurs.
+
+2. **Structural JSContact Fixpoint**:
+   $$\text{Card}_2 (\text{EContact}_2) \equiv \text{Card}_3 (\text{EContact}_3)$$
+   The deserialized JSContact structures reach complete identity by the second roundtrip pass.
+
+3. **Oscillation Diagnosis & Proptest Net**:
+   The `proptest_fuzz.rs` suite continuously fuzzes the fixpoint contract across arbitrary raw vCard inputs and arbitrary `ContactCard` instances. When test assertions fail, the oscillation analyzer diagnostic (`identify_oscillating_vcard_property` / `identify_oscillating_card_field`) isolates the specific property name and line difference, enabling instant root-cause identification during proptest test case shrinkage.
+
 

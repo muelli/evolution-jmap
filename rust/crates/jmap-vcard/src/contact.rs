@@ -6,7 +6,8 @@
 //! The mapped set is deliberately the one the address book backend needs to
 //! be useful — UID, FN, N, NICKNAME, EMAIL, TEL, ADR, LABEL, ORG, TITLE, ROLE,
 //! NOTE, BDAY, URL, CALURI, FBURL, PHOTO, CATEGORIES and the `X-` lines EDS
-//! keeps instant-messaging handles and the spouse on —
+//! keeps instant-messaging handles, spouse, manager, assistant, blog URL,
+//! and video URL on —
 //! and no more. Everything else on a card (preferred languages, the crypto keys
 //! it lists, what the contact is spoken to as, …) is *dropped*, which is only
 //! safe because saving goes back to the server as a PatchObject naming the
@@ -266,6 +267,18 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
     ("video", "VIDEO"),
 ];
 
+/// The vCard `TYPE` parameter names recognized for each JSContact phone feature on inbound parsing.
+///
+/// In addition to standard vCard 3.0 type names (e.g. `CELL`), recognizes common synonyms
+/// emitted by real-world vCard generators (e.g. `MOBILE`).
+const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
+    ("mobile", &["CELL", "MOBILE"]),
+    ("pager", &["PAGER"]),
+    ("fax", &["FAX"]),
+    ("voice", &["VOICE"]),
+    ("video", &["VIDEO"]),
+];
+
 /// JSContact address component kinds, paired with their position in the
 /// vCard `ADR` value (RFC 2426 §3.2.1: post office box, extended address,
 /// street, locality, region, postal code, country), listed in that order —
@@ -428,14 +441,24 @@ const ANNIVERSARY_KINDS: [(&str, &str); 2] =
 /// libebook-contacts 3.52.
 const X_EVOLUTION_SPOUSE: &str = "X-EVOLUTION-SPOUSE";
 
-/// The one RFC 9553 §2.1.8 relation type this mapping states.
-///
-/// Nineteen of the twenty are missing on purpose: no vCard 3.0 property and no
-/// EDS field states them, and a name on the spouse line would tell the user
-/// something the card never said. Evolution's Manager and Assistant fields are
-/// the near misses and have no type either — §2.1.8's `agent` is whoever acts on
-/// the contact's behalf, which is wider than an assistant.
+/// The line EDS keeps `E_CONTACT_MANAGER` on — the field Evolution's contact
+/// editor labels "Manager".
+const X_EVOLUTION_MANAGER: &str = "X-EVOLUTION-MANAGER";
+
+/// The line EDS keeps `E_CONTACT_ASSISTANT` on — the field Evolution's contact
+/// editor labels "Assistant".
+const X_EVOLUTION_ASSISTANT: &str = "X-EVOLUTION-ASSISTANT";
+
+/// RFC 9553 §2.1.8 relation types this mapping states on EDS relation lines.
 const SPOUSE_RELATION: &str = "spouse";
+const MANAGER_RELATION: &str = "manager";
+const ASSISTANT_RELATION: &str = "assistant";
+
+/// The line EDS keeps `E_CONTACT_BLOG_URL` on.
+const X_EVOLUTION_BLOG_URL: &str = "X-EVOLUTION-BLOG-URL";
+
+/// The line EDS keeps `E_CONTACT_VIDEO_URL` on.
+const X_EVOLUTION_VIDEO_URL: &str = "X-EVOLUTION-VIDEO-URL";
 
 /// JSContact calendar `kind` values and the vCard property stating each.
 ///
@@ -668,25 +691,29 @@ pub fn states_nickname(nickname: &Nickname) -> bool {
 }
 
 /// Whether a link reaches the user at all: it must point somewhere *and* be
-/// of a kind vCard 3.0 has a property for.
+/// of a kind vCard 3.0 or EDS has a property for.
 ///
 /// As with a title, the kind alone is not the question — a plain link with no
-/// URI has no `URL` line either, and calling it visible would let a save
+/// URI has no line either, and calling it visible would let a save
 /// delete it.
 pub fn states_link(link: &Link) -> bool {
-    !link.uri.is_empty() && maps_link_kind(link.kind.as_deref())
+    !link.uri.is_empty()
+        && !edged_with_whitespace(&link.uri)
+        && !link.uri.contains('\r')
+        && maps_link_kind(link.kind.as_deref())
 }
 
 /// Whether the vCard mapping covers a JSContact link of this `kind`.
 ///
-/// Only a link that names no kind at all, which is the plain website RFC 2426
-/// §3.6.8's `URL` means. RFC 9553 §2.6.3 defines one kind, `contact` — a URI
-/// for writing to the person — and allows vendor kinds besides; RFC 9555
-/// §2.6.3 states `contact` on vCard 4.0's `CONTACT-URI`, which the 3.0 reader
-/// EDS gives us does not know. Writing either on a `URL` would tell the user
-/// it is the contact's home page.
+/// - `None`: plain website, mapped to RFC 2426 §3.6.8 `URL` (Evolution Homepage).
+/// - `Some("blog")`: blog URL, mapped to `X-EVOLUTION-BLOG-URL` (Evolution Blog URL).
+/// - `Some("video")`: video stream URL, mapped to `X-EVOLUTION-VIDEO-URL` (Evolution Video URL).
+///
+/// RFC 9553 §2.6.3 defines `contact` (a URI for writing to the person), which RFC 9555
+/// §2.6.3 states on vCard 4.0's `CONTACT-URI`. Other kinds outside this set get no line
+/// and remain safe on the server.
 fn maps_link_kind(kind: Option<&str>) -> bool {
-    kind.is_none()
+    matches!(kind, None | Some("blog") | Some("video"))
 }
 
 /// Whether a calendar reaches the user at all: it must point somewhere *and*
@@ -722,30 +749,31 @@ fn calendar_kind(property: &str) -> Option<&'static str> {
         .map(|(kind, _)| *kind)
 }
 
-/// Whether a related entity reaches the user at all, `key` being the entry's
-/// own — which is here the entity itself rather than an id of whoever wrote the
-/// entry.
-///
-/// Two things have to hold at once:
-///
-/// - **the relation must say `spouse`.** It is the one type of the twenty RFC
-///   9553 §2.1.8 lists that Evolution has a field for; see `SPOUSE_RELATION`.
-///   An entry stating several types still crosses on the strength of that one,
-///   and an entry stating none — which RFC 9555 §2.9.5 reads a `RELATED` line
-///   carrying no `TYPE` into — states no marriage and gets no line.
-/// - **the key must be a name EDS gives back unchanged.** RFC 9553 §2.1.8 keys
-///   the map by the related Card's `uid`, and RFC 9555 §2.9.5 puts free text
-///   there where the vCard stated a `RELATED;VALUE=text` — so a key that names a
-///   URI holds an identifier, not a person, and writing it on the line would
-///   show the user a URN under the heading "Spouse" and have the next save write
-///   it back as the person's name. And because the key *is* the value here, a
-///   name EDS respells is a *different entry* to the save: it would delete the
-///   relation the server holds and add one under the new key. The empty name,
-///   ends made of ASCII whitespace — trimmed by EDS, measured against
-///   libebook-contacts 3.52, as they are on an instant-messaging handle — and a
-///   carriage return, dropped by [`card_to_vcard`], are each that case.
+/// Whether a relation states the given relation type.
+fn has_relation_type(relation: &Relation, expected: &str) -> bool {
+    relation
+        .relation
+        .as_ref()
+        .and_then(|types| types.get(expected))
+        == Some(&Value::Bool(true))
+}
+
+/// Whether a related entity reaches the user as a spouse, `key` being the
+/// entity's name.
 pub fn states_spouse(key: &str, relation: &Relation) -> bool {
-    married(relation) && names_a_person(key)
+    has_relation_type(relation, SPOUSE_RELATION) && names_a_person(key)
+}
+
+/// Whether a related entity reaches the user as a manager, `key` being the
+/// entity's name.
+pub fn states_manager(key: &str, relation: &Relation) -> bool {
+    has_relation_type(relation, MANAGER_RELATION) && names_a_person(key)
+}
+
+/// Whether a related entity reaches the user as an assistant, `key` being the
+/// entity's name.
+pub fn states_assistant(key: &str, relation: &Relation) -> bool {
+    has_relation_type(relation, ASSISTANT_RELATION) && names_a_person(key)
 }
 
 /// Whether the marriage is all a relation says, so that withdrawing it leaves
@@ -767,15 +795,6 @@ pub fn states_nothing_but_the_marriage(relation: &Relation) -> bool {
             .iter()
             .flatten()
             .all(|(kind, _)| kind == SPOUSE_RELATION)
-}
-
-/// Whether a relation states the one type that has a line.
-fn married(relation: &Relation) -> bool {
-    relation
-        .relation
-        .as_ref()
-        .and_then(|types| types.get(SPOUSE_RELATION))
-        == Some(&Value::Bool(true))
 }
 
 /// Whether a `relatedTo` key is a name a line can show the user and a save can
@@ -1596,8 +1615,14 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         if !states_link(link) {
             continue;
         }
+        let prop = match link.kind.as_deref() {
+            None => VCardProperty::Url,
+            Some("blog") => VCardProperty::Other(X_EVOLUTION_BLOG_URL.to_owned()),
+            Some("video") => VCardProperty::Other(X_EVOLUTION_VIDEO_URL.to_owned()),
+            _ => continue,
+        };
         entries.push(
-            VCardEntry::new(VCardProperty::Url)
+            VCardEntry::new(prop)
                 .with_param(VCardParameter::new(
                     VCardParameterName::Other(X_JMAP_KEY.to_owned()),
                     VCardParameterValue::Text(key.clone()),
@@ -1721,20 +1746,33 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
         );
     }
 
-    // The spouse, on the line EDS keeps that field on — and with no key on it,
-    // which no other keyed map here can do: RFC 9553 §2.1.8 keys `relatedTo` by
-    // the related entity, so the name on the line *is* the entry's key and there
-    // is nothing left for an X-JMAP-KEY to say. Every other relation, and every
-    // entity named by a UID rather than by name, gets no line: see
-    // [`states_spouse`].
+    // The relations EDS keeps fields on: spouse (E_CONTACT_SPOUSE),
+    // manager (E_CONTACT_MANAGER), and assistant (E_CONTACT_ASSISTANT).
+    // And with no key on them, which no other keyed map here can do:
+    // RFC 9553 §2.1.8 keys `relatedTo` by the related entity, so the name
+    // on the line *is* the entry's key and there is nothing left for an
+    // X-JMAP-KEY to say. Every other relation, and every entity named by a
+    // UID rather than by name, gets no line: see [`states_spouse`],
+    // [`states_manager`], and [`states_assistant`].
     for (key, relation) in card.related_to.iter().flatten() {
-        if !states_spouse(key, relation) {
-            continue;
+        if states_spouse(key, relation) {
+            entries.push(
+                VCardEntry::new(VCardProperty::Other(X_EVOLUTION_SPOUSE.to_owned()))
+                    .with_value(key.clone()),
+            );
         }
-        entries.push(
-            VCardEntry::new(VCardProperty::Other(X_EVOLUTION_SPOUSE.to_owned()))
-                .with_value(key.clone()),
-        );
+        if states_manager(key, relation) {
+            entries.push(
+                VCardEntry::new(VCardProperty::Other(X_EVOLUTION_MANAGER.to_owned()))
+                    .with_value(key.clone()),
+            );
+        }
+        if states_assistant(key, relation) {
+            entries.push(
+                VCardEntry::new(VCardProperty::Other(X_EVOLUTION_ASSISTANT.to_owned()))
+                    .with_value(key.clone()),
+            );
+        }
     }
 
     // The whole set on one line, which is all EDS reads, and with no key on it:
@@ -1837,7 +1875,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 let phone = ContactPhone {
                     number,
                     contexts: read_flags(&CONTEXTS, entry),
-                    features: read_flags(&PHONE_FEATURES, entry),
+                    features: read_phone_flags(entry),
                     pref: entry_has_type(entry, "PREF").then_some(1),
                     ..ContactPhone::default()
                 };
@@ -1871,14 +1909,21 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 }
                 notes.insert(entry_key(entry, "n", &notes), note);
             }
-            "URL" => {
+            "URL" | X_EVOLUTION_BLOG_URL | X_EVOLUTION_VIDEO_URL => {
                 // Read as one value, which is what calcard makes of a URI:
                 // neither the comma nor the semicolon inside it separates
                 // anything, so a query string listing tags arrives as the URI
                 // the line stated rather than as a fragment of it.
+                let kind = if name_upper == "URL" {
+                    None
+                } else if name_upper == X_EVOLUTION_BLOG_URL {
+                    Some("blog".to_owned())
+                } else {
+                    Some("video".to_owned())
+                };
                 let link = Link {
                     uri: entry_text(entry),
-                    kind: None,
+                    kind,
                     extra: BTreeMap::new(),
                 };
                 if !states_link(&link) {
@@ -1911,12 +1956,28 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
             // relation nobody can edit is still one a save must not delete. The
             // key is the line's own text, so nothing is invented and an
             // X-JMAP-KEY, if some other client wrote one, is not read.
-            X_EVOLUTION_SPOUSE => {
-                let (key, relation) = spouse_named(entry);
-                if !states_spouse(&key, &relation) {
+            X_EVOLUTION_SPOUSE | X_EVOLUTION_MANAGER | X_EVOLUTION_ASSISTANT => {
+                let name = entry_text(entry);
+                if !names_a_person(&name) {
                     continue;
                 }
-                related_to.insert(key, relation);
+                let relation_type = if name_upper == X_EVOLUTION_SPOUSE {
+                    SPOUSE_RELATION
+                } else if name_upper == X_EVOLUTION_MANAGER {
+                    MANAGER_RELATION
+                } else {
+                    ASSISTANT_RELATION
+                };
+                let entry_rel = related_to.entry(name).or_insert_with(|| Relation {
+                    relation: Some(BTreeMap::new()),
+                    extra: BTreeMap::new(),
+                });
+                if let Some(types) = &mut entry_rel.relation {
+                    types.insert(relation_type.to_owned(), Value::Bool(true));
+                } else {
+                    entry_rel.relation =
+                        Some([(relation_type.to_owned(), Value::Bool(true))].into());
+                }
             }
             "BDAY" | X_EVOLUTION_ANNIVERSARY => {
                 let Some(anniversary) = read_anniversary(entry) else {
@@ -2048,6 +2109,12 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
     }
     let media_type = entry_param(entry, "TYPE")
         .filter(|subtype| !subtype.eq_ignore_ascii_case(UNKNOWN_TYPE))
+        .or_else(|| {
+            entry.params.iter().find_map(|param| {
+                let name = param.name.as_str();
+                is_known_image_subtype(name).then(|| name.to_owned())
+            })
+        })
         .map(|subtype| format!("{IMAGE_PREFIX}{subtype}"));
     let uri = format!(
         "{DATA_SCHEME}{}{BASE64_MARKER},{}",
@@ -2055,6 +2122,25 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
         BASE64.encode(&bytes)
     );
     Some(photo_entry(uri, media_type))
+}
+
+fn is_known_image_subtype(subtype: &str) -> bool {
+    matches!(
+        subtype.to_ascii_uppercase().as_str(),
+        "JPEG"
+            | "JPG"
+            | "PNG"
+            | "GIF"
+            | "TIFF"
+            | "TIF"
+            | "BMP"
+            | "WEBP"
+            | "SVG"
+            | "SVG+XML"
+            | "HEIC"
+            | "AVIF"
+            | "ICO"
+    )
 }
 
 /// A media entry for a picture of the contact — the one kind a `PHOTO` line
@@ -2089,21 +2175,6 @@ fn read_title(entry: &VCardEntry) -> Option<Title> {
         kind: kind.map(str::to_owned),
         extra: BTreeMap::new(),
     })
-}
-
-/// The `relatedTo` entry a spouse line states: the name it holds, and the
-/// marriage that is all the line says about it.
-///
-/// Returned as a pair rather than filtered here, so that [`states_spouse`] is
-/// the single point this and [`card_to_vcard`] agree through — a name that could
-/// not be written on the line is not read back off one either, or the save would
-/// create an entry the emitter can never draw again.
-fn spouse_named(entry: &VCardEntry) -> (String, Relation) {
-    let relation = Relation {
-        relation: Some([(SPOUSE_RELATION.to_owned(), Value::Bool(true))].into()),
-        extra: BTreeMap::new(),
-    };
-    (entry_text(entry), relation)
 }
 
 /// The anniversary a date line states, or `None` for a line no calendar day
@@ -2468,6 +2539,20 @@ fn read_flags(table: &[(&str, &str)], entry: &VCardEntry) -> Option<Value> {
     (!flags.is_empty()).then_some(Value::Object(flags))
 }
 
+/// The JSContact phone `features` boolean map for the `TYPE` values present on a `TEL` entry.
+fn read_phone_flags(entry: &VCardEntry) -> Option<Value> {
+    let flags: Map<String, Value> = PHONE_FEATURE_TYPES
+        .iter()
+        .filter(|(_, types)| {
+            types
+                .iter()
+                .any(|type_name| entry_has_type(entry, type_name))
+        })
+        .map(|(key, _)| ((*key).to_owned(), Value::Bool(true)))
+        .collect();
+    (!flags.is_empty()).then_some(Value::Object(flags))
+}
+
 fn param_text(value: &VCardParameterValue) -> String {
     match value {
         VCardParameterValue::Text(text) => text.clone(),
@@ -2540,9 +2625,11 @@ fn entry_param(entry: &VCardEntry, name: &str) -> Option<String> {
 }
 
 fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
-    entry
-        .params
-        .iter()
-        .filter(|param| param.name.as_str().eq_ignore_ascii_case("TYPE"))
-        .any(|param| param_text(&param.value).eq_ignore_ascii_case(value))
+    entry.params.iter().any(|param| {
+        if param.name.as_str().eq_ignore_ascii_case("TYPE") {
+            param_text(&param.value).eq_ignore_ascii_case(value)
+        } else {
+            param.name.as_str().eq_ignore_ascii_case(value)
+        }
+    })
 }

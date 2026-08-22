@@ -417,6 +417,160 @@ Running record of headless polish increments on the `antigravity` branch.
      - Cards parsed from legacy `CHARSET` or `ENCODING=QUOTED-PRINTABLE` inputs are normalized on output into standard vCard 3.0 UTF-8 format, achieving fixed-point convergence (`vcard2 == vcard3`) on subsequent passes.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-22 — Standard vCard 3.0 property preservation audit & characterization (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 1. Standard-property preservation audit (GEO, TZ, MAILER, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO).
+- **Changes:**
+  - Added comprehensive audit, characterization, and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `standard_vcard_properties_dropped_by_design_characterization_and_rationale`: tests inbound vCards containing all 9 standard unmapped vCard 3.0 properties (`GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, `LOGO`) alongside all standard mapped contact fields (`UID`, `X-JMAP-UID`, `FN`, `N`, `NICKNAME`, `EMAIL`, `TEL`, `ADR`, `LABEL`, `ORG`, `TITLE`, `ROLE`, `NOTE`, `URL`, `CALURI`, `FBURL`, `PHOTO`, `CATEGORIES`, `BDAY`, `X-EVOLUTION-ANNIVERSARY`, `X-EVOLUTION-SPOUSE`, `X-JABBER`), confirming 100% field extraction for mapped properties, exclusion of unmapped properties from JSContact models, clean outbound vCard 3.0 emission, and fixed-point convergence (`card2 == card` and `vcard2 == vcard3`).
+    - `standard_properties_individual_variations_and_parameters`: tests each of the 9 standard properties across individual variations: `GEO` decimal/signed/high-precision coordinates, `TZ` UTC offsets and IANA/abbreviated text names, `MAILER` client agent strings, `PRODID` FPI product identifiers, `REV` ISO-8601 timestamps, `SORT-STRING` text and delimiter-escaped strings, `CLASS` access classifications, `SOUND` inline base64 and remote URI audio, and `LOGO` inline base64 and remote URI graphics.
+    - `jscontact_sound_and_logo_media_entries_server_preservation`: tests `ContactCard` instances with multi-entry `media` maps containing photos, sounds, logos, and documents, asserting that `states_media` strictly filters for `kind: Some("photo")`, `card_to_vcard` emits exactly one `PHOTO` line, and non-photo media entries remain preserved on the JMAP server without triggering destructive diffs during sync (`PatchObject`).
+    - `standard_properties_case_insensitivity_and_empty_values`: tests lowercase/mixed-case property names (`geo:`, `tz:`, `mailer:`, `prodid:`, `rev:`, `sort-string:`, `class:`, `sound:`, `logo:`) and empty/whitespace-only values.
+  - Enhanced `arb_vcard_property_line` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to generate all 9 standard properties during property-based fuzzing.
+  - Updated `docs/VCARD-MAPPING.md` with:
+    - Section 2 Master Property Mapping Table rows for `GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, and `LOGO`.
+    - Section 4.9 documenting the architectural justification, EDS UI state, JSContact representation, and sync safety rationale for each dropped property.
+- **Calcard behaviour-difference findings & Product Decisions (Dropped-by-Design Rationale for Standard vCard 3.0 Properties):**
+  1. `GEO` (RFC 2426 §3.4.2): Evolution contact editor lacks UI for coordinates; JSContact scopes coordinates to `Address.coordinates`. Dropping top-level `GEO` prevents creating bogus address associations; server `Address.coordinates` values are untouched by `PatchObject`.
+  2. `TZ` (RFC 2426 §3.4.1): Evolution has no per-contact timezone UI; JSContact uses IANA names (`card.time_zone`) while vCard 3.0 uses offsets/abbreviations. Server-side `time_zone` is preserved untouched by `PatchObject`.
+  3. `MAILER` (RFC 2426 §3.6.3): Deprecated/removed in vCard 4.0; legacy client metadata with no Evolution UI or JSContact mapping.
+  4. `PRODID` (RFC 2426 §3.6.4): Generator metadata is owned by the exporting serializer. Foreign `PRODID` strings are not preserved across saves to prevent misattribution.
+  5. `REV` (RFC 2426 §3.6.5): Revision timestamp is strictly owned by the authoritative JMAP server (`updated`). Emitting stale client timestamps would corrupt server revision tracking.
+  6. `SORT-STRING` (RFC 2426 §3.6.7): Replaced in vCard 4.0 by `SORT-AS`. Evolution uses `X-EVOLUTION-FILE-AS`. JSContact `sortAs` properties ride in `extra` on the JMAP layer and are left untouched by `PatchObject`.
+  7. `CLASS` (RFC 2426 §3.7.2): Deprecated access flag with no Evolution editor UI. Server privacy settings are preserved untouched by `PatchObject`.
+  8. `SOUND` (RFC 2426 §3.6.6) & `LOGO` (RFC 2426 §3.5.3): Evolution contact editor only supports personal photo display/editing (`E_CONTACT_PHOTO`). `states_media` strictly filters for `kind: Some("photo")` on `PHOTO` lines. Inbound `SOUND`/`LOGO` lines are ignored to prevent misinterpreting them as personal photos. Server-side `sound` and `logo` entries in `card.media` remain safely preserved by `PatchObject`.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+## 2026-08-22 — Phone-TYPE completeness, MOBILE synonym & 19-field EDS matrix (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 2. Phone-TYPE completeness vs EDS.
+- **Changes:**
+  - Added `PHONE_FEATURE_TYPES` and adapted `read_phone_flags` in `rust/crates/jmap-vcard/src/contact.rs` to recognize both `TYPE=CELL` and real-world synonym `TYPE=MOBILE` (case-insensitively) as JSContact `features: {"mobile": true}`, while outbound emission normalizes to canonical RFC 2426 §3.3.1 `TYPE=CELL`.
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `phone_mobile_type_synonym_and_permutations_characterization`: tests inbound `TEL;TYPE=MOBILE` across bare, lowercase, mixed-case, work/home contexts, preference parameters, and multi-feature permutations (`MOBILE,VOICE`, `MOBILE,FAX`), verifying `mobile` feature extraction, outbound normalization to `TYPE=CELL`, and fixed-point roundtrip stability (`vcard2 == vcard3`).
+    - `phone_nineteen_eds_fields_complete_matrix_and_roundtrip`: verifies the full matrix of all 19 EDS phone fields from `libebook-contacts` 3.52 (`PRIMARY`, `BUSINESS`, `BUSINESS_2`, `BUSINESS_FAX`, `HOME`, `HOME_2`, `HOME_FAX`, `MOBILE` [both `CELL` and `MOBILE`], `PAGER`, `OTHER`, `OTHER_FAX`, `CAR`, `ISDN`, `CALLBACK`, `COMPANY`, `RADIO`, `TELEX`, `TTYTDD`, `ASSISTANT`), confirming accurate context/feature/pref extraction, preference-first sorting on emission (`TEL;TYPE=PREF`), and 100% roundtrip convergence.
+    - `phone_whitespace_punctuation_and_uri_schemes_handling`: tests formatted numbers with spaces, dashes, dots, parentheses, `tel:` URIs (`tel:+1-555-0123;ext=100`), raw string preservation, and empty number omission.
+    - `phone_multi_token_and_case_insensitive_type_matrix_roundtrip`: tests comma-separated vs repeated `TYPE` parameters, mixed casing, and feature narrowing precedence order (`CELL`/`MOBILE` > `PAGER` > `FAX` > `VOICE` > `VIDEO`).
+  - Enhanced `arb_vcard_property_line` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to generate all phone type parameter variations (`CELL`, `MOBILE`, `PAGER`, `VOICE`, `FAX`, `VIDEO`, `CAR`, `ISDN`, `TTYTDD`, `WORK,CELL`, `HOME,MOBILE`).
+  - Updated `docs/VCARD-MAPPING.md` with:
+    - Section 2 Master Property Mapping Table row for `TEL` covering all 19 EDS fields and `MOBILE` synonym normalization.
+    - Section 3.3 Master EDS Phone Mapping Matrix (19 Fields) detailing field IDs, UI slots, wire types, JSContact representations, outbound types, and resolution rules.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `calcard` automatically escapes semicolons in structured `TEL` values (such as `tel:+1-555-0123;ext=100` -> `tel:+1-555-0123\;ext=100`) on emission per RFC 2426 §2.4.2, and unescapes `\;` back to literal `;` upon reading.
+  2. `calcard` serializes multiple parameters on `TEL` lines with comma-delimited `TYPE=...` grouping while parsing both comma-separated and repeated `TYPE` parameters cleanly.
+  3. `MOBILE` vs `CELL` normalization: `TYPE=MOBILE` is widely used in the wild by Android, iOS, and Outlook vCard exporters. `jmap-vcard` accepts `MOBILE` on import as JSContact `mobile` feature and normalizes to standard RFC 2426 `TYPE=CELL` on export, ensuring lossless round-trips and fixed-point convergence.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+## 2026-08-22 — Remaining X-EVOLUTION-* fields mapping & CALURI/FBURL audit (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 3. Remaining X-EVOLUTION-* fields (`X-EVOLUTION-{MANAGER, ASSISTANT, BLOG-URL, VIDEO-URL}`) and `CALURI`/`FBURL` audit.
+- **Changes:**
+  - Audited `FBURL` and `CALURI`: Confirmed they are already fully mapped and tested in `jmap-vcard` to/from `card.calendars` with `kind: "calendar"` (`CALURI` ↔ `E_CONTACT_CALENDAR_URI`) and `kind: "freeBusy"` (`FBURL` ↔ `E_CONTACT_FREEBUSY_URL`).
+  - Added constants `X_EVOLUTION_MANAGER`, `X_EVOLUTION_ASSISTANT`, `MANAGER_RELATION = "manager"`, `ASSISTANT_RELATION = "assistant"`, `X_EVOLUTION_BLOG_URL`, `X_EVOLUTION_VIDEO_URL` in `rust/crates/jmap-vcard/src/contact.rs`.
+  - Added public predicates `states_manager` and `states_assistant` and exported them in `rust/crates/jmap-vcard/src/lib.rs`.
+  - Updated `states_link` and `maps_link_kind` in `rust/crates/jmap-vcard/src/contact.rs` to support `None` (`URL`), `Some("blog")` (`X-EVOLUTION-BLOG-URL`), and `Some("video")` (`X-EVOLUTION-VIDEO-URL`), with leading/trailing whitespace and CR defense.
+  - Adapted `card_to_vcard` in `rust/crates/jmap-vcard/src/contact.rs` to:
+    - Emit `URL` (`kind: None`), `X-EVOLUTION-BLOG-URL` (`kind: Some("blog")`), and `X-EVOLUTION-VIDEO-URL` (`kind: Some("video")`) for links carrying `X-JMAP-KEY`.
+    - Emit `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, and `X-EVOLUTION-ASSISTANT` lines for entries in `related_to` matching `states_spouse`, `states_manager`, and `states_assistant`.
+  - Adapted `vcard_to_card` in `rust/crates/jmap-vcard/src/contact.rs` to:
+    - Parse `"URL" | X_EVOLUTION_BLOG_URL | X_EVOLUTION_VIDEO_URL` into `card.links` with respective `kind` (`None`, `Some("blog")`, `Some("video")`).
+    - Parse `X_EVOLUTION_SPOUSE | X_EVOLUTION_MANAGER | X_EVOLUTION_ASSISTANT` into `card.related_to[name]` with `relation: {"spouse": true}`, `{"manager": true}`, or `{"assistant": true}` when `names_a_person` holds. Multiple roles on a single person merge cleanly into one `Relation.relation` map.
+  - Added comprehensive characterization, predicate, and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `evolution_manager_and_assistant_relations_roundtrip`: tests roundtrips of cards with spouse, manager, and assistant relations.
+    - `evolution_blog_and_video_urls_links_roundtrip`: tests roundtrips of website, blog, and video links.
+    - `evolution_remaining_x_properties_coexistence_and_predicates`: validates `states_manager`, `states_assistant`, `states_spouse`, `states_link` against valid person names (including non-ASCII), rejected names (empty, whitespace-padded, URIs, CR), and relation types.
+    - `multiple_relations_on_single_person_and_multi_relation_cards`: tests individuals holding multiple simultaneous relations (e.g. manager + assistant, spouse + manager) merging on parse and roundtripping with 100% fidelity.
+    - `evolution_links_and_relations_case_insensitivity_and_whitespace`: tests mixed-case property names (`x-evolution-manager:`, `X-Evolution-Blog-Url:`) and empty/whitespace line filtering.
+  - Enhanced `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`:
+    - Updated `arb_link` to generate `video` link kinds.
+    - Updated `arb_relation` to generate `manager` and `assistant` relation types.
+    - Updated `arb_vcard_property_line` to generate `X-EVOLUTION-VIDEO-URL`.
+  - Updated `docs/VCARD-MAPPING.md`:
+    - Section 2 Master Property Mapping Table rows for `URL`, `X-EVOLUTION-BLOG-URL`, `X-EVOLUTION-VIDEO-URL`, `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, `X-EVOLUTION-ASSISTANT`.
+    - Section 3.9 & Section 3.11 documenting relationship and link mappings, multiple-role merging, and URI identifier defenses.
+    - Section 4.1 updating dropped-by-design unknown property list.
+    - Section 5 Function Index with `states_manager` and `states_assistant`.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `calcard` correctly passes through custom `X-EVOLUTION-*` properties and parameter keys (`X-JMAP-KEY`) without mangling or dropping values.
+  2. `X-EVOLUTION-BLOG-URL` and `X-EVOLUTION-VIDEO-URL` map naturally to JSContact `links` with standard kinds `"blog"` and `"video"` (RFC 9553 §2.6.3), preserving separation between personal homepages (`URL` / `E_CONTACT_HOMEPAGE_URL`) and multimedia links. Generic vendor properties (`X-BLOG-URL`, `X-VIDEO-URL`) without `X-EVOLUTION-` prefix remain safely ignored to avoid vendor drift.
+  3. `X-EVOLUTION-MANAGER` and `X-EVOLUTION-ASSISTANT` map cleanly to JSContact `related_to` with standard relation types `"manager"` and `"assistant"` (RFC 9553 §2.1.8). The entity name serves as the map key (RFC 9555 §2.9.5). `names_a_person` prevents URN/URI identifiers from being rendered into Evolution's text fields. Multiple relations for the same person round-trip into separate lines and re-merge deterministically.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+## 2026-08-22 — EMAIL and ADR slot completeness & PREF interplay (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 4. EMAIL and ADR slot completeness vs EDS (EMAIL 1..4 + attribute list, ADR/LABEL 3 slots WORK/HOME/OTHER, PREF interplay).
+- **Changes:**
+  - Audited and characterized EDS `EMAIL` slotting: Evolution exposes 4 discrete string fields (`E_CONTACT_EMAIL_1` through `E_CONTACT_EMAIL_4`, fields 8..11) plus the full `E_CONTACT_EMAIL` (field 97) `GList` attribute list containing all `EMAIL` lines (1..=4 and 5+).
+  - Audited and characterized EDS `ADR` and synthetic `LABEL` 3-slot matrix: `E_CONTACT_ADDRESS_WORK` / `E_CONTACT_ADDRESS_LABEL_WORK` (work slot), `E_CONTACT_ADDRESS_HOME` / `E_CONTACT_ADDRESS_LABEL_HOME` (home slot), and `E_CONTACT_ADDRESS_OTHER` / `E_CONTACT_ADDRESS_LABEL_OTHER` (other/unslotted).
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `email_four_slots_and_attribute_list_matrix_roundtrip`: tests cards with 1..=6 emails, verifying promotion of preferred email (`pref: 1`) to `E_CONTACT_EMAIL_1`, positional slotting across `E_CONTACT_EMAIL_1..4`, preservation of lines 5+ in `E_CONTACT_EMAIL` attribute list, unranked email sorting by key, unkeyed vCard key allocation (`e1..e5`), and fixed-point roundtrip stability (`card2 == card` and `emitted2 == emitted`).
+    - `address_three_label_slots_work_home_other_and_adr_pairing_matrix`: tests the full matrix across WORK (`TYPE=WORK`), HOME (`TYPE=HOME`), and OTHER (`TYPE=OTHER` / bare) slots with structured components and standalone labels, label-only addresses, ADR-only addresses, mixed slotting, in-place synthetic label modifications, preference-first sorting with `TYPE=PREF`, and unkeyed context pairing fallback in `label_entry`.
+    - `email_and_address_label_edge_cases_and_parameter_permutations`: tests escaped delimiters (`\n`, `\,`, `\;`, `\\`), mixed-case property/parameter names (`email;type=work,pref:`, `adr;type=work,pref:`, `label;type=other:`), and empty/whitespace line omission (`EMAIL:`, `ADR:;;;;;;`, `LABEL:`).
+  - Updated `docs/VCARD-MAPPING.md` with:
+    - Section 3.3 Master EDS Email Mapping Matrix (4 Slots + Attribute List) detailing field IDs, UI slots, wire types, JSContact representations, outbound types, and resolution rules.
+    - Section 3.4 Master EDS Address & Label Mapping Matrix (3 Slots + 3 Synthetic Labels) covering WORK, HOME, and OTHER slots, 21 subfields, and synthetic label pairing mechanics.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **EMAIL Positional Slotting & Attribute List in EDS**:
+     - EDS maps incoming `EMAIL` lines 1..4 to `E_CONTACT_EMAIL_1..4` and all lines (1..=4 and 5+) to `E_CONTACT_EMAIL`.
+     - `card_to_vcard` sorts emails by `(pref.unwrap_or(u32::MAX), key)` on emission so the lowest `pref` rank lands in `E_CONTACT_EMAIL_1` (primary email), followed by unranked emails in deterministic key order.
+  2. **Address & Synthetic Label 3-Slot Pairing**:
+     - EDS models address labels as synthetic string fields (`E_CONTACT_ADDRESS_LABEL_WORK`, `_HOME`, `_OTHER`). On import, `label_entry` matches standalone `LABEL` lines to preceding `ADR` entries using `X-JMAP-KEY` or context matching (`TYPE=WORK` -> work ADR, `TYPE=HOME` -> home ADR, `TYPE=OTHER`/bare -> other ADR).
+     - This context-matching fallback prevents spurious duplicate address entries when EDS rebuilds synthetic label fields and strips custom parameters.
+     - Outbound emission pairs each structured `ADR` with its matching standalone `LABEL` in sorted `(address_pref, key)` order, ensuring primary preferred addresses and labels land in the appropriate Evolution editor slots.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+## 2026-08-22 — vCard 2.1 legacy import tolerance & asymmetric compatibility (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 5. vCard 2.1 legacy import tolerance (ENCODING=QUOTED-PRINTABLE values, bare type words, CHARSET= params, import tolerance vs strict 3.0 export).
+- **Changes:**
+  - Enhanced `entry_has_type` in `rust/crates/jmap-vcard/src/contact.rs` to recognize both standard `TYPE=value` parameters and bare vCard 2.1 type parameter names (e.g. bare `WORK`, `HOME`, `CELL`, `MOBILE`, `VOICE`, `FAX`, `PAGER`, `PREF`, `POSTAL`, etc.) matching the token case-insensitively.
+  - Enhanced `read_photo` in `rust/crates/jmap-vcard/src/contact.rs` with `is_known_image_subtype` to infer image format subtypes (`JPEG`, `GIF`, `PNG`, `BMP`, `TIFF`, `WEBP`) from bare parameter names when explicit `TYPE=` is omitted (e.g. `PHOTO;JPEG;ENCODING=BASE64:`), constructing standard `data:image/<subtype>;base64,...` data URIs.
+  - Extended `arb_vcard_property_line` and `arb_raw_vcard` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to fuzz vCard 2.1 bare parameters and `VERSION:2.1` envelopes during property-based fuzzing.
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `vcard_21_outlook_representative_fixture_import_and_normalization`: tests representative real-world vCard 2.1 exported by legacy Microsoft Outlook (`VERSION:2.1`, bare `TEL;WORK;VOICE`, `TEL;HOME;VOICE`, `TEL;CELL;VOICE`, `TEL;WORK;FAX`, `EMAIL;PREF;INTERNET`, `ADR;WORK;PREF` / `LABEL;WORK;PREF` in QP, `NOTE;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE` with German umlauts and soft breaks, `PHOTO;JPEG;ENCODING=BASE64`, `BDAY`, `URL`, `REV`), verifying 100% extraction, outbound normalization to strict vCard 3.0 UTF-8, and fixed-point roundtrip stability (`export2 == export3` and `card2 == card3`).
+    - `vcard_21_feature_phone_nokia_sony_ericsson_fixtures_import`: tests feature phone fixtures with bare `TEL` types (`HOME`, `WORK`, `CELL`, `MOBILE`, `FAX`, `PAGER`), `EMAIL;INTERNET`, soft-wrapped QP notes, and safe omission of unmapped `SOUND;WAVE;BASE64` audio entries.
+    - `vcard_21_legacy_charsets_iso_8859_1_and_windows_1252_import`: tests legacy character set decoding across German (`CHARSET=ISO-8859-1`) and French (`CHARSET=WINDOWS-1252` with Euro sign `=80`) into native UTF-8 strings, verifying outbound normalization to clean vCard 3.0 with no redundant `CHARSET` or `ENCODING` parameters.
+    - `vcard_21_bare_type_words_and_combinations_matrix`: tests exhaustive matrix of bare parameter type combinations across telephony, email, and postal address contexts, features, and preference flags.
+    - `vcard_21_photo_formats_and_encoding_permutations`: tests `PHOTO;JPEG;ENCODING=BASE64`, `PHOTO;GIF;BASE64`, `PHOTO;PNG;ENCODING=BASE64`, and `PHOTO;TYPE=JPEG;ENCODING=BASE64`, verifying subtype inference and standard vCard 3.0 `PHOTO;ENCODING=b;TYPE=...` re-emission.
+    - `vcard_21_quoted_printable_soft_line_breaks_and_continuation`: tests QP soft line wrapping (`=\r\n`, `=\n`) and hex byte decoding (`=3D`, `=3B`, `=2C`, `=0D=0A`) across multi-line notes and structured name/organization fields.
+  - Updated `docs/VCARD-MAPPING.md` with Section 4.10 documenting the accepted vCard 2.1 subset, Postel's law asymmetric compatibility contract, and fixed-point stability invariants.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **vCard 2.1 Asymmetric Import Tolerance Contract**:
+     - Inbound parsing (`vcard_to_card`) adopts Postel's Law: accepts legacy `VERSION:2.1`, bare type parameter words (`TEL;HOME:`), legacy character sets (`CHARSET=ISO-8859-1`, `CHARSET=WINDOWS-1252`), and `ENCODING=QUOTED-PRINTABLE` byte sequences.
+     - Outbound serialization (`card_to_vcard`) is strictly canonical RFC 2426 vCard 3.0 in native UTF-8, with 75-octet folding, standard `TYPE=` parameter grouping, and RFC 2426 §2.4.2 delimiter escaping (`\n`, `\,`, `\;`, `\\`).
+     - Legacy parameters (`CHARSET`, `ENCODING=QUOTED-PRINTABLE`, `INTERNET`) are never emitted.
+  2. `calcard` automatically decodes Quoted-Printable byte sequences according to the declared `CHARSET` (or ISO-8859-1 default) and unfolds QP soft line breaks (`=\r\n`) seamlessly.
+  3. `entry_has_type` evaluates both `TYPE=value` parameters and bare parameter names matching the target type name, enabling seamless interoperability with 2.1 exporters without breaking standard 3.0 parameter matching.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+## 2026-08-22 — Round-trip fixpoint property test & oscillation regression net (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 6. Round-trip fixpoint property test (vCard→EContact→vCard→EContact→vCard reaches fixpoint by second export: export₂ == export₃ byte-identical, proptest shrinkage oscillation namer).
+- **Changes:**
+  - Added multi-pass fixpoint roundtrip characterization and oscillation diagnostic tests in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `fixpoint_roundtrip_characterization_and_oscillation_diagnostics`: tests multi-stage translation lifecycle (vCard₁ -> Card₁ -> vCard₂ [Export₁] -> Card₂ [EContact₂] -> vCard₃ [Export₂] -> Card₃ [EContact₃] -> vCard₄ [Export₃]) on a comprehensive multi-property fixture contact covering all 19 phone fields, 3 address slots, multi-component orgs, multi-role relations, custom links, anniversaries, IM services, and dropped-by-design standard properties, asserting `Export₂ == Export₃` byte-identity and `Card₂ == Card₃` structural identity.
+    - `fixpoint_convergence_across_all_contact_property_domains_matrix`: tests discrete property domains in isolation and in combination (names, nicknames, emails with 4 slots & attribute list, phones with 19 types, addresses with 3 slots & synthetic labels, organizations with 4+ units, titles/roles, notes with escapes, anniversaries with partial dates, links/blogs/videos, calendars/freeBusy, photos, online services, relations spouse/manager/assistant, categories/keywords).
+  - Added oscillation diagnosis helpers in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`:
+    - `identify_oscillating_vcard_property`: isolates exact property name and differing lines when vCard exports oscillate (`Export₂ != Export₃`).
+    - `identify_oscillating_card_field`: isolates exact JSContact field when deserialized cards oscillate (`Card₂ != Card₃`).
+    - `assert_vcard_fixpoint` and `assert_card_fixpoint`: custom proptest assertion helpers providing detailed oscillation failure diagnostics.
+  - Enhanced `arb_phone` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to fuzz all 19 EDS phone feature combinations (`car`, `isdn`, `ttytdd`, `voice+mobile`, `voice+fax`, `cell+video`, `other` context).
+  - Added 9 domain-focused fixpoint proptests in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`: `prop_fixpoint_telephony_domain`, `prop_fixpoint_email_domain`, `prop_fixpoint_address_and_label_domain`, `prop_fixpoint_organization_domain`, `prop_fixpoint_relation_domain`, `prop_fixpoint_anniversary_domain`, `prop_fixpoint_categories_domain`, `prop_fixpoint_notes_escaping_domain`, `prop_fixpoint_online_services_domain`.
+  - Updated `docs/VCARD-MAPPING.md` with Section 6 documenting the multi-stage roundtrip contract, standing fixpoint invariants (`Export₂ == Export₃`, `Card₂ == Card₃`), and the proptest regression harness.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **Multi-Stage Fixpoint Stability Invariant**:
+     - `vCard₁ -> Card₁ -> vCard₂ (Export₁) -> Card₂ (EContact₂) -> vCard₃ (Export₂) -> Card₃ (EContact₃) -> vCard₄ (Export₃)`.
+     - Export₁ normalizes legacy formats (vCard 2.1, QP encoding, bare parameters, foreign keying) into standard RFC 2426 vCard 3.0 with allocated `X-JMAP-KEY` parameters.
+     - By Export₂ (pass 2), every property representation is canonicalized and stabilized: Export₂ is byte-identical to Export₃ (`Export₂ == Export₃`), and Card₂ is structurally identical to Card₃ (`Card₂ == Card₃`).
+  2. **Oscillation Diagnostic Net**:
+     - The `identify_oscillating_vcard_property` / `identify_oscillating_card_field` helpers inspect line-by-line diffs during proptest shrinkage, immediately naming the property name (`TEL`, `ADR`, `ORG`, `CATEGORIES`, `NOTE`, etc.) that oscillates.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+
+
+
+
+
 
 
 

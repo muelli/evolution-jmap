@@ -104,7 +104,12 @@ prop_compose! {
             Just(json!({"cell": true})),
             Just(json!({"pager": true})),
             Just(json!({"video": true})),
+            Just(json!({"car": true})),
+            Just(json!({"isdn": true})),
+            Just(json!({"ttytdd": true})),
             Just(json!({"voice": true, "fax": true})),
+            Just(json!({"voice": true, "mobile": true})),
+            Just(json!({"cell": true, "video": true})),
             Just(json!("voice")),
             Just(json!(42)),
         ]),
@@ -113,6 +118,7 @@ prop_compose! {
             Just(json!("home")),
             Just(json!({"work": true})),
             Just(json!({"home": true})),
+            Just(json!({"other": true})),
         ]),
         pref in prop::option::of(0..100u32),
     ) -> ContactPhone {
@@ -262,6 +268,7 @@ prop_compose! {
             Just("website".to_string()),
             Just("feed".to_string()),
             Just("blog".to_string()),
+            Just("video".to_string()),
             "[a-z]{1,8}",
         ]),
     ) -> Link {
@@ -361,6 +368,8 @@ prop_compose! {
     fn arb_relation()(
         relation in prop::option::of(prop_oneof![
             Just([("spouse".to_string(), json!(true))].into()),
+            Just([("manager".to_string(), json!(true))].into()),
+            Just([("assistant".to_string(), json!(true))].into()),
             Just([("child".to_string(), json!(true))].into()),
             Just([("colleague".to_string(), json!(true))].into()),
             Just([("spouse".to_string(), json!(1))].into()),
@@ -538,6 +547,15 @@ prop_compose! {
             Just("FBURL".to_string()),
             Just("PHOTO".to_string()),
             Just("CATEGORIES".to_string()),
+            Just("GEO".to_string()),
+            Just("TZ".to_string()),
+            Just("MAILER".to_string()),
+            Just("PRODID".to_string()),
+            Just("REV".to_string()),
+            Just("SORT-STRING".to_string()),
+            Just("CLASS".to_string()),
+            Just("SOUND".to_string()),
+            Just("LOGO".to_string()),
             Just("X-AIM".to_string()),
             Just("X-GADUGADU".to_string()),
             Just("X-GOOGLE-TALK".to_string()),
@@ -555,6 +573,7 @@ prop_compose! {
             Just("X-EVOLUTION-MANAGER".to_string()),
             Just("X-EVOLUTION-ASSISTANT".to_string()),
             Just("X-EVOLUTION-BLOG-URL".to_string()),
+            Just("X-EVOLUTION-VIDEO-URL".to_string()),
             Just("X-EVOLUTION-FILE-AS".to_string()),
             Just("X-MOZILLA-HTML".to_string()),
             Just("X-PHONETIC-FIRST-NAME".to_string()),
@@ -570,7 +589,20 @@ prop_compose! {
             prop_oneof![
                 Just(";TYPE=WORK".to_string()),
                 Just(";TYPE=HOME".to_string()),
+                Just(";TYPE=CELL".to_string()),
+                Just(";TYPE=MOBILE".to_string()),
+                Just(";TYPE=PAGER".to_string()),
+                Just(";TYPE=VOICE".to_string()),
+                Just(";TYPE=FAX".to_string()),
+                Just(";TYPE=VIDEO".to_string()),
+                Just(";TYPE=WORK,CELL".to_string()),
+                Just(";TYPE=HOME,MOBILE".to_string()),
+                Just(";TYPE=WORK,FAX".to_string()),
+                Just(";TYPE=HOME,FAX".to_string()),
                 Just(";TYPE=VOICE,FAX".to_string()),
+                Just(";TYPE=CAR".to_string()),
+                Just(";TYPE=ISDN".to_string()),
+                Just(";TYPE=TTYTDD".to_string()),
                 Just(";TYPE=WORK,PREF".to_string()),
                 Just(";TYPE=HOME,PREF".to_string()),
                 Just(";LABEL=\"Suite 100\\nCity\"".to_string()),
@@ -594,6 +626,23 @@ prop_compose! {
                 Just(";ALTID=group1;LANGUAGE=ja".to_string()),
                 Just(";X-CUSTOM-PARAM=val1".to_string()),
                 Just(";X-VENDOR-STATUS=ACTIVE".to_string()),
+                // vCard 2.1 bare parameter names
+                Just(";WORK".to_string()),
+                Just(";HOME".to_string()),
+                Just(";CELL".to_string()),
+                Just(";MOBILE".to_string()),
+                Just(";VOICE".to_string()),
+                Just(";FAX".to_string()),
+                Just(";PAGER".to_string()),
+                Just(";PREF".to_string()),
+                Just(";INTERNET".to_string()),
+                Just(";BASE64".to_string()),
+                Just(";JPEG".to_string()),
+                Just(";GIF".to_string()),
+                Just(";PNG".to_string()),
+                Just(";POSTAL".to_string()),
+                Just(";PARCEL".to_string()),
+                Just(";DOM".to_string()),
                 ";[A-Z-]+=[A-Za-z0-9-]+",
             ],
             0..3,
@@ -607,10 +656,11 @@ prop_compose! {
 
 prop_compose! {
     fn arb_raw_vcard()(
+        version in prop_oneof![Just("3.0"), Just("2.1"), Just("4.0")],
         lines in prop::collection::vec(arb_vcard_property_line(), 0..10),
         trailing in prop::option::of("\\PC*"),
     ) -> String {
-        let mut out = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\n");
+        let mut out = format!("BEGIN:VCARD\r\nVERSION:{version}\r\n");
         for line in lines {
             out.push_str(&line);
             out.push_str("\r\n");
@@ -621,6 +671,167 @@ prop_compose! {
         }
         out
     }
+}
+
+fn identify_oscillating_vcard_property(export2: &str, export3: &str) -> String {
+    let lines2: Vec<&str> = export2.lines().collect();
+    let lines3: Vec<&str> = export3.lines().collect();
+
+    for (i, (l2, l3)) in lines2.iter().zip(lines3.iter()).enumerate() {
+        if l2 != l3 {
+            let prop_name = l2
+                .split([';', ':'])
+                .next()
+                .unwrap_or("UNKNOWN")
+                .trim_start_matches(' ');
+            return format!(
+                "Property '{prop_name}' oscillated at line {}:\n  Export₂: {l2}\n  Export₃: {l3}",
+                i + 1
+            );
+        }
+    }
+
+    if lines2.len() != lines3.len() {
+        if lines2.len() > lines3.len() {
+            let extra = &lines2[lines3.len()..];
+            let prop_name = extra[0]
+                .split([';', ':'])
+                .next()
+                .unwrap_or("UNKNOWN")
+                .trim_start_matches(' ');
+            return format!(
+                "Property '{prop_name}' oscillated (lines missing in Export₃):\n  {}",
+                extra.join("\n  ")
+            );
+        } else {
+            let extra = &lines3[lines2.len()..];
+            let prop_name = extra[0]
+                .split([';', ':'])
+                .next()
+                .unwrap_or("UNKNOWN")
+                .trim_start_matches(' ');
+            return format!(
+                "Property '{prop_name}' oscillated (spurious lines in Export₃):\n  {}",
+                extra.join("\n  ")
+            );
+        }
+    }
+
+    "Byte/content mismatch without line divergence".to_string()
+}
+
+fn identify_oscillating_card_field(card2: &ContactCard, card3: &ContactCard) -> String {
+    if card2.name != card3.name {
+        return format!(
+            "Field 'name' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.name, card3.name
+        );
+    }
+    if card2.nicknames != card3.nicknames {
+        return format!(
+            "Field 'nicknames' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.nicknames, card3.nicknames
+        );
+    }
+    if card2.emails != card3.emails {
+        return format!(
+            "Field 'emails' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.emails, card3.emails
+        );
+    }
+    if card2.phones != card3.phones {
+        return format!(
+            "Field 'phones' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.phones, card3.phones
+        );
+    }
+    if card2.organizations != card3.organizations {
+        return format!(
+            "Field 'organizations' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.organizations, card3.organizations
+        );
+    }
+    if card2.titles != card3.titles {
+        return format!(
+            "Field 'titles' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.titles, card3.titles
+        );
+    }
+    if card2.addresses != card3.addresses {
+        return format!(
+            "Field 'addresses' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.addresses, card3.addresses
+        );
+    }
+    if card2.notes != card3.notes {
+        return format!(
+            "Field 'notes' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.notes, card3.notes
+        );
+    }
+    if card2.anniversaries != card3.anniversaries {
+        return format!(
+            "Field 'anniversaries' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.anniversaries, card3.anniversaries
+        );
+    }
+    if card2.links != card3.links {
+        return format!(
+            "Field 'links' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.links, card3.links
+        );
+    }
+    if card2.calendars != card3.calendars {
+        return format!(
+            "Field 'calendars' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.calendars, card3.calendars
+        );
+    }
+    if card2.media != card3.media {
+        return format!(
+            "Field 'media' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.media, card3.media
+        );
+    }
+    if card2.online_services != card3.online_services {
+        return format!(
+            "Field 'online_services' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.online_services, card3.online_services
+        );
+    }
+    if card2.keywords != card3.keywords {
+        return format!(
+            "Field 'keywords' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.keywords, card3.keywords
+        );
+    }
+    if card2.related_to != card3.related_to {
+        return format!(
+            "Field 'related_to' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.related_to, card3.related_to
+        );
+    }
+    format!("Unknown card field oscillated:\n  Card₂: {card2:?}\n  Card₃: {card3:?}")
+}
+
+fn assert_vcard_fixpoint(export2: &str, export3: &str) -> Result<(), TestCaseError> {
+    if export2 != export3 {
+        let explanation = identify_oscillating_vcard_property(export2, export3);
+        return Err(TestCaseError::fail(format!(
+            "vCard roundtrip failed to reach fixed point (Export₂ != Export₃)!\n{explanation}"
+        )));
+    }
+    Ok(())
+}
+
+fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), TestCaseError> {
+    if card2 != card3 {
+        let explanation = identify_oscillating_card_field(card2, card3);
+        return Err(TestCaseError::fail(format!(
+            "JSContact roundtrip failed to reach fixed point (Card₂ != Card₃)!\n{explanation}"
+        )));
+    }
+    Ok(())
 }
 
 proptest! {
@@ -651,7 +862,9 @@ proptest! {
             let vcard2 = card_to_vcard(&parsed1);
             let parsed2 = vcard_to_card(&vcard2).expect("second roundtrip must parse cleanly");
             let vcard3 = card_to_vcard(&parsed2);
-            prop_assert_eq!(vcard2, vcard3, "vCard emission must reach a fixed-point");
+
+            assert_vcard_fixpoint(&vcard2, &vcard3)?;
+            assert_card_fixpoint(&parsed1, &parsed2)?;
         }
     }
 
@@ -663,7 +876,9 @@ proptest! {
             let vcard2 = card_to_vcard(&parsed2);
             let parsed3 = vcard_to_card(&vcard2).expect("third roundtrip must parse cleanly");
             let vcard3 = card_to_vcard(&parsed3);
-            prop_assert_eq!(vcard2, vcard3, "re-emitted vCard must reach a fixed-point");
+
+            assert_vcard_fixpoint(&vcard2, &vcard3)?;
+            assert_card_fixpoint(&parsed2, &parsed3)?;
         }
     }
 
@@ -885,5 +1100,180 @@ proptest! {
         let parsed2 = vcard_to_card(&vcard2).expect("parse second roundtrip");
         let vcard3 = card_to_vcard(&parsed2);
         prop_assert_eq!(vcard2, vcard3, "Photo roundtrip must reach fixed point");
+    }
+
+    #[test]
+    fn prop_fixpoint_telephony_domain(
+        phones in prop::collection::btree_map(arb_key(), arb_phone(), 1..6)
+    ) {
+        let card = ContactCard {
+            id: Some("C-TEL".into()),
+            phones: Some(phones),
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("telephony vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("telephony vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_email_domain(
+        emails in prop::collection::btree_map(arb_key(), arb_email(), 1..6)
+    ) {
+        let card = ContactCard {
+            id: Some("C-EMAIL".into()),
+            emails: Some(emails),
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("email vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("email vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_address_and_label_domain(
+        addresses in prop::collection::btree_map(arb_key(), arb_address(), 1..4)
+    ) {
+        let card = ContactCard {
+            id: Some("C-ADR".into()),
+            addresses: Some(addresses),
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("address vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("address vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_organization_domain(
+        organizations in prop::collection::btree_map(arb_key(), arb_organization(), 1..3)
+    ) {
+        let card = ContactCard {
+            id: Some("C-ORG".into()),
+            organizations: Some(organizations),
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("org vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("org vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_relation_domain(
+        relations in prop::collection::btree_map(arb_key(), arb_relation(), 1..4)
+    ) {
+        let card = ContactCard {
+            id: Some("C-REL".into()),
+            related_to: Some(relations),
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("relation vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("relation vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_anniversary_domain(
+        anniversaries in prop::collection::btree_map(arb_key(), arb_anniversary(), 1..4)
+    ) {
+        let card = ContactCard {
+            id: Some("C-ANNIV".into()),
+            anniversaries: Some(anniversaries),
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("anniversary vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("anniversary vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_categories_domain(
+        keywords in prop::collection::btree_map(
+            arb_keyword_tag(),
+            prop_oneof![Just(json!(true)), Just(json!(false)), Just(json!("tag")), Just(json!(1))],
+            1..6,
+        )
+    ) {
+        let card = ContactCard {
+            id: Some("C-CAT".into()),
+            keywords: Some(keywords),
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("categories vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("categories vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_notes_escaping_domain(
+        notes in prop::collection::btree_map(arb_key(), arb_note(), 1..3)
+    ) {
+        let card = ContactCard {
+            id: Some("C-NOTE".into()),
+            notes: Some(notes),
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("notes vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("notes vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_online_services_domain(
+        online_services in prop::collection::btree_map(arb_key(), arb_online_service(), 1..4)
+    ) {
+        let card = ContactCard {
+            id: Some("C-IM".into()),
+            online_services: Some(online_services),
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("im vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("im vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
     }
 }
