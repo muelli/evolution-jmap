@@ -1420,6 +1420,20 @@ fn member(date: &Value, name: &str) -> Option<u32> {
     date.get(name)?.as_u64()?.try_into().ok()
 }
 
+/// Unwraps Apple-style `_$!<LabelName>!$_` markers into clean label names, or
+/// returns the trimmed input text if not wrapped in markers.
+fn clean_apple_label(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    if let Some(inner) = trimmed
+        .strip_prefix("_$!<")
+        .and_then(|s| s.strip_suffix(">!$_"))
+    {
+        inner.trim()
+    } else {
+        trimmed
+    }
+}
+
 /// Render a contact card as a vCard 3.0 string, ready for
 /// `e_contact_new_from_vcard()`.
 pub fn card_to_vcard(card: &ContactCard) -> String {
@@ -1875,6 +1889,18 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut online_services = BTreeMap::new();
     let mut related_to = BTreeMap::new();
 
+    let mut group_labels = BTreeMap::new();
+    for entry in &card.entries {
+        if let Some(group) = entry.group.as_deref()
+            && entry.name.as_str().eq_ignore_ascii_case("X-ABLabel")
+        {
+            let text = entry_text(entry);
+            if !text.is_empty() {
+                group_labels.insert(group, text);
+            }
+        }
+    }
+
     for entry in &card.entries {
         let name_upper = entry.name.as_str().to_ascii_uppercase();
         match name_upper.as_str() {
@@ -1898,11 +1924,34 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 if address.is_empty() {
                     continue;
                 }
+                let mut contexts = read_flags(&CONTEXTS, entry);
+                let mut extra = BTreeMap::new();
+                if let Some(group) = entry.group.as_deref()
+                    && let Some(raw_label) = group_labels.get(group)
+                {
+                    let clean = clean_apple_label(raw_label);
+                    match clean.to_ascii_lowercase().as_str() {
+                        "work" | "school" => {
+                            if contexts.is_none() {
+                                contexts = Some(serde_json::json!({"work": true}));
+                            }
+                        }
+                        "home" => {
+                            if contexts.is_none() {
+                                contexts = Some(serde_json::json!({"private": true}));
+                            }
+                        }
+                        "other" => {}
+                        _ => {
+                            extra.insert("label".to_owned(), Value::String(clean.to_owned()));
+                        }
+                    }
+                }
                 let email = ContactEmail {
                     address,
-                    contexts: read_flags(&CONTEXTS, entry),
+                    contexts,
                     pref: entry_has_type(entry, "PREF").then_some(1),
-                    ..ContactEmail::default()
+                    extra,
                 };
                 emails.insert(entry_key(entry, "e", &emails), email);
             }
@@ -1911,17 +1960,98 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 if number.is_empty() {
                     continue;
                 }
+                let mut contexts = read_flags(&CONTEXTS, entry);
+                let mut features = read_phone_flags(entry);
+                let mut extra = BTreeMap::new();
+                if let Some(group) = entry.group.as_deref()
+                    && let Some(raw_label) = group_labels.get(group)
+                {
+                    let clean = clean_apple_label(raw_label);
+                    let clean_lower = clean.to_ascii_lowercase();
+                    match clean_lower.as_str() {
+                        "mobile" | "cell" | "iphone" => {
+                            let mut map = features.unwrap_or_else(|| serde_json::json!({}));
+                            if let Some(obj) = map.as_object_mut() {
+                                obj.insert("mobile".to_owned(), Value::Bool(true));
+                            }
+                            features = Some(map);
+                        }
+                        "pager" => {
+                            let mut map = features.unwrap_or_else(|| serde_json::json!({}));
+                            if let Some(obj) = map.as_object_mut() {
+                                obj.insert("pager".to_owned(), Value::Bool(true));
+                            }
+                            features = Some(map);
+                        }
+                        "workfax" | "work fax" => {
+                            let mut fmap = features.unwrap_or_else(|| serde_json::json!({}));
+                            if let Some(obj) = fmap.as_object_mut() {
+                                obj.insert("fax".to_owned(), Value::Bool(true));
+                            }
+                            features = Some(fmap);
+                            if contexts.is_none() {
+                                contexts = Some(serde_json::json!({"work": true}));
+                            }
+                        }
+                        "homefax" | "home fax" => {
+                            let mut fmap = features.unwrap_or_else(|| serde_json::json!({}));
+                            if let Some(obj) = fmap.as_object_mut() {
+                                obj.insert("fax".to_owned(), Value::Bool(true));
+                            }
+                            features = Some(fmap);
+                            if contexts.is_none() {
+                                contexts = Some(serde_json::json!({"private": true}));
+                            }
+                        }
+                        "fax" => {
+                            let mut fmap = features.unwrap_or_else(|| serde_json::json!({}));
+                            if let Some(obj) = fmap.as_object_mut() {
+                                obj.insert("fax".to_owned(), Value::Bool(true));
+                            }
+                            features = Some(fmap);
+                        }
+                        "work" | "school" => {
+                            if contexts.is_none() {
+                                contexts = Some(serde_json::json!({"work": true}));
+                            }
+                        }
+                        "home" => {
+                            if contexts.is_none() {
+                                contexts = Some(serde_json::json!({"private": true}));
+                            }
+                        }
+                        "main" => {
+                            let mut fmap = features.unwrap_or_else(|| serde_json::json!({}));
+                            if let Some(obj) = fmap.as_object_mut() {
+                                obj.insert("voice".to_owned(), Value::Bool(true));
+                            }
+                            features = Some(fmap);
+                            if contexts.is_none() {
+                                contexts = Some(serde_json::json!({"work": true}));
+                            }
+                        }
+                        "other" => {}
+                        _ => {
+                            extra.insert("label".to_owned(), Value::String(clean.to_owned()));
+                        }
+                    }
+                }
                 let phone = ContactPhone {
                     number,
-                    contexts: read_flags(&CONTEXTS, entry),
-                    features: read_phone_flags(entry),
+                    contexts,
+                    features,
                     pref: entry_has_type(entry, "PREF").then_some(1),
-                    ..ContactPhone::default()
+                    extra,
                 };
                 phones.insert(entry_key(entry, "p", &phones), phone);
             }
             "ADR" => {
-                let Some(address) = read_address(entry) else {
+                let group_label = entry
+                    .group
+                    .as_deref()
+                    .and_then(|g| group_labels.get(g))
+                    .map(String::as_str);
+                let Some(address) = read_address(entry, group_label) else {
                     continue;
                 };
                 addresses.insert(entry_key(entry, "a", &addresses), address);
@@ -1953,17 +2083,45 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 // neither the comma nor the semicolon inside it separates
                 // anything, so a query string listing tags arrives as the URI
                 // the line stated rather than as a fragment of it.
-                let kind = if name_upper == "URL" {
+                let mut kind = if name_upper == "URL" {
                     None
                 } else if name_upper == X_EVOLUTION_BLOG_URL {
                     Some("blog".to_owned())
                 } else {
                     Some("video".to_owned())
                 };
+                let mut extra = BTreeMap::new();
+                if let Some(group) = entry.group.as_deref()
+                    && let Some(raw_label) = group_labels.get(group)
+                {
+                    let clean = clean_apple_label(raw_label);
+                    let clean_lower = clean.to_ascii_lowercase();
+                    match clean_lower.as_str() {
+                        "homepage" | "home page" => {
+                            kind = None;
+                        }
+                        "blog" => {
+                            kind = Some("blog".to_owned());
+                        }
+                        "work" | "school" => {
+                            extra.insert("contexts".to_owned(), serde_json::json!({"work": true}));
+                        }
+                        "home" => {
+                            extra.insert(
+                                "contexts".to_owned(),
+                                serde_json::json!({"private": true}),
+                            );
+                        }
+                        "other" => {}
+                        _ => {
+                            extra.insert("label".to_owned(), Value::String(clean.to_owned()));
+                        }
+                    }
+                }
                 let link = Link {
                     uri: entry_text(entry),
                     kind,
-                    extra: BTreeMap::new(),
+                    extra,
                 };
                 if !states_link(&link) {
                     continue;
@@ -1995,34 +2153,69 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
             // relation nobody can edit is still one a save must not delete. The
             // key is the line's own text, so nothing is invented and an
             // X-JMAP-KEY, if some other client wrote one, is not read.
-            X_EVOLUTION_SPOUSE | X_EVOLUTION_MANAGER | X_EVOLUTION_ASSISTANT => {
+            X_EVOLUTION_SPOUSE
+            | X_EVOLUTION_MANAGER
+            | X_EVOLUTION_ASSISTANT
+            | "X-ABRELATEDNAMES"
+            | "X-AB-RELATED-NAMES" => {
                 let name = entry_text(entry);
                 if !names_a_person(&name) {
                     continue;
                 }
                 let relation_type = if name_upper == X_EVOLUTION_SPOUSE {
-                    SPOUSE_RELATION
+                    SPOUSE_RELATION.to_owned()
                 } else if name_upper == X_EVOLUTION_MANAGER {
-                    MANAGER_RELATION
+                    MANAGER_RELATION.to_owned()
+                } else if name_upper == X_EVOLUTION_ASSISTANT {
+                    ASSISTANT_RELATION.to_owned()
+                } else if let Some(group) = entry.group.as_deref()
+                    && let Some(raw_label) = group_labels.get(group)
+                {
+                    let clean = clean_apple_label(raw_label);
+                    match clean.to_ascii_lowercase().as_str() {
+                        "spouse" | "partner" => SPOUSE_RELATION.to_owned(),
+                        "manager" => MANAGER_RELATION.to_owned(),
+                        "assistant" => ASSISTANT_RELATION.to_owned(),
+                        other if !other.is_empty() => other.to_owned(),
+                        _ => "contact".to_owned(),
+                    }
                 } else {
-                    ASSISTANT_RELATION
+                    continue;
                 };
                 let entry_rel = related_to.entry(name).or_insert_with(|| Relation {
                     relation: Some(BTreeMap::new()),
                     extra: BTreeMap::new(),
                 });
                 if let Some(types) = &mut entry_rel.relation {
-                    types.insert(relation_type.to_owned(), Value::Bool(true));
+                    types.insert(relation_type, Value::Bool(true));
                 } else {
-                    entry_rel.relation =
-                        Some([(relation_type.to_owned(), Value::Bool(true))].into());
+                    entry_rel.relation = Some([(relation_type, Value::Bool(true))].into());
                 }
             }
-            "BDAY" | X_EVOLUTION_ANNIVERSARY => {
-                let Some(anniversary) = read_anniversary(entry) else {
-                    continue;
-                };
-                anniversaries.insert(entry_key(entry, "y", &anniversaries), anniversary);
+            "BDAY" | X_EVOLUTION_ANNIVERSARY | "X-ABDATE" | "X-AB-DATE" => {
+                if name_upper == "X-ABDATE" || name_upper == "X-AB-DATE" {
+                    let date_text = entry_text(entry);
+                    if let Some(day) = read_day(&date_text)
+                        && let Some(group) = entry.group.as_deref()
+                        && let Some(raw_label) = group_labels.get(group)
+                    {
+                        let clean = clean_apple_label(raw_label);
+                        let kind = match clean.to_ascii_lowercase().as_str() {
+                            "anniversary" | "wedding" => "wedding".to_owned(),
+                            "birthday" | "birth" => "birth".to_owned(),
+                            other if !other.is_empty() => other.to_owned(),
+                            _ => "wedding".to_owned(),
+                        };
+                        let anniversary = Anniversary {
+                            kind,
+                            date: Some(day.json()),
+                            extra: BTreeMap::new(),
+                        };
+                        anniversaries.insert(entry_key(entry, "y", &anniversaries), anniversary);
+                    }
+                } else if let Some(anniversary) = read_anniversary(entry) {
+                    anniversaries.insert(entry_key(entry, "y", &anniversaries), anniversary);
+                }
             }
             // One of the `X-` lines EDS keeps instant-messaging handles on, and
             // nothing else: a line for a service this mapping does not state is
@@ -2366,7 +2559,7 @@ fn address_pref(address: &Address) -> Option<u32> {
 
 /// The address an `ADR` line states, or `None` when every field of it is
 /// empty — the same "nothing was said" an `EMAIL:` with no address is.
-fn read_address(entry: &VCardEntry) -> Option<Address> {
+fn read_address(entry: &VCardEntry, group_label: Option<&str>) -> Option<Address> {
     let fields = entry_components(entry);
     let mut components = Vec::new();
     for (kind, index) in ADDRESS_COMPONENTS {
@@ -2383,9 +2576,29 @@ fn read_address(entry: &VCardEntry) -> Option<Address> {
     if entry_has_type(entry, "PREF") {
         extra.insert("pref".to_owned(), serde_json::Value::from(1));
     }
+    let mut contexts = read_flags(&CONTEXTS, entry);
+    if let Some(raw_label) = group_label {
+        let clean = clean_apple_label(raw_label);
+        match clean.to_ascii_lowercase().as_str() {
+            "work" | "school" => {
+                if contexts.is_none() {
+                    contexts = Some(serde_json::json!({"work": true}));
+                }
+            }
+            "home" => {
+                if contexts.is_none() {
+                    contexts = Some(serde_json::json!({"private": true}));
+                }
+            }
+            "other" => {}
+            _ => {
+                extra.insert("label".to_owned(), Value::String(clean.to_owned()));
+            }
+        }
+    }
     Some(Address {
         components: (!components.is_empty()).then_some(components),
-        contexts: read_flags(&CONTEXTS, entry),
+        contexts,
         full,
         extra,
     })

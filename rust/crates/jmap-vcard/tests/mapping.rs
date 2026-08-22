@@ -14510,3 +14510,399 @@ fn file_as_card_level_and_name_level_emission() {
     let emitted4 = card_to_vcard(&card4);
     assert!(emitted4.contains("X-EVOLUTION-FILE-AS:Anonymous Entity"));
 }
+
+#[test]
+fn apple_property_groups_representative_icloud_fixture_import_and_roundtrip() {
+    // Representative iCloud / macOS Contacts exported vCard 3.0 with Apple-style property groups
+    // and `X-ABLabel` parameter annotations (`itemN.PROPERTY` + `itemN.X-ABLabel:_$!<Label>!$_`).
+    let icloud_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "PRODID:-//Apple Inc.//macOS 14.5//EN\r\n",
+        "N:Appleseed;John;M.;Mr.;Esq.\r\n",
+        "FN:John M. Appleseed\r\n",
+        "NICKNAME:Johnny\r\n",
+        "item1.EMAIL;type=INTERNET;type=pref:john.appleseed@work.example.com\r\n",
+        "item1.X-ABLabel:_$!<Work>!$_\r\n",
+        "item2.EMAIL;type=INTERNET:john.appleseed@home.example.org\r\n",
+        "item2.X-ABLabel:_$!<Home>!$_\r\n",
+        "item3.TEL;type=pref:(555) 555-0100\r\n",
+        "item3.X-ABLabel:_$!<Mobile>!$_\r\n",
+        "item4.TEL:(555) 555-0200\r\n",
+        "item4.X-ABLabel:_$!<Work>!$_\r\n",
+        "item5.TEL:(555) 555-0300\r\n",
+        "item5.X-ABLabel:_$!<HomeFAX>!$_\r\n",
+        "item6.TEL:(555) 555-0400\r\n",
+        "item6.X-ABLabel:_$!<Main>!$_\r\n",
+        "item7.ADR;type=pref:;;1 Infinite Loop;Cupertino;CA;95014;USA\r\n",
+        "item7.X-ABLabel:_$!<Work>!$_\r\n",
+        "item8.ADR:;;123 Homestead Ave;Sunnyvale;CA;94086;USA\r\n",
+        "item8.X-ABLabel:_$!<Home>!$_\r\n",
+        "item9.URL:https://www.apple.com\r\n",
+        "item9.X-ABLabel:_$!<HomePage>!$_\r\n",
+        "item10.X-ABRELATEDNAMES;type=pref:Jane Appleseed\r\n",
+        "item10.X-ABLabel:_$!<Spouse>!$_\r\n",
+        "item11.X-ABRELATEDNAMES:Bob Smith\r\n",
+        "item11.X-ABLabel:_$!<Manager>!$_\r\n",
+        "item12.X-ABRELATEDNAMES:Alice Assistant\r\n",
+        "item12.X-ABLabel:_$!<Assistant>!$_\r\n",
+        "item13.X-ABDATE:2018-06-20\r\n",
+        "item13.X-ABLabel:_$!<Anniversary>!$_\r\n",
+        "NOTE:Representative Apple Contact export.\\nMulti-line note.\r\n",
+        "CATEGORIES:VIP,Family\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(icloud_vcard).expect("parse iCloud vcard");
+
+    // Verify Name & Nickname
+    assert_eq!(
+        card.name.as_ref().unwrap().full.as_deref(),
+        Some("John M. Appleseed")
+    );
+    assert_eq!(
+        card.nicknames
+            .as_ref()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .name,
+        "Johnny"
+    );
+
+    // Verify Emails & X-ABLabel mapped contexts
+    let emails = card.emails.as_ref().expect("emails");
+    assert_eq!(emails.len(), 2);
+    let work_email = emails
+        .values()
+        .find(|e| e.address.contains("work"))
+        .expect("work email");
+    assert_eq!(work_email.contexts.as_ref(), Some(&json!({"work": true})));
+    assert_eq!(work_email.pref, Some(1));
+    let home_email = emails
+        .values()
+        .find(|e| e.address.contains("home"))
+        .expect("home email");
+    assert_eq!(
+        home_email.contexts.as_ref(),
+        Some(&json!({"private": true}))
+    );
+
+    // Verify Telephones & X-ABLabel mapped features / contexts
+    let phones = card.phones.as_ref().expect("phones");
+    assert_eq!(phones.len(), 4);
+    let mobile = phones
+        .values()
+        .find(|p| p.number.contains("0100"))
+        .expect("mobile phone");
+    assert_eq!(mobile.features.as_ref(), Some(&json!({"mobile": true})));
+    assert_eq!(mobile.pref, Some(1));
+
+    let work_phone = phones
+        .values()
+        .find(|p| p.number.contains("0200"))
+        .expect("work phone");
+    assert_eq!(work_phone.contexts.as_ref(), Some(&json!({"work": true})));
+
+    let fax_phone = phones
+        .values()
+        .find(|p| p.number.contains("0300"))
+        .expect("fax phone");
+    assert_eq!(fax_phone.features.as_ref(), Some(&json!({"fax": true})));
+    assert_eq!(fax_phone.contexts.as_ref(), Some(&json!({"private": true})));
+
+    let main_phone = phones
+        .values()
+        .find(|p| p.number.contains("0400"))
+        .expect("main phone");
+    assert_eq!(main_phone.features.as_ref(), Some(&json!({"voice": true})));
+    assert_eq!(main_phone.contexts.as_ref(), Some(&json!({"work": true})));
+
+    // Verify Addresses & X-ABLabel mapped contexts
+    let addresses = card.addresses.as_ref().expect("addresses");
+    assert_eq!(addresses.len(), 2);
+    let work_adr = addresses
+        .values()
+        .find(|a| {
+            a.components
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|c| c.value.contains("Infinite Loop"))
+        })
+        .expect("work adr");
+    assert_eq!(work_adr.contexts.as_ref(), Some(&json!({"work": true})));
+    assert_eq!(work_adr.extra.get("pref"), Some(&json!(1)));
+
+    let home_adr = addresses
+        .values()
+        .find(|a| {
+            a.components
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|c| c.value.contains("Homestead"))
+        })
+        .expect("home adr");
+    assert_eq!(home_adr.contexts.as_ref(), Some(&json!({"private": true})));
+
+    // Verify Links
+    let links = card.links.as_ref().expect("links");
+    assert_eq!(links.len(), 1);
+    let link = links.values().next().unwrap();
+    assert_eq!(link.uri, "https://www.apple.com");
+    assert_eq!(link.kind, None);
+
+    // Verify Relations (X-ABRELATEDNAMES)
+    let related = card.related_to.as_ref().expect("related_to");
+    assert_eq!(related.len(), 3);
+    assert_eq!(
+        related
+            .get("Jane Appleseed")
+            .and_then(|r| r.relation.as_ref()),
+        Some(
+            &[("spouse".to_string(), Value::Bool(true))]
+                .into_iter()
+                .collect()
+        )
+    );
+    assert_eq!(
+        related.get("Bob Smith").and_then(|r| r.relation.as_ref()),
+        Some(
+            &[("manager".to_string(), Value::Bool(true))]
+                .into_iter()
+                .collect()
+        )
+    );
+    assert_eq!(
+        related
+            .get("Alice Assistant")
+            .and_then(|r| r.relation.as_ref()),
+        Some(
+            &[("assistant".to_string(), Value::Bool(true))]
+                .into_iter()
+                .collect()
+        )
+    );
+
+    // Verify Anniversaries (X-ABDATE)
+    let anniversaries = card.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(anniversaries.len(), 1);
+    let ann = anniversaries.values().next().unwrap();
+    assert_eq!(ann.kind, "wedding");
+    assert_eq!(
+        ann.date.as_ref(),
+        Some(&json!({"@type": "PartialDate", "year": 2018, "month": 6, "day": 20}))
+    );
+
+    // Outbound vCard 3.0 emission check
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("FN:John M. Appleseed"));
+    assert!(
+        emitted.contains("TEL;X-JMAP-KEY=p1;TYPE=CELL,PREF:(555) 555-0100")
+            || emitted.contains("TEL;TYPE=CELL,PREF;X-JMAP-KEY=p1:(555) 555-0100")
+            || emitted.contains("TEL;X-JMAP-KEY=p1;TYPE=PREF,CELL:(555) 555-0100")
+    );
+    assert!(
+        emitted.contains("EMAIL;X-JMAP-KEY=e1;TYPE=WORK,PREF:john.appleseed@work.example.com")
+            || emitted
+                .contains("EMAIL;TYPE=WORK,PREF;X-JMAP-KEY=e1:john.appleseed@work.example.com")
+            || emitted
+                .contains("EMAIL;X-JMAP-KEY=e1;TYPE=PREF,WORK:john.appleseed@work.example.com")
+    );
+    assert!(
+        emitted
+            .contains("ADR;X-JMAP-KEY=a1;TYPE=WORK,PREF:;;1 Infinite Loop;Cupertino;CA;95014;USA")
+            || emitted.contains(
+                "ADR;TYPE=WORK,PREF;X-JMAP-KEY=a1:;;1 Infinite Loop;Cupertino;CA;95014;USA"
+            )
+            || emitted.contains(
+                "ADR;X-JMAP-KEY=a1;TYPE=PREF,WORK:;;1 Infinite Loop;Cupertino;CA;95014;USA"
+            )
+    );
+    assert!(emitted.contains("X-EVOLUTION-SPOUSE:Jane Appleseed"));
+    assert!(emitted.contains("X-EVOLUTION-MANAGER:Bob Smith"));
+    assert!(emitted.contains("X-EVOLUTION-ASSISTANT:Alice Assistant"));
+    assert!(
+        emitted.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y1:2018-06-20")
+            || emitted.contains("X-EVOLUTION-ANNIVERSARY:2018-06-20")
+    );
+
+    // Multi-pass round-trip fixpoint verification
+    let card2 = vcard_to_card(&emitted).expect("second parse");
+    let emitted2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&emitted2).expect("third parse");
+    let emitted3 = card_to_vcard(&card3);
+
+    assert_eq!(
+        emitted2, emitted3,
+        "Export₂ must be byte-identical to Export₃"
+    );
+    assert_eq!(
+        card2, card3,
+        "Card₂ must be structurally identical to Card₃"
+    );
+}
+
+#[test]
+fn apple_property_groups_custom_labels_and_extended_relations() {
+    let input = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Custom Labels Contact\r\n",
+        "item1.TEL:+1-555-0999\r\n",
+        "item1.X-ABLabel:Direct Line\r\n",
+        "item2.TEL:+1-555-0888\r\n",
+        "item2.X-ABLabel:_$!<WorkFAX>!$_\r\n",
+        "item3.TEL:+1-555-0777\r\n",
+        "item3.X-ABLabel:_$!<Pager>!$_\r\n",
+        "item4.EMAIL:emergency@example.com\r\n",
+        "item4.X-ABLabel:Emergency\r\n",
+        "item5.URL:https://custom.example.org\r\n",
+        "item5.X-ABLabel:Personal Portfolio\r\n",
+        "item6.X-ABRELATEDNAMES:Charlie Partner\r\n",
+        "item6.X-ABLabel:_$!<Partner>!$_\r\n",
+        "item7.X-ABRELATEDNAMES:Dan Colleague\r\n",
+        "item7.X-ABLabel:Colleague\r\n",
+        "item8.X-ABDATE:2015-11-28\r\n",
+        "item8.X-ABLabel:First Met\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(input).expect("parse custom labels");
+
+    // TEL with custom label
+    let phones = card.phones.as_ref().unwrap();
+    let direct_phone = phones.values().find(|p| p.number == "+1-555-0999").unwrap();
+    assert_eq!(direct_phone.extra.get("label"), Some(&json!("Direct Line")));
+
+    // TEL with WorkFAX
+    let workfax_phone = phones.values().find(|p| p.number == "+1-555-0888").unwrap();
+    assert_eq!(workfax_phone.features.as_ref(), Some(&json!({"fax": true})));
+    assert_eq!(
+        workfax_phone.contexts.as_ref(),
+        Some(&json!({"work": true}))
+    );
+
+    // TEL with Pager
+    let pager_phone = phones.values().find(|p| p.number == "+1-555-0777").unwrap();
+    assert_eq!(pager_phone.features.as_ref(), Some(&json!({"pager": true})));
+
+    // EMAIL with custom label
+    let email = card.emails.as_ref().unwrap().values().next().unwrap();
+    assert_eq!(email.extra.get("label"), Some(&json!("Emergency")));
+
+    // URL with custom label
+    let link = card.links.as_ref().unwrap().values().next().unwrap();
+    assert_eq!(link.extra.get("label"), Some(&json!("Personal Portfolio")));
+
+    // Extended relations
+    let related = card.related_to.as_ref().unwrap();
+    assert_eq!(
+        related
+            .get("Charlie Partner")
+            .and_then(|r| r.relation.as_ref()),
+        Some(
+            &[("spouse".to_string(), Value::Bool(true))]
+                .into_iter()
+                .collect()
+        )
+    );
+    assert_eq!(
+        related
+            .get("Dan Colleague")
+            .and_then(|r| r.relation.as_ref()),
+        Some(
+            &[("colleague".to_string(), Value::Bool(true))]
+                .into_iter()
+                .collect()
+        )
+    );
+
+    // Custom date anniversary
+    let ann = card
+        .anniversaries
+        .as_ref()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(ann.kind, "first met");
+    assert_eq!(
+        ann.date.as_ref(),
+        Some(&json!({"@type": "PartialDate", "year": 2015, "month": 11, "day": 28}))
+    );
+}
+
+#[test]
+fn apple_property_groups_variations_and_boundary_cases() {
+    // 1. Case insensitivity in X-ABLabel and property names
+    let vcard1 = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Case Test\r\n",
+        "itemA.tel:+1-555-1111\r\n",
+        "itemA.x-ablabel:_$!<mobile>!$_\r\n",
+        "itemB.email:test@example.com\r\n",
+        "itemB.X-ABLABEL:work\r\n",
+        "itemC.adr:;;123 Test St;City;ST;12345;USA\r\n",
+        "itemC.x-AbLabel:_$!<Home>!$_\r\n",
+        "END:VCARD\r\n"
+    );
+    let card1 = vcard_to_card(vcard1).expect("parse case test");
+    assert_eq!(
+        card1
+            .phones
+            .as_ref()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .features
+            .as_ref(),
+        Some(&json!({"mobile": true}))
+    );
+    assert_eq!(
+        card1
+            .emails
+            .as_ref()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .contexts
+            .as_ref(),
+        Some(&json!({"work": true}))
+    );
+    assert_eq!(
+        card1
+            .addresses
+            .as_ref()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .contexts
+            .as_ref(),
+        Some(&json!({"private": true}))
+    );
+
+    // 2. Orphaned X-ABLabel and properties without labels
+    let vcard2 = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Orphan Test\r\n",
+        "item99.X-ABLabel:Orphaned Label\r\n",
+        "TEL:+1-555-2222\r\n",
+        "EMAIL:plain@example.com\r\n",
+        "END:VCARD\r\n"
+    );
+    let card2 = vcard_to_card(vcard2).expect("parse orphan test");
+    assert_eq!(card2.phones.as_ref().unwrap().len(), 1);
+    assert_eq!(card2.emails.as_ref().unwrap().len(), 1);
+
+    // 3. Round-trip fixed point
+    let emitted = card_to_vcard(&card1);
+    let card1_re = vcard_to_card(&emitted).expect("re-parse");
+    let emitted_re = card_to_vcard(&card1_re);
+    assert_eq!(emitted, emitted_re);
+}
