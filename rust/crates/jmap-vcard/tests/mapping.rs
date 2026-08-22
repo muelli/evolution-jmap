@@ -14088,3 +14088,172 @@ fn fixpoint_convergence_across_all_contact_property_domains_matrix() {
         );
     }
 }
+
+#[test]
+fn trailing_whitespace_filed_bug_minimal_input_named_regression() {
+    // Minimal reproduction input recorded in docs/BACKLOG.md:
+    // "BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n"
+    let input = "BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n";
+
+    let card1 = vcard_to_card(input).expect("initial parse must succeed");
+    let vcard1 = card_to_vcard(&card1);
+
+    let card2 = vcard_to_card(&vcard1).expect("second parse must succeed");
+    let vcard2 = card_to_vcard(&card2);
+
+    let card3 = vcard_to_card(&vcard2).expect("third parse must succeed");
+    let vcard3 = card_to_vcard(&card3);
+
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint failure for minimal BACKLOG input (Export₂ != Export₃):\nExport₂:\n{vcard2}\nExport₃:\n{vcard3}"
+    );
+    assert_eq!(
+        card2, card3,
+        "JSContact fixpoint failure for minimal BACKLOG input (Card₂ != Card₃):\nCard₂: {card2:?}\nCard₃: {card3:?}"
+    );
+}
+
+#[test]
+fn trailing_whitespace_on_property_values_across_all_domains_fixpoint() {
+    let input = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Test Contact \r\n",
+        "N:Family ;Given ;Additional ;Prefix ;Suffix \r\n",
+        "NICKNAME:Nick \r\n",
+        "EMAIL;TYPE=WORK,PREF:user@example.com \r\n",
+        "TEL;TYPE=WORK,VOICE:555-1234 \r\n",
+        "ADR;TYPE=WORK:;;123 Main St ;Anytown ;State ;12345 ;Country \r\n",
+        "LABEL;TYPE=WORK:123 Main St \\nAnytown \\nState 12345 \r\n",
+        "ORG:Acme Corp ;Engineering ;Platform ;Floor 3 \r\n",
+        "TITLE:Senior Architect \r\n",
+        "ROLE:Lead Engineer \r\n",
+        "NOTE:Important note text \\nWith second line \r\n",
+        "URL:https://example.com/contact \r\n",
+        "CATEGORIES:Architecture,Engineering\r\n",
+        "X-EVOLUTION-SPOUSE:Maria Carreño \r\n",
+        "X-EVOLUTION-MANAGER:Chief Manager \r\n",
+        "X-EVOLUTION-ASSISTANT:Senior Assistant \r\n",
+        "X-EVOLUTION-BLOG-URL:https://blog.example.com \r\n",
+        "X-EVOLUTION-VIDEO-URL:https://video.example.com \r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card1 = vcard_to_card(input).expect("initial parse must succeed");
+    let vcard1 = card_to_vcard(&card1);
+
+    let card2 = vcard_to_card(&vcard1).expect("second parse must succeed");
+    let vcard2 = card_to_vcard(&card2);
+
+    let card3 = vcard_to_card(&vcard2).expect("third parse must succeed");
+    let vcard3 = card_to_vcard(&card3);
+
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint failure for multi-domain trailing whitespace (Export₂ != Export₃):\nExport₂:\n{vcard2}\nExport₃:\n{vcard3}"
+    );
+    assert_eq!(
+        card2, card3,
+        "JSContact fixpoint failure for multi-domain trailing whitespace (Card₂ != Card₃)"
+    );
+}
+
+#[test]
+fn trailing_whitespace_only_property_values_fixpoint_and_filtering() {
+    let input = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN: \r\n",
+        "N: ; ; ; ; \r\n",
+        "NICKNAME: \r\n",
+        "EMAIL: \r\n",
+        "TEL: \r\n",
+        "ADR:;; ; ; ; ; \r\n",
+        "LABEL: \r\n",
+        "ORG: ; ; \r\n",
+        "TITLE: \r\n",
+        "ROLE: \r\n",
+        "NOTE: \r\n",
+        "CATEGORIES: \r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card1 = vcard_to_card(input).expect("initial parse of whitespace-only values must succeed");
+    let vcard1 = card_to_vcard(&card1);
+
+    let card2 = vcard_to_card(&vcard1).expect("second parse must succeed");
+    let vcard2 = card_to_vcard(&card2);
+
+    let card3 = vcard_to_card(&vcard2).expect("third parse must succeed");
+    let vcard3 = card_to_vcard(&card3);
+
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint failure for whitespace-only values (Export₂ != Export₃):\nExport₂:\n{vcard2}\nExport₃:\n{vcard3}"
+    );
+    assert_eq!(
+        card2, card3,
+        "JSContact fixpoint failure for whitespace-only values (Card₂ != Card₃)"
+    );
+}
+
+#[test]
+fn trailing_whitespace_with_vcard_21_and_quoted_printable_fixpoint() {
+    let input = concat!(
+        "BEGIN:VCARD\r\nVERSION:2.1\r\n",
+        "FN:Legacy Contact \r\n",
+        "TEL;WORK;VOICE:555-0100 \r\n",
+        "EMAIL;INTERNET:legacy@example.com \r\n",
+        "NOTE;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:Line 1=20 =\r\nLine 2 \r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card1 = vcard_to_card(input)
+        .expect("initial parse of vCard 2.1 with trailing whitespace must succeed");
+    let vcard1 = card_to_vcard(&card1);
+
+    let card2 = vcard_to_card(&vcard1).expect("second parse must succeed");
+    let vcard2 = card_to_vcard(&card2);
+
+    let card3 = vcard_to_card(&vcard2).expect("third parse must succeed");
+    let vcard3 = card_to_vcard(&card3);
+
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint failure for vCard 2.1 QP with trailing whitespace (Export₂ != Export₃):\nExport₂:\n{vcard2}\nExport₃:\n{vcard3}"
+    );
+    assert_eq!(
+        card2, card3,
+        "JSContact fixpoint failure for vCard 2.1 QP with trailing whitespace (Card₂ != Card₃)"
+    );
+}
+
+#[test]
+fn name_with_empty_full_string_and_components_reaches_fixed_point() {
+    let card = ContactCard {
+        name: Some(Name {
+            components: Some(vec![NameComponent {
+                kind: "given".to_string(),
+                value: "TestGiven".to_string(),
+                extra: BTreeMap::new(),
+            }]),
+            full: Some("".to_string()),
+            extra: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    let card2 = vcard_to_card(&vcard1).expect("second parse must succeed");
+    let vcard2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&vcard2).expect("third parse must succeed");
+    let vcard3 = card_to_vcard(&card3);
+
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint failure for empty full name with components (Export₂ != Export₃):\nExport₂:\n{vcard2}\nExport₃:\n{vcard3}"
+    );
+    assert_eq!(
+        card2, card3,
+        "JSContact fixpoint failure for empty full name with components (Card₂ != Card₃)"
+    );
+}

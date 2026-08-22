@@ -529,4 +529,15 @@ vCard₄ (Export₃: Stabilized vCard 3.0)
 3. **Oscillation Diagnosis & Proptest Net**:
    The `proptest_fuzz.rs` suite continuously fuzzes the fixpoint contract across arbitrary raw vCard inputs and arbitrary `ContactCard` instances. When test assertions fail, the oscillation analyzer diagnostic (`identify_oscillating_vcard_property` / `identify_oscillating_card_field`) isolates the specific property name and line difference, enabling instant root-cause identification during proptest test case shrinkage.
 
+### 6.3 Trailing Whitespace & Legacy Parameter Preservation
+
+1. **Trailing Whitespace on Text Values**:
+   - RFC 6350 §3.3 / RFC 2426 §2 makes trailing whitespace significant in text property values (`FN`, `N`, `NICKNAME`, `EMAIL`, `TEL`, `ADR`, `ORG`, `TITLE`, `ROLE`, `NOTE`, `URL`, `X-EVOLUTION-*`).
+   - `calcard` and `contact.rs` preserve trailing whitespace within property values without stripping or truncation, ensuring that multi-pass roundtrips reach byte-identical fixpoints (`Export₂ == Export₃`).
+2. **Whitespace-Only Property Values**:
+   - Whitespace-only values in set-based fields (such as `CATEGORIES: `) are cleanly rejected by validator predicates ([`states_keyword`]) to prevent EDS string-trimming bugs.
+   - Whitespace-only values in text fields (such as `NICKNAME: ` or `NOTE: `) either parse into structured fields or evaluate to empty, reaching stable fixpoint convergence by Export₂.
+3. **Legacy `ENCODING=b` on Text Lines (BACKLOG Regression Pin)**:
+   - When legacy/fuzzed vCards declare binary parameters on non-binary properties (e.g. `NICKNAME;ENCODING=b:! `), the parser cleanly rejects non-base64 binary payloads via [`entry_text_list`] and normalizes the representation, reaching fixed-point stability on Export₂.
+
 
