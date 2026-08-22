@@ -18,10 +18,11 @@ use jmap_vcard::{
     VCardError, address_label, anniversary_date, card_to_vcard, maps_context, maps_phone_feature,
     online_service_handle, online_service_uri, restore_address_components, restore_name_components,
     same_photo, same_service, states_a_point_in_time, states_address, states_address_component,
-    states_anniversary, states_calendar, states_context, states_email, states_keyword, states_link,
-    states_media, states_name_component, states_nickname, states_note,
-    states_nothing_but_the_marriage, states_online_service, states_org_unit, states_organization,
-    states_phone, states_phone_feature, states_spouse, states_title, title_kind, vcard_to_card,
+    states_anniversary, states_assistant, states_calendar, states_context, states_email,
+    states_keyword, states_link, states_manager, states_media, states_name_component,
+    states_nickname, states_note, states_nothing_but_the_marriage, states_online_service,
+    states_org_unit, states_organization, states_phone, states_phone_feature, states_spouse,
+    states_title, title_kind, vcard_to_card,
 };
 use serde_json::{Value, json};
 
@@ -7608,7 +7609,7 @@ fn unknown_and_vendor_x_properties_are_safely_ignored_by_vcard_reader() {
 
 #[test]
 fn unmapped_eds_specific_x_properties_characterization_and_rationale() {
-    // Characterizes how EDS-specific X- properties that are unmapped in jmap-vcard
+    // Characterizes how EDS-specific and vendor X- properties that are unmapped in jmap-vcard
     // behave on inbound parsing and outbound serialization.
     let vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
@@ -7618,14 +7619,12 @@ fn unmapped_eds_specific_x_properties_characterization_and_rationale() {
         // Unslotted online services in EDS
         "X-TWITTER:@eds_user\r\n",
         "X-SIP:sip:eds.user@sip.example.com\r\n",
-        // EDS manager and assistant fields (E_CONTACT_MANAGER, E_CONTACT_ASSISTANT)
-        "X-EVOLUTION-MANAGER:Big Boss\r\n",
-        "X-EVOLUTION-ASSISTANT:Helpful Assistant\r\n",
+        // Vendor manager and assistant fields without X-EVOLUTION-
         "X-MANAGER:Boss Vendor\r\n",
         "X-ASSISTANT:Assistant Vendor\r\n",
-        // EDS blog and video URLs (E_CONTACT_BLOG_URL, E_CONTACT_VIDEO_URL)
-        "X-EVOLUTION-BLOG-URL:https://blogs.example.com/user\r\n",
-        "X-EVOLUTION-VIDEO-URL:https://video.example.com/stream\r\n",
+        // Vendor blog and video URLs without X-EVOLUTION-
+        "X-BLOG-URL:https://blogs.vendor.com/user\r\n",
+        "X-VIDEO-URL:https://video.vendor.com/stream\r\n",
         // EDS file-as and sort string (E_CONTACT_FILE_AS)
         "X-EVOLUTION-FILE-AS:Custom, Contact\r\n",
         // EDS specialized telephony lines (E_CONTACT_PHONE_CALLBACK, _RADIO, _TELEX, _TTYTDD)
@@ -7651,7 +7650,7 @@ fn unmapped_eds_specific_x_properties_characterization_and_rationale() {
         Some("eds.user@example.com")
     );
 
-    // All unmapped EDS X- properties are safely ignored by design:
+    // All unmapped EDS and vendor X- properties are safely ignored by design:
     assert_eq!(card.online_services, None);
     assert_eq!(card.related_to, None);
     assert_eq!(card.links, None);
@@ -7662,10 +7661,10 @@ fn unmapped_eds_specific_x_properties_characterization_and_rationale() {
     let emitted = card_to_vcard(&card);
     assert!(!emitted.contains("X-TWITTER"));
     assert!(!emitted.contains("X-SIP"));
-    assert!(!emitted.contains("X-EVOLUTION-MANAGER"));
-    assert!(!emitted.contains("X-EVOLUTION-ASSISTANT"));
-    assert!(!emitted.contains("X-EVOLUTION-BLOG-URL"));
-    assert!(!emitted.contains("X-EVOLUTION-VIDEO-URL"));
+    assert!(!emitted.contains("X-MANAGER"));
+    assert!(!emitted.contains("X-ASSISTANT"));
+    assert!(!emitted.contains("X-BLOG-URL"));
+    assert!(!emitted.contains("X-VIDEO-URL"));
     assert!(!emitted.contains("X-EVOLUTION-FILE-AS"));
     assert!(!emitted.contains("X-EVOLUTION-CALLBACK"));
     assert!(!emitted.contains("X-EVOLUTION-RADIO"));
@@ -9708,10 +9707,10 @@ fn url_kind_filtering_and_contact_uri_omission() {
         },
     );
     links.insert(
-        "l_blog".to_owned(),
+        "l_news".to_owned(),
         Link {
-            uri: "https://blog.alice.example.com".to_owned(),
-            kind: Some("blog".to_owned()),
+            uri: "https://news.alice.example.com".to_owned(),
+            kind: Some("news".to_owned()),
             extra: BTreeMap::new(),
         },
     );
@@ -9731,7 +9730,7 @@ fn url_kind_filtering_and_contact_uri_omission() {
     };
 
     let vcard = card_to_vcard(&card);
-    // Only the plain website link gets a URL line
+    // Only the plain website link gets a URL line (feed, contact, news, vendor kinds are omitted)
     assert_eq!(vcard.matches("\r\nURL").count(), 1);
     assert_eq!(
         line(&vcard, "URL"),
@@ -9739,7 +9738,7 @@ fn url_kind_filtering_and_contact_uri_omission() {
     );
     assert!(!vcard.contains("contact.example.com"));
     assert!(!vcard.contains("rss.xml"));
-    assert!(!vcard.contains("blog.alice.example.com"));
+    assert!(!vcard.contains("news.alice.example.com"));
     assert!(!vcard.contains("custom.example.com"));
 
     let parsed = vcard_to_card(&vcard).expect("parse filtered url vcard");
@@ -9754,30 +9753,40 @@ fn url_eds_blog_video_and_custom_extensions_characterization() {
     // Characterizes EDS blog and video URL properties:
     // EDS defines E_CONTACT_BLOG_URL (`X-EVOLUTION-BLOG-URL`) and
     // E_CONTACT_VIDEO_URL (`X-EVOLUTION-VIDEO-URL`).
-    // jmap-vcard deliberately does NOT map them to `links` (or `extra`):
-    // 1. JSContact represents links in `links` map with optional vendor kinds or `extra`.
-    // 2. Synthesizing non-standard properties into JSContact would corrupt standard JMAP schemas.
-    // 3. jmap-vcard safely ignores them on parse and does not emit them on serialization.
+    // jmap-vcard maps them to `links` with kind "blog" and "video",
+    // while ignoring vendor URLs without X-EVOLUTION- prefix (X-BLOG-URL, X-VIDEO-URL).
     let raw_vcard = concat!(
         "BEGIN:VCARD\r\nVERSION:3.0\r\n",
         "FN:Alice Baker\r\n",
         "URL;X-JMAP-KEY=l1:https://alice.example.com\r\n",
-        "X-EVOLUTION-BLOG-URL:https://blogs.example.com/alice\r\n",
-        "X-EVOLUTION-VIDEO-URL:https://videos.example.com/alice\r\n",
+        "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l2:https://blogs.example.com/alice\r\n",
+        "X-EVOLUTION-VIDEO-URL;X-JMAP-KEY=l3:https://videos.example.com/alice\r\n",
+        "X-BLOG-URL:https://blogs.vendor.com/ignored\r\n",
+        "X-VIDEO-URL:https://videos.vendor.com/ignored\r\n",
         "END:VCARD\r\n"
     );
 
     let parsed = vcard_to_card(raw_vcard).expect("parse vcard with eds blog/video urls");
     let links = parsed.links.as_ref().expect("links present");
-    assert_eq!(links.len(), 1);
+    assert_eq!(links.len(), 3);
     assert_eq!(links["l1"].uri, "https://alice.example.com");
-    assert_eq!(parsed.extra.get("xEvolutionBlogUrl"), None);
-    assert_eq!(parsed.extra.get("xEvolutionVideoUrl"), None);
+    assert_eq!(links["l1"].kind, None);
+    assert_eq!(links["l2"].uri, "https://blogs.example.com/alice");
+    assert_eq!(links["l2"].kind, Some("blog".to_string()));
+    assert_eq!(links["l3"].uri, "https://videos.example.com/alice");
+    assert_eq!(links["l3"].kind, Some("video".to_string()));
 
     let emitted = card_to_vcard(&parsed);
     assert!(emitted.contains("URL;X-JMAP-KEY=l1:https://alice.example.com\r\n"));
-    assert!(!emitted.contains("X-EVOLUTION-BLOG-URL"));
-    assert!(!emitted.contains("X-EVOLUTION-VIDEO-URL"));
+    assert!(
+        emitted.contains("X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l2:https://blogs.example.com/alice\r\n")
+    );
+    assert!(
+        emitted
+            .contains("X-EVOLUTION-VIDEO-URL;X-JMAP-KEY=l3:https://videos.example.com/alice\r\n")
+    );
+    assert!(!emitted.contains("X-BLOG-URL:"));
+    assert!(!emitted.contains("X-VIDEO-URL:"));
     assert_eq!(card_to_vcard(&vcard_to_card(&emitted).unwrap()), emitted);
 }
 
@@ -12428,4 +12437,280 @@ fn phone_multi_token_and_case_insensitive_type_matrix_roundtrip() {
     let card2 = vcard_to_card(&emitted).expect("parse emitted");
     let emitted2 = card_to_vcard(&card2);
     assert_eq!(emitted, emitted2);
+}
+
+#[test]
+fn evolution_manager_and_assistant_relations_roundtrip() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:c-mgr-asst-001\r\n",
+        "FN:Taylor Swift\r\n",
+        "X-EVOLUTION-SPOUSE:Austin Swift\r\n",
+        "X-EVOLUTION-MANAGER:Scott Borchetta\r\n",
+        "X-EVOLUTION-ASSISTANT:Tree Paine\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse manager and assistant");
+    let related = card.related_to.as_ref().expect("related_to present");
+    assert_eq!(related.len(), 3);
+    assert_eq!(
+        related["Austin Swift"].relation,
+        Some([("spouse".to_string(), json!(true))].into())
+    );
+    assert_eq!(
+        related["Scott Borchetta"].relation,
+        Some([("manager".to_string(), json!(true))].into())
+    );
+    assert_eq!(
+        related["Tree Paine"].relation,
+        Some([("assistant".to_string(), json!(true))].into())
+    );
+
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("X-EVOLUTION-SPOUSE:Austin Swift\r\n"));
+    assert!(emitted.contains("X-EVOLUTION-MANAGER:Scott Borchetta\r\n"));
+    assert!(emitted.contains("X-EVOLUTION-ASSISTANT:Tree Paine\r\n"));
+
+    let card2 = vcard_to_card(&emitted).expect("parse re-emitted");
+    assert_eq!(card2, card);
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted2, emitted);
+}
+
+#[test]
+fn evolution_blog_and_video_urls_links_roundtrip() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:c-blog-video-001\r\n",
+        "FN:Morgan Lee\r\n",
+        "URL;X-JMAP-KEY=l1:https://morgan.example.com\r\n",
+        "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l2:https://blogs.example.com/morgan\r\n",
+        "X-EVOLUTION-VIDEO-URL;X-JMAP-KEY=l3:https://stream.example.com/morgan/live\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse blog and video links");
+    let links = card.links.as_ref().expect("links present");
+    assert_eq!(links.len(), 3);
+    assert_eq!(links["l1"].uri, "https://morgan.example.com");
+    assert_eq!(links["l1"].kind, None);
+    assert_eq!(links["l2"].uri, "https://blogs.example.com/morgan");
+    assert_eq!(links["l2"].kind, Some("blog".to_string()));
+    assert_eq!(links["l3"].uri, "https://stream.example.com/morgan/live");
+    assert_eq!(links["l3"].kind, Some("video".to_string()));
+
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("URL;X-JMAP-KEY=l1:https://morgan.example.com\r\n"));
+    assert!(
+        emitted.contains("X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l2:https://blogs.example.com/morgan\r\n")
+    );
+    assert!(emitted.contains(
+        "X-EVOLUTION-VIDEO-URL;X-JMAP-KEY=l3:https://stream.example.com/morgan/live\r\n"
+    ));
+
+    let card2 = vcard_to_card(&emitted).expect("parse re-emitted");
+    assert_eq!(card2, card);
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted2, emitted);
+}
+
+#[test]
+fn evolution_remaining_x_properties_coexistence_and_predicates() {
+    // Tests predicates: states_manager, states_assistant, states_spouse, states_link
+    let rel_valid_mgr = Relation {
+        relation: Some([("manager".to_string(), json!(true))].into()),
+        extra: BTreeMap::new(),
+    };
+    let rel_valid_asst = Relation {
+        relation: Some([("assistant".to_string(), json!(true))].into()),
+        extra: BTreeMap::new(),
+    };
+    let rel_valid_spouse = Relation {
+        relation: Some([("spouse".to_string(), json!(true))].into()),
+        extra: BTreeMap::new(),
+    };
+    let rel_other = Relation {
+        relation: Some([("colleague".to_string(), json!(true))].into()),
+        extra: BTreeMap::new(),
+    };
+    let rel_non_bool = Relation {
+        relation: Some([("manager".to_string(), json!(1))].into()),
+        extra: BTreeMap::new(),
+    };
+    let rel_empty = Relation {
+        relation: None,
+        extra: BTreeMap::new(),
+    };
+
+    // Valid person names
+    assert!(states_manager("Sarah Connor", &rel_valid_mgr));
+    assert!(states_assistant("John Connor", &rel_valid_asst));
+    assert!(states_spouse("Kyle Reese", &rel_valid_spouse));
+    assert!(states_manager("Élise Müller", &rel_valid_mgr));
+    assert!(states_assistant("山田 太郎", &rel_valid_asst));
+
+    // Cross-relation checks
+    assert!(!states_manager("Sarah Connor", &rel_valid_asst));
+    assert!(!states_manager("Sarah Connor", &rel_valid_spouse));
+    assert!(!states_assistant("John Connor", &rel_valid_mgr));
+    assert!(!states_assistant("John Connor", &rel_valid_spouse));
+    assert!(!states_spouse("Kyle Reese", &rel_valid_mgr));
+    assert!(!states_spouse("Kyle Reese", &rel_valid_asst));
+    assert!(!states_manager("Sarah Connor", &rel_other));
+    assert!(!states_assistant("John Connor", &rel_other));
+    assert!(!states_manager("Sarah Connor", &rel_non_bool));
+    assert!(!states_manager("Sarah Connor", &rel_empty));
+
+    // Invalid person names (empty, URI, whitespace-edged, CR)
+    assert!(!states_manager("", &rel_valid_mgr));
+    assert!(!states_manager("   ", &rel_valid_mgr));
+    assert!(!states_manager(" Sarah", &rel_valid_mgr));
+    assert!(!states_manager("Sarah ", &rel_valid_mgr));
+    assert!(!states_manager("Sarah\rConnor", &rel_valid_mgr));
+    assert!(!states_manager("urn:uuid:12345", &rel_valid_mgr));
+    assert!(!states_manager("mailto:sarah@example.com", &rel_valid_mgr));
+    assert!(!states_manager("https://example.com/sarah", &rel_valid_mgr));
+
+    assert!(!states_assistant("", &rel_valid_asst));
+    assert!(!states_assistant(" John", &rel_valid_asst));
+    assert!(!states_assistant("urn:uuid:67890", &rel_valid_asst));
+
+    // states_link across kinds
+    assert!(states_link(&Link {
+        uri: "https://example.com".to_string(),
+        kind: None,
+        extra: BTreeMap::new(),
+    }));
+    assert!(states_link(&Link {
+        uri: "https://blogs.example.com".to_string(),
+        kind: Some("blog".to_string()),
+        extra: BTreeMap::new(),
+    }));
+    assert!(states_link(&Link {
+        uri: "https://video.example.com".to_string(),
+        kind: Some("video".to_string()),
+        extra: BTreeMap::new(),
+    }));
+    assert!(!states_link(&Link {
+        uri: "".to_string(),
+        kind: None,
+        extra: BTreeMap::new(),
+    }));
+    assert!(!states_link(&Link {
+        uri: "".to_string(),
+        kind: Some("blog".to_string()),
+        extra: BTreeMap::new(),
+    }));
+    assert!(!states_link(&Link {
+        uri: "https://example.com/contact".to_string(),
+        kind: Some("contact".to_string()),
+        extra: BTreeMap::new(),
+    }));
+    assert!(!states_link(&Link {
+        uri: "https://example.com/rss".to_string(),
+        kind: Some("feed".to_string()),
+        extra: BTreeMap::new(),
+    }));
+}
+
+#[test]
+fn multiple_relations_on_single_person_and_multi_relation_cards() {
+    // Tests a person who is both manager and assistant, or spouse and manager
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:c-multi-rel-001\r\n",
+        "FN:Jordan Multi\r\n",
+        "X-EVOLUTION-SPOUSE:Taylor Brooks\r\n",
+        "X-EVOLUTION-MANAGER:Taylor Brooks\r\n",
+        "X-EVOLUTION-ASSISTANT:Alex Morgan\r\n",
+        "X-EVOLUTION-MANAGER:Alex Morgan\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse multi relations");
+    let related = card.related_to.as_ref().expect("related_to present");
+    assert_eq!(related.len(), 2);
+
+    let taylor = &related["Taylor Brooks"];
+    assert_eq!(
+        taylor.relation,
+        Some(
+            [
+                ("spouse".to_string(), json!(true)),
+                ("manager".to_string(), json!(true)),
+            ]
+            .into()
+        )
+    );
+
+    let alex = &related["Alex Morgan"];
+    assert_eq!(
+        alex.relation,
+        Some(
+            [
+                ("assistant".to_string(), json!(true)),
+                ("manager".to_string(), json!(true)),
+            ]
+            .into()
+        )
+    );
+
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("X-EVOLUTION-SPOUSE:Taylor Brooks\r\n"));
+    assert!(emitted.contains("X-EVOLUTION-MANAGER:Taylor Brooks\r\n"));
+    assert!(emitted.contains("X-EVOLUTION-MANAGER:Alex Morgan\r\n"));
+    assert!(emitted.contains("X-EVOLUTION-ASSISTANT:Alex Morgan\r\n"));
+
+    let card2 = vcard_to_card(&emitted).expect("parse re-emitted");
+    assert_eq!(card2, card);
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted2, emitted);
+}
+
+#[test]
+fn evolution_links_and_relations_case_insensitivity_and_whitespace() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:c-case-001\r\n",
+        "fn:Case Insensitive\r\n",
+        "x-evolution-manager:Boss Man\r\n",
+        "X-Evolution-Assistant:Helper Person\r\n",
+        "x-evolution-blog-url;X-JMAP-KEY=l_b:https://blogs.example.com/case\r\n",
+        "X-Evolution-Video-Url;X-JMAP-KEY=l_v:https://video.example.com/case\r\n",
+        // Empty lines that should be ignored
+        "X-EVOLUTION-MANAGER:\r\n",
+        "X-EVOLUTION-ASSISTANT:   \r\n",
+        "X-EVOLUTION-BLOG-URL:\r\n",
+        "X-EVOLUTION-VIDEO-URL:   \r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse mixed-case vcard");
+    let related = card.related_to.as_ref().expect("related_to present");
+    assert_eq!(related.len(), 2);
+    assert!(related.contains_key("Boss Man"));
+    assert!(related.contains_key("Helper Person"));
+
+    let links = card.links.as_ref().expect("links present");
+    assert_eq!(links.len(), 2);
+    assert_eq!(links["l_b"].uri, "https://blogs.example.com/case");
+    assert_eq!(links["l_b"].kind, Some("blog".to_string()));
+    assert_eq!(links["l_v"].uri, "https://video.example.com/case");
+    assert_eq!(links["l_v"].kind, Some("video".to_string()));
+
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.contains("X-EVOLUTION-MANAGER:Boss Man\r\n"));
+    assert!(emitted.contains("X-EVOLUTION-ASSISTANT:Helper Person\r\n"));
+    assert!(
+        emitted.contains("X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l_b:https://blogs.example.com/case\r\n")
+    );
+    assert!(
+        emitted.contains("X-EVOLUTION-VIDEO-URL;X-JMAP-KEY=l_v:https://video.example.com/case\r\n")
+    );
+
+    let card2 = vcard_to_card(&emitted).expect("parse re-emitted");
+    assert_eq!(card2, card);
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted2, emitted);
 }

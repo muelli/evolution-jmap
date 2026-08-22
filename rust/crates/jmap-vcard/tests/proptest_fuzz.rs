@@ -262,6 +262,7 @@ prop_compose! {
             Just("website".to_string()),
             Just("feed".to_string()),
             Just("blog".to_string()),
+            Just("video".to_string()),
             "[a-z]{1,8}",
         ]),
     ) -> Link {
@@ -361,6 +362,8 @@ prop_compose! {
     fn arb_relation()(
         relation in prop::option::of(prop_oneof![
             Just([("spouse".to_string(), json!(true))].into()),
+            Just([("manager".to_string(), json!(true))].into()),
+            Just([("assistant".to_string(), json!(true))].into()),
             Just([("child".to_string(), json!(true))].into()),
             Just([("colleague".to_string(), json!(true))].into()),
             Just([("spouse".to_string(), json!(1))].into()),
@@ -564,6 +567,7 @@ prop_compose! {
             Just("X-EVOLUTION-MANAGER".to_string()),
             Just("X-EVOLUTION-ASSISTANT".to_string()),
             Just("X-EVOLUTION-BLOG-URL".to_string()),
+            Just("X-EVOLUTION-VIDEO-URL".to_string()),
             Just("X-EVOLUTION-FILE-AS".to_string()),
             Just("X-MOZILLA-HTML".to_string()),
             Just("X-PHONETIC-FIRST-NAME".to_string()),
