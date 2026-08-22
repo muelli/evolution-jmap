@@ -674,21 +674,29 @@ Running record of headless polish increments on the `antigravity` branch.
      - URIs containing action verbs or parameters (`?call`, `?chat`, `?screenname=...`, `/u/...`) are rejected by `plain_handle` to prevent corrupting handle fields or creating fake handles.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
 
+## 2026-08-22 — LOGO & KEY field audit, characterization & server preservation (jmap-vcard)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+- **AGY-TASKS sub-step:** Batch 4, Item 5. Promote `LOGO` and `KEY` from preserved blobs to real fields (audit exact EDS field semantics first — `E_CONTACT_LOGO` and `E_CONTACT_X509_CERT`/`E_CONTACT_PGP_CERT`; evaluate UI presence, sync layer interaction, and lane boundaries; characterization tests and server preservation).
+- **Changes:**
+  - Audited `LOGO` (RFC 2426 §3.5.3 / `E_CONTACT_LOGO` ID 95) and `KEY` (RFC 2426 §3.7.2 / `E_CONTACT_X509_CERT` ID 109 / `E_CONTACT_PGP_CERT` ID 110) in EDS (`eds-sys/tests/contacts.rs`), JSContact (RFC 9553 §2.6.4 `media` and §2.7.1 `cryptoKeys`), and `jmap-book-sync` (`patch.rs` / `save.rs`).
+  - Added comprehensive characterization, boundary, and fixed-point roundtrip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `logo_and_key_vcard_lines_and_server_preservation_characterization`: verifies inbound vCards containing `LOGO` (inline base64 PNG/JPEG and remote URI) and `KEY` (X.509 base64, PGP base64, URI reference, case-insensitive names, bare untyped lines) coexisting with standard mapped fields (`FN`, `N`, `EMAIL`, `TEL`, `ADR`, `PHOTO`), asserting `PHOTO` is extracted to `card.media` without collision or corruption from `LOGO` or `KEY`, `card.extra` remains clean, outbound vCard 3.0 emission strictly omits `LOGO` and `KEY`, and roundtrip achieves multi-stage fixed-point stability (`Export₂ == Export₃` and `Card₂ == Card₃`).
+    - `crypto_keys_and_logo_server_state_untouched_characterization`: verifies server-side JSContact cards carrying `cryptoKeys` in `extra` and mixed media (`photo`, `logo`, `sound`), confirming `states_media` strictly returns `true` only for `kind: "photo"`, `same_photo` correctly evaluates equality and ignores non-photos, and `card_to_vcard` safely omits unmodeled fields, preserving them on the JMAP server via `PatchObject`.
+    - `key_and_logo_edge_cases_and_malformed_payloads`: verifies long 75-octet folded base64 payloads on `KEY` and `LOGO`, empty property lines (`KEY:`, `LOGO:`), and malformed values parse without error or panic and maintain fixed-point stability.
+  - Enhanced proptest structure-aware fuzzing in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`:
+    - Added `KEY` and parameter variants (`;TYPE=X509`, `;TYPE=PGP`, `;TYPE=X509;ENCODING=b`, `;TYPE=PGP;ENCODING=b`) to `arb_vcard_property_line`.
+  - Updated `docs/VCARD-MAPPING.md`:
+    - Master Property Mapping Table row for `KEY` (`E_CONTACT_X509_CERT`, `E_CONTACT_PGP_CERT`, `card.extra["cryptoKeys"]`).
+    - Section 4.9 Item 10 documenting deliberate drop rationale for `KEY` on vCard 3.0 emission and server-side preservation via `PatchObject`.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **`LOGO` EDS Semantics & Lane Boundary Finding**:
+     - `E_CONTACT_LOGO` (95) is modeled in EDS C enum definitions as an `EContactPhoto` struct identical to `E_CONTACT_PHOTO` (94).
+     - However, Evolution's contact editor GUI provides UI exclusively for personal photos (`E_CONTACT_PHOTO`), with no user-facing UI for `E_CONTACT_LOGO`.
+     - In the sync layer (`jmap-book-sync/src/patch.rs` and `jmap-book-sync/tests/save.rs`), `diff_media` and test assertions (e.g. `replacing_inlined_photo_with_uri_photo_and_preserving_unmodeled_logo` asserting `assert!(!vcard.contains("LOGO"))`) explicitly rely on `LOGO` NOT being emitted as a vCard line and instead being preserved on the server via `PatchObject`.
+     - Emitting `LOGO` in `jmap-vcard` would cause cross-crate test breakage in `jmap-book-sync` (which is in Claude's priority lane). In accordance with the AGY lane rules ("If an item requires files outside jmap-vcard, log the finding and keep preservation"), `LOGO` remains preserved-unmapped on vCard 3.0 emission.
+  2. **`KEY` / `cryptoKeys` Semantics & Server-Side Preservation**:
+     - EDS defines `E_CONTACT_X509_CERT` (109) and `E_CONTACT_PGP_CERT` (110) of type `EContactCert` (`{ char *data; gsize length; }`).
+     - In Evolution, certificate and PGP key management is handled globally by S/MIME in Camel/Mail and GnuPG/Seahorse keyrings rather than in the address book contact editor.
+     - In JSContact (RFC 9553 §2.7.1), cryptographic keys reside in `cryptoKeys: BTreeMap<String, CryptoKey>`. In `jmap-proto`, `ContactCard` passes `cryptoKeys` through `card.extra["cryptoKeys"]`.
+     - Dropping `KEY` from vCard 3.0 emission prevents UI/editor desynchronization while `jmap-book-sync`'s `PatchObject` safely preserves server-side `cryptoKeys` untouched across address book sync cycles.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
