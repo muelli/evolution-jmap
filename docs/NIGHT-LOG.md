@@ -1648,3 +1648,33 @@ unblocked, non-decision-gated, non-operator-blocked item across CURRENT
 PRIORITY or Round 2 Tracks A-F — everything else is pending operator
 verification in real Evolution or a maintainer decision (Track B, C2, C4,
 Track E Phase B/C). Ending the session here.
+
+## 2026-08-22 (claim) — Claiming Round 2 Track B1: journald structured logging init (`tracing` + `tracing-journald`)
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `f18c2de` (the
+maintainer's own decisions commit, today). CURRENT PRIORITY is fully closed —
+M7/M9/M10 are all tagged COMPLETE in `docs/MILESTONES.md`, and the OAuth2/
+live-server readiness items are all DONE or blocked on an inherently-human
+step (the operator's Fastmail consent round-trip). Round 2 Track A is fully
+closed; Track D (D1/D2) is code-complete pending operator verification;
+Track E Phase A is code-complete pending the vfunc slice (flagged
+escalation-worthy in the roadmap's own text — unsafe FFI, EDS-only testing —
+not claiming that here) with Phases B/C parked by maintainer decision. Track
+B1 and Track C2's second half were both just decided CLAIMABLE by the
+maintainer in `f18c2de` (2026-08-22). Picking B1: it is ordinary Rust
+(a `tracing`/`tracing-journald` init function plus wiring), not FFI-shaped,
+and — unlike per-backend polish — it is real infrastructure that helps
+diagnose exactly the kind of real-server issues this project's operator
+sessions keep hitting.
+
+Scoping the increment: a survey of every non-build/test/example ad-hoc
+logging call site found no literal `println!`/`eprintln!`/`g_message` in
+production module code — everything already funnels through
+`jmap_backend_core::trampoline::log_critical` (a thin `g_log` wrapper), used
+from ~23 sites across `jmap-backend-core`, `jmap-mail`,
+`jmap-backend-collection`, and `jmap-config`. Converting all call sites to
+carry structured fields (account id, JMAP method, object type, request id, as
+the roadmap text asks) is a multi-session effort; tonight's increment is the
+init plumbing plus wiring it into every module entry point and the one
+funnel function, which is what makes any later per-site conversion possible
+at all. Claiming that slice now.
