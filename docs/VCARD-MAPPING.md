@@ -89,6 +89,15 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`X-MATRIX`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Matrix"`, `uri: "matrix:..."`) | `E_CONTACT_IM_MATRIX_HOME_1..3`, `_WORK_1..3` | (same as above) | Bare Matrix handles (`matrix:@user:domain` without action queries). |
 | **`X-SKYPE`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Skype"`, `uri: "skype:..."`) | `E_CONTACT_IM_SKYPE_HOME_1..3`, `_WORK_1..3` | (same as above) | Bare Skype usernames (`skype:echo123?call` action rejected). |
 | **`X-YAHOO`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Yahoo"`, `uri: "yahoo:... / ymsgr:..."`) | `E_CONTACT_IM_YAHOO_HOME_1..3`, `_WORK_1..3` | (same as above) | Supports `yahoo` and `ymsgr` schemes. |
+| **`GEO`** | — | `Address.coordinates` (RFC 9553) | `E_CONTACT_GEO` (no UI) | — | Dropped by design on vCard 3.0 import/export. Evolution has no UI for coordinates. Server-side `Address.coordinates` preserved by `PatchObject`. |
+| **`TZ`** | — | `card.time_zone` (RFC 9553) | — | — | Dropped by design on vCard 3.0 import/export. Evolution has no per-contact timezone field. Server `time_zone` preserved by `PatchObject`. |
+| **`MAILER`** | — | — | `E_CONTACT_MAILER` (legacy) | — | Dropped by design. Deprecated in RFC 6350 (vCard 4.0). Legacy email client software metadata. |
+| **`PRODID`** | — | `card.prod_id` (RFC 9553) | — | — | Dropped by design on import/export. Generator metadata belongs to serialization envelope; foreign `PRODID` not preserved across saves. |
+| **`REV`** | — | `card.updated` (RFC 9553) | `E_CONTACT_REV` | — | Dropped by design on import/export. Revision timestamp is strictly owned by the JMAP server upon commit. |
+| **`SORT-STRING`** | — | `Name.sortAs` / `Org.sortAs` | `E_CONTACT_FILE_AS` (via `X-EVOLUTION-FILE-AS`) | — | Dropped by design. Replaced in RFC 6350 by `SORT-AS` parameter. JSContact `sortAs` preserved on server by `PatchObject`. |
+| **`CLASS`** | — | `card.privacy` (RFC 9553) | — | — | Dropped by design. Deprecated/removed in RFC 6350. Legacy access classification with no Evolution editor UI. |
+| **`SOUND`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "sound"`) | — | [`states_media`] | Dropped by design from vCard 3.0. [`states_media`] permits only `kind: "photo"`. Server `sound` media entries preserved by `PatchObject`. |
+| **`LOGO`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "logo"`) | `E_CONTACT_LOGO` (no UI) | [`states_media`] | Dropped by design from vCard 3.0. Evolution editor supports only personal photo (`E_CONTACT_PHOTO`). Server `logo` entries preserved by `PatchObject`. |
 
 ---
 
@@ -277,6 +286,43 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
     - Compares MIME subtypes case-insensitively (`image/jpeg` == `image/JPEG`).
     - Compares URI strings directly.
   - This allows the sync layer to detect whether the photo was actually edited by the user, avoiding redundant image re-uploads on every sync.
+
+### 4.9 Deliberate Drop Rationale for Standard vCard 3.0 Properties (`GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, `LOGO`)
+`jmap-vcard` deliberately ignores standard vCard 3.0 properties for which Evolution/EDS lacks active UI editing support or for which client-side preservation is architecturally incorrect:
+1. **`GEO` (RFC 2426 §3.4.2)**:
+   - Evolution's contact editor has no UI controls or display for geographical coordinates.
+   - JSContact (RFC 9553 §2.5.1) scopes coordinates to specific postal addresses (`Address.coordinates`), rather than top-level cards.
+   - *Rationale*: Dropping top-level `GEO` lines prevents polluting JSContact data with non-standard top-level coordinates or guessing which address the coordinate belongs to. Server-side `Address.coordinates` values are untouched during sync by `PatchObject`.
+2. **`TZ` (RFC 2426 §3.4.1)**:
+   - Evolution's contact editor has no contact-specific time zone field.
+   - JSContact (RFC 9553 §2.1.2) uses IANA Time Zone Database identifiers (`card.time_zone`), whereas vCard 3.0 `TZ` typically contains UTC offsets (`-05:00`) or non-standard abbreviations (`EST`).
+   - *Rationale*: Dropped on vCard parse/emission. Server-side `card.time_zone` is preserved untouched by `PatchObject`.
+3. **`MAILER` (RFC 2426 §3.6.3)**:
+   - Deprecated and removed in RFC 6350 (vCard 4.0 Appendix A.3).
+   - Identifies the email software agent of the sender. Evolution has no UI or storage for contact email agents.
+   - *Rationale*: Dropped by design. Deprecated legacy client metadata.
+4. **`PRODID` (RFC 2426 §3.6.4)**:
+   - Identifies the software that created the vCard stream (e.g. `PRODID:-//Apple Inc.//macOS 14.5//EN`).
+   - *Rationale*: Generator metadata belongs to the serializing exporter, not the contact record. Carrying over foreign `PRODID` strings across subsequent exports from Evolution/JMAP would misattribute the generator. Dropped by design.
+5. **`REV` (RFC 2426 §3.6.5)**:
+   - Timestamp of the vCard revision (RFC 9553 §1.4 `updated`).
+   - *Rationale*: Revision timestamps are strictly owned and managed by the authoritative store (the JMAP server) upon committing changes. Preserving or emitting stale client-side `REV` timestamps would corrupt server revision tracking. `PatchObject` leaves `updated` to the JMAP server.
+6. **`SORT-STRING` (RFC 2426 §3.6.7)**:
+   - Family name sort string, replaced in RFC 6350 / JSContact by `sortAs` parameters on `Name` and `Organization`.
+   - Evolution uses `X-EVOLUTION-FILE-AS` (`E_CONTACT_FILE_AS`) for filing display names.
+   - *Rationale*: Dropped by design. JSContact `sortAs` properties ride in `extra` on the JMAP layer and are left untouched by `PatchObject`.
+7. **`CLASS` (RFC 2426 §3.7.2)**:
+   - Access classification (`PUBLIC`, `PRIVATE`, `CONFIDENTIAL`). Deprecated/removed in vCard 4.0.
+   - Evolution contact editor has no access classification controls.
+   - *Rationale*: Dropped by design. Server-side privacy settings are preserved untouched by `PatchObject`.
+8. **`SOUND` (RFC 2426 §3.6.6)**:
+   - Digital audio clips / pronunciation guides (RFC 9553 §2.6.4 `media` with `kind: "sound"`).
+   - EDS has no `E_CONTACT_SOUND` field and Evolution has no audio playback in the contact editor.
+   - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `SOUND` lines are dropped on vCard parse to prevent misparsing as photos. Server-side `sound` media entries remain safe and untouched in `card.media` via `PatchObject`.
+9. **`LOGO` (RFC 2426 §3.5.3)**:
+   - Organization logo image (RFC 9553 §2.6.4 `media` with `kind: "logo"`).
+   - Although `E_CONTACT_LOGO` exists in EDS C enum definitions, Evolution's contact editor provides UI exclusively for personal photos (`E_CONTACT_PHOTO`).
+   - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `LOGO` lines are dropped on vCard parse to prevent colliding with or replacing the personal photo field. Server-side `logo` media entries remain safe and untouched in `card.media` via `PatchObject`.
 
 ---
 

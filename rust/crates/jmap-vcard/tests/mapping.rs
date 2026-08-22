@@ -11433,3 +11433,511 @@ fn photo_edge_cases_empty_malformed_and_large_folded_payloads() {
         "Large folded photo reaches fixed point"
     );
 }
+
+#[test]
+fn standard_vcard_properties_dropped_by_design_characterization_and_rationale() {
+    // Audit of standard vCard 3.0 properties that Evolution/EDS has no E_CONTACT_*
+    // field or active editor UI for: GEO, TZ, MAILER, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO.
+    //
+    // Contract & Rationale:
+    // 1. Inbound vCards containing these standard RFC 2426 properties parse safely without errors.
+    // 2. Standard mapped properties (FN, N, EMAIL, TEL, ADR, ORG, TITLE, ROLE, NOTE, URL, PHOTO, etc.)
+    //    are extracted with 100% fidelity.
+    // 3. Unmodeled standard properties are NOT synthesized into JSContact models or extra maps,
+    //    preventing pollution of standard JMAP JSON schemas.
+    // 4. Outbound serialization emits clean standard vCard 3.0 without unmapped property lines.
+    // 5. Exporter-owned metadata (PRODID, REV) and client-owned flags (MAILER, CLASS) are not preserved
+    //    across saves, ensuring server-side updated timestamps and generator integrity remain authoritative.
+    // 6. Roundtrip operations achieve fixed-point convergence (card2 == card and vcard2 == vcard3).
+
+    let vcard_full = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:std-prop-contact-001\r\n",
+        "X-JMAP-UID:550e8400-e29b-41d4-a716-446655440000\r\n",
+        "FN:Dr. Albert Einstein\r\n",
+        "N:Einstein;Albert;;Dr.;\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:Bertie\r\n",
+        "EMAIL;TYPE=WORK,PREF;X-JMAP-KEY=e1:albert.einstein@ias.edu\r\n",
+        "TEL;TYPE=WORK,VOICE;X-JMAP-KEY=p1:+1-609-734-8000\r\n",
+        "ADR;TYPE=WORK;X-JMAP-KEY=a1:;;1 Einstein Dr;Princeton;NJ;08540;USA\r\n",
+        "LABEL;TYPE=WORK;X-JMAP-KEY=a1:1 Einstein Dr\\nPrinceton\\, NJ 08540\\nUSA\r\n",
+        "ORG;X-JMAP-KEY=o1:Institute for Advanced Study;School of Natural Sciences\r\n",
+        "TITLE;X-JMAP-KEY=t1:Professor of Theoretical Physics\r\n",
+        "ROLE;X-JMAP-KEY=t2:Researcher\r\n",
+        "NOTE;X-JMAP-KEY=n1:General Relativity and Quantum Mechanics\r\n",
+        "URL;X-JMAP-KEY=l1:https://www.ias.edu/scholars/einstein\r\n",
+        "CALURI;X-JMAP-KEY=c1:https://cal.ias.edu/einstein\r\n",
+        "FBURL;X-JMAP-KEY=c2:https://cal.ias.edu/freebusy/einstein\r\n",
+        "PHOTO;TYPE=JPEG;ENCODING=b;X-JMAP-KEY=m1:/9j/4AAQSkZJRg==\r\n",
+        "CATEGORIES:Physics,Nobel Laureate,Relativity\r\n",
+        "BDAY;X-JMAP-KEY=y1:1879-03-14\r\n",
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y2:1903-01-06\r\n",
+        "X-EVOLUTION-SPOUSE:Mileva Marić\r\n",
+        "X-JABBER;TYPE=WORK;X-JMAP-KEY=s1:einstein@jabber.ias.edu\r\n",
+        // Standard unmapped properties to audit:
+        "GEO:40.331575;-74.667232\r\n",
+        "TZ:-05:00\r\n",
+        "MAILER:Evolution 3.52 / JMAP Client\r\n",
+        "PRODID:-//Institute for Advanced Study//IAS Contacts 3.0//EN\r\n",
+        "REV:2026-08-22T00:07:47Z\r\n",
+        "SORT-STRING:Einstein\r\n",
+        "CLASS:CONFIDENTIAL\r\n",
+        "SOUND;TYPE=BASIC;ENCODING=b:AQIDBA==\r\n",
+        "SOUND;VALUE=uri:https://example.com/einstein_pronunciation.wav\r\n",
+        "LOGO;TYPE=PNG;ENCODING=b:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n",
+        "LOGO;VALUE=uri:https://www.ias.edu/logo.png\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let parsed =
+        vcard_to_card(vcard_full).expect("parse vcard containing standard unmapped properties");
+
+    // Mapped properties are 100% intact
+    assert_eq!(parsed.id.as_ref().unwrap().as_str(), "std-prop-contact-001");
+    assert_eq!(
+        parsed.uid.as_deref(),
+        Some("550e8400-e29b-41d4-a716-446655440000")
+    );
+    assert_eq!(
+        parsed.name.as_ref().unwrap().full.as_deref(),
+        Some("Dr. Albert Einstein")
+    );
+    assert_eq!(
+        parsed.nicknames.as_ref().unwrap()["k1"].name.as_str(),
+        "Bertie"
+    );
+    assert_eq!(
+        parsed.emails.as_ref().unwrap()["e1"].address.as_str(),
+        "albert.einstein@ias.edu"
+    );
+    assert_eq!(
+        parsed.phones.as_ref().unwrap()["p1"].number.as_str(),
+        "+1-609-734-8000"
+    );
+    assert_eq!(
+        parsed.organizations.as_ref().unwrap()["o1"].name.as_deref(),
+        Some("Institute for Advanced Study")
+    );
+    assert_eq!(
+        parsed.notes.as_ref().unwrap()["n1"].note.as_str(),
+        "General Relativity and Quantum Mechanics"
+    );
+    assert_eq!(
+        parsed.links.as_ref().unwrap()["l1"].uri.as_str(),
+        "https://www.ias.edu/scholars/einstein"
+    );
+    assert_eq!(
+        parsed.calendars.as_ref().unwrap()["c1"].uri.as_str(),
+        "https://cal.ias.edu/einstein"
+    );
+    assert_eq!(
+        parsed.anniversaries.as_ref().unwrap()["y1"].kind.as_str(),
+        "birth"
+    );
+    assert!(
+        parsed
+            .related_to
+            .as_ref()
+            .unwrap()
+            .contains_key("Mileva Marić")
+    );
+    assert_eq!(
+        parsed.online_services.as_ref().unwrap()["s1"]
+            .service
+            .as_deref(),
+        Some("Jabber")
+    );
+
+    // Media contains ONLY the PHOTO — SOUND and LOGO lines are safely ignored
+    let media = parsed.media.as_ref().expect("media map present");
+    assert_eq!(media.len(), 1, "Only PHOTO is read into media map");
+    let photo = &media["m1"];
+    assert_eq!(photo.kind.as_deref(), Some("photo"));
+    assert_eq!(photo.media_type.as_deref(), Some("image/JPEG"));
+    assert_eq!(
+        photo.uri.as_str(),
+        "data:image/JPEG;base64,/9j/4AAQSkZJRg=="
+    );
+
+    // Outbound vCard contains all mapped lines and none of the unmapped standard lines
+    let emitted = card_to_vcard(&parsed);
+    assert!(emitted.contains("FN:Dr. Albert Einstein\r\n"));
+    assert!(emitted.contains("PHOTO;X-JMAP-KEY=m1;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRg==\r\n"));
+    assert!(!emitted.contains("GEO:"), "GEO must not be emitted");
+    assert!(!emitted.contains("TZ:"), "TZ must not be emitted");
+    assert!(!emitted.contains("MAILER:"), "MAILER must not be emitted");
+    assert!(!emitted.contains("PRODID:"), "PRODID must not be emitted");
+    assert!(!emitted.contains("REV:"), "REV must not be emitted");
+    assert!(
+        !emitted.contains("SORT-STRING:"),
+        "SORT-STRING must not be emitted"
+    );
+    assert!(!emitted.contains("CLASS:"), "CLASS must not be emitted");
+    assert!(!emitted.contains("SOUND"), "SOUND must not be emitted");
+    assert!(!emitted.contains("LOGO"), "LOGO must not be emitted");
+
+    // Fixed-point convergence
+    let parsed2 = vcard_to_card(&emitted).expect("second parse");
+    let emitted2 = card_to_vcard(&parsed2);
+    let parsed3 = vcard_to_card(&emitted2).expect("third parse");
+    let emitted3 = card_to_vcard(&parsed3);
+    assert_eq!(
+        parsed2, parsed3,
+        "ContactCard reaches fixed point on second pass"
+    );
+    assert_eq!(
+        emitted2, emitted3,
+        "Emitted vCard reaches fixed point on second pass"
+    );
+}
+
+#[test]
+fn standard_properties_individual_variations_and_parameters() {
+    // Verify parsing tolerance and safe omission across individual standard properties:
+    // GEO, TZ, MAILER, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO with parameters.
+
+    // 1. GEO variations: lat;lon, signed floats, precision, custom parameters
+    for geo_val in [
+        "GEO:37.386013;-122.082932",
+        "GEO:-33.8688;151.2093",
+        "GEO:0.0;0.0",
+        "GEO;X-PRECISION=HIGH:51.5074;-0.1278",
+        "GEO;VALUE=text:48.8566;2.3522",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Geo User\r\n{geo_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse GEO");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Geo User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("GEO:") && !emitted.contains("GEO;"),
+            "GEO must not be emitted"
+        );
+    }
+
+    // 2. TZ variations: UTC offsets, IANA text names, abbreviations, lowercase
+    for tz_val in [
+        "TZ:-05:00",
+        "TZ:+01:00",
+        "TZ:+05:30",
+        "TZ;VALUE=text:America/New_York",
+        "TZ;VALUE=text:Europe/Zurich",
+        "TZ;VALUE=TEXT:EST",
+        "TZ;VALUE=text:UTC",
+        "tz:America/Tokyo",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:TZ User\r\n{tz_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse TZ");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("TZ User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("TZ:") && !emitted.contains("TZ;"),
+            "TZ must not be emitted"
+        );
+    }
+
+    // 3. MAILER variations: client identifiers and version strings
+    for mailer_val in [
+        "MAILER:Evolution 3.52.0",
+        "MAILER:Mozilla Thunderbird 128.0",
+        "MAILER:Apple Mail (2.3654.120.0.1)",
+        "MAILER:PigeonMail/2.1",
+        "mailer:Custom Agent",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Mailer User\r\n{mailer_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse MAILER");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Mailer User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("MAILER:") && !emitted.contains("MAILER;"),
+            "MAILER must not be emitted"
+        );
+    }
+
+    // 4. PRODID variations: FPI strings and application identifiers
+    for prodid_val in [
+        "PRODID:-//Apple Inc.//macOS 14.5//EN",
+        "PRODID:-//Google Inc.//Google Contacts//EN",
+        "PRODID:-//Evolution Data Server//3.52.0//EN",
+        "PRODID:-//Mozilla.org/NONSGML Mozilla Address Book V1.0//EN",
+        "prodid:-//Example Corp.//EN",
+    ] {
+        let vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Prodid User\r\n{prodid_val}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&vcard).expect("parse PRODID");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Prodid User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("PRODID:") && !emitted.contains("PRODID;"),
+            "PRODID must not be emitted"
+        );
+    }
+
+    // 5. REV variations: ISO-8601 timestamps, basic and extended formats
+    for rev_val in [
+        "REV:2026-08-22T00:07:47Z",
+        "REV:20260822T000747Z",
+        "REV:1995-10-31T22:27:10.123Z",
+        "REV;VALUE=date-time:2024-01-15T12:00:00Z",
+        "rev:2026-08-22T00:00:00Z",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Rev User\r\n{rev_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse REV");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Rev User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("REV:") && !emitted.contains("REV;"),
+            "REV must not be emitted"
+        );
+    }
+
+    // 6. SORT-STRING variations: simple strings, non-ASCII, spaces, escaped delimiters
+    for sort_val in [
+        "SORT-STRING:Einstein",
+        "SORT-STRING:Mueller",
+        "SORT-STRING:Müller\\, Hans",
+        "SORT-STRING:van Beethoven",
+        "sort-string:Bach",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Sort User\r\n{sort_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse SORT-STRING");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Sort User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("SORT-STRING:") && !emitted.contains("SORT-STRING;"),
+            "SORT-STRING must not be emitted"
+        );
+    }
+
+    // 7. CLASS variations: access classifications
+    for class_val in [
+        "CLASS:PUBLIC",
+        "CLASS:PRIVATE",
+        "CLASS:CONFIDENTIAL",
+        "CLASS;X-CUSTOM=1:PUBLIC",
+        "class:private",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Class User\r\n{class_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse CLASS");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Class User")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert!(
+            !emitted.contains("CLASS:") && !emitted.contains("CLASS;"),
+            "CLASS must not be emitted"
+        );
+    }
+
+    // 8. SOUND variations: inline binary audio and remote URIs
+    for sound_val in [
+        "SOUND;TYPE=BASIC;ENCODING=b:AQIDBA==",
+        "SOUND;TYPE=WAV;ENCODING=b:UklGRg==",
+        "SOUND;VALUE=uri:https://example.com/pronunciation.wav",
+        "SOUND;VALUE=URI:file:///sounds/name.au",
+        "sound;value=uri:https://example.com/audio.mp3",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Sound User\r\n{sound_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse SOUND");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Sound User")
+        );
+        assert!(parsed.media.is_none() || parsed.media.as_ref().unwrap().is_empty());
+        let emitted = card_to_vcard(&parsed);
+        assert!(!emitted.contains("SOUND"), "SOUND must not be emitted");
+    }
+
+    // 9. LOGO variations: inline binary image and remote URIs
+    for logo_val in [
+        "LOGO;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRg==",
+        "LOGO;TYPE=PNG;ENCODING=b:iVBORw0KGgo==",
+        "LOGO;VALUE=uri:https://example.com/logo.png",
+        "LOGO;VALUE=URI:https://example.com/corporate_logo.svg",
+        "logo;value=uri:https://example.com/icon.gif",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Logo User\r\n{logo_val}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard).expect("parse LOGO");
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Logo User")
+        );
+        assert!(parsed.media.is_none() || parsed.media.as_ref().unwrap().is_empty());
+        let emitted = card_to_vcard(&parsed);
+        assert!(!emitted.contains("LOGO"), "LOGO must not be emitted");
+    }
+}
+
+#[test]
+fn jscontact_sound_and_logo_media_entries_server_preservation() {
+    // When a JSContact ContactCard on the JMAP server contains non-photo media entries
+    // (such as kind: "sound", kind: "logo", kind: "document"), states_media ensures that
+    // ONLY kind: "photo" entries are emitted onto vCard 3.0 PHOTO lines.
+    //
+    // Non-photo media entries get no vCard line and are omitted on the wire format to
+    // prevent confusing Evolution's contact editor (which only supports E_CONTACT_PHOTO).
+    // During JMAP sync, PatchObject preserves the untouched sound/logo entries on the server.
+
+    let mut media = BTreeMap::new();
+    media.insert(
+        "m_photo".to_owned(),
+        Media {
+            kind: Some("photo".to_owned()),
+            media_type: Some("image/jpeg".to_owned()),
+            uri: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    media.insert(
+        "m_logo".to_owned(),
+        Media {
+            kind: Some("logo".to_owned()),
+            media_type: Some("image/png".to_owned()),
+            uri: "https://example.com/company_logo.png".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    media.insert(
+        "m_sound".to_owned(),
+        Media {
+            kind: Some("sound".to_owned()),
+            media_type: Some("audio/wav".to_owned()),
+            uri: "data:audio/wav;base64,UklGRg==".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+    media.insert(
+        "m_doc".to_owned(),
+        Media {
+            kind: Some("document".to_owned()),
+            media_type: Some("application/pdf".to_owned()),
+            uri: "https://example.com/resume.pdf".to_owned(),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    // states_media predicate validation
+    assert!(states_media(&media["m_photo"]), "photo must be stateable");
+    assert!(
+        !states_media(&media["m_logo"]),
+        "logo must not be stateable on vCard 3.0 PHOTO"
+    );
+    assert!(
+        !states_media(&media["m_sound"]),
+        "sound must not be stateable on vCard 3.0 PHOTO"
+    );
+    assert!(
+        !states_media(&media["m_doc"]),
+        "document must not be stateable on vCard 3.0 PHOTO"
+    );
+
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Media Test Contact".to_owned()),
+            ..Name::default()
+        }),
+        media: Some(media),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+
+    // Exactly one PHOTO line emitted
+    assert_eq!(
+        vcard.matches("PHOTO").count(),
+        1,
+        "Exactly one PHOTO line must be emitted"
+    );
+    assert!(vcard.contains("PHOTO;X-JMAP-KEY=m_photo;TYPE=jpeg;ENCODING=b:/9j/4AAQSkZJRg==\r\n"));
+    assert!(!vcard.contains("LOGO"), "LOGO must not be emitted");
+    assert!(!vcard.contains("SOUND"), "SOUND must not be emitted");
+    assert!(!vcard.contains("company_logo.png"));
+    assert!(!vcard.contains("audio/wav"));
+    assert!(!vcard.contains("resume.pdf"));
+
+    // Reading back parses only the photo
+    let parsed = vcard_to_card(&vcard).expect("parse back");
+    let parsed_media = parsed.media.as_ref().expect("media present");
+    assert_eq!(parsed_media.len(), 1);
+    assert_eq!(parsed_media["m_photo"].kind.as_deref(), Some("photo"));
+    assert_eq!(
+        parsed_media["m_photo"].uri.as_str(),
+        "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+    );
+}
+
+#[test]
+fn standard_properties_case_insensitivity_and_empty_values() {
+    // Verify that empty or whitespace-only lines for all 9 standard properties
+    // are safely handled without panicking or creating empty structs.
+
+    for empty_line in [
+        "GEO:",
+        "GEO:   ",
+        "geo:",
+        "TZ:",
+        "TZ:   ",
+        "tz:",
+        "MAILER:",
+        "mailer:   ",
+        "PRODID:",
+        "prodid:   ",
+        "REV:",
+        "rev:   ",
+        "SORT-STRING:",
+        "sort-string:   ",
+        "CLASS:",
+        "class:   ",
+        "SOUND:",
+        "sound:   ",
+        "SOUND;VALUE=uri:",
+        "SOUND;ENCODING=b:",
+        "LOGO:",
+        "logo:   ",
+        "LOGO;VALUE=uri:",
+        "LOGO;ENCODING=b:",
+    ] {
+        let vcard =
+            format!("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Empty Test\r\n{empty_line}\r\nEND:VCARD\r\n");
+        let parsed = vcard_to_card(&vcard)
+            .unwrap_or_else(|e| panic!("Failed to parse empty line {empty_line:?}: {e}"));
+        assert_eq!(
+            parsed.name.as_ref().unwrap().full.as_deref(),
+            Some("Empty Test")
+        );
+        let emitted = card_to_vcard(&parsed);
+        assert_eq!(
+            emitted,
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Empty Test\r\nEND:VCARD\r\n"
+        );
+    }
+}
