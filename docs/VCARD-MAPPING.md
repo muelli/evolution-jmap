@@ -71,14 +71,18 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`TITLE`** | `X-JMAP-KEY` | `card.titles` (`Title.name`, `kind: "title"`) | `E_CONTACT_TITLE` | `read_title`, [`states_title`], [`title_kind`] | `kind: "title"` (or `None`) maps to `TITLE`. Vendor kinds dropped. |
 | **`ROLE`** | `X-JMAP-KEY` | `card.titles` (`Title.name`, `kind: "role"`) | `E_CONTACT_ROLE` | `read_title`, [`states_title`], [`title_kind`] | `kind: "role"` maps to `ROLE`. |
 | **`NOTE`** | `X-JMAP-KEY` | `card.notes` (`Note.note`) | `E_CONTACT_NOTE` | `states_note` | Free text. First line lands in EDS `E_CONTACT_NOTE`. RFC 9553 `created` and `author` ride in `extra` and are untouched during sync. |
-| **`URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: None`) | `E_CONTACT_HOMEPAGE_URL` | `states_link`, `maps_link_kind` | Only plain websites (`kind: None`) map to `URL`. `kind: "contact"` (`CONTACT-URI`) and vendor kinds dropped. `mediaType`, `label`, `contexts`, `pref` ride in `extra`. |
+| **`URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: None`) | `E_CONTACT_HOMEPAGE_URL` | `states_link`, `maps_link_kind` | Plain websites (`kind: None`) map to `URL`. `mediaType`, `label`, `contexts`, `pref` ride in `extra`. |
+| **`X-EVOLUTION-BLOG-URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: "blog"`) | `E_CONTACT_BLOG_URL` | `states_link`, `maps_link_kind` | EDS blog URL field. Maps to `links` with `kind: "blog"`. |
+| **`X-EVOLUTION-VIDEO-URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: "video"`) | `E_CONTACT_VIDEO_URL` | `states_link`, `maps_link_kind` | EDS video stream URL field. Maps to `links` with `kind: "video"`. |
 | **`CALURI`** | `X-JMAP-KEY` | `card.calendars` (`Calendar.uri`, `kind: "calendar"`) | `E_CONTACT_CALENDAR_URI` | `states_calendar`, `calendar_property`, `calendar_kind` | vCard 4.0 property emitted on vCard 3.0 for EDS 3.52 compatibility. `ICSCALENDAR` excluded. |
 | **`FBURL`** | `X-JMAP-KEY` | `card.calendars` (`Calendar.uri`, `kind: "freeBusy"`) | `E_CONTACT_FREEBUSY_URL` | `states_calendar`, `calendar_property`, `calendar_kind` | vCard 4.0 property emitted on vCard 3.0 for EDS 3.52 compatibility. |
 | **`PHOTO`** | `TYPE`, `ENCODING=b`, `VALUE=uri`, `X-JMAP-KEY` | `card.media` (`Media.uri`, `media_type`, `kind: "photo"`) | `E_CONTACT_PHOTO` | `photo`, `read_photo`, [`states_media`], [`same_photo`], `image_subtype` | Only `kind: "photo"` mapped. Inline data uses base64; `TYPE` states subtype only (e.g. `JPEG` -> `image/jpeg`). URI references use `VALUE=uri`. Re-paired via `same_photo` since EDS drops `X-JMAP-KEY` on photo edit. |
 | **`CATEGORIES`** | — | `card.keywords` (`Set<String>`) | `E_CONTACT_CATEGORY_LIST` | `drawn_tags`, `read_keywords`, [`states_keyword`] | Single sorted line emitted. Comma-separated on wire. Trimming protection: tags with leading/trailing whitespace or carriage returns omitted from emission to prevent EDS corruption. |
 | **`BDAY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "birth"`, `date`) | `E_CONTACT_BIRTH_DATE` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`], [`states_a_point_in_time`], `Day` | Single calendar day formatted `YYYY-MM-DD`. Truncated/bare years (`1984`) or years < 1000 omitted to prevent EDS clamping corruption (`1000..=9999`). `Timestamp` converted to UTC day. |
 | **`X-EVOLUTION-ANNIVERSARY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "wedding"`, `date`) | `E_CONTACT_ANNIVERSARY` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`] | EDS wedding anniversary field. Same date validation and year >= 1000 clamping rules as `BDAY`. `kind: "death"` dropped. |
-| **`X-EVOLUTION-SPOUSE`** | — | `card.related_to` (Key = Person Name, `relation: { "spouse": true }`) | `E_CONTACT_SPOUSE` | `spouse_named`, [`states_spouse`], [`states_nothing_but_the_marriage`], `names_a_person` | Key in JSContact `related_to` is the spouse name (RFC 9555 §2.9.5). No `X-JMAP-KEY` needed. 19 non-spouse relation types and URI keys dropped. |
+| **`X-EVOLUTION-SPOUSE`** | — | `card.related_to` (Key = Person Name, `relation: { "spouse": true }`) | `E_CONTACT_SPOUSE` | [`states_spouse`], [`states_nothing_but_the_marriage`], `names_a_person` | Key in JSContact `related_to` is the spouse name (RFC 9555 §2.9.5). No `X-JMAP-KEY` needed. Non-person/URI keys dropped. |
+| **`X-EVOLUTION-MANAGER`** | — | `card.related_to` (Key = Person Name, `relation: { "manager": true }`) | `E_CONTACT_MANAGER` | [`states_manager`], `names_a_person` | Key in JSContact `related_to` is the manager name (RFC 9553 §2.1.8). No `X-JMAP-KEY` needed. Non-person/URI keys dropped. |
+| **`X-EVOLUTION-ASSISTANT`** | — | `card.related_to` (Key = Person Name, `relation: { "assistant": true }`) | `E_CONTACT_ASSISTANT` | [`states_assistant`], `names_a_person` | Key in JSContact `related_to` is the assistant name (RFC 9553 §2.1.8). No `X-JMAP-KEY` needed. Non-person/URI keys dropped. |
 | **`X-AIM`** | `TYPE` (`WORK`, `HOME`), `X-JMAP-KEY` | `card.online_services` (`service: "AIM"`, `user`, `uri: "aim:..."`) | `E_CONTACT_IM_AIM_HOME_1..3`, `_WORK_1..3` | `drawn_service`, [`states_online_service`], [`online_service_handle`], [`online_service_uri`], `service_slot` | 6 EDS slots per service. Handles extracted from `user` or bare URI schemes (`SERVICE_SCHEMES`). Action/query URIs rejected. `TYPE` mandatory for EDS field visibility. |
 | **`X-GADUGADU`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Gadu-Gadu"`, `uri: "gg:..."`) | `E_CONTACT_IM_GADUGADU_HOME_1..3`, `_WORK_1..3` | (same as above) | Matched case/punctuation-insensitively (`same_service`). |
 | **`X-GOOGLE-TALK`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Google Talk"`, `uri: "xmpp:..."`) | `E_CONTACT_IM_GOOGLE_TALK_HOME_1..3`, `_WORK_1..3` | (same as above) | Handles use `xmpp` scheme. |
@@ -213,13 +217,14 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 - **`URL` Mapping & EDS Homepage Slotting**:
   - Plain website links (`kind: None` in JSContact `links`) map directly to RFC 2426 §3.6.8 `URL` lines carrying `X-JMAP-KEY`.
   - In EDS, `E_CONTACT_HOMEPAGE_URL` maps to the **first `URL` line** in the vCard. Subsequent `URL` lines pass through intact on the vCard stream and are parsed back into `card.links` with their respective keys (`l1`, `l2`, `l3`).
+- **EDS Blog & Video URLs Mapping**:
+  - EDS defines `E_CONTACT_BLOG_URL` (`X-EVOLUTION-BLOG-URL`) and `E_CONTACT_VIDEO_URL` (`X-EVOLUTION-VIDEO-URL`).
+  - `jmap-vcard` maps these directly to JSContact `links` entries with `kind: Some("blog")` and `kind: Some("video")` respectively, carrying `X-JMAP-KEY`.
+  - Generic vendor properties without the `X-EVOLUTION-` prefix (e.g. `X-BLOG-URL`, `X-VIDEO-URL`) are ignored on parse to avoid synthetic vendor drift.
 - **`URL` Kind Filtering & Contact URI Omission**:
   - RFC 9553 §2.6.3 defines `kind: "contact"` as a URI for communicating with the person (e.g. contact forms, mailto links), which RFC 9555 §2.6.3 states on vCard 4.0's `CONTACT-URI`.
-  - vCard 3.0 has no `CONTACT-URI` property. Emitting `kind: "contact"` or vendor kinds (`kind: "blog"`, `"video"`, `"feed"`) on a vCard 3.0 `URL` would populate Evolution's `E_CONTACT_HOMEPAGE_URL` and mislead the user into seeing a contact form or feed as the person's homepage.
-  - Therefore, [`states_link`] and [`maps_link_kind`] restrict vCard 3.0 emission **strictly to `kind: None`** (plain websites). All other kinds are omitted on the wire format and remain safely preserved on the server.
-- **EDS Blog & Video URLs vs JSContact Links**:
-  - EDS defines `E_CONTACT_BLOG_URL` (`X-EVOLUTION-BLOG-URL`) and `E_CONTACT_VIDEO_URL` (`X-EVOLUTION-VIDEO-URL`).
-  - `jmap-vcard` deliberately does NOT map these non-standard properties into `links` or `extra` to prevent polluting standard JSContact schemas. `vcard_to_card` safely ignores them on parse, leaving them as unmapped EDS extensions.
+  - vCard 3.0 has no `CONTACT-URI` property. Emitting `kind: "contact"` or unmapped vendor kinds (`kind: "feed"`, `"profile"`) on a vCard 3.0 `URL` would populate Evolution's `E_CONTACT_HOMEPAGE_URL` and mislead the user into seeing a contact form or feed as the person's homepage.
+  - Therefore, [`states_link`] and [`maps_link_kind`] restrict vCard emission strictly to `kind: None` (`URL`), `kind: Some("blog")` (`X-EVOLUTION-BLOG-URL`), and `kind: Some("video")` (`X-EVOLUTION-VIDEO-URL`). All other kinds are omitted on the wire format and remain safely preserved on the server.
 - **URI Punctuation & Escaping**:
   - URIs with query strings containing semicolons, commas, ampersands, hashes, and percent-encodings (e.g. `https://api.example.com/search?q=a,b;c#top`) are formatted without backslash escaping per RFC 3986 and RFC 2426 §3.6.8, round-tripping with 100% fidelity.
 - **Unmodeled `Link` Properties**:
@@ -239,6 +244,19 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
   - [`states_media`] and `photo` filter strictly for `kind: Some("photo")`. Logos, sounds, documents, and unmapped kinds get no `PHOTO` line, preserving UI separation in Evolution.
   - Unmapped media entries remain safe on the server because `jmap-book-sync` patches only mapped/edited properties.
 
+### 3.11 Relationships: Spouse, Manager, Assistant (`X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, `X-EVOLUTION-ASSISTANT`)
+- **EDS Relation Fields**:
+  - Evolution's contact editor provides dedicated text fields for **Spouse** (`E_CONTACT_SPOUSE`), **Manager** (`E_CONTACT_MANAGER`), and **Assistant** (`E_CONTACT_ASSISTANT`).
+  - In EDS vCard 3.0 representation, these are stored on `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, and `X-EVOLUTION-ASSISTANT` property lines.
+- **JSContact `relatedTo` Mapping (RFC 9553 §2.1.8 / RFC 9555 §2.9.5)**:
+  - JSContact models relationships in `card.related_to` as a map keyed by entity name (for free-text vCard entries) with a `relation` set (`{"spouse": true}`, `{"manager": true}`, `{"assistant": true}`).
+  - When parsing from vCard, `vcard_to_card` inserts or updates `related_to[name]` with the corresponding relation type if `names_a_person(name)` holds.
+  - Outbound serialization emits lines for each stated relation type: [`states_spouse`], [`states_manager`], and [`states_assistant`].
+  - If a single person holds multiple roles (e.g. both manager and assistant), multiple lines are emitted (`X-EVOLUTION-MANAGER:Alex`, `X-EVOLUTION-ASSISTANT:Alex`) and round-trip into a unified `Relation.relation` map.
+- **Name Validation & URI Identifier Defense**:
+  - `names_a_person` rejects empty names, URI scheme identifiers (`urn:uuid:...`, `mailto:...`, `http:...`), leading/trailing ASCII whitespace, and carriage returns.
+  - This ensures that entity UIDs are not mistakenly rendered as human person names in Evolution's text fields.
+
 ---
 
 ## 4. Special Semantics & Product Decision Catalog
@@ -246,7 +264,7 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 All product decisions and behavioral findings documented in `docs/AGY-LOG.md` are codified below:
 
 ### 4.1 Dropped-by-Design Rationale for Unknown `X-` Properties
-`jmap-vcard` deliberately ignores unmapped vendor `X-` properties (e.g., `X-MOZILLA-HTML`, `X-APPLE-*`, `X-MS-*`, `X-SIGNAL`, `X-DISCORD`, `X-TELEGRAM`, `X-SLACK`, `X-EVOLUTION-MANAGER`, `X-EVOLUTION-ASSISTANT`, `X-EVOLUTION-FILE-AS`):
+`jmap-vcard` deliberately ignores unmapped vendor `X-` properties (e.g., `X-MOZILLA-HTML`, `X-APPLE-*`, `X-MS-*`, `X-SIGNAL`, `X-DISCORD`, `X-TELEGRAM`, `X-SLACK`, `X-TWITTER`, `X-SIP`, `X-MANAGER`, `X-ASSISTANT`, `X-EVOLUTION-FILE-AS`, `X-EVOLUTION-CALLBACK`, `X-EVOLUTION-RADIO`, `X-EVOLUTION-TELEX`, `X-EVOLUTION-TTYTDD`):
 1. **Contract Integrity**: Prevents polluting standard JSContact (RFC 9553) models with raw non-standard vCard lines in `extra`.
 2. **Sync Safety**: `jmap-book-sync`'s `PatchObject` issues patches only for mapped/edited fields. Dropping unmapped properties on parse ensures the server's existing unmodeled attributes remain completely untouched.
 3. **UI Isolation**: Evolution has no UI fields for unsupported properties. Inventing fake mappings would confuse users and corrupt server records.
@@ -377,8 +395,8 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 | [`title_kind`] | `pub` | Resolves title kind with fallback to `"title"`. |
 | [`states_title`] | `pub` | Checks if title has non-empty name and supported kind (`title` or `role`). |
 | [`states_note`] | `pub` | Checks if note contains non-empty text. |
-| [`states_link`] | `pub` | Checks if link contains non-empty URI and plain website kind (`None`). |
-| `maps_link_kind` | `private` | Filters link kind to allow only plain website links (`kind: None`) on vCard 3.0 `URL`. |
+| [`states_link`] | `pub` | Checks if link contains non-empty URI and mapped kind (`None`, `blog`, `video`). |
+| `maps_link_kind` | `private` | Checks if link kind is supported on vCard 3.0 / EDS (`None`, `blog`, `video`). |
 | `entry_text_list` | `private` | Reads parsed text values of a multi-valued property and joins them with commas. |
 | [`states_calendar`] | `pub` | Checks if calendar has non-empty URI and mapped kind (`calendar` or `freeBusy`). |
 | [`states_media`] | `pub` | Evaluates if media entry is a valid photo with supported inline/URI payload. |
@@ -395,6 +413,8 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
 | [`anniversary_date`] | `pub` | Formats anniversary date as `YYYY-MM-DD` if valid and survives EDS clamping. |
 | [`states_a_point_in_time`] | `pub` | Checks if anniversary is dated by a UTC `Timestamp` rather than `PartialDate`. |
 | [`states_spouse`] | `pub` | Checks if relation is `spouse` and key names a printable person (not a URI). |
+| [`states_manager`] | `pub` | Checks if relation is `manager` and key names a printable person (not a URI). |
+| [`states_assistant`] | `pub` | Checks if relation is `assistant` and key names a printable person (not a URI). |
 | [`states_nothing_but_the_marriage`] | `pub` | Checks if relation entry contains only the `spouse` relation type. |
 | [`states_keyword`] | `pub` | Validates keyword tag for boolean `true`, non-emptiness, and whitespace safety. |
 
