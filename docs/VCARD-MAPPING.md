@@ -397,6 +397,46 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
    - Although `E_CONTACT_LOGO` exists in EDS C enum definitions, Evolution's contact editor provides UI exclusively for personal photos (`E_CONTACT_PHOTO`).
    - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `LOGO` lines are dropped on vCard parse to prevent colliding with or replacing the personal photo field. Server-side `logo` media entries remain safe and untouched in `card.media` via `PatchObject`.
 
+### 4.10 vCard 2.1 Legacy Import Tolerance (Asymmetric Compatibility Contract)
+
+Real-world contact exporters (such as older versions of Microsoft Outlook, feature phones from Nokia and Sony Ericsson, and legacy PBX systems) continue to emit vCard 2.1 data. To ensure robust interoperability without compromising modern standards, `jmap-vcard` implements an **asymmetric import tolerance contract**:
+
+```
+[ Inbound vCard 2.1 / 3.0 / 4.0 ]
+              │
+              ▼ vcard_to_card() (Postel's Law: liberal in what we accept)
+[ JSContact ContactCard (RFC 9553) ]
+              │
+              ▼ card_to_vcard() (Strict RFC 2426 vCard 3.0 UTF-8)
+[ Outbound Canonical vCard 3.0 ]
+```
+
+#### Accepted vCard 2.1 Subset:
+
+1. **Bare Parameter Type Names (No `TYPE=` Prefix)**:
+   - In vCard 2.1, parameter values were frequently written as bare words without the `TYPE=` parameter key (e.g. `TEL;WORK;VOICE:+12345` instead of `TEL;TYPE=WORK,VOICE:+12345`).
+   - [`vcard_to_card`] accepts all bare type names across telephony, email, and address properties:
+     - Phone contexts: `WORK`, `HOME`.
+     - Phone features: `VOICE`, `FAX`, `CELL`, `MOBILE`, `PAGER`, `VIDEO`, `CAR`, `ISDN`, `TTYTDD`.
+     - Email contexts and types: `INTERNET`, `WORK`, `HOME`, `PREF`.
+     - Address contexts and types: `WORK`, `HOME`, `POSTAL`, `PARCEL`, `DOM`, `INTL`, `PREF`.
+   - `entry_has_type` matches both standard `TYPE=value` parameters and bare parameter names matching the target token case-insensitively.
+2. **Preference Flags (`PREF`)**:
+   - Accepts bare `PREF` parameters (e.g. `EMAIL;PREF;INTERNET:alice@example.com`, `TEL;WORK;PREF:+12345`, `ADR;WORK;PREF:...`, `LABEL;WORK;PREF:...`) and maps them to `pref: Some(1)` or `extra["pref"] = 1`.
+   - Outbound emission sorts preferred entries to the top (`E_CONTACT_EMAIL_1`, primary phone) and emits standard vCard 3.0 `TYPE=PREF`.
+3. **Character Sets & Transport Encodings**:
+   - `CHARSET` parameter: Accepts legacy character set declarations (`CHARSET=UTF-8`, `CHARSET=ISO-8859-1`, `CHARSET=WINDOWS-1252`) case-insensitively on any property.
+   - `ENCODING=QUOTED-PRINTABLE`: Automatically decodes Quoted-Printable hexadecimal octets (`=C3=BC`, `=FC`, `=80`) into standard UTF-8 text strings according to the declared `CHARSET` (or ISO-8859-1 default per RFC 2045).
+   - Soft Line Breaks: Losslessly unfolds Quoted-Printable soft line breaks (`=\r\n` and `=\n`) without introducing extraneous whitespace.
+4. **Legacy Photo Formats & Subtype Inference**:
+   - Accepts bare image formats in photo parameters: `PHOTO;JPEG;ENCODING=BASE64:...`, `PHOTO;GIF;BASE64:...`, `PHOTO;PNG;ENCODING=BASE64:...`, and `PHOTO;TYPE=JPEG;ENCODING=BASE64:...`.
+   - Automatically identifies image subtypes from bare parameter names (`JPEG`, `GIF`, `PNG`, `BMP`, `TIFF`, `WEBP`) and constructs valid `data:image/<subtype>;base64,...` data URIs.
+   - Outbound serialization normalizes strictly to canonical vCard 3.0 format (`PHOTO;ENCODING=b;TYPE=<SUBTYPE>:...`).
+5. **Outbound Invariant & Fixed-Point Stability**:
+   - Outbound serialization via [`card_to_vcard`] is unconditionally RFC 2426 vCard 3.0 in native UTF-8 with standard line folding (75 octets) and backslash value escaping (`\n`, `\,`, `\;`, `\\`).
+   - Legacy parameters (`CHARSET`, `QUOTED-PRINTABLE`, `INTERNET`, bare types) are never emitted.
+   - Fixed-point stability is guaranteed: importing a 2.1 vCard, emitting as 3.0, and re-parsing reaches exact fixed-point equality (`export2 == export3` and `card2 == card3`).
+
 ---
 
 ## 5. Function & Predicate Index

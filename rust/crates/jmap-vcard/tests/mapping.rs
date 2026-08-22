@@ -13278,3 +13278,517 @@ fn email_and_address_label_edge_cases_and_parameter_permutations() {
     let parsed2 = vcard_to_card(&re_emitted).expect("re-parse");
     assert_eq!(parsed2, parsed);
 }
+
+#[test]
+fn vcard_21_outlook_representative_fixture_import_and_normalization() {
+    // Representative vCard 2.1 exported by legacy Microsoft Outlook:
+    // - VERSION:2.1
+    // - Bare parameter type words: TEL;WORK;VOICE, TEL;HOME;VOICE, TEL;CELL;VOICE, TEL;WORK;FAX
+    // - EMAIL;PREF;INTERNET and EMAIL;INTERNET
+    // - ADR;WORK;PREF and LABEL;WORK;PREF;ENCODING=QUOTED-PRINTABLE
+    // - NOTE;ENCODING=QUOTED-PRINTABLE with German umlauts and multi-line soft breaks
+    // - PHOTO;JPEG;ENCODING=BASE64
+    // - Standard fields (N, FN, ORG, TITLE, BDAY, URL, REV)
+    let outlook_vcard_21 = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:2.1\r\n",
+        "N:Mustermann;Erika;;Dr.;\r\n",
+        "FN:Dr. Erika Mustermann\r\n",
+        "ORG:Musterfirma GmbH;Entwicklung;Software\r\n",
+        "TITLE:Leitende Entwicklerin\r\n",
+        "NOTE;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:Dies ist eine Notiz mit Umlauten: =C3=84, =C3=96, =C3=9C, =C3=A4, =C3=B6=\r\n",
+        ", =C3=BC, =C3=9F.=0D=0AZweite Zeile mit Semikolon; und Komma, und Backslash\\\r\n",
+        "TEL;WORK;VOICE:+49-89-1234567\r\n",
+        "TEL;HOME;VOICE:+49-89-7654321\r\n",
+        "TEL;CELL;VOICE:+49-170-1234567\r\n",
+        "TEL;WORK;FAX:+49-89-1234568\r\n",
+        "ADR;WORK;PREF;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:;;Musterstra=C3=9Fe 123;M=C3=BCnchen;Bayern;80331;Deutschland\r\n",
+        "LABEL;WORK;PREF;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:Musterstra=C3=9Fe 123=0D=0A80331 M=C3=BCnchen=0D=0ADeutschland\r\n",
+        "EMAIL;PREF;INTERNET:erika@musterfirma.de\r\n",
+        "EMAIL;INTERNET:erika.mustermann@home.de\r\n",
+        "URL;WORK:https://www.musterfirma.de\r\n",
+        "BDAY:1975-04-12\r\n",
+        "PHOTO;JPEG;ENCODING=BASE64:\r\n",
+        " /9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////\r\n",
+        " //////////////////////////////////////////////////////wgALCAABAAEBAREA\r\n",
+        " /8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=\r\n",
+        "REV:20230115T120000Z\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(outlook_vcard_21).expect("parse outlook 2.1 vcard");
+
+    // 1. Name verification
+    let name = card.name.as_ref().expect("name");
+    assert_eq!(name.full.as_deref(), Some("Dr. Erika Mustermann"));
+    let components = name.components.as_ref().expect("components");
+    assert_eq!(components[0].kind, "title");
+    assert_eq!(components[0].value, "Dr.");
+    assert_eq!(components[1].kind, "given");
+    assert_eq!(components[1].value, "Erika");
+    assert_eq!(components[2].kind, "surname");
+    assert_eq!(components[2].value, "Mustermann");
+
+    // 2. Organization & Title
+    let orgs = card.organizations.as_ref().expect("organizations");
+    assert_eq!(orgs["o1"].name.as_deref(), Some("Musterfirma GmbH"));
+    let units = orgs["o1"].units.as_ref().expect("units");
+    assert_eq!(units.len(), 2);
+    assert_eq!(units[0].name, "Entwicklung");
+    assert_eq!(units[1].name, "Software");
+    let titles = card.titles.as_ref().expect("titles");
+    assert_eq!(titles["t1"].name, "Leitende Entwicklerin");
+
+    // 3. Note with QP decoded umlauts and soft line break
+    let notes = card.notes.as_ref().expect("notes");
+    assert_eq!(
+        notes["n1"].note,
+        "Dies ist eine Notiz mit Umlauten: Ä, Ö, Ü, ä, ö, ü, ß.\r\nZweite Zeile mit Semikolon; und Komma, und Backslash\\"
+    );
+
+    // 4. Telephones with bare 2.1 type words
+    let phones = card.phones.as_ref().expect("phones");
+    assert_eq!(phones.len(), 4);
+    assert_eq!(phones["p1"].number, "+49-89-1234567");
+    assert_eq!(phones["p1"].contexts, Some(json!({"work": true})));
+    assert_eq!(phones["p1"].features, Some(json!({"voice": true})));
+
+    assert_eq!(phones["p2"].number, "+49-89-7654321");
+    assert_eq!(phones["p2"].contexts, Some(json!({"private": true})));
+    assert_eq!(phones["p2"].features, Some(json!({"voice": true})));
+
+    assert_eq!(phones["p3"].number, "+49-170-1234567");
+    assert_eq!(
+        phones["p3"].features,
+        Some(json!({"mobile": true, "voice": true}))
+    );
+
+    assert_eq!(phones["p4"].number, "+49-89-1234568");
+    assert_eq!(phones["p4"].contexts, Some(json!({"work": true})));
+    assert_eq!(phones["p4"].features, Some(json!({"fax": true})));
+
+    // 5. Address & Label with PREF and QP decoding
+    let addrs = card.addresses.as_ref().expect("addresses");
+    assert_eq!(addrs.len(), 1);
+    let addr = &addrs["a1"];
+    assert_eq!(addr.contexts, Some(json!({"work": true})));
+    assert_eq!(addr.extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        addr.full.as_deref(),
+        Some("Musterstraße 123\r\n80331 München\r\nDeutschland")
+    );
+    let addr_comps = addr.components.as_ref().expect("address components");
+    assert_eq!(addr_comps[0].kind, "name");
+    assert_eq!(addr_comps[0].value, "Musterstraße 123");
+    assert_eq!(addr_comps[1].kind, "locality");
+    assert_eq!(addr_comps[1].value, "München");
+    assert_eq!(addr_comps[2].kind, "region");
+    assert_eq!(addr_comps[2].value, "Bayern");
+    assert_eq!(addr_comps[3].kind, "postcode");
+    assert_eq!(addr_comps[3].value, "80331");
+    assert_eq!(addr_comps[4].kind, "country");
+    assert_eq!(addr_comps[4].value, "Deutschland");
+
+    // 6. Emails with PREF
+    let emails = card.emails.as_ref().expect("emails");
+    assert_eq!(emails.len(), 2);
+    assert_eq!(emails["e1"].address, "erika@musterfirma.de");
+    assert_eq!(emails["e1"].pref, Some(1));
+    assert_eq!(emails["e2"].address, "erika.mustermann@home.de");
+    assert_eq!(emails["e2"].pref, None);
+
+    // 7. URL & Birthday
+    let links = card.links.as_ref().expect("links");
+    assert_eq!(links["l1"].uri, "https://www.musterfirma.de");
+    let anniv = card.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(anniv["y1"].kind.as_str(), "birth");
+    assert_eq!(
+        anniversary_date(&anniv["y1"]),
+        Some("1975-04-12".to_owned())
+    );
+
+    // 8. Photo with JPEG subtype inferred from bare 2.1 parameter
+    let media = card.media.as_ref().expect("media");
+    assert_eq!(media.len(), 1);
+    let photo = &media["m1"];
+    assert_eq!(photo.kind.as_deref(), Some("photo"));
+    assert_eq!(photo.media_type.as_deref(), Some("image/JPEG"));
+    assert!(photo.uri.starts_with("data:image/JPEG;base64,"));
+
+    // 9. Outbound emission normalizes strictly to vCard 3.0
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(!emitted.contains("VERSION:2.1"));
+    assert!(!emitted.contains("QUOTED-PRINTABLE"));
+    assert!(!emitted.contains("INTERNET"));
+    assert!(emitted.contains("TYPE=JPEG") && emitted.contains("ENCODING=b"));
+    assert!(emitted.contains("TYPE=WORK,VOICE:"));
+    assert!(emitted.contains("TYPE=HOME,VOICE:"));
+    assert!(emitted.contains("TYPE=CELL:"));
+    assert!(emitted.contains("TYPE=WORK,FAX:"));
+    assert!(
+        emitted.contains("EMAIL;X-JMAP-KEY=e1;TYPE=PREF:erika@musterfirma.de")
+            || emitted.contains("EMAIL;TYPE=PREF;X-JMAP-KEY=e1:erika@musterfirma.de")
+    );
+
+    // 10. Fixed-point roundtrip stability (re-emitting normalized 3.0 reaches fixpoint)
+    let card2 = vcard_to_card(&emitted).expect("parse normalized 3.0 vcard");
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted2, emitted);
+    let card3 = vcard_to_card(&emitted2).expect("parse fixpoint vcard");
+    assert_eq!(card3, card2);
+}
+
+#[test]
+fn vcard_21_feature_phone_nokia_sony_ericsson_fixtures_import() {
+    // Real-world vCard 2.1 from Nokia and Sony Ericsson feature phones:
+    // - Bare TEL types: TEL;VOICE;HOME, TEL;VOICE;WORK, TEL;CELL, TEL;MOBILE, TEL;FAX;WORK, TEL;PAGER
+    // - Bare EMAIL;INTERNET
+    // - Soft line wrapped QP note with =0D=0A
+    // - Unmapped SOUND property safely ignored
+    let feature_phone_vcard_21 = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:2.1\r\n",
+        "N:Smith;John\r\n",
+        "FN:John Smith\r\n",
+        "TEL;VOICE;HOME:555-1111\r\n",
+        "TEL;VOICE;WORK:555-2222\r\n",
+        "TEL;CELL:555-3333\r\n",
+        "TEL;MOBILE:555-4444\r\n",
+        "TEL;FAX;WORK:555-5555\r\n",
+        "TEL;PAGER:555-6666\r\n",
+        "EMAIL;INTERNET:john.smith@example.com\r\n",
+        "ADR;HOME:;;123 Main St;Springfield;IL;62701;USA\r\n",
+        "NOTE;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:Met at the conference=0D=0APromised to follow up=\r\n",
+        " next week about project.\r\n",
+        "SOUND;WAVE;BASE64:\r\n",
+        " UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(feature_phone_vcard_21).expect("parse feature phone 2.1");
+
+    let name = card.name.as_ref().expect("name");
+    assert_eq!(name.full.as_deref(), Some("John Smith"));
+
+    let phones = card.phones.as_ref().expect("phones");
+    assert_eq!(phones.len(), 6);
+    assert_eq!(phones["p1"].number, "555-1111");
+    assert_eq!(phones["p1"].contexts, Some(json!({"private": true})));
+    assert_eq!(phones["p1"].features, Some(json!({"voice": true})));
+
+    assert_eq!(phones["p2"].number, "555-2222");
+    assert_eq!(phones["p2"].contexts, Some(json!({"work": true})));
+    assert_eq!(phones["p2"].features, Some(json!({"voice": true})));
+
+    assert_eq!(phones["p3"].number, "555-3333");
+    assert_eq!(phones["p3"].features, Some(json!({"mobile": true})));
+
+    assert_eq!(phones["p4"].number, "555-4444");
+    assert_eq!(phones["p4"].features, Some(json!({"mobile": true})));
+
+    assert_eq!(phones["p5"].number, "555-5555");
+    assert_eq!(phones["p5"].contexts, Some(json!({"work": true})));
+    assert_eq!(phones["p5"].features, Some(json!({"fax": true})));
+
+    assert_eq!(phones["p6"].number, "555-6666");
+    assert_eq!(phones["p6"].features, Some(json!({"pager": true})));
+
+    let notes = card.notes.as_ref().expect("notes");
+    assert_eq!(
+        notes["n1"].note,
+        "Met at the conference\r\nPromised to follow up next week about project."
+    );
+
+    // SOUND is an audio property, not a PHOTO picture, so it is ignored on parse
+    assert!(card.media.is_none());
+
+    // Outbound emission normalizes to vCard 3.0
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(emitted.contains("555-3333") && emitted.contains("TYPE=CELL"));
+    assert!(emitted.contains("555-4444") && emitted.contains("TYPE=CELL"));
+    assert!(emitted.contains("555-6666") && emitted.contains("TYPE=PAGER"));
+
+    let card2 = vcard_to_card(&emitted).expect("re-parse");
+    assert_eq!(card2, card);
+}
+
+#[test]
+fn vcard_21_legacy_charsets_iso_8859_1_and_windows_1252_import() {
+    // 1. ISO-8859-1 German fixture
+    let iso_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:2.1\r\n",
+        "N;CHARSET=ISO-8859-1;ENCODING=QUOTED-PRINTABLE:M=FCller;Hans;;;\r\n",
+        "FN;CHARSET=ISO-8859-1;ENCODING=QUOTED-PRINTABLE:Hans M=FCller\r\n",
+        "ORG;CHARSET=ISO-8859-1:M=FCller AG\r\n",
+        "NOTE;CHARSET=ISO-8859-1;ENCODING=QUOTED-PRINTABLE:Gr=FC=DFe aus Z=FCrich=0D=0AFreundliche Empfehlung\r\n",
+        "EMAIL;INTERNET;PREF:hans.mueller@example.ch\r\n",
+        "TEL;HOME:044 123 45 67\r\n",
+        "ADR;HOME;CHARSET=ISO-8859-1;ENCODING=QUOTED-PRINTABLE:;;Bahnhofstrasse 10;Z=FCrich;;8001;Schweiz\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card1 = vcard_to_card(iso_vcard).expect("parse iso-8859-1 vcard 2.1");
+    let name1 = card1.name.as_ref().expect("name1");
+    assert_eq!(name1.full.as_deref(), Some("Hans Müller"));
+    let components1 = name1.components.as_ref().expect("components1");
+    assert_eq!(components1[0].value, "Hans");
+    assert_eq!(components1[1].value, "Müller");
+
+    let notes1 = card1.notes.as_ref().expect("notes1");
+    assert_eq!(
+        notes1["n1"].note,
+        "Grüße aus Zürich\r\nFreundliche Empfehlung"
+    );
+
+    let addrs1 = card1.addresses.as_ref().expect("addrs1");
+    let addr_comps1 = addrs1["a1"].components.as_ref().expect("addr comps1");
+    assert_eq!(addr_comps1[0].value, "Bahnhofstrasse 10");
+    assert_eq!(addr_comps1[1].value, "Zürich");
+    assert_eq!(addr_comps1[2].value, "8001");
+    assert_eq!(addr_comps1[3].value, "Schweiz");
+
+    let emitted1 = card_to_vcard(&card1);
+    assert!(!emitted1.contains("CHARSET"));
+    assert!(!emitted1.contains("QUOTED-PRINTABLE"));
+    let card1_re = vcard_to_card(&emitted1).expect("re-parse iso");
+    assert_eq!(card1_re, card1);
+
+    // 2. Windows-1252 French fixture with Euro sign (=80)
+    let win_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:2.1\r\n",
+        "N;CHARSET=WINDOWS-1252;ENCODING=QUOTED-PRINTABLE:Fran=E7ois;Ren=E9;;;\r\n",
+        "FN;CHARSET=WINDOWS-1252;ENCODING=QUOTED-PRINTABLE:Ren=E9 Fran=E7ois\r\n",
+        "NOTE;CHARSET=WINDOWS-1252;ENCODING=QUOTED-PRINTABLE:Co=FBt: 100 =80=0D=0APrix net\r\n",
+        "EMAIL;INTERNET:rene@example.fr\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card2 = vcard_to_card(win_vcard).expect("parse windows-1252 vcard 2.1");
+    let name2 = card2.name.as_ref().expect("name2");
+    assert_eq!(name2.full.as_deref(), Some("René François"));
+    let notes2 = card2.notes.as_ref().expect("notes2");
+    assert_eq!(notes2["n1"].note, "Coût: 100 €\r\nPrix net");
+
+    let emitted2 = card_to_vcard(&card2);
+    let card2_re = vcard_to_card(&emitted2).expect("re-parse win");
+    assert_eq!(card2_re, card2);
+}
+
+#[test]
+fn vcard_21_bare_type_words_and_combinations_matrix() {
+    // Tests exhaustive combinations of bare type words across TEL, EMAIL, ADR, LABEL
+    let bare_words_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:2.1\r\n",
+        "FN:Bare Parameter Matrix\r\n",
+        // TEL combinations
+        "TEL;WORK;VOICE:+1-555-0101\r\n",
+        "TEL;HOME;FAX:+1-555-0102\r\n",
+        "TEL;WORK;FAX:+1-555-0103\r\n",
+        "TEL;HOME;VOICE:+1-555-0104\r\n",
+        "TEL;CELL:+1-555-0105\r\n",
+        "TEL;MOBILE:+1-555-0106\r\n",
+        "TEL;PAGER:+1-555-0107\r\n",
+        "TEL;VIDEO:+1-555-0108\r\n",
+        "TEL;PREF;WORK;VOICE:+1-555-0100\r\n",
+        // EMAIL combinations
+        "EMAIL;WORK;INTERNET;PREF:work.primary@matrix.example\r\n",
+        "EMAIL;HOME;INTERNET:home@matrix.example\r\n",
+        "EMAIL;INTERNET:general@matrix.example\r\n",
+        // ADR combinations with bare context/type
+        "ADR;WORK;POSTAL;PARCEL;DOM:;;100 Work Blvd;Work City;Work State;10001;USA\r\n",
+        "ADR;HOME;POSTAL:;;200 Home Lane;Home Town;Home State;20002;USA\r\n",
+        "ADR;POSTAL;PREF:;;300 Postal Box;Other City;;30003;USA\r\n",
+        // LABEL with bare type and QP
+        "LABEL;WORK;PREF;ENCODING=QUOTED-PRINTABLE:100 Work Blvd=0D=0AWork City, Work State 10001\r\n",
+        "LABEL;HOME;ENCODING=QUOTED-PRINTABLE:200 Home Lane=0D=0AHome Town, Home State 20002\r\n",
+        "LABEL;POSTAL;PREF;ENCODING=QUOTED-PRINTABLE:300 Postal Box=0D=0AOther City 30003\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(bare_words_vcard).expect("parse bare words matrix");
+
+    // 1. Phone assertions
+    let phones = card.phones.as_ref().expect("phones");
+    assert_eq!(phones.len(), 9);
+    assert_eq!(phones["p1"].number, "+1-555-0101");
+    assert_eq!(phones["p1"].contexts, Some(json!({"work": true})));
+    assert_eq!(phones["p1"].features, Some(json!({"voice": true})));
+
+    assert_eq!(phones["p2"].number, "+1-555-0102");
+    assert_eq!(phones["p2"].contexts, Some(json!({"private": true})));
+    assert_eq!(phones["p2"].features, Some(json!({"fax": true})));
+
+    assert_eq!(phones["p3"].number, "+1-555-0103");
+    assert_eq!(phones["p3"].contexts, Some(json!({"work": true})));
+    assert_eq!(phones["p3"].features, Some(json!({"fax": true})));
+
+    assert_eq!(phones["p4"].number, "+1-555-0104");
+    assert_eq!(phones["p4"].contexts, Some(json!({"private": true})));
+    assert_eq!(phones["p4"].features, Some(json!({"voice": true})));
+
+    assert_eq!(phones["p5"].number, "+1-555-0105");
+    assert_eq!(phones["p5"].features, Some(json!({"mobile": true})));
+
+    assert_eq!(phones["p6"].number, "+1-555-0106");
+    assert_eq!(phones["p6"].features, Some(json!({"mobile": true})));
+
+    assert_eq!(phones["p7"].number, "+1-555-0107");
+    assert_eq!(phones["p7"].features, Some(json!({"pager": true})));
+
+    assert_eq!(phones["p8"].number, "+1-555-0108");
+    assert_eq!(phones["p8"].features, Some(json!({"video": true})));
+
+    assert_eq!(phones["p9"].number, "+1-555-0100");
+    assert_eq!(phones["p9"].pref, Some(1));
+    assert_eq!(phones["p9"].contexts, Some(json!({"work": true})));
+    assert_eq!(phones["p9"].features, Some(json!({"voice": true})));
+
+    // 2. Email assertions
+    let emails = card.emails.as_ref().expect("emails");
+    assert_eq!(emails.len(), 3);
+    assert_eq!(emails["e1"].address, "work.primary@matrix.example");
+    assert_eq!(emails["e1"].pref, Some(1));
+    assert_eq!(emails["e1"].contexts, Some(json!({"work": true})));
+    assert_eq!(emails["e2"].address, "home@matrix.example");
+    assert_eq!(emails["e2"].contexts, Some(json!({"private": true})));
+    assert_eq!(emails["e3"].address, "general@matrix.example");
+    assert_eq!(emails["e3"].contexts, None);
+
+    // 3. Address assertions with paired labels
+    let addrs = card.addresses.as_ref().expect("addresses");
+    assert_eq!(addrs.len(), 3);
+    assert_eq!(addrs["a1"].contexts, Some(json!({"work": true})));
+    assert_eq!(
+        addrs["a1"].full.as_deref(),
+        Some("100 Work Blvd\r\nWork City, Work State 10001")
+    );
+    assert_eq!(addrs["a1"].extra.get("pref"), Some(&json!(1)));
+
+    assert_eq!(addrs["a2"].contexts, Some(json!({"private": true})));
+    assert_eq!(
+        addrs["a2"].full.as_deref(),
+        Some("200 Home Lane\r\nHome Town, Home State 20002")
+    );
+
+    assert_eq!(addrs["a3"].contexts, None);
+    assert_eq!(
+        addrs["a3"].full.as_deref(),
+        Some("300 Postal Box\r\nOther City 30003")
+    );
+    assert_eq!(addrs["a3"].extra.get("pref"), Some(&json!(1)));
+
+    // 4. Outbound roundtrip
+    let emitted = card_to_vcard(&card);
+    let card2 = vcard_to_card(&emitted).expect("re-parse bare words matrix");
+    assert_eq!(card2, card);
+}
+
+#[test]
+fn vcard_21_photo_formats_and_encoding_permutations() {
+    let dummy_base64 = concat!(
+        " /9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////\r\n",
+        " //////////////////////////////////////////////////////wgALCAABAAEBAREA\r\n",
+        " /8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA="
+    );
+
+    // 1. PHOTO;JPEG;ENCODING=BASE64
+    let vcard_jpeg = format!(
+        "BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Photo JPEG\r\nPHOTO;JPEG;ENCODING=BASE64:\r\n{dummy_base64}\r\nEND:VCARD\r\n"
+    );
+    let card_jpeg = vcard_to_card(&vcard_jpeg).expect("parse photo jpeg");
+    let photo_jpeg = &card_jpeg.media.as_ref().expect("media")["m1"];
+    assert_eq!(photo_jpeg.media_type.as_deref(), Some("image/JPEG"));
+    assert!(photo_jpeg.uri.starts_with("data:image/JPEG;base64,"));
+    let emitted_jpeg = card_to_vcard(&card_jpeg);
+    assert!(emitted_jpeg.contains("TYPE=JPEG") && emitted_jpeg.contains("ENCODING=b"));
+
+    // 2. PHOTO;GIF;BASE64
+    let vcard_gif = format!(
+        "BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Photo GIF\r\nPHOTO;GIF;BASE64:\r\n{dummy_base64}\r\nEND:VCARD\r\n"
+    );
+    let card_gif = vcard_to_card(&vcard_gif).expect("parse photo gif");
+    let photo_gif = &card_gif.media.as_ref().expect("media")["m1"];
+    assert_eq!(photo_gif.media_type.as_deref(), Some("image/GIF"));
+    assert!(photo_gif.uri.starts_with("data:image/GIF;base64,"));
+    let emitted_gif = card_to_vcard(&card_gif);
+    assert!(emitted_gif.contains("TYPE=GIF") && emitted_gif.contains("ENCODING=b"));
+
+    // 3. PHOTO;PNG;ENCODING=BASE64
+    let vcard_png = format!(
+        "BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Photo PNG\r\nPHOTO;PNG;ENCODING=BASE64:\r\n{dummy_base64}\r\nEND:VCARD\r\n"
+    );
+    let card_png = vcard_to_card(&vcard_png).expect("parse photo png");
+    let photo_png = &card_png.media.as_ref().expect("media")["m1"];
+    assert_eq!(photo_png.media_type.as_deref(), Some("image/PNG"));
+    assert!(photo_png.uri.starts_with("data:image/PNG;base64,"));
+    let emitted_png = card_to_vcard(&card_png);
+    assert!(emitted_png.contains("TYPE=PNG") && emitted_png.contains("ENCODING=b"));
+
+    // 4. PHOTO;TYPE=JPEG;ENCODING=BASE64
+    let vcard_type_jpeg = format!(
+        "BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Photo Type JPEG\r\nPHOTO;TYPE=JPEG;ENCODING=BASE64:\r\n{dummy_base64}\r\nEND:VCARD\r\n"
+    );
+    let card_type_jpeg = vcard_to_card(&vcard_type_jpeg).expect("parse photo type jpeg");
+    let photo_type_jpeg = &card_type_jpeg.media.as_ref().expect("media")["m1"];
+    assert_eq!(photo_type_jpeg.media_type.as_deref(), Some("image/JPEG"));
+    let emitted_type_jpeg = card_to_vcard(&card_type_jpeg);
+    assert!(emitted_type_jpeg.contains("TYPE=JPEG") && emitted_type_jpeg.contains("ENCODING=b"));
+}
+
+#[test]
+fn vcard_21_quoted_printable_soft_line_breaks_and_continuation() {
+    // Tests quoted-printable soft line wrapping (=\r\n) and encoded delimiter bytes (=3D, =3B, =2C, =0D=0A)
+    let qp_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:2.1\r\n",
+        "N;ENCODING=QUOTED-PRINTABLE:O=27Connor;Timothy=3B Jr.;;;\r\n",
+        "FN;ENCODING=QUOTED-PRINTABLE:Timothy O=27Connor=2C Jr.\r\n",
+        "ORG;ENCODING=QUOTED-PRINTABLE:Acme=2C Inc.;Research =26 Development=3B Labs\r\n",
+        "NOTE;ENCODING=QUOTED-PRINTABLE:This is a very long note that was exported by=\r\n",
+        " an older email client using Quoted-Printable encoding and soft line breaks=\r\n",
+        " to wrap text across physical lines without breaking words.=0D=0AKey=3DValue=\r\n",
+        " pair; and a list: one, two, three.\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(qp_vcard).expect("parse qp soft breaks");
+
+    let name = card.name.as_ref().expect("name");
+    assert_eq!(name.full.as_deref(), Some("Timothy O'Connor, Jr."));
+    let components = name.components.as_ref().expect("components");
+    assert_eq!(components[0].kind, "given");
+    assert_eq!(components[0].value, "Timothy; Jr.");
+    assert_eq!(components[1].kind, "surname");
+    assert_eq!(components[1].value, "O'Connor");
+
+    let orgs = card.organizations.as_ref().expect("orgs");
+    assert_eq!(orgs["o1"].name.as_deref(), Some("Acme, Inc."));
+    let units = orgs["o1"].units.as_ref().expect("units");
+    assert_eq!(units[0].name, "Research & Development; Labs");
+
+    let notes = card.notes.as_ref().expect("notes");
+    assert_eq!(
+        notes["n1"].note,
+        concat!(
+            "This is a very long note that was exported by",
+            " an older email client using Quoted-Printable encoding and soft line breaks",
+            " to wrap text across physical lines without breaking words.\r\n",
+            "Key=Value pair; and a list: one, two, three."
+        )
+    );
+
+    // Emitting to 3.0 produces clean RFC 2426 backslash-escaped delimiters and line folding
+    let emitted = card_to_vcard(&card);
+    assert!(emitted.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(!emitted.contains("QUOTED-PRINTABLE"));
+    assert!(emitted.contains("Acme\\, Inc."));
+    assert!(emitted.contains("Research & Development\\; Labs"));
+
+    let card2 = vcard_to_card(&emitted).expect("re-parse qp emission");
+    assert_eq!(card2, card);
+}
