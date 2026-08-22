@@ -86,9 +86,10 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS_PRIVATE_DIRS "${EVOLUTION_PRIVATE_LIB_DIR}")
 # compressed stream, so the bytes it produces depend only on the changelog's
 # own content, not on when this ran — required by
 # cmake/tests/check-deb-reproducible.cmake. The copyright file
-# (docs/packaging/copyright) is DEP-5 format but hand-written, not the
-# REUSE-metadata-generated one docs/ROADMAP.md's Track C2 asks for; it says so
-# of itself.
+# (docs/packaging/copyright) is DEP-5 format, generated from REUSE.toml by
+# tools/generate-debian-copyright.py (Track C2); the third-party-notices file
+# alongside it is that same script's second output, kept in sync by the same
+# debian-copyright-in-sync CTest.
 find_program(GZIP_EXECUTABLE gzip REQUIRED)
 set(_changelog_build "${CMAKE_BINARY_DIR}/changelog")
 set(_changelog_gz "${CMAKE_BINARY_DIR}/changelog.gz")
@@ -113,6 +114,13 @@ install(FILES "${_changelog_gz}"
 	COMPONENT config-module
 )
 install(FILES "${CMAKE_SOURCE_DIR}/docs/packaging/copyright"
+	DESTINATION "/usr/share/doc/${PACKAGE_NAME}"
+	COMPONENT config-module
+)
+# Track C2's third-party-notices appendix: the third-party Cargo crates
+# statically linked into the shipped .so's, which docs/packaging/copyright's
+# own DEP-5 stanzas cannot honestly enumerate (see that file's comment).
+install(FILES "${CMAKE_SOURCE_DIR}/docs/packaging/third-party-notices"
 	DESTINATION "/usr/share/doc/${PACKAGE_NAME}"
 	COMPONENT config-module
 )
@@ -175,6 +183,7 @@ set(EXPECTED_PACKAGE_FILES
 	${EVOLUTION_MODULE_DIR}/module-jmap-configuration.so
 	/usr/share/doc/${PACKAGE_NAME}/changelog.gz
 	/usr/share/doc/${PACKAGE_NAME}/copyright
+	/usr/share/doc/${PACKAGE_NAME}/third-party-notices
 	/usr/share/lintian/overrides/${PACKAGE_NAME}
 )
 
