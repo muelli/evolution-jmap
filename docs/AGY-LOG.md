@@ -543,6 +543,30 @@ Running record of headless polish increments on the `antigravity` branch.
   3. `entry_has_type` evaluates both `TYPE=value` parameters and bare parameter names matching the target type name, enabling seamless interoperability with 2.1 exporters without breaking standard 3.0 parameter matching.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
 
+## 2026-08-22 — Round-trip fixpoint property test & oscillation regression net (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 6. Round-trip fixpoint property test (vCard→EContact→vCard→EContact→vCard reaches fixpoint by second export: export₂ == export₃ byte-identical, proptest shrinkage oscillation namer).
+- **Changes:**
+  - Added multi-pass fixpoint roundtrip characterization and oscillation diagnostic tests in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `fixpoint_roundtrip_characterization_and_oscillation_diagnostics`: tests multi-stage translation lifecycle (vCard₁ -> Card₁ -> vCard₂ [Export₁] -> Card₂ [EContact₂] -> vCard₃ [Export₂] -> Card₃ [EContact₃] -> vCard₄ [Export₃]) on a comprehensive multi-property fixture contact covering all 19 phone fields, 3 address slots, multi-component orgs, multi-role relations, custom links, anniversaries, IM services, and dropped-by-design standard properties, asserting `Export₂ == Export₃` byte-identity and `Card₂ == Card₃` structural identity.
+    - `fixpoint_convergence_across_all_contact_property_domains_matrix`: tests discrete property domains in isolation and in combination (names, nicknames, emails with 4 slots & attribute list, phones with 19 types, addresses with 3 slots & synthetic labels, organizations with 4+ units, titles/roles, notes with escapes, anniversaries with partial dates, links/blogs/videos, calendars/freeBusy, photos, online services, relations spouse/manager/assistant, categories/keywords).
+  - Added oscillation diagnosis helpers in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`:
+    - `identify_oscillating_vcard_property`: isolates exact property name and differing lines when vCard exports oscillate (`Export₂ != Export₃`).
+    - `identify_oscillating_card_field`: isolates exact JSContact field when deserialized cards oscillate (`Card₂ != Card₃`).
+    - `assert_vcard_fixpoint` and `assert_card_fixpoint`: custom proptest assertion helpers providing detailed oscillation failure diagnostics.
+  - Enhanced `arb_phone` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to fuzz all 19 EDS phone feature combinations (`car`, `isdn`, `ttytdd`, `voice+mobile`, `voice+fax`, `cell+video`, `other` context).
+  - Added 9 domain-focused fixpoint proptests in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs`: `prop_fixpoint_telephony_domain`, `prop_fixpoint_email_domain`, `prop_fixpoint_address_and_label_domain`, `prop_fixpoint_organization_domain`, `prop_fixpoint_relation_domain`, `prop_fixpoint_anniversary_domain`, `prop_fixpoint_categories_domain`, `prop_fixpoint_notes_escaping_domain`, `prop_fixpoint_online_services_domain`.
+  - Updated `docs/VCARD-MAPPING.md` with Section 6 documenting the multi-stage roundtrip contract, standing fixpoint invariants (`Export₂ == Export₃`, `Card₂ == Card₃`), and the proptest regression harness.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **Multi-Stage Fixpoint Stability Invariant**:
+     - `vCard₁ -> Card₁ -> vCard₂ (Export₁) -> Card₂ (EContact₂) -> vCard₃ (Export₂) -> Card₃ (EContact₃) -> vCard₄ (Export₃)`.
+     - Export₁ normalizes legacy formats (vCard 2.1, QP encoding, bare parameters, foreign keying) into standard RFC 2426 vCard 3.0 with allocated `X-JMAP-KEY` parameters.
+     - By Export₂ (pass 2), every property representation is canonicalized and stabilized: Export₂ is byte-identical to Export₃ (`Export₂ == Export₃`), and Card₂ is structurally identical to Card₃ (`Card₂ == Card₃`).
+  2. **Oscillation Diagnostic Net**:
+     - The `identify_oscillating_vcard_property` / `identify_oscillating_card_field` helpers inspect line-by-line diffs during proptest shrinkage, immediately naming the property name (`TEL`, `ADR`, `ORG`, `CATEGORIES`, `NOTE`, etc.) that oscillates.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+
 
 
 
