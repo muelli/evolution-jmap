@@ -103,6 +103,7 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`CLASS`** | — | `card.privacy` (RFC 9553) | — | — | Dropped by design. Deprecated/removed in RFC 6350. Legacy access classification with no Evolution editor UI. |
 | **`SOUND`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "sound"`) | — | [`states_media`] | Dropped by design from vCard 3.0. [`states_media`] permits only `kind: "photo"`. Server `sound` media entries preserved by `PatchObject`. |
 | **`LOGO`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "logo"`) | `E_CONTACT_LOGO` (no UI) | [`states_media`] | Dropped by design from vCard 3.0. Evolution editor supports only personal photo (`E_CONTACT_PHOTO`). Server `logo` entries preserved by `PatchObject`. |
+| **`KEY`** | `TYPE` (`X509`, `PGP`), `ENCODING=b`, `VALUE=uri` | `card.extra["cryptoKeys"]` (RFC 9553 §2.7.1) | `E_CONTACT_X509_CERT`, `E_CONTACT_PGP_CERT` (no UI) | — | Dropped by design from vCard 3.0. Evolution editor provides no contact certificate UI. Server `cryptoKeys` entries preserved by `PatchObject`. |
 | **`itemN.PROPERTY`** | `X-ABLabel` companion | (associated property) | (associated EDS slot) | `clean_apple_label`, `vcard_to_card` | Apple property groups (RFC 2426 §2.1.1). Group prefix is parsed by `calcard`; companion `X-ABLabel` maps contexts (`Work`, `Home`), features (`Mobile`, `Pager`, `Fax`), or custom labels. |
 | **`X-ABLabel`** | — | `extra["label"]` or mapped context/feature | — | `clean_apple_label`, `vcard_to_card` | Apple label annotation. Markers (`_$!<Label>!$_`) unwrapped. Standard labels map to JSContact contexts/features; custom labels preserved in `extra["label"]`. |
 | **`X-ABRELATEDNAMES`** | `X-ABLabel` | `card.related_to` (Key = Person Name) | `E_CONTACT_SPOUSE`, `_MANAGER`, `_ASSISTANT` | `clean_apple_label`, `vcard_to_card` | Apple relationship property. Group companion `X-ABLabel` selects relation type (`spouse`, `manager`, `assistant`, custom). Outbound normalizes to standard `X-EVOLUTION-*`. |
@@ -384,7 +385,7 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
     - Compares URI strings directly.
   - This allows the sync layer to detect whether the photo was actually edited by the user, avoiding redundant image re-uploads on every sync.
 
-### 4.9 Deliberate Drop Rationale for Standard vCard 3.0 Properties (`GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, `LOGO`)
+### 4.9 Deliberate Drop Rationale for Standard vCard 3.0 Properties (`GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, `LOGO`, `KEY`)
 `jmap-vcard` deliberately ignores standard vCard 3.0 properties for which Evolution/EDS lacks active UI editing support or for which client-side preservation is architecturally incorrect:
 1. **`GEO` (RFC 2426 §3.4.2)**:
    - Evolution's contact editor has no UI controls or display for geographical coordinates.
@@ -420,6 +421,10 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
    - Organization logo image (RFC 9553 §2.6.4 `media` with `kind: "logo"`).
    - Although `E_CONTACT_LOGO` exists in EDS C enum definitions, Evolution's contact editor provides UI exclusively for personal photos (`E_CONTACT_PHOTO`).
    - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `LOGO` lines are dropped on vCard parse to prevent colliding with or replacing the personal photo field. Server-side `logo` media entries remain safe and untouched in `card.media` via `PatchObject`.
+10. **`KEY` (RFC 2426 §3.7.2)**:
+    - Public key / certificates (X.509 `E_CONTACT_X509_CERT` and PGP `E_CONTACT_PGP_CERT`, RFC 9553 §2.7.1 `cryptoKeys`).
+    - Evolution's contact editor GUI provides no UI for inspecting or editing certificates directly on individual contacts (certificates and keys are managed globally via S/MIME and GnuPG/Seahorse keyrings).
+    - *Rationale*: Dropped by design from vCard 3.0 emission. Inbound `KEY` lines (`KEY;TYPE=X509;ENCODING=b:...`, `KEY;TYPE=PGP;ENCODING=b:...`, `KEY;VALUE=uri:...`) are safely dropped on vCard parse to avoid corrupting mapped fields. Server-side `cryptoKeys` in `card.extra["cryptoKeys"]` are preserved untouched across saves via `PatchObject`.
 
 ### 4.10 vCard 2.1 Legacy Import Tolerance (Asymmetric Compatibility Contract)
 
