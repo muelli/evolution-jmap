@@ -12714,3 +12714,567 @@ fn evolution_links_and_relations_case_insensitivity_and_whitespace() {
     let emitted2 = card_to_vcard(&card2);
     assert_eq!(emitted2, emitted);
 }
+
+#[test]
+fn email_four_slots_and_attribute_list_matrix_roundtrip() {
+    // Audit & characterization of EDS EMAIL slotting:
+    // EDS exposes 4 individual string fields:
+    //   - E_CONTACT_EMAIL_1 (field 8)
+    //   - E_CONTACT_EMAIL_2 (field 9)
+    //   - E_CONTACT_EMAIL_3 (field 10)
+    //   - E_CONTACT_EMAIL_4 (field 11)
+    // plus the E_CONTACT_EMAIL (field 97) attribute list holding all EMAIL properties (lines 1..=4 and 5+).
+    //
+    // Outbound emission: card_to_vcard sorts emails by (pref.unwrap_or(u32::MAX), key) so:
+    //   1st emitted line -> E_CONTACT_EMAIL_1 (primary email in Evolution)
+    //   2nd emitted line -> E_CONTACT_EMAIL_2
+    //   3rd emitted line -> E_CONTACT_EMAIL_3
+    //   4th emitted line -> E_CONTACT_EMAIL_4
+    //   5th+ emitted lines -> E_CONTACT_EMAIL attribute list
+    // All lines carry X-JMAP-KEY, context TYPE, and TYPE=PREF when preferred.
+
+    // 1. Six emails: e_work_pri is preferred (pref: 1), remaining 5 are unranked (pref: None)
+    // and emitted in sorted key order.
+    let card = ContactCard {
+        card_type: Some("Card".to_owned()),
+        version: Some("1.0".to_owned()),
+        emails: Some(
+            [
+                (
+                    "e_work_pri".to_owned(),
+                    ContactEmail {
+                        address: "vera.work@example.com".to_owned(),
+                        contexts: Some(json!({"work": true})),
+                        pref: Some(1),
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e_home".to_owned(),
+                    ContactEmail {
+                        address: "vera.home@example.com".to_owned(),
+                        contexts: Some(json!({"private": true})),
+                        pref: None,
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e_direct".to_owned(),
+                    ContactEmail {
+                        address: "vera.direct@example.com".to_owned(),
+                        contexts: Some(json!({"work": true})),
+                        pref: None,
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e_billing".to_owned(),
+                    ContactEmail {
+                        address: "billing@example.com".to_owned(),
+                        contexts: Some(json!({"work": true, "private": true})),
+                        pref: None,
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e_support".to_owned(),
+                    ContactEmail {
+                        address: "support@example.com".to_owned(),
+                        contexts: None,
+                        pref: None,
+                        ..ContactEmail::default()
+                    },
+                ),
+                (
+                    "e_archive".to_owned(),
+                    ContactEmail {
+                        address: "archive@example.com".to_owned(),
+                        contexts: None,
+                        pref: None,
+                        ..ContactEmail::default()
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let emitted = card_to_vcard(&card);
+    let email_lines: Vec<&str> = emitted.lines().filter(|l| l.starts_with("EMAIL")).collect();
+    assert_eq!(
+        email_lines.len(),
+        6,
+        "all 6 emails must be emitted: {emitted}"
+    );
+
+    // Slot 1 (E_CONTACT_EMAIL_1): e_work_pri (pref: 1)
+    assert!(
+        email_lines[0].contains("X-JMAP-KEY=e_work_pri")
+            && email_lines[0].contains("vera.work@example.com")
+            && email_lines[0].contains("TYPE=WORK")
+            && email_lines[0].contains("PREF"),
+        "Slot 1 (E_CONTACT_EMAIL_1) must be e_work_pri: {}",
+        email_lines[0]
+    );
+
+    // Slot 2 (E_CONTACT_EMAIL_2): e_archive (unranked, sorted key order)
+    assert!(
+        email_lines[1].contains("X-JMAP-KEY=e_archive")
+            && email_lines[1].contains("archive@example.com")
+            && !email_lines[1].contains("PREF"),
+        "Slot 2 (E_CONTACT_EMAIL_2) must be e_archive: {}",
+        email_lines[1]
+    );
+
+    // Slot 3 (E_CONTACT_EMAIL_3): e_billing (unranked)
+    assert!(
+        email_lines[2].contains("X-JMAP-KEY=e_billing")
+            && email_lines[2].contains("billing@example.com")
+            && !email_lines[2].contains("PREF"),
+        "Slot 3 (E_CONTACT_EMAIL_3) must be e_billing: {}",
+        email_lines[2]
+    );
+
+    // Slot 4 (E_CONTACT_EMAIL_4): e_direct (unranked)
+    assert!(
+        email_lines[3].contains("X-JMAP-KEY=e_direct")
+            && email_lines[3].contains("vera.direct@example.com")
+            && email_lines[3].contains("TYPE=WORK")
+            && !email_lines[3].contains("PREF"),
+        "Slot 4 (E_CONTACT_EMAIL_4) must be e_direct: {}",
+        email_lines[3]
+    );
+
+    // Slot 5 (E_CONTACT_EMAIL list entry 5): e_home (unranked)
+    assert!(
+        email_lines[4].contains("X-JMAP-KEY=e_home")
+            && email_lines[4].contains("vera.home@example.com")
+            && email_lines[4].contains("TYPE=HOME")
+            && !email_lines[4].contains("PREF"),
+        "Slot 5 (E_CONTACT_EMAIL list entry 5) must be e_home: {}",
+        email_lines[4]
+    );
+
+    // Slot 6 (E_CONTACT_EMAIL list entry 6): e_support (unranked)
+    assert!(
+        email_lines[5].contains("X-JMAP-KEY=e_support")
+            && email_lines[5].contains("support@example.com")
+            && !email_lines[5].contains("PREF"),
+        "Slot 6 (E_CONTACT_EMAIL list entry 6) must be e_support: {}",
+        email_lines[5]
+    );
+
+    // Inbound parse: all 6 emails are preserved with their exact addresses, contexts, and keys
+    let card2 = vcard_to_card(&emitted).expect("parse back 6 emails");
+    assert_eq!(card2, card);
+
+    // Re-emission converges to identical fixed point
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted2, emitted);
+
+    // 2. Unkeyed inbound vCard with 5 emails allocates e1..e5 in document order
+    let unkeyed_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Multi Email Contact\r\n",
+        "EMAIL;TYPE=WORK,PREF:one@example.com\r\n",
+        "EMAIL;TYPE=HOME:two@example.com\r\n",
+        "EMAIL;TYPE=WORK:three@example.com\r\n",
+        "EMAIL:four@example.com\r\n",
+        "EMAIL;TYPE=OTHER:five@example.com\r\n",
+        "END:VCARD\r\n"
+    );
+    let unkeyed_card = vcard_to_card(unkeyed_vcard).expect("parse unkeyed");
+    let unkeyed_emails = unkeyed_card.emails.as_ref().expect("emails");
+    assert_eq!(unkeyed_emails.len(), 5);
+    assert_eq!(unkeyed_emails["e1"].address, "one@example.com");
+    assert_eq!(unkeyed_emails["e1"].pref, Some(1));
+    assert_eq!(unkeyed_emails["e2"].address, "two@example.com");
+    assert_eq!(unkeyed_emails["e2"].pref, None);
+    assert_eq!(unkeyed_emails["e3"].address, "three@example.com");
+    assert_eq!(unkeyed_emails["e4"].address, "four@example.com");
+    assert_eq!(unkeyed_emails["e5"].address, "five@example.com");
+
+    let unkeyed_emitted = card_to_vcard(&unkeyed_card);
+    let unkeyed_card2 = vcard_to_card(&unkeyed_emitted).expect("re-parse");
+    assert_eq!(unkeyed_card2, unkeyed_card);
+}
+
+#[test]
+fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
+    // Audit & characterization of EDS Address and Label slots:
+    // EDS provides 3 primary address slots (each with 7 subfields = 21 fields) + 3 synthetic label string fields:
+    //   - Work slot:  E_CONTACT_ADDRESS_WORK (field 5)  / E_CONTACT_ADDRESS_LABEL_WORK (field 14)  [TYPE=WORK]
+    //   - Home slot:  E_CONTACT_ADDRESS_HOME (field 4)  / E_CONTACT_ADDRESS_LABEL_HOME (field 13)  [TYPE=HOME]
+    //   - Other slot: E_CONTACT_ADDRESS_OTHER (field 6) / E_CONTACT_ADDRESS_LABEL_OTHER (field 15) [TYPE=OTHER / bare]
+    //
+    // Test matrix covers:
+    // 1. All 3 slots with structured ADR + matching standalone LABEL lines.
+    // 2. All 3 slots with standalone LABEL only (no structured ADR).
+    // 3. All 3 slots with structured ADR only (no LABEL).
+    // 4. Mixed slots (Work: ADR+LABEL, Home: LABEL only, Other: ADR only).
+    // 5. In-place modification of synthetic label fields in EDS.
+    // 6. PREF interplay across address slots: highest preference emitted first with TYPE=PREF.
+    // 7. Unkeyed inbound vCards pairing ADR and LABEL by context fallback (WORK, HOME, OTHER/bare).
+
+    // --- 1. All 3 slots with structured ADR + matching standalone LABEL ---
+    let mut extra_work = BTreeMap::new();
+    extra_work.insert("pref".to_owned(), json!(1));
+
+    let card_all3 = ContactCard {
+        card_type: Some("Card".to_owned()),
+        version: Some("1.0".to_owned()),
+        addresses: Some(
+            [
+                (
+                    "a_work".to_owned(),
+                    Address {
+                        components: Some(vec![
+                            AddressComponent::new("name", "Hauptstraße 1"),
+                            AddressComponent::new("locality", "Berlin"),
+                            AddressComponent::new("postcode", "10115"),
+                            AddressComponent::new("country", "Germany"),
+                        ]),
+                        contexts: Some(json!({"work": true})),
+                        full: Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned()),
+                        extra: extra_work,
+                    },
+                ),
+                (
+                    "a_home".to_owned(),
+                    Address {
+                        components: Some(vec![
+                            AddressComponent::new("name", "Heimweg 2"),
+                            AddressComponent::new("locality", "München"),
+                            AddressComponent::new("postcode", "80331"),
+                            AddressComponent::new("country", "Germany"),
+                        ]),
+                        contexts: Some(json!({"private": true})),
+                        full: Some("Heimweg 2\n80331 München\nGermany".to_owned()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "a_other".to_owned(),
+                    Address {
+                        components: Some(vec![
+                            AddressComponent::new("postOfficeBox", "Postfach 42"),
+                            AddressComponent::new("locality", "Hamburg"),
+                            AddressComponent::new("postcode", "20095"),
+                            AddressComponent::new("country", "Germany"),
+                        ]),
+                        contexts: None,
+                        full: Some("Postfach 42\n20095 Hamburg\nGermany".to_owned()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let emitted_all3 = card_to_vcard(&card_all3);
+
+    // Verify emission order: a_work (pref: 1) is first, followed by a_home and a_other
+    let adr_lines: Vec<&str> = emitted_all3
+        .lines()
+        .filter(|l| l.starts_with("ADR"))
+        .collect();
+    let label_lines: Vec<&str> = emitted_all3
+        .lines()
+        .filter(|l| l.starts_with("LABEL"))
+        .collect();
+    assert_eq!(adr_lines.len(), 3, "3 ADR lines: {emitted_all3}");
+    assert_eq!(label_lines.len(), 3, "3 LABEL lines: {emitted_all3}");
+
+    // Work slot (E_CONTACT_ADDRESS_WORK / E_CONTACT_ADDRESS_LABEL_WORK):
+    assert!(
+        adr_lines[0].contains("X-JMAP-KEY=a_work")
+            && adr_lines[0].contains("TYPE=WORK")
+            && adr_lines[0].contains("PREF"),
+        "Work ADR must be 1st: {}",
+        adr_lines[0]
+    );
+    assert!(
+        label_lines[0].contains("X-JMAP-KEY=a_work")
+            && label_lines[0].contains("TYPE=WORK")
+            && label_lines[0].contains("PREF"),
+        "Work LABEL must be 1st: {}",
+        label_lines[0]
+    );
+
+    // Home slot (E_CONTACT_ADDRESS_HOME / E_CONTACT_ADDRESS_LABEL_HOME):
+    assert!(
+        adr_lines[1].contains("X-JMAP-KEY=a_home")
+            && adr_lines[1].contains("TYPE=HOME")
+            && !adr_lines[1].contains("PREF"),
+        "Home ADR: {}",
+        adr_lines[1]
+    );
+    assert!(
+        label_lines[1].contains("X-JMAP-KEY=a_home") && label_lines[1].contains("TYPE=HOME"),
+        "Home LABEL: {}",
+        label_lines[1]
+    );
+
+    // Other slot (E_CONTACT_ADDRESS_OTHER / E_CONTACT_ADDRESS_LABEL_OTHER):
+    assert!(
+        adr_lines[2].contains("X-JMAP-KEY=a_other") && !adr_lines[2].contains("TYPE="),
+        "Other ADR (unslotted): {}",
+        adr_lines[2]
+    );
+    assert!(
+        label_lines[2].contains("X-JMAP-KEY=a_other") && !label_lines[2].contains("TYPE="),
+        "Other LABEL (unslotted): {}",
+        label_lines[2]
+    );
+
+    // Inbound parse: all 3 addresses are restored with their structured components AND full labels
+    let parsed_all3 = vcard_to_card(&emitted_all3).expect("parse back all3");
+    assert_eq!(parsed_all3, card_all3);
+
+    // Roundtrip fixed-point
+    let re_emitted_all3 = card_to_vcard(&parsed_all3);
+    assert_eq!(re_emitted_all3, emitted_all3);
+
+    // --- 2. All 3 slots with standalone LABEL only (no structured ADR) ---
+    let card_labels_only = ContactCard {
+        card_type: Some("Card".to_owned()),
+        version: Some("1.0".to_owned()),
+        addresses: Some(
+            [
+                (
+                    "a1".to_owned(),
+                    Address {
+                        components: None,
+                        contexts: Some(json!({"work": true})),
+                        full: Some("Work Label Only\nBerlin".to_owned()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "a2".to_owned(),
+                    Address {
+                        components: None,
+                        contexts: Some(json!({"private": true})),
+                        full: Some("Home Label Only\nMünchen".to_owned()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "a3".to_owned(),
+                    Address {
+                        components: None,
+                        contexts: None,
+                        full: Some("Other Label Only\nHamburg".to_owned()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let emitted_labels = card_to_vcard(&card_labels_only);
+    assert!(
+        !emitted_labels.contains("ADR"),
+        "no ADR lines should be emitted"
+    );
+    let lbl_lines: Vec<&str> = emitted_labels
+        .lines()
+        .filter(|l| l.starts_with("LABEL"))
+        .collect();
+    assert_eq!(lbl_lines.len(), 3);
+    assert!(lbl_lines[0].contains("TYPE=WORK") && lbl_lines[0].contains("Work Label Only"));
+    assert!(lbl_lines[1].contains("TYPE=HOME") && lbl_lines[1].contains("Home Label Only"));
+    assert!(!lbl_lines[2].contains("TYPE=") && lbl_lines[2].contains("Other Label Only"));
+
+    let parsed_labels = vcard_to_card(&emitted_labels).expect("parse labels only");
+    assert_eq!(parsed_labels, card_labels_only);
+
+    // --- 3. Mixed slots (Work: ADR+LABEL, Home: LABEL only, Other: ADR only) ---
+    let card_mixed = ContactCard {
+        card_type: Some("Card".to_owned()),
+        version: Some("1.0".to_owned()),
+        addresses: Some(
+            [
+                (
+                    "a_work".to_owned(),
+                    Address {
+                        components: Some(vec![AddressComponent::new("name", "Work Street 10")]),
+                        contexts: Some(json!({"work": true})),
+                        full: Some("Work Street 10\nBerlin".to_owned()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "a_home".to_owned(),
+                    Address {
+                        components: None,
+                        contexts: Some(json!({"private": true})),
+                        full: Some("Home Label Only\nCologne".to_owned()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "a_other".to_owned(),
+                    Address {
+                        components: Some(vec![AddressComponent::new("locality", "Frankfurt")]),
+                        contexts: None,
+                        full: None,
+                        extra: BTreeMap::new(),
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let emitted_mixed = card_to_vcard(&card_mixed);
+    let parsed_mixed = vcard_to_card(&emitted_mixed).expect("parse mixed slots");
+    assert_eq!(parsed_mixed, card_mixed);
+
+    // --- 4. Unkeyed vCard with WORK, HOME, and OTHER ADR + LABEL lines ---
+    // Simulates an EDS contact export or foreign vCard without X-JMAP-KEY:
+    // label_entry must pair each LABEL with its matching ADR by context (WORK -> WORK, HOME -> HOME, OTHER/bare -> OTHER).
+    let unkeyed_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Unkeyed Address Contact\r\n",
+        "ADR;TYPE=WORK:;;Hauptstraße 1;Berlin;;10115;Germany\r\n",
+        "LABEL;TYPE=WORK:Hauptstraße 1\\n10115 Berlin\\nGermany\r\n",
+        "ADR;TYPE=HOME:;;Heimweg 2;München;;80331;Germany\r\n",
+        "LABEL;TYPE=HOME:Heimweg 2\\n80331 München\\nGermany\r\n",
+        "ADR;TYPE=OTHER:;;Postfach 42;Hamburg;;20095;Germany\r\n",
+        "LABEL;TYPE=OTHER:Postfach 42\\n20095 Hamburg\\nGermany\r\n",
+        "LABEL:Bare Label Without Type\\nBerlin\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let unkeyed_card = vcard_to_card(unkeyed_vcard).expect("parse unkeyed addresses");
+    let unkeyed_addrs = unkeyed_card.addresses.as_ref().expect("addresses");
+    // a1 (WORK), a2 (HOME), a3 (OTHER), a4 (bare label)
+    assert_eq!(
+        unkeyed_addrs.len(),
+        4,
+        "expected 4 distinct address entries"
+    );
+    assert_eq!(unkeyed_addrs["a1"].contexts, Some(json!({"work": true})));
+    assert_eq!(
+        unkeyed_addrs["a1"].full.as_deref(),
+        Some("Hauptstraße 1\n10115 Berlin\nGermany")
+    );
+    assert_eq!(unkeyed_addrs["a2"].contexts, Some(json!({"private": true})));
+    assert_eq!(
+        unkeyed_addrs["a2"].full.as_deref(),
+        Some("Heimweg 2\n80331 München\nGermany")
+    );
+    assert_eq!(unkeyed_addrs["a3"].contexts, None);
+    assert_eq!(
+        unkeyed_addrs["a3"].full.as_deref(),
+        Some("Postfach 42\n20095 Hamburg\nGermany")
+    );
+    assert_eq!(unkeyed_addrs["a4"].contexts, None);
+    assert_eq!(
+        unkeyed_addrs["a4"].full.as_deref(),
+        Some("Bare Label Without Type\nBerlin")
+    );
+
+    // Re-emission converges to fixed point
+    let unkeyed_emitted = card_to_vcard(&unkeyed_card);
+    let unkeyed_card2 = vcard_to_card(&unkeyed_emitted).expect("re-parse");
+    assert_eq!(unkeyed_card2, unkeyed_card);
+}
+
+#[test]
+fn email_and_address_label_edge_cases_and_parameter_permutations() {
+    // 1. Multi-line labels with escaped delimiters: newlines, commas, semicolons, backslashes
+    let card = ContactCard {
+        card_type: Some("Card".to_owned()),
+        version: Some("1.0".to_owned()),
+        addresses: Some(
+            [(
+                "a_complex".to_owned(),
+                Address {
+                    components: Some(vec![
+                        AddressComponent::new("name", "Suite 400, Floor 2"),
+                        AddressComponent::new("locality", "San Francisco; Bay Area"),
+                        AddressComponent::new("country", "United States \\ USA"),
+                    ]),
+                    contexts: Some(json!({"work": true})),
+                    full: Some(
+                        "Acme Corp, Suite 400\\nDept; Ops\\nSan Francisco, CA\\nUSA".to_owned(),
+                    ),
+                    extra: BTreeMap::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        emails: Some(
+            [(
+                "e1".to_owned(),
+                ContactEmail {
+                    address: "complex+user@example.com".to_owned(),
+                    contexts: Some(json!({"work": true})),
+                    pref: Some(1),
+                    ..ContactEmail::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let emitted = card_to_vcard(&card);
+    let card2 = vcard_to_card(&emitted).expect("parse complex delimiters");
+    assert_eq!(card2, card);
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted2, emitted);
+
+    // 2. Inbound vCard with mixed-case and lowercase parameters (type=work,pref, TYPE=HOME, type=other)
+    let mixed_case_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Case Permutations\r\n",
+        "email;type=work,pref:work@case.example\r\n",
+        "EMAIL;TYPE=HOME:home@case.example\r\n",
+        "email;type=other:other@case.example\r\n",
+        "adr;type=work,pref:;;100 Work St;City;;12345;US\r\n",
+        "label;type=work,pref:100 Work St\\nCity\\nUS\r\n",
+        "ADR;TYPE=HOME:;;200 Home Rd;City;;12345;US\r\n",
+        "LABEL;TYPE=HOME:200 Home Rd\\nCity\\nUS\r\n",
+        "adr;type=other:;;300 Other Ave;City;;12345;US\r\n",
+        "label;type=other:300 Other Ave\\nCity\\nUS\r\n",
+        // Empty lines that must be safely ignored
+        "EMAIL:\r\n",
+        "ADR:;;;;;;\r\n",
+        "LABEL:\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(mixed_case_vcard).expect("parse mixed case");
+    let emails = parsed.emails.as_ref().expect("emails");
+    assert_eq!(emails.len(), 3);
+    assert_eq!(emails["e1"].address, "work@case.example");
+    assert_eq!(emails["e1"].pref, Some(1));
+    assert_eq!(emails["e2"].address, "home@case.example");
+    assert_eq!(emails["e3"].address, "other@case.example");
+
+    let addrs = parsed.addresses.as_ref().expect("addresses");
+    assert_eq!(addrs.len(), 3);
+    assert_eq!(addrs["a1"].contexts, Some(json!({"work": true})));
+    assert_eq!(addrs["a1"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(addrs["a2"].contexts, Some(json!({"private": true})));
+    assert_eq!(addrs["a3"].contexts, None);
+
+    let re_emitted = card_to_vcard(&parsed);
+    let parsed2 = vcard_to_card(&re_emitted).expect("re-parse");
+    assert_eq!(parsed2, parsed);
+}

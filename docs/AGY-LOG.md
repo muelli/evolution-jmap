@@ -496,6 +496,30 @@ Running record of headless polish increments on the `antigravity` branch.
   3. `X-EVOLUTION-MANAGER` and `X-EVOLUTION-ASSISTANT` map cleanly to JSContact `related_to` with standard relation types `"manager"` and `"assistant"` (RFC 9553 §2.1.8). The entity name serves as the map key (RFC 9555 §2.9.5). `names_a_person` prevents URN/URI identifiers from being rendered into Evolution's text fields. Multiple relations for the same person round-trip into separate lines and re-merge deterministically.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
 
+## 2026-08-22 — EMAIL and ADR slot completeness & PREF interplay (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 4. EMAIL and ADR slot completeness vs EDS (EMAIL 1..4 + attribute list, ADR/LABEL 3 slots WORK/HOME/OTHER, PREF interplay).
+- **Changes:**
+  - Audited and characterized EDS `EMAIL` slotting: Evolution exposes 4 discrete string fields (`E_CONTACT_EMAIL_1` through `E_CONTACT_EMAIL_4`, fields 8..11) plus the full `E_CONTACT_EMAIL` (field 97) `GList` attribute list containing all `EMAIL` lines (1..=4 and 5+).
+  - Audited and characterized EDS `ADR` and synthetic `LABEL` 3-slot matrix: `E_CONTACT_ADDRESS_WORK` / `E_CONTACT_ADDRESS_LABEL_WORK` (work slot), `E_CONTACT_ADDRESS_HOME` / `E_CONTACT_ADDRESS_LABEL_HOME` (home slot), and `E_CONTACT_ADDRESS_OTHER` / `E_CONTACT_ADDRESS_LABEL_OTHER` (other/unslotted).
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `email_four_slots_and_attribute_list_matrix_roundtrip`: tests cards with 1..=6 emails, verifying promotion of preferred email (`pref: 1`) to `E_CONTACT_EMAIL_1`, positional slotting across `E_CONTACT_EMAIL_1..4`, preservation of lines 5+ in `E_CONTACT_EMAIL` attribute list, unranked email sorting by key, unkeyed vCard key allocation (`e1..e5`), and fixed-point roundtrip stability (`card2 == card` and `emitted2 == emitted`).
+    - `address_three_label_slots_work_home_other_and_adr_pairing_matrix`: tests the full matrix across WORK (`TYPE=WORK`), HOME (`TYPE=HOME`), and OTHER (`TYPE=OTHER` / bare) slots with structured components and standalone labels, label-only addresses, ADR-only addresses, mixed slotting, in-place synthetic label modifications, preference-first sorting with `TYPE=PREF`, and unkeyed context pairing fallback in `label_entry`.
+    - `email_and_address_label_edge_cases_and_parameter_permutations`: tests escaped delimiters (`\n`, `\,`, `\;`, `\\`), mixed-case property/parameter names (`email;type=work,pref:`, `adr;type=work,pref:`, `label;type=other:`), and empty/whitespace line omission (`EMAIL:`, `ADR:;;;;;;`, `LABEL:`).
+  - Updated `docs/VCARD-MAPPING.md` with:
+    - Section 3.3 Master EDS Email Mapping Matrix (4 Slots + Attribute List) detailing field IDs, UI slots, wire types, JSContact representations, outbound types, and resolution rules.
+    - Section 3.4 Master EDS Address & Label Mapping Matrix (3 Slots + 3 Synthetic Labels) covering WORK, HOME, and OTHER slots, 21 subfields, and synthetic label pairing mechanics.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. **EMAIL Positional Slotting & Attribute List in EDS**:
+     - EDS maps incoming `EMAIL` lines 1..4 to `E_CONTACT_EMAIL_1..4` and all lines (1..=4 and 5+) to `E_CONTACT_EMAIL`.
+     - `card_to_vcard` sorts emails by `(pref.unwrap_or(u32::MAX), key)` on emission so the lowest `pref` rank lands in `E_CONTACT_EMAIL_1` (primary email), followed by unranked emails in deterministic key order.
+  2. **Address & Synthetic Label 3-Slot Pairing**:
+     - EDS models address labels as synthetic string fields (`E_CONTACT_ADDRESS_LABEL_WORK`, `_HOME`, `_OTHER`). On import, `label_entry` matches standalone `LABEL` lines to preceding `ADR` entries using `X-JMAP-KEY` or context matching (`TYPE=WORK` -> work ADR, `TYPE=HOME` -> home ADR, `TYPE=OTHER`/bare -> other ADR).
+     - This context-matching fallback prevents spurious duplicate address entries when EDS rebuilds synthetic label fields and strips custom parameters.
+     - Outbound emission pairs each structured `ADR` with its matching standalone `LABEL` in sorted `(address_pref, key)` order, ensuring primary preferred addresses and labels land in the appropriate Evolution editor slots.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+
 
 
 
