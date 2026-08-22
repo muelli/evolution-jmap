@@ -17,57 +17,47 @@ everything else — `jmap-ical`, `jmap-cal-sync`, `jmap-backend-cal` (free/busy)
 item 7; the lintian/RUNPATH CI fix, item 8). If a task would need a file outside
 `jmap-vcard`, **log it as a finding in `docs/AGY-LOG.md` and skip it**.
 
-## Batch 3 (2026-08-22) — fidelity long tail, audit-first
-History: **Batch 1** (`f4c1ae7`) and **Batch 2** (`87b0856`) are merged; see git
-log for their scope (multi-`TYPE` phones, IM schemes, folding/escaping,
-`CATEGORIES`, `PHOTO`, proptest fuzzing, `VCARD-MAPPING.md`).
+## Batch 4 (2026-08-22) — filed bugs + real unmapped EDS fields
+History: batches 1–3 are complete and merged to master (`f4c1ae7`, `87b0856`,
+`036b46f`); see git log for scope. Same standing rules: TDD (red first),
+whole-crate green at every push, one increment per session, log to
+`docs/AGY-LOG.md`, **check the current code first** — if an item turns out
+already covered, write that finding and move on. Log genuine product decisions
+as findings rather than guessing. Do NOT edit `docs/BACKLOG.md` (outside the
+lane — the maintainer prunes it); reference its entries from `docs/AGY-LOG.md`
+instead.
 
-Standing rules, unchanged: TDD (red first), whole-crate green at every push, one
-increment per session, log to `docs/AGY-LOG.md`, **check the current code first**
-— several items below are phrased as audits because the maintainer grepped, not
-proved, the gap. If an item turns out already covered, write that finding to
-`docs/AGY-LOG.md` and move to the next. Log genuine product decisions as
-findings rather than guessing.
-
-1. **Standard-property preservation audit (GEO, TZ, MAILER, PRODID, REV,
-   SORT-STRING, CLASS, SOUND, LOGO).** The unknown-property round-trip
-   mechanism preserves unknown `X-` properties (`X-EVOLUTION-UNKNOWN`); check
-   what happens to *standard* vCard 3.0 properties Evolution has no
-   `E_CONTACT_*` field for. If they are dropped on import→export, extend the
-   preservation mechanism to carry them (same shape as the `X-` path), or — if
-   preservation is architecturally wrong for some (e.g. `REV`, which the
-   exporter should own) — document the deliberate drop per property in
-   `docs/VCARD-MAPPING.md`. Round-trip tests either way.
-2. **Phone-TYPE completeness vs EDS.** The mapping references
-   `E_CONTACT_PHONE_{BUSINESS,BUSINESS_FAX,HOME,OTHER,OTHER_FAX}`; EDS also has
-   MOBILE/CELL, PAGER, CAR, ISDN, CALLBACK, COMPANY, PRIMARY, RADIO, TELEX,
-   TTYTDD, HOME_FAX, BUSINESS_2, HOME_2, and ASSISTANT phones. Audit which
-   `TEL;TYPE=` combinations map to which fields today, close the real gaps
-   (CELL is the most common TYPE in the wild), and pin the full matrix with
-   round-trip tests + a `VCARD-MAPPING.md` table.
-3. **Remaining X-EVOLUTION-* fields.** `X-EVOLUTION-{ANNIVERSARY,SPOUSE}` are
-   mapped; EDS also round-trips `X-EVOLUTION-{MANAGER,ASSISTANT,BLOG-URL,
-   VIDEO-URL}` (and `FBURL`/`CALURI` exist as `E_CONTACT_{FREEBUSY_URL,
-   CALENDAR_URI}` — grep says those two ARE referenced, so audit first). Map
-   the missing ones to/from JSContact sensibly (JSContact has `relatedTo` /
-   `links`; if no clean JSContact home exists, preserve as vendor properties)
-   with tests.
-4. **EMAIL and ADR slot completeness.** Only `E_CONTACT_EMAIL_1` and
-   `E_CONTACT_ADDRESS_LABEL_HOME` show up in a grep; EDS has `EMAIL_2..4` (and
-   the `E_CONTACT_EMAIL` attribute list) plus `ADDRESS_LABEL_{WORK,OTHER}`.
-   Audit how multiple EMAILs and the WORK/OTHER address labels round-trip;
-   close gaps with tests covering 3+ emails and all three label slots,
-   including `PREF` interplay.
-5. **vCard 2.1 legacy import tolerance.** Real exporters (old Outlook, feature
-   phones) still emit 2.1: `ENCODING=QUOTED-PRINTABLE` values, bare type words
-   (`TEL;HOME:`), `CHARSET=` params. Import-side tolerance only — export stays
-   strictly 3.0. Tests with representative 2.1 fixtures; document accepted
-   subset in `VCARD-MAPPING.md`.
-6. **Round-trip fixpoint property test.** Add a proptest that for arbitrary
-   generated contacts, vCard→EContact→vCard→EContact→vCard reaches a fixpoint
-   by the second export (export₂ == export₃ byte-identical). Reuse the
-   batch-1/2 generators; shrinkage on failure should name the property that
-   oscillates. This is the lane's standing regression net for everything above.
+1. **Fix the filed round-trip fixpoint bug.** `docs/BACKLOG.md` records a
+   `jmap-vcard` proptest fixed-point failure that reproduces on unmodified
+   master — a trailing-whitespace round-trip nit, with its minimal input
+   recorded in the entry. Reproduce with that input (red), fix, and pin the
+   minimal input as a named regression test (not just the proptest seed).
+2. **`TEL;TYPE=WORK,VOICE,FAX` dual-role mapping** (from BACKLOG's fidelity
+   notes): a combined voice+fax work number currently picks one winner and
+   loses the distinction. Decide a deterministic mapping (e.g. fill both
+   `E_CONTACT_PHONE_BUSINESS` and `_BUSINESS_FAX`, export re-merging or
+   keeping them split — document which) and extend batch 3's 19-field matrix
+   tests to cover multi-role TYPEs.
+3. **`X-TWITTER`, `X-SIP`, and IM URI-scheme long tail** (from BACKLOG's
+   fidelity notes): audit the current IM/social scheme table (batch 1 added
+   many); add the missing ones EDS/Evolution recognize, with round-trip tests
+   and a `VCARD-MAPPING.md` note per scheme.
+4. **`FILE-AS` mapping.** EDS has `E_CONTACT_FILE_AS`; jmap-vcard maps nothing
+   to it (grep: no `FILE-AS`/`X-EVOLUTION-FILE-AS` handling). Map it, and
+   document its relationship to the batch-3-preserved `SORT-STRING` (vCard 3.0
+   twin of the same concept) in `VCARD-MAPPING.md` — one must not clobber the
+   other on round-trip.
+5. **Promote `LOGO` and `KEY` from preserved blobs to real fields.** Batch 3
+   characterized them as preserved-unmapped; EDS has first-class
+   `E_CONTACT_LOGO` and `E_CONTACT_X509_CERT` (check the exact field semantics
+   first — audit-first; if the EDS shape doesn't fit, log the finding and keep
+   preservation). `LOGO` should reuse the `PHOTO` base64/URI machinery.
+6. **Apple-style property groups** (`item1.TEL` + `item1.X-ABLabel`, as iCloud
+   and macOS exporters emit): audit what the parser currently does with a
+   group prefix (corrupt? drop? pass through?). Minimum bar: grouped
+   properties import without loss and round-trip stably; stretch: map
+   `X-ABLabel` values to the closest TYPE/EDS slot with the label preserved.
+   Fixture-driven tests with representative iCloud-shaped vCards.
 
 **With no active items left, the agy shift reports `AGY-SHIFT: BLOCKED` and
 pauses** — which is correct; it costs nothing and auto-resumes the moment this

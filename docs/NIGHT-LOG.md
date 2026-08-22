@@ -1648,3 +1648,121 @@ unblocked, non-decision-gated, non-operator-blocked item across CURRENT
 PRIORITY or Round 2 Tracks A-F — everything else is pending operator
 verification in real Evolution or a maintainer decision (Track B, C2, C4,
 Track E Phase B/C). Ending the session here.
+
+## 2026-08-22 (claim) — Claiming Round 2 Track B1: journald structured logging init (`tracing` + `tracing-journald`)
+
+Fresh survey: `git fetch` shows `origin/master` unchanged at `f18c2de` (the
+maintainer's own decisions commit, today). CURRENT PRIORITY is fully closed —
+M7/M9/M10 are all tagged COMPLETE in `docs/MILESTONES.md`, and the OAuth2/
+live-server readiness items are all DONE or blocked on an inherently-human
+step (the operator's Fastmail consent round-trip). Round 2 Track A is fully
+closed; Track D (D1/D2) is code-complete pending operator verification;
+Track E Phase A is code-complete pending the vfunc slice (flagged
+escalation-worthy in the roadmap's own text — unsafe FFI, EDS-only testing —
+not claiming that here) with Phases B/C parked by maintainer decision. Track
+B1 and Track C2's second half were both just decided CLAIMABLE by the
+maintainer in `f18c2de` (2026-08-22). Picking B1: it is ordinary Rust
+(a `tracing`/`tracing-journald` init function plus wiring), not FFI-shaped,
+and — unlike per-backend polish — it is real infrastructure that helps
+diagnose exactly the kind of real-server issues this project's operator
+sessions keep hitting.
+
+Scoping the increment: a survey of every non-build/test/example ad-hoc
+logging call site found no literal `println!`/`eprintln!`/`g_message` in
+production module code — everything already funnels through
+`jmap_backend_core::trampoline::log_critical` (a thin `g_log` wrapper), used
+from ~23 sites across `jmap-backend-core`, `jmap-mail`,
+`jmap-backend-collection`, and `jmap-config`. Converting all call sites to
+carry structured fields (account id, JMAP method, object type, request id, as
+the roadmap text asks) is a multi-session effort; tonight's increment is the
+init plumbing plus wiring it into every module entry point and the one
+funnel function, which is what makes any later per-site conversion possible
+at all. Claiming that slice now.
+
+## 2026-08-22 — Delivered: Track B1, journald logging init (`tracing` + `tracing-journald`), plumbing + wiring (code side; call-site structured fields still open)
+
+Added `tracing`, `tracing-subscriber` (with `env-filter`), and
+`tracing-journald` as workspace dependencies of `jmap-backend-core`, and a new
+`jmap_backend_core::logging` module: `init()` builds an `EnvFilter` from
+`EVOLUTION_JMAP_LOG` (default `warn`), prefers `tracing_journald::layer()`,
+and falls back to a stderr `fmt::layer()` when there is no journald socket
+(a container, a dev shell with no systemd) — errors from either the journald
+connection or `try_init` itself are swallowed, since the whole point is to
+try, not to make a module's logging mandatory for it to keep working.
+Guarded by a `OnceLock`, the exact idiom `jmap_backend_core::i18n::bind`
+already uses, and for the same reason: each of the five module cdylibs is
+its own statically-linked copy of `tracing`'s global dispatcher state, so
+"once per process" in practice means "once per module's own copy, and
+tolerant of being asked again" — the same fact `i18n::bind`'s own doc names
+for gettext binding.
+
+Wired `logging::init()` into all five module entry points, right alongside
+the existing `bind()` call: `jmap-backend-book`/`jmap-backend-cal`/
+`jmap-backend-collection`/`jmap-config`'s `load()`, and `jmap-mail`'s
+`camel_provider_module_init`. A survey for this increment (before writing
+anything) found no literal `println!`/`eprintln!`/`g_message` call anywhere
+in production module code outside build.rs/tests/examples/bin — every one of
+the sites this item's roadmap text was counting toward its "~54" estimate
+already funnels through `jmap_backend_core::trampoline::log_critical`, a
+thin `g_log` wrapper used from ~23 sites across `jmap-backend-core`,
+`jmap-mail`, `jmap-backend-collection`, and `jmap-config`. Rather than touch
+each of those 23 call sites, `log_critical` itself now also emits
+`tracing::error!("{message}")` before its existing `g_log` call — a
+one-line change to the one funnel function puts every existing site on the
+journald path (once a module has called `init`) for free, with no per-site
+edit and no behaviour change to the `g_log` half anything already depended
+on.
+
+TDD: `logging.rs`'s tests split the pure decision from the process-global
+side effect the same way this project's other vfunc-adjacent modules do
+(e.g. Track D2's `on_source_changed`) — `directive(env_value: Option<&str>)
+-> &str` is unit-tested for unset/empty/blank falling back to `warn`, a bare
+level passed through verbatim, and a per-target directive (`"evolution_jmap=
+debug,warn"`) passed through verbatim; the actual `init()` side effect can
+only be asserted panic-free (`init_twice_does_not_panic`), which is the
+property that actually matters for a function every module's entry point
+calls on every load, not just the first.
+
+**Scoped down from the item's full stated goal, logged rather than silently
+narrowed:** "Structured fields: account id, JMAP method, object type,
+request id" is NOT done — `log_critical`'s signature is `message: &str`, so
+today's conversion carries the same one bare string field `g_log` always
+did, just on a second sink. Giving any of the ~23 sites their own structured
+fields is real, per-site work this increment did not attempt; without the
+init plumbing landing first, that work had nothing to attach to.
+
+Full gate green: `cargo fmt --check`; `cargo clippy --all-targets --locked
+-- -D warnings` (default-members) and the seven-crate EDS-gated clippy
+(`evolution-jmap-client`, `jmap-backend-core`, `jmap-backend-book`,
+`jmap-backend-cal`, `jmap-mail`, `jmap-backend-collection`, `jmap-config`)
+both clean. `cargo test --locked` (default-members) and the same seven
+crates' own `cargo test --locked` (run per-crate, the standing multi-package
+workaround) both green, 0 failed — **except** the pre-existing
+`jmap-vcard` `prop_card_roundtrip_reaches_fixed_point_stability` failure
+(`docs/BACKLOG.md`, filed 2026-08-19, a trailing-whitespace round-trip
+fixed-point gap), reproducing unchanged on unmodified `master` and untouched
+by this session; left filed, not fixed, per the standing directive against
+reopening a closed backend, and its freshly-written
+`jmap-vcard/tests/proptest_fuzz.proptest-regressions` seed file was
+deliberately NOT committed — pinning that seed would turn an intermittent
+red into a permanent one for every lane, the same reasoning an earlier
+session already recorded for this exact test. Packaging leg: `ninja -C
+build && ctest --test-dir build -R 'package-deb'` (all three) green, and a
+full `ctest --test-dir build` run confirms `debian-copyright-in-sync` stays
+green with three new dependencies in the tree (Track C2's generator only
+tracks this project's own files; the new crates' licences are Track C2's
+second-half, not-yet-claimed appendix's job to enumerate). No new
+user-facing string, so no `po/` action. New file
+(`jmap-backend-core/src/logging.rs`) carries the standard SPDX header.
+
+Disk filled mid-session during the packaging build (`rust/target` at 24G,
+`cc`/`ld` dying with a `Bus error` on whichever two EDS-gated crates'
+test binaries happened to link last) — `cargo clean --profile dev`
+recovered it, the same standing issue prior sessions have logged.
+
+NIGHT-SHIFT: Track B1's init plumbing and module wiring are implemented and
+pushed — every module now sets up a journald-preferring `tracing` dispatcher
+on load, and the existing `log_critical` funnel means all ~23 current
+critical-log sites are on that path already, with per-site structured
+fields left as explicitly-scoped future work. Ending the session here per
+the standing rule against starting a second large item.
