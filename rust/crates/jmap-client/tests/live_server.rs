@@ -612,12 +612,24 @@ fn contact_card_create_update_then_destroy_round_trips_through_the_real_api() {
     );
 }
 
-/// `Calendar/set` create then destroy — the calendar counterpart of
+/// `Calendar/set` create, update, then destroy — the calendar counterpart of
 /// [`address_book_create_then_destroy_round_trips_through_the_real_api`]
 /// above, for the other half of Track D1's collection-creation vfuncs.
 /// `Client::calendar_create`/`calendar_destroy` are mock-tested
 /// (`jmap-client/tests/calendars.rs`) but had never run against a real
 /// server before this test.
+///
+/// Also checks `Client::calendar_update` (a colour patch), mirroring
+/// [`mailbox_create_rename_then_destroy_round_trips_through_the_real_api`]'s
+/// create→rename→destroy shape: it is the one pure-client layer of Track
+/// D2's calendar-colour write-back (the `ECalMetaBackendClass::
+/// source_changed` vfunc's `jmap_cal_sync::CalSync::set_color` issues
+/// exactly this call), mock-tested
+/// (`jmap-client/tests/calendars.rs::calendar_update_color`) but, unlike the
+/// mailbox test's rename, never previously sent to a real server. No
+/// `Client::all_changes` check here either, for the same reason the create
+/// half already gives: no `_get`-with-explicit-ids method exposes a `state`
+/// token for this type.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn calendar_create_then_destroy_round_trips_through_the_real_api() {
@@ -652,6 +664,21 @@ fn calendar_create_then_destroy_round_trips_through_the_real_api() {
         round_tripped.map(|calendar| calendar.name),
         Some(name),
         "the created calendar does not show up in Calendar/get afterwards"
+    );
+
+    client
+        .calendar_update(&account_id, &id, json!({"color": "#00ff00"}))
+        .expect("Calendar/set update failed against the real server");
+
+    let round_tripped_after_update = client
+        .calendars(&account_id)
+        .expect("Calendar/get failed against the real server")
+        .into_iter()
+        .find(|calendar| calendar.id.as_ref() == Some(&id));
+    assert_eq!(
+        round_tripped_after_update.and_then(|calendar| calendar.color),
+        Some("#00ff00".to_string()),
+        "the coloured calendar does not show the new colour in Calendar/get afterwards"
     );
 
     client
