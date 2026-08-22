@@ -44,7 +44,9 @@ use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::subclass::ObjectSubclass;
-use jmap_backend_core::trampoline::{guard, guard_bool, guard_value, log_critical};
+use jmap_backend_core::trampoline::{
+    guard, guard_bool, guard_value, log_critical, log_critical_for_resource,
+};
 use jmap_collection_sync::Parts;
 
 use crate::authenticate::{Login, authenticate_with, login_of};
@@ -676,21 +678,28 @@ unsafe fn login_for(
 /// over one collection.
 fn report_fan_out(report: &Populated) {
     for resource_id in &report.uncreated {
-        log_critical(&format!(
-            "authenticate_sync: EDS would not create a child source for {resource_id}"
-        ));
+        log_critical_for_resource(
+            resource_id,
+            &format!("authenticate_sync: EDS would not create a child source for {resource_id}"),
+        );
     }
     for abandoned in &report.abandoned {
-        log_critical(&format!(
-            "authenticate_sync: {} stays unexported: {}",
-            abandoned.resource_id, abandoned.setting
-        ));
+        log_critical_for_resource(
+            &abandoned.resource_id,
+            &format!(
+                "authenticate_sync: {} stays unexported: {}",
+                abandoned.resource_id, abandoned.setting
+            ),
+        );
     }
     for not_removed in &report.not_removed {
-        log_critical(&format!(
-            "authenticate_sync: {} should have been removed and was not: {}",
-            not_removed.resource_id, not_removed.message
-        ));
+        log_critical_for_resource(
+            &not_removed.resource_id,
+            &format!(
+                "authenticate_sync: {} should have been removed and was not: {}",
+                not_removed.resource_id, not_removed.message
+            ),
+        );
     }
 
     debug_print(&format!(
