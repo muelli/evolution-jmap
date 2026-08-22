@@ -417,6 +417,31 @@ Running record of headless polish increments on the `antigravity` branch.
      - Cards parsed from legacy `CHARSET` or `ENCODING=QUOTED-PRINTABLE` inputs are normalized on output into standard vCard 3.0 UTF-8 format, achieving fixed-point convergence (`vcard2 == vcard3`) on subsequent passes.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`).
 
+## 2026-08-22 — Standard vCard 3.0 property preservation audit & characterization (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 1. Standard-property preservation audit (GEO, TZ, MAILER, PRODID, REV, SORT-STRING, CLASS, SOUND, LOGO).
+- **Changes:**
+  - Added comprehensive audit, characterization, and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `standard_vcard_properties_dropped_by_design_characterization_and_rationale`: tests inbound vCards containing all 9 standard unmapped vCard 3.0 properties (`GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, `LOGO`) alongside all standard mapped contact fields (`UID`, `X-JMAP-UID`, `FN`, `N`, `NICKNAME`, `EMAIL`, `TEL`, `ADR`, `LABEL`, `ORG`, `TITLE`, `ROLE`, `NOTE`, `URL`, `CALURI`, `FBURL`, `PHOTO`, `CATEGORIES`, `BDAY`, `X-EVOLUTION-ANNIVERSARY`, `X-EVOLUTION-SPOUSE`, `X-JABBER`), confirming 100% field extraction for mapped properties, exclusion of unmapped properties from JSContact models, clean outbound vCard 3.0 emission, and fixed-point convergence (`card2 == card` and `vcard2 == vcard3`).
+    - `standard_properties_individual_variations_and_parameters`: tests each of the 9 standard properties across individual variations: `GEO` decimal/signed/high-precision coordinates, `TZ` UTC offsets and IANA/abbreviated text names, `MAILER` client agent strings, `PRODID` FPI product identifiers, `REV` ISO-8601 timestamps, `SORT-STRING` text and delimiter-escaped strings, `CLASS` access classifications, `SOUND` inline base64 and remote URI audio, and `LOGO` inline base64 and remote URI graphics.
+    - `jscontact_sound_and_logo_media_entries_server_preservation`: tests `ContactCard` instances with multi-entry `media` maps containing photos, sounds, logos, and documents, asserting that `states_media` strictly filters for `kind: Some("photo")`, `card_to_vcard` emits exactly one `PHOTO` line, and non-photo media entries remain preserved on the JMAP server without triggering destructive diffs during sync (`PatchObject`).
+    - `standard_properties_case_insensitivity_and_empty_values`: tests lowercase/mixed-case property names (`geo:`, `tz:`, `mailer:`, `prodid:`, `rev:`, `sort-string:`, `class:`, `sound:`, `logo:`) and empty/whitespace-only values.
+  - Enhanced `arb_vcard_property_line` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to generate all 9 standard properties during property-based fuzzing.
+  - Updated `docs/VCARD-MAPPING.md` with:
+    - Section 2 Master Property Mapping Table rows for `GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, and `LOGO`.
+    - Section 4.9 documenting the architectural justification, EDS UI state, JSContact representation, and sync safety rationale for each dropped property.
+- **Calcard behaviour-difference findings & Product Decisions (Dropped-by-Design Rationale for Standard vCard 3.0 Properties):**
+  1. `GEO` (RFC 2426 §3.4.2): Evolution contact editor lacks UI for coordinates; JSContact scopes coordinates to `Address.coordinates`. Dropping top-level `GEO` prevents creating bogus address associations; server `Address.coordinates` values are untouched by `PatchObject`.
+  2. `TZ` (RFC 2426 §3.4.1): Evolution has no per-contact timezone UI; JSContact uses IANA names (`card.time_zone`) while vCard 3.0 uses offsets/abbreviations. Server-side `time_zone` is preserved untouched by `PatchObject`.
+  3. `MAILER` (RFC 2426 §3.6.3): Deprecated/removed in vCard 4.0; legacy client metadata with no Evolution UI or JSContact mapping.
+  4. `PRODID` (RFC 2426 §3.6.4): Generator metadata is owned by the exporting serializer. Foreign `PRODID` strings are not preserved across saves to prevent misattribution.
+  5. `REV` (RFC 2426 §3.6.5): Revision timestamp is strictly owned by the authoritative JMAP server (`updated`). Emitting stale client timestamps would corrupt server revision tracking.
+  6. `SORT-STRING` (RFC 2426 §3.6.7): Replaced in vCard 4.0 by `SORT-AS`. Evolution uses `X-EVOLUTION-FILE-AS`. JSContact `sortAs` properties ride in `extra` on the JMAP layer and are left untouched by `PatchObject`.
+  7. `CLASS` (RFC 2426 §3.7.2): Deprecated access flag with no Evolution editor UI. Server privacy settings are preserved untouched by `PatchObject`.
+  8. `SOUND` (RFC 2426 §3.6.6) & `LOGO` (RFC 2426 §3.5.3): Evolution contact editor only supports personal photo display/editing (`E_CONTACT_PHOTO`). `states_media` strictly filters for `kind: Some("photo")` on `PHOTO` lines. Inbound `SOUND`/`LOGO` lines are ignored to prevent misinterpreting them as personal photos. Server-side `sound` and `logo` entries in `card.media` remain safely preserved by `PatchObject`.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+
 
 
 
