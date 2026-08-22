@@ -507,6 +507,23 @@ pub fn states_name_component(component: &NameComponent) -> bool {
     !component.value.is_empty() && name_field(&component.kind).is_some()
 }
 
+/// Whether a name states an Evolution file-as string.
+///
+/// Evolution's `E_CONTACT_FILE_AS` is written as `X-EVOLUTION-FILE-AS` on
+/// vCard 3.0 lines and stored in `Name.extra["fileAs"]`.
+pub fn states_file_as(name: Option<&Name>) -> bool {
+    let Some(name) = name else {
+        return false;
+    };
+    name.extra
+        .get("fileAs")
+        .or_else(|| name.extra.get("file_as"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+}
+
 /// The position in the vCard `N` value a JSContact name component kind is
 /// written into, or `None` for a kind the value has no field for.
 fn name_field(kind: &str) -> Option<usize> {
@@ -1442,6 +1459,22 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
                     .with_values(fields.into_iter().map(VCardValue::Text).collect()),
             );
         }
+    }
+
+    if let Some(file_as) = card
+        .name
+        .as_ref()
+        .and_then(|n| n.extra.get("fileAs").or_else(|| n.extra.get("file_as")))
+        .or_else(|| card.extra.get("fileAs"))
+        .or_else(|| card.extra.get("file_as"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        entries.push(
+            VCardEntry::new(VCardProperty::Other("X-EVOLUTION-FILE-AS".to_owned()))
+                .with_value(file_as.to_owned()),
+        );
     }
 
     // One line per entry rather than RFC 2426 §3.1.3's comma-separated list,
@@ -2510,16 +2543,26 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
         components.push(NameComponent::new(kind, value));
     }
 
-    // No FN and no usable N: the vCard simply does not name anybody. Note
+    let mut extra = BTreeMap::new();
+    if let Some(file_as) = find("X-EVOLUTION-FILE-AS")
+        .or_else(|| find("FILE-AS"))
+        .or_else(|| find("X-FILE-AS"))
+        .map(entry_text)
+        .filter(|f| !f.is_empty())
+    {
+        extra.insert("fileAs".to_string(), Value::String(file_as));
+    }
+
+    // No FN, no usable N, and no fileAs: the vCard simply does not name anybody. Note
     // that a missing N is never guessed at by splitting FN — a wrong guess
     // would be written back to the server on the next save.
-    if full.is_none() && components.is_empty() {
+    if full.is_none() && components.is_empty() && extra.is_empty() {
         return None;
     }
     Some(Name {
         components: (!components.is_empty()).then_some(components),
         full,
-        extra: BTreeMap::new(),
+        extra,
     })
 }
 
