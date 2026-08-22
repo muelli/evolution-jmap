@@ -276,7 +276,7 @@ impl MessageCache {
 
         // SAFETY: `stream` is an owned `GIOStream` from the call above; the
         // input stream it hands over is borrowed from it and outlived by it.
-        let source = unsafe { read_all(g_io_stream_get_input_stream(stream.as_ptr())) };
+        let source = unsafe { read_all(g_io_stream_get_input_stream(stream.as_ptr()), uid) };
         // SAFETY: closing the reference this function owns; `stream` itself
         // releases it wherever this scope ends. Closing an already-failed
         // stream is defined, and its error is not interesting: whether the
@@ -513,10 +513,13 @@ fn valid_key(key: &str) -> bool {
 /// cut short parses into a message with a truncated body and no complaint. So a
 /// failed read discards what it had rather than handing it over.
 ///
+/// `uid` names the entry for the log line on a failed read — the caller's own
+/// identifier, not read back from the stream, which carries none.
+///
 /// # Safety
 ///
 /// `input` must point at a live `GInputStream`.
-unsafe fn read_all(input: *mut gio_sys::GInputStream) -> Option<Vec<u8>> {
+unsafe fn read_all(input: *mut gio_sys::GInputStream, uid: &str) -> Option<Vec<u8>> {
     let mut source: Vec<u8> = Vec::new();
     let mut chunk = [0u8; CHUNK];
     loop {
@@ -533,9 +536,13 @@ unsafe fn read_all(input: *mut gio_sys::GInputStream) -> Option<Vec<u8>> {
             )
         };
         if read < 0 {
-            log_critical(&format!("a cached message could not be read: {}", unsafe {
-                describe(error)
-            }));
+            log_critical_for_message(
+                uid,
+                &format!(
+                    "the cached copy of message {uid} could not be read: {}",
+                    unsafe { describe(error) }
+                ),
+            );
             // SAFETY: an owned GError or NULL.
             unsafe { g_clear_error(&mut error) };
             return None;
