@@ -15157,3 +15157,215 @@ fn twitter_sip_and_unslotted_social_services_characterization_and_rationale() {
     let export2 = card_to_vcard(&card2);
     assert_eq!(export1, export2);
 }
+
+#[test]
+fn logo_and_key_vcard_lines_and_server_preservation_characterization() {
+    // Audit & characterization of LOGO (RFC 2426 §3.5.3 / E_CONTACT_LOGO) and KEY (RFC 2426 §3.7.2 / E_CONTACT_X509_CERT / E_CONTACT_PGP_CERT):
+    //
+    // 1. Inbound vCard with LOGO, KEY (X509, PGP, URI), PHOTO, and standard contact properties
+    let vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:pas-id-test-logo-key-001\r\n",
+        "FN:Dr. Vera Marie Oldenburg\r\n",
+        "N:Oldenburg;Vera;Marie;Dr.;\r\n",
+        "EMAIL;X-JMAP-KEY=e1;TYPE=WORK,PREF:vera@example.com\r\n",
+        "TEL;X-JMAP-KEY=p1;TYPE=WORK,CELL:+1-555-0199\r\n",
+        "ADR;X-JMAP-KEY=a1;TYPE=WORK:;;Hauptstr. 1;Berlin;;10115;Germany\r\n",
+        "PHOTO;X-JMAP-KEY=m1;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRg==\r\n",
+        // LOGO lines: inline base64 and remote URI
+        "LOGO;TYPE=PNG;ENCODING=b:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n",
+        "LOGO;VALUE=uri:https://example.com/corporate_logo.png\r\n",
+        // KEY lines: X.509 certificate in base64, PGP public key in base64, URI reference, case-insensitive
+        "KEY;TYPE=X509;ENCODING=b:MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0Y123\r\n",
+        "KEY;TYPE=PGP;ENCODING=b:mQGNBF+1234567890abcdef\r\n",
+        "KEY;VALUE=uri:https://example.com/keys/vera.asc\r\n",
+        "key;type=x509;encoding=b:MIIB...case_insensitive\r\n",
+        "KEY:bare-untyped-key-payload-string\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let card = vcard_to_card(vcard).expect("parse vcard with logo and key");
+
+    // Verify contact name, email, phone, address, and PHOTO are parsed intact
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Dr. Vera Marie Oldenburg")
+    );
+    assert_eq!(card.emails.as_ref().map(|e| e.len()), Some(1));
+    assert_eq!(card.phones.as_ref().map(|p| p.len()), Some(1));
+    assert_eq!(card.addresses.as_ref().map(|a| a.len()), Some(1));
+
+    // Media map contains ONLY the PHOTO — LOGO lines are safely dropped on parse
+    let media = card.media.as_ref().expect("media present");
+    assert_eq!(media.len(), 1);
+    assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(media["m1"].media_type.as_deref(), Some("image/JPEG"));
+    assert!(media["m1"].uri.starts_with("data:image/JPEG;base64,"));
+
+    // JSContact extra is empty (no unmodeled junk leaked)
+    assert!(card.extra.is_empty());
+
+    // Outbound emission: emits standard PHOTO line and strictly omits LOGO and KEY
+    let emitted = card_to_vcard(&card);
+    assert!(
+        emitted.contains("PHOTO;X-JMAP-KEY=m1;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRg==")
+            || emitted.contains("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:/9j/4AAQSkZJRg=="),
+        "PHOTO must be emitted: {emitted}"
+    );
+    assert!(
+        !emitted.contains("LOGO"),
+        "LOGO must not be emitted: {emitted}"
+    );
+    assert!(
+        !emitted.contains("KEY;"),
+        "KEY; must not be emitted: {emitted}"
+    );
+    assert!(
+        !emitted.contains("KEY:"),
+        "KEY: must not be emitted: {emitted}"
+    );
+
+    // Multi-pass roundtrip fixed-point stability
+    let card2 = vcard_to_card(&emitted).expect("re-parse emitted vcard");
+    assert_eq!(card2, card);
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted2, emitted);
+}
+
+#[test]
+fn crypto_keys_and_logo_server_state_untouched_characterization() {
+    use jmap_vcard::contact::{same_photo, states_media};
+
+    // 1. Server-side contact card carrying cryptoKeys in extra and mixed media (photo, logo, sound)
+    let mut card = ContactCard {
+        card_type: Some("Card".to_owned()),
+        version: Some("1.0".to_owned()),
+        ..ContactCard::default()
+    };
+
+    // JSContact RFC 9553 §2.7.1 cryptoKeys
+    let mut crypto_keys = BTreeMap::new();
+    crypto_keys.insert(
+        "k1".to_owned(),
+        json!({
+            "@type": "CryptoKey",
+            "kind": "key",
+            "uri": "data:application/x-x509-ca-cert;base64,MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A",
+            "mediaType": "application/x-x509-ca-cert"
+        }),
+    );
+    crypto_keys.insert(
+        "k2".to_owned(),
+        json!({
+            "@type": "CryptoKey",
+            "kind": "key",
+            "uri": "https://keys.openpgp.org/vks/v1/by-fingerprint/1234567890",
+            "mediaType": "application/pgp-keys"
+        }),
+    );
+    card.extra
+        .insert("cryptoKeys".to_owned(), json!(crypto_keys));
+
+    // JSContact RFC 9553 §2.6.4 media
+    let mut media = BTreeMap::new();
+    let photo = Media {
+        kind: Some("photo".to_owned()),
+        uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
+        media_type: Some("image/png".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let logo = Media {
+        kind: Some("logo".to_owned()),
+        uri: "https://example.com/corp_logo.svg".to_owned(),
+        media_type: Some("image/svg+xml".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let sound = Media {
+        kind: Some("sound".to_owned()),
+        uri: "https://example.com/pronunciation.ogg".to_owned(),
+        media_type: Some("audio/ogg".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    media.insert("m_photo".to_owned(), photo.clone());
+    media.insert("m_logo".to_owned(), logo.clone());
+    media.insert("m_sound".to_owned(), sound.clone());
+    card.media = Some(media);
+
+    // 2. Predicate validation: states_media answers true ONLY for photo
+    assert!(states_media(&photo), "photo must be stateable");
+    assert!(!states_media(&logo), "logo must NOT be stateable on PHOTO");
+    assert!(
+        !states_media(&sound),
+        "sound must NOT be stateable on PHOTO"
+    );
+
+    // 3. same_photo equality comparisons
+    assert!(same_photo(&photo, &photo));
+    assert!(same_photo(&logo, &sound)); // Both evaluate to None -> true
+    assert!(!same_photo(&photo, &logo)); // Photo vs None -> false
+
+    // 4. Outbound vCard emission: emits PHOTO and omits LOGO, SOUND, and cryptoKeys
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("PHOTO;X-JMAP-KEY=m_photo;TYPE=png;ENCODING=b:")
+            || vcard.contains("PHOTO;X-JMAP-KEY=m_photo;TYPE=PNG;ENCODING=b:")
+    );
+    assert!(!vcard.contains("LOGO"), "{vcard}");
+    assert!(!vcard.contains("SOUND"), "{vcard}");
+    assert!(!vcard.contains("KEY;"), "{vcard}");
+    assert!(!vcard.contains("KEY:"), "{vcard}");
+    assert!(!vcard.contains("cryptoKeys"), "{vcard}");
+
+    // 5. Inbound parse from emitted vCard
+    let parsed = vcard_to_card(&vcard).expect("parse");
+    let parsed_media = parsed.media.as_ref().expect("media");
+    assert_eq!(parsed_media.len(), 1);
+    assert_eq!(parsed_media["m_photo"].kind.as_deref(), Some("photo"));
+    assert!(parsed.extra.is_empty());
+}
+
+#[test]
+fn key_and_logo_edge_cases_and_malformed_payloads() {
+    // 1. Folded long base64 KEY and LOGO lines (75 octets)
+    let folded_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Folded Key and Logo User\r\n",
+        "KEY;TYPE=X509;ENCODING=b:MIIDhzCCAm+gAwIBAgIJAOnL/n8c3hB/MA0GCSqGSIb3DQEBCwUA\r\n",
+        " MBUxEzARBgNVBAMMCkZha2UgQ0EgMDEeFw0yMDAxMDEwMDAwMDBaFw0zMDAxMDEwMDAwMDBa\r\n",
+        " MBUxEzARBgNVBAMMCkZha2UgQ0EgMDE=\r\n",
+        "LOGO;TYPE=JPEG;ENCODING=b:/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////\r\n",
+        " ////////////////////////////////////////////////////////////////////wgAL\r\n",
+        "CAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=\r\n",
+        "END:VCARD\r\n"
+    );
+    let card1 = vcard_to_card(folded_vcard).expect("parse folded key/logo");
+    assert_eq!(
+        card1.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Folded Key and Logo User")
+    );
+    assert!(card1.media.is_none());
+
+    // 2. Empty KEY and LOGO property lines
+    let empty_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Empty Props User\r\n",
+        "KEY:\r\n",
+        "KEY;TYPE=X509;ENCODING=b:\r\n",
+        "LOGO:\r\n",
+        "LOGO;TYPE=PNG:\r\n",
+        "LOGO;VALUE=uri:\r\n",
+        "END:VCARD\r\n"
+    );
+    let card2 = vcard_to_card(empty_vcard).expect("parse empty key/logo");
+    assert_eq!(
+        card2.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Empty Props User")
+    );
+    assert!(card2.media.is_none());
+
+    // 3. Round-trip stability
+    let emitted1 = card_to_vcard(&card1);
+    let card1_re = vcard_to_card(&emitted1).expect("re-parse");
+    let emitted1_re = card_to_vcard(&card1_re);
+    assert_eq!(emitted1, emitted1_re);
+}
