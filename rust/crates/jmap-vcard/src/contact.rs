@@ -2109,6 +2109,12 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
     }
     let media_type = entry_param(entry, "TYPE")
         .filter(|subtype| !subtype.eq_ignore_ascii_case(UNKNOWN_TYPE))
+        .or_else(|| {
+            entry.params.iter().find_map(|param| {
+                let name = param.name.as_str();
+                is_known_image_subtype(name).then(|| name.to_owned())
+            })
+        })
         .map(|subtype| format!("{IMAGE_PREFIX}{subtype}"));
     let uri = format!(
         "{DATA_SCHEME}{}{BASE64_MARKER},{}",
@@ -2116,6 +2122,25 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
         BASE64.encode(&bytes)
     );
     Some(photo_entry(uri, media_type))
+}
+
+fn is_known_image_subtype(subtype: &str) -> bool {
+    matches!(
+        subtype.to_ascii_uppercase().as_str(),
+        "JPEG"
+            | "JPG"
+            | "PNG"
+            | "GIF"
+            | "TIFF"
+            | "TIF"
+            | "BMP"
+            | "WEBP"
+            | "SVG"
+            | "SVG+XML"
+            | "HEIC"
+            | "AVIF"
+            | "ICO"
+    )
 }
 
 /// A media entry for a picture of the contact — the one kind a `PHOTO` line
@@ -2600,9 +2625,11 @@ fn entry_param(entry: &VCardEntry, name: &str) -> Option<String> {
 }
 
 fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
-    entry
-        .params
-        .iter()
-        .filter(|param| param.name.as_str().eq_ignore_ascii_case("TYPE"))
-        .any(|param| param_text(&param.value).eq_ignore_ascii_case(value))
+    entry.params.iter().any(|param| {
+        if param.name.as_str().eq_ignore_ascii_case("TYPE") {
+            param_text(&param.value).eq_ignore_ascii_case(value)
+        } else {
+            param.name.as_str().eq_ignore_ascii_case(value)
+        }
+    })
 }
