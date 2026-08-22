@@ -441,6 +441,27 @@ Running record of headless polish increments on the `antigravity` branch.
   8. `SOUND` (RFC 2426 §3.6.6) & `LOGO` (RFC 2426 §3.5.3): Evolution contact editor only supports personal photo display/editing (`E_CONTACT_PHOTO`). `states_media` strictly filters for `kind: Some("photo")` on `PHOTO` lines. Inbound `SOUND`/`LOGO` lines are ignored to prevent misinterpreting them as personal photos. Server-side `sound` and `logo` entries in `card.media` remain safely preserved by `PatchObject`.
 - **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
 
+## 2026-08-22 — Phone-TYPE completeness, MOBILE synonym & 19-field EDS matrix (jmap-vcard)
+
+- **AGY-TASKS sub-step:** Batch 3, Item 2. Phone-TYPE completeness vs EDS.
+- **Changes:**
+  - Added `PHONE_FEATURE_TYPES` and adapted `read_phone_flags` in `rust/crates/jmap-vcard/src/contact.rs` to recognize both `TYPE=CELL` and real-world synonym `TYPE=MOBILE` (case-insensitively) as JSContact `features: {"mobile": true}`, while outbound emission normalizes to canonical RFC 2426 §3.3.1 `TYPE=CELL`.
+  - Added comprehensive characterization and round-trip test suites in `rust/crates/jmap-vcard/tests/mapping.rs`:
+    - `phone_mobile_type_synonym_and_permutations_characterization`: tests inbound `TEL;TYPE=MOBILE` across bare, lowercase, mixed-case, work/home contexts, preference parameters, and multi-feature permutations (`MOBILE,VOICE`, `MOBILE,FAX`), verifying `mobile` feature extraction, outbound normalization to `TYPE=CELL`, and fixed-point roundtrip stability (`vcard2 == vcard3`).
+    - `phone_nineteen_eds_fields_complete_matrix_and_roundtrip`: verifies the full matrix of all 19 EDS phone fields from `libebook-contacts` 3.52 (`PRIMARY`, `BUSINESS`, `BUSINESS_2`, `BUSINESS_FAX`, `HOME`, `HOME_2`, `HOME_FAX`, `MOBILE` [both `CELL` and `MOBILE`], `PAGER`, `OTHER`, `OTHER_FAX`, `CAR`, `ISDN`, `CALLBACK`, `COMPANY`, `RADIO`, `TELEX`, `TTYTDD`, `ASSISTANT`), confirming accurate context/feature/pref extraction, preference-first sorting on emission (`TEL;TYPE=PREF`), and 100% roundtrip convergence.
+    - `phone_whitespace_punctuation_and_uri_schemes_handling`: tests formatted numbers with spaces, dashes, dots, parentheses, `tel:` URIs (`tel:+1-555-0123;ext=100`), raw string preservation, and empty number omission.
+    - `phone_multi_token_and_case_insensitive_type_matrix_roundtrip`: tests comma-separated vs repeated `TYPE` parameters, mixed casing, and feature narrowing precedence order (`CELL`/`MOBILE` > `PAGER` > `FAX` > `VOICE` > `VIDEO`).
+  - Enhanced `arb_vcard_property_line` in `rust/crates/jmap-vcard/tests/proptest_fuzz.rs` to generate all phone type parameter variations (`CELL`, `MOBILE`, `PAGER`, `VOICE`, `FAX`, `VIDEO`, `CAR`, `ISDN`, `TTYTDD`, `WORK,CELL`, `HOME,MOBILE`).
+  - Updated `docs/VCARD-MAPPING.md` with:
+    - Section 2 Master Property Mapping Table row for `TEL` covering all 19 EDS fields and `MOBILE` synonym normalization.
+    - Section 3.3 Master EDS Phone Mapping Matrix (19 Fields) detailing field IDs, UI slots, wire types, JSContact representations, outbound types, and resolution rules.
+- **Calcard behaviour-difference findings & Product Decisions:**
+  1. `calcard` automatically escapes semicolons in structured `TEL` values (such as `tel:+1-555-0123;ext=100` -> `tel:+1-555-0123\;ext=100`) on emission per RFC 2426 §2.4.2, and unescapes `\;` back to literal `;` upon reading.
+  2. `calcard` serializes multiple parameters on `TEL` lines with comma-delimited `TYPE=...` grouping while parsing both comma-separated and repeated `TYPE` parameters cleanly.
+  3. `MOBILE` vs `CELL` normalization: `TYPE=MOBILE` is widely used in the wild by Android, iOS, and Outlook vCard exporters. `jmap-vcard` accepts `MOBILE` on import as JSContact `mobile` feature and normalizes to standard RFC 2426 `TYPE=CELL` on export, ensuring lossless round-trips and fixed-point convergence.
+- **Gates ran:** `./ci/checks.sh` clean (REUSE 3.3 compliant, `cargo fmt`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo test --locked`, `cargo deny check`, .deb package ctest).
+
+
 
 
 
