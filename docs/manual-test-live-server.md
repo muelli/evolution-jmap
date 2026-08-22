@@ -9,17 +9,23 @@ this project does not control. `rust/crates/jmap-client/tests/live_server.rs`
 is the other half, and this is its recipe.
 
 Almost all of it is read-only — session discovery, `Core/echo`, or listing
-what already exists. Four tests write: `mailbox_create_rename_then_destroy_
+what already exists. Six tests write: `mailbox_create_rename_then_destroy_
 round_trips_through_the_real_api` (`Mailbox/set` create, then a rename via
 `mailbox_update`, then destroy),
+`address_book_create_then_destroy_round_trips_through_the_real_api`
+(`AddressBook/set` create then destroy — the collection itself, not a card
+inside one),
 `contact_card_create_update_then_destroy_round_trips_through_the_real_api`
 (`ContactCard/set` create, then a rename via `contact_update`, then destroy),
+`calendar_create_then_destroy_round_trips_through_the_real_api`
+(`Calendar/set` create then destroy — the calendar counterpart of the
+address-book test),
 `calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
 (`CalendarEvent/set` create, then a title change via `event_update`, then
 destroy), and
 `email_import_update_then_destroy_round_trips_through_the_real_api`
 (`Email/import` via `upload_blob`, a mark-as-read via `email_update`, then
-`download_blob`). All four run only against a separate, dedicated throwaway
+`download_blob`). All six run only against a separate, dedicated throwaway
 account (see step 3) so they can never touch whatever account the read-only
 tests are pointed at.
 
@@ -90,7 +96,7 @@ routine option.
 
 ## 3. (optional) Enable the write-path tests
 
-The four mutating tests are skipped, not failed, unless a *separate*
+The six mutating tests are skipped, not failed, unless a *separate*
 login is given for them — deliberately not the same variables step 2
 sets, so pointing the read-only tests at a real mailbox can never also
 point the mutating tests at it. Seed a throwaway account for this alone
@@ -158,6 +164,17 @@ in the invocation, worth failing loudly on.
   calendar yet, so the round trip succeeding — proving this client's types
   read what a real server actually sends, not just `jmap-mockd`'s fixtures —
   is the claim. An account with no such capability is reported and skipped.
+- `address_book_create_then_destroy_round_trips_through_the_real_api` and
+  `calendar_create_then_destroy_round_trips_through_the_real_api` —
+  `AddressBook/set`/`Calendar/set` create a *collection* (what a user's "New
+  Address Book"/"New Calendar" sends, and what the collection backend's
+  `create_resource_sync`/`delete_resource_sync` vfuncs issue — see
+  `docs/ROADMAP.md`'s Track D1), confirm the new one shows up in
+  `AddressBook/get`/`Calendar/get` with the right name, then destroy it and
+  confirm it is gone. Unlike the tests below, these do not also check
+  `Client::all_changes`: neither type has a `_get` method here that exposes a
+  `state` token (`address_books`/`calendars` return only the list), and
+  adding one was out of scope for this coverage-only pair.
 - `mailbox_create_rename_then_destroy_round_trips_through_the_real_api`,
   `contact_card_create_update_then_destroy_round_trips_through_the_real_api`,
   and `calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
