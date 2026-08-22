@@ -216,6 +216,12 @@ mod ureq_transport {
                 return Err(TransportError::Cancelled);
             }
 
+            tracing::trace!(
+                method = ?request.method,
+                url = request.url,
+                "sending HTTP request"
+            );
+
             let result = match request.method {
                 HttpMethod::Get => {
                     let mut builder = self.agent.get(request.url);
@@ -233,7 +239,10 @@ mod ureq_transport {
                 }
             };
 
-            let response = result.map_err(|error| TransportError::Failed(error.to_string()))?;
+            let response = result.map_err(|error| {
+                tracing::debug!(url = request.url, %error, "HTTP request failed");
+                TransportError::Failed(error.to_string())
+            })?;
             let status = response.status().as_u16();
             let content_type = response
                 .headers()
@@ -246,6 +255,12 @@ mod ureq_transport {
             // whether the redirect itself is taken. `get_uri()` is the
             // request's own URL when nothing redirected.
             let final_url = ureq::ResponseExt::get_uri(&response).to_string();
+            tracing::trace!(
+                status,
+                final_url = %final_url,
+                redirected = final_url != request.url,
+                "received HTTP response"
+            );
             // `read_to_vec()` would apply `ureq`'s own `MAX_BODY_SIZE`; the
             // limit is set here so the number in force is the caller's.
             //
@@ -276,6 +291,205 @@ mod ureq_transport {
                 body,
                 final_url,
             })
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::sync::{Arc, Mutex};
+
+        use tracing::field::{Field, Visit};
+        use tracing::span::{Attributes, Id, Record};
+        use tracing::{Event, Level, Metadata, Subscriber};
+
+        use super::*;
+
+        /// Records every event this module emits (level + fields), so a test
+        /// can assert a request attached structured fields rather than only a
+        /// free-text message — duplicated from `client.rs`'s own test
+        /// harness for the same reason that one gives: this crate depends on
+        /// `tracing`, not `tracing-subscriber`, so there is no ready-made
+        /// capturing layer to share across modules.
+        struct CapturingSubscriber {
+            captured: Arc<Mutex<Vec<(Level, String, String)>>>,
+        }
+
+        struct Recorder<'a> {
+            level: Level,
+            sink: &'a Mutex<Vec<(Level, String, String)>>,
+        }
+
+        impl Visit for Recorder<'_> {
+            fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                self.sink.lock().unwrap().push((
+                    self.level,
+                    field.name().to_owned(),
+                    format!("{value:?}"),
+                ));
+            }
+
+            fn record_str(&mut self, field: &Field, value: &str) {
+                self.sink.lock().unwrap().push((
+                    self.level,
+                    field.name().to_owned(),
+                    value.to_owned(),
+                ));
+            }
+
+            fn record_bool(&mut self, field: &Field, value: bool) {
+                self.sink.lock().unwrap().push((
+                    self.level,
+                    field.name().to_owned(),
+                    value.to_string(),
+                ));
+            }
+        }
+
+        impl Subscriber for CapturingSubscriber {
+            fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+                true
+            }
+
+            fn new_span(&self, _span: &Attributes<'_>) -> Id {
+                Id::from_u64(1)
+            }
+
+            fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+            fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+            fn event(&self, event: &Event<'_>) {
+                event.record(&mut Recorder {
+                    level: *event.metadata().level(),
+                    sink: &self.captured,
+                });
+            }
+
+            fn enter(&self, _span: &Id) {}
+
+            fn exit(&self, _span: &Id) {}
+        }
+
+        type CapturedEvents = Vec<(Level, String, String)>;
+
+        fn run_captured(
+            request: HttpRequest<'_>,
+        ) -> (Result<HttpResponse, TransportError>, CapturedEvents) {
+            let captured = Arc::new(Mutex::new(Vec::new()));
+            let subscriber = CapturingSubscriber {
+                captured: captured.clone(),
+            };
+            let transport = UreqTransport::default();
+            let result =
+                tracing::subscriber::with_default(subscriber, || transport.execute(request));
+            let captured = captured.lock().unwrap().clone();
+            (result, captured)
+        }
+
+        #[test]
+        fn a_plain_request_traces_its_url_and_the_response_status() {
+            let server = jmap_mock::MockServer::builder().start();
+            let url = format!("{}/.well-known/jmap", server.origin());
+
+            let (result, captured) = run_captured(HttpRequest {
+                method: HttpMethod::Get,
+                url: &url,
+                headers: &[],
+                body: None,
+                cancel: None,
+                max_response_bytes: 1_000_000,
+            });
+
+            result.expect("the mock server answers the well-known path");
+            assert!(
+                captured
+                    .iter()
+                    .any(|(level, name, value)| *level == Level::TRACE
+                        && name == "url"
+                        && *value == url),
+                "expected a TRACE url={url} field before the request, got {captured:?}"
+            );
+            assert!(
+                captured
+                    .iter()
+                    .any(|(level, name, _)| *level == Level::TRACE && name == "status"),
+                "expected a TRACE status field after the response, got {captured:?}"
+            );
+            assert!(
+                captured
+                    .iter()
+                    .any(|(level, name, value)| *level == Level::TRACE
+                        && name == "redirected"
+                        && value == "false"),
+                "a same-URL response should trace redirected=false, got {captured:?}"
+            );
+        }
+
+        #[test]
+        fn a_redirected_request_traces_redirected_true_and_the_final_url() {
+            let server = jmap_mock::MockServer::builder()
+                .session_via_redirect()
+                .start();
+            let url = format!("{}/.well-known/jmap", server.origin());
+
+            let (result, captured) = run_captured(HttpRequest {
+                method: HttpMethod::Get,
+                url: &url,
+                headers: &[],
+                body: None,
+                cancel: None,
+                max_response_bytes: 1_000_000,
+            });
+
+            let response = result.expect("the redirect target answers the request");
+            assert_ne!(
+                response.final_url, url,
+                "session_via_redirect should actually redirect to a different path"
+            );
+            assert!(
+                captured
+                    .iter()
+                    .any(|(level, name, value)| *level == Level::TRACE
+                        && name == "redirected"
+                        && value == "true"),
+                "a redirected response should trace redirected=true, got {captured:?}"
+            );
+            assert!(
+                captured
+                    .iter()
+                    .any(|(level, name, value)| *level == Level::TRACE
+                        && name == "final_url"
+                        && *value == response.final_url),
+                "expected a TRACE final_url={} field, got {captured:?}",
+                response.final_url
+            );
+        }
+
+        #[test]
+        fn a_failed_request_traces_the_error_at_debug() {
+            // Nothing listens here: 127.0.0.1:1 is a reserved, unassigned
+            // port that refuses the connection immediately rather than
+            // timing out, so this is a fast, deterministic transport
+            // failure.
+            let (result, captured) = run_captured(HttpRequest {
+                method: HttpMethod::Get,
+                url: "http://127.0.0.1:1/",
+                headers: &[],
+                body: None,
+                cancel: None,
+                max_response_bytes: 1_000_000,
+            });
+
+            assert!(
+                matches!(result, Err(TransportError::Failed(_))),
+                "connecting to a port nothing listens on should fail the transport"
+            );
+            assert!(
+                captured
+                    .iter()
+                    .any(|(level, name, _)| *level == Level::DEBUG && name == "error"),
+                "expected a DEBUG error field on transport failure, got {captured:?}"
+            );
         }
     }
 }
