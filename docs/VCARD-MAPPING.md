@@ -486,3 +486,47 @@ Real-world contact exporters (such as older versions of Microsoft Outlook, featu
 | [`states_nothing_but_the_marriage`] | `pub` | Checks if relation entry contains only the `spouse` relation type. |
 | [`states_keyword`] | `pub` | Validates keyword tag for boolean `true`, non-emptiness, and whitespace safety. |
 
+---
+
+## 6. Round-Trip Fixpoint Stability & Regression Net
+
+### 6.1 The Multi-Stage Round-Trip Contract
+
+Every contact property mapping in `jmap-vcard` satisfies a strict multi-pass fixed-point stability invariant across the translation lifecycle:
+
+```
+vCard₁ (Inbound / Legacy 2.1 / Foreign Exporter)
+  │
+  ▼ vcard_to_card()
+Card₁ (JSContact representation)
+  │
+  ▼ card_to_vcard()
+vCard₂ (Export₁: Canonical RFC 2426 vCard 3.0)
+  │
+  ▼ vcard_to_card()
+Card₂ (EContact₂: In-Memory EDS representation)
+  │
+  ▼ card_to_vcard()
+vCard₃ (Export₂: Re-Emitted vCard 3.0)
+  │
+  ▼ vcard_to_card()
+Card₃ (EContact₃: Stabilized JSContact Card)
+  │
+  ▼ card_to_vcard()
+vCard₄ (Export₃: Stabilized vCard 3.0)
+```
+
+### 6.2 Standing Fixpoint Invariants
+
+1. **Byte-Identical vCard Fixpoint**:
+   $$\text{Export}_2 (\text{vCard}_3) \equiv \text{Export}_3 (\text{vCard}_4)$$
+   The second and third vCard 3.0 exports are guaranteed to be byte-identical. No line reordering, parameter drift, delimiter re-escaping, or whitespace fluctuation occurs.
+
+2. **Structural JSContact Fixpoint**:
+   $$\text{Card}_2 (\text{EContact}_2) \equiv \text{Card}_3 (\text{EContact}_3)$$
+   The deserialized JSContact structures reach complete identity by the second roundtrip pass.
+
+3. **Oscillation Diagnosis & Proptest Net**:
+   The `proptest_fuzz.rs` suite continuously fuzzes the fixpoint contract across arbitrary raw vCard inputs and arbitrary `ContactCard` instances. When test assertions fail, the oscillation analyzer diagnostic (`identify_oscillating_vcard_property` / `identify_oscillating_card_field`) isolates the specific property name and line difference, enabling instant root-cause identification during proptest test case shrinkage.
+
+

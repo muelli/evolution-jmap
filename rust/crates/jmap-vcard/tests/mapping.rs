@@ -13792,3 +13792,299 @@ fn vcard_21_quoted_printable_soft_line_breaks_and_continuation() {
     let card2 = vcard_to_card(&emitted).expect("re-parse qp emission");
     assert_eq!(card2, card);
 }
+
+#[test]
+fn fixpoint_roundtrip_characterization_and_oscillation_diagnostics() {
+    // Characterizes the multi-stage roundtrip contract:
+    // vCard₁ (raw inbound)
+    //   -> Card₁ (JSContact)
+    //   -> vCard₂ (Export₁)
+    //   -> Card₂ (EContact₂ / JSContact)
+    //   -> vCard₃ (Export₂)
+    //   -> Card₃ (EContact₃ / JSContact)
+    //   -> vCard₄ (Export₃)
+    //
+    // Fixed-Point Stability Invariants:
+    // 1. Export₂ (vCard₃) == Export₃ (vCard₄) byte-identical.
+    // 2. Card₂ (EContact₂) == Card₃ (EContact₃) structurally identical.
+    let complex_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:fixpoint-characterization-01\r\n",
+        "X-JMAP-UID:urn:uuid:fixpoint-0001\r\n",
+        "FN:Dr. Alexander Viktor von Humboldt, Jr.\r\n",
+        "N:von Humboldt;Alexander;Viktor;Dr.;Jr.\r\n",
+        "NICKNAME;X-JMAP-KEY=k1:Alex\r\n",
+        "NICKNAME;X-JMAP-KEY=k2:Explorer\r\n",
+        "EMAIL;X-JMAP-KEY=e1;TYPE=WORK,PREF:alex.work@academy.example.org\r\n",
+        "EMAIL;X-JMAP-KEY=e2;TYPE=HOME:alex.home@humboldt.example\r\n",
+        "EMAIL;X-JMAP-KEY=e3:alex.personal@domain.example\r\n",
+        "TEL;X-JMAP-KEY=p1;TYPE=WORK,CELL,PREF:+49-30-10001\r\n",
+        "TEL;X-JMAP-KEY=p2;TYPE=WORK,FAX:+49-30-10002\r\n",
+        "TEL;X-JMAP-KEY=p3;TYPE=HOME,VOICE:+49-30-20001\r\n",
+        "TEL;X-JMAP-KEY=p4;TYPE=PAGER:+49-30-30001\r\n",
+        "ADR;X-JMAP-KEY=a1;TYPE=WORK,PREF:PO Box 100;Suite 500;Unter den Linden 6;Berlin;Berlin;10099;Germany\r\n",
+        "LABEL;X-JMAP-KEY=a1;TYPE=WORK,PREF:PO Box 100\\nSuite 500\\nUnter den Linden 6\\n10099 Berlin\\nGermany\r\n",
+        "ADR;X-JMAP-KEY=a2;TYPE=HOME:;;Jägerstraße 22;Berlin;Berlin;10117;Germany\r\n",
+        "LABEL;X-JMAP-KEY=a2;TYPE=HOME:Jägerstraße 22\\n10117 Berlin\\nGermany\r\n",
+        "ORG;X-JMAP-KEY=o1:Prussian Academy of Sciences;Natural Philosophy;Cosmology Division;Expedition Team\r\n",
+        "TITLE;X-JMAP-KEY=t1:Director of Scientific Expeditions\r\n",
+        "ROLE;X-JMAP-KEY=t2:Principal Investigator\r\n",
+        "NOTE;X-JMAP-KEY=n1:Expedition notes & field observations:\\n1. Chimborazo barometric survey\\n2. Orinoco river mapping\r\n",
+        "BDAY;X-JMAP-KEY=b1:1769-09-14\r\n",
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=w1:1799-06-05\r\n",
+        "URL;X-JMAP-KEY=l1:https://humboldt.example.org\r\n",
+        "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l2:https://expeditions.humboldt.example.org/blog\r\n",
+        "X-EVOLUTION-VIDEO-URL;X-JMAP-KEY=l3:https://archive.example.org/lectures/kosmos.mp4\r\n",
+        "CALURI;X-JMAP-KEY=c1:https://calendar.humboldt.example.org/expeditions\r\n",
+        "FBURL;X-JMAP-KEY=c2:https://freebusy.humboldt.example.org/schedule\r\n",
+        "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://archive.example.org/portraits/humboldt.jpg\r\n",
+        "CATEGORIES:Academy,Astronomy,Botany,Expedition,Geology,Science\r\n",
+        "X-EVOLUTION-SPOUSE:Aimé Bonpland\r\n",
+        "X-EVOLUTION-MANAGER:Johann Wolfgang von Goethe\r\n",
+        "X-EVOLUTION-ASSISTANT:Carl Sigismund Kunth\r\n",
+        "X-MATRIX;X-JMAP-KEY=im1;TYPE=WORK:alex:matrix.academy.example.org\r\n",
+        "X-JABBER;X-JMAP-KEY=im2;TYPE=HOME:humboldt@jabber.example.org\r\n",
+        // Standard unmapped properties safely dropped
+        "GEO:52.5186,13.3932\r\n",
+        "TZ:Europe/Berlin\r\n",
+        "PRODID:-//Prussian Academy//Cosmology v1.0//EN\r\n",
+        "REV:1804-08-01T12:00:00Z\r\n",
+        "END:VCARD\r\n"
+    );
+
+    // Pass 1: Parse raw inbound vCard -> Card₁
+    let card1 = vcard_to_card(complex_vcard).expect("pass 1 parse");
+
+    // Pass 2: Card₁ -> Export₁ (vCard₂)
+    let vcard2 = card_to_vcard(&card1);
+
+    // Pass 3: vCard₂ -> Card₂ (EContact₂)
+    let card2 = vcard_to_card(&vcard2).expect("pass 2 parse");
+
+    // Pass 4: Card₂ -> Export₂ (vCard₃)
+    let vcard3 = card_to_vcard(&card2);
+
+    // Pass 5: vCard₃ -> Card₃ (EContact₃)
+    let card3 = vcard_to_card(&vcard3).expect("pass 3 parse");
+
+    // Pass 6: Card₃ -> Export₃ (vCard₄)
+    let vcard4 = card_to_vcard(&card3);
+
+    // Assertion 1: Export₂ == Export₃ byte-identical
+    assert_eq!(
+        vcard3, vcard4,
+        "Export₂ and Export₃ must be byte-identical fixed-points"
+    );
+
+    // Assertion 2: Card₂ == Card₃ structurally identical
+    assert_eq!(
+        card2, card3,
+        "EContact₂ and EContact₃ must be structurally identical fixed-points"
+    );
+}
+
+#[test]
+fn fixpoint_convergence_across_all_contact_property_domains_matrix() {
+    // Tests fixpoint convergence (Export₂ == Export₃ byte-identical, Card₂ == Card₃)
+    // across all 15 discrete property domains.
+    let domain_vcards = [
+        (
+            "names",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Prof. Dr. Maria-José Carreño-Quiroga, PhD\r\n",
+                "N:Carreño-Quiroga;Maria;José;Prof. Dr.;PhD\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "nicknames",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Nickname Matrix\r\n",
+                "NICKNAME;X-JMAP-KEY=k1:MJ\r\n",
+                "NICKNAME;X-JMAP-KEY=k2:Quiroga, The Great\r\n",
+                "NICKNAME;X-JMAP-KEY=k3:🌟 Star\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "emails",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Email Matrix\r\n",
+                "EMAIL;X-JMAP-KEY=e1;TYPE=WORK,PREF:primary.work@example.com\r\n",
+                "EMAIL;X-JMAP-KEY=e2;TYPE=HOME:home.address@example.org\r\n",
+                "EMAIL;X-JMAP-KEY=e3;TYPE=WORK:secondary.work@example.com\r\n",
+                "EMAIL;X-JMAP-KEY=e4:general@example.net\r\n",
+                "EMAIL;X-JMAP-KEY=e5:fifth@example.net\r\n",
+                "EMAIL;X-JMAP-KEY=e6:sixth@example.net\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "telephony",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Telephony 19 Fields Matrix\r\n",
+                "TEL;X-JMAP-KEY=p1;TYPE=WORK,CELL,PREF:+1-555-0101\r\n",
+                "TEL;X-JMAP-KEY=p2;TYPE=WORK,FAX:+1-555-0102\r\n",
+                "TEL;X-JMAP-KEY=p3;TYPE=WORK,VOICE:+1-555-0103\r\n",
+                "TEL;X-JMAP-KEY=p4;TYPE=HOME,CELL:+1-555-0104\r\n",
+                "TEL;X-JMAP-KEY=p5;TYPE=HOME,FAX:+1-555-0105\r\n",
+                "TEL;X-JMAP-KEY=p6;TYPE=HOME,VOICE:+1-555-0106\r\n",
+                "TEL;X-JMAP-KEY=p7;TYPE=PAGER:+1-555-0107\r\n",
+                "TEL;X-JMAP-KEY=p8;TYPE=VIDEO:+1-555-0108\r\n",
+                "TEL;X-JMAP-KEY=p9;TYPE=CAR:+1-555-0109\r\n",
+                "TEL;X-JMAP-KEY=p10;TYPE=ISDN:+1-555-0110\r\n",
+                "TEL;X-JMAP-KEY=p11;TYPE=TTYTDD:+1-555-0111\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "addresses_and_labels",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Address Matrix\r\n",
+                "ADR;X-JMAP-KEY=a1;TYPE=WORK,PREF:PO Box 42;Suite 100;100 Market St;San Francisco;CA;94105;USA\r\n",
+                "LABEL;X-JMAP-KEY=a1;TYPE=WORK,PREF:PO Box 42\\nSuite 100\\n100 Market St\\nSan Francisco\\, CA 94105\\nUSA\r\n",
+                "ADR;X-JMAP-KEY=a2;TYPE=HOME:;;742 Evergreen Terrace;Springfield;OR;97477;USA\r\n",
+                "LABEL;X-JMAP-KEY=a2;TYPE=HOME:742 Evergreen Terrace\\nSpringfield\\, OR 97477\\nUSA\r\n",
+                "ADR;X-JMAP-KEY=a3;TYPE=OTHER:;;Postlagernd;Berlin;;10115;Germany\r\n",
+                "LABEL;X-JMAP-KEY=a3;TYPE=OTHER:Postlagernd\\n10115 Berlin\\nGermany\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "organizations",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Org Matrix\r\n",
+                "ORG;X-JMAP-KEY=o1:Enterprise Corp;Cloud Division;Storage Group;Flash Core Team\r\n",
+                "ORG;X-JMAP-KEY=o2:;Freelance Consulting;Remote Office\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "titles_and_roles",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Titles Matrix\r\n",
+                "TITLE;X-JMAP-KEY=t1:Chief Technology Officer\r\n",
+                "TITLE;X-JMAP-KEY=t2:Vice President of Engineering\r\n",
+                "ROLE;X-JMAP-KEY=t3:Executive Committee Chair\r\n",
+                "ROLE;X-JMAP-KEY=t4:Open Standards Representative\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "notes_escaping",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Note Escaping Matrix\r\n",
+                "NOTE;X-JMAP-KEY=n1:Line 1\\nLine 2\\r\\nWith \\; and \\, and \\\\ backslashes.\\n∀x ∈ ℝ: x² ≥ 0\r\n",
+                "NOTE;X-JMAP-KEY=n2:Second note with emojis 🚀 🌟 🌍\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "anniversaries",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Anniversaries Matrix\r\n",
+                "BDAY;X-JMAP-KEY=b1:1980-05-20\r\n",
+                "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=w1:2010-09-15\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "links_blogs_videos",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Links Matrix\r\n",
+                "URL;X-JMAP-KEY=l1:https://example.com/profile?id=123&sort=asc;view=full\r\n",
+                "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l2:https://blog.example.com/tech\r\n",
+                "X-EVOLUTION-VIDEO-URL;X-JMAP-KEY=l3:https://video.example.com/channel/live\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "calendars",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Calendar Matrix\r\n",
+                "CALURI;X-JMAP-KEY=c1:https://cal.example.org/user/calendar.ics\r\n",
+                "FBURL;X-JMAP-KEY=c2:https://cal.example.org/freebusy/user.vfb\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "photos",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Photos Matrix\r\n",
+                "PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://example.com/avatar.png\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "online_services",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Online Services Matrix\r\n",
+                "X-AIM;X-JMAP-KEY=im1;TYPE=WORK:screenname1\r\n",
+                "X-GADUGADU;X-JMAP-KEY=im2;TYPE=HOME:123456\r\n",
+                "X-GOOGLE-TALK;X-JMAP-KEY=im3;TYPE=WORK:user@gmail.com\r\n",
+                "X-GROUPWISE;X-JMAP-KEY=im4;TYPE=WORK:gwuser\r\n",
+                "X-ICQ;X-JMAP-KEY=im5;TYPE=HOME:98765432\r\n",
+                "X-JABBER;X-JMAP-KEY=im6;TYPE=WORK:user@jabber.org\r\n",
+                "X-MSN;X-JMAP-KEY=im7;TYPE=HOME:user@hotmail.com\r\n",
+                "X-MATRIX;X-JMAP-KEY=im8;TYPE=WORK:user:matrix.org\r\n",
+                "X-SKYPE;X-JMAP-KEY=im9;TYPE=WORK:skype.handle\r\n",
+                "X-YAHOO;X-JMAP-KEY=im10;TYPE=HOME:yahoo_user\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "relations",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Relations Matrix\r\n",
+                "X-EVOLUTION-SPOUSE:Maria Carreño\r\n",
+                "X-EVOLUTION-MANAGER:Chief Officer Smith\r\n",
+                "X-EVOLUTION-ASSISTANT:Assistant Johnson\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+        (
+            "categories_keywords",
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Categories Matrix\r\n",
+                "CATEGORIES:Architecture,Engineering,OpenSource,Standards,VIP\r\n",
+                "END:VCARD\r\n"
+            ),
+        ),
+    ];
+
+    for (domain, vcard_input) in domain_vcards {
+        let card1 = vcard_to_card(vcard_input)
+            .unwrap_or_else(|e| panic!("domain {domain} failed initial parse: {e}"));
+        let vcard2 = card_to_vcard(&card1);
+        let card2 = vcard_to_card(&vcard2)
+            .unwrap_or_else(|e| panic!("domain {domain} failed second parse: {e}"));
+        let vcard3 = card_to_vcard(&card2);
+        let card3 = vcard_to_card(&vcard3)
+            .unwrap_or_else(|e| panic!("domain {domain} failed third parse: {e}"));
+        let vcard4 = card_to_vcard(&card3);
+
+        assert_eq!(
+            vcard3, vcard4,
+            "Domain '{domain}' failed vCard fixpoint stability (Export₂ != Export₃)"
+        );
+        assert_eq!(
+            card2, card3,
+            "Domain '{domain}' failed JSContact fixpoint stability (Card₂ != Card₃)"
+        );
+    }
+}
