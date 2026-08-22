@@ -217,10 +217,29 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 - **Clamping Protection**: EDS's `e_contact_date_to_string` clamps years to `1000..=9999`. Incomplete dates (bare years `1984` or partial months) and years < 1000 are omitted from vCard emission by `Day::survives_the_field_it_lands_in` to prevent EDS from corrupting them into January 1, 1000.
 - **`kind: "death"`**: Dropped from vCard 3.0 because EDS has no corresponding field.
 
-### 3.7 Instant Messaging (`ONLINE_SERVICES`)
+### 3.7 Instant Messaging (`ONLINE_SERVICES` ↔ `E_CONTACT_IM_*`)
 - **10 Supported Slotted Services**: AIM, Gadu-Gadu, Google Talk, GroupWise, ICQ, Jabber, MSN, Matrix, Skype, Yahoo.
-- **URI Scheme Mapping**: `SERVICE_SCHEMES` translates bare URIs (`xmpp:`, `aim:`, `gg:`, `groupwise:`, `icq:`, `msn:`, `msnim:`, `matrix:`, `skype:`, `yahoo:`, `ymsgr:`) into plain handles.
-- **Unslotted / Unmapped Services**: `X-TWITTER` and `X-SIP` are defined in EDS as `EContactAttrList` (`GList*` of `char*`) without `HOME`/`WORK` slots and are deliberately unmapped in `jmap-vcard`.
+- **6 EDS Slots per Service**: Each slotted service provides 6 dedicated string fields in `libebook-contacts` (`E_CONTACT_IM_<SERVICE>_HOME_1..3` and `_WORK_1..3`).
+- **Context Slotting**: `service_slot` evaluates `service.extra["contexts"]` (`"work"` -> `"WORK"`, private/default -> `"HOME"`).
+- **URI Scheme Mapping**: `SERVICE_SCHEMES` translates bare URIs across 18 supported scheme aliases into plain handles, and `online_service_uri` generates canonical URIs.
+- **Action/Query Rejection**: URIs containing query parameters, paths, or action fragments (e.g. `skype:echo123?call`, `aim:goim?screenname=...`, `matrix:u/vera:...`) are refused by `plain_handle`.
+- **Unslotted Services (`X-TWITTER`, `X-SIP`)**: Defined in EDS as `EContactAttrList` (`GList*` of `char*`) without `HOME`/`WORK` slots and are deliberately unmapped on vCard 3.0 emission, preserved on the server via `PatchObject`.
+
+#### Master EDS Instant Messaging Mapping Matrix (10 Services, 60 Slots, 18 URI Schemes)
+
+| Service Name | EDS Field Prefix (6 Slots) | Wire Property | Canonical URI Scheme | Accepted URI Scheme Aliases | Handle Grammar & Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **AIM** | `E_CONTACT_IM_AIM_HOME_1..3`, `_WORK_1..3` | `X-AIM` | `aim:` | `aim:`, `aol:` | AOL Instant Messenger screen names. |
+| **Gadu-Gadu** | `E_CONTACT_IM_GADUGADU_HOME_1..3`, `_WORK_1..3` | `X-GADUGADU` | `gg:` | `gg:`, `gadugadu:`, `gadu:` | Polish IM network. Numeric user identifier (UIN) per RFC 7595. |
+| **Google Talk** | `E_CONTACT_IM_GOOGLE_TALK_HOME_1..3`, `_WORK_1..3` | `X-GOOGLE-TALK` | `xmpp:` | `xmpp:`, `gtalk:` | XMPP JID handles (`user@gmail.com`). |
+| **GroupWise** | `E_CONTACT_IM_GROUPWISE_HOME_1..3`, `_WORK_1..3` | `X-GROUPWISE` | `groupwise:` | `groupwise:`, `novell:` | Novell / Micro Focus GroupWise usernames. |
+| **ICQ** | `E_CONTACT_IM_ICQ_HOME_1..3`, `_WORK_1..3` | `X-ICQ` | `icq:` | `icq:` | Numeric UIN handles (`12345678`). |
+| **Jabber** | `E_CONTACT_IM_JABBER_HOME_1..3`, `_WORK_1..3` | `X-JABBER` | `xmpp:` | `xmpp:`, `jabber:` | Standard XMPP JIDs (RFC 5122 / RFC 6120) and legacy `jabber:` URIs. |
+| **MSN** | `E_CONTACT_IM_MSN_HOME_1..3`, `_WORK_1..3` | `X-MSN` | `msn:` | `msn:`, `msnim:` | Microsoft Messenger handles / email addresses. |
+| **Matrix** | `E_CONTACT_IM_MATRIX_HOME_1..3`, `_WORK_1..3` | `X-MATRIX` | `matrix:` | `matrix:` | Matrix user IDs (`@user:server.org` or plain handles). |
+| **Skype** | `E_CONTACT_IM_SKYPE_HOME_1..3`, `_WORK_1..3` | `X-SKYPE` | `skype:` | `skype:` | Bare Skype usernames. Action parameters (`?call`, `?chat`) rejected. |
+| **Yahoo** | `E_CONTACT_IM_YAHOO_HOME_1..3`, `_WORK_1..3` | `X-YAHOO` | `yahoo:` | `yahoo:`, `ymsgr:` | Yahoo Messenger usernames and legacy `ymsgr:` protocol scheme. |
+
 
 ### 3.8 Categories & Keywords (`CATEGORIES` ↔ `E_CONTACT_CATEGORY_LIST`)
 - **Set vs List Mapping**: JSContact `keywords` (RFC 9553 §2.8.2) is a mathematical `Set` (JSON map with `true` values). vCard 3.0 `CATEGORIES` (RFC 2426 §3.7.1) is a comma-separated list of text values. EDS maps this line to `E_CONTACT_CATEGORY_LIST` (Evolution's Categories field).
@@ -500,6 +519,35 @@ item6.X-ABLabel:_$!<Anniversary>!$_
 5. **Outbound Normalization & Fixed-Point Stability**:
    - Outbound emission normalizes to standard RFC 2426 vCard 3.0 lines (`TYPE=WORK,CELL`, `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-ANNIVERSARY`).
    - Re-parsing emitted vCards achieves byte-identical fixpoints (`Export₂ == Export₃`).
+
+### 4.12 Instant Messaging, Social Networks & URI Scheme Long Tail
+
+1. **Slotted IM Services (10 Services, 60 EDS Slots)**:
+   - Evolution's contact editor exposes dedicated per-context fields for 10 instant messaging services: `AIM`, `Gadu-Gadu`, `Google Talk`, `GroupWise`, `ICQ`, `Jabber`, `MSN`, `Matrix`, `Skype`, `Yahoo`.
+   - Each service has 6 discrete string fields in EDS: `E_CONTACT_IM_<SERVICE>_HOME_1..3` and `E_CONTACT_IM_<SERVICE>_WORK_1..3`.
+   - Outbound serialization via [`card_to_vcard`] emits each service entry on its designated `X-` property carrying `X-JMAP-KEY` and `TYPE=HOME` (or `TYPE=WORK`), ensuring that user edits in Evolution update the matching entry.
+2. **Accepted URI Scheme Aliases**:
+   - Inbound URIs across standard and legacy protocols are recognized and extracted by [`online_service_handle`]:
+     - **Jabber / XMPP**: `xmpp:` (RFC 5122) and legacy `jabber:` URIs.
+     - **Google Talk**: `xmpp:` and `gtalk:` URIs.
+     - **AIM**: `aim:` and `aol:` URIs.
+     - **Gadu-Gadu**: `gg:` (RFC 7595), `gadugadu:`, and `gadu:` numeric UIN URIs.
+     - **GroupWise**: `groupwise:` and `novell:` URIs.
+     - **MSN**: `msn:` and `msnim:` URIs.
+     - **Yahoo**: `yahoo:` and `ymsgr:` URIs.
+     - **Matrix**: `matrix:` bare handle URIs.
+     - **Skype**: `skype:` username URIs.
+     - **ICQ**: `icq:` numeric UIN URIs.
+3. **Action and Query URI Rejection Invariant**:
+   - URIs with action verbs, query parameters, path hierarchies, or fragments (e.g. `skype:echo123?call`, `aim:goim?screenname=alice`, `matrix:u/vera:matrix.org`, `icq:message?uin=12345`) do not represent plain contact handles.
+   - [`plain_handle`] safely rejects these URIs to avoid corrupting user handle fields or performing lossy transformations.
+4. **Unslotted Attributes: `X-TWITTER` and `X-SIP` Rationale**:
+   - In EDS, `E_CONTACT_IM_TWITTER` (field 135) and `E_CONTACT_SIP` (field 127) are modeled as `EContactAttrList` (`GList*` of `char*`), without per-slot `HOME`/`WORK` fields.
+   - Evolution's contact editor provides no UI slotting for Twitter or SIP.
+   - *Architecture & Rationale*: `jmap-vcard` does not emit `X-TWITTER` or `X-SIP` vCard lines. On the JMAP layer, `Twitter` and `SIP` entries in `card.online_services` are untouched during synchronization by `jmap-book-sync`'s `PatchObject`. Inbound `X-TWITTER` and `X-SIP` lines in foreign vCards are safely ignored to prevent creating unslotted synthetic entries.
+5. **Modern Chat & Social Long Tail (Telegram, Discord, Signal, WhatsApp, Mastodon, IRC)**:
+   - Modern social platforms (Telegram, Discord, Signal, WhatsApp, Mastodon `acct:`, IRC) have no native UI fields in EDS.
+   - In accordance with Section 4.1, they are omitted on vCard 3.0 emission and remain safely preserved on the server via `PatchObject`.
 
 ---
 
