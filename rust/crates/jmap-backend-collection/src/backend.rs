@@ -726,15 +726,28 @@ impl Live {
     /// a handful of children at most. `e_collection_backend_ref_server` reads a
     /// weak reference, so NULL means the registry server is gone — during
     /// shutdown, say — and then there is nothing to export to.
+    ///
+    /// # Safety
+    ///
+    /// `child` must be a valid `ESource` that outlives the call. Both callers
+    /// (`populate`, `authenticate_sync`'s fan-out) only ever publish a child
+    /// whose `[Resource] Identity` is already written — `populate` checks
+    /// [`resource_id_of`] before calling this, and `fan_out::adopt` only
+    /// publishes after its own settings write has succeeded — so the failure
+    /// branch below can read it back for the log.
     fn export(&self, child: *mut ESource, context: &str) {
         // SAFETY: a valid backend; the server comes back `(transfer full)`.
         let server = unsafe {
             Owned::<ESourceRegistryServer>::from_raw(e_collection_backend_ref_server(self.0))
         };
         let Some(server) = server else {
-            log_critical(&format!(
-                "{context}: the registry server is gone; a child stays unexported"
-            ));
+            let message =
+                format!("{context}: the registry server is gone; a child stays unexported");
+            // SAFETY: `child` is a valid `ESource` by this function's contract.
+            match unsafe { resource_id_of(child) } {
+                Some(resource_id) => log_critical_for_resource(&resource_id, &message),
+                None => log_critical(&message),
+            }
             return;
         };
 
