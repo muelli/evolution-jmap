@@ -266,6 +266,18 @@ const PHONE_FEATURES: [(&str, &str); 5] = [
     ("video", "VIDEO"),
 ];
 
+/// The vCard `TYPE` parameter names recognized for each JSContact phone feature on inbound parsing.
+///
+/// In addition to standard vCard 3.0 type names (e.g. `CELL`), recognizes common synonyms
+/// emitted by real-world vCard generators (e.g. `MOBILE`).
+const PHONE_FEATURE_TYPES: [(&str, &[&str]); 5] = [
+    ("mobile", &["CELL", "MOBILE"]),
+    ("pager", &["PAGER"]),
+    ("fax", &["FAX"]),
+    ("voice", &["VOICE"]),
+    ("video", &["VIDEO"]),
+];
+
 /// JSContact address component kinds, paired with their position in the
 /// vCard `ADR` value (RFC 2426 §3.2.1: post office box, extended address,
 /// street, locality, region, postal code, country), listed in that order —
@@ -1837,7 +1849,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 let phone = ContactPhone {
                     number,
                     contexts: read_flags(&CONTEXTS, entry),
-                    features: read_flags(&PHONE_FEATURES, entry),
+                    features: read_phone_flags(entry),
                     pref: entry_has_type(entry, "PREF").then_some(1),
                     ..ContactPhone::default()
                 };
@@ -2463,6 +2475,20 @@ fn read_flags(table: &[(&str, &str)], entry: &VCardEntry) -> Option<Value> {
     let flags: Map<String, Value> = table
         .iter()
         .filter(|(_, type_name)| entry_has_type(entry, type_name))
+        .map(|(key, _)| ((*key).to_owned(), Value::Bool(true)))
+        .collect();
+    (!flags.is_empty()).then_some(Value::Object(flags))
+}
+
+/// The JSContact phone `features` boolean map for the `TYPE` values present on a `TEL` entry.
+fn read_phone_flags(entry: &VCardEntry) -> Option<Value> {
+    let flags: Map<String, Value> = PHONE_FEATURE_TYPES
+        .iter()
+        .filter(|(_, types)| {
+            types
+                .iter()
+                .any(|type_name| entry_has_type(entry, type_name))
+        })
         .map(|(key, _)| ((*key).to_owned(), Value::Bool(true)))
         .collect();
     (!flags.is_empty()).then_some(Value::Object(flags))

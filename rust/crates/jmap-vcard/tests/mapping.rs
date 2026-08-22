@@ -11941,3 +11941,491 @@ fn standard_properties_case_insensitivity_and_empty_values() {
         );
     }
 }
+
+#[test]
+fn phone_mobile_type_synonym_and_permutations_characterization() {
+    // Audit & characterization: `TYPE=MOBILE` is widely emitted in the wild (Android,
+    // iOS, Outlook, feature phones) as a synonym for vCard 3.0 standard `TYPE=CELL`.
+    // Verify that inbound `TYPE=MOBILE` parses into JSContact `features: {"mobile": true}`
+    // identically to `TYPE=CELL`, normalizes outbound to standard `TYPE=CELL`, and
+    // achieves fixed-point roundtrip stability.
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:test-phone-mobile-synonym\r\n",
+        "FN:Mobile Synonym Test\r\n",
+        "TEL;X-JMAP-KEY=p_bare_mobile;TYPE=MOBILE:+1-555-0101\r\n",
+        "TEL;X-JMAP-KEY=p_lower_mobile;TYPE=mobile:+1-555-0102\r\n",
+        "TEL;X-JMAP-KEY=p_mixed_mobile;type=Mobile:+1-555-0103\r\n",
+        "TEL;X-JMAP-KEY=p_work_mobile_plain;TYPE=WORK,MOBILE:+1-555-0104\r\n",
+        "TEL;X-JMAP-KEY=p_home_mobile;TYPE=HOME,MOBILE:+1-555-0105\r\n",
+        "TEL;X-JMAP-KEY=p_pref_mobile;TYPE=MOBILE,PREF:+1-555-0106\r\n",
+        "TEL;X-JMAP-KEY=p_work_mobile_pref;TYPE=WORK,MOBILE;TYPE=PREF:+1-555-0107\r\n",
+        "TEL;X-JMAP-KEY=p_mobile_voice;TYPE=MOBILE,VOICE:+1-555-0108\r\n",
+        "TEL;X-JMAP-KEY=p_mobile_fax;TYPE=MOBILE,FAX:+1-555-0109\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card = vcard_to_card(vcard).expect("parse mobile synonym vcard");
+    let phones = card.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 9);
+
+    // 1. TEL;TYPE=MOBILE -> features: {"mobile": true}
+    let p_bare = &phones["p_bare_mobile"];
+    assert_eq!(p_bare.number, "+1-555-0101");
+    assert_eq!(p_bare.contexts, None);
+    assert_eq!(p_bare.features, Some(json!({"mobile": true})));
+    assert_eq!(p_bare.pref, None);
+    assert!(states_phone_feature(p_bare.features.as_ref(), "mobile"));
+
+    // 2. TEL;TYPE=mobile -> lowercase
+    let p_lower = &phones["p_lower_mobile"];
+    assert_eq!(p_lower.number, "+1-555-0102");
+    assert_eq!(p_lower.features, Some(json!({"mobile": true})));
+
+    // 3. TEL;type=Mobile -> mixed case
+    let p_mixed = &phones["p_mixed_mobile"];
+    assert_eq!(p_mixed.number, "+1-555-0103");
+    assert_eq!(p_mixed.features, Some(json!({"mobile": true})));
+
+    // 4. TEL;TYPE=WORK,MOBILE -> work context + mobile feature
+    let p_wm = &phones["p_work_mobile_plain"];
+    assert_eq!(p_wm.number, "+1-555-0104");
+    assert_eq!(p_wm.contexts, Some(json!({"work": true})));
+    assert_eq!(p_wm.features, Some(json!({"mobile": true})));
+    assert!(states_context(p_wm.contexts.as_ref(), "work"));
+    assert!(states_phone_feature(p_wm.features.as_ref(), "mobile"));
+
+    // 5. TEL;TYPE=HOME,MOBILE -> private context + mobile feature
+    let p_hm = &phones["p_home_mobile"];
+    assert_eq!(p_hm.number, "+1-555-0105");
+    assert_eq!(p_hm.contexts, Some(json!({"private": true})));
+    assert_eq!(p_hm.features, Some(json!({"mobile": true})));
+    assert!(states_context(p_hm.contexts.as_ref(), "private"));
+    assert!(states_phone_feature(p_hm.features.as_ref(), "mobile"));
+
+    // 6. TEL;TYPE=MOBILE,PREF -> pref: 1 + mobile feature
+    let p_pm = &phones["p_pref_mobile"];
+    assert_eq!(p_pm.number, "+1-555-0106");
+    assert_eq!(p_pm.pref, Some(1));
+    assert_eq!(p_pm.features, Some(json!({"mobile": true})));
+
+    // 7. TEL;TYPE=WORK,MOBILE;TYPE=PREF -> work + mobile + pref
+    let p_wmp = &phones["p_work_mobile_pref"];
+    assert_eq!(p_wmp.number, "+1-555-0107");
+    assert_eq!(p_wmp.pref, Some(1));
+    assert_eq!(p_wmp.contexts, Some(json!({"work": true})));
+    assert_eq!(p_wmp.features, Some(json!({"mobile": true})));
+
+    // 8. TEL;TYPE=MOBILE,VOICE -> mobile + voice, narrowed to mobile
+    let p_mv = &phones["p_mobile_voice"];
+    assert_eq!(p_mv.number, "+1-555-0108");
+    assert_eq!(p_mv.features, Some(json!({"mobile": true, "voice": true})));
+    assert!(states_phone_feature(p_mv.features.as_ref(), "mobile"));
+    assert!(!states_phone_feature(p_mv.features.as_ref(), "voice"));
+
+    // 9. TEL;TYPE=MOBILE,FAX -> mobile + fax, narrowed to mobile
+    let p_mf = &phones["p_mobile_fax"];
+    assert_eq!(p_mf.number, "+1-555-0109");
+    assert_eq!(p_mf.features, Some(json!({"mobile": true, "fax": true})));
+    assert!(states_phone_feature(p_mf.features.as_ref(), "mobile"));
+    assert!(!states_phone_feature(p_mf.features.as_ref(), "fax"));
+
+    // Outbound emission: TYPE=MOBILE normalizes to standard vCard 3.0 TYPE=CELL
+    let emitted = card_to_vcard(&card);
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_bare_mobile"),
+        "TEL;X-JMAP-KEY=p_bare_mobile;TYPE=CELL:+1-555-0101"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_lower_mobile"),
+        "TEL;X-JMAP-KEY=p_lower_mobile;TYPE=CELL:+1-555-0102"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_mixed_mobile"),
+        "TEL;X-JMAP-KEY=p_mixed_mobile;TYPE=CELL:+1-555-0103"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_work_mobile_plain"),
+        "TEL;X-JMAP-KEY=p_work_mobile_plain;TYPE=WORK,CELL:+1-555-0104"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_home_mobile"),
+        "TEL;X-JMAP-KEY=p_home_mobile;TYPE=HOME,CELL:+1-555-0105"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_pref_mobile"),
+        "TEL;X-JMAP-KEY=p_pref_mobile;TYPE=CELL,PREF:+1-555-0106"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_work_mobile_pref"),
+        "TEL;X-JMAP-KEY=p_work_mobile_pref;TYPE=WORK,CELL,PREF:+1-555-0107"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_mobile_voice"),
+        "TEL;X-JMAP-KEY=p_mobile_voice;TYPE=CELL:+1-555-0108"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_mobile_fax"),
+        "TEL;X-JMAP-KEY=p_mobile_fax;TYPE=CELL:+1-555-0109"
+    );
+
+    // Fixed-point convergence
+    let card2 = vcard_to_card(&emitted).expect("parse roundtrip vcard");
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted, emitted2);
+}
+
+#[test]
+fn phone_nineteen_eds_fields_complete_matrix_and_roundtrip() {
+    // Comprehensive test verifying all 19 EDS phone fields from libebook-contacts 3.52:
+    //  1. E_CONTACT_PHONE_PRIMARY      (31) -> TEL;TYPE=PREF
+    //  2. E_CONTACT_PHONE_BUSINESS     (17) -> TEL;TYPE=WORK,VOICE
+    //  3. E_CONTACT_PHONE_BUSINESS_2   (18) -> TEL;TYPE=WORK (2nd work phone)
+    //  4. E_CONTACT_PHONE_BUSINESS_FAX (19) -> TEL;TYPE=WORK,FAX
+    //  5. E_CONTACT_PHONE_HOME         (23) -> TEL;TYPE=HOME,VOICE
+    //  6. E_CONTACT_PHONE_HOME_2       (24) -> TEL;TYPE=HOME (2nd home phone)
+    //  7. E_CONTACT_PHONE_HOME_FAX     (25) -> TEL;TYPE=HOME,FAX
+    //  8. E_CONTACT_PHONE_MOBILE       (27) -> TEL;TYPE=CELL / TEL;TYPE=MOBILE
+    //  9. E_CONTACT_PHONE_PAGER        (30) -> TEL;TYPE=PAGER
+    // 10. E_CONTACT_PHONE_OTHER        (28) -> TEL;TYPE=VOICE / bare TEL
+    // 11. E_CONTACT_PHONE_OTHER_FAX    (29) -> TEL;TYPE=FAX
+    // 12. E_CONTACT_PHONE_CAR          (21) -> TEL;TYPE=CAR
+    // 13. E_CONTACT_PHONE_ISDN         (26) -> TEL;TYPE=ISDN
+    // 14. E_CONTACT_PHONE_CALLBACK     (20) -> TEL;TYPE=CALLBACK
+    // 15. E_CONTACT_PHONE_COMPANY      (22) -> TEL;TYPE=COMPANY
+    // 16. E_CONTACT_PHONE_RADIO        (32) -> TEL;TYPE=RADIO
+    // 17. E_CONTACT_PHONE_TELEX        (33) -> TEL;TYPE=TELEX
+    // 18. E_CONTACT_PHONE_TTYTDD       (34) -> TEL;TYPE=TTYTDD
+    // 19. E_CONTACT_PHONE_ASSISTANT    (16) -> TEL;TYPE=ASSISTANT
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:test-19-eds-phone-fields\r\n",
+        "FN:EDS Phone Matrix Test\r\n",
+        "TEL;X-JMAP-KEY=p01_primary;TYPE=PREF:+1-555-0100\r\n",
+        "TEL;X-JMAP-KEY=p02_business;TYPE=WORK,VOICE:+1-555-0101\r\n",
+        "TEL;X-JMAP-KEY=p03_business_2;TYPE=WORK:+1-555-0102\r\n",
+        "TEL;X-JMAP-KEY=p04_business_fax;TYPE=WORK,FAX:+1-555-0103\r\n",
+        "TEL;X-JMAP-KEY=p05_home;TYPE=HOME,VOICE:+1-555-0104\r\n",
+        "TEL;X-JMAP-KEY=p06_home_2;TYPE=HOME:+1-555-0105\r\n",
+        "TEL;X-JMAP-KEY=p07_home_fax;TYPE=HOME,FAX:+1-555-0106\r\n",
+        "TEL;X-JMAP-KEY=p08_mobile_cell;TYPE=CELL:+1-555-0107\r\n",
+        "TEL;X-JMAP-KEY=p09_mobile_syn;TYPE=MOBILE:+1-555-0108\r\n",
+        "TEL;X-JMAP-KEY=p10_pager;TYPE=PAGER:+1-555-0109\r\n",
+        "TEL;X-JMAP-KEY=p11_other_voice;TYPE=VOICE:+1-555-0110\r\n",
+        "TEL;X-JMAP-KEY=p12_other_bare:+1-555-0111\r\n",
+        "TEL;X-JMAP-KEY=p13_other_fax;TYPE=FAX:+1-555-0112\r\n",
+        "TEL;X-JMAP-KEY=p14_car;TYPE=CAR:+1-555-0113\r\n",
+        "TEL;X-JMAP-KEY=p15_isdn;TYPE=ISDN:+1-555-0114\r\n",
+        "TEL;X-JMAP-KEY=p16_callback;TYPE=CALLBACK:+1-555-0115\r\n",
+        "TEL;X-JMAP-KEY=p17_company;TYPE=COMPANY:+1-555-0116\r\n",
+        "TEL;X-JMAP-KEY=p18_radio;TYPE=RADIO:+1-555-0117\r\n",
+        "TEL;X-JMAP-KEY=p19_telex;TYPE=TELEX:+1-555-0118\r\n",
+        "TEL;X-JMAP-KEY=p20_ttytdd;TYPE=TTYTDD:+1-555-0119\r\n",
+        "TEL;X-JMAP-KEY=p21_assistant;TYPE=ASSISTANT:+1-555-0120\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card = vcard_to_card(vcard).expect("parse 19-field EDS vcard");
+    let phones = card.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 21);
+
+    // 1. Primary: pref: 1
+    assert_eq!(phones["p01_primary"].pref, Some(1));
+    assert_eq!(phones["p01_primary"].number, "+1-555-0100");
+
+    // 2. Business: work context + voice feature
+    assert_eq!(phones["p02_business"].contexts, Some(json!({"work": true})));
+    assert_eq!(
+        phones["p02_business"].features,
+        Some(json!({"voice": true}))
+    );
+
+    // 3. Business 2: work context + no feature
+    assert_eq!(
+        phones["p03_business_2"].contexts,
+        Some(json!({"work": true}))
+    );
+    assert_eq!(phones["p03_business_2"].features, None);
+
+    // 4. Business Fax: work context + fax feature
+    assert_eq!(
+        phones["p04_business_fax"].contexts,
+        Some(json!({"work": true}))
+    );
+    assert_eq!(
+        phones["p04_business_fax"].features,
+        Some(json!({"fax": true}))
+    );
+
+    // 5. Home: private context + voice feature
+    assert_eq!(phones["p05_home"].contexts, Some(json!({"private": true})));
+    assert_eq!(phones["p05_home"].features, Some(json!({"voice": true})));
+
+    // 6. Home 2: private context + no feature
+    assert_eq!(
+        phones["p06_home_2"].contexts,
+        Some(json!({"private": true}))
+    );
+    assert_eq!(phones["p06_home_2"].features, None);
+
+    // 7. Home Fax: private context + fax feature
+    assert_eq!(
+        phones["p07_home_fax"].contexts,
+        Some(json!({"private": true}))
+    );
+    assert_eq!(phones["p07_home_fax"].features, Some(json!({"fax": true})));
+
+    // 8. Mobile (CELL): mobile feature
+    assert_eq!(
+        phones["p08_mobile_cell"].features,
+        Some(json!({"mobile": true}))
+    );
+
+    // 9. Mobile (MOBILE synonym): mobile feature
+    assert_eq!(
+        phones["p09_mobile_syn"].features,
+        Some(json!({"mobile": true}))
+    );
+
+    // 10. Pager: pager feature
+    assert_eq!(phones["p10_pager"].features, Some(json!({"pager": true})));
+
+    // 11. Other Voice: voice feature
+    assert_eq!(
+        phones["p11_other_voice"].features,
+        Some(json!({"voice": true}))
+    );
+
+    // 12. Other Bare: untyped
+    assert_eq!(phones["p12_other_bare"].features, None);
+    assert_eq!(phones["p12_other_bare"].contexts, None);
+
+    // 13. Other Fax: fax feature
+    assert_eq!(phones["p13_other_fax"].features, Some(json!({"fax": true})));
+
+    // 14-21. Specialized telephony lines (CAR, ISDN, CALLBACK, COMPANY, RADIO, TELEX, TTYTDD, ASSISTANT)
+    for (key, num) in [
+        ("p14_car", "+1-555-0113"),
+        ("p15_isdn", "+1-555-0114"),
+        ("p16_callback", "+1-555-0115"),
+        ("p17_company", "+1-555-0116"),
+        ("p18_radio", "+1-555-0117"),
+        ("p19_telex", "+1-555-0118"),
+        ("p20_ttytdd", "+1-555-0119"),
+        ("p21_assistant", "+1-555-0120"),
+    ] {
+        let p = &phones[key];
+        assert_eq!(p.number, num);
+        assert!(states_phone(p));
+    }
+
+    // Outbound emission: primary phone is sorted first due to pref: 1
+    let emitted = card_to_vcard(&card);
+
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p01_primary"),
+        "TEL;X-JMAP-KEY=p01_primary;TYPE=PREF:+1-555-0100"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p02_business"),
+        "TEL;X-JMAP-KEY=p02_business;TYPE=WORK,VOICE:+1-555-0101"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p03_business_2"),
+        "TEL;X-JMAP-KEY=p03_business_2;TYPE=WORK:+1-555-0102"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p04_business_fax"),
+        "TEL;X-JMAP-KEY=p04_business_fax;TYPE=WORK,FAX:+1-555-0103"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p05_home"),
+        "TEL;X-JMAP-KEY=p05_home;TYPE=HOME,VOICE:+1-555-0104"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p06_home_2"),
+        "TEL;X-JMAP-KEY=p06_home_2;TYPE=HOME:+1-555-0105"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p07_home_fax"),
+        "TEL;X-JMAP-KEY=p07_home_fax;TYPE=HOME,FAX:+1-555-0106"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p08_mobile_cell"),
+        "TEL;X-JMAP-KEY=p08_mobile_cell;TYPE=CELL:+1-555-0107"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p09_mobile_syn"),
+        "TEL;X-JMAP-KEY=p09_mobile_syn;TYPE=CELL:+1-555-0108"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p10_pager"),
+        "TEL;X-JMAP-KEY=p10_pager;TYPE=PAGER:+1-555-0109"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p11_other_voice"),
+        "TEL;X-JMAP-KEY=p11_other_voice;TYPE=VOICE:+1-555-0110"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p12_other_bare"),
+        "TEL;X-JMAP-KEY=p12_other_bare:+1-555-0111"
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p13_other_fax"),
+        "TEL;X-JMAP-KEY=p13_other_fax;TYPE=FAX:+1-555-0112"
+    );
+
+    // Multi-roundtrip fixed point stability
+    let card2 = vcard_to_card(&emitted).expect("parse roundtrip 2");
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted, emitted2);
+}
+
+#[test]
+fn phone_whitespace_punctuation_and_uri_schemes_handling() {
+    // Test formatted numbers, spaces, visual separators, tel: URI, and leading/trailing whitespace
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:test-phone-formats\r\n",
+        "FN:Phone Formats Test\r\n",
+        "TEL;X-JMAP-KEY=p_spaced;TYPE=WORK:   +1 (555) 012-3456   \r\n",
+        "TEL;X-JMAP-KEY=p_dotted;TYPE=HOME:123.456.7890\r\n",
+        "TEL;X-JMAP-KEY=p_dashed;TYPE=CELL:555-867-5309\r\n",
+        "TEL;X-JMAP-KEY=p_parens;TYPE=PAGER:(800) 555-0199\r\n",
+        "TEL;X-JMAP-KEY=p_uri;TYPE=WORK,VOICE:tel:+1-555-0123;ext=100\r\n",
+        "TEL;X-JMAP-KEY=p_bare_empty:\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card = vcard_to_card(vcard).expect("parse phone formats vcard");
+    let phones = card.phones.as_ref().expect("phones map");
+
+    // Exact string representation is preserved, empty phone numbers are dropped
+    assert_eq!(phones.len(), 5);
+    assert_eq!(phones["p_spaced"].number, "   +1 (555) 012-3456   ");
+    assert_eq!(phones["p_dotted"].number, "123.456.7890");
+    assert_eq!(phones["p_dashed"].number, "555-867-5309");
+    assert_eq!(phones["p_parens"].number, "(800) 555-0199");
+    assert_eq!(phones["p_uri"].number, "tel:+1-555-0123;ext=100");
+
+    assert!(!phones.contains_key("p_bare_empty"));
+
+    // Predicates: states_phone
+    let empty_phone = ContactPhone::default();
+    let whitespace_phone = ContactPhone {
+        number: "   ".to_string(),
+        ..ContactPhone::default()
+    };
+    assert!(!states_phone(&empty_phone));
+    assert!(states_phone(&whitespace_phone)); // Non-empty string; states_phone checks !is_empty()
+
+    // Outbound emission & roundtrip
+    let emitted = card_to_vcard(&card);
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_spaced"),
+        "TEL;X-JMAP-KEY=p_spaced;TYPE=WORK:   +1 (555) 012-3456   "
+    );
+    assert_eq!(
+        line(&emitted, "TEL;X-JMAP-KEY=p_uri"),
+        "TEL;X-JMAP-KEY=p_uri;TYPE=WORK,VOICE:tel:+1-555-0123\\;ext=100"
+    );
+
+    let card2 = vcard_to_card(&emitted).expect("parse roundtrip");
+    assert_eq!(
+        card2.phones.as_ref().unwrap()["p_uri"].number,
+        "tel:+1-555-0123;ext=100"
+    );
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted, emitted2);
+}
+
+#[test]
+fn phone_multi_token_and_case_insensitive_type_matrix_roundtrip() {
+    let vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "UID:test-phone-multi-token-matrix\r\n",
+        "FN:Phone Multi Token Test\r\n",
+        "TEL;X-JMAP-KEY=p_wc;TYPE=work,cell:+1-555-1001\r\n",
+        "TEL;X-JMAP-KEY=p_wc_sep;TYPE=WORK;TYPE=CELL:+1-555-1002\r\n",
+        "TEL;X-JMAP-KEY=p_hm;TYPE=home,mobile:+1-555-1003\r\n",
+        "TEL;X-JMAP-KEY=p_hm_sep;TYPE=HOME;TYPE=MOBILE:+1-555-1004\r\n",
+        "TEL;X-JMAP-KEY=p_wpv;type=work,pref,voice:+1-555-1005\r\n",
+        "TEL;X-JMAP-KEY=p_wpv_sep;TYPE=WORK;type=pref;TYPE=VOICE:+1-555-1006\r\n",
+        "TEL;X-JMAP-KEY=p_wvf;TYPE=WORK,FAX,CELL:+1-555-1007\r\n",
+        "TEL;X-JMAP-KEY=p_hpf;TYPE=HOME,PAGER,FAX:+1-555-1008\r\n",
+        "TEL;X-JMAP-KEY=p_vfv;TYPE=VOICE,FAX,VIDEO:+1-555-1009\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card = vcard_to_card(vcard).expect("parse multi token vcard");
+    let phones = card.phones.as_ref().expect("phones map");
+    assert_eq!(phones.len(), 9);
+
+    // Comma-separated vs semicolon-separated equivalence
+    assert_eq!(phones["p_wc"].contexts, phones["p_wc_sep"].contexts);
+    assert_eq!(phones["p_wc"].features, phones["p_wc_sep"].features);
+
+    assert_eq!(phones["p_hm"].contexts, phones["p_hm_sep"].contexts);
+    assert_eq!(phones["p_hm"].features, phones["p_hm_sep"].features);
+
+    assert_eq!(phones["p_wpv"].contexts, phones["p_wpv_sep"].contexts);
+    assert_eq!(phones["p_wpv"].features, phones["p_wpv_sep"].features);
+    assert_eq!(phones["p_wpv"].pref, phones["p_wpv_sep"].pref);
+
+    // Feature narrowing precedence:
+    // WORK,FAX,CELL -> CELL
+    assert_eq!(
+        phones["p_wvf"].features,
+        Some(json!({"mobile": true, "fax": true}))
+    );
+    assert!(states_phone_feature(
+        phones["p_wvf"].features.as_ref(),
+        "mobile"
+    ));
+    assert!(!states_phone_feature(
+        phones["p_wvf"].features.as_ref(),
+        "fax"
+    ));
+
+    // HOME,PAGER,FAX -> PAGER
+    assert_eq!(
+        phones["p_hpf"].features,
+        Some(json!({"pager": true, "fax": true}))
+    );
+    assert!(states_phone_feature(
+        phones["p_hpf"].features.as_ref(),
+        "pager"
+    ));
+    assert!(!states_phone_feature(
+        phones["p_hpf"].features.as_ref(),
+        "fax"
+    ));
+
+    // VOICE,FAX,VIDEO -> FAX
+    assert_eq!(
+        phones["p_vfv"].features,
+        Some(json!({"voice": true, "fax": true, "video": true}))
+    );
+    assert!(states_phone_feature(
+        phones["p_vfv"].features.as_ref(),
+        "fax"
+    ));
+    assert!(!states_phone_feature(
+        phones["p_vfv"].features.as_ref(),
+        "voice"
+    ));
+    assert!(!states_phone_feature(
+        phones["p_vfv"].features.as_ref(),
+        "video"
+    ));
+
+    // Outbound emission & convergence
+    let emitted = card_to_vcard(&card);
+    let card2 = vcard_to_card(&emitted).expect("parse emitted");
+    let emitted2 = card_to_vcard(&card2);
+    assert_eq!(emitted, emitted2);
+}
