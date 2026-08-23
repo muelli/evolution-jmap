@@ -54,6 +54,7 @@ pub fn calendar_get(state: &mut ServerState, arguments: Value) -> Result<Value, 
 /// draft's requirement that `name` be non-empty.
 pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Calendar> = parse_arguments(arguments)?;
+    let default_unsubscribed = state.new_collections_default_unsubscribed;
     let account = account_mut(state, &request.account_id)?;
 
     let response = simple_set(&mut account.calendars, request, |id, calendar| {
@@ -66,6 +67,9 @@ pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, 
                 .with_description("name must not be empty"));
         }
         calendar.id = Some(id.clone());
+        if default_unsubscribed && calendar.is_subscribed != Some(true) {
+            calendar.is_subscribed = Some(false);
+        }
         Ok(())
     })?;
     to_result(&response)

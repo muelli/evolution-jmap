@@ -167,3 +167,36 @@ fn a_login_whose_server_serves_no_calendars_refuses_the_create() {
         "expected an Unserved(Calendar), got {failure:?}"
     );
 }
+
+/// A real server (Stalwart, confirmed against the live deployment) defaults a
+/// freshly created collection to `isSubscribed: false` when the create does
+/// not say otherwise — and `resources.rs`'s own discovery drops
+/// `isSubscribed == Some(false)` on purpose, the same as a collection the
+/// user unsubscribed from. Left unrequested, "New Address Book"/"New
+/// Calendar" would create a collection that immediately vanishes from the
+/// next discovery. `MockServerBuilder::new_collections_default_unsubscribed`
+/// reproduces the real server's default headlessly; `create_collection`
+/// must ask for `isSubscribed: true` explicitly so the new collection is
+/// discoverable regardless of what the server would have defaulted it to.
+#[test]
+fn a_created_collection_is_discoverable_even_when_the_server_defaults_new_collections_to_unsubscribed()
+ {
+    let server = MockServer::builder()
+        .new_collections_default_unsubscribed()
+        .start();
+
+    for kind in [ChildKind::AddressBook, ChildKind::Calendar] {
+        let child = create_collection(&client(&server), &requested(kind, "Work"))
+            .unwrap_or_else(|error| panic!("the mock creates {kind:?}s: {error}"));
+
+        // `discovered` panics if the resource id is not found by a fresh
+        // discovery — exactly the failure a server-defaulted-unsubscribed
+        // create would have produced without the fix.
+        assert_eq!(
+            discovered(&server, &child.resource_id),
+            child,
+            "a freshly created {kind:?} must be discoverable immediately, \
+             not only once some other client subscribes it"
+        );
+    }
+}
