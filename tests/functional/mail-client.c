@@ -320,6 +320,25 @@ main (int argc,
 
 		report_sorted ("folders-after-create", names);
 		g_ptr_array_unref (names);
+
+		/* The mirror image: `delete_folder_sync` on the folder just made,
+		 * checked the same way — not merely that the call answered, but
+		 * that the store's own listing agrees the folder is gone. */
+		if (!camel_store_delete_folder_sync (store, "Receipts", NULL, &error))
+			return fail ("delete-folder", error);
+
+		info = camel_store_get_folder_info_sync (store, NULL,
+							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
+							 NULL, &error);
+		if (!info)
+			return fail ("folder-info-after-delete", error);
+
+		names = g_ptr_array_new_with_free_func (g_free);
+		collect_folder_names (info, names);
+		camel_folder_info_free (info);
+
+		report_sorted ("folders-after-delete", names);
+		g_ptr_array_unref (names);
 	}
 
 	g_object_unref (inbox);

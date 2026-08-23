@@ -205,9 +205,29 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "the store's own listing did not gain the new folder\n{report}"
     );
 
-    // And the other end again: the mock actually holds a fourth mailbox now,
-    // not merely that the provider claimed one — reading the mock's own
-    // store rather than trusting the client's report of it.
+    // The other end for both create and delete together: the client runs to
+    // completion — create, then delete — before any assertion here can look
+    // at the mock's state, so there is no point between the two calls to
+    // catch the mock mid-create the way the address-book/calendar removal
+    // tests do. What the method log *can* still prove is that both requests
+    // actually reached the server rather than the provider answering out of
+    // a purely local cache: exactly two `Mailbox/set` calls, one per write.
+    let mailbox_set_calls = calls.iter().filter(|call| *call == "Mailbox/set").count();
+    assert_eq!(
+        mailbox_set_calls, 2,
+        "expected one Mailbox/set for the create and one for the delete; saw {mailbox_set_calls} in {calls:?}\n{report}"
+    );
+
+    // `delete_folder_sync`, the mirror image: driven through the real
+    // vtable, not the plain decision function `manage::delete_folder`.
+    assert_eq!(
+        seen.get("folders-after-delete"),
+        Some(&"Drafts,Inbox,Sent"),
+        "the store's own listing did not lose the deleted folder\n{report}"
+    );
+
+    // And the other end: the mock's mailbox store actually lost it too, not
+    // merely that the provider claimed success.
     {
         let state = server.state();
         let state = state.lock().expect("mock state lock");
@@ -220,8 +240,8 @@ fn camel_opens_the_store_and_serves_the_inbox() {
             .map(|(_, mailbox)| mailbox.name.as_str())
             .collect();
         assert!(
-            names.contains("Receipts"),
-            "the mock's own mailbox store did not gain \"Receipts\"; it holds {names:?}\n{report}"
+            !names.contains("Receipts"),
+            "the mock's own mailbox store still holds \"Receipts\" after delete; it holds {names:?}\n{report}"
         );
     }
 }
