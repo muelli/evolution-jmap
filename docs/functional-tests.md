@@ -1029,6 +1029,23 @@ cannot exercise because they link it.
   so this is the installed file being checked and not a copy of it;
 - **the folder tree is the mock's three mailboxes**, from a single
   `Mailbox/get`;
+- **`CamelSubscribable`'s three methods, driven through the real vtable.**
+  `jmap-mail`'s own unit tests (`tests/subscriptions.rs` against a detached
+  store, `tests/emissions.rs` against a real `CamelStore` GObject built by
+  hand with no `evolution-source-registry` behind it) already cover the
+  decision and the emitted signal in detail; nothing there drives
+  `camel_subscribable_subscribe_folder_sync`/`_unsubscribe_folder_sync`
+  through an ordinary libcamel consumer talking to a real,
+  `.urls`-discovered provider the way every other mail vfunc in this file
+  now is, which is the gap this leg closes. The client unsubscribes "Sent"
+  (seeded subscribed, like every mock mailbox) and subscribes "Drafts"
+  (seeded unsubscribed for this test alone) via `CAMEL_SUBSCRIBABLE (store)`,
+  reading `folder_is_subscribed` before and after each write. Checked from
+  both ends: the store's own held answer flips locally, and — the decisive
+  check — the mock's own copy of both mailboxes' `isSubscribed` holds the
+  new value, since `set_subscribed` goes over the same `Mailbox/set` a
+  synchronise that silently dropped the write would still leave Camel's own
+  in-memory answer looking right about;
 - **the inbox is the mailbox with the JMAP `inbox` role**, which is what Camel
   asks the store for and what lets Evolution treat it as the account's inbox
   rather than as a folder that happens to be called one;
@@ -1061,9 +1078,10 @@ cannot exercise because they link it.
   re-fetched listing has to have lost it, and the mock's own mailbox store is
   checked separately that neither the original nor the renamed name remains —
   a rename that silently left a stale copy under the old name would still
-  pass a check that only looked for the new one. Across all three writes, the
-  mock's method log is checked for exactly one `Mailbox/set` per write (three
-  total), proving each request reached the server rather than the provider
+  pass a check that only looked for the new one. The mock's method log is
+  checked for exactly one `Mailbox/set` per write across the whole test —
+  create, rename, delete, and the unsubscribe/subscribe pair above (five
+  total) — proving each request reached the server rather than the provider
   answering out of a purely local cache.
 
 Every list the client reports is sorted before it is printed. The order Camel

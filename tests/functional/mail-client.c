@@ -211,6 +211,33 @@ main (int argc,
 	report_sorted ("folders", names);
 	g_ptr_array_unref (names);
 
+	/* `CamelSubscribable`: the tick beside a folder in the subscription
+	 * editor. Two folders, two directions, so neither write happens to
+	 * already hold the value it is asked to set: "Sent" starts subscribed
+	 * (every mailbox the mock seeds is) and is unsubscribed here; "Drafts"
+	 * starts unsubscribed (the Rust harness seeds it that way for this
+	 * purpose) and is subscribed here. `folder_is_subscribed` takes no
+	 * cancellable or error — it is one of Camel's non-blocking methods —
+	 * so it is called straight off the cast rather than through a
+	 * fail()-checked wrapper. */
+	{
+		CamelSubscribable *subscribable = CAMEL_SUBSCRIBABLE (store);
+
+		g_print ("sent-subscribed-initially=%d\n",
+			 camel_subscribable_folder_is_subscribed (subscribable, "Sent") ? 1 : 0);
+		if (!camel_subscribable_unsubscribe_folder_sync (subscribable, "Sent", NULL, &error))
+			return fail ("unsubscribe-sent", error);
+		g_print ("sent-subscribed-after-unsubscribe=%d\n",
+			 camel_subscribable_folder_is_subscribed (subscribable, "Sent") ? 1 : 0);
+
+		g_print ("drafts-subscribed-initially=%d\n",
+			 camel_subscribable_folder_is_subscribed (subscribable, "Drafts") ? 1 : 0);
+		if (!camel_subscribable_subscribe_folder_sync (subscribable, "Drafts", NULL, &error))
+			return fail ("subscribe-drafts", error);
+		g_print ("drafts-subscribed-after-subscribe=%d\n",
+			 camel_subscribable_folder_is_subscribed (subscribable, "Drafts") ? 1 : 0);
+	}
+
 	/* The inbox by its role rather than by its name: Camel asks the store
 	 * which folder is the inbox, and the provider answers from the
 	 * mailbox's JMAP role. A store that got that wrong hands back a
