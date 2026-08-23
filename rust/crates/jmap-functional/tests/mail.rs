@@ -378,4 +378,46 @@ fn camel_opens_the_store_and_serves_the_inbox() {
             "the mock's own mailbox store still holds the renamed/deleted folder after delete; it holds {names:?}\n{report}"
         );
     }
+
+    // `expunge_sync`: "Expunge"/"Empty Trash", the vfunc `synchronize_sync`'s
+    // own `expunge` argument (exercised above as FALSE) chains into when it
+    // is TRUE. A second, distinct message from the one `synchronize_sync`
+    // flagged — still in the inbox, untouched by the folder create/rename/
+    // transfer/delete sequence — so the inbox holds its three settled
+    // messages (the two seeds plus the appended-then-transferred-back one)
+    // right up until this point.
+    let deleted_uid = match seen.get("deleted-uid") {
+        Some(uid) => (*uid).to_string(),
+        None => panic!("the client never named a message to delete\n{report}"),
+    };
+    assert_eq!(
+        seen.get("inbox-count-after-expunge"),
+        Some(&"2"),
+        "the inbox listing did not shrink by the expunged message\n{report}"
+    );
+    assert_eq!(
+        seen.get("expunged-uid-still-listed"),
+        Some(&"0"),
+        "the expunged message's row is still in the folder's own uid list\n{report}"
+    );
+
+    // The other end, and the decisive one: not merely that Camel's local row
+    // went away, but that the mock's own copy of the message is gone
+    // entirely — `expunge_sync` on a message filed in only this mailbox is a
+    // destroy (RFC 8621 §4.6), not a keyword patch, so a synchronise that
+    // swallowed a write failure would still show a shrunk local listing while
+    // the server kept the message.
+    {
+        let state = server.state();
+        let state = state.lock().expect("mock state lock");
+        let account = state
+            .account(&account_id)
+            .expect("the mock's default account");
+        assert!(
+            !account
+                .emails
+                .contains(&jmap_proto::Id::new(deleted_uid.clone())),
+            "expunge_sync never reached the server: the mock still holds message {deleted_uid}\n{report}"
+        );
+    }
 }
