@@ -16,6 +16,7 @@ name = "jmap_collection_sync"
 [dependencies]
 evolution-jmap-client = { workspace = true }
 evolution-jmap-proto = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
