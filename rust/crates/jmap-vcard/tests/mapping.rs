@@ -15554,3 +15554,608 @@ fn apple_property_group_block_generator_roundtrips_to_fixpoint() {
     assert_eq!(vcard2, vcard3, "Export₂ == Export₃ fixpoint invariant");
     assert_eq!(parsed2, parsed3, "Card₂ == Card₃ fixpoint invariant");
 }
+
+#[test]
+fn vcard_40_google_contacts_representative_fixture_import_and_roundtrip() {
+    let google_v4 = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "N:Doe;John;Michael;Mr.;Esq.\r\n",
+        "FN:Mr. John Michael Doe Esq.\r\n",
+        "NICKNAME:Johnny\r\n",
+        "PHOTO:data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=\r\n",
+        "BDAY:19800101\r\n",
+        "ANNIVERSARY:20100615\r\n",
+        "GENDER:M\r\n",
+        "EMAIL;TYPE=work:john.doe@company.com\r\n",
+        "EMAIL;TYPE=home:johndoe@gmail.com\r\n",
+        "TEL;TYPE=\"work,voice\";VALUE=uri:tel:+1-555-555-0100\r\n",
+        "TEL;TYPE=\"cell,voice\";VALUE=uri:tel:+1-555-555-0101\r\n",
+        "TEL;TYPE=\"home,voice\";VALUE=uri:tel:+1-555-555-0102\r\n",
+        "ADR;TYPE=work:;;100 Work St.;Tech City;CA;94000;United States\r\n",
+        "ADR;TYPE=home:;;200 Home Ave.;Home Town;CA;94001;United States\r\n",
+        "ORG:Alphabet Inc.;Google LLC;Core Systems\r\n",
+        "TITLE:Senior Staff Engineer\r\n",
+        "ROLE:Engineering Lead\r\n",
+        "NOTE:Met at Open Source Summit in 2024.\\nGreat discussion on JMAP.\r\n",
+        "URL:https://john.doe.example.com\r\n",
+        "IMPP:xmpp:johndoe@chat.example.com\r\n",
+        "CATEGORIES:Colleagues,Engineering,VIP\r\n",
+        "CLIENTPIDMAP:1;urn:uuid:53e374d9-337e-4727-8803-a1e9c14e0556\r\n",
+        "UID:urn:uuid:4fbe8750-df3e-4725-b220-e0c62ba1e9f8\r\n",
+        "REV:20260823T120000Z\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(google_v4).expect("parse Google Contacts vCard 4.0");
+
+    // Name and components
+    let name = parsed.name.as_ref().expect("name");
+    assert_eq!(name.full.as_deref(), Some("Mr. John Michael Doe Esq."));
+    let comps = name.components.as_ref().expect("components");
+    assert_eq!(comps.len(), 5);
+
+    // Nicknames
+    let nicknames = parsed.nicknames.as_ref().expect("nicknames");
+    assert_eq!(nicknames.len(), 1);
+    assert_eq!(nicknames["k1"].name, "Johnny");
+
+    // Photo
+    let media = parsed.media.as_ref().expect("media");
+    assert_eq!(media.len(), 1);
+    let photo = &media["m1"];
+    assert_eq!(photo.kind.as_deref(), Some("photo"));
+    assert!(photo.uri.starts_with("data:image/jpeg;base64,"));
+    assert_eq!(photo.media_type.as_deref(), Some("image/jpeg"));
+
+    // Anniversaries (BDAY:19800101 and ANNIVERSARY:20100615)
+    let anniversaries = parsed.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(anniversaries.len(), 2);
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("birth");
+    assert_eq!(bday.date.as_ref().unwrap()["year"], 1980);
+    assert_eq!(bday.date.as_ref().unwrap()["month"], 1);
+    assert_eq!(bday.date.as_ref().unwrap()["day"], 1);
+    let anniv = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("wedding");
+    assert_eq!(anniv.date.as_ref().unwrap()["year"], 2010);
+    assert_eq!(anniv.date.as_ref().unwrap()["month"], 6);
+    assert_eq!(anniv.date.as_ref().unwrap()["day"], 15);
+
+    // Emails
+    let emails = parsed.emails.as_ref().expect("emails");
+    assert_eq!(emails.len(), 2);
+    let work_email = emails
+        .values()
+        .find(|e| e.address == "john.doe@company.com")
+        .unwrap();
+    assert_eq!(work_email.contexts.as_ref().unwrap()["work"], true);
+    let home_email = emails
+        .values()
+        .find(|e| e.address == "johndoe@gmail.com")
+        .unwrap();
+    assert_eq!(home_email.contexts.as_ref().unwrap()["private"], true);
+
+    // Phones (TYPE="work,voice", TYPE="cell,voice", TYPE="home,voice")
+    let phones = parsed.phones.as_ref().expect("phones");
+    assert_eq!(phones.len(), 3);
+    let work_phone = phones
+        .values()
+        .find(|p| p.number == "tel:+1-555-555-0100")
+        .unwrap();
+    assert_eq!(work_phone.contexts.as_ref().unwrap()["work"], true);
+    assert_eq!(work_phone.features.as_ref().unwrap()["voice"], true);
+    let cell_phone = phones
+        .values()
+        .find(|p| p.number == "tel:+1-555-555-0101")
+        .unwrap();
+    assert_eq!(cell_phone.features.as_ref().unwrap()["mobile"], true);
+    assert_eq!(cell_phone.features.as_ref().unwrap()["voice"], true);
+    let home_phone = phones
+        .values()
+        .find(|p| p.number == "tel:+1-555-555-0102")
+        .unwrap();
+    assert_eq!(home_phone.contexts.as_ref().unwrap()["private"], true);
+    assert_eq!(home_phone.features.as_ref().unwrap()["voice"], true);
+
+    // Addresses
+    let addresses = parsed.addresses.as_ref().expect("addresses");
+    assert_eq!(addresses.len(), 2);
+
+    // Organization with units
+    let orgs = parsed.organizations.as_ref().expect("organizations");
+    assert_eq!(orgs.len(), 1);
+    let org = &orgs["o1"];
+    assert_eq!(org.name.as_deref(), Some("Alphabet Inc."));
+    let units = org.units.as_ref().expect("units");
+    assert_eq!(units.len(), 2);
+    assert_eq!(units[0].name, "Google LLC");
+    assert_eq!(units[1].name, "Core Systems");
+
+    // Titles
+    let titles = parsed.titles.as_ref().expect("titles");
+    assert_eq!(titles.len(), 2);
+    let title = titles.values().find(|t| t.kind.is_none()).unwrap();
+    assert_eq!(title.name, "Senior Staff Engineer");
+    let role = titles
+        .values()
+        .find(|t| t.kind.as_deref() == Some("role"))
+        .unwrap();
+    assert_eq!(role.name, "Engineering Lead");
+
+    // Notes
+    let notes = parsed.notes.as_ref().expect("notes");
+    assert_eq!(notes.len(), 1);
+    assert_eq!(
+        notes["n1"].note,
+        "Met at Open Source Summit in 2024.\nGreat discussion on JMAP."
+    );
+
+    // Links
+    let links = parsed.links.as_ref().expect("links");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links["l1"].uri, "https://john.doe.example.com");
+
+    // Online services (IMPP:xmpp:johndoe@chat.example.com -> Jabber)
+    let services = parsed.online_services.as_ref().expect("online_services");
+    assert_eq!(services.len(), 1);
+    let service = &services["s1"];
+    assert_eq!(service.service.as_deref(), Some("Jabber"));
+    assert_eq!(service.user.as_deref(), Some("johndoe@chat.example.com"));
+
+    // Categories
+    let keywords = parsed.keywords.as_ref().expect("keywords");
+    assert_eq!(keywords.len(), 3);
+    assert!(keywords.contains_key("Colleagues"));
+    assert!(keywords.contains_key("Engineering"));
+    assert!(keywords.contains_key("VIP"));
+
+    // Unmapped/metadata properties: GENDER, CLIENTPIDMAP, REV do not pollute extra
+    assert!(
+        parsed.extra.is_empty(),
+        "extra should be clean: {:?}",
+        parsed.extra
+    );
+
+    // Round-trip fixpoint convergence
+    let export1 = card_to_vcard(&parsed);
+    assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(export1.contains("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:"));
+    assert!(export1.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY="));
+    assert!(export1.contains("X-JABBER;X-JMAP-KEY="));
+
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(card2, card3, "Card₂ == Card₃ fixpoint invariant");
+}
+
+#[test]
+fn vcard_40_ios_share_sheet_fixture_import_and_roundtrip() {
+    let ios_v4 = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "PRODID:-//Apple Inc.//iOS 17.5//EN\r\n",
+        "N:Appleseed;John;;;\r\n",
+        "FN:John Appleseed\r\n",
+        "NICKNAME:Johnny\r\n",
+        "PHOTO:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n",
+        "BDAY:19850412\r\n",
+        "ANNIVERSARY:20150920\r\n",
+        "RELATED;TYPE=spouse:Jane Appleseed\r\n",
+        "RELATED;TYPE=manager:Tim Cook\r\n",
+        "RELATED;TYPE=assistant:Siri\r\n",
+        "EMAIL;TYPE=INTERNET;TYPE=HOME;TYPE=pref:john.appleseed@icloud.com\r\n",
+        "EMAIL;TYPE=INTERNET;TYPE=WORK:john.appleseed@apple.com\r\n",
+        "TEL;TYPE=CELL;TYPE=VOICE;TYPE=pref:tel:+1-800-692-7753\r\n",
+        "TEL;TYPE=WORK;TYPE=VOICE:tel:+1-408-996-1010\r\n",
+        "ADR;TYPE=WORK;TYPE=pref:;;1 Apple Park Way;Cupertino;CA;95014;United States\r\n",
+        "URL:https://www.apple.com\r\n",
+        "NOTE:iOS Share Sheet contact export\r\n",
+        "CATEGORIES:VIP,Work\r\n",
+        "UID:urn:uuid:ab12cd34-ef56-7890-abcd-ef1234567890\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(ios_v4).expect("parse iOS vCard 4.0");
+
+    assert_eq!(
+        parsed.name.as_ref().unwrap().full.as_deref(),
+        Some("John Appleseed")
+    );
+
+    // Photo
+    let media = parsed.media.as_ref().expect("media");
+    let photo = &media["m1"];
+    assert_eq!(photo.media_type.as_deref(), Some("image/png"));
+
+    // Anniversaries
+    let anniversaries = parsed.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(anniversaries.len(), 2);
+
+    // Relations (RELATED;TYPE=spouse, manager, assistant)
+    let relations = parsed.related_to.as_ref().expect("relations");
+    assert_eq!(relations.len(), 3);
+    assert_eq!(
+        relations["Jane Appleseed"].relation.as_ref().unwrap()["spouse"],
+        true
+    );
+    assert_eq!(
+        relations["Tim Cook"].relation.as_ref().unwrap()["manager"],
+        true
+    );
+    assert_eq!(
+        relations["Siri"].relation.as_ref().unwrap()["assistant"],
+        true
+    );
+
+    // Emails
+    let emails = parsed.emails.as_ref().expect("emails");
+    assert_eq!(emails.len(), 2);
+    let pref_email = emails
+        .values()
+        .find(|e| e.address == "john.appleseed@icloud.com")
+        .unwrap();
+    assert_eq!(pref_email.pref, Some(1));
+
+    // Phones
+    let phones = parsed.phones.as_ref().expect("phones");
+    assert_eq!(phones.len(), 2);
+    let pref_phone = phones
+        .values()
+        .find(|p| p.number == "tel:+1-800-692-7753")
+        .unwrap();
+    assert_eq!(pref_phone.pref, Some(1));
+
+    // Outbound emission normalizes to standard vCard 3.0
+    let export1 = card_to_vcard(&parsed);
+    assert!(export1.contains("X-EVOLUTION-SPOUSE:Jane Appleseed\r\n"));
+    assert!(export1.contains("X-EVOLUTION-MANAGER:Tim Cook\r\n"));
+    assert!(export1.contains("X-EVOLUTION-ASSISTANT:Siri\r\n"));
+    assert!(export1.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY="));
+    assert!(export1.contains("PHOTO;X-JMAP-KEY=m1;TYPE=png;ENCODING=b:"));
+
+    // Multi-stage fixpoint convergence
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(card2, card3, "Card₂ == Card₃ fixpoint invariant");
+}
+
+#[test]
+fn vcard_40_nextcloud_and_carddav_fixture_import_and_roundtrip() {
+    let nextcloud_v4 = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "PRODID:-//Nextcloud Contacts v5.3.0//EN\r\n",
+        "UID:12345678-1234-1234-1234-123456789abc\r\n",
+        "FN:Alice Wonderland\r\n",
+        "N:Wonderland;Alice;;;\r\n",
+        "EMAIL;TYPE=work:alice@wonderland.org\r\n",
+        "TEL;TYPE=cell:tel:+49-170-1234567\r\n",
+        "ADR;TYPE=home:;;Rabbit Hole 1;Fantasy City;Bavaria;80331;Germany\r\n",
+        "PHOTO:https://wonderland.org/photos/alice.jpg\r\n",
+        "BDAY:19900520\r\n",
+        "ANNIVERSARY:20200815\r\n",
+        "IMPP;TYPE=home:xmpp:alice@jabber.de\r\n",
+        "IMPP;TYPE=work:matrix:alice:matrix.org\r\n",
+        "IMPP:skype:alice_wonder\r\n",
+        "URL:https://alice.wonderland.org\r\n",
+        "NOTE:Nextcloud vCard 4.0 export with UTF-8 umlauts: München, Gräfelfing\r\n",
+        "CATEGORIES:Friends,Open Source\r\n",
+        "TZ:Europe/Berlin\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(nextcloud_v4).expect("parse Nextcloud vCard 4.0");
+
+    assert_eq!(
+        parsed.name.as_ref().unwrap().full.as_deref(),
+        Some("Alice Wonderland")
+    );
+
+    // Photo (URI reference)
+    let media = parsed.media.as_ref().expect("media");
+    assert_eq!(media.len(), 1);
+    let photo = &media["m1"];
+    assert_eq!(photo.uri, "https://wonderland.org/photos/alice.jpg");
+
+    // Online services (IMPP across Jabber, Matrix, Skype)
+    let services = parsed.online_services.as_ref().expect("online_services");
+    assert_eq!(services.len(), 3);
+    let jabber = services
+        .values()
+        .find(|s| s.service.as_deref() == Some("Jabber"))
+        .unwrap();
+    assert_eq!(jabber.user.as_deref(), Some("alice@jabber.de"));
+    let matrix = services
+        .values()
+        .find(|s| s.service.as_deref() == Some("Matrix"))
+        .unwrap();
+    assert_eq!(matrix.user.as_deref(), Some("alice:matrix.org"));
+    let skype = services
+        .values()
+        .find(|s| s.service.as_deref() == Some("Skype"))
+        .unwrap();
+    assert_eq!(skype.user.as_deref(), Some("alice_wonder"));
+
+    // Anniversaries
+    let anniversaries = parsed.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(anniversaries.len(), 2);
+
+    // Note with Unicode umlauts
+    let notes = parsed.notes.as_ref().expect("notes");
+    assert_eq!(
+        notes["n1"].note,
+        "Nextcloud vCard 4.0 export with UTF-8 umlauts: München, Gräfelfing"
+    );
+
+    // TZ dropped safely
+    assert!(parsed.extra.is_empty(), "extra should be clean");
+
+    // Outbound emission & fixpoint
+    let export1 = card_to_vcard(&parsed);
+    assert!(
+        export1.contains("PHOTO;X-JMAP-KEY=m1;VALUE=uri:https://wonderland.org/photos/alice.jpg")
+    );
+    assert!(export1.contains("X-JABBER;X-JMAP-KEY="));
+    assert!(export1.contains("X-MATRIX;X-JMAP-KEY="));
+    assert!(export1.contains("X-SKYPE;X-JMAP-KEY="));
+
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(card2, card3, "Card₂ == Card₃ fixpoint invariant");
+}
+
+#[test]
+fn vcard_40_photo_data_uris_and_mediatype_parameters() {
+    // 1. Direct data: URI with image/jpeg
+    let vcard_data_jpeg = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Photo Data JPEG\r\n",
+        "PHOTO:data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=\r\n",
+        "END:VCARD\r\n"
+    );
+    let card1 = vcard_to_card(vcard_data_jpeg).expect("parse data jpeg");
+    let media1 = card1.media.as_ref().expect("media");
+    let p1 = &media1["m1"];
+    assert!(p1.uri.starts_with("data:image/jpeg;base64,"));
+    assert_eq!(p1.media_type.as_deref(), Some("image/jpeg"));
+
+    // 2. Direct data: URI with explicit MEDIATYPE parameter
+    let vcard_mediatype = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Photo MEDIATYPE PNG\r\n",
+        "PHOTO;MEDIATYPE=image/png:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n",
+        "END:VCARD\r\n"
+    );
+    let card2 = vcard_to_card(vcard_mediatype).expect("parse mediatype png");
+    let media2 = card2.media.as_ref().expect("media");
+    let p2 = &media2["m1"];
+    assert!(p2.uri.starts_with("data:image/png;base64,"));
+    assert_eq!(p2.media_type.as_deref(), Some("image/png"));
+
+    // 3. Direct HTTP URI without VALUE=uri
+    let vcard_http = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Photo HTTP Direct\r\n",
+        "PHOTO:https://example.com/direct_photo.webp\r\n",
+        "END:VCARD\r\n"
+    );
+    let card3 = vcard_to_card(vcard_http).expect("parse direct http photo");
+    let media3 = card3.media.as_ref().expect("media");
+    let p3 = &media3["m1"];
+    assert_eq!(p3.uri, "https://example.com/direct_photo.webp");
+
+    // 4. HTTP URI with MEDIATYPE parameter
+    let vcard_http_mediatype = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Photo HTTP MEDIATYPE\r\n",
+        "PHOTO;MEDIATYPE=image/jpeg:https://example.com/direct_photo.jpg\r\n",
+        "END:VCARD\r\n"
+    );
+    let card4 = vcard_to_card(vcard_http_mediatype).expect("parse http mediatype photo");
+    let media4 = card4.media.as_ref().expect("media");
+    let p4 = &media4["m1"];
+    assert_eq!(p4.uri, "https://example.com/direct_photo.jpg");
+    assert_eq!(p4.media_type.as_deref(), Some("image/jpeg"));
+
+    // All roundtrip cleanly to fixed points
+    for card in [&card1, &card2, &card3, &card4] {
+        let export1 = card_to_vcard(card);
+        let c2 = vcard_to_card(&export1).expect("parse export1");
+        let export2 = card_to_vcard(&c2);
+        let c3 = vcard_to_card(&export2).expect("parse export2");
+        let export3 = card_to_vcard(&c3);
+        assert_eq!(export2, export3);
+        assert_eq!(c2, c3);
+    }
+}
+
+#[test]
+fn vcard_40_impp_all_supported_services_and_action_query_rejection() {
+    let vcard_impp = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:IMPP Matrix Contact\r\n",
+        "IMPP:xmpp:alice@jabber.org\r\n",
+        "IMPP;TYPE=home:skype:alice_skype\r\n",
+        "IMPP;TYPE=work:matrix:alice:matrix.org\r\n",
+        "IMPP:aim:alice_aim\r\n",
+        "IMPP:icq:12345678\r\n",
+        "IMPP:msn:alice@hotmail.com\r\n",
+        "IMPP:yahoo:alice_yahoo\r\n",
+        "IMPP:groupwise:alice_gw\r\n",
+        "IMPP:gg:87654321\r\n",
+        "IMPP:gtalk:alice.gtalk@gmail.com\r\n",
+        // Action and query URIs that must be rejected safely
+        "IMPP:skype:echo123?call\r\n",
+        "IMPP:xmpp:alice?message\r\n",
+        "IMPP:aim:goim?screenname=alice\r\n",
+        "IMPP:unknownservice:user123\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(vcard_impp).expect("parse IMPP vCard 4.0");
+    let services = parsed.online_services.as_ref().expect("online_services");
+    assert_eq!(
+        services.len(),
+        10,
+        "all 10 mapped services should be extracted"
+    );
+
+    let services_by_name: BTreeMap<_, _> = services
+        .values()
+        .map(|s| (s.service.as_deref().unwrap(), s.user.as_deref().unwrap()))
+        .collect();
+
+    assert_eq!(services_by_name["Jabber"], "alice@jabber.org");
+    assert_eq!(services_by_name["Skype"], "alice_skype");
+    assert_eq!(services_by_name["Matrix"], "alice:matrix.org");
+    assert_eq!(services_by_name["AIM"], "alice_aim");
+    assert_eq!(services_by_name["ICQ"], "12345678");
+    assert_eq!(services_by_name["MSN"], "alice@hotmail.com");
+    assert_eq!(services_by_name["Yahoo"], "alice_yahoo");
+    assert_eq!(services_by_name["GroupWise"], "alice_gw");
+    assert_eq!(services_by_name["Gadu-Gadu"], "87654321");
+    assert_eq!(services_by_name["Google Talk"], "alice.gtalk@gmail.com");
+
+    // Outbound roundtrip
+    let export1 = card_to_vcard(&parsed);
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(card2, card3, "Card₂ == Card₃ fixpoint invariant");
+}
+
+#[test]
+fn vcard_40_related_and_anniversary_variations() {
+    let vcard_related = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Related and Anniversary Contact\r\n",
+        "RELATED;TYPE=spouse:Jane Spouse\r\n",
+        "RELATED;TYPE=partner:Alex Partner\r\n",
+        "RELATED;TYPE=manager:Boss Man\r\n",
+        "RELATED;TYPE=assistant:Help Desk\r\n",
+        "RELATED;TYPE=co-worker:Colleague Bob\r\n",
+        "RELATED:Friend Dave\r\n",
+        "ANNIVERSARY:19990518\r\n",
+        "ANNIVERSARY:20050820\r\n",
+        "BDAY:19881125\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(vcard_related).expect("parse related v4");
+    let relations = parsed.related_to.as_ref().expect("relations");
+
+    assert_eq!(
+        relations["Jane Spouse"].relation.as_ref().unwrap()["spouse"],
+        true
+    );
+    assert_eq!(
+        relations["Alex Partner"].relation.as_ref().unwrap()["spouse"],
+        true
+    );
+    assert_eq!(
+        relations["Boss Man"].relation.as_ref().unwrap()["manager"],
+        true
+    );
+    assert_eq!(
+        relations["Help Desk"].relation.as_ref().unwrap()["assistant"],
+        true
+    );
+    assert_eq!(
+        relations["Colleague Bob"].relation.as_ref().unwrap()["co-worker"],
+        true
+    );
+    assert_eq!(
+        relations["Friend Dave"].relation.as_ref().unwrap()["contact"],
+        true
+    );
+
+    let anniversaries = parsed.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(anniversaries.len(), 3);
+
+    // Outbound roundtrip
+    let export1 = card_to_vcard(&parsed);
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(card2, card3, "Card₂ == Card₃ fixpoint invariant");
+}
+
+#[test]
+fn vcard_40_type_parameters_quoted_and_comma_delimited() {
+    let vcard_types = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Quoted Types Contact\r\n",
+        "TEL;TYPE=\"work,voice\":+1-555-0100\r\n",
+        "TEL;TYPE=\"home,cell\";PREF=1:+1-555-0200\r\n",
+        "TEL;TYPE=\"WORK,FAX\":+1-555-0300\r\n",
+        "EMAIL;TYPE=\"WORK\";PREF=1:work@example.com\r\n",
+        "EMAIL;TYPE=\"HOME\":home@example.com\r\n",
+        "ADR;TYPE=\"WORK\";PREF=1:;;100 Corp Way;City;ST;12345;USA\r\n",
+        "ADR;TYPE=\"HOME\":;;200 Res Rd;City;ST;12345;USA\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(vcard_types).expect("parse quoted types");
+
+    let phones = parsed.phones.as_ref().expect("phones");
+    assert_eq!(phones.len(), 3);
+    let p1 = phones.values().find(|p| p.number == "+1-555-0100").unwrap();
+    assert_eq!(p1.contexts.as_ref().unwrap()["work"], true);
+    assert_eq!(p1.features.as_ref().unwrap()["voice"], true);
+
+    let p2 = phones.values().find(|p| p.number == "+1-555-0200").unwrap();
+    assert_eq!(p2.contexts.as_ref().unwrap()["private"], true);
+    assert_eq!(p2.features.as_ref().unwrap()["mobile"], true);
+    assert_eq!(p2.pref, Some(1));
+
+    let p3 = phones.values().find(|p| p.number == "+1-555-0300").unwrap();
+    assert_eq!(p3.contexts.as_ref().unwrap()["work"], true);
+    assert_eq!(p3.features.as_ref().unwrap()["fax"], true);
+
+    let emails = parsed.emails.as_ref().expect("emails");
+    assert_eq!(emails.len(), 2);
+    let e1 = emails
+        .values()
+        .find(|e| e.address == "work@example.com")
+        .unwrap();
+    assert_eq!(e1.contexts.as_ref().unwrap()["work"], true);
+    assert_eq!(e1.pref, Some(1));
+
+    let addresses = parsed.addresses.as_ref().expect("addresses");
+    assert_eq!(addresses.len(), 2);
+    let a1 = addresses
+        .values()
+        .find(|a| a.extra.get("pref") == Some(&serde_json::json!(1)))
+        .unwrap();
+    assert_eq!(a1.contexts.as_ref().unwrap()["work"], true);
+
+    // Outbound roundtrip
+    let export1 = card_to_vcard(&parsed);
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(card2, card3, "Card₂ == Card₃ fixpoint invariant");
+}

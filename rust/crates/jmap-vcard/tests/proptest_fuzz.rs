@@ -718,6 +718,13 @@ prop_compose! {
             Just("X-SIGNAL".to_string()),
             Just("X-TELEGRAM".to_string()),
             Just("X-CUSTOM".to_string()),
+            // vCard 4.0 standard properties
+            Just("IMPP".to_string()),
+            Just("RELATED".to_string()),
+            Just("ANNIVERSARY".to_string()),
+            Just("GENDER".to_string()),
+            Just("CLIENTPIDMAP".to_string()),
+            Just("MEMBER".to_string()),
             "[A-Z0-9-]{1,12}",
         ],
         group in prop_oneof![
@@ -771,6 +778,13 @@ prop_compose! {
                 Just(";ALTID=group1;LANGUAGE=ja".to_string()),
                 Just(";X-CUSTOM-PARAM=val1".to_string()),
                 Just(";X-VENDOR-STATUS=ACTIVE".to_string()),
+                // vCard 4.0 parameters
+                Just(";MEDIATYPE=image/png".to_string()),
+                Just(";MEDIATYPE=image/jpeg".to_string()),
+                Just(";TYPE=\"work,voice\"".to_string()),
+                Just(";TYPE=\"home,cell\"".to_string()),
+                Just(";TYPE=\"WORK,FAX\"".to_string()),
+                Just(";PREF=1".to_string()),
                 // vCard 2.1 bare parameter names
                 Just(";WORK".to_string()),
                 Just(";HOME".to_string()),
@@ -801,6 +815,11 @@ prop_compose! {
             Just("_$!<Manager>!$_".to_string()),
             Just("_$!<Assistant>!$_".to_string()),
             Just("_$!<Anniversary>!$_".to_string()),
+            Just("xmpp:alice@jabber.org".to_string()),
+            Just("matrix:alice:matrix.org".to_string()),
+            Just("skype:alice_skype".to_string()),
+            Just("data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string()),
+            Just("https://example.com/photo.jpg".to_string()),
         ],
     ) -> String {
         let param_str = params.join("");
@@ -1636,5 +1655,36 @@ proptest! {
 
         assert_vcard_fixpoint(&vcard2, &vcard3)?;
         assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_vcard_40_import_domain(
+        fn_name in "\\PC{1,20}",
+        impp_service in prop_oneof![
+            Just("xmpp:user@example.com"),
+            Just("skype:skype_user"),
+            Just("matrix:user:matrix.org"),
+            Just("aim:aim_user"),
+            Just("icq:1234567"),
+            Just("msn:user@hotmail.com"),
+            Just("yahoo:yahoo_user"),
+        ],
+        spouse_name in "\\PC{1,20}",
+        has_pref in prop::bool::ANY,
+    ) {
+        let pref_str = if has_pref { ";PREF=1" } else { "" };
+        let raw_v4 = format!(
+            "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:{fn_name}\r\nIMPP:{impp_service}\r\nRELATED;TYPE=spouse:{spouse_name}\r\nANNIVERSARY:20100520\r\nBDAY:19900101\r\nTEL;TYPE=\"work,voice\"{pref_str}:+1-555-0100\r\nEND:VCARD\r\n"
+        );
+
+        if let Ok(parsed1) = vcard_to_card(&raw_v4) {
+            let vcard2 = card_to_vcard(&parsed1);
+            let parsed2 = vcard_to_card(&vcard2).expect("v4 roundtrip vcard2 parse");
+            let vcard3 = card_to_vcard(&parsed2);
+            let parsed3 = vcard_to_card(&vcard3).expect("v4 roundtrip vcard3 parse");
+
+            assert_vcard_fixpoint(&vcard2, &vcard3)?;
+            assert_card_fixpoint(&parsed2, &parsed3)?;
+        }
     }
 }

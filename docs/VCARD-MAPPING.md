@@ -76,7 +76,10 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`X-EVOLUTION-VIDEO-URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: "video"`) | `E_CONTACT_VIDEO_URL` | `states_link`, `maps_link_kind` | EDS video stream URL field. Maps to `links` with `kind: "video"`. |
 | **`CALURI`** | `X-JMAP-KEY` | `card.calendars` (`Calendar.uri`, `kind: "calendar"`) | `E_CONTACT_CALENDAR_URI` | `states_calendar`, `calendar_property`, `calendar_kind` | vCard 4.0 property emitted on vCard 3.0 for EDS 3.52 compatibility. `ICSCALENDAR` excluded. |
 | **`FBURL`** | `X-JMAP-KEY` | `card.calendars` (`Calendar.uri`, `kind: "freeBusy"`) | `E_CONTACT_FREEBUSY_URL` | `states_calendar`, `calendar_property`, `calendar_kind` | vCard 4.0 property emitted on vCard 3.0 for EDS 3.52 compatibility. |
-| **`PHOTO`** | `TYPE`, `ENCODING=b`, `VALUE=uri`, `X-JMAP-KEY` | `card.media` (`Media.uri`, `media_type`, `kind: "photo"`) | `E_CONTACT_PHOTO` | `photo`, `read_photo`, [`states_media`], [`same_photo`], `image_subtype` | Only `kind: "photo"` mapped. Inline data uses base64; `TYPE` states subtype only (e.g. `JPEG` -> `image/jpeg`). URI references use `VALUE=uri`. Re-paired via `same_photo` since EDS drops `X-JMAP-KEY` on photo edit. |
+| **`ANNIVERSARY`** | `X-JMAP-KEY`, `VALUE=date` | `card.anniversaries` (`kind: "wedding"`, `date`) | `E_CONTACT_ANNIVERSARY` | `read_anniversary`, `Day` | vCard 4.0 standard anniversary property (RFC 6350 §6.4.3). Maps to `kind: "wedding"`. Outbound normalizes to `X-EVOLUTION-ANNIVERSARY`. |
+| **`RELATED`** | `TYPE` (`spouse`, `partner`, `manager`, `assistant`, custom) | `card.related_to` (Key = Person Name, `relation: { "<type>": true }`) | `E_CONTACT_SPOUSE`, `_MANAGER`, `_ASSISTANT` | `names_a_person`, `vcard_to_card` | vCard 4.0 standard relationship property (RFC 6350 §6.6.6). Maps `TYPE=spouse`/`partner` -> `spouse`, `TYPE=manager` -> `manager`, `TYPE=assistant` -> `assistant`, or custom relations when `names_a_person` holds. Outbound normalizes to standard `X-EVOLUTION-*`. |
+| **`IMPP`** | `TYPE` (`WORK`, `HOME`), `X-JMAP-KEY` | `card.online_services` (`service`, `user`) | `E_CONTACT_IM_<SERVICE>_HOME_1..3`, `_WORK_1..3` | `SERVICE_SCHEMES`, `plain_handle`, `vcard_to_card` | vCard 4.0 standard instant messaging property (RFC 4770 / RFC 6350 §6.4.3). Maps URI schemes (`xmpp:`, `skype:`, `matrix:`, `aim:`, `icq:`, `msn:`, `yahoo:`, `groupwise:`, `gg:`, `gtalk:`) to matching service handle. Action/query URIs safely rejected. Outbound normalizes to slotted `X-` properties (`X-JABBER`, `X-SKYPE`, `X-MATRIX`, etc.). |
+| **`PHOTO`** | `TYPE`, `MEDIATYPE`, `ENCODING=b`, `VALUE=uri`, `X-JMAP-KEY` | `card.media` (`Media.uri`, `media_type`, `kind: "photo"`) | `E_CONTACT_PHOTO` | `photo`, `read_photo`, [`states_media`], [`same_photo`], `image_subtype` | Only `kind: "photo"` mapped. Inbound accepts RFC 2397 `data:` URIs (direct without double-base64 encoding), direct HTTP/HTTPS URIs without `VALUE=uri`, and `MEDIATYPE` parameters (RFC 6350 §5.7). Outbound uses canonical vCard 3.0 base64 + `ENCODING=b`. Re-paired via `same_photo` since EDS drops `X-JMAP-KEY` on photo edit. |
 | **`CATEGORIES`** | — | `card.keywords` (`Set<String>`) | `E_CONTACT_CATEGORY_LIST` | `drawn_tags`, `read_keywords`, [`states_keyword`] | Single sorted line emitted. Comma-separated on wire. Trimming protection: tags with leading/trailing whitespace or carriage returns omitted from emission to prevent EDS corruption. |
 | **`BDAY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "birth"`, `date`) | `E_CONTACT_BIRTH_DATE` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`], [`states_a_point_in_time`], `Day` | Single calendar day formatted `YYYY-MM-DD`. Truncated/bare years (`1984`) or years < 1000 omitted to prevent EDS clamping corruption (`1000..=9999`). `Timestamp` converted to UTC day. |
 | **`X-EVOLUTION-ANNIVERSARY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "wedding"`, `date`) | `E_CONTACT_ANNIVERSARY` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`] | EDS wedding anniversary field. Same date validation and year >= 1000 clamping rules as `BDAY`. `kind: "death"` dropped. |
@@ -94,10 +97,13 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`X-SKYPE`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Skype"`, `uri: "skype:..."`) | `E_CONTACT_IM_SKYPE_HOME_1..3`, `_WORK_1..3` | (same as above) | Bare Skype usernames (`skype:echo123?call` action rejected). |
 | **`X-YAHOO`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Yahoo"`, `uri: "yahoo:... / ymsgr:..."`) | `E_CONTACT_IM_YAHOO_HOME_1..3`, `_WORK_1..3` | (same as above) | Supports `yahoo` and `ymsgr` schemes. |
 | **`GEO`** | — | `Address.coordinates` (RFC 9553) | `E_CONTACT_GEO` (no UI) | — | Dropped by design on vCard 3.0 import/export. Evolution has no UI for coordinates. Server-side `Address.coordinates` preserved by `PatchObject`. |
-| **`TZ`** | — | `card.time_zone` (RFC 9553) | — | — | Dropped by design on vCard 3.0 import/export. Evolution has no per-contact timezone field. Server `time_zone` preserved by `PatchObject`. |
+| **`TZ`** | — | `card.time_zone` (RFC 9553) | — | — | Dropped by design on vCard 3.0 import/export. Text/Olson timezones in vCard 4.0 (`TZ:Europe/Berlin`) are safely ignored on import. Server `time_zone` preserved by `PatchObject`. |
 | **`MAILER`** | — | — | `E_CONTACT_MAILER` (legacy) | — | Dropped by design. Deprecated in RFC 6350 (vCard 4.0). Legacy email client software metadata. |
 | **`PRODID`** | — | `card.prod_id` (RFC 9553) | — | — | Dropped by design on import/export. Generator metadata belongs to serialization envelope; foreign `PRODID` not preserved across saves. |
 | **`REV`** | — | `card.updated` (RFC 9553) | `E_CONTACT_REV` | — | Dropped by design on import/export. Revision timestamp is strictly owned by the JMAP server upon commit. |
+| **`GENDER`** | — | — | — | — | vCard 4.0 property (RFC 6350 §6.5.1). Safely ignored by reader; does not pollute `card.extra`. |
+| **`CLIENTPIDMAP`** | — | — | — | — | vCard 4.0 property (RFC 6350 §6.7.7). Safely ignored by reader; does not pollute `card.extra`. |
+| **`MEMBER`** | — | — | — | — | vCard 4.0 group member property (RFC 6350 §6.6.5). Safely ignored for individual contacts. |
 | **`SORT-STRING`** | — | `Name.sortAs` / `Org.sortAs` | — | — | Dropped by design from vCard 3.0 emission. Replaced in RFC 6350 by `SORT-AS` parameter. JSContact `sortAs` preserved on server by `PatchObject` without clobbering `fileAs`. |
 | **`X-EVOLUTION-FILE-AS`** | — | `Name.extra["fileAs"]` / `card.extra["fileAs"]` | `E_CONTACT_FILE_AS` | `states_file_as` | Evolution "File Under" field. Inbound accepts `X-EVOLUTION-FILE-AS`, `FILE-AS`, and `X-FILE-AS`. Outbound normalizes to `X-EVOLUTION-FILE-AS`. Coexists with `sortAs` without clobbering. |
 | **`CLASS`** | — | `card.privacy` (RFC 9553) | — | — | Dropped by design. Deprecated/removed in RFC 6350. Legacy access classification with no Evolution editor UI. |
@@ -553,6 +559,43 @@ item6.X-ABLabel:_$!<Anniversary>!$_
 5. **Modern Chat & Social Long Tail (Telegram, Discord, Signal, WhatsApp, Mastodon, IRC)**:
    - Modern social platforms (Telegram, Discord, Signal, WhatsApp, Mastodon `acct:`, IRC) have no native UI fields in EDS.
    - In accordance with Section 4.1, they are omitted on vCard 3.0 emission and remain safely preserved on the server via `PatchObject`.
+
+### 4.13 vCard 4.0 Import Tolerance & Interoperability Contract
+
+Modern contact exporters (Google Contacts, iOS Share Sheet, Nextcloud, macOS Contacts, CardDAV servers) emit `VERSION:4.0` envelopes adhering to RFC 6350. To ensure robust headless import and lossless synchronization back to Evolution and JMAP, `jmap-vcard` implements strict import tolerance with clean outbound normalization to canonical vCard 3.0:
+
+1. **Instant Messaging (`IMPP`)**:
+   - RFC 4770 / RFC 6350 §6.4.3 standard property for instant messaging.
+   - Inbound `IMPP:<scheme>:<handle>` lines are parsed into `card.online_services` matching the protocol scheme (`xmpp` -> `Jabber`, `skype` -> `Skype`, `matrix` -> `Matrix`, `aim` -> `AIM`, `icq` -> `ICQ`, `msn` -> `MSN`, `yahoo` -> `Yahoo`, `groupwise` -> `GroupWise`, `gg` -> `Gadu-Gadu`, `gtalk` -> `Google Talk`).
+   - Action/query URIs (e.g. `skype:echo123?call`, `xmpp:alice?message`) are safely filtered out by [`plain_handle`].
+   - Outbound serialization maps to slotted `X-` properties (`X-JABBER`, `X-SKYPE`, `X-MATRIX`, etc.) carrying `TYPE=HOME`/`TYPE=WORK` and `X-JMAP-KEY`.
+
+2. **Relationships (`RELATED`)**:
+   - RFC 6350 §6.6.6 standard relationship property.
+   - Inbound `RELATED;TYPE=spouse:<name>` and `RELATED;TYPE=partner:<name>` map to `card.related_to` with `relation: { "spouse": true }`.
+   - `RELATED;TYPE=manager:<name>` maps to `relation: { "manager": true }`.
+   - `RELATED;TYPE=assistant:<name>` maps to `relation: { "assistant": true }`.
+   - Other relations or unannotated `RELATED:<name>` map to `relation: { "<type>": true }` or `relation: { "contact": true }` when `names_a_person` holds.
+   - Outbound serialization maps spouse, manager, and assistant to `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, `X-EVOLUTION-ASSISTANT`.
+
+3. **Anniversaries (`ANNIVERSARY`)**:
+   - RFC 6350 §6.4.3 standard anniversary property.
+   - Inbound `ANNIVERSARY:<date>` maps to `card.anniversaries` with `kind: "wedding"`.
+   - Outbound serialization maps wedding anniversaries to `X-EVOLUTION-ANNIVERSARY`.
+
+4. **Photos (`PHOTO`)**:
+   - Direct RFC 2397 `data:` URIs (e.g. `PHOTO:data:image/jpeg;base64,...`) are imported without requiring `VALUE=uri` and without double-base64 wrapping.
+   - Direct HTTP/HTTPS URIs (e.g. `PHOTO:https://example.com/photo.jpg`) are imported as URI references without requiring `VALUE=uri`.
+   - `MEDIATYPE` parameter (RFC 6350 §5.7, e.g. `PHOTO;MEDIATYPE=image/png:...`) is extracted into `Media.media_type`.
+   - Outbound serialization emits canonical vCard 3.0 inline base64 (`ENCODING=b;TYPE=<subtype>`) or URI reference (`VALUE=uri`).
+
+5. **Quoted and Comma-Delimited Parameters**:
+   - Inbound parameters in vCard 4.0 format (e.g. `TEL;TYPE="work,voice":...`, `TEL;TYPE="home,cell";PREF=1:...`) have quotes trimmed and comma-separated tokens split cleanly.
+   - `PREF=1` parameter maps to `pref: Some(1)` across phone, email, and address entries.
+
+6. **Ignored Metadata & Fixpoint Invariants**:
+   - Standard vCard 4.0 metadata properties (`GENDER`, `CLIENTPIDMAP`, `MEMBER`, text/Olson `TZ`) are safely dropped on import without polluting `card.extra`.
+   - Re-exporting an imported vCard 4.0 produces canonical vCard 3.0 that immediately achieves fixed-point convergence (`Export₂ == Export₃` and `Card₂ == Card₃`).
 
 ---
 
