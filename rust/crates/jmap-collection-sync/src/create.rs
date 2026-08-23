@@ -94,29 +94,44 @@ impl std::error::Error for CreateFailure {}
 /// the next discovery would have written rather than a near-miss of it.
 pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child, CreateFailure> {
     let layout = CollectionLayout::from_session(client.session());
-    let account = layout
-        .account_for(requested.kind)
-        .ok_or(CreateFailure::Unserved(requested.kind))?;
+    let kind = requested.kind;
+    let account = layout.account_for(requested.kind).ok_or_else(|| {
+        let error = CreateFailure::Unserved(requested.kind);
+        tracing::warn!(?kind, %error, "collection create failed");
+        error
+    })?;
+
+    let account_id = account.id.to_string();
+    let display_name = requested.display_name.as_str();
+    tracing::debug!(account_id, ?kind, display_name, "creating collection");
 
     let resource = match requested.kind {
         ChildKind::AddressBook => {
-            let created = client.address_book_create(
-                &account.id,
-                &AddressBook {
-                    name: requested.display_name.clone(),
-                    ..AddressBook::default()
-                },
-            )?;
+            let created = client
+                .address_book_create(
+                    &account.id,
+                    &AddressBook {
+                        name: requested.display_name.clone(),
+                        ..AddressBook::default()
+                    },
+                )
+                .inspect_err(|error| {
+                    tracing::warn!(account_id, ?kind, %error, "collection create failed");
+                })?;
             created_resource(created.id, &created.name, created.is_default, None)
         }
         ChildKind::Calendar => {
-            let created = client.calendar_create(
-                &account.id,
-                &Calendar {
-                    name: requested.display_name.clone(),
-                    ..Calendar::default()
-                },
-            )?;
+            let created = client
+                .calendar_create(
+                    &account.id,
+                    &Calendar {
+                        name: requested.display_name.clone(),
+                        ..Calendar::default()
+                    },
+                )
+                .inspect_err(|error| {
+                    tracing::warn!(account_id, ?kind, %error, "collection create failed");
+                })?;
             let color = created.color.clone();
             created_resource(created.id, &created.name, created.is_default, color)
         }

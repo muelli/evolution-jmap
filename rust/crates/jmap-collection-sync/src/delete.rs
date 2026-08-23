@@ -97,16 +97,31 @@ impl std::error::Error for DeleteFailure {}
 /// account in which that id is some *other* collection.
 pub fn delete_collection(client: &Client, doomed: &Doomed) -> Result<(), DeleteFailure> {
     let layout = CollectionLayout::from_session(client.session());
-    let account = layout
-        .account_for(doomed.kind)
-        .ok_or(DeleteFailure::Unserved(doomed.kind))?;
+    let kind = doomed.kind;
+    let collection_id = doomed.collection_id.to_string();
+    let account = layout.account_for(doomed.kind).ok_or_else(|| {
+        let error = DeleteFailure::Unserved(doomed.kind);
+        tracing::warn!(?kind, collection_id, %error, "collection destroy failed");
+        error
+    })?;
+
+    let account_id = account.id.to_string();
+    tracing::debug!(account_id, ?kind, collection_id, "destroying collection");
 
     match doomed.kind {
         ChildKind::AddressBook => {
-            client.address_book_destroy(&account.id, &doomed.collection_id)?;
+            client
+                .address_book_destroy(&account.id, &doomed.collection_id)
+                .inspect_err(|error| {
+                    tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
+                })?;
         }
         ChildKind::Calendar => {
-            client.calendar_destroy(&account.id, &doomed.collection_id)?;
+            client
+                .calendar_destroy(&account.id, &doomed.collection_id)
+                .inspect_err(|error| {
+                    tracing::warn!(account_id, ?kind, collection_id, %error, "collection destroy failed");
+                })?;
         }
     }
 
