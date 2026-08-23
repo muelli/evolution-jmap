@@ -795,13 +795,25 @@ impl MailSync {
     /// user's decision about it is simply moot. Every other refusal stays the
     /// server's own [`SyncError::Client`].
     pub fn set_subscribed(&self, mailbox: &Id, subscribed: bool) -> Result<(), SyncError> {
+        let account_id = self.account_id().to_string();
+        let mailbox_id = mailbox.to_string();
+        tracing::debug!(
+            account_id,
+            mailbox_id,
+            subscribed,
+            "setting mail folder subscription"
+        );
         self.client
             .mailbox_update(
                 &self.account_id,
                 mailbox,
                 serde_json::json!({ "isSubscribed": subscribed }),
             )
-            .map_err(|error| folder_error(mailbox, error))
+            .map_err(|error| {
+                let error = folder_error(mailbox, error);
+                tracing::warn!(account_id, mailbox_id, subscribed, %error, "mail folder subscription change failed");
+                error
+            })
     }
 
     /// Makes a folder — `create_folder_sync`.
@@ -961,6 +973,9 @@ impl MailSync {
         parent: Option<&FolderInfo>,
         name: &str,
     ) -> Result<String, SyncError> {
+        let account_id = self.account_id().to_string();
+        let mailbox_id = folder.to_string();
+        tracing::debug!(account_id, mailbox_id, name, "renaming mail folder");
         self.client
             .mailbox_update(
                 &self.account_id,
@@ -970,7 +985,11 @@ impl MailSync {
                     "parentId": parent.map(|parent| parent.id.as_str()),
                 }),
             )
-            .map_err(|error| folder_error(folder, error))?;
+            .map_err(|error| {
+                let error = folder_error(folder, error);
+                tracing::warn!(account_id, mailbox_id, name, %error, "mail folder rename failed");
+                error
+            })?;
 
         Ok(path::join(
             parent.map(|parent| parent.path.as_str()),

@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::create_folder`/`delete_folder` trace their writes with
-//! `account_id` and the folder's name/id, the Track B1 slice after
-//! `jmap-book-sync`'s (`tests/tracing_writes.rs` there).
+//! `MailSync::create_folder`/`delete_folder` and `set_subscribed`/
+//! `rename_folder` trace their writes with `account_id` and the folder's
+//! name/id, the Track B1 slice after `jmap-book-sync`'s
+//! (`tests/tracing_writes.rs` there).
 
 use std::sync::{Arc, Mutex};
 
@@ -192,6 +193,98 @@ fn deleting_a_nonexistent_folder_traces_the_failure() {
 
     let captured = capture(|| {
         let _ = sync.delete_folder(&Id::new("M404"));
+    });
+
+    assert!(
+        captured
+            .iter()
+            .any(|(level, name, _)| *level == Level::WARN && name == "error"),
+        "expected a WARN error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn subscribing_a_folder_traces_the_account_and_mailbox_id_on_success() {
+    let fixture = Fixture::start();
+    let mailbox = fixture.seed_mailbox("Projects");
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        sync.set_subscribed(&mailbox, true).unwrap();
+    });
+
+    assert!(
+        has(
+            &captured,
+            Level::DEBUG,
+            "account_id",
+            fixture.account_id.as_ref()
+        ),
+        "expected a DEBUG account_id field, got {captured:?}"
+    );
+    assert!(
+        has(&captured, Level::DEBUG, "mailbox_id", mailbox.as_ref()),
+        "expected a DEBUG mailbox_id field, got {captured:?}"
+    );
+    assert!(
+        captured.iter().all(|(_, name, _)| name != "error"),
+        "a successful subscription change should not log an error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn subscribing_a_nonexistent_folder_traces_the_failure() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        let _ = sync.set_subscribed(&Id::new("M404"), true);
+    });
+
+    assert!(
+        captured
+            .iter()
+            .any(|(level, name, _)| *level == Level::WARN && name == "error"),
+        "expected a WARN error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn renaming_a_folder_traces_the_account_and_mailbox_id_on_success() {
+    let fixture = Fixture::start();
+    let folder = fixture.seed_mailbox("Projects");
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        sync.rename_folder(&folder, None, "Archive").unwrap();
+    });
+
+    assert!(
+        has(
+            &captured,
+            Level::DEBUG,
+            "account_id",
+            fixture.account_id.as_ref()
+        ),
+        "expected a DEBUG account_id field, got {captured:?}"
+    );
+    assert!(
+        has(&captured, Level::DEBUG, "mailbox_id", folder.as_ref()),
+        "expected a DEBUG mailbox_id field, got {captured:?}"
+    );
+    assert!(
+        captured.iter().all(|(_, name, _)| name != "error"),
+        "a successful rename should not log an error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn renaming_a_nonexistent_folder_traces_the_failure() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        let _ = sync.rename_folder(&Id::new("M404"), None, "Archive");
     });
 
     assert!(
