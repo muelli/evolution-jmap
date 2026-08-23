@@ -107,6 +107,7 @@ main (int argc,
 	GPtrArray *bodies;
 	gchar *joined;
 	gchar *appended_uid = NULL;
+	gchar *flagged_uid = NULL;
 	guint index;
 	const gchar *source_uid;
 	const gchar *protocol;
@@ -245,6 +246,13 @@ main (int argc,
 		GByteArray *body;
 		CamelStream *stream;
 
+		/* Whichever row Camel hands over first, held aside for the
+		 * `synchronize_sync` block below — which one it is does not
+		 * matter, since that block only reads back the same row it
+		 * wrote a flag onto. */
+		if (index == 0)
+			flagged_uid = g_strdup (uid);
+
 		message_info = camel_folder_get_message_info (inbox, uid);
 		if (!message_info) {
 			g_printerr ("summary: no message info for uid '%s'\n", uid);
@@ -291,6 +299,51 @@ main (int argc,
 	report_sorted ("message-bodies", bodies);
 	g_ptr_array_unref (subjects);
 	g_ptr_array_unref (bodies);
+
+	/* `synchronize_sync`: the write half of what everything above only
+	 * reads. Marking a message important is a local Camel flag until a
+	 * synchronise carries it to the server as a keyword; nothing else in
+	 * this program ever writes to a message's flags, so this is the only
+	 * place that vfunc is reached. */
+	if (!flagged_uid)
+		return fail ("no-message-to-flag", NULL);
+
+	g_print ("flagged-uid=%s\n", flagged_uid);
+	{
+		CamelMessageInfo *flag_info;
+
+		flag_info = camel_folder_get_message_info (inbox, flagged_uid);
+		if (!flag_info) {
+			g_free (flagged_uid);
+			return fail ("get-message-info-for-flag", NULL);
+		}
+		camel_message_info_set_flags (flag_info, CAMEL_MESSAGE_FLAGGED, CAMEL_MESSAGE_FLAGGED);
+		g_clear_object (&flag_info);
+	}
+
+	if (!camel_folder_synchronize_sync (inbox, FALSE, NULL, &error)) {
+		g_free (flagged_uid);
+		return fail ("synchronize", error);
+	}
+
+	/* The flag survives a fresh read of the row — which a synchronise
+	 * that swallowed a write failure instead of reporting one would
+	 * still show, so this alone does not prove the server was asked;
+	 * the mock's own method log and stored keywords, checked from the
+	 * Rust harness, are what prove that. */
+	{
+		CamelMessageInfo *flag_info;
+
+		flag_info = camel_folder_get_message_info (inbox, flagged_uid);
+		if (!flag_info) {
+			g_free (flagged_uid);
+			return fail ("get-message-info-after-sync", NULL);
+		}
+		g_print ("flagged-after-sync=%d\n",
+			 (camel_message_info_get_flags (flag_info) & CAMEL_MESSAGE_FLAGGED) ? 1 : 0);
+		g_clear_object (&flag_info);
+	}
+	g_free (flagged_uid);
 
 	/* `append_message_sync`: a message Camel is already holding — dragged
 	 * out of another account, dropped as a `.eml`, saved by a filter —

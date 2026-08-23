@@ -1071,6 +1071,24 @@ hands folders or message uids over is the provider's business, and a test that
 compared it as given would be asserting an order nobody promised — which it did
 once, before this was written down.
 
+- **`synchronize_sync`, driven through `camel_folder_synchronize_sync()`.**
+  Everything above this point is Camel reading; this is the one place it
+  writes. The client marks one already-read inbox message
+  `CAMEL_MESSAGE_FLAGGED` (`camel_message_info_set_flags`) and calls
+  `camel_folder_synchronize_sync(inbox, FALSE, …)`. `jmap-mail`'s own tests
+  (`rust/crates/jmap-mail/tests/synchronize.rs`) already cover the keyword
+  diff and the JMAP `Email/set` patch it produces by calling the decision
+  function directly against a bare `JmapFolder`; nothing there drives the
+  `extern "C" synchronize_sync` trampoline through a real `CamelFolder`
+  dispatching its own vtable, which is the gap this leg closes. Checked from
+  both ends: the flag survives a fresh read of the row after the
+  synchronise, and — the decisive check, since a synchronise that silently
+  dropped the write would still show the flag in Camel's own in-memory row —
+  the mock's own stored copy of the message carries the `$flagged` keyword,
+  and the method log shows an `Email/set`. `expunge_sync` (the vfunc behind
+  "Empty Trash"/"Expunge", and `synchronize_sync`'s own `expunge` argument)
+  is the same kind of gap and is not covered here — left as a follow-up.
+
 Sending is not covered here. It is the next section.
 
 ## What the transport test asserts
