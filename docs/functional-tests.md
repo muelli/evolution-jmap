@@ -1067,7 +1067,7 @@ made permanent and repeatable.
 ## What the collection test asserts
 
 `rust/crates/jmap-functional/tests/collection.rs`, against `tests/functional/
-collection-client.c`, is the odd one out among these six in a different way
+collection-client.c`, is the odd one out among these seven in a different way
 again: it is not a factory opening a leaf backend from a `.source` file at
 all, but `evolution-source-registry` itself loading `module-jmap-backend.so`
 (`EDS_REGISTRY_MODULES`) and turning one collection account into the
@@ -1098,11 +1098,65 @@ Asserted:
   asks with `ids: null`) and no `Mailbox/get`, matching `MailEnabled=false`.
 
 What this does not cover, left for a future increment now that this harness
-exists: `create_resource_sync`/`delete_resource_sync` (Track D1's "New
-Address Book"/"Delete" — the async `e_source_registry_create_sources_sync`/
-`e_source_remove_sync` half, not the populate this test drives) and D2's
-colour push (`source_changed`, which needs a running calendar-factory
-backend instance rather than just the registry).
+exists: `create_resource_sync`/`delete_resource_sync` for a *calendar*
+(the sibling test below only does address books) and D2's colour push
+(`source_changed`, which needs a running calendar-factory backend instance
+rather than just the registry).
+
+## What the collection-create test asserts
+
+`rust/crates/jmap-functional/tests/collection-create.rs`, against
+`tests/functional/collection-create-client.c`, is the write half of the
+surface the test above only reads: Evolution's own "New Address Book"/
+"Delete" calls — `e_source_remote_create_sync()` on the account and
+`e_source_remote_delete_sync()` on the child it returns — against the same
+real registry, proving `ECollectionBackendClass::create_resource_sync`/
+`delete_resource_sync` rather than populate/fan-out.
+`jmap-backend-collection`'s own `tests/{create_resource,delete_resource}.rs`
+drive those same vfuncs directly against an in-process `EServerSideSource`
+they build themselves; this is the one test in the tree that reaches them
+through a real registry's own D-Bus round trip instead.
+
+**Not `e_source_registry_create_sources_sync`/`e_source_remove_sync`, which
+this test used at first.** Those write a source's keyfile straight to the
+registry's own directory with no backend involved — the right pair for a
+standalone account, not a collection's child — and a first run against them
+"passed" a client that never called `create_resource_sync` at all: the
+child appeared with an empty `BackendName`, no `[Resource]`/`[Authentication]`/
+`[Security]` groups, and no request reached the mock, then refused to be
+removed with "is not removable" (a backend child's `removable` is always
+`FALSE`; only `remote-deletable` lets it go). `e_source.h`'s own comments on
+`remote_create_sync`/`remote_delete_sync` are what named the actual pair:
+`remote_create_sync` is called *on the account*, passing a scratch source as
+an argument, and requires `ESource:remote-creatable`; `remote_delete_sync`
+is called *on the child itself* and requires `ESource:remote-deletable`.
+
+The client waits for the account to become `remote-creatable` (set by the
+first populate, per `jmap-backend-collection::populate::Populating::
+offer_creation`) — the flag `e_source_remote_create_sync` refuses outright
+without — then builds a scratch `ESource` the same way "New Address Book"
+does: no `GDBusObject` yet, the `[Address Book]` extension naming the kind,
+and a display name (the mock's `AddressBook/set` handler refuses an empty
+one). No uid and no `Parent=` on the scratch source — the registry service
+mints its own uid for the child (`e_server_side_source_new_user_file`, per
+`create_resource.rs`'s own module comment) and `adopt_created` sets
+`Parent=` itself — so after `e_source_remote_create_sync` succeeds the
+client finds the new child the way `collection-client.c` finds discovered
+ones: by listing which address book names the account as `Parent=`. It then
+calls `e_source_remote_delete_sync` on it and polls for it to disappear the
+same way.
+
+Asserted:
+
+- the account was found and became `remote-creatable`;
+- the created child appeared, naming `jmap` as its `BackendName`, the
+  account as its `Parent=`, enabled and writable — the same properties
+  `create_resource.rs`'s own module doc says `adopt_created` is responsible
+  for;
+- the child disappeared after `e_source_remote_delete_sync`;
+- the mock recorded exactly two `AddressBook/set` calls — one create, one
+  destroy — not merely a source appearing and disappearing locally with no
+  server round trip.
 
 ## Debugging a failure
 

@@ -126,6 +126,18 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-collection-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
 	target_link_directories(functional-collection-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# The write half of the same surface: "New Address Book"/"Delete", i.e.
+	# `e_source_remote_create_sync`/`e_source_remote_delete_sync` against the
+	# same registry, proving `create_resource_sync`/`delete_resource_sync`
+	# rather than populate/fan-out. A separate client, not a mode of the one
+	# above, for the same reason the cal-client family is split: each answers
+	# one question against the registry, not several.
+	add_executable(functional-collection-create-client tests/functional/collection-create-client.c)
+	target_include_directories(functional-collection-create-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-collection-create-client PRIVATE ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-collection-create-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-collection-create-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	add_executable(functional-config-lookup-client tests/functional/config-lookup-client.c)
 	target_include_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_INCLUDE_DIRS})
 	target_compile_options(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_CFLAGS_OTHER})
@@ -216,6 +228,21 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CLIENT=$<TARGET_FILE:functional-collection-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
+	)
+
+	# The write half: "New Address Book"/"Delete" through the same registry,
+	# proving create_resource_sync/delete_resource_sync end to end.
+	add_test(
+		NAME functional-collection-create
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test collection-create
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-collection-create PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CREATE_CLIENT=$<TARGET_FILE:functional-collection-create-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
 	# module-jmap-configuration.so, not one of the four EDS/Camel backends:
