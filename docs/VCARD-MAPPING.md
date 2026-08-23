@@ -655,6 +655,21 @@ vCard₄ (Export₃: Stabilized vCard 3.0)
    - Whitespace-only values in set-based fields (such as `CATEGORIES: `) are cleanly rejected by validator predicates ([`states_keyword`]) to prevent EDS string-trimming bugs.
    - Whitespace-only values in text fields (such as `NICKNAME: ` or `NOTE: `) either parse into structured fields or evaluate to empty, reaching stable fixpoint convergence by Export₂.
 3. **Legacy `ENCODING=b` on Text Lines (BACKLOG Regression Pin)**:
-   - When legacy/fuzzed vCards declare binary parameters on non-binary properties (e.g. `NICKNAME;ENCODING=b:! `), the parser cleanly rejects non-base64 binary payloads via [`entry_text_list`] and normalizes the representation, reaching fixed-point stability on Export₂.
+   - When legacy/fuzzed vCards declare binary parameters on non-binary properties (e.g. `NICKNAME;ENCODING=b:! `), the parser cleanly rejects non-base64 binary payloads via `entry_text_list` and normalizes the representation, reaching fixed-point stability on Export₂.
+
+### 6.4 Fixpoint Proptest Generator Synchronization (Batches 3–4 Sync)
+
+1. **Synchronized Generator Coverage**:
+   - `arb_name`: Fuzzes name components alongside optional `fileAs` and `sortAs` in `Name.extra`, testing inbound `FILE-AS`, `X-FILE-AS`, `X-EVOLUTION-FILE-AS`, and `SORT-STRING`.
+   - `arb_card_extra`: Fuzzes `ContactCard.extra` with `fileAs`, `sortAs`, `cryptoKeys`, and unmodeled server fields.
+   - `arb_email`, `arb_phone`, `arb_address`, `arb_link`, `arb_relation`: Fuzz custom/Apple labels in `extra["label"]`, testing label extraction and roundtrip stability.
+   - `arb_apple_property_group_block`: Generates paired Apple property groups (`itemN.PROPERTY` with `itemN.X-ABLabel`) across telephony, email, postal address, links, extended relations (`X-ABRELATEDNAMES` / `X-AB-RELATED-NAMES`), and extended dates (`X-ABDATE` / `X-AB-DATE`).
+   - `arb_vcard_property_line`: Covers full current property surface including standard properties, vendor extensions, legacy parameters, and dropped-by-design markers (`AGENT`, `SOUND`, `LOGO`, `KEY`).
+2. **Domain Fixpoint Proptests**:
+   - `prop_fixpoint_name_and_file_as_domain`: Asserts fixpoint stability for `Name`, `fileAs`, and `sortAs`.
+   - `prop_fixpoint_apple_property_groups_domain`: Asserts that raw vCards with Apple property groups parse without panic and normalize outbound to standard vCard 3.0 reaching fixpoints.
+   - `prop_fixpoint_links_domain`: Asserts fixpoint stability across URL kinds and labels.
+   - `prop_fixpoint_crypto_keys_and_logo_preservation_domain`: Asserts that `cryptoKeys` and non-photo media do not leak into vCard 3.0 emissions while maintaining roundtrip stability.
+   - `identify_oscillating_card_field`: Enhanced with `card.extra` divergence inspection during proptest shrinkage.
 
 
