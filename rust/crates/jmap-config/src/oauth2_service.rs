@@ -78,18 +78,23 @@
 //! throwaway instance, dispatched through EDS's own `e_oauth2_service_*()`
 //! wrappers.
 
+use std::collections::HashMap;
 use std::ffi::{CStr, c_char};
 use std::ptr;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use eds_sys::{
     EOAuth2Service, EOAuth2ServiceBase, EOAuth2ServiceBaseClass, EOAuth2ServiceInterface, ESource,
-    e_oauth2_service_base_get_type, e_oauth2_service_get_type,
+    e_oauth2_service_base_get_type, e_oauth2_service_get_type, e_source_get_uid,
 };
 use glib_sys::{GHashTable, GType, g_hash_table_replace, g_strdup};
 use jmap_backend_core::i18n::{self, N_};
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
+
+use jmap_backend_core::error::cstring_lossy;
+use jmap_backend_core::marshal::read_string;
+use jmap_client::oauth::PkceVerifier;
 
 use crate::oauth2;
 
@@ -218,8 +223,43 @@ unsafe extern "C" fn prepare_authentication_uri_query(
                 );
             }
             add_resource(source, uri_query);
+            // RFC 7636 PKCE, which EDS 3.52 does not know at all (its
+            // libedataserver contains no `code_challenge` — checked with
+            // `strings`, not assumed) and which a provider may mandate for
+            // public clients: Fastmail advertises only S256 and its consent
+            // flow answers `error=invalid_request` to a challenge-less
+            // request (observed live 2026-08-23, after scope and resource
+            // were already right). The verifier is stashed per source UID
+            // for `prepare_get_token_form` to redeem; a repeated
+            // authorization attempt simply replaces it.
+            let verifier = PkceVerifier::generate();
+            g_hash_table_replace(
+                uri_query,
+                g_strdup(c"code_challenge".as_ptr()).cast(),
+                g_strdup(cstring_lossy(&verifier.challenge()).as_ptr()).cast(),
+            );
+            g_hash_table_replace(
+                uri_query,
+                g_strdup(c"code_challenge_method".as_ptr()).cast(),
+                g_strdup(c"S256".as_ptr()).cast(),
+            );
+            if let Some(uid) = read_string(e_source_get_uid(source)) {
+                pkce_verifiers()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(uid, verifier.secret().to_owned());
+            }
         },
     );
+}
+
+/// The PKCE verifiers awaiting their token exchange, keyed by source UID —
+/// in-memory only: a verifier is a per-flow secret with no business in the
+/// on-disk keyfile, and both halves of the flow run in the same process (the
+/// credentials prompter's).
+fn pkce_verifiers() -> &'static Mutex<HashMap<String, String>> {
+    static VERIFIERS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    VERIFIERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// EDS's own `prepare_get_token_form`, saved by `interface_init` before being
@@ -271,6 +311,20 @@ unsafe extern "C" fn prepare_get_token_form(
             default(service, source, authorization_code, form);
         }
         add_resource(source, form);
+        // Redeem the PKCE verifier stashed when the authorization query was
+        // built (RFC 7636 §4.5). Taken, not copied: a verifier is single-use.
+        if let Some(uid) = read_string(e_source_get_uid(source))
+            && let Some(verifier) = pkce_verifiers()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&uid)
+        {
+            g_hash_table_replace(
+                form,
+                g_strdup(c"code_verifier".as_ptr()).cast(),
+                g_strdup(cstring_lossy(&verifier).as_ptr()).cast(),
+            );
+        }
     });
 }
 
