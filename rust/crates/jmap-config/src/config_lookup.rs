@@ -400,10 +400,16 @@ unsafe fn add_result(
     let result = unsafe {
         e_config_lookup_result_simple_new(
             E_CONFIG_LOOKUP_RESULT_COLLECTION,
-            // Lower is higher priority; matched to the plain IMAP priority
-            // `e-config-lookup-result.h` defines (1000) since, like IMAP,
-            // this is the one-account-one-mailbox case, not a fallback.
-            1000,
+            // Lower is higher priority, and this must be STRICTLY better than
+            // `e-config-lookup-result.h`'s PRIORITY_IMAP and PRIORITY_SMTP
+            // (both 1000): the page picks a backend only on `priority <
+            // selected`, so a tie loses to candidate order. Observed live
+            // (2026-08-23, Fastmail): at 1000 the receiving page stayed on
+            // ISPDB's imapx while the sending page flipped to jmap — a broken
+            // hybrid. A result built from the provider's own SRV record plus
+            // a completed RFC 7591 registration is the provider's answer, not
+            // a generic guess, so it outranks ISPDB's.
+            900,
             GTRUE,
             protocol.as_ptr(),
             i18n::translate_static(N_(c"JMAP account (OAuth 2.0)")),
