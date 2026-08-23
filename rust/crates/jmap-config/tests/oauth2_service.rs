@@ -30,11 +30,15 @@ use eds_sys::{
     e_oauth2_service_can_process, e_oauth2_service_get_authentication_uri,
     e_oauth2_service_get_client_id, e_oauth2_service_get_client_secret,
     e_oauth2_service_get_display_name, e_oauth2_service_get_name,
-    e_oauth2_service_get_redirect_uri, e_oauth2_service_get_refresh_uri, e_oauth2_services_find,
+    e_oauth2_service_get_redirect_uri, e_oauth2_service_get_refresh_uri,
+    e_oauth2_service_prepare_authentication_uri_query, e_oauth2_services_find,
     e_oauth2_services_new, e_source_authentication_set_method, e_source_get_extension,
     e_source_new_with_uid,
 };
-use glib_sys::GFALSE;
+use glib_sys::{
+    GFALSE, g_free, g_hash_table_destroy, g_hash_table_lookup, g_hash_table_new_full, g_str_equal,
+    g_str_hash,
+};
 use gobject_sys::{
     G_TYPE_OBJECT, GValue, g_object_new_with_properties, g_object_unref, g_value_init,
     g_value_set_object, g_value_unset,
@@ -90,6 +94,7 @@ fn config() -> Config {
         authorization_endpoint: Some("https://jmap.example.com/authorize".to_owned()),
         token_endpoint: Some("https://jmap.example.com/token".to_owned()),
         redirect_uri: Some("https://client.example.org/callback".to_owned()),
+        scope: Some("urn:ietf:params:oauth:scope:mail offline_access".to_owned()),
     }
 }
 
@@ -178,6 +183,80 @@ fn every_borrowed_field_reads_back_what_was_applied() {
             borrowed(e_oauth2_service_get_redirect_uri(service, source.0)).as_deref(),
             Some("https://client.example.org/callback")
         );
+    }
+}
+
+/// The authorization request must NAME the scope this client registered for —
+/// whether an omitted `scope` falls back to the registration's is
+/// server-discretionary (RFC 6749 §3.3), and Fastmail answered
+/// `error=invalid_scope` to exactly that omission (observed live 2026-08-23).
+/// Driven through EDS's own `e_oauth2_service_prepare_authentication_uri_query`
+/// so the chain to the default (which builds the standard query, here pinned
+/// via `response_type`) is exercised too, not just our added key.
+#[test]
+fn prepare_authentication_uri_query_names_the_registered_scope() {
+    let service = service_in(registry());
+    let source = TestSource::new().written(&config());
+
+    // SAFETY: standard GLib hash-table construction with string keys/values
+    // owned by the table, the same shape EDS's caller builds.
+    let query = unsafe {
+        g_hash_table_new_full(
+            Some(g_str_hash),
+            Some(g_str_equal),
+            Some(g_free),
+            Some(g_free),
+        )
+    };
+    // SAFETY: a live implementer, a live source, and a live table.
+    unsafe {
+        e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
+
+        let scope = g_hash_table_lookup(query, c"scope".as_ptr().cast());
+        assert!(!scope.is_null(), "the query carries no scope");
+        assert_eq!(
+            CStr::from_ptr(scope.cast()).to_str().unwrap(),
+            "urn:ietf:params:oauth:scope:mail offline_access"
+        );
+        // The default ran first: the standard query is still built.
+        let response_type = g_hash_table_lookup(query, c"response_type".as_ptr().cast());
+        assert!(
+            !response_type.is_null(),
+            "chaining to EDS's default was lost — the standard query is gone"
+        );
+
+        g_hash_table_destroy(query);
+    }
+}
+
+/// A deployment that advertises no scopes stores none, and the query must
+/// stay exactly what EDS's default built — no empty `scope`, which RFC 6749
+/// treats as a (likely wrong) request of its own.
+#[test]
+fn prepare_authentication_uri_query_adds_nothing_without_a_stored_scope() {
+    let service = service_in(registry());
+    let source = TestSource::new().written(&Config {
+        scope: None,
+        ..config()
+    });
+
+    // SAFETY: as above.
+    let query = unsafe {
+        g_hash_table_new_full(
+            Some(g_str_hash),
+            Some(g_str_equal),
+            Some(g_free),
+            Some(g_free),
+        )
+    };
+    // SAFETY: as above.
+    unsafe {
+        e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
+        assert!(
+            g_hash_table_lookup(query, c"scope".as_ptr().cast()).is_null(),
+            "no stored scope must mean no scope parameter at all"
+        );
+        g_hash_table_destroy(query);
     }
 }
 
