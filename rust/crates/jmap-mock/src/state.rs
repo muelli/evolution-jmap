@@ -157,6 +157,14 @@ pub struct ServerState {
     /// other test and this project's own prior assumption before that
     /// finding.
     pub new_collections_default_unsubscribed: bool,
+    /// Answer a `CalendarEvent/set` create with only `id` in the `created`
+    /// map, as [`crate::MockServerBuilder::terse_calendar_event_create`]
+    /// asked — every other property was already sent by the client, so a
+    /// spec-following server (RFC 8620 §5.3) may omit all of it, as a live
+    /// Stalwart deployment does. `false` echoes the full event back,
+    /// matching every other test and this project's own prior assumption
+    /// before that finding.
+    pub terse_calendar_event_create: bool,
 }
 
 impl ServerState {
@@ -181,6 +189,7 @@ impl ServerState {
             terse_submission_create: false,
             terse_contact_create: false,
             new_collections_default_unsubscribed: false,
+            terse_calendar_event_create: false,
         }
     }
 
