@@ -580,8 +580,34 @@ private bus, its own freshly started factory):
   rather than `list_existing_sync` again.
 
 What this does not cover: the calendar side (`ECalMetaBackendClass::
-get_changes_sync`), the same gap for the same reason — left as a follow-up,
-the same book/cal split several earlier sessions on this thread already used.
+get_changes_sync`) — see "What the calendar-changes test asserts" below.
+
+## What the calendar-changes test asserts
+
+`rust/crates/jmap-functional/tests/calendar-changes.rs`, against
+`tests/functional/cal-changes-client.c`: the calendar-side twin of
+book-changes, above, and closing the gap that one left open. Every leg of
+the calendar test below opens its calendar exactly once, so all of them
+exercise `list_existing_sync` and none reaches
+`ECalMetaBackendClass::get_changes_sync`.
+
+`cal-changes-client.c` is a small client of its own rather than a mode of
+`cal-client.c`'s already-large, phase-free `main`: it connects, lists every
+event via `e_cal_client_get_object_list_sync ("#t", …)`, and prints the
+summaries sorted — the calendar analogue of `book-client.c`'s `list` phase.
+The same two-connect, one-on-disk-cache structure as book-changes:
+
+- the first connect starts from an empty cache and lists a single seeded
+  event; the mock recorded a `CalendarEvent/get` and no
+  `CalendarEvent/changes`, confirming `list_existing_sync`;
+- a second event is seeded straight into the mock's store through
+  `Store::transaction` (not `Store::seed_with_id`, used for the first —
+  same reason as book-changes: only a transaction logs a `Change` for
+  `CalendarEvent/changes` to report);
+- the second connect, against the same warm on-disk cache, lists both
+  events — and the mock's method log gained a `CalendarEvent/changes` call
+  after the first connect's own calls, confirming the post-connect refresh
+  went through `get_changes_sync` this time.
 
 ## What the calendar test asserts
 

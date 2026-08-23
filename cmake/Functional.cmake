@@ -125,6 +125,14 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# whose populate/fan-out this test is about. `libedataserver` alone is
 	# enough, the same library the mail/transport clients below link for
 	# their own registry lookups.
+	# The calendar analogue of `functional-book-client`'s `list` phase, for
+	# `get_changes_sync` coverage — see tests/functional/cal-changes-client.c.
+	add_executable(functional-cal-changes-client tests/functional/cal-changes-client.c)
+	target_include_directories(functional-cal-changes-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
+	target_compile_options(functional-cal-changes-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
+	target_link_libraries(functional-cal-changes-client PRIVATE ${LIBECAL_LIBRARIES})
+	target_link_directories(functional-cal-changes-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
+
 	pkg_check_modules(LIBEDATASERVER REQUIRED libedataserver-1.2>=${REQUIRE_EVOLUTION_VERSION})
 	add_executable(functional-collection-client tests/functional/collection-client.c)
 	target_include_directories(functional-collection-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
@@ -244,6 +252,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CLIENT=$<TARGET_FILE:functional-cal-client>;JMAP_FUNCTIONAL_CAL_EDIT_CLIENT=$<TARGET_FILE:functional-cal-edit-client>;JMAP_FUNCTIONAL_CAL_ZONE_CLIENT=$<TARGET_FILE:functional-cal-zone-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# The calendar twin of `functional-book-changes`: two connects sharing
+	# one on-disk cache, to reach `get_changes_sync` rather than
+	# `list_existing_sync` a second time. See `tests/calendar-changes.rs`.
+	add_test(
+		NAME functional-cal-changes
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test calendar-changes
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-changes PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CHANGES_CLIENT=$<TARGET_FILE:functional-cal-changes-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
 	# D2's write half through a real, running backend instance: a colour edit
