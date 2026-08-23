@@ -79,7 +79,16 @@ fn camel_opens_the_store_and_serves_the_inbox() {
 
         let inbox = account.seed_mailbox("Inbox", Some("inbox"));
         account.seed_mailbox("Sent", Some("sent"));
-        account.seed_mailbox("Drafts", Some("drafts"));
+        // Seeded unsubscribed on purpose, opposite of every other mailbox
+        // here: the `CamelSubscribable` block below subscribes it, and a
+        // write that starts from the value it is asked to set would prove
+        // nothing.
+        let drafts = account.seed_mailbox("Drafts", Some("drafts"));
+        account
+            .mailboxes
+            .get_mut(&drafts)
+            .expect("the mailbox just seeded")
+            .is_subscribed = Some(false);
 
         account.seed_email(EmailSeed::new(
             inbox.clone(),
@@ -147,6 +156,61 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         Some(&"Drafts,Inbox,Sent"),
         "the folder tree is not the mock's three mailboxes\n{report}"
     );
+
+    // `CamelSubscribable`: the tick beside a folder in the subscription
+    // editor, driven through the real vtable rather than the plain decision
+    // function `jmap-mail`'s own `tests/subscriptions.rs` calls directly.
+    // Checked locally first...
+    assert_eq!(
+        seen.get("sent-subscribed-initially"),
+        Some(&"1"),
+        "Sent did not start subscribed, the way every mock-seeded mailbox does\n{report}"
+    );
+    assert_eq!(
+        seen.get("sent-subscribed-after-unsubscribe"),
+        Some(&"0"),
+        "unsubscribe_folder_sync did not flip the store's own held answer for Sent\n{report}"
+    );
+    assert_eq!(
+        seen.get("drafts-subscribed-initially"),
+        Some(&"0"),
+        "Drafts did not start unsubscribed, the way this test seeded it\n{report}"
+    );
+    assert_eq!(
+        seen.get("drafts-subscribed-after-subscribe"),
+        Some(&"1"),
+        "subscribe_folder_sync did not flip the store's own held answer for Drafts\n{report}"
+    );
+
+    // ...then against the mock's own copy, the decisive half: a write that
+    // silently failed to reach the server would still leave Camel's own
+    // in-memory answer, checked above, looking right.
+    {
+        let state = server.state();
+        let state = state.lock().expect("mock state lock");
+        let account = state
+            .account(&account_id)
+            .expect("the mock's default account");
+        let subscribed = |name: &str| {
+            account
+                .mailboxes
+                .iter()
+                .find(|(_, mailbox)| mailbox.name == name)
+                .and_then(|(_, mailbox)| mailbox.is_subscribed)
+        };
+        assert_eq!(
+            subscribed("Sent"),
+            Some(false),
+            "unsubscribe_folder_sync never reached the server: the mock's own copy of \
+             Sent still carries isSubscribed=true\n{report}"
+        );
+        assert_eq!(
+            subscribed("Drafts"),
+            Some(true),
+            "subscribe_folder_sync never reached the server: the mock's own copy of \
+             Drafts still carries isSubscribed=false\n{report}"
+        );
+    }
 
     // By role rather than by name. Camel asks the store which folder is the
     // inbox and the provider answers from the mailbox's JMAP role, so a
@@ -341,11 +405,14 @@ fn camel_opens_the_store_and_serves_the_inbox() {
     // address-book/calendar removal tests do. What the method log *can*
     // still prove is that all three requests actually reached the server
     // rather than the provider answering out of a purely local cache:
-    // exactly three `Mailbox/set` calls, one per write.
+    // exactly three `Mailbox/set` calls for the folder create/rename/delete,
+    // plus one each for the unsubscribe-Sent and subscribe-Drafts writes
+    // asserted above — `set_subscribed` goes over the same method — five in
+    // total.
     let mailbox_set_calls = calls.iter().filter(|call| *call == "Mailbox/set").count();
     assert_eq!(
-        mailbox_set_calls, 3,
-        "expected one Mailbox/set each for the create, the rename and the delete; saw {mailbox_set_calls} in {calls:?}\n{report}"
+        mailbox_set_calls, 5,
+        "expected one Mailbox/set each for the create, the rename, the delete, the unsubscribe and the subscribe; saw {mailbox_set_calls} in {calls:?}\n{report}"
     );
 
     // `delete_folder_sync`, the mirror image: driven through the real
