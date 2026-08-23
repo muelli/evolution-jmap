@@ -1877,7 +1877,8 @@ const MAX_LINE_OCTETS: usize = 75;
 /// value whose text folds to exactly 75 octets therefore keeps every empty
 /// trailing slot on the same physical line: 81 octets for an `ADR`, one per
 /// empty slot (found by a fuzzer seed; the regression test in
-/// `tests/proptest_fuzz.rs` carries the shrunken card). Folding is defined on
+/// `tests/proptest_fuzz.rs` carries the shrunken card; reported upstream as
+/// <https://github.com/stalwartlabs/calcard/issues/25>). Folding is defined on
 /// the octet layer — unfolding restores the same stream wherever a cut lands
 /// — so any cut is *correct*; cutting at character boundaries, and never
 /// between a `\` and the octet it escapes, additionally keeps every physical
