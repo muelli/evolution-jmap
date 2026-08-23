@@ -990,7 +990,22 @@ cannot exercise because they link it.
   by calling `manage::create_folder` directly against a bare `JmapStore`
   struct; nothing there drives the `extern "C" create_folder_sync`
   trampoline through a real `CamelStore` GObject dispatching its own vtable,
-  which is the gap this leg closes.
+  which is the gap this leg closes;
+- **`rename_folder_sync`, the same gap for a rename.** The client calls
+  `camel_store_rename_folder_sync()` to rename `Receipts` to `Invoices` under
+  the same (root) parent — a changed last component, which `manage.rs`'s own
+  doc comment reads as the name the user typed rather than this store's path
+  encoding of one — and the re-fetched listing has to show `Invoices` in
+  `Receipts`'s place;
+- **`delete_folder_sync`, driven the same way.** The client deletes the
+  renamed folder (`Invoices`) with `camel_store_delete_folder_sync()`; the
+  re-fetched listing has to have lost it, and the mock's own mailbox store is
+  checked separately that neither the original nor the renamed name remains —
+  a rename that silently left a stale copy under the old name would still
+  pass a check that only looked for the new one. Across all three writes, the
+  mock's method log is checked for exactly one `Mailbox/set` per write (three
+  total), proving each request reached the server rather than the provider
+  answering out of a purely local cache.
 
 Every list the client reports is sorted before it is printed. The order Camel
 hands folders or message uids over is the provider's business, and a test that

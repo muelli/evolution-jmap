@@ -321,10 +321,32 @@ main (int argc,
 		report_sorted ("folders-after-create", names);
 		g_ptr_array_unref (names);
 
-		/* The mirror image: `delete_folder_sync` on the folder just made,
+		/* `rename_folder_sync` on the folder just made: a changed last
+		 * component under the same (root) parent, which `manage.rs`'s own
+		 * module doc reads as the name the user typed rather than this
+		 * store's own path encoding of one. Checked the same way as create:
+		 * not merely that the call answered, but that the store's own
+		 * listing agrees the folder is now called "Invoices". */
+		if (!camel_store_rename_folder_sync (store, "Receipts", "Invoices", NULL, &error))
+			return fail ("rename-folder", error);
+
+		info = camel_store_get_folder_info_sync (store, NULL,
+							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
+							 NULL, &error);
+		if (!info)
+			return fail ("folder-info-after-rename", error);
+
+		names = g_ptr_array_new_with_free_func (g_free);
+		collect_folder_names (info, names);
+		camel_folder_info_free (info);
+
+		report_sorted ("folders-after-rename", names);
+		g_ptr_array_unref (names);
+
+		/* The mirror image: `delete_folder_sync` on the renamed folder,
 		 * checked the same way — not merely that the call answered, but
 		 * that the store's own listing agrees the folder is gone. */
-		if (!camel_store_delete_folder_sync (store, "Receipts", NULL, &error))
+		if (!camel_store_delete_folder_sync (store, "Invoices", NULL, &error))
 			return fail ("delete-folder", error);
 
 		info = camel_store_get_folder_info_sync (store, NULL,
