@@ -1239,6 +1239,50 @@ Asserted:
   read the live `ESource` and pushed a `Calendar/set` update, not merely
   that the pure decision function behind it would have.
 
+## What the calendar-free-busy test asserts
+
+`rust/crates/jmap-functional/tests/calendar-free-busy.rs`, against
+`tests/functional/cal-free-busy-client.c`, is Track E Path A's
+`get_free_busy_sync` proven through a real, running backend instance — the
+piece `jmap-backend-cal/tests/backend.rs` and `tests/ops.rs` stop short of.
+`backend.rs` only proves the `get_free_busy_sync` vtable slot is installed
+on `ECalBackendSyncClass` (two levels up from `ECalMetaBackend`, since that
+is where EDS declares it); `ops.rs` only proves the pure
+attendee-answering decision (`ops::get_free_busy`) against a literal
+`CalSync::free_busy` stand-in, with no `ESource`/`ECalClient` involved.
+Neither drives the FFI glue in between: a real `ECalClient` asking a real,
+connected `ECalMetaBackend` instance for free/busy, which is what actually
+calls `jmap_cal_sync::CalSync::free_busy` — the `Principal/query` +
+`Principal/getAvailability` round trip described in that module's own doc
+comment — and marshals the answer back through `marshal::free_busy_list`
+into the `GSList` EDS hands the client.
+
+Like the calendar-colour test above, this calendar is standalone: D2/Track
+E's account-id resolution has no dependency on `jmap-backend-collection`,
+so the mock only needs one seeded calendar, one seeded `Principal` (an
+address the client asks about), and one seeded `CalendarEvent` busy inside
+the requested window.
+
+The client opens the calendar with `e_cal_client_connect_sync()`, which is
+what makes `evolution-calendar-factory` dlopen `libecalbackendjmap.so` and
+keeps a live backend instance running — `get_free_busy_sync` only ever
+fires on a backend that is connected. It then calls
+`e_cal_client_get_free_busy_sync()` for the seeded principal's address over
+a window that contains the seeded event, and reads the answer back off the
+one `ECalComponent` EDS returns: its `ATTENDEE` property and each
+`FREEBUSY` property's value and `FBTYPE` parameter.
+
+Asserted:
+
+- the source reached `connected`;
+- exactly one `ECalComponent` came back, addressed to the seeded
+  principal's `mailto:` address;
+- it carries exactly one `FREEBUSY` period, spanning the seeded event's
+  start and end, `FBTYPE=BUSY` — proof that the *running* vfunc actually
+  round-tripped through `Principal/query` + `Principal/getAvailability`
+  against the mock, not merely that the pure decision function behind it
+  would have.
+
 ## Debugging a failure
 
 The failure message carries the client's whole stdout and stderr, including

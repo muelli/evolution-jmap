@@ -74,17 +74,19 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-book-client PRIVATE ${LIBEBOOK_LIBRARIES})
 	target_link_directories(functional-book-client PRIVATE ${LIBEBOOK_LIBRARY_DIRS})
 
-	# Four calendar clients rather than one, because they ask different
+	# Five calendar clients rather than one, because they ask different
 	# questions: cal-client.c creates every event it looks at, cal-edit-client.c
 	# reads one the server already held and saves back the members no iCalendar
 	# line has room for, cal-zone-client.c asks what instant an event's zone
 	# resolves to — before and after each of the two kinds of edit a user can make
-	# to such an event — and cal-color-client.c asks the same question D1 asks of
+	# to such an event — cal-color-client.c asks the same question D1 asks of
 	# create/delete, but of D2's colour push: does a live backend instance's
 	# `source_changed` vfunc actually fire and reach the server, not just the
-	# pure decision function behind it. See the header of each.
+	# pure decision function behind it — and cal-free-busy-client.c asks that
+	# same "does the live vfunc actually run" question of Track E Path A's
+	# `get_free_busy_sync`. See the header of each.
 	#
-	# The third takes a mode argument, which the other two do not, because it asks
+	# The third takes a mode argument, which the others do not, because it asks
 	# its one question from both ends: `read` starts from a zone only the server
 	# can name, `create` from one only the client can. The two are separate runs
 	# and not phases of one — `create`'s zone must be in the calendar's timezone
@@ -94,10 +96,10 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# event-start.c holds the one function that reports the instant a start
 	# resolves to, so that a difference between what two of these programs answer
 	# is a difference in the event rather than in how it was measured. It is
-	# compiled into all four because that keeps this a single loop; cal-client.c
-	# and cal-color-client.c do not call it, and an unreferenced function costs
-	# nothing here.
-	foreach(_client cal cal-edit cal-zone cal-color)
+	# compiled into all five because that keeps this a single loop; cal-client.c,
+	# cal-color-client.c and cal-free-busy-client.c do not call it, and an
+	# unreferenced function costs nothing here.
+	foreach(_client cal cal-edit cal-zone cal-color cal-free-busy)
 		add_executable(functional-${_client}-client
 			tests/functional/${_client}-client.c
 			tests/functional/connection-status.c
@@ -243,6 +245,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_COLOR_CLIENT=$<TARGET_FILE:functional-cal-color-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# Track E Path A's `get_free_busy_sync` through a real, running backend
+	# instance: a free/busy query for a seeded principal, and whether the
+	# running vfunc actually round-trips it through `Principal/query` +
+	# `Principal/getAvailability` — not just whether the pure decision
+	# function behind it (`jmap-backend-cal/tests/ops.rs`) would.
+	add_test(
+		NAME functional-cal-free-busy
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test calendar-free-busy
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-free-busy PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_FREE_BUSY_CLIENT=$<TARGET_FILE:functional-cal-free-busy-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
 	# The collection backend's populate/fan-out: a real
