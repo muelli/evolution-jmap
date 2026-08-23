@@ -445,7 +445,13 @@ impl MailSync {
         if change.is_empty() {
             return Ok(());
         }
-        self.update_email(uid, change.patch())
+        let account_id = self.account_id().to_string();
+        let message_uid = uid.to_string();
+        tracing::debug!(account_id, uid = message_uid, "setting message keywords");
+        self.update_email(uid, change.patch()).map_err(|error| {
+            tracing::warn!(account_id, uid = message_uid, %error, "message keyword change failed");
+            error
+        })
     }
 
     /// Files one message into another mailbox — `transfer_messages_to_sync`.
@@ -477,7 +483,13 @@ impl MailSync {
         if filing.is_empty() {
             return Ok(());
         }
-        self.update_email(uid, filing.patch())
+        let account_id = self.account_id().to_string();
+        let message_uid = uid.to_string();
+        tracing::debug!(account_id, uid = message_uid, "filing message");
+        self.update_email(uid, filing.patch()).map_err(|error| {
+            tracing::warn!(account_id, uid = message_uid, %error, "message filing failed");
+            error
+        })
     }
 
     /// Makes one message leave a mailbox for good — `expunge_sync`.

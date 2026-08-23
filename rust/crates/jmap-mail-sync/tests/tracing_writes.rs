@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `MailSync::create_folder`/`delete_folder` and `set_subscribed`/
-//! `rename_folder` trace their writes with `account_id` and the folder's
-//! name/id, the Track B1 slice after `jmap-book-sync`'s
-//! (`tests/tracing_writes.rs` there).
+//! `MailSync::create_folder`/`delete_folder`, `set_subscribed`/
+//! `rename_folder`, and `set_keywords`/`file_message` trace their writes with
+//! `account_id` and the folder's/message's name/id, the Track B1 slice after
+//! `jmap-book-sync`'s (`tests/tracing_writes.rs` there).
 
 use std::sync::{Arc, Mutex};
 
 use jmap_client::{Client, Credentials};
-use jmap_mail_sync::MailSync;
-use jmap_mock::MockServer;
+use jmap_mail_sync::{Filing, KeywordChange, Keywords, MailSync};
+use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id as SpanId, Record};
@@ -40,6 +40,20 @@ impl Fixture {
             .account_mut(&self.account_id)
             .unwrap()
             .seed_mailbox(name, None)
+    }
+
+    /// One message, filed in `mailbox`, with no keywords.
+    fn seed_message(&self, mailbox: &Id) -> Id {
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&self.account_id).unwrap();
+        account.seed_email(EmailSeed::new(
+            mailbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ))
     }
 }
 
@@ -292,5 +306,159 @@ fn renaming_a_nonexistent_folder_traces_the_failure() {
             .iter()
             .any(|(level, name, _)| *level == Level::WARN && name == "error"),
         "expected a WARN error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn setting_keywords_traces_the_account_and_uid_on_success() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let uid = fixture.seed_message(&inbox);
+    let sync = fixture.sync();
+    let before = Keywords::default();
+    let after = Keywords::new(
+        &jmap_mail_sync::MessageFlags {
+            seen: true,
+            ..Default::default()
+        },
+        &[],
+    );
+    let change = KeywordChange::between(&before, &after);
+
+    let captured = capture(|| {
+        sync.set_keywords(&uid, &change).unwrap();
+    });
+
+    assert!(
+        has(
+            &captured,
+            Level::DEBUG,
+            "account_id",
+            fixture.account_id.as_ref()
+        ),
+        "expected a DEBUG account_id field, got {captured:?}"
+    );
+    assert!(
+        has(&captured, Level::DEBUG, "uid", uid.as_ref()),
+        "expected a DEBUG uid field, got {captured:?}"
+    );
+    assert!(
+        captured.iter().all(|(_, name, _)| name != "error"),
+        "a successful keyword change should not log an error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn setting_keywords_on_a_nonexistent_message_traces_the_failure() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let before = Keywords::default();
+    let after = Keywords::new(
+        &jmap_mail_sync::MessageFlags {
+            seen: true,
+            ..Default::default()
+        },
+        &[],
+    );
+    let change = KeywordChange::between(&before, &after);
+
+    let captured = capture(|| {
+        let _ = sync.set_keywords(&Id::new("E404"), &change);
+    });
+
+    assert!(
+        captured
+            .iter()
+            .any(|(level, name, _)| *level == Level::WARN && name == "error"),
+        "expected a WARN error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn setting_an_empty_keyword_change_traces_nothing_at_all() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let uid = fixture.seed_message(&inbox);
+    let sync = fixture.sync();
+    let same = Keywords::default();
+    let change = KeywordChange::between(&same, &same);
+    assert!(change.is_empty());
+
+    let captured = capture(|| {
+        sync.set_keywords(&uid, &change).unwrap();
+    });
+
+    assert!(
+        captured.is_empty(),
+        "an empty change sends no request and should trace nothing, got {captured:?}"
+    );
+}
+
+#[test]
+fn filing_a_message_traces_the_account_and_uid_on_success() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let archive = fixture.seed_mailbox("Archive");
+    let uid = fixture.seed_message(&inbox);
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        sync.file_message(&uid, &Filing::copied_into(archive.clone()))
+            .unwrap();
+    });
+
+    assert!(
+        has(
+            &captured,
+            Level::DEBUG,
+            "account_id",
+            fixture.account_id.as_ref()
+        ),
+        "expected a DEBUG account_id field, got {captured:?}"
+    );
+    assert!(
+        has(&captured, Level::DEBUG, "uid", uid.as_ref()),
+        "expected a DEBUG uid field, got {captured:?}"
+    );
+    assert!(
+        captured.iter().all(|(_, name, _)| name != "error"),
+        "a successful filing should not log an error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn filing_a_nonexistent_message_traces_the_failure() {
+    let fixture = Fixture::start();
+    let archive = fixture.seed_mailbox("Archive");
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        let _ = sync.file_message(&Id::new("E404"), &Filing::copied_into(archive));
+    });
+
+    assert!(
+        captured
+            .iter()
+            .any(|(level, name, _)| *level == Level::WARN && name == "error"),
+        "expected a WARN error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn filing_a_message_into_the_mailbox_it_is_already_in_traces_nothing_at_all() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let uid = fixture.seed_message(&inbox);
+    let sync = fixture.sync();
+    let filing = Filing::moved(inbox.clone(), inbox);
+    assert!(filing.is_empty());
+
+    let captured = capture(|| {
+        sync.file_message(&uid, &filing).unwrap();
+    });
+
+    assert!(
+        captured.is_empty(),
+        "an empty filing sends no request and should trace nothing, got {captured:?}"
     );
 }
