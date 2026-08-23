@@ -256,3 +256,42 @@ in the invocation, worth failing loudly on.
 
 Anything short of that is a finding, not a nuisance — write it down in
 `docs/NIGHT-LOG.md`.
+
+## `jmap-cal-sync`'s free/busy test
+
+`rust/crates/jmap-cal-sync/tests/live_server.rs` is a second, separate
+live-server file, in the crate that actually implements
+`ECalBackendSync::get_free_busy_sync` — `jmap-client`'s own file proves the
+wire calls (`Calendar/set`, `CalendarEvent/set`) round-trip, but nothing
+there drives `CalSync::free_busy` itself (`Principal/query` by email, then
+`Principal/getAvailability`, then `jmap_ical::busy_periods_to_vfreebusy`'s
+marshalling) — the actual decision the meeting-scheduler vfunc makes.
+
+It reads the *same* `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`/
+`_REBASE_URLS` variables step 2/3 above already set up — no new credentials
+needed if you already enabled the write-path tests — but any account with
+the calendars capability works, since this test only asks about its *own*
+address (every real account has a `Principal` of its own, so there is
+nothing second to provision the way step 3a's recipient account is). Run it
+with:
+
+```console
+$ cargo test -p evolution-jmap-cal-sync -- --ignored
+```
+
+No `--features live-server` gate: unlike `jmap-client`, this crate defines
+no such feature — `#[ignore]` alone already keeps it out of a plain `cargo
+test`, the same mechanism that gates `jmap-client`'s own file.
+
+`free_busy_of_the_calendar_owner_reflects_a_real_event_against_the_real_server`
+creates a one-hour event on the account's default calendar, asks
+`free_busy` about the account's own address (plus a second, nonexistent
+address in the same call, confirming it is silently absent — the "invited
+someone outside the organisation" case, per
+`jmap-cal-sync/tests/freebusy.rs`'s equivalent mock test), confirms the
+answer's `VFREEBUSY` names the account and carries a
+`FREEBUSY;FBTYPE=BUSY:` line for exactly the event's window (`CalendarEvent::
+simple` anchors the event to `Etc/UTC`, so the digits are expected to match
+exactly, the same bar the mock-based tests hold to — not merely "some busy
+period exists"), then destroys the event. Skipped, not failed, when
+`JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
