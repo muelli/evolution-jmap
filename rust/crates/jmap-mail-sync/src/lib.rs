@@ -667,9 +667,16 @@ impl MailSync {
         keywords: &Keywords,
         received_at: Option<i64>,
     ) -> Result<Id, SyncError> {
+        let account_id = self.account_id().to_string();
+        let mailbox_id = mailbox.to_string();
+        tracing::debug!(account_id, mailbox_id, "importing message");
         let upload = self
             .client
-            .upload_blob(&self.account_id, MESSAGE_MEDIA_TYPE, source)?;
+            .upload_blob(&self.account_id, MESSAGE_MEDIA_TYPE, source)
+            .map_err(|error| {
+                tracing::warn!(account_id, mailbox_id, %error, "message import failed");
+                error
+            })?;
 
         let mut import = EmailImport::new(upload.blob_id, mailbox.clone());
         for keyword in keywords.iter() {
@@ -679,7 +686,13 @@ impl MailSync {
             import = import.received_at(UtcDate::new(received_at));
         }
 
-        let imported = self.client.email_import(&self.account_id, &import)?;
+        let imported = self
+            .client
+            .email_import(&self.account_id, &import)
+            .map_err(|error| {
+                tracing::warn!(account_id, mailbox_id, %error, "message import failed");
+                error
+            })?;
         imported
             .id
             .ok_or_else(|| SyncError::protocol("Email/import created a message without an id"))
@@ -723,11 +736,21 @@ impl MailSync {
             ..
         } = outgoing;
 
+        let account_id = self.account_id().to_string();
+        let identity_id = identity.to_string();
+        tracing::debug!(account_id, identity_id, "sending message");
+
         // No `receivedAt`: the message is arriving now, and the server's clock
         // is the one every other client of the account will read it by.
+        // `import_message`'s own trace already covers this half of the send.
         let uid = self.import_message(&staging, source, &keywords, None)?;
+        let message_uid = uid.to_string();
         self.client
-            .submit_email(&self.account_id, &uid, &identity, envelope, accepted)?;
+            .submit_email(&self.account_id, &uid, &identity, envelope, accepted)
+            .map_err(|error| {
+                tracing::warn!(account_id, identity_id, uid = message_uid, %error, "message submission failed");
+                error
+            })?;
         Ok(uid)
     }
 
