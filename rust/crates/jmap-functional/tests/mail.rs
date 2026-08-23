@@ -205,21 +205,35 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "the store's own listing did not gain the new folder\n{report}"
     );
 
-    // The other end for both create and delete together: the client runs to
-    // completion — create, then delete — before any assertion here can look
-    // at the mock's state, so there is no point between the two calls to
-    // catch the mock mid-create the way the address-book/calendar removal
-    // tests do. What the method log *can* still prove is that both requests
-    // actually reached the server rather than the provider answering out of
-    // a purely local cache: exactly two `Mailbox/set` calls, one per write.
+    // `rename_folder_sync`, driven through the real vtable rather than the
+    // plain decision function `manage::rename_folder`. The last component
+    // changed under the same (root) parent — the "name the user typed" half
+    // of `manage.rs`'s own doc comment, not a drag-and-drop of the folder's
+    // existing path encoding.
+    assert_eq!(
+        seen.get("folders-after-rename"),
+        Some(&"Drafts,Inbox,Invoices,Sent"),
+        "the store's own listing did not reflect the rename\n{report}"
+    );
+
+    // The other end for create, rename and delete together: the client runs
+    // to completion — create, then rename, then delete — before any
+    // assertion here can look at the mock's state, so there is no point
+    // between the calls to catch the mock mid-sequence the way the
+    // address-book/calendar removal tests do. What the method log *can*
+    // still prove is that all three requests actually reached the server
+    // rather than the provider answering out of a purely local cache:
+    // exactly three `Mailbox/set` calls, one per write.
     let mailbox_set_calls = calls.iter().filter(|call| *call == "Mailbox/set").count();
     assert_eq!(
-        mailbox_set_calls, 2,
-        "expected one Mailbox/set for the create and one for the delete; saw {mailbox_set_calls} in {calls:?}\n{report}"
+        mailbox_set_calls, 3,
+        "expected one Mailbox/set each for the create, the rename and the delete; saw {mailbox_set_calls} in {calls:?}\n{report}"
     );
 
     // `delete_folder_sync`, the mirror image: driven through the real
-    // vtable, not the plain decision function `manage::delete_folder`.
+    // vtable, not the plain decision function `manage::delete_folder` —
+    // deleting the folder by its post-rename name, since that is what the
+    // client asked to delete.
     assert_eq!(
         seen.get("folders-after-delete"),
         Some(&"Drafts,Inbox,Sent"),
@@ -227,7 +241,9 @@ fn camel_opens_the_store_and_serves_the_inbox() {
     );
 
     // And the other end: the mock's mailbox store actually lost it too, not
-    // merely that the provider claimed success.
+    // merely that the provider claimed success — checked under both names,
+    // since a rename that silently left a stale copy behind under the old
+    // name would still pass a check that only looked for the new one.
     {
         let state = server.state();
         let state = state.lock().expect("mock state lock");
@@ -240,8 +256,8 @@ fn camel_opens_the_store_and_serves_the_inbox() {
             .map(|(_, mailbox)| mailbox.name.as_str())
             .collect();
         assert!(
-            !names.contains("Receipts"),
-            "the mock's own mailbox store still holds \"Receipts\" after delete; it holds {names:?}\n{report}"
+            !names.contains("Receipts") && !names.contains("Invoices"),
+            "the mock's own mailbox store still holds the renamed/deleted folder after delete; it holds {names:?}\n{report}"
         );
     }
 }
