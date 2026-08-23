@@ -704,6 +704,7 @@ dependencies = [
  "jmap-backend-core",
  "jmap-config",
  "jmap-mail",
+ "tracing",
 ]
 
 [[package]]

@@ -38,6 +38,9 @@ evolution-jmap-collection-sync = { workspace = true }
 gio-sys = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
+# Facade only, no `tracing-subscriber`/`tracing-journald` — mirrors
+# `evolution-jmap-client`'s own precedent for keeping a non-init crate lean.
+tracing = { workspace = true }
 # The `EOAuth2Service` implementation the module load registers alongside the
 # backend and its factory — see module.rs. `jmap-config` dev-depends on this
 # crate for its own account/collection round-trip tests, which is a
