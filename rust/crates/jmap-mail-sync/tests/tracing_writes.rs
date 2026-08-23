@@ -2,17 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `MailSync::create_folder`/`delete_folder`, `set_subscribed`/
-//! `rename_folder`, `set_keywords`/`file_message`, and `expunge_message`
-//! trace their writes with `account_id` and the folder's/message's name/id,
-//! the Track B1 slice after `jmap-book-sync`'s (`tests/tracing_writes.rs`
-//! there).
+//! `rename_folder`, `set_keywords`/`file_message`, `expunge_message`, and
+//! `import_message`/`send_message` trace their writes with `account_id` and
+//! the folder's/message's name/id, the Track B1 slice after
+//! `jmap-book-sync`'s (`tests/tracing_writes.rs` there).
 
 use std::sync::{Arc, Mutex};
 
 use jmap_client::{Client, Credentials};
-use jmap_mail_sync::{Filing, KeywordChange, Keywords, MailSync};
+use jmap_mail_sync::{Filing, KeywordChange, Keywords, MailSync, Outgoing};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
+use jmap_proto::mail::{Envelope, EnvelopeAddress};
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id as SpanId, Record};
 use tracing::{Event, Level, Metadata, Subscriber};
@@ -24,7 +25,11 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Self {
-        let server = MockServer::builder().start();
+        Self::started_with(MockServer::builder())
+    }
+
+    fn started_with(builder: jmap_mock::MockServerBuilder) -> Self {
+        let server = builder.start();
         let account_id = server.account_id();
         Self { server, account_id }
     }
@@ -41,6 +46,15 @@ impl Fixture {
             .account_mut(&self.account_id)
             .unwrap()
             .seed_mailbox(name, None)
+    }
+
+    fn seed_identity(&self, name: &str, email: &str) -> Id {
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&self.account_id)
+            .unwrap()
+            .seed_identity(name, email)
     }
 
     /// One message, filed in `mailbox`, with no keywords.
@@ -569,6 +583,152 @@ fn expunging_a_nonexistent_message_traces_the_failure() {
 
     let captured = capture(|| {
         let _ = sync.expunge_message(&Id::new("E404"), &inbox);
+    });
+
+    assert!(
+        captured
+            .iter()
+            .any(|(level, name, _)| *level == Level::WARN && name == "error"),
+        "expected a WARN error field, got {captured:?}"
+    );
+}
+
+const MESSAGE: &[u8] = b"From: Bob <bob@example.com>\r\n\
+To: Alice <alice@example.com>\r\n\
+Subject: Lunch?\r\n\
+Message-ID: <lunch@example.com>\r\n\
+Date: Thu, 15 Jan 2026 09:30:00 +0000\r\n\
+\r\n\
+One o'clock at the usual place.\r\n";
+
+#[test]
+fn importing_a_message_traces_the_account_and_mailbox_id_on_success() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        sync.import_message(&inbox, MESSAGE.to_vec(), &Keywords::default(), None)
+            .unwrap();
+    });
+
+    assert!(
+        has(
+            &captured,
+            Level::DEBUG,
+            "account_id",
+            fixture.account_id.as_ref()
+        ),
+        "expected a DEBUG account_id field, got {captured:?}"
+    );
+    assert!(
+        has(&captured, Level::DEBUG, "mailbox_id", inbox.as_ref()),
+        "expected a DEBUG mailbox_id field, got {captured:?}"
+    );
+    assert!(
+        captured.iter().all(|(_, name, _)| name != "error"),
+        "a successful import should not log an error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn importing_bytes_that_are_not_a_message_traces_the_failure() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        let _ = sync.import_message(
+            &inbox,
+            b"\x00\x01 not a message at all".to_vec(),
+            &Keywords::default(),
+            None,
+        );
+    });
+
+    assert!(
+        captured
+            .iter()
+            .any(|(level, name, _)| *level == Level::WARN && name == "error"),
+        "expected a WARN error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn importing_a_message_over_the_accounts_upload_limit_traces_the_failure() {
+    let fixture = Fixture::started_with(MockServer::builder().size_upload(1024));
+    let inbox = fixture.seed_mailbox("Inbox");
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        let _ = sync.import_message(&inbox, vec![b'x'; 4096], &Keywords::default(), None);
+    });
+
+    assert!(
+        captured
+            .iter()
+            .any(|(level, name, _)| *level == Level::WARN && name == "error"),
+        "expected a WARN error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn sending_a_message_traces_the_account_and_identity_on_success() {
+    let fixture = Fixture::start();
+    let drafts = fixture.seed_mailbox("Drafts");
+    let identity = fixture.seed_identity("Alice", "alice@example.com");
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        sync.send_message(Outgoing {
+            source: MESSAGE.to_vec(),
+            identity: identity.clone(),
+            envelope: Some(Envelope {
+                mail_from: EnvelopeAddress::new("alice@example.com"),
+                rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
+            }),
+            staging: drafts,
+            destination: None,
+        })
+        .unwrap();
+    });
+
+    assert!(
+        has(
+            &captured,
+            Level::DEBUG,
+            "account_id",
+            fixture.account_id.as_ref()
+        ),
+        "expected a DEBUG account_id field, got {captured:?}"
+    );
+    assert!(
+        has(&captured, Level::DEBUG, "identity_id", identity.as_ref()),
+        "expected a DEBUG identity_id field, got {captured:?}"
+    );
+    assert!(
+        captured.iter().all(|(_, name, _)| name != "error"),
+        "a successful send should not log an error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn sending_a_message_through_no_identity_traces_the_failure() {
+    let fixture = Fixture::start();
+    let drafts = fixture.seed_mailbox("Drafts");
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        let _ = sync.send_message(Outgoing {
+            source: MESSAGE.to_vec(),
+            identity: Id::new("I404"),
+            envelope: Some(Envelope {
+                mail_from: EnvelopeAddress::new("alice@example.com"),
+                rcpt_to: vec![EnvelopeAddress::new("bob@example.com")],
+            }),
+            staging: drafts,
+            destination: None,
+        });
     });
 
     assert!(
