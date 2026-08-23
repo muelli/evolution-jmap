@@ -431,3 +431,46 @@ creates a top-level folder via `MailSync::create_folder`, confirms it via
 `folder_tree`, then deletes it via `MailSync::delete_folder` and confirms it
 is gone. Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD`
 are unset.
+
+## `jmap-cal-sync`'s save/remove test
+
+`rust/crates/jmap-cal-sync/tests/live_server_save.rs` is the calendar
+counterpart of `jmap-book-sync`'s save/remove test above, in the crate that
+actually implements `ECalMetaBackend::save_component_sync`/
+`remove_component_sync` — `jmap-client/tests/live_server.rs` already proves
+`CalendarEvent/set` round-trips through `Client` directly, and this crate's
+own `live_server.rs` already proves `CalSync::free_busy` (a read-side
+decision), but nothing had driven `CalSync::save_component`/
+`remove_component` themselves: the iCalendar-to-`CalendarEvent` mapping and
+the create/update decision `save_component` makes.
+
+It reads the same `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`/
+`_REBASE_URLS` variables step 2/3 above already set up. Run it with:
+
+```console
+$ cargo test -p evolution-jmap-cal-sync --test live_server_save -- --ignored
+```
+
+No `--features live-server` gate, for the same reason as the other files.
+
+`saving_then_removing_an_event_round_trips_through_the_real_server` saves a
+new iCalendar VEVENT via `CalSync::save_component`, confirms it via
+`list_existing`, edits it (a summary change, mirroring an Evolution
+appointment rename) via `save_component` with `existing_uid`, confirms the
+edit via `load_component`, then removes it via `remove_component` and
+confirms it is gone. Skipped, not failed, when
+`JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
+
+While building this test against real Stalwart, it also caught a real client
+bug (fixed, not just found): `CalendarEvent/set`'s `created` response held
+only `id`, omitting every property the client had just sent (RFC 8620 §5.3
+permits this — none of those properties is server-set), the same class of
+bug `jmap-book-sync`'s save/remove test found for contacts.
+`CalSync::save_component`'s create branch rendered its return value straight
+from that terse object, so the iCalendar object handed back to EDS
+immediately after a save was missing the summary, start time, and everything
+else just written. Fixed by rendering from a fresh `load_component` after
+create, the same way the update branch already did — see
+`jmap-cal-sync/tests/terse_create.rs` for the headless, `jmap-mockd`-
+reproducible regression test (`MockServerBuilder::
+terse_calendar_event_create`), and `docs/NIGHT-LOG.md` for the full account.
