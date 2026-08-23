@@ -29,12 +29,15 @@ use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_CALENDAR, E_SOURCE_EXTENSION_RESOURCE,
     ESource, ESourceRegistryServer, e_server_side_source_get_write_directory,
     e_server_side_source_new, e_source_address_book_get_type, e_source_calendar_get_type,
-    e_source_get_extension, e_source_get_parent, e_source_get_writable, e_source_has_extension,
-    e_source_registry_server_new, e_source_set_display_name, g_file_new_for_path,
+    e_source_get_extension, e_source_get_parent, e_source_get_uid, e_source_get_writable,
+    e_source_has_extension, e_source_registry_server_new, e_source_set_display_name,
+    g_file_new_for_path,
 };
 use glib_sys::GFALSE;
 use gobject_sys::{GObject, g_object_unref};
-use jmap_backend_collection::create_resource::{adopt_created, create_on_server, requested_of};
+use jmap_backend_collection::create_resource::{
+    adopt_created, create_on_server, requested_of, stored_password_of,
+};
 use jmap_backend_collection::resource_id::{kind_of, resource_id_of};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::source::ConnectTarget;
@@ -352,5 +355,94 @@ fn adopting_a_created_child_is_not_what_offers_it_for_deletion() {
     assert!(
         unsafe { eds_sys::e_source_get_remote_deletable(scratch.source) } == GFALSE,
         "adopt_created set remote-deletable; the flag has two homes now"
+    );
+}
+
+/// Records every field of every event it sees, as `(name, value)` pairs —
+/// mirrors `jmap_backend_core::trampoline`'s own test-only subscriber, which
+/// this crate cannot reuse directly (it is private to that crate) and has no
+/// `tracing-subscriber` dev-dependency to build one from instead.
+struct CapturingSubscriber {
+    captured: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+}
+
+struct Recorder<'a>(&'a std::sync::Mutex<Vec<(String, String)>>);
+
+impl tracing::field::Visit for Recorder<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((field.name().to_owned(), format!("{value:?}")));
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((field.name().to_owned(), value.to_owned()));
+    }
+}
+
+impl tracing::Subscriber for CapturingSubscriber {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        event.record(&mut Recorder(&self.captured));
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+#[test]
+fn stored_password_of_a_gone_registry_server_names_the_account_in_a_structured_field() {
+    // `server.is_null()` is the "registry server is gone" branch — reachable
+    // with no `ESourceRegistryServer` at all, which keeps this test to the one
+    // thing under test (the `account_id` field) rather than also standing up a
+    // credentials provider that then has to fail a lookup.
+    let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
+    // SAFETY: a live source this test holds a reference to; the uid comes back
+    // `(transfer none)`.
+    let account_id =
+        unsafe { read_string(e_source_get_uid(scratch.source)) }.expect("every source has a uid");
+
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let subscriber = CapturingSubscriber {
+        captured: captured.clone(),
+    };
+
+    tracing::subscriber::with_default(subscriber, || {
+        // SAFETY: a NULL server (the branch under test), a live source, and no
+        // cancellable — all valid per `stored_password_of`'s own contract.
+        let password = unsafe {
+            stored_password_of(
+                ptr::null_mut(),
+                scratch.source,
+                ptr::null_mut(),
+                "create_resource_sync",
+            )
+        };
+        assert_eq!(password, None);
+    });
+
+    assert!(
+        captured
+            .lock()
+            .unwrap()
+            .contains(&("account_id".to_owned(), account_id)),
+        "expected an account_id field naming the source's own uid, got {:?}",
+        captured.lock().unwrap()
     );
 }

@@ -45,7 +45,8 @@ use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{
-    guard, guard_bool, guard_value, log_critical, log_critical_for_resource,
+    guard, guard_bool, guard_value, log_critical, log_critical_for_account,
+    log_critical_for_resource,
 };
 use jmap_collection_sync::Parts;
 
@@ -207,12 +208,15 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
         // SAFETY: EDS hands us one of its own backends, alive for the call, and
         // `ECollectionBackend` derives from `EBackend`.
         let source = unsafe { e_backend_get_source(backend.cast()) };
-        let (parts, user) = if source.is_null() {
+        let (parts, user, account_id) = if source.is_null() {
             log_critical("populate: the collection backend has no account source");
-            (Parts::NONE, None)
+            (Parts::NONE, None, None)
         } else {
             // SAFETY: a valid `ESource` owned by the backend, only read from.
-            unsafe { (parts_of(source), user_of(source)) }
+            let (parts, user) = unsafe { (parts_of(source), user_of(source)) };
+            // SAFETY: as above; the uid comes back `(transfer none)`.
+            let account_id = unsafe { read_string(e_source_get_uid(source)) };
+            (parts, user, account_id)
         };
 
         let collection = Live(backend);
@@ -226,17 +230,25 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
         if report.unidentified > 0 {
             // Unreachable through EDS — it only caches a source `dup_resource_id`
             // answered for — so reaching it means a source changed underneath.
-            log_critical(&format!(
+            let message = format!(
                 "populate: {} cached children of this account could not be named and stay hidden",
                 report.unidentified
-            ));
+            );
+            match account_id.as_deref() {
+                Some(account_id) => log_critical_for_account(account_id, &message),
+                None => log_critical(&message),
+            }
         }
 
-        debug_print(&format!(
+        let message = format!(
             "populate: {} cached children exported, asked to authenticate: {:?}",
             report.children.len(),
             report.asked
-        ));
+        );
+        match account_id.as_deref() {
+            Some(account_id) => debug_print_for_account(account_id, &message),
+            None => debug_print(&message),
+        }
     });
 }
 
@@ -355,7 +367,11 @@ unsafe extern "C" fn authenticate_sync(
         unsafe {
             authenticate_with(source, credentials, cancellable, error, |login| {
                 let report = fan_out(&collection, &login)?;
-                report_fan_out(&report);
+                // SAFETY: `authenticate_with` only calls this closure once
+                // `source` is confirmed non-NULL; the uid comes back
+                // `(transfer none)`. (Already inside the outer `unsafe` block.)
+                let account_id = read_string(e_source_get_uid(source));
+                report_fan_out(&report, account_id.as_deref());
                 Ok(())
             })
         }
@@ -694,7 +710,11 @@ unsafe fn login_for(
 /// one address book of it could not be written, and turning a per-child
 /// failure into a failed authentication would take the whole account offline
 /// over one collection.
-fn report_fan_out(report: &Populated) {
+///
+/// `account_id` names the account this fan-out ran for, attached only to the
+/// summary line below — the three per-child lists above already carry their
+/// own `resource_id`, a more specific structured field than the account's.
+fn report_fan_out(report: &Populated, account_id: Option<&str>) {
     for resource_id in &report.uncreated {
         log_critical_for_resource(
             resource_id,
@@ -720,10 +740,14 @@ fn report_fan_out(report: &Populated) {
         );
     }
 
-    debug_print(&format!(
+    let message = format!(
         "authenticate_sync: {} children written",
         report.children.len()
-    ));
+    );
+    match account_id {
+        Some(account_id) => debug_print_for_account(account_id, &message),
+        None => debug_print(&message),
+    }
 }
 
 /// A live collection, as a populate and a fan-out use it: the EDS calls behind
@@ -962,6 +986,15 @@ fn debug_print_for_resource(resource_id: &str, message: &str) {
     debug_print_eds(message);
 }
 
+/// Like [`debug_print`], but also attaches `account_id` as a structured
+/// `tracing` field, mirroring [`log_critical_for_account`] at DEBUG level —
+/// for a `populate`/fan-out summary spanning a whole account's children, which
+/// has no single resource to name. The EDS debug-channel side is unchanged.
+fn debug_print_for_account(account_id: &str, message: &str) {
+    tracing::debug!(account_id, "{message}");
+    debug_print_eds(message);
+}
+
 /// The EDS debug-channel half [`debug_print`] and [`debug_print_for_resource`]
 /// share.
 fn debug_print_eds(message: &str) {
@@ -1047,6 +1080,27 @@ mod debug_print_tests {
                 .unwrap()
                 .contains(&("resource_id".to_owned(), "addressbook-1".to_owned())),
             "expected a resource_id=addressbook-1 field, got {:?}",
+            captured.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn debug_print_for_account_attaches_the_account_id_as_a_structured_field() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            debug_print_for_account("account-1", "3 cached children exported");
+        });
+
+        assert!(
+            captured
+                .lock()
+                .unwrap()
+                .contains(&("account_id".to_owned(), "account-1".to_owned())),
+            "expected an account_id=account-1 field, got {:?}",
             captured.lock().unwrap()
         );
     }
