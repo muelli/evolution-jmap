@@ -622,8 +622,12 @@ fn place_name(location: &Value) -> Option<&str> {
 /// - **A value that is not `true`.** RFC 8984 §1.4.3 has every value of a Set be
 ///   `true`; drawing anything else would say the tag is set where the server said
 ///   it is not.
-/// - **An empty tag.** An empty part of a value list reads back as nothing at
-///   all, so the tag would vanish between the drawing and the save.
+/// - **An empty, or whitespace-only, tag.** An empty part of a value list reads
+///   back as nothing at all, so the tag would vanish between the drawing and the
+///   save; a whitespace-only one fares no better, because drawing it writes an
+///   unescaped `CATEGORIES: ` line and [`read_keywords`] reads that bare
+///   whitespace back as nothing too (calcard's own parser trims it), so it would
+///   vanish just as surely, one round trip later.
 /// - **A tag holding a carriage return.** It is dropped on its way onto a content
 ///   line — see `syntax::fold_into`, where that is a security property and not
 ///   tidiness — so the tag would come back spelled differently and a save would
@@ -632,7 +636,7 @@ fn place_name(location: &Value) -> Option<&str> {
 /// The single point the save and `drawn_tags` agree through, so a tag cannot be
 /// called shown and then left off the line.
 pub fn maps_keyword(tag: &str, set: &Value) -> bool {
-    set == &Value::Bool(true) && !tag.is_empty() && !tag.contains('\r')
+    set == &Value::Bool(true) && !tag.trim().is_empty() && !tag.contains('\r')
 }
 
 /// The tags to write on the `CATEGORIES` line, in the order the set holds them —
@@ -3291,6 +3295,17 @@ fn fetched_locally(href: &str) -> bool {
 /// and `CATEGORIES:a,,b` state nothing between their separators, which is not the
 /// same as stating a tag whose name is nothing.
 ///
+/// Leading and trailing whitespace is trimmed off each tag, and a
+/// whitespace-only value is dropped the same way an empty one is, rather than
+/// carried literally: writing a tag's edge whitespace back emits it unescaped
+/// (`CATEGORIES:0 ` for a tag stated as `"0 "`), and calcard's own parser
+/// trims exactly that bare edge whitespace on the next parse — so carrying it
+/// here would only defer the trim by one round trip instead of applying it on
+/// the first, which is what a fixed point requires. Trimming up front makes
+/// what gets read match what a second read would produce anyway. (See
+/// [`maps_keyword`], which refuses to draw a now-unreachable whitespace-only
+/// tag for the matching reason.)
+///
 /// `None` rather than an empty map for a component with no tags, for the reason
 /// [`read_locations`] gives: the save path reads an edit off a difference from
 /// what was shown, and an empty set would claim the event is untagged where the
@@ -3298,6 +3313,7 @@ fn fetched_locally(href: &str) -> bool {
 fn read_keywords(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
     let tags: BTreeMap<String, Value> = component_entries(vevent, "CATEGORIES")
         .flat_map(entry_texts)
+        .map(|tag| tag.trim().to_owned())
         .filter(|tag| !tag.is_empty())
         .map(|tag| (tag, Value::Bool(true)))
         .collect();

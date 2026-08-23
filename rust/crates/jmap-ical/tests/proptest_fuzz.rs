@@ -492,3 +492,48 @@ fn a_space_before_an_escaped_character_in_a_category_survives_a_roundtrip() {
         "the space before the escaped semicolon must survive the round trip"
     );
 }
+
+/// Regression test for `docs/BACKLOG.md`'s "`jmap-ical` round trip is not a
+/// fixed point for a whitespace-only `CATEGORIES` value": a `CATEGORIES`
+/// value that is a single backslash-escaped space parses as the literal tag
+/// `" "` (calcard keeps an escaped character verbatim), which this crate then
+/// writes back unescaped as a bare `CATEGORIES: ` line — and calcard's own
+/// parser trims that bare, unescaped whitespace to the empty string on the
+/// next parse, so the tag disappears one round trip later than an event
+/// starting with no tag at all.
+#[test]
+fn a_category_that_is_only_whitespace_reaches_fixed_point_on_the_first_emit() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCATEGORIES:\\ \r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    let parsed1 = ical_to_event(ics).expect("an escaped-space CATEGORIES value must parse");
+    let ical1 = event_to_ical(&parsed1);
+    let parsed2 = ical_to_event(&ical1).expect("re-parsing the emitted iCal must succeed");
+    let ical2 = event_to_ical(&parsed2);
+
+    assert_eq!(
+        ical1, ical2,
+        "re-emitted iCalendar must reach a fixed-point"
+    );
+}
+
+/// Same root cause as the test above, but with real content beside the
+/// whitespace: a trailing space survives the first parse (escaped) but is
+/// trimmed by calcard on the second (unescaped, bare) — so a tag `"0 "`
+/// settles to `"0"` one round trip later than a tag starting at `"0"`
+/// outright. Found by `proptest` after the whitespace-only fix above landed;
+/// pinned deterministically for the same reason the sibling regression tests
+/// in this file are.
+#[test]
+fn a_category_with_trailing_whitespace_reaches_fixed_point_on_the_first_emit() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCATEGORIES:\\0 \r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    let parsed1 = ical_to_event(ics).expect("an escaped CATEGORIES value must parse");
+    let ical1 = event_to_ical(&parsed1);
+    let parsed2 = ical_to_event(&ical1).expect("re-parsing the emitted iCal must succeed");
+    let ical2 = event_to_ical(&parsed2);
+
+    assert_eq!(
+        ical1, ical2,
+        "re-emitted iCalendar must reach a fixed-point"
+    );
+}
