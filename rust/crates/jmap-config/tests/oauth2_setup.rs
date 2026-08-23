@@ -119,31 +119,46 @@ fn a_server_issuing_a_secret_anyway_has_it_carried_into_the_config() {
 }
 
 #[test]
-fn registration_asks_for_every_scope_the_deployment_advertises() {
-    // Confirmed against a real deployment (Fastmail, see
-    // `docs/OAUTH-FASTMAIL.md`): a registration naming no `scope` is issued an
-    // *empty* default, which RFC 6749 §3.3 lets an authorization request that
-    // itself omits `scope` fall back to — a token with no JMAP access at all.
+fn registration_asks_for_the_scopes_this_client_uses_and_no_others() {
+    // Two real-deployment lessons (Fastmail, `docs/OAUTH-FASTMAIL.md`):
+    // a registration naming no `scope` is issued an *empty* default, which
+    // RFC 6749 §3.3 lets a scope-less authorization request fall back to — a
+    // token with no JMAP access at all. And a registration naming *every*
+    // advertised scope inherits a default the user cannot be asked to
+    // consent to: Fastmail's authorization endpoint answered
+    // `error=invalid_scope` for a registered set including its MCP and
+    // OpenID Connect scopes (observed live 2026-08-23). So: exactly the
+    // scopes this client uses — the JMAP data scopes plus `offline_access`
+    // for a refresh token — from those the deployment advertises, and the
+    // same string is carried into `Config::scope` for the authorization
+    // request to name explicitly.
     let server = MockServer::builder()
         .oauth_authorization_server(|origin| {
             let mut document = metadata(origin);
             document["scopes_supported"] = json!([
                 "urn:ietf:params:oauth:scope:mail",
                 "urn:ietf:params:oauth:scope:contacts",
+                "urn:ietf:params:oauth:scope:calendars",
+                "https://provider.example/dev/mcp",
+                "openid",
+                "profile",
+                "email",
+                "offline_access",
             ]);
             document
         })
         .oauth_client_registration(|request| {
             assert_eq!(
                 request["scope"],
-                "urn:ietf:params:oauth:scope:mail urn:ietf:params:oauth:scope:contacts"
+                "urn:ietf:params:oauth:scope:mail urn:ietf:params:oauth:scope:contacts \
+                 urn:ietf:params:oauth:scope:calendars offline_access"
             );
             (201, json!({"client_id": "abc123"}))
         })
         .start();
     let (host, port) = host_and_port(&server);
 
-    discover_and_register(
+    let config = discover_and_register(
         &UreqTransport::default(),
         host,
         port,
@@ -152,6 +167,15 @@ fn registration_asks_for_every_scope_the_deployment_advertises() {
         None,
     )
     .expect("the deployment registers this client");
+    assert_eq!(
+        config.scope.as_deref(),
+        Some(
+            "urn:ietf:params:oauth:scope:mail urn:ietf:params:oauth:scope:contacts \
+             urn:ietf:params:oauth:scope:calendars offline_access"
+        ),
+        "the registered scope must be carried into the config for the \
+         authorization request to name explicitly"
+    );
 }
 
 #[test]

@@ -99,15 +99,31 @@ pub fn discover_and_register(
     }
     let registration_endpoint = server.registration_endpoint.ok_or(Error::NoRegistration)?;
 
-    // Ask for every scope the deployment advertises, rather than naming none:
-    // confirmed against a real deployment (see `docs/OAUTH-FASTMAIL.md`) that
-    // a registration naming no scope is issued an *empty* default, which RFC
-    // 6749 §3.3 then lets an authorization request that also omits `scope`
-    // fall back to — silently producing a token with no JMAP access at all.
-    // A deployment naming none (the pure RFC 8620 case, `scopes_supported`
-    // absent from its metadata) keeps today's behaviour: no `scope` sent,
-    // whatever the server treats as its own default.
-    let scope = (!server.scopes_supported.is_empty()).then(|| server.scopes_supported.join(" "));
+    // Register — and later request — exactly the scopes this client uses,
+    // chosen from those the deployment advertises: the JMAP data scopes (as
+    // `docs/OAUTH-FASTMAIL.md` records their spelling) plus `offline_access`
+    // for a refresh token. Naming none is wrong (a registration naming no
+    // `scope` can be issued an *empty* default — a token with no JMAP access
+    // at all), and naming everything advertised is wrong too: the registered
+    // set becomes the RFC 6749 §3.3 default, and a default containing
+    // provider extras (Fastmail's MCP scope, OpenID Connect identity scopes)
+    // has been seen rejected outright — `error=invalid_scope` at the
+    // authorization endpoint, observed live 2026-08-23. A deployment naming
+    // none (the pure RFC 8620 case, `scopes_supported` absent) keeps today's
+    // behaviour: no `scope` sent, everything granted implicitly.
+    const REQUESTED_SCOPES: [&str; 4] = [
+        "urn:ietf:params:oauth:scope:mail",
+        "urn:ietf:params:oauth:scope:contacts",
+        "urn:ietf:params:oauth:scope:calendars",
+        "offline_access",
+    ];
+    let picked: Vec<&str> = server
+        .scopes_supported
+        .iter()
+        .map(String::as_str)
+        .filter(|advertised| REQUESTED_SCOPES.contains(advertised))
+        .collect();
+    let scope = (!picked.is_empty()).then(|| picked.join(" "));
 
     let registered = oauth::register_client(
         transport,
@@ -128,5 +144,6 @@ pub fn discover_and_register(
         authorization_endpoint: server.authorization_endpoint,
         token_endpoint: server.token_endpoint,
         redirect_uri: Some(redirect_uri.to_owned()),
+        scope,
     })
 }

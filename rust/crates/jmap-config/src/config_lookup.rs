@@ -502,6 +502,12 @@ unsafe fn add_result(
         add_optional_string(
             result,
             oauth2::EXTENSION_NAME,
+            c"scope",
+            config.scope.as_deref(),
+        );
+        add_optional_string(
+            result,
+            oauth2::EXTENSION_NAME,
             c"redirect-uri",
             config.redirect_uri.as_deref(),
         );

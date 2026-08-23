@@ -102,6 +102,12 @@ pub struct Config {
     /// RFC 6749 §3.1.2's `redirect_uri`, fixed at registration time and asked
     /// for again on every authentication — `get_redirect_uri`.
     pub redirect_uri: Option<String>,
+    /// The space-joined RFC 6749 §3.3 scope this client registered for and
+    /// must therefore name explicitly on every authorization request —
+    /// relying on the registered default instead is server-discretionary and
+    /// has been seen rejected live (`error=invalid_scope`, Fastmail
+    /// 2026-08-23). Absent for a deployment advertising no scopes.
+    pub scope: Option<String>,
 }
 
 /// The instance struct: nothing but [`ESourceExtension`]'s own state plus one
@@ -133,6 +139,7 @@ struct Fields {
     authorization_endpoint: Option<CString>,
     token_endpoint: Option<CString>,
     redirect_uri: Option<CString>,
+    scope: Option<CString>,
     /// Values a later write replaced, kept alive rather than freed.
     ///
     /// [`borrowed`] hands an `EOAuth2Service` vfunc's caller a `const gchar
@@ -172,6 +179,7 @@ impl Fields {
                 PROP_AUTHORIZATION_ENDPOINT => &mut self.authorization_endpoint,
                 PROP_TOKEN_ENDPOINT => &mut self.token_endpoint,
                 PROP_REDIRECT_URI => &mut self.redirect_uri,
+                PROP_SCOPE => &mut self.scope,
                 _ => return false,
             };
             if *slot == value {
@@ -195,6 +203,7 @@ impl Fields {
             PROP_AUTHORIZATION_ENDPOINT => Some(&self.authorization_endpoint),
             PROP_TOKEN_ENDPOINT => Some(&self.token_endpoint),
             PROP_REDIRECT_URI => Some(&self.redirect_uri),
+            PROP_SCOPE => Some(&self.scope),
             _ => None,
         }
     }
@@ -203,12 +212,13 @@ impl Fields {
 /// The five properties' ids and the names `class_init` installs them under —
 /// dense from 1, since GObject treats 0 as "no property", and local to this
 /// class alone.
-const PROPERTIES: [(u32, &CStr); 5] = [
+const PROPERTIES: [(u32, &CStr); 6] = [
     (1, c"client-id"),
     (2, c"client-secret"),
     (3, c"authorization-endpoint"),
     (4, c"token-endpoint"),
     (5, c"redirect-uri"),
+    (6, c"scope"),
 ];
 
 const PROP_CLIENT_ID: u32 = PROPERTIES[0].0;
@@ -216,6 +226,7 @@ const PROP_CLIENT_SECRET: u32 = PROPERTIES[1].0;
 const PROP_AUTHORIZATION_ENDPOINT: u32 = PROPERTIES[2].0;
 const PROP_TOKEN_ENDPOINT: u32 = PROPERTIES[3].0;
 const PROP_REDIRECT_URI: u32 = PROPERTIES[4].0;
+const PROP_SCOPE: u32 = PROPERTIES[5].0;
 
 // SAFETY: both structs are #[repr(C)] and lead with ESourceExtension's own
 // instance/class structs, whose layout eds-sys's tests/layout.rs checks
@@ -413,6 +424,7 @@ pub unsafe fn apply(source: *mut ESource, config: &Config) {
         (PROP_AUTHORIZATION_ENDPOINT, &config.authorization_endpoint),
         (PROP_TOKEN_ENDPOINT, &config.token_endpoint),
         (PROP_REDIRECT_URI, &config.redirect_uri),
+        (PROP_SCOPE, &config.scope),
     ] {
         // Every id here is one of `PROPERTIES`' own, so `set` cannot decline.
         fields.set(id, value.as_deref().map(cstring_lossy));
@@ -462,6 +474,10 @@ pub unsafe fn read(source: *mut ESource) -> Config {
             .map(|value| value.to_string_lossy().into_owned()),
         redirect_uri: fields
             .redirect_uri
+            .as_ref()
+            .map(|value| value.to_string_lossy().into_owned()),
+        scope: fields
+            .scope
             .as_ref()
             .map(|value| value.to_string_lossy().into_owned()),
     }
@@ -584,4 +600,14 @@ pub unsafe fn token_endpoint(source: *mut ESource) -> *const c_char {
 /// `source` must be a valid `ESource`.
 pub unsafe fn redirect_uri(source: *mut ESource) -> *const c_char {
     unsafe { borrowed(source, |fields| &fields.redirect_uri) }
+}
+
+/// `source`'s registered `scope`, or NULL — absent for a deployment that
+/// advertises no scopes. See [`borrowed`] for the pointer's lifetime.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`.
+pub unsafe fn scope(source: *mut ESource) -> *const c_char {
+    unsafe { borrowed(source, |fields| &fields.scope) }
 }

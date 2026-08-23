@@ -80,12 +80,13 @@
 
 use std::ffi::{CStr, c_char};
 use std::ptr;
+use std::sync::OnceLock;
 
 use eds_sys::{
     EOAuth2Service, EOAuth2ServiceBase, EOAuth2ServiceBaseClass, EOAuth2ServiceInterface, ESource,
     e_oauth2_service_base_get_type, e_oauth2_service_get_type,
 };
-use glib_sys::GType;
+use glib_sys::{GHashTable, GType, g_hash_table_replace, g_strdup};
 use jmap_backend_core::i18n::{self, N_};
 use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
@@ -157,7 +158,57 @@ unsafe impl InterfaceImpl for Vtable {
         vtable.get_authentication_uri = Some(get_authentication_uri);
         vtable.get_refresh_uri = Some(get_refresh_uri);
         vtable.get_redirect_uri = Some(get_redirect_uri);
+        // The interface's own slot arrives pre-filled with EDS's default,
+        // which builds the standard RFC 6749 query but knows nothing of
+        // scope — concrete services add their own (EDS's Google and Outlook
+        // implementations do exactly this). Keep the default reachable and
+        // chain to it, then add ours.
+        if let Some(default) = vtable.prepare_authentication_uri_query {
+            let _ = DEFAULT_PREPARE_AUTHENTICATION_URI_QUERY.set(default);
+        }
+        vtable.prepare_authentication_uri_query = Some(prepare_authentication_uri_query);
     }
+}
+
+/// EDS's own `prepare_authentication_uri_query`, saved by `interface_init`
+/// before being displaced, so the override below can chain to it.
+static DEFAULT_PREPARE_AUTHENTICATION_URI_QUERY: OnceLock<
+    unsafe extern "C" fn(*mut EOAuth2Service, *mut ESource, *mut GHashTable),
+> = OnceLock::new();
+
+/// Adds the RFC 6749 §3.3 `scope` this client registered for (stored on the
+/// source by the discovery worker) to the authorization request, after EDS's
+/// default has built the standard query.
+///
+/// Sent explicitly rather than left to the registered-default fallback:
+/// whether an omitted `scope` falls back to the registration's is
+/// server-discretionary, and Fastmail answered `error=invalid_scope` to
+/// exactly that omission (observed live 2026-08-23). A source with no stored
+/// scope — a deployment that advertises none — keeps the query untouched.
+unsafe extern "C" fn prepare_authentication_uri_query(
+    service: *mut EOAuth2Service,
+    source: *mut ESource,
+    uri_query: *mut GHashTable,
+) {
+    guard(
+        "JmapOAuth2Service::prepare_authentication_uri_query",
+        (),
+        || unsafe {
+            if let Some(default) = DEFAULT_PREPARE_AUTHENTICATION_URI_QUERY.get() {
+                default(service, source, uri_query);
+            }
+            let scope = oauth2::scope(source);
+            if !scope.is_null() && *scope != 0 {
+                // The table frees both halves (EDS builds it with g_free
+                // destroyers), so both are handed over as fresh copies.
+                g_hash_table_replace(
+                    uri_query,
+                    g_strdup(c"scope".as_ptr()).cast(),
+                    g_strdup(scope).cast(),
+                );
+            }
+        },
+    );
 }
 
 unsafe extern "C" fn get_name(_service: *mut EOAuth2Service) -> *const c_char {
