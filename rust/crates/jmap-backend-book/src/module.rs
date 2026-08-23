@@ -23,6 +23,26 @@
 //! this repository exports the same pair of symbols, a `no_mangle` function
 //! *is* its C symbol, and two of these rlibs in one link therefore collapse
 //! into one entry point that answers for both.
+//!
+//! ## Why the OAuth2 service registers here too
+//!
+//! An OAuth2 collection's `[Authentication] Method` names
+//! `jmap_config::oauth2_service::NAME`, not the generic `"OAuth2"` string
+//! (`jmap-config/src/backend.rs`'s `AUTH_CHOICES`), so
+//! `jmap_backend_core::oauth2::source_uses_oauth2` resolves it through
+//! `e_oauth2_services_is_oauth2_alias_static` — a query against the
+//! `EOAuth2Services` singleton *of this process*, which only answers for a
+//! service registered here. Unlike EWS's Office 365 service, which ships
+//! inside `libedataserver` itself and so already exists in every process,
+//! this project's service is a plugin that has to be registered into each
+//! process that asks — `jmap-backend-collection`'s own module (the registry
+//! process) and `jmap-config`'s (the shell process, `f83e04b`) already do
+//! this for the processes they run in; `evolution-addressbook-factory`,
+//! where every JMAP address book actually connects, was the remaining gap:
+//! without it, `source_uses_oauth2` answered `false` here even for an
+//! account whose token EDS could fetch just fine, so this backend fell back
+//! to the password path and asked for credentials an OAuth2-only account
+//! does not have.
 
 use gobject_sys::GTypeModule;
 use jmap_backend_core::i18n::bind;
@@ -66,6 +86,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
         unsafe {
             remember_backend_type(register_dynamic::<JmapBookBackend>(type_module));
             register_dynamic::<JmapBookFactory>(type_module);
+            register_dynamic::<jmap_config::oauth2_service::Service>(type_module);
         }
     });
 }

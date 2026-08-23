@@ -32,6 +32,7 @@ testing = ["jmap-backend-core/testing"]
 [dependencies]
 eds-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
+jmap-config = { workspace = true }
 evolution-jmap-book-sync = { workspace = true }
 evolution-jmap-client = { workspace = true }
 evolution-jmap-proto = { workspace = true }

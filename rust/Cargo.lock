@@ -651,6 +651,7 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-book",
  "jmap-backend-core",
+ "jmap-config",
 ]
 
 [[package]]
@@ -676,6 +677,7 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-cal",
  "jmap-backend-core",
+ "jmap-config",
  "libc",
  "serde_json",
 ]
