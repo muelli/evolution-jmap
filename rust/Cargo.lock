@@ -306,6 +306,7 @@ dependencies = [
  "evolution-jmap-vcard",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

@@ -121,7 +121,21 @@ impl BookSync {
         let Some(uid) = existing_uid else {
             card.id = None;
             card.address_book_ids = Some(BTreeMap::from([(self.address_book_id.clone(), true)]));
-            let stored = self.client.contact_create(&self.account_id, &card)?;
+            let account_id = self.account_id().to_string();
+            let address_book_id = self.address_book_id().to_string();
+            tracing::debug!(account_id, address_book_id, "creating contact card");
+            let stored = match self.client.contact_create(&self.account_id, &card) {
+                Ok(stored) => stored,
+                Err(error) => {
+                    tracing::warn!(
+                        account_id,
+                        address_book_id,
+                        %error,
+                        "contact card create failed"
+                    );
+                    return Err(error.into());
+                }
+            };
             return ContactInfo::render(&stored);
         };
 
@@ -130,16 +144,44 @@ impl BookSync {
         if patch.is_empty() {
             return ContactInfo::render(&current);
         }
-        self.client
-            .contact_update(&self.account_id, &Id::from(uid), Value::Object(patch))?;
+        let account_id = self.account_id().to_string();
+        let address_book_id = self.address_book_id().to_string();
+        tracing::debug!(account_id, address_book_id, uid, "updating contact card");
+        if let Err(error) =
+            self.client
+                .contact_update(&self.account_id, &Id::from(uid), Value::Object(patch))
+        {
+            tracing::warn!(
+                account_id,
+                address_book_id,
+                uid,
+                %error,
+                "contact card update failed"
+            );
+            return Err(error.into());
+        }
         self.load_contact(uid)
     }
 
     /// Destroy a card — `remove_contact_sync`.
     pub fn remove_contact(&self, uid: &str) -> Result<(), SyncError> {
-        Ok(self
+        let account_id = self.account_id().to_string();
+        let address_book_id = self.address_book_id().to_string();
+        tracing::debug!(account_id, address_book_id, uid, "removing contact card");
+        if let Err(error) = self
             .client
-            .contact_destroy(&self.account_id, &Id::from(uid))?)
+            .contact_destroy(&self.account_id, &Id::from(uid))
+        {
+            tracing::warn!(
+                account_id,
+                address_book_id,
+                uid,
+                %error,
+                "contact card destroy failed"
+            );
+            return Err(error.into());
+        }
+        Ok(())
     }
 
     /// What changed since `since` — `get_changes_sync`.
