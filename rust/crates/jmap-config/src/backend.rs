@@ -99,8 +99,9 @@ use eds_sys::{
     e_source_get_extension, e_source_new, e_source_security_get_type,
 };
 use evo_sys::{
-    EMailConfigPage, EMailConfigServiceBackend, EMailConfigServiceBackendClass,
-    EMailConfigServicePage, GtkBox, GtkWidget, e_mail_config_page_changed,
+    E_CONFIG_LOOKUP_RESULT_COLLECTION, EConfigLookup, EMailConfigPage, EMailConfigServiceBackend,
+    EMailConfigServiceBackendClass, EMailConfigServicePage, GtkBox, GtkWidget,
+    e_mail_config_page_changed, e_mail_config_service_backend_auto_configure_for_kind,
     e_mail_config_service_backend_get_collection, e_mail_config_service_backend_get_page,
     e_mail_config_service_backend_get_source, e_mail_config_service_backend_get_type,
     e_mail_config_service_page_get_email_address, gtk_box_pack_start,
@@ -110,7 +111,7 @@ use evo_sys::{
     gtk_label_set_mnemonic_widget, gtk_label_set_text, gtk_label_set_xalign,
     gtk_widget_set_hexpand, gtk_widget_set_visible, gtk_widget_show_all,
 };
-use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, gboolean, gpointer};
+use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, gboolean, gint, gpointer};
 use gobject_sys::{
     G_BINDING_BIDIRECTIONAL, G_BINDING_SYNC_CREATE, G_CONNECT_DEFAULT, GBinding, GObject,
     GParamSpec, GValue, g_object_get_data, g_object_set_data, g_signal_connect_object,
@@ -198,7 +199,53 @@ unsafe impl ObjectSubclass for JmapConfigServiceBackend {
         class.setup_defaults = Some(setup_defaults);
         class.check_complete = Some(check_complete);
         class.commit_changes = Some(commit_changes);
+        class.auto_configure = Some(auto_configure);
     }
+}
+
+/// What the assistant's "Look Up Account Details" dispatches to on every
+/// registered backend after the `EConfigLookup` workers finish:
+/// `e_mail_config_service_page_auto_configure` polls each backend's answer and
+/// selects the lowest-priority TRUE as the page's active provider.
+///
+/// The parent's implementation answers FALSE unconditionally, so without this
+/// override the wizard can never offer JMAP no matter what
+/// [`config_lookup`](crate::config_lookup)'s worker discovered — observed live
+/// against Fastmail (2026-08-23): SRV, RFC 8414 discovery, and RFC 7591
+/// registration all succeeded, the COLLECTION result was added and complete,
+/// and the combo still showed only imapx/smtp.
+///
+/// The body is the same one-liner `evolution-ews` uses
+/// (`mail_config_ews_backend_auto_configure`): hand Evolution's own
+/// `auto_configure_for_kind` helper the COLLECTION kind, a NULL protocol (the
+/// helper then matches results against `class.backend_name` — "jmap", exactly
+/// what the worker's results carry), and the backend's collection source for
+/// the winning result to be written onto.
+///
+/// FALSE on a panic — the safe direction: the assistant falls back to
+/// whatever another backend offered rather than trusting a half-applied
+/// configuration.
+unsafe extern "C" fn auto_configure(
+    backend: *mut EMailConfigServiceBackend,
+    config_lookup: *mut EConfigLookup,
+    out_priority: *mut gint,
+    out_is_complete: *mut gboolean,
+) -> gboolean {
+    guard(
+        "JmapConfigServiceBackend::auto_configure",
+        GFALSE,
+        || unsafe {
+            e_mail_config_service_backend_auto_configure_for_kind(
+                backend,
+                config_lookup,
+                E_CONFIG_LOOKUP_RESULT_COLLECTION,
+                ptr::null(),
+                e_mail_config_service_backend_get_collection(backend),
+                out_priority,
+                out_is_complete,
+            )
+        },
+    )
 }
 
 /// What Evolution calls once, from `constructed`, to find out what an account

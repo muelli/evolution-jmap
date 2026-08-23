@@ -291,6 +291,38 @@ impl Drop for MailSource {
     }
 }
 
+/// Without this slot filled, the account assistant's Look Up can discover a
+/// complete JMAP account and the wizard still offers only imapx/smtp: the
+/// base class's `auto_configure` unconditionally answers FALSE, and
+/// `e_mail_config_service_page_auto_configure` selects the winning backend
+/// purely from that vfunc's answers (observed live against Fastmail
+/// 2026-08-23 — SRV, RFC 8414 discovery, and RFC 7591 registration all
+/// succeeded and the result went unoffered). Calling the slot needs a real
+/// `EConfigLookup` and a page-bound collection source, which is functional-
+/// test territory; what a unit test CAN pin is that the slot is installed at
+/// all, which is exactly the failure this caught.
+#[test]
+fn class_init_displaces_the_inherited_auto_configure() {
+    let class = Class::get();
+    // The slot is never NULL — GObject copies the parent's vtable, and the
+    // parent's default unconditionally answers FALSE. What must hold is that
+    // class_init DISPLACED it, the same assertion shape
+    // `new_collection_displaces_the_inherited_one` uses.
+    let ours = class
+        .vfuncs()
+        .auto_configure
+        .expect("class_init installed no auto_configure");
+    let inherited = parent_class()
+        .auto_configure
+        .expect("Evolution installs its own auto_configure");
+    assert!(
+        !std::ptr::fn_addr_eq(ours, inherited),
+        "auto_configure is still Evolution's, which answers FALSE \
+         unconditionally — the assistant's Look Up can never offer JMAP \
+         through it"
+    );
+}
+
 #[test]
 fn the_type_extends_the_class_evolution_instantiates_per_provider() {
     let gtype = register_static::<JmapConfigServiceBackend>();
