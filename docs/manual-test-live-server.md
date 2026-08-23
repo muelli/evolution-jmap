@@ -560,3 +560,27 @@ mailboxes, then moves it out of the Inbox into the new folder via
 the new folder still does. Cleans up via `MailSync::expunge_message` and
 `MailSync::delete_folder`. Skipped, not failed, when
 `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
+
+## `jmap-mail-sync`'s folder-settings test
+
+`rust/crates/jmap-mail-sync/tests/live_server_folder_settings.rs` covers the
+two `jmap-mail-sync` writes none of the tests above touch:
+`MailSync::set_subscribed` (the write behind `CamelSubscribable`'s two
+vfuncs) and `MailSync::rename_folder` (`CamelStore::rename_folder_sync`).
+Only `jmap-mockd` had exercised either before
+(`jmap-mail-sync/tests/{subscribe,rename_folder}.rs`).
+
+Same environment variables as the import/expunge test. Run it with:
+
+```console
+$ cargo test -p evolution-jmap-mail-sync --test live_server_folder_settings -- --ignored
+```
+
+No `--features live-server` gate, for the same reason as the other files.
+
+`subscribing_and_renaming_a_folder_reach_the_real_server` creates a
+top-level folder, unsubscribes it and confirms via a fresh `folder_tree`
+listing, resubscribes it and confirms that too, renames it and confirms
+both the returned Camel path and the listing's new display name, then
+deletes it. Skipped, not failed, when
+`JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
