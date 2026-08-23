@@ -291,6 +291,37 @@ main (int argc,
 	g_ptr_array_unref (subjects);
 	g_ptr_array_unref (bodies);
 
+	/* "New Folder" at the account root: `create_folder_sync` on the live
+	 * store, not the plain decision function `jmap-mail`'s own unit tests
+	 * call directly. A NULL parent is the account itself, the same
+	 * convention `manage.rs`'s own tests use. */
+	{
+		CamelFolderInfo *created;
+
+		created = camel_store_create_folder_sync (store, NULL, "Receipts", NULL, &error);
+		if (!created)
+			return fail ("create-folder", error);
+
+		g_print ("create-folder-name=%s\n", created->full_name);
+		camel_folder_info_free (created);
+
+		/* The property `manage.rs`'s own module doc names as the point of
+		 * the vfunc: the store's own listing has to be in step with what
+		 * it just told Camel it made, not merely return success. */
+		info = camel_store_get_folder_info_sync (store, NULL,
+							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
+							 NULL, &error);
+		if (!info)
+			return fail ("folder-info-after-create", error);
+
+		names = g_ptr_array_new_with_free_func (g_free);
+		collect_folder_names (info, names);
+		camel_folder_info_free (info);
+
+		report_sorted ("folders-after-create", names);
+		g_ptr_array_unref (names);
+	}
+
 	g_object_unref (inbox);
 	g_object_unref (session);
 	g_object_unref (source);

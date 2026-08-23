@@ -978,7 +978,19 @@ cannot exercise because they link it.
 - **every message body downloads**, which is a different request again: a blob
   download is a plain HTTP GET rather than a method call, and a provider that
   lists mail it cannot open is a common enough failure to be worth fetching all
-  of them.
+  of them;
+- **`create_folder_sync`, driven through the real `CamelStore` vtable.** The
+  client calls `camel_store_create_folder_sync()` for a folder named
+  `Receipts` under the account root; the created `CamelFolderInfo`'s
+  `full_name` and a re-fetched `folder_info` listing both have to agree the
+  new folder is there, and the mock's own mailbox store is checked
+  separately for the same name. `jmap-mail`'s own unit tests
+  (`rust/crates/jmap-mail/tests/manage.rs`) already cover the create
+  decision in detail — parent resolution, name-vs-path encoding, refusals —
+  by calling `manage::create_folder` directly against a bare `JmapStore`
+  struct; nothing there drives the `extern "C" create_folder_sync`
+  trampoline through a real `CamelStore` GObject dispatching its own vtable,
+  which is the gap this leg closes.
 
 Every list the client reports is sorted before it is printed. The order Camel
 hands folders or message uids over is the provider's business, and a test that

@@ -188,4 +188,40 @@ fn camel_opens_the_store_and_serves_the_inbox() {
             "the provider never asked for {method}; it asked for {calls:?}\n{report}"
         );
     }
+
+    // `create_folder_sync`, driven through the real vtable rather than the
+    // plain decision function `jmap-mail`'s own unit tests call directly.
+    assert_eq!(
+        seen.get("create-folder-name"),
+        Some(&"Receipts"),
+        "the created folder's full name is not the mailbox name asked for\n{report}"
+    );
+
+    // The provider's own claim: Camel's `folder_created` announcement named
+    // the same folder the return value did.
+    assert_eq!(
+        seen.get("folders-after-create"),
+        Some(&"Drafts,Inbox,Receipts,Sent"),
+        "the store's own listing did not gain the new folder\n{report}"
+    );
+
+    // And the other end again: the mock actually holds a fourth mailbox now,
+    // not merely that the provider claimed one — reading the mock's own
+    // store rather than trusting the client's report of it.
+    {
+        let state = server.state();
+        let state = state.lock().expect("mock state lock");
+        let account = state
+            .account(&account_id)
+            .expect("the mock's default account");
+        let names: std::collections::BTreeSet<&str> = account
+            .mailboxes
+            .iter()
+            .map(|(_, mailbox)| mailbox.name.as_str())
+            .collect();
+        assert!(
+            names.contains("Receipts"),
+            "the mock's own mailbox store did not gain \"Receipts\"; it holds {names:?}\n{report}"
+        );
+    }
 }
