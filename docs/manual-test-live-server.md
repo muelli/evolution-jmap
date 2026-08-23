@@ -407,3 +407,27 @@ imports a message into the write-test account's Inbox via
 expunges it via `MailSync::expunge_message` and confirms it is gone.
 Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
 unset.
+
+## `jmap-mail-sync`'s create/delete-folder test
+
+`rust/crates/jmap-mail-sync/tests/live_server_folder.rs` is the
+folder-management counterpart of the import/expunge test above, in the same
+crate: it exercises `create_folder_sync`/`delete_folder_sync`
+(`MailSync::create_folder`/`delete_folder`), a materially different code
+path (`Mailbox/set` create/destroy, not `Email/import`/`Email/set`). Only
+`jmap-mockd` had exercised these before (`jmap-mail-sync/tests/{create,
+delete}_folder.rs`).
+
+Same environment variables as the import/expunge test. Run it with:
+
+```console
+$ cargo test -p evolution-jmap-mail-sync --test live_server_folder -- --ignored
+```
+
+No `--features live-server` gate, for the same reason as the other files.
+
+`creating_then_deleting_a_folder_round_trips_through_the_real_server`
+creates a top-level folder via `MailSync::create_folder`, confirms it via
+`folder_tree`, then deletes it via `MailSync::delete_folder` and confirms it
+is gone. Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD`
+are unset.
