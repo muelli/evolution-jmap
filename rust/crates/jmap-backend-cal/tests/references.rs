@@ -154,19 +154,29 @@ fn loading_a_zoned_object_over_and_over_retains_nothing() {
     // as allocation that never comes back, which is what this measures and what
     // no assertion about the rendered text can see.
     //
-    // The criterion is a window of loads that retains *exactly nothing*, not a
-    // byte threshold. Thresholds are the wrong instrument here twice over: too
-    // tight and libical's own one-time caching fails the test, too loose and a
-    // small leak passes it (measured: a per-load leak of one wrapper is 192
-    // bytes, which an RSS-based first draft of this test did not notice at all).
-    // A cache is finite, so the growth per window falls to zero and stays there;
-    // a leak is per-load, so no window can ever reach zero. Measured on this
-    // code: ~350 kB retained by the first window of 10,000, single-digit kB by
-    // the second, and exactly 0 by the third or fourth — hence a sequence of
-    // windows rather than one warmup and one measurement, and a window count
-    // with room to spare over what convergence has been seen to need.
+    // The criterion is a window of loads whose retained growth is
+    // indistinguishable from background noise — NOT exactly zero, and not a
+    // per-load threshold. A per-load threshold is the wrong instrument (too
+    // loose and a small leak passes: one leaked wrapper is 192 bytes/load =
+    // 1.9 MB/window, which an RSS-based first draft never noticed). Exactly
+    // zero is ALSO the wrong instrument, which an earlier draft of this test
+    // learned in CI: `allocated_bytes` reads `mallinfo2().uordblks`, a
+    // PROCESS-GLOBAL number, and this process is never quiet — the other
+    // tests in this binary run on parallel threads, and global machinery
+    // (GLib internals, libical's zone cache, the tracing/journald init the
+    // backends gained with Track B1) allocates lazily and incrementally.
+    // Observed noise on loaded CI machines: up to ~9 kB per window, settling
+    // but never exactly 0 — flaking ~4 of 6 runs.
+    //
+    // NOISE_FLOOR separates the two regimes with wide margins on both sides:
+    // the smallest REAL per-load leak expressible in glibc (one minimum
+    // 32-byte chunk per load) retains ≥ 320 kB per 10,000-load window — 10×
+    // the floor — while worst observed noise (~9 kB) is ~4× below it. A cache
+    // is finite, so growth per window falls under the floor and stays there;
+    // a leak is per-load, so no window can.
     const LOADS: u64 = 10_000;
     const WINDOWS: usize = 8;
+    const NOISE_FLOOR: u64 = 32 * 1024;
     let mut retained = Vec::with_capacity(WINDOWS);
     for _ in 0..WINDOWS {
         let before = allocated_bytes();
@@ -174,14 +184,15 @@ fn loading_a_zoned_object_over_and_over_retains_nothing() {
             load_and_render();
         }
         let growth = allocated_bytes().saturating_sub(before);
-        if growth == 0 {
+        if growth <= NOISE_FLOOR {
             return;
         }
         retained.push(growth);
     }
     panic!(
-        "no window of {LOADS} loads retained nothing — bytes retained per window: {retained:?}. \
-         A finite cache settles; a reference kept on every load does not."
+        "no window of {LOADS} loads retained less than the {NOISE_FLOOR}-byte noise floor — \
+         bytes retained per window: {retained:?}. A finite cache settles under the floor; \
+         a reference kept on every load (>= ~320 kB/window) never can."
     );
 }
 
