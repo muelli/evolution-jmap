@@ -37,6 +37,14 @@
  * they open the same book the same way and differ only in what they then ask of
  * it.
  *
+ * `list` is a different kind of phase: it makes no change and asks nothing
+ * of a single contact, only what the whole book currently holds, sorted by
+ * full name. `rust/crates/jmap-functional/tests/book-changes.rs` runs it
+ * twice against one reused on-disk cache, with a contact seeded into the
+ * mock's store in between, to see whether a second connect's own
+ * post-connect refresh went through `EBookMetaBackendClass::get_changes_sync`
+ * rather than `list_existing_sync` again.
+ *
  *   usage: functional-book-client <source-uid> write <full-name> <photo-base64>
  *          functional-book-client <source-uid> edit <contact-uid> <email>
  *          functional-book-client <source-uid> rename <contact-uid> \
@@ -51,6 +59,7 @@
  *          functional-book-client <source-uid> unnote <contact-uid>
  *          functional-book-client <source-uid> rehandle <contact-uid> <handle>
  *          functional-book-client <source-uid> remove <contact-uid>
+ *          functional-book-client <source-uid> list
  */
 
 #include <libebook/libebook.h>
@@ -1226,6 +1235,54 @@ remove_phase (EBookClient *book,
 	return 0;
 }
 
+/* Lists every contact the book holds, sorted by full name so that which of
+ * two connects produced the listing (`list_existing_sync`'s full query or
+ * `get_changes_sync`'s incremental delta merged into the same cache) cannot
+ * be told apart from stdout's order — the point of this phase is what the
+ * cache ends up containing, not what order EDS happened to hand it back in.
+ * `rust/crates/jmap-functional/tests/book-changes.rs` is the only caller: it
+ * runs this same client twice against one `Session`'s reused on-disk cache,
+ * seeding a second contact straight into the mock's store in between, to
+ * tell whether the second connect's own post-connect refresh went through
+ * `get_changes_sync` rather than `list_existing_sync` again. */
+static int
+list_phase (EBookClient *book)
+{
+	GSList *contacts = NULL, *link;
+	GError *error = NULL;
+	EBookQuery *query;
+	gchar *query_string;
+	GList *names = NULL, *name_link;
+	guint index = 0;
+
+	query = e_book_query_any_field_contains ("");
+	query_string = e_book_query_to_string (query);
+	e_book_query_unref (query);
+
+	if (!e_book_client_get_contacts_sync (book, query_string, &contacts, NULL, &error)) {
+		g_free (query_string);
+		return fail ("list", error);
+	}
+	g_free (query_string);
+
+	for (link = contacts; link; link = link->next) {
+		EContact *contact = link->data;
+		const gchar *name = e_contact_get_const (contact, E_CONTACT_FULL_NAME);
+
+		names = g_list_insert_sorted (names, g_strdup (name ? name : ""),
+					      (GCompareFunc) g_strcmp0);
+	}
+
+	g_print ("contacts=%u\n", g_slist_length (contacts));
+	for (name_link = names; name_link; name_link = name_link->next, index++)
+		g_print ("contact-%u=%s\n", index, (const gchar *) name_link->data);
+
+	g_list_free_full (names, g_free);
+	g_slist_free_full (contacts, g_object_unref);
+
+	return 0;
+}
+
 static void
 usage (const gchar *program)
 {
@@ -1239,9 +1296,10 @@ usage (const gchar *program)
 		    "       %s <source-uid> renote <contact-uid> <note>\n"
 		    "       %s <source-uid> unnote <contact-uid>\n"
 		    "       %s <source-uid> rehandle <contact-uid> <handle>\n"
-		    "       %s <source-uid> remove <contact-uid>\n",
+		    "       %s <source-uid> remove <contact-uid>\n"
+		    "       %s <source-uid> list\n",
 		    program, program, program, program, program, program, program,
-		    program, program, program, program);
+		    program, program, program, program, program);
 }
 
 int
@@ -1275,7 +1333,8 @@ main (int argc,
 	      (g_str_equal (phase, "renote") && argc == 5) ||
 	      (g_str_equal (phase, "unnote") && argc == 4) ||
 	      (g_str_equal (phase, "rehandle") && argc == 5) ||
-	      (g_str_equal (phase, "remove") && argc == 4))) {
+	      (g_str_equal (phase, "remove") && argc == 4) ||
+	      (g_str_equal (phase, "list") && argc == 3))) {
 		usage (argv[0]);
 		return 2;
 	}
@@ -1350,6 +1409,8 @@ main (int argc,
 		status = unnote_phase (book, argv[3]);
 	else if (g_str_equal (phase, "rehandle"))
 		status = rehandle_phase (book, argv[3], argv[4]);
+	else if (g_str_equal (phase, "list"))
+		status = list_phase (book);
 	else
 		status = remove_phase (book, argv[3]);
 

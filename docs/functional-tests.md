@@ -550,6 +550,39 @@ It seeds one minimal card straight into the mock's store, runs
   the account's `contact_cards` store no longer holds an entry for the id —
   the outcome that matters, not merely that some request was sent.
 
+## What the book-changes test asserts
+
+`rust/crates/jmap-functional/tests/book-changes.rs`, against `book-client.c`'s
+`list` phase: whether `EBookMetaBackendClass::get_changes_sync` is actually
+reached through a real, running factory, not just through `jmap-backend-book`'s
+own tests, which call `ops::get_changes` as a plain function on a bare struct.
+
+Every leg of the address-book test above opens its book exactly once, so all
+of them exercise `list_existing_sync` — a fresh meta-backend cache has no
+stored sync tag to diff from — and none reaches `get_changes_sync` at all.
+This test opens the *same* book twice, reusing one `Session`'s on-disk cache
+across two separate `session.run()` calls (each its own process, its own
+private bus, its own freshly started factory):
+
+- the first connect starts from an empty cache and lists a single seeded
+  contact; the mock recorded a `ContactCard/get` and no `ContactCard/changes`,
+  confirming it went through `list_existing_sync`;
+- a second contact is then seeded straight into the mock's store, but through
+  `Store::transaction`, not `Store::seed` — only a transaction bumps the
+  state counter and logs a `Change`, which is the only thing
+  `ContactCard/changes` has to report; `Store::seed` (used for the first
+  contact, and everywhere else in this crate seeding a baseline fixture) is
+  deliberately invisible to it;
+- the second connect, against the same warm on-disk cache, lists both
+  contacts — and the mock's method log gained a `ContactCard/changes` call
+  after the first connect's own calls, confirming EDS's post-connect refresh
+  went through `get_changes_sync` this time, with a real sync tag to hand it,
+  rather than `list_existing_sync` again.
+
+What this does not cover: the calendar side (`ECalMetaBackendClass::
+get_changes_sync`), the same gap for the same reason — left as a follow-up,
+the same book/cal split several earlier sessions on this thread already used.
+
 ## What the calendar test asserts
 
 `rust/crates/jmap-functional/tests/calendar.rs`, against

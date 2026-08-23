@@ -215,6 +215,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
+	# Reuses `functional-book-client`'s own binary and module (the `list`
+	# phase is just another mode of that program) — the new coverage here is
+	# in what the Rust test drives it through: two separate connects sharing
+	# one on-disk cache, to reach `get_changes_sync` rather than
+	# `list_existing_sync` a second time. See `tests/book-changes.rs`.
+	add_test(
+		NAME functional-book-changes
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test book-changes
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-changes PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
 	add_test(
 		NAME functional-cal
 		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
