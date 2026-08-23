@@ -107,7 +107,8 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`SORT-STRING`** | — | `Name.sortAs` / `Org.sortAs` | — | — | Dropped by design from vCard 3.0 emission. Replaced in RFC 6350 by `SORT-AS` parameter. JSContact `sortAs` preserved on server by `PatchObject` without clobbering `fileAs`. |
 | **`X-EVOLUTION-FILE-AS`** | — | `Name.extra["fileAs"]` / `card.extra["fileAs"]` | `E_CONTACT_FILE_AS` | `states_file_as` | Evolution "File Under" field. Inbound accepts `X-EVOLUTION-FILE-AS`, `FILE-AS`, and `X-FILE-AS`. Outbound normalizes to `X-EVOLUTION-FILE-AS`. Coexists with `sortAs` without clobbering. |
 | **`CLASS`** | — | `card.privacy` (RFC 9553) | — | — | Dropped by design. Deprecated/removed in RFC 6350. Legacy access classification with no Evolution editor UI. |
-| **`SOUND`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "sound"`) | — | [`states_media`] | Dropped by design from vCard 3.0. [`states_media`] permits only `kind: "photo"`. Server `sound` media entries preserved by `PatchObject`. |
+| **`SOUND`** | `TYPE`, `ENCODING=b`, `VALUE=uri`, `MEDIATYPE` | `card.media` (`kind: "sound"`) | — | [`states_media`] | Dropped by design from vCard 3.0. [`states_media`] permits only `kind: "photo"`. Inbound audio payloads and URIs safely ignored without corrupting photos. Server `sound` media entries preserved by `PatchObject`. |
+| **`AGENT`** | `VALUE=uri`, text, nested vCard | `card.related_to` (`relation: { "agent": true }`) | — | [`states_spouse`], [`states_manager`], [`states_assistant`] | Dropped by design from vCard 3.0 emission. Deprecated/removed in RFC 6350. Inbound nested vCards, URIs, and text safely ignored without corrupting surrounding card or polluting `card.extra`. Server `relatedTo` agent entries preserved by `PatchObject`. |
 | **`LOGO`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "logo"`) | `E_CONTACT_LOGO` (no UI) | [`states_media`] | Dropped by design from vCard 3.0. Evolution editor supports only personal photo (`E_CONTACT_PHOTO`). Server `logo` entries preserved by `PatchObject`. |
 | **`KEY`** | `TYPE` (`X509`, `PGP`), `ENCODING=b`, `VALUE=uri` | `card.extra["cryptoKeys"]` (RFC 9553 §2.7.1) | `E_CONTACT_X509_CERT`, `E_CONTACT_PGP_CERT` (no UI) | — | Dropped by design from vCard 3.0. Evolution editor provides no contact certificate UI. Server `cryptoKeys` entries preserved by `PatchObject`. |
 | **`itemN.PROPERTY`** | `X-ABLabel` companion | (associated property) | (associated EDS slot) | `clean_apple_label`, `vcard_to_card` | Apple property groups (RFC 2426 §2.1.1). Group prefix is parsed by `calcard`; companion `X-ABLabel` maps contexts (`Work`, `Home`), features (`Mobile`, `Pager`, `Fax`), or custom labels. |
@@ -391,8 +392,8 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
     - Compares URI strings directly.
   - This allows the sync layer to detect whether the photo was actually edited by the user, avoiding redundant image re-uploads on every sync.
 
-### 4.9 Deliberate Drop Rationale for Standard vCard 3.0 Properties (`GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, `LOGO`, `KEY`)
-`jmap-vcard` deliberately ignores standard vCard 3.0 properties for which Evolution/EDS lacks active UI editing support or for which client-side preservation is architecturally incorrect:
+### 4.9 Deliberate Drop Rationale for Standard vCard Properties (`GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, `AGENT`, `LOGO`, `KEY`)
+`jmap-vcard` deliberately ignores standard vCard properties for which Evolution/EDS lacks active UI editing support or for which client-side preservation is architecturally incorrect:
 1. **`GEO` (RFC 2426 §3.4.2)**:
    - Evolution's contact editor has no UI controls or display for geographical coordinates.
    - JSContact (RFC 9553 §2.5.1) scopes coordinates to specific postal addresses (`Address.coordinates`), rather than top-level cards.
@@ -419,15 +420,21 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
    - Access classification (`PUBLIC`, `PRIVATE`, `CONFIDENTIAL`). Deprecated/removed in vCard 4.0.
    - Evolution contact editor has no access classification controls.
    - *Rationale*: Dropped by design. Server-side privacy settings are preserved untouched by `PatchObject`.
-8. **`SOUND` (RFC 2426 §3.6.6)**:
+8. **`SOUND` (RFC 2426 §3.6.3 / RFC 6350 §6.6.5)**:
    - Digital audio clips / pronunciation guides (RFC 9553 §2.6.4 `media` with `kind: "sound"`).
+   - Audio encodings include 8-bit mu-law (`TYPE=BASIC`), WAV (`TYPE=WAV`), MP3 (`TYPE=MP3`), Ogg Vorbis (`TYPE=OGG`), remote/local URIs (`VALUE=uri`), and vCard 4.0 data URIs (`SOUND:data:audio/ogg;base64,...`) and `MEDIATYPE` parameters.
    - EDS has no `E_CONTACT_SOUND` field and Evolution has no audio playback in the contact editor.
-   - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `SOUND` lines are dropped on vCard parse to prevent misparsing as photos. Server-side `sound` media entries remain safe and untouched in `card.media` via `PatchObject`.
-9. **`LOGO` (RFC 2426 §3.5.3)**:
-   - Organization logo image (RFC 9553 §2.6.4 `media` with `kind: "logo"`).
-   - Although `E_CONTACT_LOGO` exists in EDS C enum definitions, Evolution's contact editor provides UI exclusively for personal photos (`E_CONTACT_PHOTO`).
-   - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `LOGO` lines are dropped on vCard parse to prevent colliding with or replacing the personal photo field. Server-side `logo` media entries remain safe and untouched in `card.media` via `PatchObject`.
-10. **`KEY` (RFC 2426 §3.7.2)**:
+   - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `SOUND` lines are safely dropped on vCard parse to prevent misparsing as photos or polluting `card.media`. Outbound emission strictly omits `SOUND`. Server-side `sound` media entries remain safe and untouched in `card.media` via `PatchObject`.
+9. **`AGENT` (RFC 2426 §3.5.4)**:
+   - Specifies information about another person who will act on behalf of the contact (RFC 9553 §2.1.8 & §2.7.2 `relatedTo` with `relation: { "agent": true }`). Deprecated and removed in RFC 6350 (replaced by `RELATED;TYPE=agent`).
+   - Value may be a URI (`AGENT;VALUE=uri:...`), plain text, or a structured nested vCard (`AGENT:BEGIN:VCARD\n...END:VCARD\n`).
+   - EDS provides slots exclusively for Spouse (`E_CONTACT_SPOUSE`), Manager (`E_CONTACT_MANAGER`), and Assistant (`E_CONTACT_ASSISTANT`). An agent is legally empowered to act on behalf of the contact, which is wider than an assistant; emitting an agent as an assistant would corrupt semantics.
+   - *Rationale*: Inbound `AGENT` lines (including escaped nested vCards, URIs, and text) parse safely without corrupting surrounding contact fields and are dropped on parse. Outbound emission strictly omits `AGENT` lines ([`states_spouse`], [`states_manager`], and [`states_assistant`] evaluate to `false` for `agent`). Server-side `relatedTo` agent relations remain safe and untouched on the server via `PatchObject`.
+10. **`LOGO` (RFC 2426 §3.5.3)**:
+    - Organization logo image (RFC 9553 §2.6.4 `media` with `kind: "logo"`).
+    - Although `E_CONTACT_LOGO` exists in EDS C enum definitions, Evolution's contact editor provides UI exclusively for personal photos (`E_CONTACT_PHOTO`).
+    - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `LOGO` lines are dropped on vCard parse to prevent colliding with or replacing the personal photo field. Server-side `logo` media entries remain safe and untouched in `card.media` via `PatchObject`.
+11. **`KEY` (RFC 2426 §3.7.2)**:
     - Public key / certificates (X.509 `E_CONTACT_X509_CERT` and PGP `E_CONTACT_PGP_CERT`, RFC 9553 §2.7.1 `cryptoKeys`).
     - Evolution's contact editor GUI provides no UI for inspecting or editing certificates directly on individual contacts (certificates and keys are managed globally via S/MIME and GnuPG/Seahorse keyrings).
     - *Rationale*: Dropped by design from vCard 3.0 emission. Inbound `KEY` lines (`KEY;TYPE=X509;ENCODING=b:...`, `KEY;TYPE=PGP;ENCODING=b:...`, `KEY;VALUE=uri:...`) are safely dropped on vCard parse to avoid corrupting mapped fields. Server-side `cryptoKeys` in `card.extra["cryptoKeys"]` are preserved untouched across saves via `PatchObject`.
