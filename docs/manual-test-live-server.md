@@ -432,6 +432,39 @@ creates a top-level folder via `MailSync::create_folder`, confirms it via
 is gone. Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD`
 are unset.
 
+## `jmap-mail-sync`'s send test
+
+`rust/crates/jmap-mail-sync/tests/live_server_send.rs` is the
+`MailSync::send_message` counterpart of `jmap-client/tests/
+live_server.rs::send_email_delivers_to_a_second_account_on_the_real_server`:
+that test already proves `Client::send_email` (`Email/set` +
+`EmailSubmission/set`, chained) delivers between two real accounts, but
+nothing had driven `MailSync::send_message` itself — the upload-then-stage-
+then-submit sequencing through `import_message`, `MailSync::identity_for`'s
+address-to-identity lookup, and `MailSync::outgoing_mailboxes`'s Drafts/Sent
+staging decision. Only `jmap-mockd` had exercised `send_message` before
+(`jmap-mail-sync/tests/send.rs`).
+
+It needs both the write-test account (step 3) and the recipient account
+(step 3a) — the same pair `send_email_delivers_to_a_second_account_on_the_
+real_server` uses. Run it with:
+
+```console
+$ cargo test -p evolution-jmap-mail-sync --test live_server_send -- --ignored
+```
+
+No `--features live-server` gate, for the same reason as the other files.
+
+`sending_a_message_delivers_to_a_second_account_on_the_real_server` builds an
+`Outgoing` from `MailSync::identity_for`'s lookup of the write-test account's
+own address and `MailSync::outgoing_mailboxes`'s Drafts/Sent decision, sends
+it via `MailSync::send_message`, then polls the recipient's own
+`MailSync::messages` (not raw `Client::email_query`, to keep the assertion on
+this crate's own read path) until the message actually lands in its Inbox —
+proof of delivery, not merely that the server accepted the submission.
+Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` or
+`JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` are unset.
+
 ## `jmap-cal-sync`'s save/remove test
 
 `rust/crates/jmap-cal-sync/tests/live_server_save.rs` is the calendar
