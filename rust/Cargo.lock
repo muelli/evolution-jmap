@@ -317,6 +317,7 @@ dependencies = [
  "evolution-jmap-mock",
  "evolution-jmap-proto",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

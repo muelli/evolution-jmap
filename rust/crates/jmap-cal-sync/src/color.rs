@@ -18,9 +18,22 @@ impl CalSync {
     /// Push a colour edit — `None` clears it, matching the omitted-vs-empty
     /// rule the read path already uses for `Calendar.color`.
     pub fn set_color(&self, color: Option<&str>) -> Result<(), SyncError> {
+        let account_id = self.account_id().to_string();
+        let calendar_id = self.calendar_id().to_string();
+        tracing::debug!(account_id, calendar_id, color, "pushing calendar colour");
         let patch: Value = json!({ "color": color });
-        self.client()
-            .calendar_update(self.account_id(), self.calendar_id(), patch)?;
+        if let Err(error) =
+            self.client()
+                .calendar_update(self.account_id(), self.calendar_id(), patch)
+        {
+            tracing::warn!(
+                account_id,
+                calendar_id,
+                %error,
+                "calendar colour push failed"
+            );
+            return Err(error.into());
+        }
         Ok(())
     }
 }
