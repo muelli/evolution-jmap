@@ -1883,7 +1883,10 @@ const MAX_LINE_OCTETS: usize = 75;
 /// between a `\` and the octet it escapes, additionally keeps every physical
 /// line valid UTF-8 and every escape pair whole for line-oriented readers.
 fn fold_overlong_lines(vcard: String) -> String {
-    if vcard.split("\r\n").all(|line| line.len() <= MAX_LINE_OCTETS) {
+    if vcard
+        .split("\r\n")
+        .all(|line| line.len() <= MAX_LINE_OCTETS)
+    {
         return vcard;
     }
     let mut out = String::with_capacity(vcard.len() + 16);
