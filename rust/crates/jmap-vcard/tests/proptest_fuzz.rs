@@ -834,6 +834,35 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
     Ok(())
 }
 
+// Regression for a fixed-point failure `prop_card_roundtrip_reaches_fixed_point_stability`
+// found on a random seed (docs/BACKLOG.md, "jmap-vcard round trip is not a fixed point for
+// a value with trailing whitespace", second occurrence): a `Name` with a stated-but-empty
+// `full` and only a `given` component round-tripped once (to `parsed1`) drops `full`
+// (an empty FN is indistinguishable from an absent one on read), but round-tripping that
+// result again (to `parsed2`) synthesizes a derived `full` from the components — so
+// `parsed1 != parsed2` and the property never reaches the fixed point it asserts.
+#[test]
+fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_point() {
+    let card = ContactCard {
+        name: Some(Name {
+            components: Some(vec![NameComponent::new("given", "A")]),
+            full: Some(String::new()),
+            extra: BTreeMap::new(),
+        }),
+        ..Default::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    let parsed1 = vcard_to_card(&vcard1).expect("first roundtrip must parse cleanly");
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("second roundtrip must parse cleanly");
+
+    assert_eq!(
+        parsed1.name, parsed2.name,
+        "name field oscillated between the first and second roundtrip"
+    );
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 

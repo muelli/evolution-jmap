@@ -1427,7 +1427,18 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     if let Some(name) = &card.name {
-        if let Some(full) = name.full.clone().or_else(|| derive_full(name)) {
+        // An empty stated `full` reads back as absent (`read_name` below filters
+        // an empty FN to `None`, the same way it treats no FN at all), so it must
+        // be treated as absent here too — otherwise the first round trip keeps a
+        // literal empty FN while every later one derives and keeps a non-empty
+        // one, and the two never reach the same fixed point.
+        let full = name
+            .full
+            .as_deref()
+            .filter(|full| !full.is_empty())
+            .map(str::to_owned)
+            .or_else(|| derive_full(name));
+        if let Some(full) = full {
             entries.push(VCardEntry::new(VCardProperty::Fn).with_value(full));
         }
         if let Some(fields) = name_fields(name) {
