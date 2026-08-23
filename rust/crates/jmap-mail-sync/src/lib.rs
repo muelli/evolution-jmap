@@ -854,7 +854,15 @@ impl MailSync {
             parent_id: parent.map(|parent| parent.id.clone()),
             ..Mailbox::default()
         };
-        let created = self.client.mailbox_create(&self.account_id, &requested)?;
+        let account_id = self.account_id().to_string();
+        tracing::debug!(account_id, name, "creating mail folder");
+        let created = match self.client.mailbox_create(&self.account_id, &requested) {
+            Ok(created) => created,
+            Err(error) => {
+                tracing::warn!(account_id, name, %error, "mail folder create failed");
+                return Err(error.into());
+            }
+        };
         let id = created
             .id
             .ok_or_else(|| SyncError::protocol("Mailbox/set created a mailbox without an id"))?;
@@ -901,9 +909,14 @@ impl MailSync {
     /// the user asked for, and reporting it as a failure would turn someone
     /// else's tidying into a broken account.
     pub fn delete_folder(&self, mailbox: &Id) -> Result<(), SyncError> {
-        self.client
-            .mailbox_destroy(&self.account_id, mailbox)
-            .map_err(|error| folder_error(mailbox, error))
+        let account_id = self.account_id().to_string();
+        let mailbox_id = mailbox.to_string();
+        tracing::debug!(account_id, mailbox_id, "deleting mail folder");
+        if let Err(error) = self.client.mailbox_destroy(&self.account_id, mailbox) {
+            tracing::warn!(account_id, mailbox_id, %error, "mail folder delete failed");
+            return Err(folder_error(mailbox, error));
+        }
+        Ok(())
     }
 
     /// Renames a folder, and moves it — `rename_folder_sync`.
