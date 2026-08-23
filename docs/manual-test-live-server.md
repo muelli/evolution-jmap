@@ -379,3 +379,31 @@ asks for `isSubscribed: true` explicitly on both the `AddressBook` and
 for the headless, `jmap-mockd`-reproducible regression test
 (`MockServerBuilder::new_collections_default_unsubscribed`), and
 `docs/NIGHT-LOG.md` for the full account.
+
+## `jmap-mail-sync`'s import/expunge test
+
+`rust/crates/jmap-mail-sync/tests/live_server.rs` is the mail counterpart of
+the three files above, in the crate that actually implements
+`append_message_sync`/`expunge_sync` (`MailSync::import_message`/
+`expunge_message`) — `jmap-client/tests/live_server.rs` already proves
+`Email/import` and `Mailbox/set` round-trip through `Client` directly, but
+nothing there drives this crate's own `import_message`/`expunge_message`:
+the upload-then-import sequencing, and `expunge_message`'s
+read-before-write mailbox-membership decision.
+
+It reads the same `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`/
+`_REBASE_URLS` variables step 2/3 above already set up. Run it with:
+
+```console
+$ cargo test -p evolution-jmap-mail-sync -- --ignored
+```
+
+No `--features live-server` gate, for the same reason as the three files
+above.
+
+`importing_then_expunging_a_message_round_trips_through_the_real_server`
+imports a message into the write-test account's Inbox via
+`MailSync::import_message`, confirms it via `MailSync::messages`, then
+expunges it via `MailSync::expunge_message` and confirms it is gone.
+Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
+unset.
