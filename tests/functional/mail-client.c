@@ -106,6 +106,7 @@ main (int argc,
 	GPtrArray *subjects;
 	GPtrArray *bodies;
 	gchar *joined;
+	gchar *appended_uid = NULL;
 	guint index;
 	const gchar *source_uid;
 	const gchar *protocol;
@@ -310,7 +311,6 @@ main (int argc,
 			"Found on the floor.\r\n";
 		CamelMimeMessage *outside;
 		CamelMimeMessage *reread;
-		gchar *appended_uid = NULL;
 
 		outside = camel_mime_message_new ();
 		if (!camel_data_wrapper_construct_from_data_sync (
@@ -332,22 +332,23 @@ main (int argc,
 
 		/* The row is the listing's to write, not the append's — the
 		 * message appears only once the folder is next refreshed. */
-		if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
-			g_free (appended_uid);
+		if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
 			return fail ("refresh-after-append", error);
-		}
 
 		uids = camel_folder_get_uids (inbox);
 		g_print ("inbox-count-after-append=%u\n", uids->len);
 
 		reread = camel_folder_get_message_sync (inbox, appended_uid, NULL, &error);
 		camel_folder_free_uids (inbox, uids);
-		g_free (appended_uid);
 		if (!reread)
 			return fail ("get-appended-message", error);
 
 		g_print ("appended-subject=%s\n", camel_mime_message_get_subject (reread));
 		g_object_unref (reread);
+
+		/* `appended_uid` stays alive: `transfer_messages_to_sync`,
+		 * below, moves this same message once "Receipts" exists to
+		 * move it into. */
 	}
 
 	/* "New Folder" at the account root: `create_folder_sync` on the live
@@ -379,6 +380,116 @@ main (int argc,
 
 		report_sorted ("folders-after-create", names);
 		g_ptr_array_unref (names);
+
+		/* `transfer_messages_to_sync`: dragging the message appended
+		 * earlier out of the inbox and into the folder just created.
+		 * `camel_folder_transfer_messages_to_sync` dispatches straight
+		 * to the vfunc here because both folders belong to this one
+		 * store — the cross-store path through `get_message`/
+		 * `append_message` that `transfer.rs`'s own doc comment
+		 * describes is not what this exercises.
+		 * `delete_originals=TRUE`, a move: checked from both folders,
+		 * not merely that the call answered — the row has to leave the
+		 * inbox as well as land in "Receipts". */
+		{
+			CamelFolder *receipts;
+			GPtrArray *transfer_uids;
+			GPtrArray *transferred = NULL;
+
+			receipts = camel_store_get_folder_sync (store, "Receipts",
+								 CAMEL_STORE_FOLDER_NONE,
+								 NULL, &error);
+			if (!receipts)
+				return fail ("get-receipts-folder", error);
+
+			transfer_uids = g_ptr_array_new ();
+			g_ptr_array_add (transfer_uids, appended_uid);
+
+			if (!camel_folder_transfer_messages_to_sync (inbox, transfer_uids,
+								      receipts, TRUE,
+								      &transferred, NULL, &error)) {
+				g_ptr_array_unref (transfer_uids);
+				g_object_unref (receipts);
+				return fail ("transfer-message", error);
+			}
+			g_ptr_array_unref (transfer_uids);
+
+			/* RFC 8621 gives an `Email` one immutable id per account, so
+			 * the uid reported for the transferred message is the same
+			 * uid that went in, not a fresh one the destination minted —
+			 * `transfer.rs`'s own `Reported` doc makes the same point. */
+			g_print ("transfer-uid=%s\n",
+				 (transferred && transferred->len > 0 && transferred->pdata[0])
+				 ? (const gchar *) transferred->pdata[0] : "");
+			if (transferred) {
+				guint t;
+
+				for (t = 0; t < transferred->len; t++)
+					g_free (transferred->pdata[t]);
+				g_ptr_array_unref (transferred);
+			}
+
+			if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
+				g_object_unref (receipts);
+				return fail ("refresh-after-transfer-inbox", error);
+			}
+			uids = camel_folder_get_uids (inbox);
+			g_print ("inbox-count-after-transfer=%u\n", uids->len);
+			camel_folder_free_uids (inbox, uids);
+
+			if (!camel_folder_refresh_info_sync (receipts, NULL, &error)) {
+				g_object_unref (receipts);
+				return fail ("refresh-after-transfer-receipts", error);
+			}
+			uids = camel_folder_get_uids (receipts);
+			g_print ("receipts-count-after-transfer=%u\n", uids->len);
+			camel_folder_free_uids (receipts, uids);
+
+			/* Moved back, the mirror image: a JMAP server refuses to
+			 * destroy a mailbox that still holds a message
+			 * (`mailboxHasEmail`), which the rename/delete sequence
+			 * below exercises on an empty "Receipts" — so the message
+			 * goes back to the inbox first, the same way a user who
+			 * dropped a message into a folder would have to move it
+			 * back out before deleting that folder. */
+			transfer_uids = g_ptr_array_new ();
+			g_ptr_array_add (transfer_uids, appended_uid);
+
+			if (!camel_folder_transfer_messages_to_sync (receipts, transfer_uids,
+								      inbox, TRUE,
+								      &transferred, NULL, &error)) {
+				g_ptr_array_unref (transfer_uids);
+				g_object_unref (receipts);
+				return fail ("transfer-message-back", error);
+			}
+			g_ptr_array_unref (transfer_uids);
+			if (transferred) {
+				guint t;
+
+				for (t = 0; t < transferred->len; t++)
+					g_free (transferred->pdata[t]);
+				g_ptr_array_unref (transferred);
+			}
+
+			if (!camel_folder_refresh_info_sync (receipts, NULL, &error)) {
+				g_object_unref (receipts);
+				return fail ("refresh-after-transfer-back-receipts", error);
+			}
+			uids = camel_folder_get_uids (receipts);
+			g_print ("receipts-count-after-transfer-back=%u\n", uids->len);
+			camel_folder_free_uids (receipts, uids);
+
+			if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
+				g_object_unref (receipts);
+				return fail ("refresh-after-transfer-back-inbox", error);
+			}
+			uids = camel_folder_get_uids (inbox);
+			g_print ("inbox-count-after-transfer-back=%u\n", uids->len);
+			camel_folder_free_uids (inbox, uids);
+
+			g_object_unref (receipts);
+		}
+		g_free (appended_uid);
 
 		/* `rename_folder_sync` on the folder just made: a changed last
 		 * component under the same (root) parent, which `manage.rs`'s own
