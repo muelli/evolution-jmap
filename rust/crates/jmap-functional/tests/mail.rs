@@ -231,6 +231,53 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "append_message_sync never asked the server for Email/import; it asked for {calls:?}\n{report}"
     );
 
+    // `transfer_messages_to_sync`: the appended message, dragged out of the
+    // inbox and into "Receipts". RFC 8621 gives an `Email` one immutable id
+    // per account, so the uid the transfer reports for the moved message is
+    // the same uid the append minted — not a fresh one the destination
+    // folder made up — which is `transfer.rs`'s own `Reported` doc's point.
+    assert_eq!(
+        seen.get("transfer-uid"),
+        seen.get("append-uid"),
+        "transfer_messages_to_sync reported a different uid than the message it moved was appended under\n{report}"
+    );
+
+    // A move, checked from both ends: the row leaves the inbox (back down to
+    // the two seeded messages) and lands in the destination.
+    assert_eq!(
+        seen.get("inbox-count-after-transfer"),
+        Some(&"2"),
+        "the inbox still holds the message after it was moved out\n{report}"
+    );
+    assert_eq!(
+        seen.get("receipts-count-after-transfer"),
+        Some(&"1"),
+        "the destination folder does not hold the moved message\n{report}"
+    );
+
+    // Moved back, the mirror image, before the rename/delete sequence below
+    // runs on "Receipts" — a JMAP server refuses to destroy a mailbox that
+    // still holds a message, so the test moves it back out rather than
+    // deleting a non-empty folder, same as a real user would have to.
+    assert_eq!(
+        seen.get("receipts-count-after-transfer-back"),
+        Some(&"0"),
+        "the destination folder still holds the message after it was moved back out\n{report}"
+    );
+    assert_eq!(
+        seen.get("inbox-count-after-transfer-back"),
+        Some(&"3"),
+        "the inbox does not hold the message again after it was moved back\n{report}"
+    );
+
+    // The other end: the transfer is one `Email/set` patching `mailboxIds`,
+    // not `Email/import` a second time — a move of a message the account
+    // already has is not a message the account has never seen.
+    assert!(
+        calls.iter().any(|call| call == "Email/set"),
+        "transfer_messages_to_sync never asked the server for Email/set; it asked for {calls:?}\n{report}"
+    );
+
     // `rename_folder_sync`, driven through the real vtable rather than the
     // plain decision function `manage::rename_folder`. The last component
     // changed under the same (root) parent — the "name the user typed" half
