@@ -178,10 +178,55 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "the message bodies did not survive the download\n{report}"
     );
 
+    // `synchronize_sync`: the write half nothing above exercises. Marking one
+    // message important is a local Camel flag until a synchronise carries it
+    // to the server as a keyword — checked from both ends, not merely that
+    // the call returned successfully, since a synchronise that swallowed a
+    // write failure instead of reporting one would still read the flag back
+    // out of Camel's own in-memory row.
+    let flagged_uid = match seen.get("flagged-uid") {
+        Some(uid) => (*uid).to_string(),
+        None => panic!("the client never named a message to flag\n{report}"),
+    };
+    assert_eq!(
+        seen.get("flagged-after-sync"),
+        Some(&"1"),
+        "the flag did not survive a fresh read of the row after synchronize_sync\n{report}"
+    );
+
+    // The other end: the mock's own copy of the message, not merely that
+    // `synchronize_sync` returned success locally.
+    {
+        let state = server.state();
+        let state = state.lock().expect("mock state lock");
+        let account = state
+            .account(&account_id)
+            .expect("the mock's default account");
+        let email = account
+            .emails
+            .get(&jmap_proto::Id::new(flagged_uid.clone()))
+            .unwrap_or_else(|| panic!("the flagged message is not on the server at all\n{report}"));
+        assert_eq!(
+            email
+                .keywords
+                .as_ref()
+                .and_then(|keywords| keywords.get(jmap_proto::mail::keyword::FLAGGED))
+                .copied(),
+            Some(true),
+            "synchronize_sync never reached the server: the mock's own copy of \
+             message {flagged_uid} carries no {} keyword\n{report}",
+            jmap_proto::mail::keyword::FLAGGED
+        );
+    }
+
     // The other end: what the server was actually asked for. Nothing here is
     // scheduled or refreshed in the background — every call above is
     // synchronous — so these are not a race.
     let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "Email/set"),
+        "synchronize_sync never asked the server for Email/set; it asked for {calls:?}\n{report}"
+    );
     for method in ["Mailbox/get", "Email/query", "Email/get"] {
         assert!(
             calls.iter().any(|call| call == method),
