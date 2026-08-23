@@ -515,11 +515,14 @@ unsafe extern "C" fn create_resource_sync(
         // the next populate, so the create would look as if nothing had
         // happened.
         Collection::publish(&Live(backend), scratch_source);
-        debug_print(&format!(
-            "create_resource_sync: created {} {}",
-            kind_noun(child.kind),
-            child.resource_id
-        ));
+        debug_print_for_resource(
+            &child.resource_id,
+            &format!(
+                "create_resource_sync: created {} {}",
+                kind_noun(child.kind),
+                child.resource_id
+            ),
+        );
         GTRUE
     };
 
@@ -624,11 +627,14 @@ unsafe extern "C" fn delete_resource_sync(
             };
         }
 
-        debug_print(&format!(
-            "delete_resource_sync: deleted {} {}",
-            kind_noun(doomed.kind),
-            doomed.collection_id
-        ));
+        debug_print_for_resource(
+            doomed.collection_id.as_str(),
+            &format!(
+                "delete_resource_sync: deleted {} {}",
+                kind_noun(doomed.kind),
+                doomed.collection_id
+            ),
+        );
         GTRUE
     };
 
@@ -936,11 +942,134 @@ unsafe impl Collection for Live {
 }
 
 /// One line on EDS's own debug channel, which is silent unless
-/// `SOURCE_REGISTRY_DEBUG` is set.
+/// `SOURCE_REGISTRY_DEBUG` is set, and on `tracing`'s DEBUG channel, so the
+/// same informational write/discovery events `log_critical`'s callers already
+/// forward at ERROR also reach journald at DEBUG once a module has called
+/// [`jmap_backend_core::logging::init`].
 fn debug_print(message: &str) {
+    tracing::debug!("{message}");
+    debug_print_eds(message);
+}
+
+/// Like [`debug_print`], but also attaches `resource_id` as a structured
+/// `tracing` field, mirroring
+/// [`jmap_backend_core::trampoline::log_critical_for_resource`] at DEBUG
+/// level — for the two vfuncs (`create_resource_sync`, `delete_resource_sync`)
+/// that already have the resource id in hand when they report success. The
+/// EDS debug-channel side is unchanged: it still carries the id in prose too.
+fn debug_print_for_resource(resource_id: &str, message: &str) {
+    tracing::debug!(resource_id, "{message}");
+    debug_print_eds(message);
+}
+
+/// The EDS debug-channel half [`debug_print`] and [`debug_print_for_resource`]
+/// share.
+fn debug_print_eds(message: &str) {
     let message = cstring_lossy(message);
     // SAFETY: `e_source_registry_debug_print` is variadic and takes a printf
     // format; passing the text as an argument to `%s` keeps a `%` in it from
     // being read as a directive.
     unsafe { e_source_registry_debug_print(c"%s\n".as_ptr(), message.as_ptr()) };
+}
+
+#[cfg(test)]
+mod debug_print_tests {
+    use std::sync::{Arc, Mutex};
+
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
+
+    use super::*;
+
+    /// Records every field of every event it sees, as `(name, value)` pairs —
+    /// mirrors `jmap_backend_core::trampoline`'s own test-only subscriber,
+    /// which this crate cannot reuse directly (it is private to that crate),
+    /// and this crate has no `tracing-subscriber` dev-dependency either.
+    struct CapturingSubscriber {
+        captured: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    struct Recorder<'a>(&'a Mutex<Vec<(String, String)>>);
+
+    impl Visit for Recorder<'_> {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), format!("{value:?}")));
+        }
+
+        fn record_str(&mut self, field: &Field, value: &str) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), value.to_owned()));
+        }
+    }
+
+    impl Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            event.record(&mut Recorder(&self.captured));
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
+
+    #[test]
+    fn debug_print_for_resource_attaches_the_resource_id_as_a_structured_field() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            debug_print_for_resource("addressbook-1", "created address book addressbook-1");
+        });
+
+        assert!(
+            captured
+                .lock()
+                .unwrap()
+                .contains(&("resource_id".to_owned(), "addressbook-1".to_owned())),
+            "expected a resource_id=addressbook-1 field, got {:?}",
+            captured.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn debug_print_does_not_attach_a_resource_id_field() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            debug_print("no resource id in this one");
+        });
+
+        assert!(
+            captured
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(name, _)| name != "resource_id"),
+            "did not expect a resource_id field, got {:?}",
+            captured.lock().unwrap()
+        );
+    }
 }
