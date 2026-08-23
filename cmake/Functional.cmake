@@ -138,6 +138,16 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-collection-create-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
 	target_link_directories(functional-collection-create-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# The calendar sibling of the client above: the same create/delete pair,
+	# against E_SOURCE_EXTENSION_CALENDAR instead of the address-book
+	# extension, proving create_resource_sync/delete_resource_sync do not
+	# mix the two kinds of child up.
+	add_executable(functional-collection-create-calendar-client tests/functional/collection-create-calendar-client.c)
+	target_include_directories(functional-collection-create-calendar-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-collection-create-calendar-client PRIVATE ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-collection-create-calendar-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-collection-create-calendar-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	add_executable(functional-config-lookup-client tests/functional/config-lookup-client.c)
 	target_include_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_INCLUDE_DIRS})
 	target_compile_options(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_CFLAGS_OTHER})
@@ -243,6 +253,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CREATE_CLIENT=$<TARGET_FILE:functional-collection-create-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
+	)
+
+	# The calendar leg of the same write half: "New Calendar"/"Delete"
+	# against E_SOURCE_EXTENSION_CALENDAR, proving create_resource_sync/
+	# delete_resource_sync pick the right `/set` call for the child kind.
+	add_test(
+		NAME functional-collection-create-calendar
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test collection-create-calendar
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-collection-create-calendar PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CREATE_CALENDAR_CLIENT=$<TARGET_FILE:functional-collection-create-calendar-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
 	# module-jmap-configuration.so, not one of the four EDS/Camel backends:
