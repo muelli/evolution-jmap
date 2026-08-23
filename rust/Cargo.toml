@@ -93,3 +93,12 @@ jmap-mail = { path = "crates/jmap-mail" }
 codegen-units = 1
 strip = "debuginfo"
 incremental = false
+
+# Test binaries statically link the full EDS/GTK FFI surface per crate, so
+# unstripped they run 100-130MB each; with ~90 of them across the workspace
+# that fills a CI runner's disk (rust-lld dies with a Bus error that looks
+# like a linker bug but is actually ENOSPC). Debug info is not needed to run
+# them, only to debug a failure post-mortem with gdb, so strip it the same
+# way [profile.release] already does.
+[profile.test]
+strip = "debuginfo"
