@@ -465,3 +465,30 @@ proptest! {
         }
     }
 }
+
+/// Regression test for the minimal input `prop_ical_roundtrip_reaches_fixed_point_stability`
+/// found: a `CATEGORIES` tag ending in a space right before a character `calcard`
+/// escapes on emit (here `;`) used to lose that space on the next parse — `calcard`'s
+/// tokenizer treated it as trailing whitespace to trim, not realising the following
+/// backslash-escape would keep the token going. Fixed upstream between calcard 0.3.9
+/// (bundled when this was found) and 0.3.11 (bumped for this fix); pinned here as a
+/// deterministic case so a future downgrade or reintroduction is caught without
+/// relying on `proptest` to regenerate the same random seed.
+#[test]
+fn a_space_before_an_escaped_character_in_a_category_survives_a_roundtrip() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nCATEGORIES:a ;\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    let parsed1 = ical_to_event(ics).expect("a plain CATEGORIES value must parse");
+    let ical1 = event_to_ical(&parsed1);
+    let parsed2 = ical_to_event(&ical1).expect("re-parsing the emitted iCal must succeed");
+    let ical2 = event_to_ical(&parsed2);
+
+    assert_eq!(
+        ical1, ical2,
+        "re-emitted iCalendar must reach a fixed-point"
+    );
+    assert_eq!(
+        parsed2.keywords, parsed1.keywords,
+        "the space before the escaped semicolon must survive the round trip"
+    );
+}
