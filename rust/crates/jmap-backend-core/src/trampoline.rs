@@ -169,6 +169,17 @@ pub fn log_critical_for_resource(resource_id: &str, message: &str) {
     g_log_critical(message);
 }
 
+/// Like [`log_critical`], but also attaches `account_id` as a structured
+/// `tracing` field, so a failure that has no single resource to blame — a
+/// credentials lookup or a populate/fan-out summary spanning a whole account's
+/// children — can still be picked out by `journalctl
+/// EVOLUTION_JMAP_ACCOUNT_ID=<account_id>`. The `GError`/`g_log` side is
+/// unchanged.
+pub fn log_critical_for_account(account_id: &str, message: &str) {
+    tracing::error!(account_id, "{message}");
+    g_log_critical(message);
+}
+
 /// The `g_log` half [`log_critical`] and [`log_critical_for_message`] share.
 fn g_log_critical(message: &str) {
     let message = cstring_lossy(message);
@@ -355,6 +366,52 @@ mod tests {
                 .iter()
                 .all(|(name, _)| name != "resource_id"),
             "did not expect a resource_id field, got {:?}",
+            captured.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn log_critical_for_account_attaches_the_account_id_as_a_structured_field() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            log_critical_for_account(
+                "account-1",
+                "the account's credentials could not be looked up",
+            );
+        });
+
+        assert!(
+            captured
+                .lock()
+                .unwrap()
+                .contains(&("account_id".to_owned(), "account-1".to_owned())),
+            "expected an account_id=account-1 field, got {:?}",
+            captured.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn log_critical_does_not_attach_an_account_id_field() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            log_critical("no account id in this one");
+        });
+
+        assert!(
+            captured
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(name, _)| name != "account_id"),
+            "did not expect an account_id field, got {:?}",
             captured.lock().unwrap()
         );
     }

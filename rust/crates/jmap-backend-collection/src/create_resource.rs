@@ -100,7 +100,7 @@ use eds_sys::{
     ENamedParameters, ESource, ESourceCredentialsProvider, ESourceRegistryServer,
     e_named_parameters_free, e_server_side_source_set_writable,
     e_server_side_source_set_write_directory, e_source_credentials_provider_lookup_sync,
-    e_source_get_display_name, e_source_registry_server_ref_credentials_provider,
+    e_source_get_display_name, e_source_get_uid, e_source_registry_server_ref_credentials_provider,
     e_source_set_parent,
 };
 use gio_sys::GCancellable;
@@ -111,7 +111,7 @@ use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{password as password_of, read_string};
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::source::{self, ConnectTarget};
-use jmap_backend_core::trampoline::log_critical;
+use jmap_backend_core::trampoline::{log_critical, log_critical_for_account};
 use jmap_client::Credentials;
 use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Child, ChildKind, CreateFailure, Requested, create_collection};
@@ -367,7 +367,10 @@ pub fn kind_noun(kind: ChildKind) -> &'static str {
 ///
 /// `context` names the vfunc for the critical channel — the same lookup serves
 /// [`crate::delete_resource`]'s vfunc, and a log line that named the wrong one
-/// would send a reader to the wrong module.
+/// would send a reader to the wrong module. Every failure here also carries
+/// `source`'s own uid as a structured `account_id` field (there is no single
+/// resource to blame — a credentials lookup runs on the account as a whole),
+/// via [`log_critical_for_account`].
 ///
 /// [`ConnectError::CredentialsRequired`]: jmap_backend_core::connect::ConnectError::CredentialsRequired
 ///
@@ -381,12 +384,17 @@ pub unsafe fn stored_password_of(
     cancellable: *mut GCancellable,
     context: &str,
 ) -> Option<String> {
+    // SAFETY: a valid source by this function's own contract; the uid comes
+    // back `(transfer none)`, borrowed for the length of this call.
+    let account_id = unsafe { read_string(e_source_get_uid(source)) };
+
     if server.is_null() {
         // The registry server is a weak reference on the backend, so NULL means
         // it is gone — during shutdown, say — and then there is nobody to ask.
-        log_critical(&format!(
-            "{context}: the registry server is gone; no credentials to look up"
-        ));
+        report_critical(
+            account_id.as_deref(),
+            format!("{context}: the registry server is gone; no credentials to look up"),
+        );
         return None;
     }
 
@@ -398,15 +406,35 @@ pub unsafe fn stored_password_of(
         )
     };
     let Some(provider) = provider else {
-        log_critical(&format!(
-            "{context}: the registry server has no credentials provider"
-        ));
+        report_critical(
+            account_id.as_deref(),
+            format!("{context}: the registry server has no credentials provider"),
+        );
         return None;
     };
 
     // SAFETY: a live provider, a valid source and a cancellable satisfying this
     // function's contract.
-    unsafe { lookup_password(provider.as_ptr(), source, cancellable, context) }
+    unsafe {
+        lookup_password(
+            provider.as_ptr(),
+            source,
+            cancellable,
+            context,
+            account_id.as_deref(),
+        )
+    }
+}
+
+/// [`log_critical_for_account`] when `account_id` is known, else the plain
+/// [`log_critical`] — the account's own uid is not always readable (an
+/// `ESource` with none would be a first for EDS, but it is not this
+/// function's contract to assume it).
+fn report_critical(account_id: Option<&str>, message: String) {
+    match account_id {
+        Some(account_id) => log_critical_for_account(account_id, &message),
+        None => log_critical(&message),
+    }
 }
 
 /// One `e_source_credentials_provider_lookup_sync`, with both things it hands
@@ -421,6 +449,7 @@ unsafe fn lookup_password(
     source: *mut ESource,
     cancellable: *mut GCancellable,
     context: &str,
+    account_id: Option<&str>,
 ) -> Option<String> {
     let mut credentials: *mut ENamedParameters = ptr::null_mut();
     let mut error: *mut GError = ptr::null_mut();
@@ -442,9 +471,10 @@ unsafe fn lookup_password(
         // SAFETY: the call failed, so `error` is NULL or a `GError` ownership of
         // which passed to us; its message is a string the struct owns.
         let message = unsafe { take_message(error) };
-        log_critical(&format!(
-            "{context}: the account's credentials could not be looked up: {message}"
-        ));
+        report_critical(
+            account_id,
+            format!("{context}: the account's credentials could not be looked up: {message}"),
+        );
         return None;
     }
 
