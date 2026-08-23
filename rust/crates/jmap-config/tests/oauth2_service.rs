@@ -95,6 +95,7 @@ fn config() -> Config {
         token_endpoint: Some("https://jmap.example.com/token".to_owned()),
         redirect_uri: Some("https://client.example.org/callback".to_owned()),
         scope: Some("urn:ietf:params:oauth:scope:mail offline_access".to_owned()),
+        resource: Some("https://jmap.example.com/session".to_owned()),
     }
 }
 
@@ -223,6 +224,13 @@ fn prepare_authentication_uri_query_names_the_registered_scope() {
         assert!(
             !response_type.is_null(),
             "chaining to EDS's default was lost — the standard query is gone"
+        );
+        // RFC 8707: the stored resource rides along.
+        let resource = g_hash_table_lookup(query, c"resource".as_ptr().cast());
+        assert!(!resource.is_null(), "the query carries no resource");
+        assert_eq!(
+            CStr::from_ptr(resource.cast()).to_str().unwrap(),
+            "https://jmap.example.com/session"
         );
 
         g_hash_table_destroy(query);

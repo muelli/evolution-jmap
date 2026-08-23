@@ -167,6 +167,16 @@ unsafe impl InterfaceImpl for Vtable {
             let _ = DEFAULT_PREPARE_AUTHENTICATION_URI_QUERY.set(default);
         }
         vtable.prepare_authentication_uri_query = Some(prepare_authentication_uri_query);
+        // RFC 8707 names the resource on the token grants too, so both form
+        // builders get the same chain-and-add treatment as the query above.
+        if let Some(default) = vtable.prepare_get_token_form {
+            let _ = DEFAULT_PREPARE_GET_TOKEN_FORM.set(default);
+        }
+        vtable.prepare_get_token_form = Some(prepare_get_token_form);
+        if let Some(default) = vtable.prepare_refresh_token_form {
+            let _ = DEFAULT_PREPARE_REFRESH_TOKEN_FORM.set(default);
+        }
+        vtable.prepare_refresh_token_form = Some(prepare_refresh_token_form);
     }
 }
 
@@ -207,6 +217,78 @@ unsafe extern "C" fn prepare_authentication_uri_query(
                     g_strdup(scope).cast(),
                 );
             }
+            add_resource(source, uri_query);
+        },
+    );
+}
+
+/// EDS's own `prepare_get_token_form`, saved by `interface_init` before being
+/// displaced, so the override below can chain to it.
+static DEFAULT_PREPARE_GET_TOKEN_FORM: OnceLock<
+    unsafe extern "C" fn(*mut EOAuth2Service, *mut ESource, *const c_char, *mut GHashTable),
+> = OnceLock::new();
+
+/// EDS's own `prepare_refresh_token_form`, saved the same way.
+static DEFAULT_PREPARE_REFRESH_TOKEN_FORM: OnceLock<
+    unsafe extern "C" fn(*mut EOAuth2Service, *mut ESource, *const c_char, *mut GHashTable),
+> = OnceLock::new();
+
+/// Adds the stored RFC 8707 `resource` indicator to `table` when the source
+/// carries one; a source without one (a deployment the discovery probe could
+/// not classify, or that predates resource indicators) leaves the request
+/// exactly as EDS's default built it.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource` and `table` a live `GHashTable` with
+/// `g_free` destroyers for both halves.
+unsafe fn add_resource(source: *mut ESource, table: *mut GHashTable) {
+    // SAFETY: the caller's contract.
+    unsafe {
+        let resource = oauth2::resource(source);
+        if !resource.is_null() && *resource != 0 {
+            g_hash_table_replace(
+                table,
+                g_strdup(c"resource".as_ptr()).cast(),
+                g_strdup(resource).cast(),
+            );
+        }
+    }
+}
+
+/// RFC 8707 §2.2: the resource is named when the code is redeemed, not only
+/// when it is authorized — a deployment that requires it at one end requires
+/// it at both (Fastmail's `error=invalid_target`, observed live 2026-08-23,
+/// is the authorization half of that requirement).
+unsafe extern "C" fn prepare_get_token_form(
+    service: *mut EOAuth2Service,
+    source: *mut ESource,
+    authorization_code: *const c_char,
+    form: *mut GHashTable,
+) {
+    guard("JmapOAuth2Service::prepare_get_token_form", (), || unsafe {
+        if let Some(default) = DEFAULT_PREPARE_GET_TOKEN_FORM.get() {
+            default(service, source, authorization_code, form);
+        }
+        add_resource(source, form);
+    });
+}
+
+/// As [`prepare_get_token_form`], for the refresh grant.
+unsafe extern "C" fn prepare_refresh_token_form(
+    service: *mut EOAuth2Service,
+    source: *mut ESource,
+    refresh_token: *const c_char,
+    form: *mut GHashTable,
+) {
+    guard(
+        "JmapOAuth2Service::prepare_refresh_token_form",
+        (),
+        || unsafe {
+            if let Some(default) = DEFAULT_PREPARE_REFRESH_TOKEN_FORM.get() {
+                default(service, source, refresh_token, form);
+            }
+            add_resource(source, form);
         },
     );
 }
