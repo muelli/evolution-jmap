@@ -1098,10 +1098,10 @@ Asserted:
   asks with `ids: null`) and no `Mailbox/get`, matching `MailEnabled=false`.
 
 What this does not cover, left for a future increment now that this harness
-exists: `create_resource_sync`/`delete_resource_sync` for a *calendar*
-(the sibling test below only does address books) and D2's colour push
-(`source_changed`, which needs a running calendar-factory backend instance
-rather than just the registry).
+exists: D2's colour push (`source_changed`, which needs a running
+calendar-factory backend instance rather than just the registry). The
+`create_resource_sync`/`delete_resource_sync` half — for both an address
+book and a calendar — is covered below.
 
 ## What the collection-create test asserts
 
@@ -1157,6 +1157,34 @@ Asserted:
 - the mock recorded exactly two `AddressBook/set` calls — one create, one
   destroy — not merely a source appearing and disappearing locally with no
   server round trip.
+
+## What the collection-create-calendar test asserts
+
+`rust/crates/jmap-functional/tests/collection-create-calendar.rs`, against
+`tests/functional/collection-create-calendar-client.c`, is the same proof as
+the test above, run for a calendar instead of an address book —
+`E_SOURCE_EXTENSION_CALENDAR` and `Calendar/set` in place of the address-book
+extension and `AddressBook/set`. The client is a line-for-line mirror of
+`collection-create-client.c` with the extension swapped; nothing about the
+create/delete sequence itself differs between the two kinds of child.
+
+The reason this is its own test rather than a second case inside the
+existing one: which `/set` call a create or delete reaches is exactly the
+kind of thing a resource-kind mixup gets wrong silently — an address book
+and a calendar may share one resource id (RFC 8620 §1.2), so a backend that
+guessed the kind from the id alone could destroy the wrong object and still
+report success. `jmap-backend-collection/tests/delete.rs` already guards
+against that on the read/delete-decision side with an in-process fixture;
+this is the same risk, checked from the write side, through a real registry.
+
+Asserted, mirroring the address-book test property for property: the
+account was found and became `remote-creatable`; the created child
+appeared, naming `jmap` as its `BackendName`, the account as its `Parent=`,
+enabled and writable; the child disappeared after
+`e_source_remote_delete_sync`; the mock recorded exactly two `Calendar/set`
+calls (one create, one destroy) and **no** `AddressBook/set` call at all —
+the check that a calendar create/delete does not silently reach the other
+kind's server call.
 
 ## Debugging a failure
 
