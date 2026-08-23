@@ -537,12 +537,29 @@ impl MailSync {
     /// and closing it would need a server-side "destroy if in no other mailbox"
     /// the protocol does not have.
     pub fn expunge_message(&self, uid: &Id, mailbox: &Id) -> Result<(), SyncError> {
-        let filed_in = self.message_mailboxes(uid)?;
+        let account_id = self.account_id().to_string();
+        let message_uid = uid.to_string();
+        let mailbox_id = mailbox.to_string();
+        let filed_in = self.message_mailboxes(uid).map_err(|error| {
+            tracing::warn!(account_id, uid = message_uid, mailbox_id, %error, "message expunge failed");
+            error
+        })?;
         if !filed_in.contains(mailbox) {
             return Ok(());
         }
+        tracing::debug!(
+            account_id,
+            uid = message_uid,
+            mailbox_id,
+            "expunging message"
+        );
         if filed_in.len() > 1 {
-            return self.update_email(uid, mailboxes::out_of(mailbox));
+            return self
+                .update_email(uid, mailboxes::out_of(mailbox))
+                .map_err(|error| {
+                    tracing::warn!(account_id, uid = message_uid, mailbox_id, %error, "message expunge failed");
+                    error
+                });
         }
         self.client
             .email_destroy(&self.account_id, uid)
@@ -553,6 +570,10 @@ impl MailSync {
                     SyncError::NoSuchMessage(uid.clone())
                 }
                 _ => SyncError::Client(error),
+            })
+            .map_err(|error| {
+                tracing::warn!(account_id, uid = message_uid, mailbox_id, %error, "message expunge failed");
+                error
             })
     }
 
