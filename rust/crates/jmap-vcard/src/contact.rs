@@ -1861,6 +1861,71 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
             .expect("writing to String never fails");
     }
     out.push_str("END:VCARD\r\n");
+    fold_overlong_lines(out)
+}
+
+/// The RFC 2426 §2.6 folding width `card_to_vcard`'s output holds to, in
+/// octets, excluding the line break.
+const MAX_LINE_OCTETS: usize = 75;
+
+/// Folds any physical line longer than [`MAX_LINE_OCTETS`], cutting at UTF-8
+/// character boundaries.
+///
+/// Folding is calcard's job, and its writer does it — except that a
+/// structured value's `;` separators are written *after* its fold check, and
+/// that check is skipped when the component coming next is empty text. A
+/// value whose text folds to exactly 75 octets therefore keeps every empty
+/// trailing slot on the same physical line: 81 octets for an `ADR`, one per
+/// empty slot (found by a fuzzer seed; the regression test in
+/// `tests/proptest_fuzz.rs` carries the shrunken card). Folding is defined on
+/// the octet layer — unfolding restores the same stream wherever a cut lands
+/// — so any cut is *correct*; cutting at character boundaries, and never
+/// between a `\` and the octet it escapes, additionally keeps every physical
+/// line valid UTF-8 and every escape pair whole for line-oriented readers.
+fn fold_overlong_lines(vcard: String) -> String {
+    if vcard.split("\r\n").all(|line| line.len() <= MAX_LINE_OCTETS) {
+        return vcard;
+    }
+    let mut out = String::with_capacity(vcard.len() + 16);
+    for (index, line) in vcard.split("\r\n").enumerate() {
+        if index > 0 {
+            out.push_str("\r\n");
+        }
+        let mut rest = line;
+        // A continuation line's leading space spends one of its 75 octets.
+        let mut budget = MAX_LINE_OCTETS;
+        while rest.len() > budget {
+            let mut cut = budget;
+            while cut > 0 && !rest.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            // An odd run of backslashes ending at the cut means the last one
+            // escapes the octet on the far side — step inside the run so the
+            // pair stays on one line.
+            if rest[..cut]
+                .bytes()
+                .rev()
+                .take_while(|&byte| byte == b'\\')
+                .count()
+                % 2
+                == 1
+            {
+                cut -= 1;
+            }
+            if cut == 0 {
+                // Unreachable for anything calcard emits, but never loop: take
+                // the first boundary — unfolding restores the octets either way.
+                cut = (1..=rest.len())
+                    .find(|&i| rest.is_char_boundary(i))
+                    .unwrap_or(rest.len());
+            }
+            out.push_str(&rest[..cut]);
+            out.push_str("\r\n ");
+            rest = &rest[cut..];
+            budget = MAX_LINE_OCTETS - 1;
+        }
+        out.push_str(rest);
+    }
     out
 }
 

@@ -900,6 +900,43 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
     );
 }
 
+// Regression for `prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8`
+// found on a random seed (CI run 32663971912): calcard's writer emits a
+// structured value's `;` separators *after* its fold check, and skips the fold
+// altogether when the component coming next is empty text — so an `ADR` whose
+// value folds to exactly 75 octets keeps all six empty trailing slots on the
+// same physical line, at 81. The value here is byte-for-byte the minimal case
+// proptest shrank to: 53 octets of multi-byte UTF-8 that land the 22-octet
+// prefix `ADR;X-JMAP-KEY=-AaaAa:` plus the value at exactly the edge.
+#[test]
+fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
+    let mut addresses = BTreeMap::new();
+    addresses.insert(
+        "-AaaAa".to_owned(),
+        Address {
+            components: Some(vec![AddressComponent::new(
+                "postOfficeBox",
+                "ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প",
+            )]),
+            contexts: None,
+            full: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    let card = ContactCard {
+        addresses: Some(addresses),
+        ..Default::default()
+    };
+
+    for line in card_to_vcard(&card).split("\r\n") {
+        assert!(
+            line.len() <= 75,
+            "physical line exceeds 75 octets (len = {}): {line:?}",
+            line.len()
+        );
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(200))]
 
@@ -952,10 +989,12 @@ proptest! {
     fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
         let vcard = card_to_vcard(&card);
         for line in vcard.split("\r\n") {
-            // Emitted physical lines target 75 octets and never exceed 80 octets
-            // (when multi-byte UTF-8 sequences or escape tokens land near boundary)
+            // Exactly the RFC 2426 §2.6 width: calcard's own writer overshoots
+            // when empty structured slots trail a value at the boundary, and
+            // `card_to_vcard`'s refold pass exists to take that back to 75 —
+            // a looser bound here is what let that overshoot go unseen.
             prop_assert!(
-                line.len() <= 80,
+                line.len() <= 75,
                 "Physical line exceeds maximum line length (len = {}): {:?}",
                 line.len(),
                 line
