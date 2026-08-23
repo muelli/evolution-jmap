@@ -99,6 +99,8 @@ main (int argc,
 	CamelService *service;
 	CamelStore *store;
 	CamelFolder *inbox;
+	CamelFolder *trash;
+	CamelFolder *junk;
 	CamelFolderInfo *info;
 	CamelMimeMessage *message;
 	GPtrArray *names;
@@ -247,6 +249,21 @@ main (int argc,
 		return fail ("inbox", error);
 
 	g_print ("inbox-full-name=%s\n", camel_folder_get_full_name (inbox));
+
+	/* The other two by-role lookups: same purpose-lookup family as the
+	 * inbox above, each answered from a different role rather than the
+	 * inherited vTrash/vJunk virtual folders. */
+	trash = camel_store_get_trash_folder_sync (store, NULL, &error);
+	if (!trash)
+		return fail ("trash", error);
+	g_print ("trash-full-name=%s\n", camel_folder_get_full_name (trash));
+	g_object_unref (trash);
+
+	junk = camel_store_get_junk_folder_sync (store, NULL, &error);
+	if (!junk)
+		return fail ("junk", error);
+	g_print ("junk-full-name=%s\n", camel_folder_get_full_name (junk));
+	g_object_unref (junk);
 
 	if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
 		return fail ("refresh", error);

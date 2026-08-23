@@ -1027,7 +1027,7 @@ cannot exercise because they link it.
   for protocol* — a message about the connect that is really about a typo. The
   `.urls` file is staged from the source tree rather than written by the test,
   so this is the installed file being checked and not a copy of it;
-- **the folder tree is the mock's three mailboxes**, from a single
+- **the folder tree is the mock's five mailboxes**, from a single
   `Mailbox/get`;
 - **`CamelSubscribable`'s three methods, driven through the real vtable.**
   `jmap-mail`'s own unit tests (`tests/subscriptions.rs` against a detached
@@ -1049,6 +1049,14 @@ cannot exercise because they link it.
 - **the inbox is the mailbox with the JMAP `inbox` role**, which is what Camel
   asks the store for and what lets Evolution treat it as the account's inbox
   rather than as a folder that happens to be called one;
+- **`get_trash_folder_sync`/`get_junk_folder_sync`, the same by-role lookup for
+  the other two purposes Camel asks for by name rather than by path.** The
+  client opens each with `camel_store_get_trash_folder_sync()`/
+  `camel_store_get_junk_folder_sync()` and checks the returned folder's
+  `full_name` is the mailbox seeded with that role — not the inherited
+  vTrash/vJunk virtual folders, which `folders.rs`'s own module doc explains
+  would be the wrong answer for a JMAP account (a local-only search over a
+  flag versus another client's own trash mailbox);
 - **the summaries are the seeded messages** — `Email/query` and `Email/get`,
   through Camel's own summary machinery;
 - **every message body downloads**, which is a different request again: a blob

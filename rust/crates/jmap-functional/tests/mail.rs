@@ -89,6 +89,11 @@ fn camel_opens_the_store_and_serves_the_inbox() {
             .get_mut(&drafts)
             .expect("the mailbox just seeded")
             .is_subscribed = Some(false);
+        // `get_trash_folder_sync`/`get_junk_folder_sync`: purpose-lookups the
+        // same family as `get_inbox_folder_sync` above, but each answered
+        // from a different role.
+        account.seed_mailbox("Trash", Some("trash"));
+        account.seed_mailbox("Junk", Some("junk"));
 
         account.seed_email(EmailSeed::new(
             inbox.clone(),
@@ -153,8 +158,8 @@ fn camel_opens_the_store_and_serves_the_inbox() {
     // tree from one `Mailbox/get`.
     assert_eq!(
         seen.get("folders"),
-        Some(&"Drafts,Inbox,Sent"),
-        "the folder tree is not the mock's three mailboxes\n{report}"
+        Some(&"Drafts,Inbox,Junk,Sent,Trash"),
+        "the folder tree is not the mock's five mailboxes\n{report}"
     );
 
     // `CamelSubscribable`: the tick beside a folder in the subscription
@@ -219,6 +224,21 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         seen.get("inbox-full-name"),
         Some(&"Inbox"),
         "the store's inbox is not the mailbox with the inbox role\n{report}"
+    );
+
+    // `get_trash_folder_sync`/`get_junk_folder_sync`: the same by-role lookup
+    // as the inbox above, each answered from a different role rather than
+    // the inherited vTrash/vJunk virtual folders — see `folders.rs`'s own
+    // module doc for why those would be the wrong answer for a JMAP account.
+    assert_eq!(
+        seen.get("trash-full-name"),
+        Some(&"Trash"),
+        "the store's trash folder is not the mailbox with the trash role\n{report}"
+    );
+    assert_eq!(
+        seen.get("junk-full-name"),
+        Some(&"Junk"),
+        "the store's junk folder is not the mailbox with the junk role\n{report}"
     );
 
     assert_eq!(
@@ -310,7 +330,7 @@ fn camel_opens_the_store_and_serves_the_inbox() {
     // the same folder the return value did.
     assert_eq!(
         seen.get("folders-after-create"),
-        Some(&"Drafts,Inbox,Receipts,Sent"),
+        Some(&"Drafts,Inbox,Junk,Receipts,Sent,Trash"),
         "the store's own listing did not gain the new folder\n{report}"
     );
 
@@ -394,7 +414,7 @@ fn camel_opens_the_store_and_serves_the_inbox() {
     // existing path encoding.
     assert_eq!(
         seen.get("folders-after-rename"),
-        Some(&"Drafts,Inbox,Invoices,Sent"),
+        Some(&"Drafts,Inbox,Invoices,Junk,Sent,Trash"),
         "the store's own listing did not reflect the rename\n{report}"
     );
 
@@ -421,7 +441,7 @@ fn camel_opens_the_store_and_serves_the_inbox() {
     // client asked to delete.
     assert_eq!(
         seen.get("folders-after-delete"),
-        Some(&"Drafts,Inbox,Sent"),
+        Some(&"Drafts,Inbox,Junk,Sent,Trash"),
         "the store's own listing did not lose the deleted folder\n{report}"
     );
 
