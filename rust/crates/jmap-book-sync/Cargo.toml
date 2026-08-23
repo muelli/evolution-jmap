@@ -19,6 +19,7 @@ evolution-jmap-proto = { workspace = true }
 evolution-jmap-vcard = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
