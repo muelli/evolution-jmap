@@ -206,7 +206,21 @@ impl CalSync {
                 // the shape a server may refuse the entire save over.
                 prune_time_zones(&mut event);
             }
-            let stored = self.client.event_create(&self.account_id, &event)?;
+            let account_id = self.account_id().to_string();
+            let calendar_id = self.calendar_id().to_string();
+            tracing::debug!(account_id, calendar_id, "creating calendar event");
+            let stored = match self.client.event_create(&self.account_id, &event) {
+                Ok(stored) => stored,
+                Err(error) => {
+                    tracing::warn!(
+                        account_id,
+                        calendar_id,
+                        %error,
+                        "calendar event create failed"
+                    );
+                    return Err(error.into());
+                }
+            };
             return ComponentInfo::render(&stored);
         };
 
@@ -215,16 +229,41 @@ impl CalSync {
         if patch.is_empty() {
             return ComponentInfo::render(&current);
         }
-        self.client
-            .event_update(&self.account_id, &Id::from(uid), Value::Object(patch))?;
+        let account_id = self.account_id().to_string();
+        let calendar_id = self.calendar_id().to_string();
+        tracing::debug!(account_id, calendar_id, uid, "updating calendar event");
+        if let Err(error) =
+            self.client
+                .event_update(&self.account_id, &Id::from(uid), Value::Object(patch))
+        {
+            tracing::warn!(
+                account_id,
+                calendar_id,
+                uid,
+                %error,
+                "calendar event update failed"
+            );
+            return Err(error.into());
+        }
         self.load_component(uid)
     }
 
     /// Destroy an event — `remove_component_sync`.
     pub fn remove_component(&self, uid: &str) -> Result<(), SyncError> {
-        Ok(self
-            .client
-            .event_destroy(&self.account_id, &Id::from(uid))?)
+        let account_id = self.account_id().to_string();
+        let calendar_id = self.calendar_id().to_string();
+        tracing::debug!(account_id, calendar_id, uid, "removing calendar event");
+        if let Err(error) = self.client.event_destroy(&self.account_id, &Id::from(uid)) {
+            tracing::warn!(
+                account_id,
+                calendar_id,
+                uid,
+                %error,
+                "calendar event destroy failed"
+            );
+            return Err(error.into());
+        }
+        Ok(())
     }
 
     /// What changed since `since` — `get_changes_sync`.
