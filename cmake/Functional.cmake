@@ -112,6 +112,20 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# requires unconditionally for module-jmap-configuration.so itself, so
 	# EVOLUTION_SHELL's variables are already populated here with nothing new
 	# to check for.
+	# The collection client is another odd one out: it opens no book or
+	# calendar and connects to no factory, only to the registry itself —
+	# the daemon that loads `module-jmap-backend.so` (`EDS_REGISTRY_MODULES`,
+	# staged by `Session::stage_collection_backend`) and is the one process
+	# whose populate/fan-out this test is about. `libedataserver` alone is
+	# enough, the same library the mail/transport clients below link for
+	# their own registry lookups.
+	pkg_check_modules(LIBEDATASERVER REQUIRED libedataserver-1.2>=${REQUIRE_EVOLUTION_VERSION})
+	add_executable(functional-collection-client tests/functional/collection-client.c)
+	target_include_directories(functional-collection-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-collection-client PRIVATE ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-collection-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-collection-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	add_executable(functional-config-lookup-client tests/functional/config-lookup-client.c)
 	target_include_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_INCLUDE_DIRS})
 	target_compile_options(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_CFLAGS_OTHER})
@@ -184,6 +198,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CLIENT=$<TARGET_FILE:functional-cal-client>;JMAP_FUNCTIONAL_CAL_EDIT_CLIENT=$<TARGET_FILE:functional-cal-edit-client>;JMAP_FUNCTIONAL_CAL_ZONE_CLIENT=$<TARGET_FILE:functional-cal-zone-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# The collection backend's populate/fan-out: a real
+	# evolution-source-registry loading module-jmap-backend.so for the
+	# account keyfile the Rust side writes, and the client above waiting for
+	# the address-book and calendar children `docs/manual-test-collection-
+	# backend.md`'s recipe describes to appear via the registry's own API.
+	add_test(
+		NAME functional-collection
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test collection
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-collection PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CLIENT=$<TARGET_FILE:functional-collection-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
 	# module-jmap-configuration.so, not one of the four EDS/Camel backends:

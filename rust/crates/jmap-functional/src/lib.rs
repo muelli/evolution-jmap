@@ -158,6 +158,19 @@ impl Session {
         );
     }
 
+    /// The same for `evolution-source-registry` itself, which scans
+    /// `EDS_REGISTRY_MODULES` for the collection backend
+    /// (`module-jmap-backend.so`, per `docs/manual-test-collection-backend.md`)
+    /// rather than a factory's own directory.
+    pub fn stage_collection_backend(&mut self, built_module: &Path) {
+        self.stage_backend(
+            "EDS_REGISTRY_MODULES",
+            "registry-modules",
+            "module-jmap-backend.so",
+            built_module,
+        );
+    }
+
     /// Stage a built cdylib as the one Camel mail provider this session can
     /// see, together with the `.urls` file that is what makes Camel open it.
     ///
