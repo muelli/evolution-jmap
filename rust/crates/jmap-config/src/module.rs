@@ -118,6 +118,17 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
         unsafe {
             register_dynamic::<JmapConfigServiceBackend>(type_module);
             register_dynamic::<JmapConfigLookup>(type_module);
+            // The OAuth2 service must exist in THIS process too, not only in
+            // the source registry's (the collection module registers it
+            // there): Evolution's shell hosts the credentials prompter, and
+            // its OAuth2 prompter impl can only route an `[Authentication]
+            // Method=JMAP` source to the sign-in window if an EOAuth2Service
+            // answering that name is registered in the prompter's own
+            // process. Without this line the prompter falls back to the
+            // password dialog — observed live (2026-08-23, Fastmail): a
+            // freshly discovered OAuth account prompted for a password that
+            // nothing could satisfy.
+            register_dynamic::<crate::oauth2_service::Service>(type_module);
         }
         crate::oauth2::ensure_registered();
     });

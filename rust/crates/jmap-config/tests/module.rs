@@ -48,6 +48,7 @@ use jmap_config::backend::JmapConfigServiceBackend;
 use jmap_config::config_lookup::JmapConfigLookup;
 use jmap_config::mail::MAIL_BACKEND_NAME;
 use jmap_config::module::{load, unload};
+use jmap_config::oauth2_service;
 
 /// A `GTypeModule` standing in for the `EModule` Evolution would load us as.
 #[repr(C)]
@@ -166,6 +167,26 @@ impl Drop for Class {
         // SAFETY: the reference taken in `get` is given back exactly once.
         unsafe { g_type_class_unref(self.0.cast()) };
     }
+}
+
+/// The credentials prompter runs in Evolution's SHELL process, and it can
+/// route an `[Authentication] Method=JMAP` source to the OAuth 2.0 sign-in
+/// window only if an `EOAuth2Service` answering that name is registered in
+/// that same process. The collection module registers the service for the
+/// source registry's process; this module must do the same for the shell's,
+/// or the prompter falls back to the password dialog — observed live
+/// (2026-08-23, Fastmail): a freshly discovered OAuth account prompted for a
+/// password that nothing could satisfy.
+#[test]
+fn the_entry_point_registers_the_oauth2_service_type() {
+    loaded();
+    assert_ne!(
+        // SAFETY: NAME is a 'static NUL-terminated string.
+        unsafe { g_type_from_name(<oauth2_service::Service as ObjectSubclass>::NAME.as_ptr()) },
+        0,
+        "e_module_load did not register the OAuth2 service type — the shell's \
+         credentials prompter can only offer the password dialog without it"
+    );
 }
 
 #[test]
