@@ -1097,11 +1097,11 @@ Asserted:
 - the mock recorded an `AddressBook/get` and a `Calendar/get` (both fan-out
   asks with `ids: null`) and no `Mailbox/get`, matching `MailEnabled=false`.
 
-What this does not cover, left for a future increment now that this harness
-exists: D2's colour push (`source_changed`, which needs a running
-calendar-factory backend instance rather than just the registry). The
-`create_resource_sync`/`delete_resource_sync` half — for both an address
-book and a calendar — is covered below.
+The `create_resource_sync`/`delete_resource_sync` half — for both an
+address book and a calendar — is covered below. D2's colour push
+(`source_changed`, which needs a running calendar-factory backend instance
+rather than just the registry) is covered further down, in "What the
+calendar-colour test asserts".
 
 ## What the collection-create test asserts
 
@@ -1185,6 +1185,59 @@ enabled and writable; the child disappeared after
 calls (one create, one destroy) and **no** `AddressBook/set` call at all —
 the check that a calendar create/delete does not silently reach the other
 kind's server call.
+
+## What the calendar-colour test asserts
+
+`rust/crates/jmap-functional/tests/calendar-color.rs`, against
+`tests/functional/cal-color-client.c`, is D2's write half proven through a
+real, running backend instance — the piece
+`jmap-backend-cal/tests/backend.rs` and `tests/ops.rs` stop short of.
+`backend.rs` only proves the `source_changed` vtable slot is installed and
+differs from the parent's; `ops.rs` only proves the pure diff-and-push
+decision (`ops::on_source_changed`) against literal colours with no
+`ESource` involved. Neither drives the FFI glue in between: reading the
+*live* `ESourceSelectable` colour off a real `ESource` inside the vfunc
+body, which only a real `ECalMetaBackend` instance — one actually
+connected and watching a real `ESource` for its own `"changed"` signal —
+can exercise.
+
+Unlike the collection tests above, this calendar is standalone: D2's
+account-id/calendar-id resolution
+(`jmap-backend-cal/src/connect.rs`, `jmap-backend-core/src/connect.rs::
+resolve`) reads the JMAP session's primary account and the source's own
+`[Resource] Identity=`/is-default fallback, with no dependency on
+`jmap-backend-collection` at all — the same keyfile shape
+`calendar.rs` already uses.
+
+The client opens the calendar with `e_cal_client_connect_sync()`, which is
+what makes `evolution-calendar-factory` dlopen `libecalbackendjmap.so` and
+keeps a live backend instance watching the source for the rest of the
+client's life — `source_changed` only ever fires on a backend that is
+connected. It then makes the edit a colour-picker in the calendar-properties
+dialog makes: `e_source_selectable_set_color()` on the `ESource`'s
+"Calendar" extension (the same `ESourceSelectable` `jmap-backend-collection/
+src/child_source.rs`'s own colour write, D2's read path, targets), then
+`e_source_write_sync()`.
+
+The push this triggers is asynchronous relative to `e_source_write_sync()`
+returning — EDS's own doc comment for the vfunc says it runs "from a
+dedicated thread" — and this harness's daemons die with the private D-Bus
+session when the client process exits, so there is nothing to usefully poll
+for from the Rust side afterwards. The client instead waits a plain,
+generous, fixed settle time (`PUSH_SETTLE_SECONDS`) after the write before
+exiting.
+
+Asserted:
+
+- the source reached `connected`, and the client reported writing the edit;
+- the colour read back immediately after connect, before the edit, was
+  EDS's own `ESourceSelectable` default (`#62a0ea`) — ruling out the read
+  path having already set some other colour, which would make "the push
+  happened" and "the push never had anything to do" indistinguishable;
+- the mock's own copy of the seeded calendar carries the new colour after
+  the client exits — the running backend's `source_changed` vfunc actually
+  read the live `ESource` and pushed a `Calendar/set` update, not merely
+  that the pure decision function behind it would have.
 
 ## Debugging a failure
 
