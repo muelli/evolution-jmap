@@ -23,17 +23,32 @@
 //!
 //! `evolution-source-registry` (this module's own process) is where a JMAP
 //! account's OAuth2 token actually gets refreshed, not the account-setup
-//! module — checked against evolution-ews's own working implementation
-//! (`src/EWS/registry/module-ews-backend.c`) rather than guessed: it registers
-//! `EOAuth2ServiceOffice365` in exactly this module, beside its own backend
-//! and factory, and nowhere else. One registration is the whole of it because
-//! `EOAuth2ServiceBase` (`jmap_config::oauth2_service`'s own docs point at
-//! `e-oauth2-service-base.c`) is itself an `EExtension` whose
+//! module. `EOAuth2ServiceBase` (`jmap_config::oauth2_service`'s own docs
+//! point at `e-oauth2-service-base.c`) is itself an `EExtension` whose
 //! `extensible_type` is `E_TYPE_OAUTH2_SERVICES`; `EOAuth2Services`'s
 //! constructor calls `e_extensible_load_extensions()` on itself before
 //! returning, so any process that later constructs that singleton
 //! instantiates every service registered by then — no manual `g_object_new`
 //! or `e_oauth2_services_add` call needed here.
+//!
+//! **Correction (2026-08-23, item 11's EWS-parity audit):** an earlier
+//! version of this comment claimed evolution-ews registers
+//! `EOAuth2ServiceOffice365` "in exactly this module... and nowhere else,"
+//! and used that to argue registering our own service only in the registry
+//! process was enough — which is exactly the reasoning `docs/ROADMAP.md`
+//! item 12 later found wrong the hard way (an infinite OAuth2 consent loop
+//! on the book/cal backends). Reading evolution-ews's actual source (not
+//! just this one file) shows the claim was wrong, not merely incomplete:
+//! `src/EWS/registry/module-ews-backend.c`,
+//! `src/EWS/evolution/module-ews-configuration.c` (the shell process),
+//! `src/EWS/addressbook/e-book-backend-ews-factory.c`, and
+//! `src/EWS/calendar/e-cal-backend-ews-factory.c` **each** call
+//! `e_oauth2_service_office365_type_register(type_module)` — four modules,
+//! matching this project's own four (`jmap-config`, this crate,
+//! `jmap-backend-book`, `jmap-backend-cal`) exactly. `EOAuth2ServiceOffice365`
+//! is a plugin type like ours, not something `libedataserver` ships built in;
+//! every process that wants `EOAuth2Services` to find a service has to
+//! register it there itself, EWS included.
 //!
 //! ## Why the `[JMAP OAuth2]` extension registers here too
 //!

@@ -1181,17 +1181,23 @@ pub unsafe fn is_complete(collection: *mut ESource) -> bool {
 /// here is either that second instance, which is not a fault, or an account
 /// `check_complete` already refused to let the user leave the page with.
 ///
-/// ## The gap this leaves, said plainly
+/// ## The gap this leaves, and where it is closed
 ///
 /// On the assistant's path the transport source therefore ends up with the
 /// service name `jmap` and no server, and JMAP submission needs one. Nothing
-/// else in the dialog is in a position to write it: the sending page is hidden
-/// for a store-and-transport provider, and the backend that is its candidate
-/// cannot see the account. The place that can is the collection backend, in
-/// `evolution-source-registry`, which is handed the account and can walk
-/// `e_collection_backend_list_mail_sources()` for the children that hang off it
-/// — and that is the next increment, not something to fake here by writing a
-/// host this backend does not know.
+/// else in *this* dialog is in a position to write it: the sending page is
+/// hidden for a store-and-transport provider, and the backend that is its
+/// candidate cannot see the account. The place that can is the collection
+/// backend, in `evolution-source-registry`, which is handed the account and
+/// `child_added`'s own callback for every source parented to it — **and that
+/// increment has since landed**: `jmap_backend_collection::mail_child::
+/// follow_server` binds the transport's (and mail account's) `[Authentication]`/
+/// `[Security]` to the collection's exactly for this reason, the one exception
+/// to `child_added`'s normal "both sides already have it" rule. See that
+/// module's own docs for why the transport needs an exception at all and how
+/// `[Security]`/`[Authentication] Method` are translated across the boundary
+/// (a `CamelNetworkSecurityMethod` nick and a Bearer/OAuth2 credential
+/// selector, respectively, not just a plain copy).
 unsafe extern "C" fn commit_changes(backend: *mut EMailConfigServiceBackend) {
     guard("commit_changes", (), || {
         // SAFETY: a live backend of this class, which is what Evolution
