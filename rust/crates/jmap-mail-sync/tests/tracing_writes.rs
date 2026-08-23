@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `MailSync::create_folder`/`delete_folder`, `set_subscribed`/
-//! `rename_folder`, and `set_keywords`/`file_message` trace their writes with
-//! `account_id` and the folder's/message's name/id, the Track B1 slice after
-//! `jmap-book-sync`'s (`tests/tracing_writes.rs` there).
+//! `rename_folder`, `set_keywords`/`file_message`, and `expunge_message`
+//! trace their writes with `account_id` and the folder's/message's name/id,
+//! the Track B1 slice after `jmap-book-sync`'s (`tests/tracing_writes.rs`
+//! there).
 
 use std::sync::{Arc, Mutex};
 
@@ -460,5 +461,120 @@ fn filing_a_message_into_the_mailbox_it_is_already_in_traces_nothing_at_all() {
     assert!(
         captured.is_empty(),
         "an empty filing sends no request and should trace nothing, got {captured:?}"
+    );
+}
+
+#[test]
+fn expunging_a_message_this_mailbox_is_the_last_home_of_traces_the_account_uid_and_mailbox() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let uid = fixture.seed_message(&inbox);
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        sync.expunge_message(&uid, &inbox).unwrap();
+    });
+
+    assert!(
+        has(
+            &captured,
+            Level::DEBUG,
+            "account_id",
+            fixture.account_id.as_ref()
+        ),
+        "expected a DEBUG account_id field, got {captured:?}"
+    );
+    assert!(
+        has(&captured, Level::DEBUG, "uid", uid.as_ref()),
+        "expected a DEBUG uid field, got {captured:?}"
+    );
+    assert!(
+        has(&captured, Level::DEBUG, "mailbox_id", inbox.as_ref()),
+        "expected a DEBUG mailbox_id field, got {captured:?}"
+    );
+    assert!(
+        captured.iter().all(|(_, name, _)| name != "error"),
+        "a successful expunge should not log an error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn expunging_a_message_filed_elsewhere_too_traces_the_account_uid_and_mailbox() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let archive = fixture.seed_mailbox("Archive");
+    let uid = fixture.seed_message(&inbox);
+    let sync = fixture.sync();
+    sync.file_message(&uid, &Filing::copied_into(archive))
+        .unwrap();
+
+    let captured = capture(|| {
+        sync.expunge_message(&uid, &inbox).unwrap();
+    });
+
+    assert!(
+        has(
+            &captured,
+            Level::DEBUG,
+            "account_id",
+            fixture.account_id.as_ref()
+        ),
+        "expected a DEBUG account_id field, got {captured:?}"
+    );
+    assert!(
+        has(&captured, Level::DEBUG, "uid", uid.as_ref()),
+        "expected a DEBUG uid field, got {captured:?}"
+    );
+    assert!(
+        has(&captured, Level::DEBUG, "mailbox_id", inbox.as_ref()),
+        "expected a DEBUG mailbox_id field, got {captured:?}"
+    );
+    assert!(
+        captured.iter().all(|(_, name, _)| name != "error"),
+        "a successful expunge should not log an error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn expunging_a_message_that_is_not_in_this_mailbox_traces_no_write() {
+    // The read that decides this (`Email/get`) still happens and leaves its own
+    // transport-level trace noise, unlike `set_keywords`/`file_message`'s
+    // short-circuit, which sends no request at all — so this asserts the
+    // absence of this crate's own write trace rather than an empty capture.
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let archive = fixture.seed_mailbox("Archive");
+    let uid = fixture.seed_message(&archive);
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        sync.expunge_message(&uid, &inbox).unwrap();
+    });
+
+    assert!(
+        !has(&captured, Level::DEBUG, "mailbox_id", inbox.as_ref()),
+        "a no-op expunge should not trace a write, got {captured:?}"
+    );
+    assert!(
+        captured.iter().all(|(_, name, _)| name != "error"),
+        "a no-op expunge should not log an error field, got {captured:?}"
+    );
+}
+
+#[test]
+fn expunging_a_nonexistent_message_traces_the_failure() {
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
+        let _ = sync.expunge_message(&Id::new("E404"), &inbox);
+    });
+
+    assert!(
+        captured
+            .iter()
+            .any(|(level, name, _)| *level == Level::WARN && name == "error"),
+        "expected a WARN error field, got {captured:?}"
     );
 }
