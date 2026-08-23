@@ -1085,9 +1085,19 @@ once, before this was written down.
   synchronise, and — the decisive check, since a synchronise that silently
   dropped the write would still show the flag in Camel's own in-memory row —
   the mock's own stored copy of the message carries the `$flagged` keyword,
-  and the method log shows an `Email/set`. `expunge_sync` (the vfunc behind
-  "Empty Trash"/"Expunge", and `synchronize_sync`'s own `expunge` argument)
-  is the same kind of gap and is not covered here — left as a follow-up.
+  and the method log shows an `Email/set`.
+- **`expunge_sync`, driven through `camel_folder_expunge_sync()`.** The vfunc
+  behind "Empty Trash"/"Expunge", and the one `synchronize_sync`'s own
+  `expunge` argument (exercised above as `FALSE`) chains into when it is
+  `TRUE`. The client marks a second, distinct inbox message
+  `CAMEL_MESSAGE_DELETED` and calls `camel_folder_expunge_sync(inbox, …)`.
+  Checked from both ends: the row leaves Camel's own folder listing (the
+  inbox count drops and the uid is no longer among those Camel reports), and
+  — the decisive check, since destroying a message filed in only one mailbox
+  is an `Email/set` **destroy** (RFC 8621 §4.6), not a keyword patch — the
+  mock no longer holds the message at all. A second message rather than the
+  one `synchronize_sync` flagged, so that message stays on the server for the
+  `synchronize_sync` assertions above to still find.
 
 Sending is not covered here. It is the next section.
 

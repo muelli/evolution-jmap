@@ -108,6 +108,7 @@ main (int argc,
 	gchar *joined;
 	gchar *appended_uid = NULL;
 	gchar *flagged_uid = NULL;
+	gchar *deleted_uid = NULL;
 	guint index;
 	const gchar *source_uid;
 	const gchar *protocol;
@@ -246,12 +247,18 @@ main (int argc,
 		GByteArray *body;
 		CamelStream *stream;
 
-		/* Whichever row Camel hands over first, held aside for the
-		 * `synchronize_sync` block below — which one it is does not
-		 * matter, since that block only reads back the same row it
-		 * wrote a flag onto. */
+		/* Whichever rows Camel hands over first and second, held aside
+		 * for the `synchronize_sync` and `expunge_sync` blocks below —
+		 * which ones they are does not matter, since those blocks only
+		 * read back the same rows they wrote to. Two distinct messages,
+		 * not one reused for both: `expunge_sync` destroys its message
+		 * outright, and the Rust harness still needs to find the
+		 * `synchronize_sync` message on the mock afterwards to confirm
+		 * its keyword survived. */
 		if (index == 0)
 			flagged_uid = g_strdup (uid);
+		else if (index == 1)
+			deleted_uid = g_strdup (uid);
 
 		message_info = camel_folder_get_message_info (inbox, uid);
 		if (!message_info) {
@@ -343,7 +350,10 @@ main (int argc,
 			 (camel_message_info_get_flags (flag_info) & CAMEL_MESSAGE_FLAGGED) ? 1 : 0);
 		g_clear_object (&flag_info);
 	}
-	g_free (flagged_uid);
+
+	/* `flagged_uid` stays alive: `expunge_sync`, at the very end of this
+	 * program, reuses this same message once the folder create/rename/
+	 * transfer/delete sequence below is done with it. */
 
 	/* `append_message_sync`: a message Camel is already holding — dragged
 	 * out of another account, dropped as a `.eml`, saved by a filter —
@@ -585,6 +595,52 @@ main (int argc,
 		report_sorted ("folders-after-delete", names);
 		g_ptr_array_unref (names);
 	}
+
+	/* `expunge_sync`: "Expunge"/"Empty Trash", the vfunc
+	 * `synchronize_sync`'s own `expunge` argument (already exercised above,
+	 * with that argument FALSE) chains into when it is TRUE. A second,
+	 * distinct message from the one `synchronize_sync` flagged — that one
+	 * stays on the server so the Rust harness can still confirm its keyword
+	 * survived; this one is destroyed outright, which the harness confirms
+	 * by its absence instead. It is still sitting in the inbox, untouched by
+	 * the folder create/rename/transfer/delete sequence above. */
+	if (!deleted_uid)
+		return fail ("no-message-to-delete", NULL);
+
+	g_print ("deleted-uid=%s\n", deleted_uid);
+	{
+		CamelMessageInfo *delete_info;
+
+		delete_info = camel_folder_get_message_info (inbox, deleted_uid);
+		if (!delete_info) {
+			g_free (deleted_uid);
+			return fail ("get-message-info-for-delete", NULL);
+		}
+		camel_message_info_set_flags (delete_info, CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_DELETED);
+		g_clear_object (&delete_info);
+	}
+
+	if (!camel_folder_expunge_sync (inbox, NULL, &error)) {
+		g_free (deleted_uid);
+		return fail ("expunge", error);
+	}
+
+	uids = camel_folder_get_uids (inbox);
+	g_print ("inbox-count-after-expunge=%u\n", uids->len);
+	{
+		gboolean still_listed = FALSE;
+
+		for (index = 0; index < uids->len; index++) {
+			if (g_strcmp0 (uids->pdata[index], deleted_uid) == 0) {
+				still_listed = TRUE;
+				break;
+			}
+		}
+		g_print ("expunged-uid-still-listed=%d\n", still_listed ? 1 : 0);
+	}
+	camel_folder_free_uids (inbox, uids);
+	g_free (flagged_uid);
+	g_free (deleted_uid);
 
 	g_object_unref (inbox);
 	g_object_unref (session);
