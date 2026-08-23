@@ -735,6 +735,7 @@ dependencies = [
 name = "jmap-config"
 version = "0.2.0"
 dependencies = [
+ "base64",
  "eds-sys",
  "evo-sys",
  "evolution-jmap-client",
@@ -748,6 +749,7 @@ dependencies = [
  "jmap-config",
  "jmap-mail",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

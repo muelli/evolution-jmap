@@ -54,6 +54,11 @@ gobject-sys = { workspace = true }
 # Self dev-dependency to turn on `testing` (and so `detached()`) for this
 # crate's own test builds only — see the `[features]` comment above.
 jmap-config = { path = ".", features = ["testing"] }
+# The PKCE round-trip test recomputes BASE64URL(SHA256(verifier)) to hold the
+# token form's verifier against the authorization query's challenge — the same
+# two crates jmap-client's own PKCE type uses, so nothing new in the lockfile.
+base64 = { workspace = true }
+sha2 = { workspace = true }
 # The account this writes is only right if the collection backend reads it back
 # as the account that was written, so the tests link the reader and hold the two
 # against each other.

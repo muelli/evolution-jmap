@@ -31,9 +31,9 @@ use eds_sys::{
     e_oauth2_service_get_client_id, e_oauth2_service_get_client_secret,
     e_oauth2_service_get_display_name, e_oauth2_service_get_name,
     e_oauth2_service_get_redirect_uri, e_oauth2_service_get_refresh_uri,
-    e_oauth2_service_prepare_authentication_uri_query, e_oauth2_services_find,
-    e_oauth2_services_new, e_source_authentication_set_method, e_source_get_extension,
-    e_source_new_with_uid,
+    e_oauth2_service_prepare_authentication_uri_query, e_oauth2_service_prepare_get_token_form,
+    e_oauth2_services_find, e_oauth2_services_new, e_source_authentication_set_method,
+    e_source_get_extension, e_source_new_with_uid,
 };
 use glib_sys::{
     GFALSE, g_free, g_hash_table_destroy, g_hash_table_lookup, g_hash_table_new_full, g_str_equal,
@@ -232,8 +232,88 @@ fn prepare_authentication_uri_query_names_the_registered_scope() {
             CStr::from_ptr(resource.cast()).to_str().unwrap(),
             "https://jmap.example.com/session"
         );
+        // RFC 7636 PKCE: EDS 3.52 has none, providers mandate it — the
+        // challenge must be here, and S256 the only method ever named.
+        let method = g_hash_table_lookup(query, c"code_challenge_method".as_ptr().cast());
+        assert!(
+            !method.is_null(),
+            "the query carries no code_challenge_method"
+        );
+        assert_eq!(CStr::from_ptr(method.cast()).to_str().unwrap(), "S256");
+        let challenge = g_hash_table_lookup(query, c"code_challenge".as_ptr().cast());
+        assert!(!challenge.is_null(), "the query carries no code_challenge");
+        assert_eq!(
+            CStr::from_ptr(challenge.cast()).to_str().unwrap().len(),
+            43,
+            "an S256 challenge is 32 base64url octets"
+        );
 
         g_hash_table_destroy(query);
+    }
+}
+
+/// The verifier redeemed at the token endpoint must be the secret behind the
+/// challenge the authorization request named (RFC 7636 §4.5) — driven through
+/// both EDS entry points in order, the way the credentials prompter does.
+#[test]
+fn the_token_form_redeems_the_verifier_behind_the_authorization_challenge() {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    let service = service_in(registry());
+    let source = TestSource::new().written(&config());
+
+    // SAFETY: standard GLib hash tables and live objects throughout.
+    unsafe {
+        let query = g_hash_table_new_full(
+            Some(g_str_hash),
+            Some(g_str_equal),
+            Some(g_free),
+            Some(g_free),
+        );
+        e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
+        let challenge = CStr::from_ptr(
+            g_hash_table_lookup(query, c"code_challenge".as_ptr().cast()).cast::<c_char>(),
+        )
+        .to_str()
+        .unwrap()
+        .to_owned();
+
+        let form = g_hash_table_new_full(
+            Some(g_str_hash),
+            Some(g_str_equal),
+            Some(g_free),
+            Some(g_free),
+        );
+        e_oauth2_service_prepare_get_token_form(service, source.0, c"an-auth-code".as_ptr(), form);
+        let verifier = g_hash_table_lookup(form, c"code_verifier".as_ptr().cast());
+        assert!(
+            !verifier.is_null(),
+            "the token form carries no code_verifier"
+        );
+        let verifier = CStr::from_ptr(verifier.cast::<c_char>()).to_str().unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(sha2::Sha256::digest(verifier.as_bytes())),
+            challenge,
+            "the redeemed verifier is not the secret behind the sent challenge"
+        );
+        // Single-use: a second token form gets no verifier.
+        let form2 = g_hash_table_new_full(
+            Some(g_str_hash),
+            Some(g_str_equal),
+            Some(g_free),
+            Some(g_free),
+        );
+        e_oauth2_service_prepare_get_token_form(service, source.0, c"an-auth-code".as_ptr(), form2);
+        assert!(
+            g_hash_table_lookup(form2, c"code_verifier".as_ptr().cast()).is_null(),
+            "a PKCE verifier must be single-use"
+        );
+
+        g_hash_table_destroy(query);
+        g_hash_table_destroy(form);
+        g_hash_table_destroy(form2);
     }
 }
 
