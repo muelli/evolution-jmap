@@ -92,6 +92,18 @@ impl std::error::Error for CreateFailure {}
 /// may flag the new collection default, and — for a calendar — may assign it a
 /// colour. All three reach the child that way, so a created child is the child
 /// the next discovery would have written rather than a near-miss of it.
+///
+/// The create explicitly asks for `isSubscribed: true`. Both specifications
+/// leave a freshly created collection's subscription state up to the server,
+/// and a real server (confirmed against Stalwart, which is not merely
+/// theoretical) defaults it to *unsubscribed* rather than leaving the property
+/// absent — and [`crate::resources`]'s own discovery filter drops
+/// `isSubscribed == Some(false)` on purpose, treating it exactly like a
+/// collection the user removed. Left to that default, "New Address Book"/"New
+/// Calendar" would create a collection that then vanishes from the sidebar
+/// until some other client happens to subscribe it. A user who just asked to
+/// create a collection has unambiguously asked to see it, so subscription is
+/// requested, not assumed from the server's silence.
 pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child, CreateFailure> {
     let layout = CollectionLayout::from_session(client.session());
     let kind = requested.kind;
@@ -112,6 +124,7 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
                     &account.id,
                     &AddressBook {
                         name: requested.display_name.clone(),
+                        is_subscribed: Some(true),
                         ..AddressBook::default()
                     },
                 )
@@ -126,6 +139,7 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
                     &account.id,
                     &Calendar {
                         name: requested.display_name.clone(),
+                        is_subscribed: Some(true),
                         ..Calendar::default()
                     },
                 )

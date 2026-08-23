@@ -332,3 +332,50 @@ fresh `ContactCard/get` after create, the same way the update branch already
 did — see `jmap-book-sync/tests/terse_create.rs` for the headless,
 `jmap-mockd`-reproducible regression test (`MockServerBuilder::
 terse_contact_create`), and `docs/NIGHT-LOG.md` for the full account.
+
+## `jmap-collection-sync`'s create/delete test
+
+`rust/crates/jmap-collection-sync/tests/live_server.rs` is the collection
+counterpart of the two files above, in the crate that actually implements
+`ECollectionBackendClass::create_resource_sync`/`delete_resource_sync` —
+`jmap-client/tests/live_server.rs` already proves `AddressBook/set` and
+`Calendar/set` round-trip through `Client` directly, but nothing there drives
+this crate's own `create_collection`/`delete_collection`: the account
+resolution through `CollectionLayout`, the create/destroy dispatch by
+`ChildKind`, and the `Child` a create derives from what the server answered.
+
+It reads the same `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`/
+`_REBASE_URLS` variables step 2/3 above already set up. Run it with:
+
+```console
+$ cargo test -p evolution-jmap-collection-sync -- --ignored
+```
+
+No `--features live-server` gate, for the same reason as the two files above.
+
+`creating_then_deleting_a_collection_round_trips_through_the_real_server`
+creates an address book and a calendar via `create_collection`, confirms
+each is listed by a fresh `Fanout::discover`, then destroys both via
+`delete_collection` and confirms neither is listed anymore. Skipped, not
+failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
+
+While building this test against real Stalwart, it also caught a real client
+bug (fixed, not just found): a freshly created `AddressBook`/`Calendar` came
+back `isSubscribed: false` from Stalwart when the create did not say
+otherwise, and `jmap-collection-sync`'s own discovery deliberately drops
+`isSubscribed == Some(false)` (the same rule that keeps a collection the
+user unsubscribed from out of the sidebar). So a collection Evolution's "New
+Address Book"/"New Calendar" had just created would immediately vanish from
+the next discovery — this test's first run against real Stalwart failed
+exactly that way. `jmap-mockd` never caught it because it always seeds its
+address books/calendars `isSubscribed: Some(true)` and a create through it
+that names no `isSubscribed` is stored as `None`, which the discovery filter
+also treats as subscribed — a real divergence between the mock's and a real
+server's default for an unspecified property. Fixed: `create_collection` now
+asks for `isSubscribed: true` explicitly on both the `AddressBook` and
+`Calendar` create, rather than relying on the server's silence. See
+`jmap-collection-sync/tests/create.rs`'s
+`a_created_collection_is_discoverable_even_when_the_server_defaults_new_collections_to_unsubscribed`
+for the headless, `jmap-mockd`-reproducible regression test
+(`MockServerBuilder::new_collections_default_unsubscribed`), and
+`docs/NIGHT-LOG.md` for the full account.

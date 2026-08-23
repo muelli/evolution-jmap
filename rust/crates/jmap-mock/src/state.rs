@@ -145,6 +145,18 @@ pub struct ServerState {
     /// matching every other test and this project's own prior assumption
     /// before that finding.
     pub terse_contact_create: bool,
+    /// Default a freshly created `AddressBook`/`Calendar` to
+    /// `isSubscribed: false` unless the create explicitly asked for `true`,
+    /// as [`crate::MockServerBuilder::new_collections_default_unsubscribed`]
+    /// asked — a real server (Stalwart, confirmed against the live
+    /// deployment) does this even though both specifications leave a fresh
+    /// collection's subscription state unstated, and
+    /// `jmap_collection_sync::resources`'s own discovery drops
+    /// `isSubscribed == Some(false)` on purpose. `false` leaves the property
+    /// exactly as the client sent it (typically absent), matching every
+    /// other test and this project's own prior assumption before that
+    /// finding.
+    pub new_collections_default_unsubscribed: bool,
 }
 
 impl ServerState {
@@ -168,6 +180,7 @@ impl ServerState {
             reject_download_accept_json: false,
             terse_submission_create: false,
             terse_contact_create: false,
+            new_collections_default_unsubscribed: false,
         }
     }
 

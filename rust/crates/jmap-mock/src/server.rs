@@ -100,6 +100,7 @@ pub struct MockServerBuilder {
     reject_download_accept_json: bool,
     terse_submission_create: bool,
     terse_contact_create: bool,
+    new_collections_default_unsubscribed: bool,
 }
 
 impl MockServerBuilder {
@@ -391,6 +392,19 @@ impl MockServerBuilder {
         self
     }
 
+    /// Default a freshly created `AddressBook`/`Calendar` to
+    /// `isSubscribed: false` unless the create explicitly asked for `true` —
+    /// confirmed against a live Stalwart deployment, which does this even
+    /// though neither RFC 9610 nor draft-ietf-jmap-calendars states a
+    /// default for a fresh collection's subscription state. Off by default,
+    /// matching the mock's own prior behaviour (leaving `isSubscribed`
+    /// exactly as the client sent it, typically absent) and every other
+    /// test.
+    pub fn new_collections_default_unsubscribed(mut self) -> Self {
+        self.new_collections_default_unsubscribed = true;
+        self
+    }
+
     /// Bind to localhost and start serving on a background thread. The
     /// server stops when the returned handle is dropped.
     pub fn start(self) -> MockServer {
@@ -410,6 +424,7 @@ impl MockServerBuilder {
         state.reject_download_accept_json = self.reject_download_accept_json;
         state.terse_submission_create = self.terse_submission_create;
         state.terse_contact_create = self.terse_contact_create;
+        state.new_collections_default_unsubscribed = self.new_collections_default_unsubscribed;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -473,6 +488,7 @@ impl MockServer {
             reject_download_accept_json: false,
             terse_submission_create: false,
             terse_contact_create: false,
+            new_collections_default_unsubscribed: false,
         }
     }
 

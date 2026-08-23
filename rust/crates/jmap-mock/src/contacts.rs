@@ -48,6 +48,7 @@ pub fn address_book_get(state: &mut ServerState, arguments: Value) -> Result<Val
 /// RFC 9610 states for `name`.
 pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<AddressBook> = parse_arguments(arguments)?;
+    let default_unsubscribed = state.new_collections_default_unsubscribed;
     let account = account_mut(state, &request.account_id)?;
 
     let response = simple_set(&mut account.address_books, request, |id, book| {
@@ -60,6 +61,9 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
                 .with_description("name must not be empty"));
         }
         book.id = Some(id.clone());
+        if default_unsubscribed && book.is_subscribed != Some(true) {
+            book.is_subscribed = Some(false);
+        }
         Ok(())
     })?;
     to_result(&response)
