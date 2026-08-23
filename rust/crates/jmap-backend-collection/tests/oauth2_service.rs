@@ -6,14 +6,23 @@
 //! session's own "next session" note.
 //!
 //! `evolution-source-registry` is where a JMAP account's OAuth2 token
-//! actually gets refreshed, so this is where the service belongs — checked
-//! against evolution-ews's own working implementation
-//! (`gitlab.gnome.org/GNOME/evolution-ews`,
-//! `src/EWS/registry/module-ews-backend.c`) rather than guessed, since a
-//! wrong placement is invisible on this headless VM either way. That module
-//! calls `e_oauth2_service_office365_type_register(type_module)` beside its
-//! backend/factory registrations and nothing more — no `g_object_new`, no
-//! `e_oauth2_services_add` anywhere in that codebase.
+//! actually gets refreshed, so this is where the service belongs. That
+//! module calls `e_oauth2_service_office365_type_register(type_module)`
+//! beside its backend/factory registrations — no `g_object_new`, no
+//! `e_oauth2_services_add` anywhere in that codebase, here or in
+//! evolution-ews.
+//!
+//! **Correction (2026-08-23, item 11's EWS-parity audit):** this comment
+//! used to add "and nothing more... and nowhere else," reading
+//! `module-ews-backend.c` as the *only* place evolution-ews registers
+//! `EOAuth2ServiceOffice365`. That was wrong, not just incomplete — item 12
+//! already found the registry-only registration insufficient for this
+//! project's own book/cal backends (an infinite consent loop), and
+//! re-reading evolution-ews's actual source confirms why: it registers the
+//! same service in `module-ews-configuration.c` (the shell process),
+//! `e-book-backend-ews-factory.c`, and `e-cal-backend-ews-factory.c` too —
+//! four modules, exactly matching this project's own four. See
+//! `docs/EWS-PARITY.md` for the full module-registration comparison.
 //!
 //! The reason one call is enough: `EOAuth2ServiceBase` (`e-oauth2-service-base.c`,
 //! read rather than assumed) is itself an `EExtension` whose
