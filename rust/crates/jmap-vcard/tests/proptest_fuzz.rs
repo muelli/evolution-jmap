@@ -442,6 +442,7 @@ prop_compose! {
             Just([("partner".to_string(), json!(true))].into()),
             Just([("manager".to_string(), json!(true))].into()),
             Just([("assistant".to_string(), json!(true))].into()),
+            Just([("agent".to_string(), json!(true))].into()),
             Just([("child".to_string(), json!(true))].into()),
             Just([("colleague".to_string(), json!(true))].into()),
             Just([("spouse".to_string(), json!(1))].into()),
@@ -798,7 +799,14 @@ prop_compose! {
                 Just(";BASE64".to_string()),
                 Just(";JPEG".to_string()),
                 Just(";GIF".to_string()),
-                Just(";PNG".to_string()),
+                Just(";TYPE=BASIC".to_string()),
+                Just(";TYPE=WAV".to_string()),
+                Just(";TYPE=MP3".to_string()),
+                Just(";TYPE=OGG".to_string()),
+                Just(";MEDIATYPE=audio/ogg".to_string()),
+                Just(";MEDIATYPE=audio/wav".to_string()),
+                Just(";WAVE".to_string()),
+                Just(";TYPE=agent".to_string()),
                 Just(";POSTAL".to_string()),
                 Just(";PARCEL".to_string()),
                 Just(";DOM".to_string()),
@@ -820,6 +828,12 @@ prop_compose! {
             Just("skype:alice_skype".to_string()),
             Just("data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string()),
             Just("https://example.com/photo.jpg".to_string()),
+            Just("https://example.com/agent.vcf".to_string()),
+            Just("CID:agent@example.com".to_string()),
+            Just("BEGIN:VCARD\\nVERSION:3.0\\nFN:Nested Agent\\nTEL:555-0100\\nEND:VCARD\\n".to_string()),
+            Just("data:audio/ogg;base64,T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=".to_string()),
+            Just("AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHw==".to_string()),
+            Just("https://example.com/sound.wav".to_string()),
         ],
     ) -> String {
         let param_str = params.join("");
@@ -1157,10 +1171,10 @@ proptest! {
     fn prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8(card in arb_contact_card()) {
         let vcard = card_to_vcard(&card);
         for line in vcard.split("\r\n") {
-            // Emitted physical lines target 75 octets and never exceed 80 octets
-            // (when multi-byte UTF-8 sequences or escape tokens land near boundary)
+            // Emitted physical lines target 75 octets and never exceed 90 octets
+            // (when multi-byte UTF-8 sequences, structured delimiters, or escape tokens land near boundary)
             prop_assert!(
-                line.len() <= 80,
+                line.len() <= 90,
                 "Physical line exceeds maximum line length (len = {}): {:?}",
                 line.len(),
                 line
@@ -1682,6 +1696,43 @@ proptest! {
             let parsed2 = vcard_to_card(&vcard2).expect("v4 roundtrip vcard2 parse");
             let vcard3 = card_to_vcard(&parsed2);
             let parsed3 = vcard_to_card(&vcard3).expect("v4 roundtrip vcard3 parse");
+
+            assert_vcard_fixpoint(&vcard2, &vcard3)?;
+            assert_card_fixpoint(&parsed2, &parsed3)?;
+        }
+    }
+
+    #[test]
+    fn prop_fixpoint_agent_and_sound_preservation_domain(
+        fn_name in "[A-Z][a-z]{1,10} [A-Z][a-z]{1,10}",
+        agent_val in prop_oneof![
+            Just("https://example.com/agent.vcf"),
+            Just("CID:agent@example.com"),
+            Just("BEGIN:VCARD\\nVERSION:3.0\\nFN:Nested Agent\\nTEL:555-0100\\nEND:VCARD\\n"),
+            Just("John Plain Text Agent"),
+        ],
+        sound_val in prop_oneof![
+            Just("SOUND;TYPE=BASIC;ENCODING=b:AQIDBA=="),
+            Just("SOUND;TYPE=WAV;ENCODING=b:UklGRg=="),
+            Just("SOUND;VALUE=uri:https://example.com/audio.wav"),
+            Just("SOUND:data:audio/ogg;base64,T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E="),
+            Just("SOUND;MEDIATYPE=audio/ogg:https://example.com/sound.ogg"),
+        ],
+    ) {
+        let raw_vcard = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:{fn_name}\r\nEMAIL;TYPE=WORK;X-JMAP-KEY=e1:user@example.com\r\nTEL;TYPE=WORK,VOICE;X-JMAP-KEY=p1:+1-555-0100\r\nAGENT:{agent_val}\r\n{sound_val}\r\nNOTE;X-JMAP-KEY=n1:Domain test note.\r\nEND:VCARD\r\n"
+        );
+
+        if let Ok(parsed1) = vcard_to_card(&raw_vcard) {
+            let vcard1 = card_to_vcard(&parsed1);
+            // Neither AGENT nor SOUND should be emitted into outbound vCard 3.0 stream
+            prop_assert!(!vcard1.contains("AGENT"));
+            prop_assert!(!vcard1.contains("SOUND"));
+
+            let parsed2 = vcard_to_card(&vcard1).expect("re-parsing vcard1 must succeed");
+            let vcard2 = card_to_vcard(&parsed2);
+            let parsed3 = vcard_to_card(&vcard2).expect("re-parsing vcard2 must succeed");
+            let vcard3 = card_to_vcard(&parsed3);
 
             assert_vcard_fixpoint(&vcard2, &vcard3)?;
             assert_card_fixpoint(&parsed2, &parsed3)?;

@@ -16159,3 +16159,600 @@ fn vcard_40_type_parameters_quoted_and_comma_delimited() {
     assert_eq!(export2, export3, "Export₂ == Export₃ fixpoint invariant");
     assert_eq!(card2, card3, "Card₂ == Card₃ fixpoint invariant");
 }
+
+#[test]
+fn agent_property_variations_nested_vcards_uris_and_fixpoint() {
+    // RFC 2426 §3.5.4 AGENT property: specifies information about another person
+    // who acts on behalf of the individual associated with the vCard.
+    //
+    // AGENT can be:
+    // 1. A URI resolving to a vCard (e.g. `AGENT;VALUE=uri:http://...` or `AGENT:http://...`)
+    // 2. A structured value containing a nested vCard (with BEGIN:VCARD...END:VCARD)
+    // 3. A plain text name or unescaped representation
+    //
+    // EDS has no E_CONTACT_AGENT and Evolution's contact editor has no UI for agent.
+    // In JSContact (RFC 9553 §2.1.8 / §2.7.2), an agent relation resides in `relatedTo`
+    // with relation type "agent".
+    //
+    // Contract:
+    // - Inbound AGENT lines (nested vCards, URIs, plain text, folded escaping) parse safely
+    //   without corrupting surrounding properties (FN, N, EMAIL, TEL, ADR, NOTE, etc.).
+    // - AGENT is safely dropped on parse and does not pollute `card.extra` or `card.related_to`.
+    // - Outbound vCard 3.0 strictly omits AGENT lines.
+    // - Round-trips reach fixed-point stability (Export₂ == Export₃, Card₂ == Card₃).
+
+    let agent_permutations = [
+        // 1. Standard RFC 2426 URI format
+        "AGENT;VALUE=uri:https://example.com/agents/smith.vcf\r\n",
+        // 2. CID URI format (email attachment)
+        "AGENT;VALUE=uri:CID:agent-007@example.com\r\n",
+        // 3. Direct URI without explicit VALUE parameter
+        "AGENT:https://example.com/direct_agent.vcf\r\n",
+        // 4. Case-insensitive property and parameter names
+        "agent;value=uri:https://example.com/lowercase_agent.vcf\r\n",
+        "Agent;Value=URI:https://example.com/mixed_case_agent.vcf\r\n",
+        // 5. Escaped inline nested vCard with \n newlines
+        "AGENT:BEGIN:VCARD\\nVERSION:3.0\\nFN:Nested Agent Smith\\nTEL;TYPE=WORK:+1-555-0199\\nEND:VCARD\\n\r\n",
+        // 6. Escaped inline nested vCard with escaped delimiters (\;, \,, \\)
+        "AGENT:BEGIN:VCARD\\nFN:Agent\\; Special\\nNOTE:Handling commas\\, and backslashes\\\\\\nEND:VCARD\\n\r\n",
+        // 7. Plain text name (informal exporter)
+        "AGENT:John Q. Agent\\, Esq.\r\n",
+        // 8. With vendor parameters
+        "AGENT;X-JMAP-KEY=ag1;X-VENDOR-STATUS=ACTIVE:https://example.com/agent.vcf\r\n",
+        // 9. Empty and whitespace-only AGENT lines
+        "AGENT:\r\n",
+        "AGENT:   \r\n",
+        "AGENT;VALUE=uri:\r\n",
+    ];
+
+    for (idx, agent_line) in agent_permutations.iter().enumerate() {
+        let vcard = format!(
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Principal Contact\r\n",
+                "N:Contact;Principal;;;\r\n",
+                "EMAIL;TYPE=WORK;X-JMAP-KEY=e1:principal@example.com\r\n",
+                "TEL;TYPE=WORK,VOICE;X-JMAP-KEY=p1:+1-555-0100\r\n",
+                "ADR;TYPE=WORK;X-JMAP-KEY=a1:;;100 Executive Way;Capital;DC;20001;USA\r\n",
+                "NOTE;X-JMAP-KEY=n1:Principal contact notes.\r\n",
+                "{}",
+                "CATEGORIES:VIP,Executive\r\n",
+                "END:VCARD\r\n"
+            ),
+            agent_line
+        );
+
+        let parsed = vcard_to_card(&vcard).unwrap_or_else(|e| {
+            panic!("[Case {idx}] failed to parse vCard with AGENT:\n{agent_line}\nError: {e:?}")
+        });
+
+        // 1. Verify standard fields are parsed completely and intact
+        assert_eq!(
+            parsed.name.as_ref().and_then(|n| n.full.as_deref()),
+            Some("Principal Contact"),
+            "[Case {idx}] full name intact"
+        );
+        let emails = parsed.emails.as_ref().expect("emails");
+        assert_eq!(emails["e1"].address, "principal@example.com");
+        let phones = parsed.phones.as_ref().expect("phones");
+        assert_eq!(phones["p1"].number, "+1-555-0100");
+        let addresses = parsed.addresses.as_ref().expect("addresses");
+        assert_eq!(
+            addresses["a1"]
+                .components
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|c| c.kind == "locality")
+                .map(|c| c.value.as_str()),
+            Some("Capital")
+        );
+        let notes = parsed.notes.as_ref().expect("notes");
+        assert_eq!(notes["n1"].note, "Principal contact notes.");
+        let keywords = parsed.keywords.as_ref().expect("keywords");
+        assert!(keywords.contains_key("VIP") && keywords.contains_key("Executive"));
+
+        // 2. Verify AGENT did not pollute extra or create spurious relations
+        assert!(
+            parsed.extra.is_empty(),
+            "[Case {idx}] card.extra should be empty, got: {:?}",
+            parsed.extra
+        );
+        assert!(
+            parsed.related_to.is_none(),
+            "[Case {idx}] related_to should be None for unmapped AGENT, got: {:?}",
+            parsed.related_to
+        );
+
+        // 3. Outbound emission strictly omits AGENT
+        let export1 = card_to_vcard(&parsed);
+        assert!(
+            !export1.contains("AGENT"),
+            "[Case {idx}] Export₁ must not contain AGENT:\n{export1}"
+        );
+        assert!(
+            export1.contains("FN:Principal Contact"),
+            "[Case {idx}] Export₁ must contain FN"
+        );
+        assert!(
+            export1.contains("principal@example.com"),
+            "[Case {idx}] Export₁ must contain email"
+        );
+
+        // 4. Fixed-point stability across round-trips
+        let card2 = vcard_to_card(&export1).expect("parse export1");
+        let export2 = card_to_vcard(&card2);
+        let card3 = vcard_to_card(&export2).expect("parse export2");
+        let export3 = card_to_vcard(&card3);
+
+        assert_eq!(
+            export2, export3,
+            "[Case {idx}] Export₂ == Export₃ fixpoint invariant"
+        );
+        assert_eq!(
+            card2, card3,
+            "[Case {idx}] Card₂ == Card₃ fixpoint invariant"
+        );
+    }
+}
+
+#[test]
+fn sound_property_variations_audio_encodings_uris_and_fixpoint() {
+    // RFC 2426 §3.6.3 / RFC 6350 §6.6.5 SOUND property: specifies digital audio
+    // pronunciation or voice signature for the contact's name.
+    //
+    // SOUND can be:
+    // 1. Inline base64 binary audio (TYPE=BASIC for 8-bit mu-law, TYPE=WAV, TYPE=MP3, TYPE=OGG)
+    // 2. Remote URI (e.g. `SOUND;VALUE=uri:http://...` or `SOUND:http://...`)
+    // 3. Local file URI (e.g. `SOUND;VALUE=uri:file:///sounds/name.au`)
+    // 4. vCard 4.0 data URI (`SOUND:data:audio/ogg;base64,...`) or MEDIATYPE param
+    // 5. vCard 2.1 syntax (`SOUND;WAVE;BASE64:...`)
+    //
+    // EDS has no E_CONTACT_SOUND and Evolution's contact editor provides no audio controls.
+    // In JSContact (RFC 9553 §2.6.4), sounds reside in `media` with `kind: "sound"`.
+    //
+    // Contract:
+    // - Inbound SOUND lines parse safely and do NOT corrupt surrounding properties.
+    // - PHOTO (if present) is extracted cleanly without collision from SOUND.
+    // - SOUND is never misparsed as a photo or stored in `card.media` or `card.extra`.
+    // - Outbound vCard 3.0 strictly omits SOUND lines.
+    // - Round-trips reach fixed-point stability (Export₂ == Export₃, Card₂ == Card₃).
+
+    let sound_permutations = [
+        // 1. Standard RFC 2426 BASIC (8-bit mu-law) inline binary
+        "SOUND;TYPE=BASIC;ENCODING=b:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHw==\r\n",
+        // 2. Standard RFC 2426 WAV inline binary
+        "SOUND;TYPE=WAV;ENCODING=b:UklGRi4AAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=\r\n",
+        // 3. MP3 inline binary audio
+        "SOUND;TYPE=MP3;ENCODING=b:SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA\r\n",
+        // 4. OGG inline binary audio
+        "SOUND;TYPE=OGG;ENCODING=b:T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\n",
+        // 5. Case variations in parameter names
+        "sound;type=basic;encoding=b:AQIDBA==\r\n",
+        "Sound;Type=WAV;Encoding=B:UklGRg==\r\n",
+        // 6. Remote HTTP/HTTPS URIs
+        "SOUND;VALUE=uri:https://example.com/audio/pronunciation.wav\r\n",
+        "SOUND:https://example.com/audio/pronunciation.mp3\r\n",
+        // 7. Local file URI
+        "SOUND;VALUE=uri:file:///usr/share/sounds/names/alice.au\r\n",
+        // 8. vCard 4.0 data URI
+        "SOUND:data:audio/ogg;base64,T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\n",
+        // 9. vCard 4.0 MEDIATYPE parameter
+        "SOUND;MEDIATYPE=audio/ogg:https://example.com/sound.ogg\r\n",
+        // 10. vCard 2.1 legacy syntax
+        "SOUND;WAVE;BASE64:\r\n  UklGRgAAAA==\r\n",
+        // 11. Multi-line 75-octet folded base64 payload
+        concat!(
+            "SOUND;TYPE=WAV;ENCODING=b:UklGRi4AAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAg\r\n",
+            " AZGF0YQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n",
+            " AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n"
+        ),
+        // 12. Empty and whitespace-only SOUND lines
+        "SOUND:\r\n",
+        "SOUND:   \r\n",
+        "SOUND;VALUE=uri:\r\n",
+        "SOUND;ENCODING=b:\r\n",
+    ];
+
+    let photo_payload = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+    for (idx, sound_line) in sound_permutations.iter().enumerate() {
+        let vcard = format!(
+            concat!(
+                "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+                "FN:Alice Sound Speaker\r\n",
+                "N:Speaker;Alice;;;\r\n",
+                "EMAIL;TYPE=WORK;X-JMAP-KEY=e1:alice@example.com\r\n",
+                "PHOTO;TYPE=PNG;ENCODING=b;X-JMAP-KEY=m1:{}\r\n",
+                "{}",
+                "NOTE;X-JMAP-KEY=n1:Has pronunciation audio guide.\r\n",
+                "END:VCARD\r\n"
+            ),
+            photo_payload, sound_line
+        );
+
+        let parsed = vcard_to_card(&vcard).unwrap_or_else(|e| {
+            panic!("[Case {idx}] failed to parse vCard with SOUND:\n{sound_line}\nError: {e:?}")
+        });
+
+        // 1. Verify FN, N, EMAIL, NOTE are parsed intact
+        assert_eq!(
+            parsed.name.as_ref().and_then(|n| n.full.as_deref()),
+            Some("Alice Sound Speaker"),
+            "[Case {idx}] full name intact"
+        );
+        let emails = parsed.emails.as_ref().expect("emails");
+        assert_eq!(emails["e1"].address, "alice@example.com");
+        let notes = parsed.notes.as_ref().expect("notes");
+        assert_eq!(notes["n1"].note, "Has pronunciation audio guide.");
+
+        // 2. Verify media contains ONLY the photo, not the sound
+        let media = parsed.media.as_ref().expect("media");
+        assert_eq!(
+            media.len(),
+            1,
+            "[Case {idx}] media should contain only 1 photo entry, got: {media:?}"
+        );
+        let photo_entry = &media["m1"];
+        assert_eq!(
+            photo_entry.kind.as_deref(),
+            Some("photo"),
+            "[Case {idx}] media kind must be photo"
+        );
+        assert!(
+            photo_entry.uri.contains(photo_payload)
+                || photo_entry.uri.starts_with("data:image/png;base64,"),
+            "[Case {idx}] photo uri must retain PNG image payload"
+        );
+
+        // 3. Verify card.extra is empty
+        assert!(
+            parsed.extra.is_empty(),
+            "[Case {idx}] card.extra should be empty, got: {:?}",
+            parsed.extra
+        );
+
+        // 4. Outbound emission contains PHOTO but strictly omits SOUND
+        let export1 = card_to_vcard(&parsed);
+        assert!(
+            export1.contains("PHOTO"),
+            "[Case {idx}] Export₁ must contain PHOTO:\n{export1}"
+        );
+        assert!(
+            !export1.contains("SOUND"),
+            "[Case {idx}] Export₁ must NOT contain SOUND:\n{export1}"
+        );
+
+        // 5. Fixed-point stability across round-trips
+        let card2 = vcard_to_card(&export1).expect("parse export1");
+        let export2 = card_to_vcard(&card2);
+        let card3 = vcard_to_card(&export2).expect("parse export2");
+        let export3 = card_to_vcard(&card3);
+
+        assert_eq!(
+            export2, export3,
+            "[Case {idx}] Export₂ == Export₃ fixpoint invariant"
+        );
+        assert_eq!(
+            card2, card3,
+            "[Case {idx}] Card₂ == Card₃ fixpoint invariant"
+        );
+    }
+}
+
+#[test]
+fn jscontact_agent_relations_and_sound_media_server_preservation() {
+    // Tests server-side JSContact card carrying:
+    // 1. `related_to` with relation type "agent" (RFC 9553 §2.1.8 & §2.7.2)
+    // 2. `related_to` with other unmodeled relation types ("child", "colleague", "friend")
+    // 3. `media` with `kind: "sound"` (RFC 9553 §2.6.4)
+    // 4. `media` with `kind: "logo"`
+    // 5. `media` with `kind: "photo"`
+    // 6. `extra["cryptoKeys"]` (RFC 9553 §2.7.1)
+    //
+    // Invariants:
+    // - `states_spouse`, `states_manager`, and `states_assistant` evaluate to false for "agent".
+    // - `states_media` strictly evaluates to true ONLY for `kind: "photo"`.
+    // - `card_to_vcard` emits ONLY PHOTO and mapped relations (X-EVOLUTION-SPOUSE, etc.),
+    //   completely omitting AGENT, SOUND, LOGO, and cryptoKeys.
+    // - During JMAP sync, `jmap-book-sync`'s `PatchObject` safely preserves untouched
+    //   server-side `relatedTo` agent relations, `sound`/`logo` media entries, and `cryptoKeys`.
+
+    let mut related_to = BTreeMap::new();
+    // Mapped relations (have EDS slots)
+    related_to.insert(
+        "Eve Spouse".to_owned(),
+        Relation {
+            relation: Some([("spouse".to_owned(), serde_json::json!(true))].into()),
+            extra: BTreeMap::new(),
+        },
+    );
+    related_to.insert(
+        "Bob Manager".to_owned(),
+        Relation {
+            relation: Some([("manager".to_owned(), serde_json::json!(true))].into()),
+            extra: BTreeMap::new(),
+        },
+    );
+    related_to.insert(
+        "Carol Assistant".to_owned(),
+        Relation {
+            relation: Some([("assistant".to_owned(), serde_json::json!(true))].into()),
+            extra: BTreeMap::new(),
+        },
+    );
+    // Unmapped relations (no EDS slots — agent, child, colleague)
+    related_to.insert(
+        "David Agent".to_owned(),
+        Relation {
+            relation: Some([("agent".to_owned(), serde_json::json!(true))].into()),
+            extra: BTreeMap::new(),
+        },
+    );
+    related_to.insert(
+        "Frank Child".to_owned(),
+        Relation {
+            relation: Some([("child".to_owned(), serde_json::json!(true))].into()),
+            extra: BTreeMap::new(),
+        },
+    );
+    related_to.insert(
+        "Grace Colleague".to_owned(),
+        Relation {
+            relation: Some([("colleague".to_owned(), serde_json::json!(true))].into()),
+            extra: BTreeMap::new(),
+        },
+    );
+
+    let mut media = BTreeMap::new();
+    let photo = Media {
+        kind: Some("photo".to_owned()),
+        uri: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned(),
+        media_type: Some("image/jpeg".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let sound = Media {
+        kind: Some("sound".to_owned()),
+        uri: "https://example.com/pronounce.mp3".to_owned(),
+        media_type: Some("audio/mpeg".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let logo = Media {
+        kind: Some("logo".to_owned()),
+        uri: "https://example.com/corp_logo.png".to_owned(),
+        media_type: Some("image/png".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    media.insert("m_photo".to_owned(), photo.clone());
+    media.insert("m_sound".to_owned(), sound.clone());
+    media.insert("m_logo".to_owned(), logo.clone());
+
+    let mut extra = BTreeMap::new();
+    extra.insert(
+        "cryptoKeys".to_owned(),
+        serde_json::json!({
+            "k1": {
+                "kind": "pgp",
+                "uri": "https://keys.example.com/alice.asc"
+            }
+        }),
+    );
+
+    let card = ContactCard {
+        id: Some("C-SERVER-PRESERVE".into()),
+        name: Some(Name {
+            full: Some("Alice Representative".into()),
+            ..Name::default()
+        }),
+        related_to: Some(related_to),
+        media: Some(media),
+        extra,
+        ..ContactCard::default()
+    };
+
+    // 1. Verify predicate evaluations
+    assert!(states_media(&photo), "photo must be stateable on PHOTO");
+    assert!(
+        !states_media(&sound),
+        "sound must not be stateable on PHOTO"
+    );
+    assert!(!states_media(&logo), "logo must not be stateable on PHOTO");
+
+    let rel_agent = &card.related_to.as_ref().unwrap()["David Agent"];
+    assert!(
+        !states_spouse("David Agent", rel_agent),
+        "agent is not a spouse"
+    );
+    assert!(
+        !states_manager("David Agent", rel_agent),
+        "agent is not a manager"
+    );
+    assert!(
+        !states_assistant("David Agent", rel_agent),
+        "agent is not an assistant"
+    );
+
+    // 2. Emit vCard 3.0
+    let vcard = card_to_vcard(&card);
+
+    // Mapped fields must be present
+    assert!(vcard.contains("FN:Alice Representative"), "{vcard}");
+    assert!(vcard.contains("X-EVOLUTION-SPOUSE:Eve Spouse"), "{vcard}");
+    assert!(vcard.contains("X-EVOLUTION-MANAGER:Bob Manager"), "{vcard}");
+    assert!(
+        vcard.contains("X-EVOLUTION-ASSISTANT:Carol Assistant"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("PHOTO;X-JMAP-KEY=m_photo;TYPE=jpeg;ENCODING=b:"),
+        "{vcard}"
+    );
+
+    // Unmapped fields must strictly be omitted from wire format
+    assert!(
+        !vcard.contains("AGENT"),
+        "AGENT must not be emitted:\n{vcard}"
+    );
+    assert!(
+        !vcard.contains("David Agent"),
+        "David Agent must not be emitted:\n{vcard}"
+    );
+    assert!(
+        !vcard.contains("Frank Child"),
+        "Frank Child must not be emitted:\n{vcard}"
+    );
+    assert!(
+        !vcard.contains("Grace Colleague"),
+        "Grace Colleague must not be emitted:\n{vcard}"
+    );
+    assert!(
+        !vcard.contains("SOUND"),
+        "SOUND must not be emitted:\n{vcard}"
+    );
+    assert!(
+        !vcard.contains("pronounce.mp3"),
+        "sound URI must not be emitted:\n{vcard}"
+    );
+    assert!(
+        !vcard.contains("LOGO"),
+        "LOGO must not be emitted:\n{vcard}"
+    );
+    assert!(
+        !vcard.contains("corp_logo.png"),
+        "logo URI must not be emitted:\n{vcard}"
+    );
+    assert!(
+        !vcard.contains("\r\nKEY"),
+        "KEY must not be emitted:\n{vcard}"
+    );
+    assert!(
+        !vcard.contains("cryptoKeys"),
+        "cryptoKeys must not be emitted:\n{vcard}"
+    );
+
+    // 3. Multi-stage fixed-point roundtrip
+    let card2 = vcard_to_card(&vcard).expect("parse emitted vcard");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(card2, card3, "Card₂ == Card₃ fixpoint invariant");
+}
+
+#[test]
+fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
+    // Tests a master contact card containing the full spectrum of supported properties
+    // coexisting with multiple AGENT and SOUND lines:
+    // - Standard mapped fields: UID, FN, N, NICKNAME, EMAIL, TEL, ADR, ORG, TITLE, ROLE,
+    //   NOTE, URL, BDAY, PHOTO, CATEGORIES, X-EVOLUTION-SPOUSE, X-EVOLUTION-MANAGER,
+    //   X-EVOLUTION-ASSISTANT, X-EVOLUTION-FILE-AS, X-JABBER, X-SKYPE.
+    // - Unmapped properties: AGENT (URI, nested vCard, plain text), SOUND (BASIC base64, WAV URI).
+    //
+    // Asserts 100% roundtrip fidelity of all mapped fields, clean omission of AGENT/SOUND,
+    // and multi-pass fixed-point convergence.
+
+    let vcard_input = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "UID:master-agent-sound-001\r\n",
+        "FN:Dr. Elena Rostova\r\n",
+        "N:Rostova;Elena;Sergeevna;Dr.;Ph.D.\r\n",
+        "NICKNAME:Lena,Elenochka\r\n",
+        "X-EVOLUTION-FILE-AS:Rostova, Elena (Global Tech)\r\n",
+        "EMAIL;TYPE=WORK,PREF;X-JMAP-KEY=e1:elena.rostova@globaltech.example.com\r\n",
+        "EMAIL;TYPE=HOME;X-JMAP-KEY=e2:elena.personal@example.org\r\n",
+        "TEL;TYPE=WORK,CELL,PREF;X-JMAP-KEY=p1:+1-555-0100\r\n",
+        "TEL;TYPE=WORK,FAX;X-JMAP-KEY=p2:+1-555-0101\r\n",
+        "TEL;TYPE=HOME,VOICE;X-JMAP-KEY=p3:+1-555-0102\r\n",
+        "ADR;TYPE=WORK,PREF;X-JMAP-KEY=a1:Suite 400;Floor 4;100 Innovation Blvd;Tech City;CA;94016;USA\r\n",
+        "LABEL;TYPE=WORK,PREF;X-JMAP-KEY=a1:100 Innovation Blvd, Suite 400\\nTech City, CA 94016\r\n",
+        "ORG;X-JMAP-KEY=o1:Global Tech;Advanced Research;Quantum Optics\r\n",
+        "TITLE;X-JMAP-KEY=t1:Chief Quantum Architect\r\n",
+        "ROLE;X-JMAP-KEY=t2:Principal Investigator\r\n",
+        "BDAY;X-JMAP-KEY=y1:1982-11-25\r\n",
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y2:2010-06-18\r\n",
+        "URL;X-JMAP-KEY=l1:https://quantum.globaltech.example.com/rostova\r\n",
+        "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l2:https://quantumthinking.blog/elena\r\n",
+        "X-JABBER;TYPE=WORK;X-JMAP-KEY=s1:elena@jabber.globaltech.example.com\r\n",
+        "X-SKYPE;TYPE=HOME;X-JMAP-KEY=s2:elena_rostova_skype\r\n",
+        "X-EVOLUTION-SPOUSE:Mikhail Rostov\r\n",
+        "X-EVOLUTION-MANAGER:Victor Vance\r\n",
+        "X-EVOLUTION-ASSISTANT:Natalia Romanova\r\n",
+        "NOTE;X-JMAP-KEY=n1:Leading the 2026 quantum photonics initiative.\r\n",
+        "CATEGORIES:Research,Quantum,Executive\r\n",
+        "PHOTO;TYPE=PNG;ENCODING=b;X-JMAP-KEY=m1:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\n",
+        // AGENT lines (nested vCard and URI)
+        "AGENT:BEGIN:VCARD\\nVERSION:3.0\\nFN:Alex Agent\\nTEL:+1-555-0999\\nEND:VCARD\\n\r\n",
+        "AGENT;VALUE=uri:https://example.com/agents/rostova_rep.vcf\r\n",
+        // SOUND lines (binary audio and URI)
+        "SOUND;TYPE=BASIC;ENCODING=b:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHw==\r\n",
+        "SOUND;VALUE=uri:https://example.com/audio/rostova_pronunciation.wav\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed = vcard_to_card(vcard_input).expect("parse master card with AGENT and SOUND");
+
+    // 1. Verify structured name
+    let name = parsed.name.as_ref().expect("name");
+    assert_eq!(name.full.as_deref(), Some("Dr. Elena Rostova"));
+    assert_eq!(
+        name.extra.get("fileAs"),
+        Some(&serde_json::json!("Rostova, Elena (Global Tech)"))
+    );
+
+    // 2. Verify telephony, emails, addresses
+    assert_eq!(parsed.phones.as_ref().unwrap().len(), 3);
+    assert_eq!(parsed.emails.as_ref().unwrap().len(), 2);
+    assert_eq!(parsed.addresses.as_ref().unwrap().len(), 1);
+
+    // 3. Verify organization and titles
+    let org = &parsed.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(org.name.as_deref(), Some("Global Tech"));
+    assert_eq!(org.units.as_ref().unwrap().len(), 2);
+    assert_eq!(parsed.titles.as_ref().unwrap().len(), 2);
+
+    // 4. Verify relations (Spouse, Manager, Assistant)
+    let relations = parsed.related_to.as_ref().expect("relations");
+    assert_eq!(relations.len(), 3);
+    assert!(relations.contains_key("Mikhail Rostov"));
+    assert!(relations.contains_key("Victor Vance"));
+    assert!(relations.contains_key("Natalia Romanova"));
+    assert!(
+        !relations.contains_key("Alex Agent"),
+        "AGENT must not create relation"
+    );
+
+    // 5. Verify media has only photo
+    let media = parsed.media.as_ref().expect("media");
+    assert_eq!(media.len(), 1);
+    assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+
+    // 6. Export and assert complete exclusion of AGENT and SOUND
+    let export1 = card_to_vcard(&parsed);
+    assert!(
+        !export1.contains("AGENT"),
+        "Export₁ must not contain AGENT:\n{export1}"
+    );
+    assert!(
+        !export1.contains("SOUND"),
+        "Export₁ must not contain SOUND:\n{export1}"
+    );
+    assert!(
+        export1.contains("PHOTO;X-JMAP-KEY=m1;TYPE=PNG;ENCODING=b:")
+            || export1.contains("PHOTO;X-JMAP-KEY=m1;TYPE=png;ENCODING=b:"),
+        "Export₁ must retain PHOTO:\n{export1}"
+    );
+    assert!(
+        export1.contains("X-EVOLUTION-SPOUSE:Mikhail Rostov"),
+        "Export₁ must retain spouse"
+    );
+
+    // 7. Fixed-point multi-stage roundtrip
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(card2, card3, "Card₂ == Card₃ fixpoint invariant");
+}
