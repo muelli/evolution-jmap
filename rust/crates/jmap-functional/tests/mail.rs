@@ -205,6 +205,32 @@ fn camel_opens_the_store_and_serves_the_inbox() {
         "the store's own listing did not gain the new folder\n{report}"
     );
 
+    // `append_message_sync`: a message Camel is already holding, arriving in
+    // this account's inbox from outside it — `Email/import` over an uploaded
+    // blob, not `Email/set`'s transfer of a message the account already
+    // has. Checked as a round trip, the same as create/rename/delete: not
+    // merely that the append answered, but that the folder's own listing
+    // grew, and that fetching the message back by the uid it was minted
+    // under returns the same subject that went up.
+    assert!(
+        seen.get("append-uid").is_some_and(|uid| !uid.is_empty()),
+        "append_message_sync did not mint a uid for the appended message\n{report}"
+    );
+    assert_eq!(
+        seen.get("inbox-count-after-append"),
+        Some(&"3"),
+        "the inbox listing did not grow by the appended message\n{report}"
+    );
+    assert_eq!(
+        seen.get("appended-subject"),
+        Some(&"Dropped in"),
+        "re-fetching the appended message by its minted uid did not return the message that went up\n{report}"
+    );
+    assert!(
+        calls.iter().any(|call| call == "Email/import"),
+        "append_message_sync never asked the server for Email/import; it asked for {calls:?}\n{report}"
+    );
+
     // `rename_folder_sync`, driven through the real vtable rather than the
     // plain decision function `manage::rename_folder`. The last component
     // changed under the same (root) parent — the "name the user typed" half

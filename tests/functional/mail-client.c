@@ -291,6 +291,65 @@ main (int argc,
 	g_ptr_array_unref (subjects);
 	g_ptr_array_unref (bodies);
 
+	/* `append_message_sync`: a message Camel is already holding — dragged
+	 * out of another account, dropped as a `.eml`, saved by a filter —
+	 * that this account has never seen, as opposed to `Email/set`'s
+	 * transfer of a message the account already has. Parsed from raw RFC
+	 * 5322 bytes rather than built header-by-header, the same way
+	 * `jmap-mail`'s own append tests construct one: the parse on the way
+	 * in has to be Camel's, or the write on the way out could disagree
+	 * with it. */
+	{
+		static const gchar outside_message[] =
+			"From: Dave <dave@example.com>\r\n"
+			"To: Alice <alice@example.com>\r\n"
+			"Subject: Dropped in\r\n"
+			"Message-ID: <dropped@example.com>\r\n"
+			"Date: Thu, 15 Jan 2026 11:00:00 +0000\r\n"
+			"\r\n"
+			"Found on the floor.\r\n";
+		CamelMimeMessage *outside;
+		CamelMimeMessage *reread;
+		gchar *appended_uid = NULL;
+
+		outside = camel_mime_message_new ();
+		if (!camel_data_wrapper_construct_from_data_sync (
+				CAMEL_DATA_WRAPPER (outside),
+				outside_message, sizeof (outside_message) - 1,
+				NULL, &error)) {
+			g_object_unref (outside);
+			return fail ("parse-outside-message", error);
+		}
+
+		if (!camel_folder_append_message_sync (inbox, outside, NULL,
+							&appended_uid, NULL, &error)) {
+			g_object_unref (outside);
+			return fail ("append-message", error);
+		}
+		g_object_unref (outside);
+
+		g_print ("append-uid=%s\n", appended_uid ? appended_uid : "");
+
+		/* The row is the listing's to write, not the append's — the
+		 * message appears only once the folder is next refreshed. */
+		if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
+			g_free (appended_uid);
+			return fail ("refresh-after-append", error);
+		}
+
+		uids = camel_folder_get_uids (inbox);
+		g_print ("inbox-count-after-append=%u\n", uids->len);
+
+		reread = camel_folder_get_message_sync (inbox, appended_uid, NULL, &error);
+		camel_folder_free_uids (inbox, uids);
+		g_free (appended_uid);
+		if (!reread)
+			return fail ("get-appended-message", error);
+
+		g_print ("appended-subject=%s\n", camel_mime_message_get_subject (reread));
+		g_object_unref (reread);
+	}
+
 	/* "New Folder" at the account root: `create_folder_sync` on the live
 	 * store, not the plain decision function `jmap-mail`'s own unit tests
 	 * call directly. A NULL parent is the account itself, the same
