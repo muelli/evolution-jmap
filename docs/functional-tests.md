@@ -525,6 +525,31 @@ card's state on the server moves. Catching it takes a before-and-after on that
 state, which is `an_edit_that_left_a_uri_only_handle_alone_writes_nothing` in the
 fixtures.
 
+### Removing a contact: the vfunc none of the other legs reach
+
+The twelfth leg (`removing_a_contact_through_eds_reaches_the_server_and_the_
+cache`) is the odd one out: it is the only leg in this file that does not save
+an edit. Every other leg exercises `save_contact_sync` (a create or a modify);
+this one exercises `remove_contact_sync` — the address-book mirror of the
+recurring-occurrence delete the calendar test drives via
+`e_cal_client_remove_object_sync` — which until this leg had no coverage
+through a real, connected `EBookMetaBackend` instance at all, only a
+vtable-slot assertion (`jmap-backend-book/tests/backend.rs`) and pure
+decision-function tests against the mock (`jmap-book-sync`'s own suite).
+
+It seeds one minimal card straight into the mock's store, runs
+`e_book_client_remove_contact_by_uid_sync` against it through
+`book-client.c`'s `remove` phase, and checks both ends:
+
+- **EDS's own cache agrees the contact is gone.** A follow-up
+  `e_book_client_get_contact_sync` for the same UID is expected to fail with
+  `E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND` — a backend that answered the
+  removal with success but never really told its cache would still hand the
+  card back here;
+- **the server lost it too.** The mock recorded a `ContactCard/set` call, and
+  the account's `contact_cards` store no longer holds an entry for the id —
+  the outcome that matters, not merely that some request was sent.
+
 ## What the calendar test asserts
 
 `rust/crates/jmap-functional/tests/calendar.rs`, against

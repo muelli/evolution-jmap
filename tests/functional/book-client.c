@@ -50,6 +50,7 @@
  *          functional-book-client <source-uid> renote <contact-uid> <note>
  *          functional-book-client <source-uid> unnote <contact-uid>
  *          functional-book-client <source-uid> rehandle <contact-uid> <handle>
+ *          functional-book-client <source-uid> remove <contact-uid>
  */
 
 #include <libebook/libebook.h>
@@ -1175,6 +1176,56 @@ rehandle_phase (EBookClient *book,
 	return save_and_report (book, contact, uid);
 }
 
+/* The eleventh phase: the user deletes a contact, on a card the server filed
+ * before EDS ever connected.
+ *
+ * The one phase of the ten before it that does not save an edit — it removes
+ * the whole card, the vfunc none of them reach
+ * (`remove_contact_sync`/`e_book_client_remove_contact_by_uid_sync`, the
+ * mirror of the recurring-occurrence delete `cal-client.c` already drives on
+ * the calendar side). Waited for first, the way every seeded-card phase is,
+ * so a slow initial cache fill cannot be mistaken for "the card was never
+ * there to remove" below. Reported twice over: whether the call itself
+ * succeeded, and whether EDS's own cache agrees afterwards — a backend that
+ * answered success without truly forwarding the destroy would still show the
+ * card on the next get, which is the failure this phase exists to catch. */
+static int
+remove_phase (EBookClient *book,
+             const gchar *uid)
+{
+	GError *error = NULL;
+	EContact *read_back = NULL;
+
+	if (!wait_for_contact (book, uid)) {
+		g_printerr ("wait: EDS never produced the contact '%s'\n", uid);
+		return 1;
+	}
+
+	if (!e_book_client_remove_contact_by_uid_sync (book, uid, E_BOOK_OPERATION_FLAG_NONE,
+						       NULL, &error))
+		return fail ("remove", error);
+
+	g_print ("removed=1\n");
+
+	/* Read back through the same call every other phase's "did it really
+	 * take" check uses. `E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND` is the
+	 * answer a gone contact gives; anything else — including success — says
+	 * the removal did not really reach the cache the way it claimed to. */
+	if (e_book_client_get_contact_sync (book, uid, &read_back, NULL, &error)) {
+		g_object_unref (read_back);
+		g_print ("gone=0\n");
+		return 0;
+	}
+
+	g_print ("gone=%d\n",
+		 g_error_matches (error, E_BOOK_CLIENT_ERROR,
+				  E_BOOK_CLIENT_ERROR_CONTACT_NOT_FOUND) ? 1 : 0);
+	g_print ("gone-error-message=%s\n", error ? error->message : "");
+	g_clear_error (&error);
+
+	return 0;
+}
+
 static void
 usage (const gchar *program)
 {
@@ -1187,9 +1238,10 @@ usage (const gchar *program)
 		    "       %s <source-uid> unspouse <contact-uid>\n"
 		    "       %s <source-uid> renote <contact-uid> <note>\n"
 		    "       %s <source-uid> unnote <contact-uid>\n"
-		    "       %s <source-uid> rehandle <contact-uid> <handle>\n",
+		    "       %s <source-uid> rehandle <contact-uid> <handle>\n"
+		    "       %s <source-uid> remove <contact-uid>\n",
 		    program, program, program, program, program, program, program,
-		    program, program, program);
+		    program, program, program, program);
 }
 
 int
@@ -1222,7 +1274,8 @@ main (int argc,
 	      (g_str_equal (phase, "unspouse") && argc == 4) ||
 	      (g_str_equal (phase, "renote") && argc == 5) ||
 	      (g_str_equal (phase, "unnote") && argc == 4) ||
-	      (g_str_equal (phase, "rehandle") && argc == 5))) {
+	      (g_str_equal (phase, "rehandle") && argc == 5) ||
+	      (g_str_equal (phase, "remove") && argc == 4))) {
 		usage (argv[0]);
 		return 2;
 	}
@@ -1295,8 +1348,10 @@ main (int argc,
 		status = renote_phase (book, argv[3], argv[4]);
 	else if (g_str_equal (phase, "unnote"))
 		status = unnote_phase (book, argv[3]);
-	else
+	else if (g_str_equal (phase, "rehandle"))
 		status = rehandle_phase (book, argv[3], argv[4]);
+	else
+		status = remove_phase (book, argv[3]);
 
 	g_object_unref (client);
 	g_object_unref (source);

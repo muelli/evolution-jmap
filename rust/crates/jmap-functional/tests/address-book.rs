@@ -3299,3 +3299,116 @@ fn retyping_a_uri_only_handle_through_eds_writes_the_uri_back() {
     assert_the_seeded_organizations_and_titles_survived(card);
     assert_the_seeded_addresses_survived(card);
 }
+
+/// The name and address of the card the `remove` leg deletes. Plain, since
+/// nothing about this leg is a mapping question — it is whether
+/// `remove_contact_sync` really reaches the server, and neither end reads
+/// this text back for anything beyond confirming the right card was seeded.
+const REMOVABLE_FULL_NAME: &str = "Alex Krycek";
+const REMOVABLE_EMAIL: &str = "alex@example.com";
+
+/// Put a single, minimal card into the mock's store, the way `seed_card`
+/// does for the name-editing legs — straight into the store rather than
+/// through EDS, since the point of this leg is what EDS does with a card it
+/// did not just write.
+fn seed_removable_card(server: &jmap_mock::MockServer) -> Id {
+    let account_id = server.account_id();
+    let state = server.state();
+    let mut state = state.lock().expect("mock state lock");
+    let account = state
+        .account_mut(&account_id)
+        .expect("the mock's default account");
+    let book = account.seed_address_book("Personal", true);
+
+    let id = account.contact_cards.alloc_id();
+    let mut card = ContactCard::simple(book, REMOVABLE_FULL_NAME, REMOVABLE_EMAIL);
+    card.id = Some(id.clone());
+    card.uid = Some(format!("urn:example:card:{}", id.as_str()));
+    account.contact_cards.seed_with_id(id.clone(), card);
+    id
+}
+
+/// `remove_contact_sync` — the address-book mirror of the recurring-occurrence
+/// delete `calendar.rs`/`cal-client.c` already drive on the calendar side, and
+/// the one vfunc none of the other ten legs in this file reach: they all save
+/// an edit, never destroy the card outright.
+///
+/// Checked from both ends, as every other leg is: EDS's own cache has to
+/// agree the card is gone (a backend that answered success without truly
+/// forwarding the destroy would still hand back the card on the next get),
+/// and the server the backend talks to has to have lost it too (a backend
+/// that only dropped its local cache entry would leave a ghost the next
+/// `ContactCard/get`-driven refresh would resurrect).
+#[test]
+fn removing_a_contact_through_eds_reaches_the_server_and_the_cache() {
+    let client = required_path("JMAP_FUNCTIONAL_BOOK_CLIENT");
+    let module = required_path("JMAP_FUNCTIONAL_BOOK_MODULE");
+
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let card_id = seed_removable_card(&server);
+    let port = mock_port(&server);
+
+    let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/address-book-remove"));
+    session.write_source("jmap-functional", &keyfile(port));
+    session.stage_address_book_backend(&module);
+
+    let output = session.run(&client, &["jmap-functional", "remove", card_id.as_str()]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The connect, checked before anything else for the reason the first leg
+    // spells out: a read-only or unconnected book turns every later failure
+    // into a message about the wrong thing.
+    assert_eq!(
+        seen.get("connection-status"),
+        Some(&"connected"),
+        "EDS never saw the source reach connected\n{report}"
+    );
+    assert_eq!(
+        seen.get("readonly"),
+        Some(&"0"),
+        "EDS opened the book read-only\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed with {}\n{report}",
+        output.status
+    );
+
+    assert_eq!(
+        seen.get("removed"),
+        Some(&"1"),
+        "e_book_client_remove_contact_by_uid_sync did not report success\n{report}"
+    );
+    assert_eq!(
+        seen.get("gone"),
+        Some(&"1"),
+        "EDS's own cache still hands back the removed contact\n{report}"
+    );
+
+    // The other end: the server the backend actually talks to. The write path
+    // is deliberately not asserted against `method_calls()` here beyond this —
+    // a destroy is a `ContactCard/set` call like every other write this file
+    // checks — because the load-bearing claim is the *outcome*, not the call
+    // shape: the card is gone from the store, not merely that some request
+    // was sent.
+    let calls = server.method_calls();
+    assert!(
+        calls.iter().any(|call| call == "ContactCard/set"),
+        "the removal never reached the server; it asked for {calls:?}\n{report}"
+    );
+
+    let state = server.state();
+    let state = state.lock().expect("mock state lock");
+    let account = state
+        .account(&account_id)
+        .expect("the mock's default account");
+    assert!(
+        account.contact_cards.get(&card_id).is_none(),
+        "the server still holds the card EDS reported gone: {:?}",
+        account.contact_cards.get(&card_id)
+    );
+}
