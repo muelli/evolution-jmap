@@ -276,7 +276,9 @@ fn moving_the_account_to_another_server_moves_its_children() {
 
     assert_eq!(
         child.config().target,
-        ConnectTarget::Origin("https://jmap.example.org:443".into()),
+        // A stated default port serializes out of the origin (RFC 6454 §6.2);
+        // the child still follows the renamed server either way.
+        ConnectTarget::Origin("https://jmap.example.org".into()),
         "the child stayed with the server the account used to name"
     );
 }
