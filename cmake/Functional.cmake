@@ -74,12 +74,15 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-book-client PRIVATE ${LIBEBOOK_LIBRARIES})
 	target_link_directories(functional-book-client PRIVATE ${LIBEBOOK_LIBRARY_DIRS})
 
-	# Three calendar clients rather than one, because they ask different
+	# Four calendar clients rather than one, because they ask different
 	# questions: cal-client.c creates every event it looks at, cal-edit-client.c
 	# reads one the server already held and saves back the members no iCalendar
-	# line has room for, and cal-zone-client.c asks what instant an event's zone
+	# line has room for, cal-zone-client.c asks what instant an event's zone
 	# resolves to — before and after each of the two kinds of edit a user can make
-	# to such an event. See the header of each.
+	# to such an event — and cal-color-client.c asks the same question D1 asks of
+	# create/delete, but of D2's colour push: does a live backend instance's
+	# `source_changed` vfunc actually fire and reach the server, not just the
+	# pure decision function behind it. See the header of each.
 	#
 	# The third takes a mode argument, which the other two do not, because it asks
 	# its one question from both ends: `read` starts from a zone only the server
@@ -91,9 +94,10 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# event-start.c holds the one function that reports the instant a start
 	# resolves to, so that a difference between what two of these programs answer
 	# is a difference in the event rather than in how it was measured. It is
-	# compiled into all three because that keeps this a single loop; cal-client.c
-	# does not call it, and an unreferenced function costs nothing here.
-	foreach(_client cal cal-edit cal-zone)
+	# compiled into all four because that keeps this a single loop; cal-client.c
+	# and cal-color-client.c do not call it, and an unreferenced function costs
+	# nothing here.
+	foreach(_client cal cal-edit cal-zone cal-color)
 		add_executable(functional-${_client}-client
 			tests/functional/${_client}-client.c
 			tests/functional/connection-status.c
@@ -220,6 +224,25 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CLIENT=$<TARGET_FILE:functional-cal-client>;JMAP_FUNCTIONAL_CAL_EDIT_CLIENT=$<TARGET_FILE:functional-cal-edit-client>;JMAP_FUNCTIONAL_CAL_ZONE_CLIENT=$<TARGET_FILE:functional-cal-zone-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# D2's write half through a real, running backend instance: a colour edit
+	# on the calendar's own `ESourceSelectable`, and whether the running
+	# `source_changed` vfunc pushes it — not just whether the pure decision
+	# function behind it (`jmap-backend-cal/tests/ops.rs`) would.
+	add_test(
+		NAME functional-cal-color
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test calendar-color
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-color PROPERTIES
+		LABELS functional
+		# Generous for the usual reason, plus PUSH_SETTLE_SECONDS' own
+		# deliberate wait inside the client.
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_COLOR_CLIENT=$<TARGET_FILE:functional-cal-color-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
 	# The collection backend's populate/fan-out: a real
