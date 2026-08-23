@@ -41,11 +41,31 @@ prop_compose! {
     fn arb_name()(
         components in prop::option::of(prop::collection::vec(arb_name_component(), 0..6)),
         full in prop::option::of("\\PC*"),
+        file_as in prop::option::of(prop_oneof![
+            "\\PC{1,20}",
+            Just("Doe, John".to_string()),
+            Just("Smith; Alice".to_string()),
+            Just("Müller, Jörg".to_string()),
+            Just("".to_string()),
+        ]),
+        sort_as in prop::option::of(prop_oneof![
+            "\\PC{1,20}",
+            Just("DOE".to_string()),
+            Just("SMITH".to_string()),
+            Just("".to_string()),
+        ]),
     ) -> Name {
+        let mut extra = BTreeMap::new();
+        if let Some(f) = file_as {
+            extra.insert("fileAs".to_string(), json!(f));
+        }
+        if let Some(s) = sort_as {
+            extra.insert("sortAs".to_string(), json!(s));
+        }
         Name {
             components,
             full,
-            extra: BTreeMap::new(),
+            extra,
         }
     }
 }
@@ -84,12 +104,22 @@ prop_compose! {
             Just(json!(123)),
         ]),
         pref in prop::option::of(0..100u32),
+        label in prop::option::of(prop_oneof![
+            Just("Support".to_string()),
+            Just("Sales".to_string()),
+            Just("School".to_string()),
+            "\\PC{1,15}",
+        ]),
     ) -> ContactEmail {
+        let mut extra = BTreeMap::new();
+        if let Some(l) = label {
+            extra.insert("label".to_string(), json!(l));
+        }
         ContactEmail {
             address,
             contexts,
             pref,
-            extra: BTreeMap::new(),
+            extra,
         }
     }
 }
@@ -121,13 +151,23 @@ prop_compose! {
             Just(json!({"other": true})),
         ]),
         pref in prop::option::of(0..100u32),
+        label in prop::option::of(prop_oneof![
+            Just("Direct Line".to_string()),
+            Just("iPhone".to_string()),
+            Just("Main Office".to_string()),
+            "\\PC{1,15}",
+        ]),
     ) -> ContactPhone {
+        let mut extra = BTreeMap::new();
+        if let Some(l) = label {
+            extra.insert("label".to_string(), json!(l));
+        }
         ContactPhone {
             number,
             features,
             contexts,
             pref,
-            extra: BTreeMap::new(),
+            extra,
         }
     }
 }
@@ -200,10 +240,18 @@ prop_compose! {
             Just(json!({"home": true})),
         ]),
         pref in prop::option::of(0..100u32),
+        label in prop::option::of(prop_oneof![
+            Just("Warehouse".to_string()),
+            Just("Branch Office".to_string()),
+            "\\PC{1,15}",
+        ]),
     ) -> Address {
         let mut extra = BTreeMap::new();
         if let Some(p) = pref {
             extra.insert("pref".to_owned(), json!(p));
+        }
+        if let Some(l) = label {
+            extra.insert("label".to_owned(), json!(l));
         }
         Address {
             components,
@@ -271,11 +319,20 @@ prop_compose! {
             Just("video".to_string()),
             "[a-z]{1,8}",
         ]),
+        label in prop::option::of(prop_oneof![
+            Just("Portfolio".to_string()),
+            Just("Company Blog".to_string()),
+            "\\PC{1,15}",
+        ]),
     ) -> Link {
+        let mut extra = BTreeMap::new();
+        if let Some(l) = label {
+            extra.insert("label".to_string(), json!(l));
+        }
         Link {
             uri,
             kind,
-            extra: BTreeMap::new(),
+            extra,
         }
     }
 }
@@ -382,17 +439,28 @@ prop_compose! {
     fn arb_relation()(
         relation in prop::option::of(prop_oneof![
             Just([("spouse".to_string(), json!(true))].into()),
+            Just([("partner".to_string(), json!(true))].into()),
             Just([("manager".to_string(), json!(true))].into()),
             Just([("assistant".to_string(), json!(true))].into()),
             Just([("child".to_string(), json!(true))].into()),
             Just([("colleague".to_string(), json!(true))].into()),
             Just([("spouse".to_string(), json!(1))].into()),
+            Just([("emergency".to_string(), json!(true))].into()),
             Just(BTreeMap::new()),
         ]),
+        label in prop::option::of(prop_oneof![
+            Just("Emergency Contact".to_string()),
+            Just("Colleague".to_string()),
+            "\\PC{1,15}",
+        ]),
     ) -> Relation {
+        let mut extra = BTreeMap::new();
+        if let Some(l) = label {
+            extra.insert("label".to_string(), json!(l));
+        }
         Relation {
             relation,
-            extra: BTreeMap::new(),
+            extra,
         }
     }
 }
@@ -501,12 +569,52 @@ prop_compose! {
     }
 }
 
+prop_compose! {
+    fn arb_card_extra()(
+        file_as in prop::option::of(prop_oneof![
+            "\\PC{1,20}",
+            Just("Company, Acme".to_string()),
+            Just("Custom File As".to_string()),
+            Just("".to_string()),
+        ]),
+        sort_as in prop::option::of(prop_oneof![
+            "\\PC{1,20}",
+            Just("ACME".to_string()),
+            Just("".to_string()),
+        ]),
+        crypto_keys in prop::option::of(prop_oneof![
+            Just(json!({"k1": {"kind": "pgp", "uri": "https://example.com/key.asc"}})),
+            Just(json!({"k2": {"kind": "x509", "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A..."}})),
+        ]),
+        unmodeled in prop::option::of(prop_oneof![
+            Just(json!("custom_val")),
+            Just(json!({"nested": 123})),
+        ]),
+    ) -> BTreeMap<String, serde_json::Value> {
+        let mut extra = BTreeMap::new();
+        if let Some(f) = file_as {
+            extra.insert("fileAs".to_string(), json!(f));
+        }
+        if let Some(s) = sort_as {
+            extra.insert("sortAs".to_string(), json!(s));
+        }
+        if let Some(c) = crypto_keys {
+            extra.insert("cryptoKeys".to_string(), c);
+        }
+        if let Some(u) = unmodeled {
+            extra.insert("unmodeledProp".to_string(), u);
+        }
+        extra
+    }
+}
+
 fn arb_contact_card() -> impl Strategy<Value = ContactCard> {
     (
         arb_card_ids(),
         arb_card_comm(),
         arb_card_org(),
         arb_card_resources(),
+        arb_card_extra(),
     )
         .prop_map(
             |(
@@ -514,6 +622,7 @@ fn arb_contact_card() -> impl Strategy<Value = ContactCard> {
                 (emails, phones, online_services),
                 (organizations, titles, addresses, notes),
                 (anniversaries, links, calendars, media, keywords, related_to),
+                extra,
             )| {
                 ContactCard {
                     id: id.map(Into::into),
@@ -535,6 +644,7 @@ fn arb_contact_card() -> impl Strategy<Value = ContactCard> {
                     online_services,
                     keywords,
                     related_to,
+                    extra,
                     ..ContactCard::default()
                 }
             },
@@ -571,6 +681,7 @@ prop_compose! {
             Just("SOUND".to_string()),
             Just("LOGO".to_string()),
             Just("KEY".to_string()),
+            Just("AGENT".to_string()),
             Just("X-AIM".to_string()),
             Just("X-GADUGADU".to_string()),
             Just("X-GOOGLE-TALK".to_string()),
@@ -590,12 +701,18 @@ prop_compose! {
             Just("X-EVOLUTION-BLOG-URL".to_string()),
             Just("X-EVOLUTION-VIDEO-URL".to_string()),
             Just("X-EVOLUTION-FILE-AS".to_string()),
+            Just("FILE-AS".to_string()),
+            Just("X-FILE-AS".to_string()),
             Just("X-ABLabel".to_string()),
             Just("X-ABRELATEDNAMES".to_string()),
+            Just("X-AB-RELATED-NAMES".to_string()),
             Just("X-ABDATE".to_string()),
+            Just("X-AB-DATE".to_string()),
+            Just("X-ABShowAs".to_string()),
+            Just("X-ADDRESSBOOKSERVER-KIND".to_string()),
+            Just("X-ADDRESSBOOKSERVER-MEMBER".to_string()),
             Just("X-MOZILLA-HTML".to_string()),
             Just("X-PHONETIC-FIRST-NAME".to_string()),
-            Just("X-ABShowAs".to_string()),
             Just("X-MS-CARDPICTURE".to_string()),
             Just("X-DISCORD".to_string()),
             Just("X-SIGNAL".to_string()),
@@ -692,14 +809,77 @@ prop_compose! {
 }
 
 prop_compose! {
+    fn arb_apple_property_group_block()(
+        group_idx in 1..8usize,
+        prop_kind in prop_oneof![
+            Just("TEL"),
+            Just("EMAIL"),
+            Just("ADR"),
+            Just("URL"),
+            Just("X-ABRELATEDNAMES"),
+            Just("X-AB-RELATED-NAMES"),
+            Just("X-ABDATE"),
+            Just("X-AB-DATE"),
+        ],
+        label in prop_oneof![
+            Just("_$!<Work>!$_".to_string()),
+            Just("_$!<Home>!$_".to_string()),
+            Just("_$!<Mobile>!$_".to_string()),
+            Just("_$!<WorkFAX>!$_".to_string()),
+            Just("_$!<HomeFAX>!$_".to_string()),
+            Just("_$!<Main>!$_".to_string()),
+            Just("_$!<School>!$_".to_string()),
+            Just("_$!<HomePage>!$_".to_string()),
+            Just("_$!<Spouse>!$_".to_string()),
+            Just("_$!<Manager>!$_".to_string()),
+            Just("_$!<Assistant>!$_".to_string()),
+            Just("_$!<Anniversary>!$_".to_string()),
+            Just("Direct Line".to_string()),
+            Just("Branch Office".to_string()),
+            Just("First Met".to_string()),
+            Just("Emergency Contact".to_string()),
+            Just("Portfolio".to_string()),
+            "[A-Za-z0-9 _-]{1,15}",
+        ],
+        pref in any::<bool>(),
+        phone_num in "[0-9]{3,4}",
+        user_name in "[a-z]{3,6}",
+        street in "[0-9]{1,3} [A-Za-z]+ St",
+        rel_name in "[A-Z][a-z]+ [A-Z][a-z]+",
+        year in 1980..2025i32,
+        month in 1..12i32,
+        day in 1..28i32,
+    ) -> String {
+        let group = format!("item{group_idx}");
+        let pref_param = if pref { ";type=pref" } else { "" };
+        let prop_line = match prop_kind {
+            "TEL" => format!("{group}.TEL{pref_param}:+1-555-{phone_num}"),
+            "EMAIL" => format!("{group}.EMAIL{pref_param}:{user_name}@example.com"),
+            "ADR" => format!("{group}.ADR{pref_param}:;;{street};Springfield;IL;62701;USA"),
+            "URL" => format!("{group}.URL{pref_param}:https://example.com/{user_name}"),
+            "X-ABRELATEDNAMES" | "X-AB-RELATED-NAMES" => format!("{group}.{prop_kind}{pref_param}:{rel_name}"),
+            "X-ABDATE" | "X-AB-DATE" => format!("{group}.{prop_kind}{pref_param}:{year:04}-{month:02}-{day:02}"),
+            _ => format!("{group}.{prop_kind}{pref_param}:Value"),
+        };
+        let label_line = format!("{group}.X-ABLabel:{label}");
+        format!("{prop_line}\r\n{label_line}")
+    }
+}
+
+prop_compose! {
     fn arb_raw_vcard()(
         version in prop_oneof![Just("3.0"), Just("2.1"), Just("4.0")],
-        lines in prop::collection::vec(arb_vcard_property_line(), 0..10),
+        lines in prop::collection::vec(arb_vcard_property_line(), 0..8),
+        groups in prop::collection::vec(arb_apple_property_group_block(), 0..3),
         trailing in prop::option::of("\\PC*"),
     ) -> String {
         let mut out = format!("BEGIN:VCARD\r\nVERSION:{version}\r\n");
         for line in lines {
             out.push_str(&line);
+            out.push_str("\r\n");
+        }
+        for group in groups {
+            out.push_str(&group);
             out.push_str("\r\n");
         }
         out.push_str("END:VCARD\r\n");
@@ -846,6 +1026,12 @@ fn identify_oscillating_card_field(card2: &ContactCard, card3: &ContactCard) -> 
         return format!(
             "Field 'related_to' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
             card2.related_to, card3.related_to
+        );
+    }
+    if card2.extra != card3.extra {
+        return format!(
+            "Field 'extra' oscillated:\n  Card₂: {:?}\n  Card₃: {:?}",
+            card2.extra, card3.extra
         );
     }
     format!("Unknown card field oscillated:\n  Card₂: {card2:?}\n  Card₃: {card3:?}")
@@ -1337,6 +1523,115 @@ proptest! {
         let parsed1 = vcard_to_card(&vcard1).expect("im vcard1 parse");
         let vcard2 = card_to_vcard(&parsed1);
         let parsed2 = vcard_to_card(&vcard2).expect("im vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_name_and_file_as_domain(
+        name in arb_name(),
+        card_file_as in prop::option::of(prop_oneof![
+            "\\PC{1,20}",
+            Just("Enterprise, Inc.".to_string()),
+            Just("Smith; Alice".to_string()),
+        ]),
+    ) {
+        let mut extra = BTreeMap::new();
+        if let Some(cf) = card_file_as {
+            extra.insert("fileAs".to_string(), json!(cf));
+        }
+        let card = ContactCard {
+            id: Some("C-NAME".into()),
+            name: Some(name),
+            extra,
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("name vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("name vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_apple_property_groups_domain(
+        groups in prop::collection::vec(arb_apple_property_group_block(), 1..5),
+    ) {
+        let mut raw_vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Apple Group Fuzz User\r\n".to_string();
+        for group in groups {
+            raw_vcard.push_str(&group);
+            raw_vcard.push_str("\r\n");
+        }
+        raw_vcard.push_str("END:VCARD\r\n");
+
+        if let Ok(parsed1) = vcard_to_card(&raw_vcard) {
+            let vcard1 = card_to_vcard(&parsed1);
+            let parsed2 = vcard_to_card(&vcard1).expect("apple group vcard1 parse");
+            let vcard2 = card_to_vcard(&parsed2);
+            let parsed3 = vcard_to_card(&vcard2).expect("apple group vcard2 parse");
+            let vcard3 = card_to_vcard(&parsed3);
+
+            assert_vcard_fixpoint(&vcard2, &vcard3)?;
+            assert_card_fixpoint(&parsed2, &parsed3)?;
+        }
+    }
+
+    #[test]
+    fn prop_fixpoint_links_domain(
+        links in prop::collection::btree_map(arb_key(), arb_link(), 1..4),
+    ) {
+        let card = ContactCard {
+            id: Some("C-LINKS".into()),
+            links: Some(links),
+            ..ContactCard::default()
+        };
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("links vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("links vcard2 parse");
+        let vcard3 = card_to_vcard(&parsed2);
+
+        assert_vcard_fixpoint(&vcard2, &vcard3)?;
+        assert_card_fixpoint(&parsed1, &parsed2)?;
+    }
+
+    #[test]
+    fn prop_fixpoint_crypto_keys_and_logo_preservation_domain(
+        crypto_keys in prop::collection::btree_map(
+            arb_key(),
+            prop_oneof![
+                Just(json!({"kind": "pgp", "uri": "https://example.com/key.asc"})),
+                Just(json!({"kind": "x509", "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A..."})),
+            ],
+            1..3,
+        ),
+        media in prop::collection::btree_map(arb_key(), arb_media(), 1..3),
+    ) {
+        let mut extra = BTreeMap::new();
+        extra.insert("cryptoKeys".to_string(), json!(crypto_keys));
+
+        let card = ContactCard {
+            id: Some("C-KEY-LOGO".into()),
+            media: Some(media),
+            extra,
+            ..ContactCard::default()
+        };
+
+        let vcard1 = card_to_vcard(&card);
+        // Neither KEY nor LOGO should be emitted into vCard 3.0 stream
+        prop_assert!(!vcard1.contains("KEY:"));
+        prop_assert!(!vcard1.contains("KEY;"));
+        prop_assert!(!vcard1.contains("LOGO:"));
+        prop_assert!(!vcard1.contains("LOGO;"));
+
+        let parsed1 = vcard_to_card(&vcard1).expect("preservation vcard1 parse");
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("preservation vcard2 parse");
         let vcard3 = card_to_vcard(&parsed2);
 
         assert_vcard_fixpoint(&vcard2, &vcard3)?;

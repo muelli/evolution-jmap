@@ -15369,3 +15369,188 @@ fn key_and_logo_edge_cases_and_malformed_payloads() {
     let emitted1_re = card_to_vcard(&card1_re);
     assert_eq!(emitted1, emitted1_re);
 }
+
+#[test]
+fn proptest_generator_sync_coverage_and_domain_invariants() {
+    // 1. Contact with name-level fileAs and sortAs, card-level fileAs and cryptoKeys
+    let mut name_extra = BTreeMap::new();
+    name_extra.insert("fileAs".to_string(), json!("Doe, John (Name Extra)"));
+    name_extra.insert("sortAs".to_string(), json!("DOE"));
+
+    let mut card_extra = BTreeMap::new();
+    card_extra.insert("fileAs".to_string(), json!("Doe, John (Card Extra)"));
+    card_extra.insert(
+        "cryptoKeys".to_string(),
+        json!({"k1": {"kind": "pgp", "uri": "https://example.com/key.asc"}}),
+    );
+    card_extra.insert("unmodeledCustom".to_string(), json!("preserve_me"));
+
+    let mut email_extra = BTreeMap::new();
+    email_extra.insert("label".to_string(), json!("Support"));
+
+    let mut phone_extra = BTreeMap::new();
+    phone_extra.insert("label".to_string(), json!("Direct Line"));
+
+    let mut adr_extra = BTreeMap::new();
+    adr_extra.insert("label".to_string(), json!("Warehouse"));
+    adr_extra.insert("pref".to_string(), json!(1));
+
+    let mut link_extra = BTreeMap::new();
+    link_extra.insert("label".to_string(), json!("Portfolio"));
+
+    let mut rel_extra = BTreeMap::new();
+    rel_extra.insert("label".to_string(), json!("Emergency Contact"));
+
+    let card = ContactCard {
+        id: Some("C-GEN-SYNC".into()),
+        name: Some(Name {
+            full: Some("John Doe".into()),
+            components: Some(vec![
+                NameComponent::new("given", "John"),
+                NameComponent::new("surname", "Doe"),
+            ]),
+            extra: name_extra,
+        }),
+        emails: Some(
+            [(
+                "e1".to_string(),
+                ContactEmail {
+                    address: "support@example.com".into(),
+                    contexts: Some(json!({"work": true})),
+                    pref: Some(1),
+                    extra: email_extra,
+                },
+            )]
+            .into(),
+        ),
+        phones: Some(
+            [(
+                "p1".to_string(),
+                ContactPhone {
+                    number: "+1-555-0199".into(),
+                    features: Some(json!({"voice": true})),
+                    contexts: Some(json!({"work": true})),
+                    pref: Some(1),
+                    extra: phone_extra,
+                },
+            )]
+            .into(),
+        ),
+        addresses: Some(
+            [(
+                "a1".to_string(),
+                Address {
+                    components: Some(vec![
+                        AddressComponent::new("name", "100 Industrial Pkwy"),
+                        AddressComponent::new("locality", "Springfield"),
+                    ]),
+                    contexts: Some(json!({"work": true})),
+                    full: Some("100 Industrial Pkwy, Springfield".into()),
+                    extra: adr_extra,
+                },
+            )]
+            .into(),
+        ),
+        links: Some(
+            [(
+                "l1".to_string(),
+                Link {
+                    uri: "https://portfolio.example.com".into(),
+                    kind: Some("website".into()),
+                    extra: link_extra,
+                },
+            )]
+            .into(),
+        ),
+        related_to: Some(
+            [(
+                "r1".to_string(),
+                Relation {
+                    relation: Some([("partner".to_string(), json!(true))].into()),
+                    extra: rel_extra,
+                },
+            )]
+            .into(),
+        ),
+        extra: card_extra,
+        ..ContactCard::default()
+    };
+
+    // Export₁ must emit X-EVOLUTION-FILE-AS (preferring name-level fileAs) and standard properties
+    let vcard1 = card_to_vcard(&card);
+    assert!(vcard1.contains("X-EVOLUTION-FILE-AS:Doe\\, John (Name Extra)"));
+    assert!(!vcard1.contains("cryptoKeys"));
+    assert!(!vcard1.contains("unmodeledCustom"));
+    assert!(!vcard1.contains("KEY:"));
+
+    // Parse₁ extracts fields cleanly
+    let parsed1 = vcard_to_card(&vcard1).expect("parse vcard1");
+    let name1 = parsed1.name.as_ref().expect("name1");
+    assert_eq!(
+        name1.extra.get("fileAs").and_then(|v| v.as_str()),
+        Some("Doe, John (Name Extra)")
+    );
+
+    // Multi-pass round-trip reaches exact fixed point
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("parse vcard2");
+    let vcard3 = card_to_vcard(&parsed2);
+    assert_eq!(vcard2, vcard3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(parsed1, parsed2, "Card₂ == Card₃ fixpoint invariant");
+}
+
+#[test]
+fn apple_property_group_block_generator_roundtrips_to_fixpoint() {
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Apple Groups Contact\r\n",
+        "item1.TEL;type=pref:+1-555-0100\r\n",
+        "item1.X-ABLabel:_$!<Mobile>!$_\r\n",
+        "item2.TEL:+1-555-0200\r\n",
+        "item2.X-ABLabel:Direct Line\r\n",
+        "item3.EMAIL;type=pref:alice@example.com\r\n",
+        "item3.X-ABLabel:_$!<Work>!$_\r\n",
+        "item4.ADR;type=pref:;;123 Main St;Springfield;IL;62701;USA\r\n",
+        "item4.X-ABLabel:_$!<Work>!$_\r\n",
+        "item5.URL:https://alice.example.com\r\n",
+        "item5.X-ABLabel:_$!<HomePage>!$_\r\n",
+        "item6.X-ABRELATEDNAMES;type=pref:Bob Smith\r\n",
+        "item6.X-ABLabel:_$!<Spouse>!$_\r\n",
+        "item7.X-AB-RELATED-NAMES:Charlie Brown\r\n",
+        "item7.X-ABLabel:Colleague\r\n",
+        "item8.X-ABDATE;type=pref:2018-06-15\r\n",
+        "item8.X-ABLabel:_$!<Anniversary>!$_\r\n",
+        "item9.X-AB-DATE:2020-01-01\r\n",
+        "item9.X-ABLabel:First Met\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed1 = vcard_to_card(raw_vcard).expect("parse apple groups raw vcard");
+    let phones = parsed1.phones.as_ref().expect("phones");
+    assert_eq!(phones.len(), 2);
+
+    let emails = parsed1.emails.as_ref().expect("emails");
+    assert_eq!(emails.len(), 1);
+
+    let addresses = parsed1.addresses.as_ref().expect("addresses");
+    assert_eq!(addresses.len(), 1);
+
+    let links = parsed1.links.as_ref().expect("links");
+    assert_eq!(links.len(), 1);
+
+    let relations = parsed1.related_to.as_ref().expect("relations");
+    assert_eq!(relations.len(), 2);
+
+    let anniversaries = parsed1.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(anniversaries.len(), 2);
+
+    // Outbound emission normalizes to vCard 3.0 standard properties and reaches fixed point
+    let vcard1 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard1).expect("parse vcard1");
+    let vcard2 = card_to_vcard(&parsed2);
+    let parsed3 = vcard_to_card(&vcard2).expect("parse vcard2");
+    let vcard3 = card_to_vcard(&parsed3);
+
+    assert_eq!(vcard2, vcard3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(parsed2, parsed3, "Card₂ == Card₃ fixpoint invariant");
+}
