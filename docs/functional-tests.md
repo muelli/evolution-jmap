@@ -60,8 +60,8 @@ error naming the missing one. That is deliberate: see below.
    `XDG_CACHE_HOME`, the `.source` keyfiles that describe the account and name
    the mock's port — one of them, or three where a send is involved — and a
    module directory holding the one module under test, named by
-   `EDS_ADDRESS_BOOK_MODULES`, `EDS_CALENDAR_MODULES` or
-   `EDS_CAMEL_PROVIDER_DIR`;
+   `EDS_ADDRESS_BOOK_MODULES`, `EDS_CALENDAR_MODULES`,
+   `EDS_CAMEL_PROVIDER_DIR` or `EDS_REGISTRY_MODULES`;
 3. runs the client program on a **private session bus** from
    `dbus-run-session`, with that environment and nothing inherited. The
    daemons D-Bus activates are this test's daemons, started with this test's
@@ -1021,7 +1021,7 @@ write.
 ## What the config lookup test asserts
 
 `rust/crates/jmap-functional/tests/config-lookup.rs`, against
-`tests/functional/config-lookup-client.c`, is the odd one out among these
+`tests/functional/config-lookup-client.c`, is the odd one out among the other
 five: it is not a daemon opening a book, calendar or mail store from a
 `.source` keyfile, because a config lookup happens *before* any account
 exists. It exercises `JmapConfigLookup` (`jmap-config/src/config_lookup.rs`),
@@ -1063,6 +1063,46 @@ prompter ever opens, and this test's assertions stop at exactly that
 boundary. `docs/NIGHT-LOG.md`'s 307th session hand-drove this same dispatch
 once with a throwaway client before this test existed; this is that spike
 made permanent and repeatable.
+
+## What the collection test asserts
+
+`rust/crates/jmap-functional/tests/collection.rs`, against `tests/functional/
+collection-client.c`, is the odd one out among these six in a different way
+again: it is not a factory opening a leaf backend from a `.source` file at
+all, but `evolution-source-registry` itself loading `module-jmap-backend.so`
+(`EDS_REGISTRY_MODULES`) and turning one collection account into the
+children `docs/manual-test-collection-backend.md`'s hand-run recipe
+describes — `jmap-backend-collection`'s populate/fan-out, checked through a
+real registry instead of the crate's own in-process `EServerSideSource`
+fixtures.
+
+The client connects to the registry, confirms the account keyfile itself
+was picked up (`account-found`), then polls `e_source_registry_list_sources`
+until it sees two sources naming the account as `Parent=` or a 30-second
+deadline passes — the same polling shape `connection-status.c` uses for a
+different property of the same kind of source, since the children are
+written to disk by the backend and picked up by the registry's own file
+monitor, an asynchronous step with no simpler signal to wait on.
+
+Asserted:
+
+- the account was found at all — a registry that never loaded the module,
+  or loaded it and matched no `BackendName=jmap` collection factory, fails
+  here first;
+- exactly one address-book child and one calendar child appeared, matching
+  `ContactsEnabled=true`/`CalendarEnabled=true` in the keyfile;
+- each child names `jmap` as its own `BackendName`, the account as its
+  `Parent=`, and is enabled — the properties `child_added` is actually
+  responsible for, not merely that some source of the right kind exists;
+- the mock recorded an `AddressBook/get` and a `Calendar/get` (both fan-out
+  asks with `ids: null`) and no `Mailbox/get`, matching `MailEnabled=false`.
+
+What this does not cover, left for a future increment now that this harness
+exists: `create_resource_sync`/`delete_resource_sync` (Track D1's "New
+Address Book"/"Delete" — the async `e_source_registry_create_sources_sync`/
+`e_source_remove_sync` half, not the populate this test drives) and D2's
+colour push (`source_changed`, which needs a running calendar-factory
+backend instance rather than just the registry).
 
 ## Debugging a failure
 
