@@ -3858,11 +3858,14 @@ fn to_ical_date_time(local: &str) -> Option<String> {
     exists(&date, &time).then(|| format!("{date}T{time}"))
 }
 
-/// `20260115T130000`, `20260115T130000Z` or `20260115` (`VALUE=DATE`) →
-/// `2026-01-15T13:00:00`. A date without a time is read as midnight:
-/// `showWithoutTime` is not modeled yet, and an all-day event that lost its
-/// start entirely would be worse than one pinned to the top of the day.
-pub(crate) fn to_local_date_time(value: &str) -> Option<String> {
+/// Whether `value` has the shape of a DATE-TIME or DATE (`YYYYMMDD`, an
+/// optional `T` and `HHMMSS`, an optional trailing `Z`) — digits in all the
+/// right places, whether or not they name an instant that exists. Splits
+/// "not shaped like a date-time at all" (`"whenever"`) from "shaped like one
+/// but naming no real instant" (`"20261315T000000Z"`, month 13): the two get
+/// different treatment in [`rrule_to_rule`] and [`to_local_date_time`] means
+/// the latter either way, so this is the shape check factored out of it.
+fn date_time_digits(value: &str) -> Option<(&str, &str)> {
     let value = value.strip_suffix(['Z', 'z']).unwrap_or(value);
     let (date, time) = match value.split_once('T') {
         Some((date, time)) => (date, time),
@@ -3877,6 +3880,15 @@ pub(crate) fn to_local_date_time(value: &str) -> Option<String> {
     if !date.bytes().chain(time.bytes()).all(|b| b.is_ascii_digit()) {
         return None;
     }
+    Some((date, time))
+}
+
+/// `20260115T130000`, `20260115T130000Z` or `20260115` (`VALUE=DATE`) →
+/// `2026-01-15T13:00:00`. A date without a time is read as midnight:
+/// `showWithoutTime` is not modeled yet, and an all-day event that lost its
+/// start entirely would be worse than one pinned to the top of the day.
+pub(crate) fn to_local_date_time(value: &str) -> Option<String> {
+    let (date, time) = date_time_digits(value)?;
     if !exists(date, time) {
         return None;
     }
@@ -4585,6 +4597,18 @@ fn rrule_to_rule(value: &str, ends: Ends) -> Option<RecurrenceRule> {
             "FREQ" => rule.frequency = value.to_ascii_lowercase(),
             "INTERVAL" => rule.interval = value.parse().ok(),
             "COUNT" => rule.count = value.parse().ok(),
+            // A value with no shape of a DATE-TIME at all (not merely one that
+            // is shaped like one but names no real instant, e.g. month 13 —
+            // `a_rules_unreadable_until_is_kept_rather_than_read_as_no_end_at_all`
+            // keeps *that* case verbatim on purpose, for `maps_recurrence_rule`
+            // to flag) takes the rest of the rule with it — see this function's
+            // own canary test, `an_until_no_parser_can_read_never_reaches_this_
+            // mapping`. Used to fall out of this crate for free: `calcard`
+            // itself would drop such a rule down to its `FREQ` alone before
+            // `entry_raw_value` ever saw the trailing parts. A later `calcard`
+            // became more lenient and started handing the whole raw text
+            // through instead, so the truncation has to happen here now.
+            "UNTIL" if date_time_digits(value).is_none() => break,
             "UNTIL" => rule.until = Some(read_until(value, ends)),
             "BYDAY" => rule.by_day = Some(value.split(',').map(to_nday).collect()),
             "BYMONTHDAY" => {
