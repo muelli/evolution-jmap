@@ -336,6 +336,13 @@ pub fn connect_target(
         // The keyfile writes 0 for "not set"; leaving it out lets the
         // scheme's default apply instead of asking for port 0.
         0 => format!("{scheme}://{authority}"),
+        // A stated default port serializes out too: RFC 6454 §6.2 origins
+        // carry no default port, and RFC 8414 §3.3 compares issuers
+        // byte-for-byte — an SRV record naming port 443 explicitly (Fastmail's
+        // does) must still yield the issuer its metadata states, or OAuth
+        // discovery can never validate. Connecting is unaffected either way.
+        443 if secure => format!("{scheme}://{authority}"),
+        80 if !secure => format!("{scheme}://{authority}"),
         port => format!("{scheme}://{authority}:{port}"),
     }))
 }
@@ -410,6 +417,35 @@ mod tests {
     /// The rules `jmap-mail` reaches this function for. `tests/source.rs`
     /// drives them through an `ESource`; this pins them on the shared entry
     /// point itself, which has a second caller that does not go near one.
+    /// RFC 8414 §3.3 compares issuers byte-for-byte, and RFC 6454 §6.2
+    /// serializes an origin without its scheme's default port — so a stated
+    /// default port must serialize out. This is not cosmetic: Fastmail's
+    /// `_jmap._tcp` SRV record names port 443 explicitly while its
+    /// authorization-server metadata says `"issuer": "https://api.fastmail.com"`
+    /// (no port), so an origin that keeps `:443` can never pass the issuer
+    /// check and OAuth autodiscovery silently surfaces nothing (observed live
+    /// 2026-08-23). Non-default ports must stay, or nothing plaintext-local is
+    /// reachable.
+    #[test]
+    fn a_default_port_serializes_out_of_the_origin() {
+        assert_eq!(
+            origin(Some("api.fastmail.com"), 443, true).as_deref(),
+            Ok("https://api.fastmail.com")
+        );
+        assert_eq!(
+            origin(Some("localhost"), 80, false).as_deref(),
+            Ok("http://localhost")
+        );
+        assert_eq!(
+            origin(Some("jmap.example.com"), 8443, true).as_deref(),
+            Ok("https://jmap.example.com:8443")
+        );
+        assert_eq!(
+            origin(Some("localhost"), 8080, false).as_deref(),
+            Ok("http://localhost:8080")
+        );
+    }
+
     #[test]
     fn the_origin_applies_the_host_rules_whoever_supplies_the_host() {
         assert_eq!(origin(None, 0, true), Err(SourceError::MissingHost));
