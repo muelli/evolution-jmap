@@ -1,0 +1,36 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:pas-id-6890AB12-34CD-56EF-7890-ABCDEF123456
+X-EVOLUTION-FILE-AS:Dubois, Henri (Aéronautique)
+FN:Henri François Dubois
+N:Dubois;Henri;François;;
+NICKNAME:Riton
+ORG:Aéronautique Spatiale SA;Département Propulsion;Systèmes Cryogéniques;Bureau d'études 4
+TITLE:Ingénieur en chef
+ROLE:Responsable Propulsion
+TEL;TYPE=WORK,VOICE:+33 5 61 00 11 22
+TEL;TYPE=HOME,VOICE:+33 5 61 00 33 44
+TEL;TYPE=CELL,VOICE:+33 6 00 11 22 33
+TEL;TYPE=WORK,FAX:+33 5 61 00 11 23
+ADR;TYPE=WORK:;;10 Avenue Edouard Belin;Toulouse;Haute-Garonne;31400;France
+LABEL;TYPE=WORK:10 Avenue Edouard Belin\n31400 Toulouse\nFrance
+ADR;TYPE=HOME:;;25 Rue des Fleurs;Blagnac;Haute-Garonne;31700;France
+LABEL;TYPE=HOME:25 Rue des Fleurs\n31700 Blagnac\nFrance
+EMAIL;TYPE=WORK,INTERNET:henri.dubois@aerospatiale.example
+EMAIL;TYPE=HOME,INTERNET:h.dubois@home.example
+URL;TYPE=WORK:https://www.aerospatiale.example
+URL;TYPE=HOME:https://henridubois.example
+BDAY:19740428
+X-EVOLUTION-ANNIVERSARY:20010908
+X-EVOLUTION-SPOUSE:Marie-Claire Dubois
+X-EVOLUTION-MANAGER:Philippe Martin
+X-EVOLUTION-ASSISTANT:Corinne Petit
+X-EVOLUTION-BLOG-URL:https://blog.henridubois.example
+X-EVOLUTION-VIDEO-URL:https://video.aerospatiale.example/u/hdubois
+X-JABBER;TYPE=WORK:hdubois@jabber.aerospatiale.example
+X-MATRIX;TYPE=HOME:hdubois:matrix.org
+NOTE:Expert propulsion cryogénique pour lanceurs spatiaux.\nReprésentant aux comités techniques CNES et ESA.
+CATEGORIES:Aéronautique,Ingénierie,Toulouse
+PHOTO;ENCODING=b;TYPE=PNG:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+REV:20260823T100000Z
+END:VCARD

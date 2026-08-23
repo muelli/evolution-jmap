@@ -16756,3 +16756,717 @@ fn agent_and_sound_coexisting_in_full_master_card_roundtrip() {
     assert_eq!(export2, export3, "Export₂ == Export₃ fixpoint invariant");
     assert_eq!(card2, card3, "Card₂ == Card₃ fixpoint invariant");
 }
+
+fn read_fixture(file_name: &str) -> String {
+    let path = format!("{}/tests/fixtures/{file_name}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+struct RealExporterTestCase {
+    name: &'static str,
+    fixture_file: &'static str,
+    exporter_name: &'static str,
+    expected_full_name: &'static str,
+    expected_surname: &'static str,
+    expected_given_name: &'static str,
+    expected_email_count: usize,
+    expected_phone_count: usize,
+    expected_address_count: usize,
+    expected_org_name: Option<&'static str>,
+    expected_org_units_count: usize,
+    expected_title_count: usize,
+    expected_anniversaries_count: usize,
+    expected_relations_count: usize,
+    expected_has_photo: bool,
+    expected_categories_count: usize,
+    unmapped_vendor_properties_dropped_on_export: &'static [&'static str],
+}
+
+#[test]
+fn real_exporter_fixture_corpus_table_driven_roundtrip() {
+    let corpus = [
+        RealExporterTestCase {
+            name: "Google Contacts Export (vCard 3.0 with Apple Group Labels)",
+            fixture_file: "google_contacts_export.vcf",
+            exporter_name: "Google Contacts",
+            expected_full_name: "Dr. Jane Marie Doe",
+            expected_surname: "Doe",
+            expected_given_name: "Jane",
+            expected_email_count: 2,
+            expected_phone_count: 3,
+            expected_address_count: 2,
+            expected_org_name: Some("Alphabet Inc."),
+            expected_org_units_count: 2,
+            expected_title_count: 2,
+            expected_anniversaries_count: 2, // BDAY + Anniversary
+            expected_relations_count: 3,     // Spouse, Manager, Assistant
+            expected_has_photo: true,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-GENDER",
+                "X-PHONETIC-FIRST-NAME",
+                "X-PHONETIC-LAST-NAME",
+            ],
+        },
+        RealExporterTestCase {
+            name: "Apple iCloud & macOS Contacts Export (vCard 3.0 with X-ABLabel Groups)",
+            fixture_file: "icloud_macos_export.vcf",
+            exporter_name: "Apple iCloud / macOS Contacts",
+            expected_full_name: "Prof. Alicia Katherine Vance",
+            expected_surname: "Vance",
+            expected_given_name: "Alicia",
+            expected_email_count: 2,
+            expected_phone_count: 4, // Mobile, Work, WorkFAX, Main
+            expected_address_count: 2,
+            expected_org_name: Some("MIT"),
+            expected_org_units_count: 2,
+            expected_title_count: 2,
+            expected_anniversaries_count: 2, // BDAY + Anniversary
+            expected_relations_count: 3,     // Spouse, Manager, Assistant
+            expected_has_photo: true,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &["PRODID", "X-ABShowAs"],
+        },
+        RealExporterTestCase {
+            name: "Microsoft Outlook Modern Export (vCard 3.0 with Design & Office Extensions)",
+            fixture_file: "outlook_vcard30_export.vcf",
+            exporter_name: "Microsoft Outlook 16.0 / M365",
+            expected_full_name: "Mr. Erik Magnus Lindqvist",
+            expected_surname: "Lindqvist",
+            expected_given_name: "Erik",
+            expected_email_count: 3,
+            expected_phone_count: 4, // Work, Home, Cell, WorkFAX
+            expected_address_count: 2,
+            expected_org_name: Some("Nordic Solutions AB"),
+            expected_org_units_count: 3, // Cloud Infrastructure, Platform Security, Executive Team
+            expected_title_count: 2,
+            expected_anniversaries_count: 1, // BDAY
+            expected_relations_count: 0,
+            expected_has_photo: false,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-MS-OL-DESIGN",
+                "X-MS-CARDPICTURE",
+                "X-MS-TEL-ASSISTANT",
+                "X-MS-IMADDRESS",
+                "PRODID",
+            ],
+        },
+        RealExporterTestCase {
+            name: "Microsoft Outlook Classic Export (vCard 2.1 with Quoted-Printable & Bare Types)",
+            fixture_file: "outlook_vcard21_export.vcf",
+            exporter_name: "Microsoft Outlook 2.1 / Legacy",
+            expected_full_name: "Dr. Wolfgang Klaus Müller",
+            expected_surname: "Müller",
+            expected_given_name: "Wolfgang",
+            expected_email_count: 2,
+            expected_phone_count: 4, // Work, Home, Cell, WorkFAX
+            expected_address_count: 2,
+            expected_org_name: Some("Hanseatische Handelsgesellschaft mbH"),
+            expected_org_units_count: 3,
+            expected_title_count: 1,
+            expected_anniversaries_count: 1, // BDAY
+            expected_relations_count: 0,
+            expected_has_photo: false,
+            expected_categories_count: 0,
+            unmapped_vendor_properties_dropped_on_export: &["ENCODING=QUOTED-PRINTABLE", "CHARSET"],
+        },
+        RealExporterTestCase {
+            name: "Nextcloud & CardDAV Export (vCard 4.0 with Data URIs, IMPP & Related)",
+            fixture_file: "nextcloud_carddav_export.vcf",
+            exporter_name: "Nextcloud Contacts / SabreDAV",
+            expected_full_name: "Dr. Camille Sylvie Laurent",
+            expected_surname: "Laurent",
+            expected_given_name: "Camille",
+            expected_email_count: 2,
+            expected_phone_count: 4, // Work, Home, Cell, WorkFAX
+            expected_address_count: 2,
+            expected_org_name: Some("INRIA Paris"),
+            expected_org_units_count: 2,
+            expected_title_count: 2,
+            expected_anniversaries_count: 2, // BDAY + Anniversary
+            expected_relations_count: 2,     // Spouse, Assistant
+            expected_has_photo: true,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &["GENDER", "PRODID"],
+        },
+        RealExporterTestCase {
+            name: "GNOME Evolution Native Export (vCard 3.0 with File-As & Slotted Attributes)",
+            fixture_file: "evolution_native_export.vcf",
+            exporter_name: "GNOME Evolution / EDS",
+            expected_full_name: "Henri François Dubois",
+            expected_surname: "Dubois",
+            expected_given_name: "Henri",
+            expected_email_count: 2,
+            expected_phone_count: 4, // Work, Home, Cell, WorkFAX
+            expected_address_count: 2,
+            expected_org_name: Some("Aéronautique Spatiale SA"),
+            expected_org_units_count: 3,
+            expected_title_count: 2,
+            expected_anniversaries_count: 2, // BDAY + Anniversary
+            expected_relations_count: 3,     // Spouse, Manager, Assistant
+            expected_has_photo: true,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &[],
+        },
+    ];
+
+    for case in &corpus {
+        assert!(!case.exporter_name.is_empty(), "Exporter name specified");
+        let vcard_text = read_fixture(case.fixture_file);
+
+        // 1. Inbound Parsing to JSContact / EContact model
+        let card = vcard_to_card(&vcard_text).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse fixture {} ({}): {e}",
+                case.fixture_file, case.exporter_name
+            )
+        });
+
+        // 2. Validate Parsed Mapped Surface
+        let name = card.name.as_ref().expect("name present");
+        assert_eq!(
+            name.full.as_deref(),
+            Some(case.expected_full_name),
+            "Full name mismatch for {} ({})",
+            case.name,
+            case.exporter_name
+        );
+
+        let surname_comp = name
+            .components
+            .as_ref()
+            .and_then(|comps| comps.iter().find(|c| c.kind == "surname"));
+        assert_eq!(
+            surname_comp.map(|c| c.value.as_str()),
+            Some(case.expected_surname),
+            "Surname mismatch for {}",
+            case.name
+        );
+
+        let given_comp = name
+            .components
+            .as_ref()
+            .and_then(|comps| comps.iter().find(|c| c.kind == "given"));
+        assert_eq!(
+            given_comp.map(|c| c.value.as_str()),
+            Some(case.expected_given_name),
+            "Given name mismatch for {}",
+            case.name
+        );
+
+        let emails = card.emails.as_ref().expect("emails map present");
+        assert_eq!(
+            emails.len(),
+            case.expected_email_count,
+            "Email count mismatch for {}",
+            case.name
+        );
+
+        let phones = card.phones.as_ref().expect("phones map present");
+        assert_eq!(
+            phones.len(),
+            case.expected_phone_count,
+            "Phone count mismatch for {}",
+            case.name
+        );
+
+        let addresses = card.addresses.as_ref().expect("addresses map present");
+        assert_eq!(
+            addresses.len(),
+            case.expected_address_count,
+            "Address count mismatch for {}",
+            case.name
+        );
+
+        if let Some(expected_org) = case.expected_org_name {
+            let orgs = card.organizations.as_ref().expect("organizations present");
+            let primary_org = orgs.values().next().expect("primary org");
+            assert_eq!(
+                primary_org.name.as_deref(),
+                Some(expected_org),
+                "Org name mismatch for {}",
+                case.name
+            );
+            assert_eq!(
+                primary_org.units.as_ref().map(|u| u.len()).unwrap_or(0),
+                case.expected_org_units_count,
+                "Org units count mismatch for {}",
+                case.name
+            );
+        }
+
+        assert_eq!(
+            card.titles.as_ref().map(|t| t.len()).unwrap_or(0),
+            case.expected_title_count,
+            "Title count mismatch for {}",
+            case.name
+        );
+
+        assert_eq!(
+            card.anniversaries.as_ref().map(|a| a.len()).unwrap_or(0),
+            case.expected_anniversaries_count,
+            "Anniversaries count mismatch for {}",
+            case.name
+        );
+
+        assert_eq!(
+            card.related_to.as_ref().map(|r| r.len()).unwrap_or(0),
+            case.expected_relations_count,
+            "Relations count mismatch for {}",
+            case.name
+        );
+
+        if case.expected_has_photo {
+            let media = card.media.as_ref().expect("media present");
+            assert!(
+                media.values().any(|m| m.kind.as_deref() == Some("photo")),
+                "Expected photo missing for {}",
+                case.name
+            );
+        }
+
+        assert_eq!(
+            card.keywords.as_ref().map(|k| k.len()).unwrap_or(0),
+            case.expected_categories_count,
+            "Categories count mismatch for {}",
+            case.name
+        );
+
+        // 3. First Export (Export₁) to canonical RFC 2426 vCard 3.0
+        let export1 = card_to_vcard(&card);
+        assert!(
+            export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"),
+            "Export₁ must start with vCard 3.0 envelope for {}:\n{export1}",
+            case.name
+        );
+        assert!(
+            export1.ends_with("END:VCARD\r\n"),
+            "Export₁ must end with END:VCARD for {}:\n{export1}",
+            case.name
+        );
+
+        // Verify unmapped vendor properties are cleanly dropped
+        for dropped_prop in case.unmapped_vendor_properties_dropped_on_export {
+            assert!(
+                !export1.contains(dropped_prop),
+                "Export₁ must drop unmapped vendor property '{}' for {}:\n{export1}",
+                dropped_prop,
+                case.name
+            );
+        }
+
+        // 4. Multi-Stage Round-Trip Fixpoint Execution
+        let card2 = vcard_to_card(&export1)
+            .unwrap_or_else(|e| panic!("Failed to parse Export₁ for {}: {e}", case.name));
+        let export2 = card_to_vcard(&card2);
+        let card3 = vcard_to_card(&export2)
+            .unwrap_or_else(|e| panic!("Failed to parse Export₂ for {}: {e}", case.name));
+        let export3 = card_to_vcard(&card3);
+
+        // 5. Standing Fixpoint Invariants
+        assert_eq!(
+            export2, export3,
+            "Export₂ == Export₃ fixpoint invariant violated for {}",
+            case.name
+        );
+        assert_eq!(
+            card2, card3,
+            "Card₂ == Card₃ fixpoint invariant violated for {}",
+            case.name
+        );
+
+        // 6. Lossless Preservation of Mapped Surface (card2 vs card3 and card vs card2)
+        assert_eq!(
+            card2.name, card3.name,
+            "Name preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            card2.nicknames, card3.nicknames,
+            "Nicknames preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            card2.organizations, card3.organizations,
+            "Organizations preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            card2.titles, card3.titles,
+            "Titles preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            card2.keywords, card3.keywords,
+            "Keywords preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            card2.anniversaries, card3.anniversaries,
+            "Anniversaries preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            card2.related_to, card3.related_to,
+            "Relations preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            card2.links, card3.links,
+            "Links preserved losslessly for {}",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn real_exporter_fixture_google_contacts_detailed_roundtrip() {
+    let vcard_text = read_fixture("google_contacts_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Google Contacts fixture");
+
+    // 1. Verify phonetic names and gender do not pollute extra
+    assert!(
+        card.extra.is_empty(),
+        "card.extra must be clean, got: {:?}",
+        card.extra
+    );
+
+    // 2. Verify Apple group labels resolved to native contexts
+    let emails = card.emails.as_ref().unwrap();
+    let work_email = emails
+        .values()
+        .find(|e| e.address == "jane.doe@research.example")
+        .expect("work email");
+    assert_eq!(
+        work_email.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+
+    let home_email = emails
+        .values()
+        .find(|e| e.address == "janedoe.personal@private.example")
+        .expect("home email");
+    assert_eq!(
+        home_email.contexts.as_ref().and_then(|c| c.get("private")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 3. Verify telephony features
+    let phones = card.phones.as_ref().unwrap();
+    let cell_phone = phones
+        .values()
+        .find(|p| p.number == "+1 (650) 555-0142")
+        .expect("cell phone");
+    assert_eq!(
+        cell_phone.features.as_ref().and_then(|f| f.get("mobile")),
+        Some(&serde_json::json!(true))
+    );
+
+    let fax_phone = phones
+        .values()
+        .find(|p| p.number == "+1 (650) 555-0198")
+        .expect("fax phone");
+    assert_eq!(
+        fax_phone.features.as_ref().and_then(|f| f.get("fax")),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        fax_phone.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 4. Verify relations
+    let relations = card.related_to.as_ref().unwrap();
+    assert!(states_spouse(
+        "John Michael Doe",
+        &relations["John Michael Doe"]
+    ));
+    assert!(states_manager(
+        "Dr. Alan Turing",
+        &relations["Dr. Alan Turing"]
+    ));
+    assert!(states_assistant("Sarah Connor", &relations["Sarah Connor"]));
+
+    // 5. Verify multiline note
+    let notes = card.notes.as_ref().unwrap();
+    let note_text = &notes.values().next().unwrap().note;
+    assert!(note_text.contains("NeurIPS 2024"));
+    assert!(note_text.contains("transformer optimizations"));
+
+    // 6. Export and fixpoint verification
+    let export1 = card_to_vcard(&card);
+    assert!(!export1.contains("X-GENDER"));
+    assert!(!export1.contains("X-PHONETIC"));
+    assert!(export1.contains("X-EVOLUTION-SPOUSE:John Michael Doe"));
+    assert!(export1.contains("X-EVOLUTION-MANAGER:Dr. Alan Turing"));
+    assert!(export1.contains("X-EVOLUTION-ASSISTANT:Sarah Connor"));
+
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_apple_icloud_macos_detailed_roundtrip() {
+    let vcard_text = read_fixture("icloud_macos_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Apple iCloud fixture");
+
+    // 1. Verify MAIN phone mapped to voice + work
+    let phones = card.phones.as_ref().unwrap();
+    let main_phone = phones
+        .values()
+        .find(|p| p.number == "+1 (555) 999-0000")
+        .expect("main phone");
+    assert_eq!(
+        main_phone.features.as_ref().and_then(|f| f.get("voice")),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        main_phone.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 2. Verify structured address with escaped comma
+    let addresses = card.addresses.as_ref().unwrap();
+    let work_adr = addresses
+        .values()
+        .find(|a| a.contexts.as_ref().and_then(|c| c.get("work")) == Some(&serde_json::json!(true)))
+        .expect("work adr");
+    let street = work_adr
+        .components
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|c| c.kind == "name")
+        .unwrap();
+    assert_eq!(street.value, "500 Science Drive, Suite 3B");
+
+    // 3. Verify relations & anniversary
+    let relations = card.related_to.as_ref().unwrap();
+    assert!(states_spouse("Robert Vance", &relations["Robert Vance"]));
+    assert!(states_manager(
+        "Dean Marcus Cole",
+        &relations["Dean Marcus Cole"]
+    ));
+    assert!(states_assistant(
+        "Elena Rostova",
+        &relations["Elena Rostova"]
+    ));
+
+    let anniversaries = card.anniversaries.as_ref().unwrap();
+    let wedding = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("wedding anniversary");
+    assert_eq!(anniversary_date(wedding), Some("2004-06-20".into()));
+
+    // 4. Export and fixpoint verification
+    let export1 = card_to_vcard(&card);
+    assert!(!export1.contains("PRODID"));
+    assert!(!export1.contains("X-ABShowAs"));
+
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_outlook_modern_vcard30_detailed_roundtrip() {
+    let vcard_text = read_fixture("outlook_vcard30_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Outlook 3.0 fixture");
+
+    // 1. Verify 4-unit ORG hierarchy (Company, Unit 1, Unit 2, Office)
+    let orgs = card.organizations.as_ref().unwrap();
+    let org = orgs.values().next().unwrap();
+    assert_eq!(org.name.as_deref(), Some("Nordic Solutions AB"));
+    let units = org.units.as_ref().unwrap();
+    assert_eq!(units.len(), 3);
+    assert_eq!(units[0].name, "Cloud Infrastructure");
+    assert_eq!(units[1].name, "Platform Security");
+    assert_eq!(units[2].name, "Executive Team");
+
+    // 2. Verify postal addresses and labels
+    let addresses = card.addresses.as_ref().unwrap();
+    let work_adr = addresses
+        .values()
+        .find(|a| a.contexts.as_ref().and_then(|c| c.get("work")) == Some(&serde_json::json!(true)))
+        .expect("work adr");
+    assert!(
+        work_adr
+            .full
+            .as_ref()
+            .unwrap()
+            .contains("Stureplan 4, 5 tr")
+    );
+
+    // 3. Export and ensure X-MS-* extensions are cleanly dropped
+    let export1 = card_to_vcard(&card);
+    assert!(!export1.contains("X-MS-OL-DESIGN"));
+    assert!(!export1.contains("X-MS-CARDPICTURE"));
+    assert!(!export1.contains("X-MS-TEL-ASSISTANT"));
+    assert!(!export1.contains("X-MS-IMADDRESS"));
+
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_outlook_classic_vcard21_detailed_roundtrip() {
+    let vcard_text = read_fixture("outlook_vcard21_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Outlook 2.1 fixture");
+
+    // 1. Verify German umlauts decoded from QP
+    let name = card.name.as_ref().unwrap();
+    assert_eq!(name.full.as_deref(), Some("Dr. Wolfgang Klaus Müller"));
+
+    let notes = card.notes.as_ref().unwrap();
+    let note_text = &notes.values().next().unwrap().note;
+    assert!(note_text.contains("Großkunde für Logistiklösungen"));
+    assert!(note_text.contains("telefonische Kontaktaufnahme"));
+
+    // 2. Verify QP address decoded
+    let addresses = card.addresses.as_ref().unwrap();
+    let work_adr = addresses
+        .values()
+        .find(|a| a.contexts.as_ref().and_then(|c| c.get("work")) == Some(&serde_json::json!(true)))
+        .expect("work adr");
+    assert!(work_adr.full.as_ref().unwrap().contains("Gebäude B"));
+
+    // 3. Export to strict vCard 3.0 UTF-8
+    let export1 = card_to_vcard(&card);
+    assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(!export1.contains("QUOTED-PRINTABLE"));
+    assert!(!export1.contains("CHARSET"));
+
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_nextcloud_carddav_vcard40_detailed_roundtrip() {
+    let vcard_text = read_fixture("nextcloud_carddav_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Nextcloud fixture");
+
+    // 1. Verify data URI photo
+    let media = card.media.as_ref().unwrap();
+    let photo = media
+        .values()
+        .find(|m| m.kind.as_deref() == Some("photo"))
+        .unwrap();
+    assert_eq!(photo.media_type.as_deref(), Some("image/jpeg"));
+    assert!(photo.uri.starts_with("data:image/jpeg;base64,"));
+
+    // 2. Verify IMPP online services
+    let services = card.online_services.as_ref().unwrap();
+    assert!(
+        services
+            .values()
+            .any(|s| s.service.as_deref() == Some("Matrix"))
+    );
+    assert!(
+        services
+            .values()
+            .any(|s| s.service.as_deref() == Some("Jabber"))
+    );
+
+    // 3. Export to canonical vCard 3.0
+    let export1 = card_to_vcard(&card);
+    assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(!export1.contains("GENDER"));
+    assert!(!export1.contains("PRODID"));
+
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_evolution_native_vcard30_detailed_roundtrip() {
+    let vcard_text = read_fixture("evolution_native_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Evolution fixture");
+
+    // 1. Verify File-As
+    let name = card.name.as_ref().unwrap();
+    assert_eq!(
+        name.extra.get("fileAs"),
+        Some(&serde_json::json!("Dubois, Henri (Aéronautique)"))
+    );
+
+    // 2. Verify EDS relations, blogs, videos, and slotted IMs
+    let relations = card.related_to.as_ref().unwrap();
+    assert!(states_spouse(
+        "Marie-Claire Dubois",
+        &relations["Marie-Claire Dubois"]
+    ));
+    assert!(states_manager(
+        "Philippe Martin",
+        &relations["Philippe Martin"]
+    ));
+    assert!(states_assistant(
+        "Corinne Petit",
+        &relations["Corinne Petit"]
+    ));
+
+    let links = card.links.as_ref().unwrap();
+    assert!(links.values().any(|l| l.kind.as_deref() == Some("blog")));
+    assert!(links.values().any(|l| l.kind.as_deref() == Some("video")));
+
+    let services = card.online_services.as_ref().unwrap();
+    assert!(
+        services
+            .values()
+            .any(|s| s.service.as_deref() == Some("Jabber"))
+    );
+    assert!(
+        services
+            .values()
+            .any(|s| s.service.as_deref() == Some("Matrix"))
+    );
+
+    // 3. Export and assert complete retention
+    let export1 = card_to_vcard(&card);
+    let unfolded_export1 = unfolded(&export1);
+    assert!(unfolded_export1.contains("X-EVOLUTION-FILE-AS:Dubois\\, Henri (Aéronautique)"));
+    assert!(unfolded_export1.contains("X-EVOLUTION-SPOUSE:Marie-Claire Dubois"));
+    assert!(unfolded_export1.contains("X-EVOLUTION-MANAGER:Philippe Martin"));
+    assert!(unfolded_export1.contains("X-EVOLUTION-ASSISTANT:Corinne Petit"));
+    assert!(
+        unfolded_export1.contains("X-EVOLUTION-BLOG-URL")
+            && unfolded_export1.contains("https://blog.henridubois.example")
+    );
+    assert!(
+        unfolded_export1.contains("X-EVOLUTION-VIDEO-URL")
+            && unfolded_export1.contains("https://video.aerospatiale.example/u/hdubois")
+    );
+
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}

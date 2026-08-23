@@ -722,4 +722,42 @@ vCard₄ (Export₃: Stabilized vCard 3.0)
    - `prop_fixpoint_crypto_keys_and_logo_preservation_domain`: Asserts that `cryptoKeys` and non-photo media do not leak into vCard 3.0 emissions while maintaining roundtrip stability.
    - `identify_oscillating_card_field`: Enhanced with `card.extra` divergence inspection during proptest shrinkage.
 
+---
+
+## 7. Real-Exporter Fixture Corpus & Whole-File Regression Net
+
+To ensure long-term stability and guard against edge-case regressions from third-party contact applications, `jmap-vcard` maintains a dedicated real-exporter fixture corpus in `tests/fixtures/` and a whole-file table-driven test net in `tests/mapping.rs`.
+
+### 7.1 Exporter Fixture Corpus
+
+| Exporter / Platform | Fixture File | Protocol / Format | Key Characteristics & Mapped Surface | Preservation & Drop Invariants |
+| :--- | :--- | :--- | :--- | :--- |
+| **Google Contacts** | `google_contacts_export.vcf` | vCard 3.0 | • Apple group labels (`itemN.X-ABLabel`)<br>• Phonetic names (`X-PHONETIC-*`)<br>• Multi-unit `ORG` (3 components)<br>• Multiple emails, phones, addresses<br>• BDAY, anniversary, relations (Spouse, Manager, Assistant)<br>• Base64 JPEG `PHOTO` | • `X-GENDER` & `X-PHONETIC-*` dropped on export<br>• Group labels map to native contexts & EDS slots<br>• Relations normalize to `X-EVOLUTION-*`<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **Apple iCloud / macOS Contacts** | `icloud_macos_export.vcf` | vCard 3.0 | • `PRODID:-//Apple Inc.//...`<br>• Grouped properties with `_$!<Label>!$_`<br>• `MAIN` phone (`voice` + `work`)<br>• Structured `ADR` with escaped commas<br>• `X-ABRELATEDNAMES` (Spouse, Manager, Assistant)<br>• `X-ABDATE` (Anniversary)<br>• Base64 PNG `PHOTO` | • `PRODID` & `X-ABShowAs` dropped on export<br>• Standard Apple labels map to native fields<br>• Custom labels preserved in `extra["label"]`<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **Microsoft Outlook Modern** | `outlook_vcard30_export.vcf` | vCard 3.0 | • `PRODID:-//Microsoft Corporation//...`<br>• 4-unit `ORG` hierarchy (Company, Unit 1, Unit 2, Office)<br>• Structured `N` with prefixes/suffixes<br>• Multi-role telephony (`TYPE=WORK,VOICE`, `TYPE=WORK,FAX`)<br>• Structured `ADR` + standalone `LABEL`<br>• Multiline notes with URL links | • Proprietary `X-MS-*` extensions dropped cleanly<br>• 4th `ORG` unit maps to `E_CONTACT_OFFICE`<br>• Standalone labels paired to matching `ADR`s<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **Microsoft Outlook Classic** | `outlook_vcard21_export.vcf` | vCard 2.1 | • Legacy `VERSION:2.1`<br>• Quoted-Printable encoded text & newlines<br>• ISO-8859-1 German umlauts (`ä`, `ö`, `ü`, `ß`)<br>• Bare type parameter words (`TEL;WORK;VOICE`)<br>• `ADR` & `LABEL` in QP format | • Asymmetric tolerance: imports 2.1 QP<br>• Outbound normalizes to strict vCard 3.0 UTF-8<br>• Legacy `CHARSET` / `ENCODING` never emitted<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **Nextcloud / CardDAV** | `nextcloud_carddav_export.vcf` | vCard 4.0 | • Modern `VERSION:4.0`<br>• Inline `PHOTO:data:image/jpeg;base64,...`<br>• RFC 4770 `IMPP` (Matrix, Jabber)<br>• RFC 6350 `RELATED;TYPE=spouse` & `assistant`<br>• RFC 6350 `ANNIVERSARY`<br>• `ADR;LABEL=...` property parameters | • Asymmetric tolerance: imports vCard 4.0<br>• `IMPP` maps to native slotted IM properties<br>• Outbound normalizes to canonical vCard 3.0<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **GNOME Evolution Native** | `evolution_native_export.vcf` | vCard 3.0 | • Full native Evolution vCard 3.0<br>• `X-EVOLUTION-FILE-AS`<br>• `X-EVOLUTION-SPOUSE`, `_MANAGER`, `_ASSISTANT`<br>• `X-EVOLUTION-BLOG-URL`, `_VIDEO-URL`<br>• Slotted IMs (`X-JABBER`, `X-MATRIX`)<br>• 19-field telephony matrix & 3-slot addresses | • 100% lossless retention of all Evolution fields<br>• Deterministic `X-JMAP-KEY` preservation<br>• Multi-pass fixpoint: `Export₁ == Export₂ == Export₃` |
+
+### 7.2 Table-Driven Whole-File Regression Net
+
+The table-driven test suite (`real_exporter_fixture_corpus_table_driven_roundtrip` in `tests/mapping.rs`) executes the complete multi-stage lifecycle across the entire fixture corpus:
+
+1. **Inbound Import (`vcard_to_card`)**:
+   - Parses the complete realistic card into JSContact / EContact model.
+   - Asserts full names, structured components, email counts, phone counts & features, address counts & components, organization unit hierarchies, titles & roles, anniversary dates, relations, photos, and categories.
+
+2. **Outbound Normalization (`card_to_vcard`)**:
+   - Asserts valid RFC 2426 vCard 3.0 envelope (`BEGIN:VCARD\r\nVERSION:3.0\r\n` ... `END:VCARD\r\n`).
+   - Verifies that all unmapped vendor properties (`X-GENDER`, `X-PHONETIC-*`, `X-MS-*`, `PRODID`, `GENDER`) are cleanly excluded on export.
+
+3. **Multi-Stage Fixpoint Convergence**:
+   - Executes passes 1, 2, and 3: `vCard₁ → Card₁ → vCard₂ (Export₁) → Card₂ → vCard₃ (Export₂) → Card₃ → vCard₄ (Export₃)`.
+   - Validates standing invariants:
+     $$\text{Export}_2 \equiv \text{Export}_3 \quad\text{and}\quad \text{Card}_2 \equiv \text{Card}_3$$
+
+4. **Lossless Surface Preservation**:
+   - Verifies that all mapped data on `Card₂` (Name, Nicknames, Organizations, Titles, Anniversaries, Relations, Links, Keywords, Photos, Emails, Phones, Addresses) is identical to `Card₃` and preserved losslessly from `Card₁`.
+
+
 
