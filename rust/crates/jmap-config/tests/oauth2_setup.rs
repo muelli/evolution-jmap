@@ -176,6 +176,11 @@ fn registration_asks_for_the_scopes_this_client_uses_and_no_others() {
         "the registered scope must be carried into the config for the \
          authorization request to name explicitly"
     );
+    assert_eq!(
+        config.resource.as_deref(),
+        Some(format!("{}/.well-known/jmap", server.origin()).as_str()),
+        "the RFC 8707 resource must be the URL the session probe landed on"
+    );
 }
 
 #[test]

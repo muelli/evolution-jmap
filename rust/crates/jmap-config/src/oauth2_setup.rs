@@ -29,7 +29,7 @@ use jmap_backend_core::i18n::translate;
 use jmap_backend_core::source::{self, SourceError};
 use jmap_client::CancelFlag;
 use jmap_client::oauth::{self, ClientRegistrationRequest};
-use jmap_client::transport::Transport;
+use jmap_client::transport::{HttpMethod, HttpRequest, Transport};
 
 use crate::oauth2::Config;
 
@@ -145,5 +145,39 @@ pub fn discover_and_register(
         token_endpoint: server.token_endpoint,
         redirect_uri: Some(redirect_uri.to_owned()),
         scope,
+        resource: probe_resource(transport, &issuer, cancel),
     })
+}
+
+/// The RFC 8707 `resource` indicator for this deployment: the URL its JMAP
+/// session resource actually lives at, found by asking `.well-known/jmap`
+/// unauthenticated and taking the URL that answers (redirects followed) —
+/// a 401/403 answers the question as well as a 200 does, since only the
+/// location matters here, not the content.
+///
+/// That definition is not guessed: a deployment that publishes RFC 9728
+/// protected-resource metadata names the same URL as its canonical
+/// `resource` — verified live against Fastmail 2026-08-23, whose session's
+/// 401 carries `WWW-Authenticate: Bearer resource_metadata="…"` naming
+/// metadata with `"resource": "https://api.fastmail.com/jmap/session"`,
+/// exactly the URL this probe lands on. `None` (network failure) omits the
+/// parameter, which is the pre-RFC 8707 behaviour a deployment that never
+/// heard of resource indicators expects.
+fn probe_resource(
+    transport: &dyn Transport,
+    issuer: &str,
+    cancel: Option<&CancelFlag>,
+) -> Option<String> {
+    let url = format!("{issuer}/.well-known/jmap");
+    let response = transport
+        .execute(HttpRequest {
+            method: HttpMethod::Get,
+            url: &url,
+            headers: &[("Accept".to_owned(), "application/json".to_owned())],
+            body: None,
+            cancel,
+            max_response_bytes: 64 * 1024,
+        })
+        .ok()?;
+    matches!(response.status, 200 | 401 | 403).then_some(response.final_url)
 }

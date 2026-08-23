@@ -124,6 +124,7 @@ fn config() -> Config {
         token_endpoint: Some("https://jmap.example.com/token".to_owned()),
         redirect_uri: Some("https://client.example.org/callback".to_owned()),
         scope: Some("urn:ietf:params:oauth:scope:mail offline_access".to_owned()),
+        resource: Some("https://jmap.example.com/session".to_owned()),
     }
 }
 
@@ -193,6 +194,10 @@ fn every_field_is_reachable_through_the_gobject_property_it_was_installed_as() {
     assert_eq!(
         source.property("scope").as_deref(),
         Some("urn:ietf:params:oauth:scope:mail offline_access")
+    );
+    assert_eq!(
+        source.property("resource").as_deref(),
+        Some("https://jmap.example.com/session")
     );
 }
 

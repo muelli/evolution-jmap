@@ -108,6 +108,13 @@ pub struct Config {
     /// has been seen rejected live (`error=invalid_scope`, Fastmail
     /// 2026-08-23). Absent for a deployment advertising no scopes.
     pub scope: Option<String>,
+    /// The RFC 8707 `resource` indicator — the JMAP session resource the
+    /// token is for, named on the authorization request and both token
+    /// grants. Deployments differ on whether it is required; one that
+    /// requires it rejects its absence outright (`error=invalid_target`,
+    /// Fastmail 2026-08-23), and RFC 8707 makes sending it always-valid.
+    /// Absent when the discovery-time probe could not determine it.
+    pub resource: Option<String>,
 }
 
 /// The instance struct: nothing but [`ESourceExtension`]'s own state plus one
@@ -140,6 +147,7 @@ struct Fields {
     token_endpoint: Option<CString>,
     redirect_uri: Option<CString>,
     scope: Option<CString>,
+    resource: Option<CString>,
     /// Values a later write replaced, kept alive rather than freed.
     ///
     /// [`borrowed`] hands an `EOAuth2Service` vfunc's caller a `const gchar
@@ -180,6 +188,7 @@ impl Fields {
                 PROP_TOKEN_ENDPOINT => &mut self.token_endpoint,
                 PROP_REDIRECT_URI => &mut self.redirect_uri,
                 PROP_SCOPE => &mut self.scope,
+                PROP_RESOURCE => &mut self.resource,
                 _ => return false,
             };
             if *slot == value {
@@ -204,6 +213,7 @@ impl Fields {
             PROP_TOKEN_ENDPOINT => Some(&self.token_endpoint),
             PROP_REDIRECT_URI => Some(&self.redirect_uri),
             PROP_SCOPE => Some(&self.scope),
+            PROP_RESOURCE => Some(&self.resource),
             _ => None,
         }
     }
@@ -212,13 +222,14 @@ impl Fields {
 /// The five properties' ids and the names `class_init` installs them under —
 /// dense from 1, since GObject treats 0 as "no property", and local to this
 /// class alone.
-const PROPERTIES: [(u32, &CStr); 6] = [
+const PROPERTIES: [(u32, &CStr); 7] = [
     (1, c"client-id"),
     (2, c"client-secret"),
     (3, c"authorization-endpoint"),
     (4, c"token-endpoint"),
     (5, c"redirect-uri"),
     (6, c"scope"),
+    (7, c"resource"),
 ];
 
 const PROP_CLIENT_ID: u32 = PROPERTIES[0].0;
@@ -227,6 +238,7 @@ const PROP_AUTHORIZATION_ENDPOINT: u32 = PROPERTIES[2].0;
 const PROP_TOKEN_ENDPOINT: u32 = PROPERTIES[3].0;
 const PROP_REDIRECT_URI: u32 = PROPERTIES[4].0;
 const PROP_SCOPE: u32 = PROPERTIES[5].0;
+const PROP_RESOURCE: u32 = PROPERTIES[6].0;
 
 // SAFETY: both structs are #[repr(C)] and lead with ESourceExtension's own
 // instance/class structs, whose layout eds-sys's tests/layout.rs checks
@@ -425,6 +437,7 @@ pub unsafe fn apply(source: *mut ESource, config: &Config) {
         (PROP_TOKEN_ENDPOINT, &config.token_endpoint),
         (PROP_REDIRECT_URI, &config.redirect_uri),
         (PROP_SCOPE, &config.scope),
+        (PROP_RESOURCE, &config.resource),
     ] {
         // Every id here is one of `PROPERTIES`' own, so `set` cannot decline.
         fields.set(id, value.as_deref().map(cstring_lossy));
@@ -478,6 +491,10 @@ pub unsafe fn read(source: *mut ESource) -> Config {
             .map(|value| value.to_string_lossy().into_owned()),
         scope: fields
             .scope
+            .as_ref()
+            .map(|value| value.to_string_lossy().into_owned()),
+        resource: fields
+            .resource
             .as_ref()
             .map(|value| value.to_string_lossy().into_owned()),
     }
@@ -610,4 +627,14 @@ pub unsafe fn redirect_uri(source: *mut ESource) -> *const c_char {
 /// `source` must be a valid `ESource`.
 pub unsafe fn scope(source: *mut ESource) -> *const c_char {
     unsafe { borrowed(source, |fields| &fields.scope) }
+}
+
+/// `source`'s stored RFC 8707 `resource` indicator, or NULL when discovery
+/// could not determine one. See [`borrowed`] for the pointer's lifetime.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`.
+pub unsafe fn resource(source: *mut ESource) -> *const c_char {
+    unsafe { borrowed(source, |fields| &fields.resource) }
 }
