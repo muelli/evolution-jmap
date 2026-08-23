@@ -507,3 +507,30 @@ create, the same way the update branch already did — see
 `jmap-cal-sync/tests/terse_create.rs` for the headless, `jmap-mockd`-
 reproducible regression test (`MockServerBuilder::
 terse_calendar_event_create`), and `docs/NIGHT-LOG.md` for the full account.
+
+## `jmap-mail-sync`'s keywords test
+
+`rust/crates/jmap-mail-sync/tests/live_server_keywords.rs` is the
+`MailSync::set_keywords` counterpart of the import/expunge and
+create/delete-folder tests above, in the same crate: it exercises the
+function `CamelFolder::set_message_flags` actually calls — the single
+most-executed write in an ordinary mail client's life (mark read, star,
+flag) — which only `jmap-mockd` had exercised before
+(`jmap-mail-sync/tests/keywords.rs`).
+
+Same environment variables as the import/expunge test. Run it with:
+
+```console
+$ cargo test -p evolution-jmap-mail-sync --test live_server_keywords -- --ignored
+```
+
+No `--features live-server` gate, for the same reason as the other files.
+
+`setting_keywords_on_a_message_reaches_the_real_server` imports a message
+into the write-test account's Inbox, flags it via `MailSync::set_keywords`,
+confirms the flag via `MailSync::messages`' returned
+`MessageSummary::flags`, then in a second patch clears `flagged` and sets
+`seen` in the same call and confirms both — proving the diff names both a
+removal and an addition correctly, not just whichever came first. Cleans up
+via `MailSync::expunge_message`. Skipped, not failed, when
+`JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
