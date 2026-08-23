@@ -136,7 +136,18 @@ impl BookSync {
                     return Err(error.into());
                 }
             };
-            return ContactInfo::render(&stored);
+            // RFC 8620 §5.3 only requires the server to report properties
+            // it set itself, so `stored` may carry nothing but `id` (a real
+            // deployment does exactly this — see `tests/terse_create.rs`).
+            // Render from a fresh load rather than `stored` directly, so the
+            // vCard handed back to EDS always reflects what was actually
+            // filed, not merely what a chatty server happened to echo.
+            let id = stored
+                .id
+                .as_ref()
+                .ok_or_else(|| SyncError::protocol("ContactCard/set created a card without an id"))?
+                .to_string();
+            return self.load_contact(&id);
         };
 
         let current = self.fetch(uid)?;

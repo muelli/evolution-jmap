@@ -137,6 +137,14 @@ pub struct ServerState {
     /// `false` echoes them back in full, matching every other test and this
     /// project's own prior assumption before that finding.
     pub terse_submission_create: bool,
+    /// Answer a `ContactCard/set` create with only `id` in the `created`
+    /// map, as [`crate::MockServerBuilder::terse_contact_create`] asked —
+    /// every other property was already sent by the client, so a
+    /// spec-following server (RFC 8620 §5.3) may omit all of it, as a live
+    /// Stalwart deployment does. `false` echoes the full card back,
+    /// matching every other test and this project's own prior assumption
+    /// before that finding.
+    pub terse_contact_create: bool,
 }
 
 impl ServerState {
@@ -159,6 +167,7 @@ impl ServerState {
             download_via_redirect_to: None,
             reject_download_accept_json: false,
             terse_submission_create: false,
+            terse_contact_create: false,
         }
     }
 

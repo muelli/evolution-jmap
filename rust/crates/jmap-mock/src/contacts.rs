@@ -139,7 +139,25 @@ pub fn contact_card_set(state: &mut ServerState, arguments: Value) -> Result<Val
         }
         Ok(())
     })?;
-    to_result(&response)
+    let mut result = to_result(&response)?;
+
+    // RFC 8620 §5.3: the `created` map need only carry properties the
+    // client did not already send. Every property but `id` was named by the
+    // client itself in a create, so none is server-set — a server reading
+    // that literally (Stalwart among them) leaves everything else out. See
+    // `MockServerBuilder::terse_contact_create`'s doc for the finding this
+    // reproduces.
+    if state.terse_contact_create
+        && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
+    {
+        for object in created.values_mut() {
+            if let Some(id) = object.get("id").cloned() {
+                *object = Value::Object(serde_json::Map::from_iter([("id".to_owned(), id)]));
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 pub fn contact_card_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
