@@ -99,6 +99,7 @@ pub struct MockServerBuilder {
     download_via_redirect_to: Option<String>,
     reject_download_accept_json: bool,
     terse_submission_create: bool,
+    terse_contact_create: bool,
 }
 
 impl MockServerBuilder {
@@ -378,6 +379,18 @@ impl MockServerBuilder {
         self
     }
 
+    /// Answer a `ContactCard/set` create with only `id` in the `created`
+    /// map, as a server that reads RFC 8620 §5.3 literally does: every
+    /// other property (`name`, `emails`, …) was already sent by the client,
+    /// so none is server-set and a spec-following server may leave all of
+    /// them out — confirmed against a live Stalwart deployment. Off by
+    /// default, matching the mock's own prior behaviour (echoing the full
+    /// card back) and every other test.
+    pub fn terse_contact_create(mut self) -> Self {
+        self.terse_contact_create = true;
+        self
+    }
+
     /// Bind to localhost and start serving on a background thread. The
     /// server stops when the returned handle is dropped.
     pub fn start(self) -> MockServer {
@@ -396,6 +409,7 @@ impl MockServerBuilder {
         state.download_via_redirect_to = self.download_via_redirect_to.clone();
         state.reject_download_accept_json = self.reject_download_accept_json;
         state.terse_submission_create = self.terse_submission_create;
+        state.terse_contact_create = self.terse_contact_create;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -458,6 +472,7 @@ impl MockServer {
             download_via_redirect_to: None,
             reject_download_accept_json: false,
             terse_submission_create: false,
+            terse_contact_create: false,
         }
     }
 

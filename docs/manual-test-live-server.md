@@ -295,3 +295,40 @@ simple` anchors the event to `Etc/UTC`, so the digits are expected to match
 exactly, the same bar the mock-based tests hold to — not merely "some busy
 period exists"), then destroys the event. Skipped, not failed, when
 `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
+
+## `jmap-book-sync`'s save/remove test
+
+`rust/crates/jmap-book-sync/tests/live_server.rs` is the address-book
+counterpart of the free/busy file above, in the crate that actually
+implements `EBookMetaBackendSync::save_contact_sync`/`remove_contact_sync` —
+`jmap-client/tests/live_server.rs` already proves `ContactCard/set` round-trips
+through `Client` directly, but nothing there drives `BookSync::save_contact`
+itself: the vCard-to-`ContactCard` mapping and the create/update decision.
+
+It reads the same `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD`/
+`_REBASE_URLS` variables step 2/3 above already set up. Run it with:
+
+```console
+$ cargo test -p evolution-jmap-book-sync -- --ignored
+```
+
+No `--features live-server` gate, for the same reason as `jmap-cal-sync`'s file.
+
+`saving_then_removing_a_contact_round_trips_through_the_real_server` saves a
+new vCard via `BookSync::save_contact`, confirms it via `list_existing`,
+edits it (a name change, mirroring an Evolution contact rename), confirms the
+edit via `load_contact`, then removes it via `remove_contact` and confirms
+it is gone. Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/
+`_PASSWORD` are unset.
+
+While building this test against real Stalwart, it also caught a real client
+bug (fixed, not just found): `ContactCard/set`'s `created` response held only
+`id`, omitting every property the client had just sent (RFC 8620 §5.3
+permits this — none of those properties is server-set). `BookSync::
+save_contact`'s create branch rendered its return value straight from that
+terse object, so the vCard handed back to EDS immediately after a save was
+missing the name and everything else just written. Fixed by rendering from a
+fresh `ContactCard/get` after create, the same way the update branch already
+did — see `jmap-book-sync/tests/terse_create.rs` for the headless,
+`jmap-mockd`-reproducible regression test (`MockServerBuilder::
+terse_contact_create`), and `docs/NIGHT-LOG.md` for the full account.
