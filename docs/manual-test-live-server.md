@@ -534,3 +534,29 @@ confirms the flag via `MailSync::messages`' returned
 removal and an addition correctly, not just whichever came first. Cleans up
 via `MailSync::expunge_message`. Skipped, not failed, when
 `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
+
+## `jmap-mail-sync`'s filing test
+
+`rust/crates/jmap-mail-sync/tests/live_server_filing.rs` is the
+`MailSync::file_message` counterpart of the tests above, in the same crate:
+it exercises the function `transfer_messages_to_sync` actually calls (a
+copy or a move between mailboxes), which only `jmap-mockd` had exercised
+before (`jmap-mail-sync/tests/mailboxes.rs`, `tests/updates.rs`).
+
+Same environment variables as the import/expunge test. Run it with:
+
+```console
+$ cargo test -p evolution-jmap-mail-sync --test live_server_filing -- --ignored
+```
+
+No `--features live-server` gate, for the same reason as the other files.
+
+`filing_a_message_into_another_folder_reaches_the_real_server` imports a
+message into the write-test account's Inbox, creates a second folder via
+`MailSync::create_folder`, copies the message into it via
+`Filing::copied_into` and confirms `MailSync::messages` lists it in both
+mailboxes, then moves it out of the Inbox into the new folder via
+`Filing::moved` in one patch and confirms the Inbox no longer lists it while
+the new folder still does. Cleans up via `MailSync::expunge_message` and
+`MailSync::delete_folder`. Skipped, not failed, when
+`JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
