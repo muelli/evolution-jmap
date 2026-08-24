@@ -16809,6 +16809,25 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             ],
         },
         RealExporterTestCase {
+            name: "Google Contacts Export (vCard 4.0 with Data URIs, IMPP & Related)",
+            fixture_file: "google_contacts_vcard40_export.vcf",
+            exporter_name: "Google Contacts (vCard 4.0)",
+            expected_full_name: "Dr. Jane Marie Doe",
+            expected_surname: "Doe",
+            expected_given_name: "Jane",
+            expected_email_count: 2,
+            expected_phone_count: 3,
+            expected_address_count: 2,
+            expected_org_name: Some("Alphabet Inc."),
+            expected_org_units_count: 2,
+            expected_title_count: 2,
+            expected_anniversaries_count: 2, // BDAY + Anniversary
+            expected_relations_count: 3,     // Spouse, Manager, Assistant
+            expected_has_photo: true,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &["GENDER", "CLIENTPIDMAP", "PRODID"],
+        },
+        RealExporterTestCase {
             name: "Apple iCloud & macOS Contacts Export (vCard 3.0 with X-ABLabel Groups)",
             fixture_file: "icloud_macos_export.vcf",
             exporter_name: "Apple iCloud / macOS Contacts",
@@ -17212,6 +17231,163 @@ fn real_exporter_fixture_google_contacts_detailed_roundtrip() {
 }
 
 #[test]
+fn real_exporter_fixture_google_contacts_vcard40_detailed_roundtrip() {
+    let vcard_text = read_fixture("google_contacts_vcard40_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Google Contacts vCard 4.0 fixture");
+
+    // 1. Verify GENDER, CLIENTPIDMAP, PRODID, and REV do not pollute extra
+    assert!(
+        card.extra.is_empty(),
+        "card.extra must be clean, got: {:?}",
+        card.extra
+    );
+
+    // 2. Verify email properties and PREF rank
+    let emails = card.emails.as_ref().unwrap();
+    let work_email = emails
+        .values()
+        .find(|e| e.address == "jane.doe@research.example")
+        .expect("work email");
+    assert_eq!(
+        work_email.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(work_email.pref, Some(1));
+
+    let home_email = emails
+        .values()
+        .find(|e| e.address == "janedoe.personal@private.example")
+        .expect("home email");
+    assert_eq!(
+        home_email.contexts.as_ref().and_then(|c| c.get("private")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 3. Verify telephony features and quoted TYPE parameters
+    let phones = card.phones.as_ref().unwrap();
+    let work_phone = phones
+        .values()
+        .find(|p| p.number == "+1 (650) 555-0199")
+        .expect("work phone");
+    assert_eq!(
+        work_phone.features.as_ref().and_then(|f| f.get("voice")),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        work_phone.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(work_phone.pref, Some(1));
+
+    let cell_phone = phones
+        .values()
+        .find(|p| p.number == "+1 (650) 555-0142")
+        .expect("cell phone");
+    assert_eq!(
+        cell_phone.features.as_ref().and_then(|f| f.get("mobile")),
+        Some(&serde_json::json!(true))
+    );
+
+    let fax_phone = phones
+        .values()
+        .find(|p| p.number == "+1 (650) 555-0198")
+        .expect("fax phone");
+    assert_eq!(
+        fax_phone.features.as_ref().and_then(|f| f.get("fax")),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        fax_phone.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 4. Verify postal addresses and inline LABEL parameter extraction
+    let addresses = card.addresses.as_ref().unwrap();
+    let work_adr = addresses
+        .values()
+        .find(|a| a.contexts.as_ref().and_then(|c| c.get("work")) == Some(&serde_json::json!(true)))
+        .expect("work adr");
+    assert!(
+        work_adr
+            .full
+            .as_ref()
+            .unwrap()
+            .contains("1600 Amphitheatre Pkwy")
+    );
+    assert_eq!(work_adr.extra.get("pref"), Some(&serde_json::json!(1)));
+
+    // 5. Verify IMPP online services mapped to Jabber / Google Talk
+    let services = card.online_services.as_ref().unwrap();
+    let impp = services
+        .values()
+        .find(|s| s.user.as_deref() == Some("janedoe@google.example"))
+        .expect("IMPP service");
+    assert_eq!(impp.service.as_deref(), Some("Jabber"));
+
+    // 6. Verify relations (Spouse, Manager, Assistant)
+    let relations = card.related_to.as_ref().unwrap();
+    assert!(states_spouse(
+        "John Michael Doe",
+        &relations["John Michael Doe"]
+    ));
+    assert!(states_manager(
+        "Dr. Alan Turing",
+        &relations["Dr. Alan Turing"]
+    ));
+    assert!(states_assistant("Sarah Connor", &relations["Sarah Connor"]));
+
+    // 7. Verify hyphenated anniversary dates
+    let anniversaries = card.anniversaries.as_ref().unwrap();
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("birthday");
+    assert_eq!(
+        bday.date,
+        Some(serde_json::json!({"@type": "PartialDate", "year": 1982, "month": 7, "day": 15}))
+    );
+
+    let anniversary = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("anniversary");
+    assert_eq!(
+        anniversary.date,
+        Some(serde_json::json!({"@type": "PartialDate", "year": 2010, "month": 9, "day": 18}))
+    );
+
+    // 8. Verify inline data URI photo
+    let media = card.media.as_ref().unwrap();
+    let photo = media
+        .values()
+        .find(|m| m.kind.as_deref() == Some("photo"))
+        .expect("photo");
+    assert_eq!(photo.media_type.as_deref(), Some("image/jpeg"));
+    assert!(photo.uri.starts_with("data:image/jpeg;base64,"));
+
+    // 9. Export to canonical vCard 3.0 and verify field normalizations
+    let export1 = card_to_vcard(&card);
+    assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(!export1.contains("GENDER"));
+    assert!(!export1.contains("CLIENTPIDMAP"));
+    assert!(!export1.contains("PRODID"));
+    assert!(export1.contains("X-EVOLUTION-SPOUSE:John Michael Doe"));
+    assert!(export1.contains("X-EVOLUTION-MANAGER:Dr. Alan Turing"));
+    assert!(export1.contains("X-EVOLUTION-ASSISTANT:Sarah Connor"));
+    assert!(export1.contains("PHOTO;"));
+    assert!(export1.contains("ENCODING=b"));
+
+    // 10. Multi-stage roundtrip fixpoint execution
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
 fn real_exporter_fixture_apple_icloud_macos_detailed_roundtrip() {
     let vcard_text = read_fixture("icloud_macos_export.vcf");
     let card = vcard_to_card(&vcard_text).expect("parse Apple iCloud fixture");
@@ -17469,4 +17645,511 @@ fn real_exporter_fixture_evolution_native_vcard30_detailed_roundtrip() {
 
     assert_eq!(export2, export3, "Export₂ == Export₃");
     assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn hyphenated_dates_bday_and_anniversary_variations_fidelity() {
+    // 1. Standard BDAY extended format (RFC 2426 §3.1.5)
+    let vcard_bday_extended = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY:1985-04-12\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_extended).expect("parse BDAY extended");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 2. BDAY with explicit VALUE=date parameter
+    let vcard_bday_value_date = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY;VALUE=date:1985-04-12\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_value_date).expect("parse BDAY VALUE=date");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 3. BDAY with VALUE=DATE uppercase and lowercase
+    let vcard_bday_value_date_lower = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY;value=DATE:1985-04-12\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_value_date_lower).expect("parse BDAY value=DATE");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 4. BDAY with VALUE=date-and-or-time
+    let vcard_bday_date_and_or_time = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY;VALUE=date-and-or-time:1985-04-12\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_date_and_or_time).expect("parse BDAY date-and-or-time");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 5. BDAY with extended ISO 8601 timestamps (UTC and timezone offsets)
+    let vcard_bday_utc = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY:1985-04-12T10:30:00Z\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_utc = vcard_to_card(vcard_bday_utc).expect("parse BDAY UTC");
+    let anniversaries = card_utc.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    let vcard_bday_tz_plus = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY:1985-04-12T10:30:00+02:00\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_tz_plus).expect("parse BDAY TZ +02:00");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    let vcard_bday_tz_minus = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY:1985-04-12T10:30:00-05:00\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_tz_minus).expect("parse BDAY TZ -05:00");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 6. Grouped property item1.BDAY
+    let vcard_bday_grouped = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "item1.BDAY;VALUE=date:1985-04-12\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_grouped).expect("parse item1.BDAY");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 7. ANNIVERSARY extended format (RFC 6350 §6.2.6)
+    let vcard_anniv_extended = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Alice Date\r\n",
+        "ANNIVERSARY:2015-09-20\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_anniv_extended).expect("parse ANNIVERSARY extended");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let anniv = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("anniv");
+    assert_eq!(
+        anniv.date,
+        Some(json!({"@type": "PartialDate", "year": 2015, "month": 9, "day": 20}))
+    );
+
+    // 8. ANNIVERSARY with explicit VALUE=date parameter
+    let vcard_anniv_value_date = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Alice Date\r\n",
+        "ANNIVERSARY;VALUE=date:2015-09-20\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_anniv_value_date).expect("parse ANNIVERSARY VALUE=date");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let anniv = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("anniv");
+    assert_eq!(
+        anniv.date,
+        Some(json!({"@type": "PartialDate", "year": 2015, "month": 9, "day": 20}))
+    );
+
+    // 9. ANNIVERSARY with timestamp
+    let vcard_anniv_timestamp = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Alice Date\r\n",
+        "ANNIVERSARY:2015-09-20T14:00:00Z\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_anniv_timestamp).expect("parse ANNIVERSARY timestamp");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let anniv = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("anniv");
+    assert_eq!(
+        anniv.date,
+        Some(json!({"@type": "PartialDate", "year": 2015, "month": 9, "day": 20}))
+    );
+
+    // 10. Coexisting BDAY, ANNIVERSARY, X-EVOLUTION-ANNIVERSARY, and Apple X-ABDATE in one card
+    let vcard_all_dates = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY;VALUE=date:1985-04-12\r\n",
+        "X-EVOLUTION-ANNIVERSARY:2010-06-15\r\n",
+        "item1.X-ABDATE:2018-11-22\r\n",
+        "item1.X-ABLabel:_$!<Anniversary>!$_\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_all_dates).expect("parse all dates");
+    let anniversaries = card.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(anniversaries.len(), 3);
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("birth");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+    let wedding_dates: Vec<_> = anniversaries
+        .values()
+        .filter(|a| a.kind == "wedding")
+        .filter_map(|a| a.date.as_ref())
+        .collect();
+    assert_eq!(wedding_dates.len(), 2);
+    assert!(
+        wedding_dates
+            .iter()
+            .any(|d| d["year"] == 2010 && d["month"] == 6 && d["day"] == 15)
+    );
+    assert!(
+        wedding_dates
+            .iter()
+            .any(|d| d["year"] == 2018 && d["month"] == 11 && d["day"] == 22)
+    );
+
+    // 11. Multi-pass fixed-point stability
+    let export1 = card_to_vcard(&card);
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
+    // 1. Server-side JSContact card with full spectrum of batch 5/6 modeled and unmodeled fields
+    let mut name_extra = BTreeMap::new();
+    name_extra.insert("fileAs".to_string(), json!("Sync, Fuzz (Name Extra)"));
+    name_extra.insert("sortAs".to_string(), json!("SYNC"));
+
+    let mut card_extra = BTreeMap::new();
+    card_extra.insert("fileAs".to_string(), json!("Sync, Fuzz (Card Extra)"));
+    card_extra.insert(
+        "cryptoKeys".to_string(),
+        json!({"k1": {"kind": "pgp", "uri": "https://example.com/sync_key.asc"}}),
+    );
+    card_extra.insert("unmodeledServerTag".to_string(), json!("server_state"));
+
+    let mut email_extra = BTreeMap::new();
+    email_extra.insert("label".to_string(), json!("Engineering"));
+
+    let mut phone_extra = BTreeMap::new();
+    phone_extra.insert("label".to_string(), json!("Mobile Work"));
+
+    let mut adr_extra = BTreeMap::new();
+    adr_extra.insert("label".to_string(), json!("Main HQ"));
+    adr_extra.insert("pref".to_string(), json!(1));
+
+    let mut rel_extra_spouse = BTreeMap::new();
+    rel_extra_spouse.insert("label".to_string(), json!("Spouse"));
+
+    let mut rel_extra_agent = BTreeMap::new();
+    rel_extra_agent.insert("label".to_string(), json!("Legal Representative"));
+
+    let card = ContactCard {
+        id: Some("C-GEN-SYNC-B6".into()),
+        name: Some(Name {
+            full: Some("Fuzz Sync".into()),
+            components: Some(vec![
+                NameComponent::new("given", "Fuzz"),
+                NameComponent::new("surname", "Sync"),
+            ]),
+            extra: name_extra,
+        }),
+        emails: Some(
+            [(
+                "e1".to_string(),
+                ContactEmail {
+                    address: "fuzz@example.com".into(),
+                    contexts: Some(json!({"work": true})),
+                    pref: Some(1),
+                    extra: email_extra,
+                },
+            )]
+            .into(),
+        ),
+        phones: Some(
+            [(
+                "p1".to_string(),
+                ContactPhone {
+                    number: "+1-555-0188".into(),
+                    features: Some(json!({"voice": true, "mobile": true})),
+                    contexts: Some(json!({"work": true})),
+                    pref: Some(1),
+                    extra: phone_extra,
+                },
+            )]
+            .into(),
+        ),
+        addresses: Some(
+            [(
+                "a1".to_string(),
+                Address {
+                    components: Some(vec![
+                        AddressComponent::new("name", "500 Silicon Ave"),
+                        AddressComponent::new("locality", "Palo Alto"),
+                        AddressComponent::new("region", "CA"),
+                        AddressComponent::new("postcode", "94301"),
+                        AddressComponent::new("country", "USA"),
+                    ]),
+                    contexts: Some(json!({"work": true})),
+                    full: Some("500 Silicon Ave, Palo Alto, CA 94301, USA".into()),
+                    extra: adr_extra,
+                },
+            )]
+            .into(),
+        ),
+        media: Some(
+            [
+                (
+                    "m1".to_string(),
+                    Media {
+                        kind: Some("photo".to_string()),
+                        uri: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string(),
+                        media_type: Some("image/jpeg".to_string()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "m2".to_string(),
+                    Media {
+                        kind: Some("sound".to_string()),
+                        uri: "https://example.com/audio.ogg".to_string(),
+                        media_type: Some("audio/ogg".to_string()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "m3".to_string(),
+                    Media {
+                        kind: Some("logo".to_string()),
+                        uri: "https://example.com/logo.png".to_string(),
+                        media_type: Some("image/png".to_string()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        related_to: Some(
+            [
+                (
+                    "Alice Spouse".to_string(),
+                    Relation {
+                        relation: Some([("spouse".to_string(), json!(true))].into()),
+                        extra: rel_extra_spouse,
+                    },
+                ),
+                (
+                    "Bob Agent".to_string(),
+                    Relation {
+                        relation: Some([("agent".to_string(), json!(true))].into()),
+                        extra: rel_extra_agent,
+                    },
+                ),
+                (
+                    "Carol Colleague".to_string(),
+                    Relation {
+                        relation: Some([("colleague".to_string(), json!(true))].into()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        online_services: Some(
+            [
+                (
+                    "s1".to_string(),
+                    OnlineService {
+                        service: Some("Jabber".to_string()),
+                        user: Some("fuzz@jabber.org".to_string()),
+                        uri: None,
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "s2".to_string(),
+                    OnlineService {
+                        service: Some("Skype".to_string()),
+                        user: Some("fuzz_skype".to_string()),
+                        uri: None,
+                        extra: BTreeMap::new(),
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        extra: card_extra,
+        ..ContactCard::default()
+    };
+
+    // 2. Assert outbound vCard 3.0 emission strictly excludes unmodeled server fields, agent, sound, logo, keys
+    let vcard1 = card_to_vcard(&card);
+    assert!(vcard1.contains("X-EVOLUTION-FILE-AS:Sync\\, Fuzz (Name Extra)"));
+    assert!(vcard1.contains("X-EVOLUTION-SPOUSE:Alice Spouse"));
+    assert!(vcard1.contains("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:"));
+    assert!(!vcard1.contains("AGENT:"));
+    assert!(!vcard1.contains("AGENT;"));
+    assert!(!vcard1.contains("SOUND:"));
+    assert!(!vcard1.contains("SOUND;"));
+    assert!(!vcard1.contains("LOGO:"));
+    assert!(!vcard1.contains("LOGO;"));
+    assert!(!vcard1.contains("KEY:"));
+    assert!(!vcard1.contains("KEY;"));
+    assert!(!vcard1.contains("Bob Agent"));
+    assert!(!vcard1.contains("Carol Colleague"));
+    assert!(!vcard1.contains("cryptoKeys"));
+    assert!(!vcard1.contains("unmodeledServerTag"));
+
+    // 3. Round-trip reaches exact fixpoint stability
+    let parsed1 = vcard_to_card(&vcard1).expect("parse vcard1");
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("parse vcard2");
+    let vcard3 = card_to_vcard(&parsed2);
+    assert_eq!(vcard2, vcard3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(parsed1, parsed2, "Card₂ == Card₃ fixpoint invariant");
+
+    // 4. Inbound vCard 4.0 stream containing full batch-5/6 feature matrix
+    let raw_v4 = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Comprehensive v4 Fuzz\r\n",
+        "N:Fuzz;Comprehensive;;;\r\n",
+        "EMAIL;TYPE=\"work,pref\";PREF=1:v4user@example.com\r\n",
+        "TEL;TYPE=\"work,voice\";PREF=1:+1-555-0177\r\n",
+        "ADR;TYPE=\"work,pref\";LABEL=\"700 Tech Way\\nSan Jose, CA 95110\":;;700 Tech Way;San Jose;CA;95110;USA\r\n",
+        "BDAY;VALUE=date:1988-03-25\r\n",
+        "ANNIVERSARY:2016-10-14\r\n",
+        "PHOTO:data:image/jpeg;base64,/9j/4AAQSkZJRg==\r\n",
+        "IMPP:xmpp:v4user@jabber.example.com\r\n",
+        "IMPP:skype:v4user_skype\r\n",
+        "IMPP:matrix:v4user:matrix.org\r\n",
+        "IMPP:aim:v4user_aim\r\n",
+        "IMPP:icq:7654321\r\n",
+        "IMPP:msn:v4user@msn.com\r\n",
+        "IMPP:yahoo:v4user_yahoo\r\n",
+        "IMPP:groupwise:v4user_gw\r\n",
+        "IMPP:gg:554433\r\n",
+        "IMPP:gtalk:v4user@gmail.com\r\n",
+        "IMPP:xmpp:rejected@chat.org?action=call\r\n",
+        "RELATED;TYPE=spouse:Valerie Spouse\r\n",
+        "RELATED;TYPE=manager:Victor Manager\r\n",
+        "RELATED;TYPE=assistant:Vera Assistant\r\n",
+        "RELATED;TYPE=colleague:Vincent Colleague\r\n",
+        "AGENT:BEGIN:VCARD\\nVERSION:3.0\\nFN:Nested Agent\\nEND:VCARD\\n\r\n",
+        "SOUND;TYPE=BASIC;ENCODING=b:AQIDBA==\r\n",
+        "GENDER:F\r\n",
+        "CLIENTPIDMAP:1;urn:uuid:67e374d9-337e-4727-8803-a1e9c14e0999\r\n",
+        "MEMBER:urn:uuid:550e8400-e29b-41d4-a716-446655440000\r\n",
+        "NOTE;X-JMAP-KEY=n1:vCard 4.0 comprehensive generator synchronization test.\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed_v4 = vcard_to_card(raw_v4).expect("parse raw vCard 4.0");
+
+    // Assert accurate extraction of mapped properties
+    let p_anniv = parsed_v4.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(p_anniv.len(), 2);
+    let p_rel = parsed_v4.related_to.as_ref().expect("related_to");
+    assert_eq!(p_rel.len(), 4);
+    let p_im = parsed_v4.online_services.as_ref().expect("online_services");
+    assert_eq!(p_im.len(), 10); // 10 valid services, 1 action query rejected
+
+    // Outbound emission normalizes to standard vCard 3.0 and achieves fixed point
+    let export1_v4 = card_to_vcard(&parsed_v4);
+    assert!(!export1_v4.contains("AGENT"));
+    assert!(!export1_v4.contains("SOUND"));
+    assert!(!export1_v4.contains("GENDER"));
+    assert!(!export1_v4.contains("CLIENTPIDMAP"));
+    assert!(!export1_v4.contains("MEMBER"));
+
+    let card2_v4 = vcard_to_card(&export1_v4).expect("parse export1_v4");
+    let export2_v4 = card_to_vcard(&card2_v4);
+    let card3_v4 = vcard_to_card(&export2_v4).expect("parse export2_v4");
+    let export3_v4 = card_to_vcard(&card3_v4);
+
+    assert_eq!(
+        export2_v4, export3_v4,
+        "Export₂ == Export₃ (v4 normalization)"
+    );
+    assert_eq!(card2_v4, card3_v4, "Card₂ == Card₃ (v4 normalization)");
 }

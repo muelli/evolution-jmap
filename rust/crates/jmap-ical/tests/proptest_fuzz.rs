@@ -464,6 +464,29 @@ proptest! {
             prop_assert_eq!(ical1, ical2, "re-emitted iCalendar must reach a fixed-point");
         }
     }
+
+    #[test]
+    fn prop_emitted_ical_lines_target_75_octets_and_are_valid_utf8(event in arb_calendar_event()) {
+        let ical = event_to_ical(&event);
+        for line in ical.split("\r\n") {
+            // Exactly the RFC 5545 §3.1 width: calcard's own writer overshoots
+            // on long properties like RRULE and when empty structured slots
+            // trail a value at the boundary (stalwartlabs/calcard#25), and
+            // `Component::to_ics`'s refold pass takes it back to 75.
+            prop_assert!(
+                line.len() <= 75,
+                "Physical line exceeds maximum line length (len = {}): {:?}",
+                line.len(),
+                line
+            );
+            // Multi-byte UTF-8 code points must never be split across a fold
+            prop_assert!(
+                std::str::from_utf8(line.as_bytes()).is_ok(),
+                "Invalid UTF-8 sequence in line slice: {:?}",
+                line
+            );
+        }
+    }
 }
 
 /// Regression test for the minimal input `prop_ical_roundtrip_reaches_fixed_point_stability`

@@ -707,19 +707,22 @@ vCard₄ (Export₃: Stabilized vCard 3.0)
 3. **Legacy `ENCODING=b` on Text Lines (BACKLOG Regression Pin)**:
    - When legacy/fuzzed vCards declare binary parameters on non-binary properties (e.g. `NICKNAME;ENCODING=b:! `), the parser cleanly rejects non-base64 binary payloads via `entry_text_list` and normalizes the representation, reaching fixed-point stability on Export₂.
 
-### 6.4 Fixpoint Proptest Generator Synchronization (Batches 3–4 Sync)
+### 6.4 Fixpoint Proptest Generator Synchronization (Batches 3–6 Sync)
 
 1. **Synchronized Generator Coverage**:
    - `arb_name`: Fuzzes name components alongside optional `fileAs` and `sortAs` in `Name.extra`, testing inbound `FILE-AS`, `X-FILE-AS`, `X-EVOLUTION-FILE-AS`, and `SORT-STRING`.
    - `arb_card_extra`: Fuzzes `ContactCard.extra` with `fileAs`, `sortAs`, `cryptoKeys`, and unmodeled server fields.
    - `arb_email`, `arb_phone`, `arb_address`, `arb_link`, `arb_relation`: Fuzz custom/Apple labels in `extra["label"]`, testing label extraction and roundtrip stability.
-   - `arb_apple_property_group_block`: Generates paired Apple property groups (`itemN.PROPERTY` with `itemN.X-ABLabel`) across telephony, email, postal address, links, extended relations (`X-ABRELATEDNAMES` / `X-AB-RELATED-NAMES`), and extended dates (`X-ABDATE` / `X-AB-DATE`).
-   - `arb_vcard_property_line`: Covers full current property surface including standard properties, vendor extensions, legacy parameters, and dropped-by-design markers (`AGENT`, `SOUND`, `LOGO`, `KEY`).
+   - `arb_apple_property_group_block`: Generates paired Apple property groups (`itemN.PROPERTY` with `itemN.X-ABLabel`) across telephony, email, postal address, links, instant messaging (`IMPP`), birthdays (`BDAY`), extended relations (`X-ABRELATEDNAMES` / `X-AB-RELATED-NAMES`), and extended dates (`X-ABDATE` / `X-AB-DATE`).
+   - `arb_vcard_property_line`: Covers full current property surface including standard properties, vendor extensions, legacy parameters, vCard 4.0 parameters (`MEDIATYPE`, `PREF=1..10`, quoted `TYPE="work,voice"`, `VALUE=date`, `VALUE=date-and-or-time`, `VALUE=text`), all 10 IM protocol schemes (`xmpp`, `skype`, `matrix`, `aim`, `icq`, `msn`, `yahoo`, `groupwise`, `gg`, `gtalk`, `sip`), extended/hyphenated dates, and dropped-by-design markers (`AGENT`, `SOUND`, `LOGO`, `KEY`).
 2. **Domain Fixpoint Proptests**:
    - `prop_fixpoint_name_and_file_as_domain`: Asserts fixpoint stability for `Name`, `fileAs`, and `sortAs`.
    - `prop_fixpoint_apple_property_groups_domain`: Asserts that raw vCards with Apple property groups parse without panic and normalize outbound to standard vCard 3.0 reaching fixpoints.
    - `prop_fixpoint_links_domain`: Asserts fixpoint stability across URL kinds and labels.
-   - `prop_fixpoint_crypto_keys_and_logo_preservation_domain`: Asserts that `cryptoKeys` and non-photo media do not leak into vCard 3.0 emissions while maintaining roundtrip stability.
+   - `prop_fixpoint_crypto_keys_and_logo_preservation_domain`: Asserts that `cryptoKeys` and non-photo media (`logo`, `sound`) do not leak into vCard 3.0 emissions while maintaining roundtrip stability.
+   - `prop_fixpoint_relation_domain`: Asserts that unmapped relations (`agent`, `child`, `colleague`, `emergency`) strictly omit `AGENT:` properties on export and reach fixed-point stability.
+   - `prop_fixpoint_vcard_40_import_domain`: Asserts multi-pass fixed-point stability across all vCard 4.0 property variations (`IMPP` across all services, `RELATED` relation types, `BDAY` / `ANNIVERSARY` date formats, inline `PHOTO` data URIs, `ADR` with quoted `LABEL`, `EMAIL` / `TEL` with quoted types and `PREF`, and unmapped metadata).
+   - `prop_fixpoint_agent_and_sound_preservation_domain`: Asserts that inbound `AGENT` (nested vCards, URIs, text) and `SOUND` (audio formats, data URIs, media types) lines parse safely and are omitted from vCard 3.0 emissions.
    - `identify_oscillating_card_field`: Enhanced with `card.extra` divergence inspection during proptest shrinkage.
 
 ---
@@ -732,7 +735,8 @@ To ensure long-term stability and guard against edge-case regressions from third
 
 | Exporter / Platform | Fixture File | Protocol / Format | Key Characteristics & Mapped Surface | Preservation & Drop Invariants |
 | :--- | :--- | :--- | :--- | :--- |
-| **Google Contacts** | `google_contacts_export.vcf` | vCard 3.0 | • Apple group labels (`itemN.X-ABLabel`)<br>• Phonetic names (`X-PHONETIC-*`)<br>• Multi-unit `ORG` (3 components)<br>• Multiple emails, phones, addresses<br>• BDAY, anniversary, relations (Spouse, Manager, Assistant)<br>• Base64 JPEG `PHOTO` | • `X-GENDER` & `X-PHONETIC-*` dropped on export<br>• Group labels map to native contexts & EDS slots<br>• Relations normalize to `X-EVOLUTION-*`<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **Google Contacts (vCard 3.0)** | `google_contacts_export.vcf` | vCard 3.0 | • Apple group labels (`itemN.X-ABLabel`)<br>• Phonetic names (`X-PHONETIC-*`)<br>• Multi-unit `ORG` (3 components)<br>• Multiple emails, phones, addresses<br>• BDAY, anniversary, relations (Spouse, Manager, Assistant)<br>• Base64 JPEG `PHOTO` | • `X-GENDER` & `X-PHONETIC-*` dropped on export<br>• Group labels map to native contexts & EDS slots<br>• Relations normalize to `X-EVOLUTION-*`<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **Google Contacts (vCard 4.0)** | `google_contacts_vcard40_export.vcf` | vCard 4.0 | • Modern `VERSION:4.0`<br>• Inline `PHOTO:data:image/jpeg;base64,...`<br>• RFC 4770 `IMPP` (Google Talk / Jabber)<br>• RFC 6350 `RELATED;TYPE=spouse`, `manager`, `assistant`<br>• RFC 6350 `ANNIVERSARY` & hyphenated `BDAY`<br>• `ADR;LABEL=...` parameters & `PREF=1` | • Asymmetric tolerance: imports vCard 4.0<br>• `GENDER`, `CLIENTPIDMAP`, `PRODID` dropped on export<br>• `IMPP` & `RELATED` normalize to canonical vCard 3.0<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
 | **Apple iCloud / macOS Contacts** | `icloud_macos_export.vcf` | vCard 3.0 | • `PRODID:-//Apple Inc.//...`<br>• Grouped properties with `_$!<Label>!$_`<br>• `MAIN` phone (`voice` + `work`)<br>• Structured `ADR` with escaped commas<br>• `X-ABRELATEDNAMES` (Spouse, Manager, Assistant)<br>• `X-ABDATE` (Anniversary)<br>• Base64 PNG `PHOTO` | • `PRODID` & `X-ABShowAs` dropped on export<br>• Standard Apple labels map to native fields<br>• Custom labels preserved in `extra["label"]`<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
 | **Microsoft Outlook Modern** | `outlook_vcard30_export.vcf` | vCard 3.0 | • `PRODID:-//Microsoft Corporation//...`<br>• 4-unit `ORG` hierarchy (Company, Unit 1, Unit 2, Office)<br>• Structured `N` with prefixes/suffixes<br>• Multi-role telephony (`TYPE=WORK,VOICE`, `TYPE=WORK,FAX`)<br>• Structured `ADR` + standalone `LABEL`<br>• Multiline notes with URL links | • Proprietary `X-MS-*` extensions dropped cleanly<br>• 4th `ORG` unit maps to `E_CONTACT_OFFICE`<br>• Standalone labels paired to matching `ADR`s<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
 | **Microsoft Outlook Classic** | `outlook_vcard21_export.vcf` | vCard 2.1 | • Legacy `VERSION:2.1`<br>• Quoted-Printable encoded text & newlines<br>• ISO-8859-1 German umlauts (`ä`, `ö`, `ü`, `ß`)<br>• Bare type parameter words (`TEL;WORK;VOICE`)<br>• `ADR` & `LABEL` in QP format | • Asymmetric tolerance: imports 2.1 QP<br>• Outbound normalizes to strict vCard 3.0 UTF-8<br>• Legacy `CHARSET` / `ENCODING` never emitted<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
@@ -758,6 +762,36 @@ The table-driven test suite (`real_exporter_fixture_corpus_table_driven_roundtri
 
 4. **Lossless Surface Preservation**:
    - Verifies that all mapped data on `Card₂` (Name, Nicknames, Organizations, Titles, Anniversaries, Relations, Links, Keywords, Photos, Emails, Phones, Addresses) is identical to `Card₃` and preserved losslessly from `Card₁`.
+
+---
+
+## 8. Extended ISO 8601 Hyphenated Date Handling & Upstream Fidelity
+
+### 8.1 Upstream Calcard Date Parsing Characteristics & Blast Radius
+In `calcard` 0.3.11, date parsing exhibits distinct behaviors across basic vs. extended formats and property types:
+1. **Date-Only Parser (`parse_vcard_date`)**:
+   - When parsing date-only properties (such as `BDAY` or `ANNIVERSARY` with `VALUE=date`, or `ANNIVERSARY` in vCard 4.0), `calcard` reads extended format `YYYY-MM-DD` only up to the year and month (`1985-04`), stopping before the second hyphen and leaving `day` as `None`.
+   - In contrast, ISO 8601 basic format (`YYYYMMDD`, e.g. `19850412`, `20150920`) is parsed fully into year, month, and day.
+2. **Date-and-Time Parser (`parse_vcard_date_and_or_time`)**:
+   - In vCard 3.0 `BDAY` with timestamp (e.g. `1985-04-12T10:30:00Z` or `1985-04-12T10:30:00+02:00`), extended format parses `day` correctly before `'T'`.
+   - In vCard 4.0 `ANNIVERSARY`, extended format `2015-09-20T14:00:00Z` drops the day because vCard 4.0 grammar expects basic format `20150920T140000Z`.
+
+### 8.2 Real-World Exporter Blast Radius
+Extended hyphenated dates (`YYYY-MM-DD`) are widely produced across major contact ecosystems:
+- **RFC 2426 §3.1.5 (vCard 3.0 Normative Specification)**: Explicitly uses `BDAY:1996-04-15` and `BDAY:1953-10-15T23:10:00Z` in standard examples.
+- **GNOME Evolution / EDS (`libebook-contacts`)**: Writes `BDAY:YYYY-MM-DD` and `X-EVOLUTION-ANNIVERSARY:YYYY-MM-DD` by default via `e_contact_date_to_string`.
+- **Apple iCloud / macOS Contacts**: Exports `X-ABDATE` and `BDAY:YYYY-MM-DD`.
+- **Google Contacts**: Exports `BDAY:YYYY-MM-DD`.
+- **Microsoft Outlook Modern (M365)**: Exports `BDAY:YYYY-MM-DD`.
+- **Nextcloud / SabreDAV (CardDAV)**: Emits `BDAY:YYYY-MM-DD` and `ANNIVERSARY:YYYY-MM-DD`.
+
+### 8.3 Import-Side Pre-Normalization Strategy
+To guarantee 100% fidelity without day loss, `jmap-vcard`'s [`vcard_to_card`] applies import-side pre-normalization (`normalize_vcard_dates`):
+- Date property lines (`BDAY`, `ANNIVERSARY`, `X-EVOLUTION-ANNIVERSARY`, `X-ABDATE`, `X-AB-DATE`) with 10-character `YYYY-MM-DD` values are normalized to `YYYYMMDD` before passing the stream to `calcard`.
+- vCard 4.0 `ANNIVERSARY` timestamp values with `YYYY-MM-DDTHH:MM:SS...` are normalized to standard basic format `YYYYMMDDTHHMMSS...`.
+- Partial dates without days (`YYYY-MM`, `YYYY`, `--MM-DD`), non-date text (`VALUE=text:circa 1800`), and non-date properties (`NOTE:born 1985-04-12`) are preserved untouched.
+- Outbound serialization (`card_to_vcard`) continues to emit standard extended ISO 8601 `YYYY-MM-DD` (`BDAY;X-JMAP-KEY=y1:1985-04-12`), adhering to RFC 2426 and achieving immediate fixed-point stability on pass 2 (`Export₂ == Export₃`).
+
 
 
 
