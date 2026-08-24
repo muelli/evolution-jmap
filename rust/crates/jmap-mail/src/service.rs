@@ -398,6 +398,7 @@ unsafe fn attempt<T: Connected>(
     // alongside the `ESource` side of the same choice. See `oauth2`'s module
     // docs for why asking a second time here cannot disagree with them.
     let credentials = if uses_oauth2 {
+        tracing::debug!("authenticating with OAuth 2.0");
         // The one object allowed to fetch an OAuth 2.0 token, as it is the
         // only object allowed to fetch a password. `session` releases the
         // reference `ref_session` handed over when it drops at the end of the
@@ -413,6 +414,7 @@ unsafe fn attempt<T: Connected>(
         let token = unsafe { oauth2::access_token(session.as_ptr(), service, cancellable) };
         Credentials::bearer(token?)
     } else if uses_api_token {
+        tracing::debug!("authenticating with an API token");
         // The pasted token rides the same password prompt Basic uses — see
         // `jmap_backend_core::api_token`'s module docs for why — so it is
         // read exactly where the password is, just below.
@@ -421,6 +423,7 @@ unsafe fn attempt<T: Connected>(
         let password = unsafe { read_string(camel_service_get_password(service)) };
         bearer_credentials(password.as_deref())
     } else {
+        tracing::debug!("authenticating with a password");
         // The session put it there before calling us, and it is the only
         // credential this code ever sees: nothing reads a password out of the
         // settings object, which Evolution serialises into a config file.
@@ -446,11 +449,18 @@ fn finish_authenticate(
     uses_oauth2: bool,
     outcome: Result<(), StoreError>,
 ) -> Result<(), StoreError> {
-    if uses_oauth2 {
+    let outcome = if uses_oauth2 {
         outcome.map_err(StoreError::reclassify_oauth2_rejection)
     } else {
         outcome
+    };
+    match &outcome {
+        Ok(()) => tracing::debug!(uses_oauth2, "mail service authenticated"),
+        Err(error) => {
+            tracing::debug!(uses_oauth2, ?error, "mail service authentication failed");
+        }
     }
+    outcome
 }
 
 /// Drops the connection, then lets `CamelService` do its half.
@@ -586,5 +596,100 @@ mod finish_authenticate_tests {
     fn success_passes_through_unchanged_either_way() {
         assert!(finish_authenticate(true, Ok(())).is_ok());
         assert!(finish_authenticate(false, Ok(())).is_ok());
+    }
+
+    /// Records every event this function emits (field name → value), so a
+    /// test can assert the credential method and the outcome were traced —
+    /// duplicated from `jmap_client::transport`'s own test harness for the
+    /// same reason that one gives: this crate depends on `tracing`, not
+    /// `tracing-subscriber`, so there is no ready-made capturing layer to
+    /// share across crates. This is what item 15's own investigation found
+    /// missing: a live send produced no trace to tell the operator which
+    /// branch ran, because nothing here emitted any.
+    struct CapturingSubscriber {
+        captured: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    struct Recorder<'a> {
+        sink: &'a std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl tracing::field::Visit for Recorder<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.sink
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), format!("{value:?}")));
+        }
+
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.sink
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), value.to_string()));
+        }
+    }
+
+    impl tracing::Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut Recorder {
+                sink: &self.captured,
+            });
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    fn run_captured(
+        uses_oauth2: bool,
+        outcome: Result<(), StoreError>,
+    ) -> (Result<(), StoreError>, Vec<(String, String)>) {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+        let result = tracing::subscriber::with_default(subscriber, || {
+            finish_authenticate(uses_oauth2, outcome)
+        });
+        let captured = captured.lock().unwrap().clone();
+        (result, captured)
+    }
+
+    #[test]
+    fn a_successful_oauth2_attempt_traces_which_method_was_used() {
+        let (result, captured) = run_captured(true, Ok(()));
+        assert!(result.is_ok());
+        assert!(
+            captured.contains(&("uses_oauth2".to_owned(), "true".to_owned())),
+            "expected a uses_oauth2=true field, got {captured:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_attempt_traces_the_classified_error() {
+        let error = StoreError::Client(Error::Http {
+            status: 401,
+            problem: None,
+        });
+        let (result, captured) = run_captured(true, Err(error));
+        assert!(matches!(result, Err(StoreError::OAuth2(_))));
+        assert!(
+            captured.iter().any(|(name, _)| name == "error"),
+            "expected an error field, got {captured:?}"
+        );
     }
 }

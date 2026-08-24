@@ -786,6 +786,7 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-core",
  "jmap-mail",
+ "tracing",
 ]
 
 [[package]]

@@ -36,6 +36,7 @@ evolution-jmap-proto = { workspace = true }
 gio-sys = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 # Self dev-dependency to turn on `testing` (and so `detached()`) for this
