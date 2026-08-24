@@ -206,8 +206,74 @@ impl Component {
     pub(crate) fn to_ics(&self) -> String {
         let mut out = String::new();
         self.write_into(&mut out);
-        out
+        fold_overlong_lines(out)
     }
+}
+
+/// The RFC 5545 §3.1 folding width `to_ics`'s output holds to, in
+/// octets, excluding the line break.
+const MAX_LINE_OCTETS: usize = 75;
+
+/// Folds any physical line longer than [`MAX_LINE_OCTETS`], cutting at UTF-8
+/// character boundaries.
+///
+/// Folding is calcard's job, and its writer does it — except that a
+/// structured value's `;` separators are written *after* its fold check, and
+/// that check is skipped when the component coming next is empty text. A
+/// value whose text folds to exactly 75 octets therefore keeps every empty
+/// trailing slot on the same physical line. Additionally, calcard emits
+/// recurrence rules (`ICalendarValue::RecurrenceRule`) without line folding.
+/// Folding is defined on the octet layer — unfolding restores the same
+/// stream wherever a cut lands — so any cut is *correct*; cutting at
+/// character boundaries, and never between a `\` and the octet it escapes,
+/// additionally keeps every physical line valid UTF-8 and every escape pair
+/// whole for line-oriented readers (reported upstream as
+/// <https://github.com/stalwartlabs/calcard/issues/25>).
+fn fold_overlong_lines(ics: String) -> String {
+    if ics.split("\r\n").all(|line| line.len() <= MAX_LINE_OCTETS) {
+        return ics;
+    }
+    let mut out = String::with_capacity(ics.len() + 16);
+    for (index, line) in ics.split("\r\n").enumerate() {
+        if index > 0 {
+            out.push_str("\r\n");
+        }
+        let mut rest = line;
+        // A continuation line's leading space spends one of its 75 octets.
+        let mut budget = MAX_LINE_OCTETS;
+        while rest.len() > budget {
+            let mut cut = budget;
+            while cut > 0 && !rest.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            // An odd run of backslashes ending at the cut means the last one
+            // escapes the octet on the far side — step inside the run so the
+            // pair stays on one line.
+            if rest[..cut]
+                .bytes()
+                .rev()
+                .take_while(|&byte| byte == b'\\')
+                .count()
+                % 2
+                == 1
+            {
+                cut -= 1;
+            }
+            if cut == 0 {
+                // Unreachable for anything calcard emits, but never loop: take
+                // the first boundary — unfolding restores the octets either way.
+                cut = (1..=rest.len())
+                    .find(|&i| rest.is_char_boundary(i))
+                    .unwrap_or(rest.len());
+            }
+            out.push_str(&rest[..cut]);
+            out.push_str("\r\n ");
+            rest = &rest[cut..];
+            budget = MAX_LINE_OCTETS - 1;
+        }
+        out.push_str(rest);
+    }
+    out
 }
 
 pub(crate) fn make_entry(name: &str, value: &str) -> ICalendarEntry {
