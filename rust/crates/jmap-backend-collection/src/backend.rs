@@ -26,13 +26,13 @@ use eds_sys::{
     ECollectionBackend, ECollectionBackendClass, ENamedParameters, ESource,
     ESourceAuthenticationResult, ESourceRegistryServer, e_backend_get_source,
     e_backend_schedule_authenticate, e_backend_schedule_credentials_required,
-    e_collection_backend_claim_all_resources, e_collection_backend_freeze_populate,
-    e_collection_backend_get_cache_dir, e_collection_backend_get_type,
-    e_collection_backend_is_new_source, e_collection_backend_list_calendar_sources,
-    e_collection_backend_list_contacts_sources, e_collection_backend_new_child,
-    e_collection_backend_ref_server, e_collection_backend_thaw_populate,
-    e_server_side_source_set_remote_creatable, e_source_get_uid, e_source_registry_debug_print,
-    e_source_registry_server_add_source,
+    e_collection_backend_authenticate_children, e_collection_backend_claim_all_resources,
+    e_collection_backend_freeze_populate, e_collection_backend_get_cache_dir,
+    e_collection_backend_get_type, e_collection_backend_is_new_source,
+    e_collection_backend_list_calendar_sources, e_collection_backend_list_contacts_sources,
+    e_collection_backend_new_child, e_collection_backend_ref_server,
+    e_collection_backend_thaw_populate, e_server_side_source_set_remote_creatable,
+    e_source_get_uid, e_source_registry_debug_print, e_source_registry_server_add_source,
 };
 use gio_sys::{GCancellable, GTlsCertificateFlags};
 use glib_sys::{GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar, guint16};
@@ -340,6 +340,12 @@ unsafe extern "C" fn child_added(backend: *mut ECollectionBackend, child_source:
 /// which failures become a second password prompt — is decided in
 /// `authenticate_with`, where it is testable.
 ///
+/// `push_credentials` is the other half of that instance:
+/// `authenticate_with`'s own doc explains why a successful fan-out hands the
+/// freshly-resolved credentials to already-running address-book/calendar
+/// children (`e_collection_backend_authenticate_children`) rather than leaving
+/// each to notice on its own.
+///
 /// The two certificate out-parameters are deliberately left alone; see
 /// [`crate::authenticate`] on why this backend never offers a certificate for
 /// the user to trust.
@@ -372,15 +378,30 @@ unsafe extern "C" fn authenticate_sync(
         // `authenticate_with`'s contract, and `Live`'s methods are the EDS
         // calls `Collection` documents.
         unsafe {
-            authenticate_with(source, credentials, cancellable, error, |login| {
-                let report = fan_out(&collection, &login)?;
-                // SAFETY: `authenticate_with` only calls this closure once
-                // `source` is confirmed non-NULL; the uid comes back
-                // `(transfer none)`. (Already inside the outer `unsafe` block.)
-                let account_id = read_string(e_source_get_uid(source));
-                report_fan_out(&report, account_id.as_deref());
-                Ok(())
-            })
+            authenticate_with(
+                source,
+                credentials,
+                cancellable,
+                error,
+                |login| {
+                    let report = fan_out(&collection, &login)?;
+                    // SAFETY: `authenticate_with` only calls this closure once
+                    // `source` is confirmed non-NULL; the uid comes back
+                    // `(transfer none)`. (Already inside the outer `unsafe`
+                    // block.)
+                    let account_id = read_string(e_source_get_uid(source));
+                    report_fan_out(&report, account_id.as_deref());
+                    Ok(())
+                },
+                |credentials| {
+                    // SAFETY: `authenticate_with` only calls this closure once
+                    // the fan-out above has succeeded, on the same live
+                    // `backend` this vfunc was dispatched on, with the same
+                    // `credentials` this vfunc received. (Already inside the
+                    // outer `unsafe` block.)
+                    e_collection_backend_authenticate_children(collection.0, credentials);
+                },
+            )
         }
     };
 

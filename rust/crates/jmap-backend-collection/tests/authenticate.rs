@@ -192,6 +192,10 @@ struct ErrorSeen {
 }
 
 /// Runs `authenticate_with` and reports both of the things it answers with.
+///
+/// The push-credentials seam is a no-op here: every test in this file except
+/// the ones about the seam itself only cares about the enum and the `GError`,
+/// the same two things this helper reported before that seam existed.
 fn run<F>(
     source: *mut ESource,
     credentials: *const ENamedParameters,
@@ -201,12 +205,37 @@ fn run<F>(
 where
     F: FnOnce(Login) -> Result<(), Error>,
 {
+    run_full(source, credentials, cancellable, fan_out, |_| {})
+}
+
+/// Like [`run`], but also takes the `push_credentials` closure, for the tests
+/// about that seam itself — which record what they were called with in a
+/// `RefCell` the way every other test here records what `fan_out` was handed.
+fn run_full<F, P>(
+    source: *mut ESource,
+    credentials: *const ENamedParameters,
+    cancellable: *mut GCancellable,
+    fan_out: F,
+    push_credentials: P,
+) -> (ESourceAuthenticationResult, Option<ErrorSeen>)
+where
+    F: FnOnce(Login) -> Result<(), Error>,
+    P: FnOnce(*const ENamedParameters),
+{
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: a valid or NULL source, a valid or NULL parameter set, a valid or
     // NULL cancellable and an out-parameter initialised to NULL are what the
     // vfunc receives.
-    let result =
-        unsafe { authenticate_with(source, credentials, cancellable, &mut error, fan_out) };
+    let result = unsafe {
+        authenticate_with(
+            source,
+            credentials,
+            cancellable,
+            &mut error,
+            fan_out,
+            push_credentials,
+        )
+    };
 
     if error.is_null() {
         return (result, None);
@@ -504,6 +533,85 @@ fn a_fan_out_that_worked_sets_no_error() {
 
     assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
     assert!(error.is_none(), "a successful authenticate set an error");
+}
+
+#[test]
+fn a_successful_fan_out_pushes_the_same_credentials_to_already_running_children() {
+    // EWS's `e_collection_backend_authenticate_children()`, mirrored here: a
+    // collection that just resolved credentials hands them to its
+    // already-running address-book/calendar children immediately, rather than
+    // leaving each to hit its own credentials-required cycle before it
+    // independently re-fetches the same thing. See `docs/EWS-PARITY.md` Surface
+    // 5 and this function's own doc.
+    let source = account();
+    let stored = StoredPassword::new("hunter2");
+    let pushed = RefCell::new(Vec::new());
+
+    let (result, error) = run_full(
+        source.0,
+        stored.0,
+        ptr::null_mut(),
+        |_| Ok(()),
+        |credentials| pushed.borrow_mut().push(credentials),
+    );
+
+    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+    assert!(error.is_none());
+    assert_eq!(
+        pushed.into_inner(),
+        vec![stored.0.cast_const()],
+        "the fan-out's own credentials were not pushed to the children exactly once"
+    );
+}
+
+#[test]
+fn a_fan_out_that_fails_pushes_no_credentials_to_children() {
+    // Nothing was freshly authenticated for this login, so there is nothing
+    // honest to hand a child that never got a look at it either.
+    let source = account();
+    let stored = StoredPassword::new("hunter2");
+    let pushed = RefCell::new(Vec::new());
+
+    let (result, error) = run_full(
+        source.0,
+        stored.0,
+        ptr::null_mut(),
+        |_| {
+            Err(Error::Http {
+                status: 401,
+                problem: None,
+            })
+        },
+        |credentials| pushed.borrow_mut().push(credentials),
+    );
+
+    assert_eq!(result, E_SOURCE_AUTHENTICATION_REJECTED);
+    assert!(error.is_some());
+    assert!(
+        pushed.into_inner().is_empty(),
+        "a rejected fan-out still pushed credentials to the children"
+    );
+}
+
+#[test]
+fn an_account_with_nothing_switched_on_pushes_no_credentials_to_children() {
+    // The fan-out never runs for this account (see
+    // `an_account_with_nothing_switched_on_is_accepted_without_being_contacted`),
+    // so there is nothing resolved yet to push either.
+    let source = account().parts(Parts::NONE);
+    let pushed = RefCell::new(Vec::new());
+
+    let (result, error) = run_full(
+        source.0,
+        ptr::null(),
+        ptr::null_mut(),
+        never,
+        |credentials| pushed.borrow_mut().push(credentials),
+    );
+
+    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+    assert!(error.is_none());
+    assert!(pushed.into_inner().is_empty());
 }
 
 #[test]
