@@ -17470,3 +17470,250 @@ fn real_exporter_fixture_evolution_native_vcard30_detailed_roundtrip() {
     assert_eq!(export2, export3, "Export₂ == Export₃");
     assert_eq!(card2, card3, "Card₂ == Card₃");
 }
+
+#[test]
+fn hyphenated_dates_bday_and_anniversary_variations_fidelity() {
+    // 1. Standard BDAY extended format (RFC 2426 §3.1.5)
+    let vcard_bday_extended = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY:1985-04-12\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_extended).expect("parse BDAY extended");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 2. BDAY with explicit VALUE=date parameter
+    let vcard_bday_value_date = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY;VALUE=date:1985-04-12\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_value_date).expect("parse BDAY VALUE=date");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 3. BDAY with VALUE=DATE uppercase and lowercase
+    let vcard_bday_value_date_lower = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY;value=DATE:1985-04-12\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_value_date_lower).expect("parse BDAY value=DATE");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 4. BDAY with VALUE=date-and-or-time
+    let vcard_bday_date_and_or_time = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY;VALUE=date-and-or-time:1985-04-12\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_date_and_or_time).expect("parse BDAY date-and-or-time");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 5. BDAY with extended ISO 8601 timestamps (UTC and timezone offsets)
+    let vcard_bday_utc = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY:1985-04-12T10:30:00Z\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_utc = vcard_to_card(vcard_bday_utc).expect("parse BDAY UTC");
+    let anniversaries = card_utc.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    let vcard_bday_tz_plus = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY:1985-04-12T10:30:00+02:00\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_tz_plus).expect("parse BDAY TZ +02:00");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    let vcard_bday_tz_minus = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY:1985-04-12T10:30:00-05:00\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_tz_minus).expect("parse BDAY TZ -05:00");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 6. Grouped property item1.BDAY
+    let vcard_bday_grouped = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "item1.BDAY;VALUE=date:1985-04-12\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_bday_grouped).expect("parse item1.BDAY");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+
+    // 7. ANNIVERSARY extended format (RFC 6350 §6.2.6)
+    let vcard_anniv_extended = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Alice Date\r\n",
+        "ANNIVERSARY:2015-09-20\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_anniv_extended).expect("parse ANNIVERSARY extended");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let anniv = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("anniv");
+    assert_eq!(
+        anniv.date,
+        Some(json!({"@type": "PartialDate", "year": 2015, "month": 9, "day": 20}))
+    );
+
+    // 8. ANNIVERSARY with explicit VALUE=date parameter
+    let vcard_anniv_value_date = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Alice Date\r\n",
+        "ANNIVERSARY;VALUE=date:2015-09-20\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_anniv_value_date).expect("parse ANNIVERSARY VALUE=date");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let anniv = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("anniv");
+    assert_eq!(
+        anniv.date,
+        Some(json!({"@type": "PartialDate", "year": 2015, "month": 9, "day": 20}))
+    );
+
+    // 9. ANNIVERSARY with timestamp
+    let vcard_anniv_timestamp = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Alice Date\r\n",
+        "ANNIVERSARY:2015-09-20T14:00:00Z\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_anniv_timestamp).expect("parse ANNIVERSARY timestamp");
+    let anniversaries = card.anniversaries.expect("anniversaries");
+    let anniv = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("anniv");
+    assert_eq!(
+        anniv.date,
+        Some(json!({"@type": "PartialDate", "year": 2015, "month": 9, "day": 20}))
+    );
+
+    // 10. Coexisting BDAY, ANNIVERSARY, X-EVOLUTION-ANNIVERSARY, and Apple X-ABDATE in one card
+    let vcard_all_dates = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Date\r\n",
+        "BDAY;VALUE=date:1985-04-12\r\n",
+        "X-EVOLUTION-ANNIVERSARY:2010-06-15\r\n",
+        "item1.X-ABDATE:2018-11-22\r\n",
+        "item1.X-ABLabel:_$!<Anniversary>!$_\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(vcard_all_dates).expect("parse all dates");
+    let anniversaries = card.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(anniversaries.len(), 3);
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("birth");
+    assert_eq!(
+        bday.date,
+        Some(json!({"@type": "PartialDate", "year": 1985, "month": 4, "day": 12}))
+    );
+    let wedding_dates: Vec<_> = anniversaries
+        .values()
+        .filter(|a| a.kind == "wedding")
+        .filter_map(|a| a.date.as_ref())
+        .collect();
+    assert_eq!(wedding_dates.len(), 2);
+    assert!(
+        wedding_dates
+            .iter()
+            .any(|d| d["year"] == 2010 && d["month"] == 6 && d["day"] == 15)
+    );
+    assert!(
+        wedding_dates
+            .iter()
+            .any(|d| d["year"] == 2018 && d["month"] == 11 && d["day"] == 22)
+    );
+
+    // 11. Multi-pass fixed-point stability
+    let export1 = card_to_vcard(&card);
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
