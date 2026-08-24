@@ -301,7 +301,15 @@ impl Client {
                 limit,
             });
         }
+        // Wire-level bodies, TRACE-only: the one place every JMAP method call
+        // and its answer pass through, so an operator chasing a server
+        // rejection can read the exact exchange out of journald
+        // (`EVOLUTION_JMAP_LOG=trace`) instead of guessing what was sent.
+        // Bodies carry user content — TRACE is opt-in and journald is local —
+        // and never credentials: `Authorization` is a header, not a body.
+        tracing::trace!(body = %String::from_utf8_lossy(&body), "JMAP request body");
         let response = self.execute(HttpMethod::Post, &api_url, Some(&body))?;
+        tracing::trace!(body = %String::from_utf8_lossy(&response.body), "JMAP response body");
         Ok(serde_json::from_slice(&response.body)?)
     }
 
