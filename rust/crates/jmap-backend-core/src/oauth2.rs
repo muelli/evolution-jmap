@@ -41,6 +41,53 @@
 //!
 //! [name]: ../../jmap_config/oauth2_service/constant.NAME.html
 //!
+//! ## Why the services object is held rather than made per question
+//!
+//! The one transcription liberty taken with EDS's rule above is which of the
+//! two spellings of the alias lookup is called.
+//! `e_oauth2_services_is_oauth2_alias_static()` — the one
+//! `e_soup_session_setup_message_credentials` uses — creates an
+//! `EOAuth2Services`, queries it and drops that reference again on every call,
+//! and its own documentation names the precondition that makes that safe:
+//!
+//! > The #EOAuth2Services is implemented as a singleton, thus it won't be much
+//! > trouble, **as long as there is something else having created one
+//! > instance.**
+//!
+//! Where nothing else has, the reference it drops is the last one, and two
+//! threads asking at once race: one is inside `oauth2_services_dispose`, which
+//! frees `priv->services` without clearing the field, while the other is inside
+//! `oauth2_services_constructor`, which still sees the not-yet-cleared
+//! `services_singleton` and takes a reference to it — a legal GObject
+//! resurrection of an object whose service list has just been freed. The
+//! resurrected instance is then walked, and a dangling `EOAuth2Service` is
+//! dereferenced. That is a SIGSEGV in whichever process asked, which for a
+//! collection backend is `evolution-source-registry` and so every account in
+//! the session.
+//!
+//! Every real Evolution process happens to satisfy the precondition —
+//! `e_source_registry_init()` holds an `EOAuth2Services` for the registry's
+//! lifetime — so this is a crash nothing reaches by accident *today*. This
+//! module holds one on purpose instead: a single instance, created on the first
+//! question and never released, which is EDS's precondition met deliberately
+//! rather than inherited from whoever else happens to be in the process.
+//! `e_oauth2_services_is_oauth2_alias()` is then the same lookup `_static`
+//! would have made, minus the create-and-destroy around it.
+//!
+//! **What holding one does *not* change is which services are found.** An
+//! `EOAuth2Services` loads its extensions once, at construction
+//! (`e_extensible_load_extensions`), so which services answer depends on what
+//! had registered one by the time the instance was built. In a process that
+//! holds a registry, the instance is the registry's — and `_static` was already
+//! returning that same one, never getting as far as constructing anything of
+//! its own, because the singleton was alive throughout. Taking one more
+//! reference to it changes nothing about when it was built. Only where nothing
+//! else holds one does this fix the instance's age, and that is exactly where
+//! it fixes the crash. `e_extensible_reload_extensions()` is deliberately *not*
+//! called to re-widen that: it mutates the extension array under no lock of its
+//! own, so calling it per question would put back a race of the same kind this
+//! removes.
+//!
 //! ## What is deliberately not re-checked here
 //!
 //! **That the connection is encrypted.** EDS's own rule pre-fills credentials
@@ -62,10 +109,11 @@
 
 use std::ffi::CString;
 use std::ptr;
+use std::sync::OnceLock;
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_AUTHENTICATION, ESource, ESourceAuthentication,
-    e_oauth2_services_is_oauth2_alias_static, e_source_authentication_get_method,
+    E_SOURCE_EXTENSION_AUTHENTICATION, EOAuth2Services, ESource, ESourceAuthentication,
+    e_oauth2_services_is_oauth2_alias, e_oauth2_services_new, e_source_authentication_get_method,
     e_source_authentication_get_type, e_source_get_oauth2_access_token_sync,
 };
 use gio_sys::GCancellable;
@@ -78,6 +126,44 @@ use crate::marshal::{extension_if_present, read_string};
 /// The generic spelling of "this source authenticates with OAuth 2.0", as
 /// opposed to the name of one particular service.
 pub const OAUTH2_METHOD: &str = "OAuth2";
+
+/// The process's `EOAuth2Services`, kept alive for as long as the process is —
+/// see the module docs on why holding one is part of asking the question
+/// safely.
+///
+/// A raw pointer rather than a wrapper with a `Drop`, deliberately: there is no
+/// point in the process's life at which releasing this would be an improvement,
+/// and a release is exactly the thing whose absence makes the singleton safe to
+/// query. Everything below only ever reads it.
+struct Services(*mut EOAuth2Services);
+
+// SAFETY: the pointer is only ever handed back to EDS's own accessors, and the
+// ones this module calls take the instance's `property_lock` around every read
+// of the service list (`e-oauth2-services.c`). The pointer itself is written
+// once, under `OnceLock`, and read-only afterwards.
+unsafe impl Send for Services {}
+// SAFETY: as `Send`.
+unsafe impl Sync for Services {}
+
+static SERVICES: OnceLock<Services> = OnceLock::new();
+
+/// The held `EOAuth2Services`, created on the first question.
+///
+/// `OnceLock` is what closes the window the module docs describe rather than
+/// merely narrowing it: the first thread to ask creates the instance while
+/// every other waits, so no second thread can be part-way through a
+/// create-or-destroy of the singleton while this one runs. From then on this
+/// module holds a reference, so nothing else in the process can drop the last
+/// one either — including EDS's own transient `ESourceRegistry` inside
+/// [`access_token`], which is only ever reached *after* a question has been
+/// asked and so after this has run.
+fn services() -> *mut EOAuth2Services {
+    // SAFETY: no arguments; the reference this returns is transfer-full and is
+    // deliberately never given back.
+    SERVICES
+        .get_or_init(|| Services(unsafe { e_oauth2_services_new() }))
+        .0
+}
 
 /// Whether `[Authentication] Method` names OAuth 2.0 — see the module docs for
 /// whose rule this is.
@@ -102,10 +188,21 @@ pub fn method_is_oauth2(method: Option<&str>) -> bool {
     let Ok(method) = CString::new(method) else {
         return false;
     };
-    // SAFETY: a NUL-terminated string valid for the call. The function builds
-    // and frees its own `EOAuth2Services`, applies its own guard against
-    // "none"/"plain/password"/the empty string, and takes nothing of ours.
-    unsafe { e_oauth2_services_is_oauth2_alias_static(method.as_ptr()) != GFALSE }
+    // An `EOAuth2Services` that could not be constructed is one with no
+    // registered services to match against, which is the same answer an empty
+    // one gives — and the same safe direction as the interior-NUL case above:
+    // the account falls back to the password path rather than to a token
+    // nothing could have issued.
+    let services = services();
+    if services.is_null() {
+        return false;
+    }
+    // SAFETY: a live `EOAuth2Services` this module holds a reference to for the
+    // process's lifetime, and a NUL-terminated string valid for the call. The
+    // function applies EDS's own guard against "none"/"plain/password"/the
+    // empty string, locks the instance around the lookup, and takes nothing of
+    // ours.
+    unsafe { e_oauth2_services_is_oauth2_alias(services, method.as_ptr()) != GFALSE }
 }
 
 /// [`method_is_oauth2`] asked of a source, which is how `connect_sync` reaches

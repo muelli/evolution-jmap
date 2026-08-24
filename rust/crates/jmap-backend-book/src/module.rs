@@ -30,7 +30,7 @@
 //! `jmap_config::oauth2_service::NAME`, not the generic `"OAuth2"` string
 //! (`jmap-config/src/backend.rs`'s `AUTH_CHOICES`), so
 //! `jmap_backend_core::oauth2::source_uses_oauth2` resolves it through
-//! `e_oauth2_services_is_oauth2_alias_static` — a query against the
+//! `e_oauth2_services_is_oauth2_alias` — a query against the
 //! `EOAuth2Services` singleton *of this process*, which only answers for a
 //! service registered here. Unlike EWS's Office 365 service, which ships
 //! inside `libedataserver` itself and so already exists in every process,
