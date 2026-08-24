@@ -469,16 +469,16 @@ fn class_init_replaces_the_default_authenticate_sync_rather_than_leaving_it() {
 }
 
 #[test]
-fn installing_authenticate_sync_leaves_the_other_ebackend_slots_inherited() {
-    // `authenticate_sync` is the first slot this crate writes into a half of
-    // the class struct it does not own the layout of — bindgen's
-    // `EBackendClass`, two levels up, sitting between GObject's class and
-    // `ECollectionBackendClass`'s own vfuncs. A wrong offset there does not
-    // fail to compile; it silently overwrites a neighbouring slot with a
-    // function of a different signature, which is a call through a bad pointer
-    // the first time EDS uses it. The two neighbours EDS fills in are
-    // `get_destination_address` and `prepare_shutdown`, so they are what pins
-    // it: both must still be exactly what the grandparent installed.
+fn installing_authenticate_sync_and_get_destination_address_leaves_prepare_shutdown_inherited() {
+    // `authenticate_sync` and `get_destination_address` are the two slots this
+    // crate writes into a half of the class struct it does not own the layout
+    // of — bindgen's `EBackendClass`, two levels up, sitting between GObject's
+    // class and `ECollectionBackendClass`'s own vfuncs. A wrong offset there
+    // does not fail to compile; it silently overwrites a neighbouring slot with
+    // a function of a different signature, which is a call through a bad
+    // pointer the first time EDS uses it. `prepare_shutdown` is the one
+    // neighbour still left untouched, so it is what pins the offset from the
+    // far side: it must still be exactly what the grandparent installed.
     let class = Class::get();
     let parent = e_backend_class();
     assert!(
@@ -491,13 +491,40 @@ fn installing_authenticate_sync_leaves_the_other_ebackend_slots_inherited() {
     let inherited = unsafe { &*parent };
 
     assert_eq!(
-        ours.get_destination_address.map(|f| f as usize),
-        inherited.get_destination_address.map(|f| f as usize),
-        "class_init overwrote get_destination_address"
-    );
-    assert_eq!(
         ours.prepare_shutdown.map(|f| f as usize),
         inherited.prepare_shutdown.map(|f| f as usize),
         "class_init overwrote prepare_shutdown"
+    );
+}
+
+#[test]
+fn class_init_replaces_the_default_get_destination_address_rather_than_leaving_it() {
+    // `EBackendClass`'s own default (`backend_get_destination_address`) reads
+    // the backend's "connectable" property via `e_backend_ref_connectable`,
+    // which nothing in this crate ever sets — so left inherited, it always
+    // answers `FALSE`, and EDS's host-specific reachability monitor sees only
+    // generic network-up/down for a JMAP account, never this account's actual
+    // host. That is invisible in exactly the way `authenticate_sync`'s own
+    // uninstalled-default would be, which is why this slot gets the same kind
+    // of test.
+    let class = Class::get();
+    let parent = e_backend_class();
+    assert!(
+        !parent.is_null(),
+        "the grandparent class was not referenced"
+    );
+
+    let ours = class
+        .backend_vfuncs()
+        .get_destination_address
+        .expect("class_init installed no get_destination_address");
+    // SAFETY: a live class struct.
+    let inherited = unsafe { (*parent).get_destination_address }
+        .expect("EDS installs a default that reads the connectable property");
+
+    assert!(
+        ours as usize != inherited as usize,
+        "the slot still holds EDS's default, which never sees a host this crate never sets \
+         as the backend's connectable"
     );
 }

@@ -35,7 +35,7 @@ use eds_sys::{
     e_source_registry_server_add_source,
 };
 use gio_sys::{GCancellable, GTlsCertificateFlags};
-use glib_sys::{GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar};
+use glib_sys::{GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar, guint16};
 use gobject_sys::g_type_class_peek;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, fail_bool, fail_invalid};
@@ -43,6 +43,7 @@ use jmap_backend_core::error::{cstring_lossy, fail_bool, fail_invalid};
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::owned::Owned;
+use jmap_backend_core::source::destination_address;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{
     guard, guard_bool, guard_value, log_critical, log_critical_for_account,
@@ -138,6 +139,12 @@ unsafe impl ObjectSubclass for JmapCollectionBackend {
         // the one thing worse than not writing here is writing to the wrong
         // offset. `tests/backend.rs` holds both.
         vfuncs.parent_class.authenticate_sync = Some(authenticate_sync);
+        // The grandparent's other slot: EDS's own default reads the
+        // "connectable" property, which nothing here ever sets, so it always
+        // answers FALSE — a JMAP account's host is invisible to EDS's
+        // host-specific reachability monitor without this override. See
+        // `get_destination_address` below.
+        vfuncs.parent_class.get_destination_address = Some(get_destination_address);
     }
 }
 
@@ -389,6 +396,50 @@ unsafe extern "C" fn authenticate_sync(
             authenticate,
         )
     }
+}
+
+/// What EDS calls to learn which host to watch for this account's own
+/// reachability, separately from generic network-up/down — used by
+/// `e_backend_is_destination_reachable` and by EDS's periodic reachability
+/// monitor, neither of which this crate calls directly.
+///
+/// The decision is [`jmap_backend_core::source::destination_address`]'s; what
+/// is here is the account source the vfunc is not handed and the two
+/// out-parameters, which is EDS's own convention for "answer, or say you
+/// cannot" rather than a `GError`.
+///
+/// A panic becomes `FALSE` with both out-parameters untouched, which is
+/// [`guard`]'s ordinary "answer nothing" fallback and the same honest
+/// non-answer a backend with no account source gets on the path that does not
+/// panic.
+unsafe extern "C" fn get_destination_address(
+    backend: *mut EBackend,
+    host: *mut *mut gchar,
+    port: *mut guint16,
+) -> gboolean {
+    guard("get_destination_address", GFALSE, || {
+        // `(transfer none)`, and NULL only for a backend EDS did not
+        // construct from a source.
+        // SAFETY: EDS hands us one of its own backends, alive for the call.
+        let source = unsafe { e_backend_get_source(backend) };
+        if source.is_null() {
+            return GFALSE;
+        }
+
+        // SAFETY: a valid account source, only read from, alive for the call.
+        let Some((address_host, address_port)) = (unsafe { destination_address(source) }) else {
+            return GFALSE;
+        };
+
+        // SAFETY: `host`/`port` are the vfunc's own out-parameters, written
+        // only on this success path; ownership of the duplicated string
+        // passes to EDS, which frees it with `g_free`.
+        unsafe {
+            *host = dup_string(&address_host);
+            *port = address_port;
+        }
+        GTRUE
+    })
 }
 
 /// What EDS calls when the user asks Evolution for a new address book or
