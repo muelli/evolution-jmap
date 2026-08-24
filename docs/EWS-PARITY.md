@@ -153,26 +153,20 @@ bug.
 | `child_added` | Binds `[Authentication]` fields via live `GBinding`s, chains up **last** | `backend.rs:274-324`, chains up **first** | DIVERGENCE — justified | Order reversed deliberately (`backend.rs:262-268`): `offer_deletion` needs the parent's binding to already exist. |
 | `child_removed` | Removes folder from EWS's own private id→source cache (delta-sync bookkeeping) | absent (`tests/backend.rs:369-371` pins the inherited/NULL slot) | DIVERGENCE — plausibly justified | This crate re-derives the full child set from EDS's own listing functions every fan-out pass rather than maintaining a private cache (`backend.rs:954-965`), so nothing obviously needs feeding on removal — not independently verified against `Fanout`'s internals in this pass. |
 | `create_resource_sync`/`delete_resource_sync` | Server create/delete with foreign/public-folder special-casing, no chain-up | `backend.rs:422-549`, `571-660`, same non-chaining shape | MATCH | |
-| `authenticate_sync` (grandparent `EBackendClass` slot) | Resolves credentials, on success calls `e_collection_backend_authenticate_children()` to push them into already-running address-book/calendar child backends immediately, then syncs | `backend.rs:344-392` + `authenticate.rs:149-209`, no equivalent push to children | MATCH on the slot; **GAP** on child propagation | `e_collection_backend_authenticate_children()` exists so live child backends get freshly-resolved credentials immediately instead of independently hitting their own credentials-required cycle. Nothing about that need is EWS-specific — a JMAP account has the identical "collection just resolved a password/token the child backends don't know about yet" moment. Grep across the crate confirms no equivalent call exists. |
+| `authenticate_sync` (grandparent `EBackendClass` slot) | Resolves credentials, on success calls `e_collection_backend_authenticate_children()` to push them into already-running address-book/calendar child backends immediately, then syncs | **FIXED 2026-08-24 (session N+58)** — `authenticate_with` (`authenticate.rs`) takes a `push_credentials` closure, called once a fan-out succeeds; `backend.rs`'s `authenticate_sync` wires it to `e_collection_backend_authenticate_children(collection.0, credentials)` | MATCH | Was a **GAP**; closed as item 11's own follow-up (1) — see `docs/ROADMAP.md` item 11 and `docs/NIGHT-LOG.md`. |
 | `EBackendClass::get_destination_address` | Parses the account's host into host/port, feeding EDS's own host-specific network-reachability monitor (rather than only generic network-up/down) | **FIXED 2026-08-24 (session N+57)** — `backend.rs`'s new `get_destination_address`, reading `jmap_backend_core::source::destination_address` (mirrors `ews_backend_get_destination_address`'s own `[Authentication] Host`/`Port` fallback branch) | MATCH | Was a **GAP**; closed as item 11's own follow-up (2) — see `docs/ROADMAP.md` item 11 and `docs/NIGHT-LOG.md`. |
 | `constructed` (sets `remote-creatable`, forces NTLM fallback, `allow-sources-rename=TRUE`, etc.) | absent | DIVERGENCE — mostly justified | `backend.rs:893-921`'s `offer_creation` comment explicitly discusses and rejects a `constructed` override for `remote-creatable` specifically (an already-considered, reasoned decision). `allow-sources-rename` has no equivalent discussion anywhere — a minor, low-severity omission (renaming a JMAP account may not cascade to children's display names) rather than a structural gap. |
 | Module registration (`module-ews-backend.c`) | Backend, factory, OAuth2 service, plus a custom `ESourceEwsFolder` extension type | `module.rs`: backend, factory, OAuth2 service — no custom resource-id extension type | MATCH on ordering/rationale; unexplained asymmetry, not confirmed as a gap | See Surface 1. This crate's resource identity presumably rides on a built-in EDS extension rather than a bespoke one; not confirmed in this pass. |
 
-**Two real gaps found, neither EWS-specific; one fixed, one still open:**
+**Two real gaps found, neither EWS-specific; both now fixed:**
 
 1. **No `e_collection_backend_authenticate_children()`-equivalent push of
-   freshly-resolved credentials to already-running child backends.** Today,
-   each child backend (book/cal/mail) independently fetches its own
-   credentials via `connect_with`'s three-branch resolution when *it* needs
+   freshly-resolved credentials to already-running child backends.** Before
+   this fix, each child backend (book/cal/mail) independently fetched its own
+   credentials via `connect_with`'s three-branch resolution when *it* needed
    them, rather than being handed what the collection backend just resolved.
-   Given items 7 and 12 already found and fixed two separate credential-
-   propagation bugs in this area, this is a plausible, not-yet-observed third
-   one — likely lower-severity than those two since each child already
-   fetches its own OAuth2 token/API-token/password rather than depending on
-   a push, but worth a dedicated increment to confirm whether any real
-   symptom (an extra prompt cycle right after a fresh collection
-   authentication, before any child has had its own chance to fetch) is
-   actually observable, and fix it if so. **Still open.**
+   **Fixed 2026-08-24 (session N+58)** — see the table row above and
+   `docs/NIGHT-LOG.md`.
 2. **`EBackendClass::get_destination_address` is not implemented**, leaving
    EDS's host-reachability monitor unable to watch this account's actual
    JMAP host specifically, only generic network-up/down. Low severity (the
@@ -183,8 +177,9 @@ bug.
    table row above and `docs/NIGHT-LOG.md`.
 
 Both were filed as follow-up items in `docs/ROADMAP.md`'s item 11 entry rather
-than fixed in this same session, per the item's own "each its own increment"
-instruction and this session's time budget.
+than fixed in the same session that found them, per the item's own "each its
+own increment" instruction and that session's time budget — each was picked up
+and closed in its own later increment instead.
 
 ## Summary
 
