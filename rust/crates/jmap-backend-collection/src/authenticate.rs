@@ -90,7 +90,7 @@ use jmap_backend_core::error::{invalid_arg_gerror, set_raw_gerror};
 use jmap_backend_core::marshal::password as stored_password;
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
 use jmap_backend_core::source::SourceError;
-use jmap_client::Credentials;
+use jmap_client::{Credentials, Error};
 use jmap_collection_sync::Parts;
 
 use crate::collection_source::{Server, parts_of, server_of};
@@ -190,6 +190,11 @@ where
     // asked libsecret for anything — or a valid `ENamedParameters` that
     // outlives the call.
     let password = unsafe { stored_password(credentials) };
+    // Read once and kept, not just asked inside `login_of`: `fan_out`'s own
+    // failure needs it too, to tell a 401 on the token this login just
+    // fetched apart from one on an ordinary password — see `finish_fan_out`.
+    // SAFETY: a valid source, checked non-NULL above.
+    let uses_oauth2 = unsafe { source_uses_oauth2(source) };
     // SAFETY: a valid source, checked non-NULL above, and a cancellable that
     // satisfies `login_of`'s contract by this function's own.
     let login = match unsafe { login_of(source, parts, password.as_deref(), cancellable) } {
@@ -210,18 +215,38 @@ where
     // alive for the duration of the vfunc, which outlives this scope.
     let _cancel = unsafe { observe(cancellable) };
 
-    match fan_out(login) {
+    match finish_fan_out(uses_oauth2, fan_out(login)) {
         Ok(()) => {
             push_credentials(credentials);
             ACCEPTED_AUTH_RESULT
         }
         Err(failure) => {
-            let failure = ConnectError::from(failure);
             // SAFETY: as above.
             unsafe { set_raw_gerror(error, failure.to_gerror()) };
             failure.auth_result()
         }
     }
+}
+
+/// What `authenticate_with` reports, given what `fan_out` itself answered.
+///
+/// Split out so the reclassification decision needs no live `ESource`, the
+/// same way [`jmap_backend_core::connect`]'s own `finish_connect` is split
+/// out of `connect_with` for the address book and calendar backends'
+/// `connect_sync` — this is the collection backend's sibling of that, over
+/// `fan_out`'s `jmap_client::Error` rather than a `Result<T, ConnectError>`
+/// an `open` already returns. See
+/// [`ConnectError::reclassify_oauth2_rejection`] for why a 401 on a bearer
+/// token this login just fetched is not "the password was wrong" the way it
+/// is for Basic or an API token.
+fn finish_fan_out(uses_oauth2: bool, outcome: Result<(), Error>) -> Result<(), ConnectError> {
+    outcome.map_err(ConnectError::from).map_err(|failure| {
+        if uses_oauth2 {
+            failure.reclassify_oauth2_rejection()
+        } else {
+            failure
+        }
+    })
 }
 
 /// One read of the account and one set of credentials, as the [`Login`] every
@@ -353,4 +378,54 @@ impl LoginError {
 /// The `GError` for a backend that was handed no account at all.
 fn no_account_gerror() -> *mut GError {
     invalid_arg_gerror("the JMAP collection backend has no account to authenticate")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The gate `authenticate_with` applies around `fan_out`'s outcome: only
+    /// an OAuth 2.0 login's 401 is reclassified, and success passes through
+    /// unchanged either way — the collection backend's sibling of
+    /// `jmap_mail::service::finish_authenticate_tests` and
+    /// `jmap_backend_core::connect`'s own `finish_connect` test.
+    #[test]
+    fn finish_fan_out_reclassifies_only_when_the_login_was_oauth2() {
+        let unauthorized = || {
+            Err(Error::Http {
+                status: 401,
+                problem: None,
+            })
+        };
+
+        assert!(matches!(
+            finish_fan_out(true, unauthorized()),
+            Err(ConnectError::OAuth2(_))
+        ));
+        assert!(matches!(
+            finish_fan_out(false, unauthorized()),
+            Err(ConnectError::Client(_))
+        ));
+        assert!(finish_fan_out(true, Ok(())).is_ok());
+        assert!(finish_fan_out(false, Ok(())).is_ok());
+    }
+
+    /// The reclassification is narrow: a non-401 failure on an OAuth 2.0
+    /// login is left as `Client`, the same as `jmap_backend_core::connect`'s
+    /// `only_a_401_is_reclassified_to_oauth2_required`.
+    #[test]
+    fn only_the_401_shape_is_reclassified() {
+        for failure in [
+            Error::Http {
+                status: 403,
+                problem: None,
+            },
+            Error::Transport("down".to_owned()),
+        ] {
+            assert!(matches!(
+                finish_fan_out(true, Err(failure)),
+                Err(ConnectError::Client(_))
+            ));
+        }
+    }
 }
