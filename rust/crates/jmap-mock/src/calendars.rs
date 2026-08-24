@@ -137,12 +137,14 @@ pub fn calendar_event_set(state: &mut ServerState, arguments: Value) -> Result<V
                 SetError::new(error::set::INVALID_PROPERTIES).with_description("start is required")
             );
         }
-        // jscalendarbis §3.1.2: a standalone Event MUST set `version`. Enforced
-        // exactly the way Fastmail does — same type, same property list, no
-        // description — because reproducing the strictest real deployment is
-        // what keeps the mock honest (found 2026-08-24: every real create was
-        // refused over this while the mock waved it through).
-        if event.version.is_none() {
+        // jscalendarbis §3.1.2 + draft-ietf-jmap-calendars-28 §1.4: a
+        // standalone Event MUST set `version`, and in JMAP context the object
+        // is a jscalendarbis Event, so the only valid value is "2.0".
+        // Enforced exactly the way Fastmail does — same type, same property
+        // list, no description; it rejects absent AND "1.0" alike (both
+        // wire-observed 2026-08-24) — because reproducing the strictest real
+        // deployment is what keeps the mock honest.
+        if event.version.as_deref() != Some("2.0") {
             return Err(SetError::new(error::set::INVALID_PROPERTIES).with_properties(["version"]));
         }
         event.id = Some(id.clone());
