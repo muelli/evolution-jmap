@@ -134,12 +134,26 @@ impl std::fmt::Display for Error {
                 error.error_type,
                 error.description.as_deref().unwrap_or("no description")
             ),
-            Error::Set(error) => write!(
-                f,
-                "set error: {} ({})",
-                error.error_type,
-                error.description.as_deref().unwrap_or("no description")
-            ),
+            Error::Set(error) => {
+                write!(
+                    f,
+                    "set error: {} ({})",
+                    error.error_type,
+                    error.description.as_deref().unwrap_or("no description")
+                )?;
+                // The property list is often the ONLY diagnostic a strict
+                // server sends (observed: Fastmail's `invalidProperties`
+                // with no description) — dropping it turns a precise
+                // rejection into a mystery.
+                if let Some(properties) = error
+                    .properties
+                    .as_deref()
+                    .filter(|properties| !properties.is_empty())
+                {
+                    write!(f, " [properties: {}]", properties.join(", "))?;
+                }
+                Ok(())
+            }
             Error::Json(error) => write!(f, "JSON error: {error}"),
             Error::Protocol(message) => write!(f, "protocol error: {message}"),
             Error::Cancelled => f.write_str("operation cancelled"),
@@ -191,5 +205,35 @@ impl std::error::Error for Error {
 impl From<serde_json::Error> for Error {
     fn from(error: serde_json::Error) -> Self {
         Error::Json(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn a_set_error_display_names_the_offending_properties() {
+        let error = Error::Set(jmap_proto::error::SetError {
+            error_type: "invalidProperties".into(),
+            description: None,
+            properties: Some(vec!["start".into(), "duration".into()]),
+            extra: Default::default(),
+        });
+        assert_eq!(
+            error.to_string(),
+            "set error: invalidProperties (no description) [properties: start, duration]"
+        );
+    }
+
+    #[test]
+    fn a_set_error_without_properties_reads_as_before() {
+        let error = Error::Set(jmap_proto::error::SetError {
+            error_type: "forbidden".into(),
+            description: Some("nope".into()),
+            properties: None,
+            extra: Default::default(),
+        });
+        assert_eq!(error.to_string(), "set error: forbidden (nope)");
     }
 }
