@@ -199,6 +199,62 @@ fn only_a_401_makes_camel_ask_for_the_password_again() {
     }
 }
 
+/// The same 401 the test above reports as `REJECTED` for a plain password
+/// does not mean the same thing for a bearer token EDS itself supplied — see
+/// `StoreError::reclassify_oauth2_rejection`'s own doc for why. `attempt`'s
+/// OAuth 2.0 branch is the one caller, and it is not reachable without a live
+/// `CamelSession`; this proves the reclassification itself, on the same
+/// `StoreError` variant the OAuth 2.0 path would actually receive from
+/// `open_mail` — a real 401 from a real (mock) server, not a hand-built one.
+#[test]
+fn a_401_on_a_bearer_token_reclassifies_to_the_same_oauth2_failure_a_fetch_would_get() {
+    let server = MockServer::builder().bearer_token("good-token").start();
+
+    let error = expect_error(open_mail(
+        &config(&server),
+        Credentials::bearer("wrong-token"),
+    ));
+    assert!(
+        matches!(error, StoreError::Client(_)),
+        "expected a client error, got {error}"
+    );
+    assert_eq!(error.authentication_result(), CAMEL_AUTHENTICATION_REJECTED);
+
+    let reclassified = error.reclassify_oauth2_rejection();
+    assert!(
+        matches!(reclassified, StoreError::OAuth2(_)),
+        "expected OAuth2, got {reclassified}"
+    );
+    assert_eq!(
+        reclassified.authentication_result(),
+        CAMEL_AUTHENTICATION_ERROR
+    );
+}
+
+/// Reclassification is narrow: a `Client` failure that is not a 401 — the
+/// same shape `only_a_401_makes_camel_ask_for_the_password_again` already
+/// pins as `ERROR` regardless — passes through unchanged, so a genuinely
+/// broken OAuth 2.0 account (an unreachable server, a cancelled request) is
+/// not silently turned into a *different* `ERROR` that would read oddly to
+/// whoever debugs it.
+#[test]
+fn only_the_401_shape_is_reclassified() {
+    for error in [
+        StoreError::Client(Error::Http {
+            status: 403,
+            problem: None,
+        }),
+        StoreError::Client(Error::Transport("down".to_owned())),
+        StoreError::Client(Error::Cancelled),
+    ] {
+        let reclassified = error.reclassify_oauth2_rejection();
+        assert!(
+            matches!(reclassified, StoreError::Client(_)),
+            "expected the error left alone, got {reclassified}"
+        );
+    }
+}
+
 #[test]
 fn an_unreachable_server_is_an_error_not_a_credentials_problem() {
     let config = ServerConfig {

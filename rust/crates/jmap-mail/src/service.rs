@@ -430,7 +430,27 @@ unsafe fn attempt<T: Connected>(
         password_credentials(config.user.as_deref(), password.as_deref())
     };
 
-    authenticate(connected, &config, credentials)
+    finish_authenticate(uses_oauth2, authenticate(connected, &config, credentials))
+}
+
+/// What `attempt` reports, given what [`authenticate`] itself answered.
+///
+/// Split out from `attempt` so this decision — reclassify only an OAuth 2.0
+/// attempt's rejection, leave every other outcome exactly as `authenticate`
+/// gave it — is a plain function a test can drive without a `CamelService`,
+/// the same way [`authenticate`] itself is split out from the vfunc for a
+/// `CamelSession`. See `StoreError::reclassify_oauth2_rejection`'s own doc for
+/// why a 401 on a bearer token EDS itself handed over is not "the password
+/// was wrong" the way it is for Basic or an API token.
+fn finish_authenticate(
+    uses_oauth2: bool,
+    outcome: Result<(), StoreError>,
+) -> Result<(), StoreError> {
+    if uses_oauth2 {
+        outcome.map_err(StoreError::reclassify_oauth2_rejection)
+    } else {
+        outcome
+    }
 }
 
 /// Drops the connection, then lets `CamelService` do its half.
@@ -527,4 +547,44 @@ unsafe fn fail_internal(error: *mut *mut GError) -> CamelAuthenticationResult {
     // function's.
     unsafe { set_raw_gerror(error, gerror) };
     CAMEL_AUTHENTICATION_ERROR
+}
+
+#[cfg(test)]
+mod finish_authenticate_tests {
+    use jmap_client::Error;
+
+    use super::finish_authenticate;
+    use crate::connect::StoreError;
+
+    #[test]
+    fn an_oauth2_401_is_reclassified() {
+        let error = StoreError::Client(Error::Http {
+            status: 401,
+            problem: None,
+        });
+        let result = finish_authenticate(true, Err(error));
+        assert!(
+            matches!(result, Err(StoreError::OAuth2(_))),
+            "expected OAuth2, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn the_same_401_is_left_alone_for_a_non_oauth2_attempt() {
+        let error = StoreError::Client(Error::Http {
+            status: 401,
+            problem: None,
+        });
+        let result = finish_authenticate(false, Err(error));
+        assert!(
+            matches!(result, Err(StoreError::Client(_))),
+            "expected Client, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn success_passes_through_unchanged_either_way() {
+        assert!(finish_authenticate(true, Ok(())).is_ok());
+        assert!(finish_authenticate(false, Ok(())).is_ok());
+    }
 }

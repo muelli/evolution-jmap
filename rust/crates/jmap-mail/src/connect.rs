@@ -238,6 +238,38 @@ impl StoreError {
         }
     }
 
+    /// Turns a server's 401 on an OAuth 2.0 bearer token into the same
+    /// `OAuth2` failure a failed *fetch* of that token already gets.
+    ///
+    /// Call only where the credentials just tried were themselves an OAuth
+    /// 2.0 access token — [`crate::service::attempt`] is the one caller, and
+    /// it already knows that from the same account field [`oauth2::uses_oauth2`]
+    /// reads. A 401 on a Basic or API-token attempt is left alone: there,
+    /// [`is_wrong_password`] correctly means the password was wrong, and
+    /// `REJECTED` (ask again) is the right answer.
+    ///
+    /// For OAuth 2.0 it is not. `access_token`'s own doc explains why a
+    /// failure to *obtain* a token is reported as `OAuth2`/`ERROR` rather than
+    /// `REJECTED`: `CamelAuthenticationResult` has no fourth value for "ask
+    /// again without discarding what you have" the way `ESourceAuthentication
+    /// Result::REQUIRED` does, so `REJECTED` here means the credentials
+    /// prompter discards the stored refresh token and opens a fresh consent
+    /// screen — the right response to a grant that was genuinely revoked, and
+    /// a disruptive overreaction to a token the server merely rejected once,
+    /// e.g. transiently or moments before EDS itself would have refreshed it.
+    /// A 401 *after* a token was obtained is exactly as ambiguous between
+    /// those two as a *failure to obtain one* already is, so it gets the same
+    /// answer: report it, do not discard.
+    ///
+    /// [`oauth2::uses_oauth2`]: crate::oauth2::uses_oauth2
+    /// [`is_wrong_password`]: jmap_backend_core::connect::is_wrong_password
+    pub fn reclassify_oauth2_rejection(self) -> Self {
+        match self {
+            Self::Client(error) if is_wrong_password(&error) => Self::OAuth2(error.to_string()),
+            other => other,
+        }
+    }
+
     /// Allocates a `GError` describing this failure. Ownership passes to the
     /// caller, who must `g_error_free` it or hand it to a C caller that will.
     pub fn to_gerror(&self) -> *mut GError {
