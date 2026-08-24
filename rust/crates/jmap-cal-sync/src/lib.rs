@@ -172,9 +172,8 @@ impl CalSync {
             // what the user is then told, and [`patch::diff`] for the edit,
             // which leaves the property alone instead.
             if let Some(rule) = event
-                .recurrence_rules
+                .recurrence_rule
                 .iter()
-                .flatten()
                 .find(|rule| !maps_recurrence_rule(rule))
             {
                 return Err(SyncError::Unsendable(unsendable_recurrence(

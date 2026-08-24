@@ -206,14 +206,14 @@ fn event_update_recurrence() {
         )
         .unwrap();
     let id = created.id.unwrap();
-    assert!(created.recurrence_rules.is_none());
+    assert!(created.recurrence_rule.is_none());
 
     let weekly = RecurrenceRule::new("weekly");
     client
         .event_update(
             &account_id,
             &id,
-            json!({"recurrenceRules": [weekly], "title": "Yoga (weekly)"}),
+            json!({"recurrenceRule": weekly, "title": "Yoga (weekly)"}),
         )
         .unwrap();
 
@@ -223,9 +223,8 @@ fn event_update_recurrence() {
         .list
         .remove(0);
     assert_eq!(event.title.as_deref(), Some("Yoga (weekly)"));
-    let rules = event.recurrence_rules.as_ref().unwrap();
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].frequency, "weekly");
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.frequency, "weekly");
     // Untouched properties survive the patch.
     assert_eq!(event.start.as_deref(), Some("2026-09-03T18:00:00"));
 }

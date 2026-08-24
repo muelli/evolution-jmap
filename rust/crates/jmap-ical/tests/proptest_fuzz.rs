@@ -282,7 +282,7 @@ prop_compose! {
 
 prop_compose! {
     fn arb_event_recurrence()(
-        recurrence_rules in prop::option::of(prop::collection::vec(arb_recurrence_rule(), 0..2)),
+        recurrence_rule in prop::option::of(arb_recurrence_rule()),
         recurrence_overrides in prop::option::of(prop::collection::btree_map(
             Just("2026-01-16T13:00:00".to_string()),
             prop_oneof![
@@ -308,11 +308,11 @@ prop_compose! {
             0..2,
         )),
     ) -> (
-        Option<Vec<RecurrenceRule>>,
+        Option<RecurrenceRule>,
         Option<BTreeMap<String, serde_json::Value>>,
         Option<BTreeMap<String, serde_json::Value>>,
     ) {
-        (recurrence_rules, recurrence_overrides, time_zones)
+        (recurrence_rule, recurrence_overrides, time_zones)
     }
 }
 
@@ -330,7 +330,7 @@ fn arb_calendar_event() -> impl Strategy<Value = CalendarEvent> {
                 (title, description, start, time_zone, duration),
                 (show_without_time, status, free_busy_status, priority, privacy),
                 (locations, virtual_locations, links, keywords, alerts, participants),
-                (recurrence_rules, recurrence_overrides, time_zones),
+                (recurrence_rule, recurrence_overrides, time_zones),
             )| {
                 CalendarEvent {
                     id: id.map(Into::into),
@@ -352,7 +352,7 @@ fn arb_calendar_event() -> impl Strategy<Value = CalendarEvent> {
                     keywords,
                     alerts,
                     participants,
-                    recurrence_rules,
+                    recurrence_rule,
                     recurrence_overrides,
                     time_zones,
                     ..CalendarEvent::default()

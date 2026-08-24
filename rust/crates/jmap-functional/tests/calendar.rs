@@ -1548,22 +1548,22 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
     // has nothing for an exclusion to be an exception to.
     let recurring = by_title(RECURRING_SUMMARY);
     let rules = recurring
-        .recurrence_rules
+        .recurrence_rule
         .as_ref()
         .unwrap_or_else(|| panic!("the recurring event has no rule: {recurring:?}"));
-    assert_eq!(rules[0].frequency, "weekly", "{recurring:?}");
+    assert_eq!(rules.frequency, "weekly", "{recurring:?}");
     // Four rather than the six it was created with: the split truncated it, and
     // the count is the only thing on the server that says where the old series
     // now ends. Six here is the old series still recurring over the fortnight
     // the new one owns, which every other client reading the account would show
     // as two appointments a week apart under two titles.
-    assert_eq!(rules[0].count, Some(4), "{recurring:?}");
+    assert_eq!(rules.count, Some(4), "{recurring:?}");
     // The day the rule repeats on, as the NDay objects RFC 8984 §4.3.3 spells
     // it with. A rule that arrived without them is a weekly series pinned to
     // whatever day its start happens to fall on, which is the same event only
     // for as long as nobody moves the start.
     assert_eq!(
-        rules[0].by_day.as_deref(),
+        rules.by_day.as_deref(),
         Some(&[NDay::new("th")][..]),
         "the day the series repeats on did not reach the server: {recurring:?}"
     );
@@ -1635,13 +1635,13 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
          replaces: {split:?}"
     );
     let split_rules = split
-        .recurrence_rules
+        .recurrence_rule
         .as_ref()
         .unwrap_or_else(|| panic!("the event the split made has no rule: {split:?}"));
-    assert_eq!(split_rules[0].frequency, "weekly", "{split:?}");
-    assert_eq!(split_rules[0].count, Some(2), "{split:?}");
+    assert_eq!(split_rules.frequency, "weekly", "{split:?}");
+    assert_eq!(split_rules.count, Some(2), "{split:?}");
     assert_eq!(
-        split_rules[0].by_day.as_deref(),
+        split_rules.by_day.as_deref(),
         Some(&[NDay::new("th")][..]),
         "the event the split made does not repeat on the day the series did: \
          {split:?}"
@@ -1677,11 +1677,11 @@ fn evolution_opens_the_calendar_and_a_write_reaches_the_server() {
         "the zoned series has the wrong length: {zoned_recurring:?}"
     );
     let zoned_rules = zoned_recurring
-        .recurrence_rules
+        .recurrence_rule
         .as_ref()
         .unwrap_or_else(|| panic!("the zoned series has no rule: {zoned_recurring:?}"));
-    assert_eq!(zoned_rules[0].frequency, "weekly", "{zoned_recurring:?}");
-    assert_eq!(zoned_rules[0].count, Some(3), "{zoned_recurring:?}");
+    assert_eq!(zoned_rules.frequency, "weekly", "{zoned_recurring:?}");
+    assert_eq!(zoned_rules.count, Some(3), "{zoned_recurring:?}");
     // The whole point of the event: the moved occurrence, carrying both the
     // wall-clock start the user put it at and the clock that start is on. A
     // patch of `{"start": …}` alone — which is what the mapping sent before it

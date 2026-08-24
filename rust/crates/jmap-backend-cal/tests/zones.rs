@@ -208,16 +208,16 @@ fn every_zone_libical_ships_converts_a_recurrences_utc_until() {
             let ics = recurring_in(&definition, &tzid, until);
             let rules = jmap_ical::ical_to_event(&ics)
                 .expect("the envelope is a calendar object")
-                .recurrence_rules
+                .recurrence_rule
                 .expect("the rule survived the mapping");
 
             assert_eq!(
-                rules[0].until.as_deref(),
+                rules.until.as_deref(),
                 Some(libical_reads(&name, until).as_str()),
                 "{name} at {until} does not read the way libical reads it"
             );
             assert!(
-                jmap_ical::maps_recurrence_rule(&rules[0]),
+                jmap_ical::maps_recurrence_rule(&rules),
                 "{name} at {until} cannot be sent, so a create carrying it is refused"
             );
         }

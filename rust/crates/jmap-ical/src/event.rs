@@ -467,7 +467,7 @@ pub const MAPPED_PROPERTIES: [&str; 17] = [
     "links",
     "keywords",
     "alerts",
-    "recurrenceRules",
+    "recurrenceRule",
     "recurrenceOverrides",
 ];
 
@@ -1226,7 +1226,7 @@ fn read_alert(valarm: &ICalendarComponent) -> Option<Value> {
 /// `interval`, `count`, `until` and `firstDayOfWeek`; `rscale` and `skip` — which
 /// count a rule in a calendar other than the Gregorian one — ride in
 /// [`RecurrenceRule::extra`] and would be lost. A caller that patches
-/// `recurrenceRules` for a rule this returns `false` for narrows the user's
+/// `recurrenceRule` for a rule this returns `false` for narrows the user's
 /// recurrence behind their back.
 ///
 /// A rule `rule_to_rrule` refuses outright fails this too, so the save path
@@ -1557,7 +1557,7 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
 
     let mut vevent = vevent_of(event, as_a_date, zone, None);
 
-    for rule in event.recurrence_rules.iter().flatten() {
+    for rule in event.recurrence_rule.iter() {
         if let Some(entry) = rule_to_rrule(rule, Ends::In(Zoned::named(zone)), as_a_date)
             .and_then(|v| rrule_entry(&v))
         {
@@ -3015,9 +3015,16 @@ fn read_vevent(
         name: time_zone.as_deref(),
         observances: definition.map(|zone| zone.observances.as_slice()),
     });
-    let rules: Vec<RecurrenceRule> = component_entries(vevent, "RRULE")
+    // jscalendarbis §3.3.3 models an Event's recurrence as a single
+    // RecurrenceRule, not RFC 8984's array. RFC 5545 technically permits more
+    // than one RRULE line, but real calendars — Evolution's own recurrence
+    // editor included — never write more than one, so only the first
+    // readable one is kept here; a further RRULE line is dropped rather than
+    // failing the whole event, the same narrowing habit the rest of this
+    // mapping already has for a property an object can hold only one of.
+    let rule: Option<RecurrenceRule> = component_entries(vevent, "RRULE")
         .filter_map(|property| rrule_to_rule(&entry_raw_value(property), ends))
-        .collect();
+        .next();
 
     CalendarEvent {
         id: text("UID").map(Into::into),
@@ -3076,7 +3083,7 @@ fn read_vevent(
         // back under the key it came out with and a save patches
         // `links/<key>/href`. See [`read_links`].
         links: read_links(vevent),
-        recurrence_rules: (!rules.is_empty()).then_some(rules),
+        recurrence_rule: rule,
         recurrence_overrides: None,
         // Filled in by [`ical_to_event`] once the event's own zone is known,
         // because whether the document is defining a zone *for us* depends on
@@ -3774,9 +3781,8 @@ fn shows_without_time(event: &CalendarEvent, start: &str) -> bool {
             .filter(|duration| !duration.is_empty())
             .is_none_or(whole_days)
         && event
-            .recurrence_rules
+            .recurrence_rule
             .iter()
-            .flatten()
             .filter(|rule| writable(rule))
             .all(|rule| {
                 rule.until
@@ -4478,7 +4484,7 @@ fn set_position_token(position: i32) -> Option<String> {
 /// [`maps_recurrence_rule`] asks [`weekday_token`] about the value instead of
 /// asking this function.
 ///
-/// The cost of that: a save which patches `recurrenceRules` for some *other*
+/// The cost of that: a save which patches `recurrenceRule` for some *other*
 /// reason drops an explicit `firstDayOfWeek: "mo"` the server held. That is the
 /// value the property defaults to, so the rule still names the same dates.
 ///
@@ -4529,7 +4535,7 @@ fn weekday_token(day: &str) -> Option<&'static str> {
 /// it in a shape [`crate::zone`] will not guess at. There the instant is kept as
 /// it was stated, `Z` and all: that is not a LocalDateTime, so [`writable`]
 /// refuses it and [`maps_recurrence_rule`] tells the save path to leave
-/// `recurrenceRules` alone.
+/// `recurrenceRule` alone.
 ///
 /// [`Ends::At`] is the one case where the shift needs no definition at all, an
 /// offset being a number rather than a zone — see that variant.

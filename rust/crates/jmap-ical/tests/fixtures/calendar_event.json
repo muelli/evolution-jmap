@@ -9,12 +9,10 @@
   "timeZone": "Europe/Berlin",
   "duration": "PT1H30M",
   "status": "confirmed",
-  "recurrenceRules": [
-    {
-      "@type": "RecurrenceRule",
-      "frequency": "weekly",
-      "interval": 2,
-      "count": 10
-    }
-  ]
+  "recurrenceRule": {
+    "@type": "RecurrenceRule",
+    "frequency": "weekly",
+    "interval": 2,
+    "count": 10
+  }
 }

@@ -1398,10 +1398,10 @@ fn an_edited_instance_is_drawn_at_the_series_place() {
     // override does not patch. A component that left the place off would show
     // the user an occurrence that happens nowhere.
     let mut event = placed("loc1", json!({"@type": "Location", "name": "Room 42"}));
-    event.recurrence_rules = Some(vec![RecurrenceRule {
+    event.recurrence_rule = Some(RecurrenceRule {
         frequency: "weekly".to_owned(),
         ..RecurrenceRule::default()
-    }]);
+    });
     event.recurrence_overrides = Some(
         [(
             "2026-01-29T13:00:00".to_owned(),
@@ -1615,10 +1615,10 @@ fn an_edited_instance_is_drawn_with_the_series_tags() {
     // and, now that an override *may* restate them (see OVERRIDE_PROPERTIES),
     // would read back as the user having unfiled that one occurrence.
     let mut event = tagged([("offsite", json!(true))]);
-    event.recurrence_rules = Some(vec![RecurrenceRule {
+    event.recurrence_rule = Some(RecurrenceRule {
         frequency: "weekly".to_owned(),
         ..RecurrenceRule::default()
-    }]);
+    });
     event.recurrence_overrides = Some(
         [(
             "2026-01-29T13:00:00".to_owned(),
@@ -2203,24 +2203,20 @@ fn a_recurrence_rule_carries_freq_interval_and_count() {
         "RRULE:FREQ=WEEKLY;COUNT=10;INTERVAL=2"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].frequency, "weekly");
-    assert_eq!(rules[0].interval, Some(2));
-    assert_eq!(rules[0].count, Some(10));
-    assert_eq!(rules[0].rule_type.as_deref(), Some("RecurrenceRule"));
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.frequency, "weekly");
+    assert_eq!(rules.interval, Some(2));
+    assert_eq!(rules.count, Some(10));
+    assert_eq!(rules.rule_type.as_deref(), Some("RecurrenceRule"));
 }
 
 #[test]
 fn an_interval_of_one_is_left_implicit() {
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             interval: Some(1),
             ..RecurrenceRule::new("daily")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     // INTERVAL=1 is the RFC 5545 default; writing it out only makes the line
@@ -2233,10 +2229,10 @@ fn until_is_a_date_time_in_the_events_own_zone() {
     let event = CalendarEvent {
         start: Some("2026-01-15T13:00:00".to_owned()),
         time_zone: Some("Etc/UTC".to_owned()),
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             until: Some("2026-12-31T09:00:00".to_owned()),
             ..RecurrenceRule::new("monthly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -2245,11 +2241,8 @@ fn until_is_a_date_time_in_the_events_own_zone() {
         "RRULE:FREQ=MONTHLY;UNTIL=20261231T090000Z"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0].until.as_deref(), Some("2026-12-31T09:00:00"));
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.until.as_deref(), Some("2026-12-31T09:00:00"));
 }
 
 #[test]
@@ -2262,18 +2255,18 @@ fn an_all_day_events_until_is_a_date_like_its_start() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             until: Some("2026-12-31T00:00:00".to_owned()),
             ..RecurrenceRule::new("weekly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=WEEKLY;UNTIL=20261231");
 
     let read_back = ical_to_event(&ics).expect("parse");
-    let rules = read_back.recurrence_rules.expect("a rule came back");
-    assert_eq!(rules[0].until.as_deref(), Some("2026-12-31T00:00:00"));
+    let rules = read_back.recurrence_rule.expect("a rule came back");
+    assert_eq!(rules.until.as_deref(), Some("2026-12-31T00:00:00"));
 }
 
 #[test]
@@ -2286,10 +2279,10 @@ fn an_all_day_event_whose_recurrence_ends_at_a_time_stays_a_date_time() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             until: Some("2026-12-31T09:00:00".to_owned()),
             ..RecurrenceRule::new("weekly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -2305,7 +2298,7 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
     // An UNTIL that cannot be rendered used to be left off the RRULE, which
     // turns a recurrence that ends into one that never does — an event repeated
     // into every week of the user's calendar for ever. Showing the rule not at
-    // all is the smaller lie, and the save path is told so: recurrenceRules is
+    // all is the smaller lie, and the save path is told so: recurrenceRule is
     // patched only when every rule the server holds survives the trip.
     for until in ["2026-13-31T09:00:00", "whenever", "2026-02-30T09:00:00"] {
         let rule = RecurrenceRule {
@@ -2315,7 +2308,7 @@ fn a_rule_whose_until_cannot_be_written_is_dropped_rather_than_left_unbounded() 
         assert!(!maps_recurrence_rule(&rule), "{until}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert!(without(&event_to_ical(&event), "RRULE"), "{until}");
@@ -2349,14 +2342,14 @@ fn a_zoned_rules_utc_until_is_not_taken_for_a_local_time() {
     );
     let rules = ical_to_event(ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
-    assert_ne!(rules[0].until.as_deref(), Some("2026-09-01T07:00:00"));
+    assert_ne!(rules.until.as_deref(), Some("2026-09-01T07:00:00"));
     // Converting it would need a zone database this crate deliberately does not
     // carry, so the rule is one the save path must leave alone: the server's own
     // `until` stays where it is rather than being moved by an edit that never
     // touched the recurrence.
-    assert!(!maps_recurrence_rule(&rules[0]));
+    assert!(!maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -2403,10 +2396,10 @@ fn a_utc_until_is_read_as_local_wherever_the_two_are_the_same_instant() {
         let ics = zoned(dtstart, until);
         let rules = ical_to_event(&ics)
             .expect("parse")
-            .recurrence_rules
+            .recurrence_rule
             .expect("a rule came back");
-        assert_eq!(rules[0].until.as_deref(), Some(read), "{dtstart}");
-        assert!(maps_recurrence_rule(&rules[0]), "{dtstart}");
+        assert_eq!(rules.until.as_deref(), Some(read), "{dtstart}");
+        assert!(maps_recurrence_rule(&rules), "{dtstart}");
     }
 }
 
@@ -2484,14 +2477,14 @@ fn a_zoned_rules_utc_until_is_converted_through_the_documents_own_vtimezone() {
 
             let rules = ical_to_event(&ics)
                 .expect("parse")
-                .recurrence_rules
+                .recurrence_rule
                 .expect("a rule came back");
 
-            assert_eq!(rules[0].until.as_deref(), Some(read), "{until} in {tzid}");
+            assert_eq!(rules.until.as_deref(), Some(read), "{until} in {tzid}");
             // Which is the point of the conversion: the rule can now be sent,
             // where before it was kept verbatim and the save path had to leave
-            // `recurrenceRules` alone — or refuse the create outright.
-            assert!(maps_recurrence_rule(&rules[0]), "{until} in {tzid}");
+            // `recurrenceRule` alone — or refuse the create outright.
+            assert!(maps_recurrence_rule(&rules), "{until} in {tzid}");
         }
     }
 
@@ -2510,8 +2503,8 @@ fn a_zoned_rules_utc_until_is_converted_through_the_documents_own_vtimezone() {
         "{ics}"
     );
     assert_eq!(
-        ical_to_event(&ics).expect("parse").recurrence_rules,
-        event.recurrence_rules
+        ical_to_event(&ics).expect("parse").recurrence_rule,
+        event.recurrence_rule
     );
 }
 
@@ -2526,11 +2519,11 @@ fn a_series_end_no_zone_could_state_is_the_one_thing_a_refusal_can_quote() {
     let named_and_not_defined = recurring_in("Europe/Berlin", "", "20260331T120000Z");
     let rules = ical_to_event(&named_and_not_defined)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
-    assert!(!maps_recurrence_rule(&rules[0]));
+    assert!(!maps_recurrence_rule(&rules));
     assert_eq!(
-        unstateable_until(&rules[0]),
+        unstateable_until(&rules),
         Some("2026-03-31T12:00:00Z"),
         "the instant kept verbatim is what the user gets told about"
     );
@@ -2544,10 +2537,10 @@ fn a_series_end_no_zone_could_state_is_the_one_thing_a_refusal_can_quote() {
     );
     let rules = ical_to_event(&defined)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
-    assert!(maps_recurrence_rule(&rules[0]));
-    assert_eq!(unstateable_until(&rules[0]), None);
+    assert!(maps_recurrence_rule(&rules));
+    assert_eq!(unstateable_until(&rules), None);
 
     // And a rule refused for a reason that is not its end reports none either,
     // so a caller cannot phrase an unrelated refusal as a time-zone problem.
@@ -2561,10 +2554,10 @@ fn a_series_end_no_zone_could_state_is_the_one_thing_a_refusal_can_quote() {
          END:VCALENDAR\r\n";
     let rules = ical_to_event(leap_month)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
-    assert!(!maps_recurrence_rule(&rules[0]));
-    assert_eq!(unstateable_until(&rules[0]), None);
+    assert!(!maps_recurrence_rule(&rules));
+    assert_eq!(unstateable_until(&rules), None);
 }
 
 #[test]
@@ -2606,11 +2599,11 @@ fn a_summer_that_began_last_year_is_still_the_offset_in_force() {
 
         let rules = ical_to_event(&ics)
             .expect("parse")
-            .recurrence_rules
+            .recurrence_rule
             .expect("a rule came back");
 
-        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
-        assert!(maps_recurrence_rule(&rules[0]), "{until}");
+        assert_eq!(rules.until.as_deref(), Some(read), "{until}");
+        assert!(maps_recurrence_rule(&rules), "{until}");
     }
 }
 
@@ -2631,11 +2624,11 @@ fn a_zone_of_one_observance_states_the_offset_it_never_moves_from() {
 
     let rules = ical_to_event(&ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
 
-    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T17:30:00"));
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(rules.until.as_deref(), Some("2026-03-31T17:30:00"));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -2672,10 +2665,10 @@ fn a_transition_the_zone_lists_by_date_counts_like_any_other() {
 
         let rules = ical_to_event(&ics)
             .expect("parse")
-            .recurrence_rules
+            .recurrence_rule
             .expect("a rule came back");
 
-        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
+        assert_eq!(rules.until.as_deref(), Some(read), "{until}");
     }
 }
 
@@ -2717,11 +2710,11 @@ fn a_transition_rule_that_has_stopped_stops_being_counted() {
 
     let rules = ical_to_event(&ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
 
-    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T15:00:00"));
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(rules.until.as_deref(), Some("2026-03-31T15:00:00"));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -2767,11 +2760,11 @@ fn a_transition_named_by_a_weekday_and_a_run_of_dates_is_counted() {
 
         let rules = ical_to_event(&ics)
             .expect("parse")
-            .recurrence_rules
+            .recurrence_rule
             .expect("a rule came back");
 
-        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
-        assert!(maps_recurrence_rule(&rules[0]), "{until}");
+        assert_eq!(rules.until.as_deref(), Some(read), "{until}");
+        assert!(maps_recurrence_rule(&rules), "{until}");
     }
 }
 
@@ -2819,11 +2812,11 @@ fn a_transition_rule_that_skips_years_is_searched_for_further_back_than_two() {
 
     let rules = ical_to_event(&ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
 
-    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T13:00:00"));
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(rules.until.as_deref(), Some("2026-03-31T13:00:00"));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -2845,11 +2838,11 @@ fn a_rule_the_search_found_no_occurrence_of_is_refused_rather_than_read_as_silen
 
     let rules = ical_to_event(&ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
 
-    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T12:00:00Z"));
-    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(rules.until.as_deref(), Some("2026-03-31T12:00:00Z"));
+    assert!(!maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -2878,11 +2871,11 @@ fn an_observance_moving_off_a_sub_minute_offset_west_of_utc_still_describes_the_
 
     let rules = ical_to_event(&ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
 
-    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T12:00:00"));
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(rules.until.as_deref(), Some("2026-03-31T12:00:00"));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -2930,11 +2923,11 @@ fn a_transition_rule_naming_the_start_of_its_workweek_is_counted_all_the_same() 
 
         let rules = ical_to_event(&ics)
             .expect("parse")
-            .recurrence_rules
+            .recurrence_rule
             .expect("a rule came back");
 
-        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
-        assert!(maps_recurrence_rule(&rules[0]), "{until}");
+        assert_eq!(rules.until.as_deref(), Some(read), "{until}");
+        assert!(maps_recurrence_rule(&rules), "{until}");
     }
 }
 
@@ -2972,11 +2965,11 @@ fn a_transition_rule_stating_its_own_time_of_day_is_counted() {
 
         let rules = ical_to_event(&ics)
             .expect("parse")
-            .recurrence_rules
+            .recurrence_rule
             .expect("a rule came back");
 
-        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
-        assert!(maps_recurrence_rule(&rules[0]), "{until}");
+        assert_eq!(rules.until.as_deref(), Some(read), "{until}");
+        assert!(maps_recurrence_rule(&rules), "{until}");
     }
 }
 
@@ -3029,11 +3022,11 @@ fn a_time_of_day_the_rule_states_is_the_one_the_transition_happens_at() {
 
         let rules = ical_to_event(&ics)
             .expect("parse")
-            .recurrence_rules
+            .recurrence_rule
             .expect("a rule came back");
 
-        assert_eq!(rules[0].until.as_deref(), Some(read), "{until}");
-        assert!(maps_recurrence_rule(&rules[0]), "{until}");
+        assert_eq!(rules.until.as_deref(), Some(read), "{until}");
+        assert!(maps_recurrence_rule(&rules), "{until}");
     }
 }
 
@@ -3051,11 +3044,11 @@ fn a_rule_stating_more_than_one_time_of_day_is_refused() {
 
     let rules = ical_to_event(&ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
 
-    assert_eq!(rules[0].until.as_deref(), Some("2026-03-29T01:00:00Z"));
-    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(rules.until.as_deref(), Some("2026-03-29T01:00:00Z"));
+    assert!(!maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -3084,15 +3077,15 @@ fn a_time_of_day_outside_the_range_it_is_stated_in_is_refused() {
 
         let rules = ical_to_event(&ics)
             .expect("parse")
-            .recurrence_rules
+            .recurrence_rule
             .expect("a rule came back");
 
         assert_eq!(
-            rules[0].until.as_deref(),
+            rules.until.as_deref(),
             Some("2026-03-29T01:00:00Z"),
             "{rule}"
         );
-        assert!(!maps_recurrence_rule(&rules[0]), "{rule}");
+        assert!(!maps_recurrence_rule(&rules), "{rule}");
     }
 }
 
@@ -3116,11 +3109,11 @@ fn a_weekday_and_a_run_of_dates_naming_two_of_them_is_refused() {
 
     let rules = ical_to_event(&ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
 
-    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T12:00:00Z"));
-    assert!(!maps_recurrence_rule(&rules[0]));
+    assert_eq!(rules.until.as_deref(), Some("2026-03-31T12:00:00Z"));
+    assert!(!maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -3143,11 +3136,11 @@ fn a_year_a_transition_rule_does_not_happen_in_is_a_year_it_does_not_happen_in()
 
     let rules = ical_to_event(&ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
 
-    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T13:00:00"));
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert_eq!(rules.until.as_deref(), Some("2026-03-31T13:00:00"));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -3173,22 +3166,22 @@ fn a_zone_whose_transitions_cannot_be_worked_out_leaves_the_until_alone() {
 
         let rules = ical_to_event(&ics)
             .expect("parse")
-            .recurrence_rules
+            .recurrence_rule
             .expect("a rule came back");
 
         assert_eq!(
-            rules[0].until.as_deref(),
+            rules.until.as_deref(),
             Some("2026-03-31T12:00:00Z"),
             "{rule}"
         );
-        assert!(!maps_recurrence_rule(&rules[0]), "{rule}");
+        assert!(!maps_recurrence_rule(&rules), "{rule}");
     }
 }
 
 #[test]
 fn a_rule_with_unmodeled_parts_is_flagged_rather_than_silently_narrowed() {
     // `rscale` & friends ride in `extra` and do not survive the trip through
-    // iCalendar, so the save path must not patch recurrenceRules for them. (It
+    // iCalendar, so the save path must not patch recurrenceRule for them. (It
     // has an iCalendar spelling of its own, RFC 7529's `RSCALE`, which neither
     // this mapping nor libical carries — a rule counted in another calendar
     // drawn as a Gregorian one repeats on the wrong days entirely.)
@@ -3204,11 +3197,11 @@ fn a_weekly_rule_names_the_days_it_repeats_on() {
     // to start, which is the wrong day for every Monday-and-Thursday standup
     // created anywhere but on a Monday.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_day: Some(vec![NDay::new("mo"), NDay::new("th")]),
             count: Some(6),
             ..RecurrenceRule::new("weekly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -3217,16 +3210,13 @@ fn a_weekly_rule_names_the_days_it_repeats_on() {
         "RRULE:FREQ=WEEKLY;COUNT=6;BYDAY=MO,TH"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
     assert_eq!(
-        rules[0].by_day.as_deref(),
+        rules.by_day.as_deref(),
         Some(&[NDay::new("mo"), NDay::new("th")][..])
     );
     // Which is what tells the save path it may write the property back.
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -3244,21 +3234,18 @@ fn a_monthly_rule_names_which_of_those_days_it_means() {
         },
     ];
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_day: Some(days.clone()),
             ..RecurrenceRule::new("monthly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=MONTHLY;BYDAY=2WE,-1FR");
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0].by_day.as_deref(), Some(&days[..]));
-    assert!(maps_recurrence_rule(&rules[0]));
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.by_day.as_deref(), Some(&days[..]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -3276,10 +3263,10 @@ fn reads_the_days_off_a_rule_written_by_hand() {
     );
     let rules = ical_to_event(ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
     assert_eq!(
-        rules[0].by_day.as_deref(),
+        rules.by_day.as_deref(),
         Some(
             &[NDay {
                 nth_of_period: Some(3),
@@ -3309,7 +3296,7 @@ fn an_ordinal_weekday_is_refused_where_the_recurrence_has_no_period_to_count_in(
         assert!(!maps_recurrence_rule(&rule), "{frequency}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         let ics = event_to_ical(&event);
@@ -3352,7 +3339,7 @@ fn a_day_no_weekday_names_is_flagged_rather_than_written() {
         assert!(!maps_recurrence_rule(&rule), "{days:?}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -3369,11 +3356,11 @@ fn a_monthly_rule_names_the_days_of_the_month_it_repeats_on() {
     // Wednesday" but "the 15th", and RFC 8984 §4.3.3's negative value for the
     // last day of the month, whichever day of the week that lands on.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_month_day: Some(vec![15, -1]),
             count: Some(6),
             ..RecurrenceRule::new("monthly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -3382,13 +3369,10 @@ fn a_monthly_rule_names_the_days_of_the_month_it_repeats_on() {
         "RRULE:FREQ=MONTHLY;COUNT=6;BYMONTHDAY=15,-1"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0].by_month_day.as_deref(), Some(&[15, -1][..]));
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.by_month_day.as_deref(), Some(&[15, -1][..]));
     // Which is what tells the save path it may write the property back.
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -3396,11 +3380,11 @@ fn the_days_of_the_month_are_written_after_the_days_of_the_week() {
     // Both parts at once, in the order libical writes them, so that a rule read
     // back out of EDS's own cache compares equal to the one that went in.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_day: Some(vec![NDay::new("we")]),
             by_month_day: Some(vec![15]),
             ..RecurrenceRule::new("yearly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     assert_eq!(
@@ -3422,9 +3406,9 @@ fn reads_the_days_of_the_month_off_a_rule_written_by_hand() {
         "END:VEVENT\r\n",
         "END:VCALENDAR\r\n",
     );
-    let rules = ical_to_event(ics).expect("parse").recurrence_rules.unwrap();
-    assert_eq!(rules[0].by_month_day.as_deref(), Some(&[1, -31][..]));
-    assert!(maps_recurrence_rule(&rules[0]));
+    let rules = ical_to_event(ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.by_month_day.as_deref(), Some(&[1, -31][..]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -3440,7 +3424,7 @@ fn days_of_the_month_are_refused_where_a_week_is_the_period() {
     assert!(!maps_recurrence_rule(&rule));
 
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![rule]),
+        recurrence_rule: Some(rule),
         ..CalendarEvent::default()
     };
     assert_eq!(line(&event_to_ical(&event), "RRULE:"), "RRULE:FREQ=WEEKLY");
@@ -3460,7 +3444,7 @@ fn a_day_no_month_has_is_flagged_rather_than_written() {
         assert!(!maps_recurrence_rule(&rule), "{days:?}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -3493,9 +3477,9 @@ fn a_day_of_the_month_a_hand_written_rule_invents_is_not_written_back() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].by_month_day.as_deref(), Some(&[15, 32][..]));
-    assert!(!maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.by_month_day.as_deref(), Some(&[15, 32][..]));
+    assert!(!maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=MONTHLY",
@@ -3509,11 +3493,11 @@ fn a_yearly_rule_names_the_days_of_the_year_it_repeats_on() {
     // iCalendar's `BYYEARDAY`, whose negative value counts back from the end of
     // the year the way `byMonthDay`'s does from the end of the month.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_year_day: Some(vec![1, -1]),
             count: Some(4),
             ..RecurrenceRule::new("yearly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -3522,13 +3506,10 @@ fn a_yearly_rule_names_the_days_of_the_year_it_repeats_on() {
         "RRULE:FREQ=YEARLY;COUNT=4;BYYEARDAY=1,-1"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0].by_year_day.as_deref(), Some(&[1, -1][..]));
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.by_year_day.as_deref(), Some(&[1, -1][..]));
     // Which is what tells the save path it may write the property back.
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -3537,13 +3518,13 @@ fn the_days_of_the_year_are_written_after_the_days_of_the_month() {
     // `BYYEARDAY` between `BYMONTHDAY` and `BYMONTH` — so that a rule read back
     // out of EDS's own cache compares equal to the one that went in.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_day: Some(vec![NDay::new("we")]),
             by_month_day: Some(vec![15]),
             by_year_day: Some(vec![100]),
             by_month: Some(vec!["3".to_owned()]),
             ..RecurrenceRule::new("yearly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     assert_eq!(
@@ -3566,9 +3547,9 @@ fn reads_the_days_of_the_year_off_a_rule_written_by_hand() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].by_year_day.as_deref(), Some(&[1, -366][..]));
-    assert!(maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.by_year_day.as_deref(), Some(&[1, -366][..]));
+    assert!(maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=YEARLY;BYYEARDAY=1,-366"
@@ -3589,7 +3570,7 @@ fn days_of_the_year_are_refused_where_the_period_is_shorter_than_one() {
         assert!(!maps_recurrence_rule(&rule), "{frequency}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -3608,10 +3589,10 @@ fn a_day_of_the_year_is_carried_at_a_frequency_shorter_than_a_day() {
     // three frequencies the RFC excludes rather than allowing `YEARLY` alone.
     for frequency in ["hourly", "minutely", "secondly", "yearly"] {
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![RecurrenceRule {
+            recurrence_rule: Some(RecurrenceRule {
                 by_year_day: Some(vec![100]),
                 ..RecurrenceRule::new(frequency)
-            }]),
+            }),
             ..CalendarEvent::default()
         };
         let ics = event_to_ical(&event);
@@ -3619,11 +3600,8 @@ fn a_day_of_the_year_is_carried_at_a_frequency_shorter_than_a_day() {
             line(&ics, "RRULE:").ends_with(";BYYEARDAY=100"),
             "{frequency}"
         );
-        let rules = ical_to_event(&ics)
-            .expect("parse")
-            .recurrence_rules
-            .unwrap();
-        assert!(maps_recurrence_rule(&rules[0]), "{frequency}");
+        let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+        assert!(maps_recurrence_rule(&rules), "{frequency}");
     }
 }
 
@@ -3641,7 +3619,7 @@ fn a_day_no_year_has_is_flagged_rather_than_written() {
         assert!(!maps_recurrence_rule(&rule), "{days:?}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -3668,9 +3646,9 @@ fn a_day_of_the_year_a_hand_written_rule_invents_is_not_written_back() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].by_year_day.as_deref(), Some(&[100, 367][..]));
-    assert!(!maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.by_year_day.as_deref(), Some(&[100, 367][..]));
+    assert!(!maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=YEARLY",
@@ -3684,11 +3662,11 @@ fn a_yearly_rule_names_the_months_it_repeats_in() {
     // `BYMONTH`. JSCalendar holds each month as a string; the numbers 1 to 12 of
     // the Gregorian calendar are spelled the same in both formats.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_month: Some(vec!["3".to_owned(), "9".to_owned()]),
             count: Some(4),
             ..RecurrenceRule::new("yearly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -3697,16 +3675,13 @@ fn a_yearly_rule_names_the_months_it_repeats_in() {
         "RRULE:FREQ=YEARLY;COUNT=4;BYMONTH=3,9"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
     assert_eq!(
-        rules[0].by_month.as_deref(),
+        rules.by_month.as_deref(),
         Some(&["3".to_owned(), "9".to_owned()][..])
     );
     // Which is what tells the save path it may write the property back.
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -3715,12 +3690,12 @@ fn the_months_are_written_after_the_days_of_the_month() {
     // — `BYMONTH` last — so that a rule read back out of EDS's own cache
     // compares equal to the one that went in.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_day: Some(vec![NDay::new("we")]),
             by_month_day: Some(vec![15]),
             by_month: Some(vec!["3".to_owned()]),
             ..RecurrenceRule::new("yearly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     assert_eq!(
@@ -3737,19 +3712,16 @@ fn a_month_is_carried_at_any_frequency() {
     // frequency gate here, and a weekly rule keeps its months.
     for frequency in ["daily", "weekly", "monthly", "yearly"] {
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![RecurrenceRule {
+            recurrence_rule: Some(RecurrenceRule {
                 by_month: Some(vec!["1".to_owned()]),
                 ..RecurrenceRule::new(frequency)
-            }]),
+            }),
             ..CalendarEvent::default()
         };
         let ics = event_to_ical(&event);
         assert!(line(&ics, "RRULE:").ends_with(";BYMONTH=1"), "{frequency}");
-        let rules = ical_to_event(&ics)
-            .expect("parse")
-            .recurrence_rules
-            .unwrap();
-        assert!(maps_recurrence_rule(&rules[0]), "{frequency}");
+        let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+        assert!(maps_recurrence_rule(&rules), "{frequency}");
     }
 }
 
@@ -3769,12 +3741,12 @@ fn reads_the_months_off_a_rule_written_by_hand() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
+    let rules = event.recurrence_rule.as_ref().unwrap();
     assert_eq!(
-        rules[0].by_month.as_deref(),
+        rules.by_month.as_deref(),
         Some(&["3".to_owned(), "12".to_owned()][..])
     );
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert!(maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=YEARLY;BYMONTH=3,12"
@@ -3810,7 +3782,7 @@ fn a_month_no_year_has_is_flagged_rather_than_written() {
         assert!(!maps_recurrence_rule(&rule), "{months:?}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -3835,7 +3807,7 @@ fn a_leap_month_is_flagged_rather_than_written() {
     assert!(!maps_recurrence_rule(&rule));
 
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![rule]),
+        recurrence_rule: Some(rule),
         ..CalendarEvent::default()
     };
     assert_eq!(line(&event_to_ical(&event), "RRULE:"), "RRULE:FREQ=YEARLY");
@@ -3858,8 +3830,8 @@ fn a_month_a_hand_written_rule_invents_is_not_written_back() {
              END:VCALENDAR\r\n"
         );
         let event = ical_to_event(&ics).expect("parse");
-        let rules = event.recurrence_rules.as_deref().unwrap();
-        assert!(!maps_recurrence_rule(&rules[0]), "{value}");
+        let rules = event.recurrence_rule.as_ref().unwrap();
+        assert!(!maps_recurrence_rule(rules), "{value}");
         assert_eq!(
             line(&event_to_ical(&event), "RRULE:"),
             "RRULE:FREQ=YEARLY",
@@ -3876,12 +3848,12 @@ fn a_weekly_rule_names_the_day_its_weeks_start_on() {
     // fortnightly series begins, so the same `BYDAY` counted from Monday and from
     // Sunday produces different dates.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             interval: Some(2),
             by_day: Some(vec![NDay::new("tu")]),
             first_day_of_week: Some("su".to_owned()),
             ..RecurrenceRule::new("weekly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -3890,13 +3862,10 @@ fn a_weekly_rule_names_the_day_its_weeks_start_on() {
         "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;WKST=SU"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0].first_day_of_week.as_deref(), Some("su"));
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.first_day_of_week.as_deref(), Some("su"));
     // Which is what tells the save path it may write the property back.
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -3905,14 +3874,14 @@ fn the_day_the_week_starts_on_is_written_last() {
     // them — `WKST` after `BYMONTH`, last of all — so that a rule read back out
     // of EDS's own cache compares equal to the one that went in.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_day: Some(vec![NDay::new("we")]),
             by_month_day: Some(vec![15]),
             by_year_day: Some(vec![100]),
             by_month: Some(vec!["3".to_owned()]),
             first_day_of_week: Some("su".to_owned()),
             ..RecurrenceRule::new("yearly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     assert_eq!(
@@ -3937,16 +3906,13 @@ fn a_week_starting_on_monday_is_left_off_the_rule() {
     assert!(maps_recurrence_rule(&rule));
 
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![rule]),
+        recurrence_rule: Some(rule),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=WEEKLY");
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0].first_day_of_week, None);
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.first_day_of_week, None);
 }
 
 #[test]
@@ -3957,24 +3923,21 @@ fn the_day_the_week_starts_on_is_carried_at_any_frequency() {
     // gate: the day the server named is carried as it came.
     for frequency in ["daily", "weekly", "monthly", "yearly"] {
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![RecurrenceRule {
+            recurrence_rule: Some(RecurrenceRule {
                 first_day_of_week: Some("su".to_owned()),
                 ..RecurrenceRule::new(frequency)
-            }]),
+            }),
             ..CalendarEvent::default()
         };
         let ics = event_to_ical(&event);
         assert!(line(&ics, "RRULE:").ends_with(";WKST=SU"), "{frequency}");
-        let rules = ical_to_event(&ics)
-            .expect("parse")
-            .recurrence_rules
-            .unwrap();
+        let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
         assert_eq!(
-            rules[0].first_day_of_week.as_deref(),
+            rules.first_day_of_week.as_deref(),
             Some("su"),
             "{frequency}"
         );
-        assert!(maps_recurrence_rule(&rules[0]), "{frequency}");
+        assert!(maps_recurrence_rule(&rules), "{frequency}");
     }
 }
 
@@ -3992,10 +3955,10 @@ fn every_day_of_the_week_can_start_one() {
         ("su", "SU"),
     ] {
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![RecurrenceRule {
+            recurrence_rule: Some(RecurrenceRule {
                 first_day_of_week: Some(day.to_owned()),
                 ..RecurrenceRule::new("weekly")
-            }]),
+            }),
             ..CalendarEvent::default()
         };
         let ics = event_to_ical(&event);
@@ -4003,11 +3966,8 @@ fn every_day_of_the_week_can_start_one() {
             line(&ics, "RRULE:"),
             format!("RRULE:FREQ=WEEKLY;WKST={token}")
         );
-        let rules = ical_to_event(&ics)
-            .expect("parse")
-            .recurrence_rules
-            .unwrap();
-        assert_eq!(rules[0].first_day_of_week.as_deref(), Some(day), "{day}");
+        let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+        assert_eq!(rules.first_day_of_week.as_deref(), Some(day), "{day}");
     }
 }
 
@@ -4027,9 +3987,9 @@ fn reads_the_day_the_week_starts_on_off_a_rule_written_by_hand() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].first_day_of_week.as_deref(), Some("sa"));
-    assert!(maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.first_day_of_week.as_deref(), Some("sa"));
+    assert!(maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=WEEKLY;WKST=SA"
@@ -4058,7 +4018,7 @@ fn a_day_no_week_starts_on_is_flagged_rather_than_written() {
         assert!(!maps_recurrence_rule(&rule), "{day}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -4080,12 +4040,12 @@ fn a_yearly_rule_names_the_weeks_of_the_year_it_repeats_in() {
     // name different days. That day is modeled now, which is what makes this part
     // safe to carry at all.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_week_no: Some(vec![1, -1]),
             first_day_of_week: Some("su".to_owned()),
             count: Some(4),
             ..RecurrenceRule::new("yearly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -4094,13 +4054,10 @@ fn a_yearly_rule_names_the_weeks_of_the_year_it_repeats_in() {
         "RRULE:FREQ=YEARLY;COUNT=4;BYWEEKNO=1,-1;WKST=SU"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0].by_week_no.as_deref(), Some(&[1, -1][..]));
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.by_week_no.as_deref(), Some(&[1, -1][..]));
     // Which is what tells the save path it may write the property back.
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -4122,7 +4079,7 @@ fn the_weeks_of_the_year_are_written_after_the_days_of_the_year() {
         ..RecurrenceRule::new("yearly")
     };
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![rule.clone()]),
+        recurrence_rule: Some(rule.clone()),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -4133,11 +4090,8 @@ fn the_weeks_of_the_year_are_written_after_the_days_of_the_year() {
 
     // And the fold survives the trip back: every part arrives as it left, so a
     // save comparing the two sees no edit.
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0], rule);
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules, rule);
 }
 
 #[test]
@@ -4155,9 +4109,9 @@ fn reads_the_weeks_of_the_year_off_a_rule_written_by_hand() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].by_week_no.as_deref(), Some(&[1, -53][..]));
-    assert!(maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.by_week_no.as_deref(), Some(&[1, -53][..]));
+    assert!(maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=YEARLY;BYWEEKNO=1,-53"
@@ -4183,7 +4137,7 @@ fn weeks_of_the_year_are_refused_at_every_frequency_but_yearly() {
         assert!(!maps_recurrence_rule(&rule), "{frequency}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -4212,7 +4166,7 @@ fn a_week_no_year_has_is_flagged_rather_than_written() {
         assert!(!maps_recurrence_rule(&rule), "{weeks:?}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -4239,9 +4193,9 @@ fn a_week_of_the_year_a_hand_written_rule_invents_is_not_written_back() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].by_week_no.as_deref(), Some(&[20, 54][..]));
-    assert!(!maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.by_week_no.as_deref(), Some(&[20, 54][..]));
+    assert!(!maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=YEARLY",
@@ -4259,12 +4213,12 @@ fn a_monthly_rule_names_which_occurrence_of_the_set_it_takes() {
     // `BYDAY=FR;BYSETPOS=-1` and `BYDAY=-1FR` name the same Fridays, but a server
     // is entitled to spell it either way and only one of them was carried before.
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_day: Some(vec![NDay::new("fr")]),
             by_set_position: Some(vec![-1]),
             count: Some(4),
             ..RecurrenceRule::new("monthly")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -4273,13 +4227,10 @@ fn a_monthly_rule_names_which_occurrence_of_the_set_it_takes() {
         "RRULE:FREQ=MONTHLY;COUNT=4;BYDAY=FR;BYSETPOS=-1"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0].by_set_position.as_deref(), Some(&[-1][..]));
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.by_set_position.as_deref(), Some(&[-1][..]));
     // Which is what tells the save path it may write the property back.
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -4298,7 +4249,7 @@ fn the_position_in_the_set_is_written_after_the_months() {
         ..RecurrenceRule::new("yearly")
     };
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![rule.clone()]),
+        recurrence_rule: Some(rule.clone()),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -4308,11 +4259,8 @@ fn the_position_in_the_set_is_written_after_the_months() {
          BYMONTH=3;BYSETPOS=2;WKST=SU"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0], rule);
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules, rule);
 }
 
 #[test]
@@ -4329,9 +4277,9 @@ fn reads_the_position_in_the_set_off_a_rule_written_by_hand() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].by_set_position.as_deref(), Some(&[1, -1][..]));
-    assert!(maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.by_set_position.as_deref(), Some(&[1, -1][..]));
+    assert!(maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1,-1"
@@ -4362,7 +4310,7 @@ fn a_position_with_nothing_to_select_from_is_flagged_rather_than_written() {
         assert!(!maps_recurrence_rule(&rule), "{rule:?}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule.clone()]),
+            recurrence_rule: Some(rule.clone()),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -4392,7 +4340,7 @@ fn a_position_no_set_has_is_flagged_rather_than_written() {
         assert!(!maps_recurrence_rule(&rule), "{positions:?}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -4419,9 +4367,9 @@ fn a_position_a_hand_written_rule_invents_is_not_written_back() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].by_set_position.as_deref(), Some(&[1, 367][..]));
-    assert!(!maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.by_set_position.as_deref(), Some(&[1, 367][..]));
+    assert!(!maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=MONTHLY;BYDAY=FR",
@@ -4439,20 +4387,17 @@ fn carries_the_hours_of_the_day_a_rule_repeats_at() {
         ..RecurrenceRule::new("daily")
     };
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![rule.clone()]),
+        recurrence_rule: Some(rule.clone()),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=DAILY;BYHOUR=9,17");
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0].by_hour.as_deref(), Some(&[9, 17][..]));
-    assert_eq!(rules[0], rule);
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.by_hour.as_deref(), Some(&[9, 17][..]));
+    assert_eq!(rules, rule);
     // Which is what tells the save path it may write the property back.
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -4477,7 +4422,7 @@ fn the_times_of_day_are_written_before_every_other_part() {
         ..RecurrenceRule::new("yearly")
     };
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![rule.clone()]),
+        recurrence_rule: Some(rule.clone()),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -4487,11 +4432,8 @@ fn the_times_of_day_are_written_before_every_other_part() {
          BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3;BYSETPOS=2;WKST=SU"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0], rule);
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules, rule);
 }
 
 #[test]
@@ -4510,9 +4452,9 @@ fn reads_the_hours_of_the_day_off_a_rule_written_by_hand() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].by_hour.as_deref(), Some(&[9, 17][..]));
-    assert!(maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.by_hour.as_deref(), Some(&[9, 17][..]));
+    assert!(maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=DAILY;BYHOUR=9,17;BYSETPOS=-1"
@@ -4540,7 +4482,7 @@ fn an_hour_no_day_has_is_flagged_rather_than_written() {
         assert!(!maps_recurrence_rule(&rule), "{hours:?}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -4566,8 +4508,8 @@ fn an_hour_a_hand_written_rule_invents_is_not_written_back() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert!(!maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert!(!maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=DAILY;BYDAY=FR",
@@ -4592,10 +4534,10 @@ fn an_all_day_event_whose_rule_names_hours_is_drawn_as_a_timed_one() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_hour: Some(vec![9]),
             ..RecurrenceRule::new("daily")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -4606,7 +4548,7 @@ fn an_all_day_event_whose_rule_names_hours_is_drawn_as_a_timed_one() {
     // here is not read back as the user having cleared it.
     let read_back = ical_to_event(&ics).expect("parse");
     assert_eq!(read_back.show_without_time, None);
-    assert_eq!(read_back.recurrence_rules, event.recurrence_rules);
+    assert_eq!(read_back.recurrence_rule, event.recurrence_rule);
 }
 
 #[test]
@@ -4619,17 +4561,17 @@ fn an_all_day_event_whose_hours_are_unwritable_stays_a_date() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_hour: Some(vec![24]),
             ..RecurrenceRule::new("daily")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
     assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=DAILY");
     assert!(!maps_recurrence_rule(
-        &event.recurrence_rules.as_ref().unwrap()[0]
+        event.recurrence_rule.as_ref().unwrap()
     ));
 }
 
@@ -4645,7 +4587,7 @@ fn carries_the_minutes_and_seconds_a_rule_repeats_at() {
         ..RecurrenceRule::new("hourly")
     };
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![rule.clone()]),
+        recurrence_rule: Some(rule.clone()),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -4654,15 +4596,12 @@ fn carries_the_minutes_and_seconds_a_rule_repeats_at() {
         "RRULE:FREQ=HOURLY;BYSECOND=0;BYMINUTE=0,30"
     );
 
-    let rules = ical_to_event(&ics)
-        .expect("parse")
-        .recurrence_rules
-        .unwrap();
-    assert_eq!(rules[0].by_minute.as_deref(), Some(&[0, 30][..]));
-    assert_eq!(rules[0].by_second.as_deref(), Some(&[0][..]));
-    assert_eq!(rules[0], rule);
+    let rules = ical_to_event(&ics).expect("parse").recurrence_rule.unwrap();
+    assert_eq!(rules.by_minute.as_deref(), Some(&[0, 30][..]));
+    assert_eq!(rules.by_second.as_deref(), Some(&[0][..]));
+    assert_eq!(rules, rule);
     // Which is what tells the save path it may write the property back.
-    assert!(maps_recurrence_rule(&rules[0]));
+    assert!(maps_recurrence_rule(&rules));
 }
 
 #[test]
@@ -4680,10 +4619,10 @@ fn reads_the_minutes_and_seconds_off_a_rule_written_by_hand() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].by_minute.as_deref(), Some(&[15, 45][..]));
-    assert_eq!(rules[0].by_second.as_deref(), Some(&[0, 30][..]));
-    assert!(maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.by_minute.as_deref(), Some(&[15, 45][..]));
+    assert_eq!(rules.by_second.as_deref(), Some(&[0, 30][..]));
+    assert!(maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=HOURLY;BYSECOND=0,30;BYMINUTE=15,45;BYSETPOS=-1"
@@ -4703,7 +4642,7 @@ fn the_sixtieth_second_is_written_and_the_sixtieth_minute_is_not() {
     };
     assert!(maps_recurrence_rule(&leap));
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![leap]),
+        recurrence_rule: Some(leap),
         ..CalendarEvent::default()
     };
     assert_eq!(
@@ -4735,7 +4674,7 @@ fn the_sixtieth_second_is_written_and_the_sixtieth_minute_is_not() {
         assert!(!maps_recurrence_rule(&rule), "{minutes:?} {seconds:?}");
 
         let event = CalendarEvent {
-            recurrence_rules: Some(vec![rule]),
+            recurrence_rule: Some(rule),
             ..CalendarEvent::default()
         };
         assert_eq!(
@@ -4769,10 +4708,10 @@ fn a_minute_a_hand_written_rule_invents_is_not_written_back() {
         "END:VCALENDAR\r\n",
     );
     let event = ical_to_event(ics).expect("parse");
-    let rules = event.recurrence_rules.as_deref().unwrap();
-    assert_eq!(rules[0].by_minute.as_deref(), Some(&[30, 60][..]));
-    assert_eq!(rules[0].by_second.as_deref(), Some(&[15, 61][..]));
-    assert!(!maps_recurrence_rule(&rules[0]));
+    let rules = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rules.by_minute.as_deref(), Some(&[30, 60][..]));
+    assert_eq!(rules.by_second.as_deref(), Some(&[15, 61][..]));
+    assert!(!maps_recurrence_rule(rules));
     assert_eq!(
         line(&event_to_ical(&event), "RRULE:"),
         "RRULE:FREQ=DAILY;BYDAY=FR",
@@ -4791,11 +4730,11 @@ fn an_all_day_event_whose_rule_names_minutes_is_drawn_as_a_timed_one() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_minute: Some(vec![30]),
             by_second: Some(vec![15]),
             ..RecurrenceRule::new("daily")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
@@ -4809,7 +4748,7 @@ fn an_all_day_event_whose_rule_names_minutes_is_drawn_as_a_timed_one() {
     // here is not read back as the user having cleared it.
     let read_back = ical_to_event(&ics).expect("parse");
     assert_eq!(read_back.show_without_time, None);
-    assert_eq!(read_back.recurrence_rules, event.recurrence_rules);
+    assert_eq!(read_back.recurrence_rule, event.recurrence_rule);
 }
 
 #[test]
@@ -4822,17 +4761,17 @@ fn an_all_day_event_whose_minutes_are_unwritable_stays_a_date() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             by_minute: Some(vec![60]),
             ..RecurrenceRule::new("daily")
-        }]),
+        }),
         ..CalendarEvent::default()
     };
     let ics = event_to_ical(&event);
     assert_eq!(line(&ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
     assert_eq!(line(&ics, "RRULE:"), "RRULE:FREQ=DAILY");
     assert!(!maps_recurrence_rule(
-        &event.recurrence_rules.as_ref().unwrap()[0]
+        event.recurrence_rule.as_ref().unwrap()
     ));
 }
 
@@ -4858,7 +4797,7 @@ fn recurring_with(overrides: Value) -> CalendarEvent {
         start: Some("2026-01-15T13:00:00".to_owned()),
         time_zone: Some("Europe/Berlin".to_owned()),
         duration: Some("PT1H".to_owned()),
-        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
         recurrence_overrides: Some(
             overrides
                 .as_object()
@@ -4953,7 +4892,7 @@ fn an_all_day_events_excluded_instance_is_a_date_like_its_start() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
         recurrence_overrides: Some(
             [("2026-01-29T00:00:00".to_owned(), json!({"excluded": true}))].into(),
         ),
@@ -4978,7 +4917,7 @@ fn an_all_day_event_whose_excluded_instance_has_a_time_stays_a_date_time() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
         recurrence_overrides: Some(
             [("2026-01-29T09:00:00".to_owned(), json!({"excluded": true}))].into(),
         ),
@@ -5165,7 +5104,7 @@ fn an_all_day_event_whose_instance_takes_a_zone_stays_a_date_time() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
         recurrence_overrides: Some(
             [(
                 "2026-01-29T00:00:00".to_owned(),
@@ -5323,7 +5262,7 @@ fn an_all_day_events_edited_instance_is_written_as_a_date() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
         recurrence_overrides: Some(
             [(
                 "2026-01-29T00:00:00".to_owned(),
@@ -5358,7 +5297,7 @@ fn an_all_day_event_whose_edited_instance_takes_a_time_stays_a_date_time() {
         start: Some("2026-01-15T00:00:00".to_owned()),
         duration: Some("P1D".to_owned()),
         show_without_time: Some(true),
-        recurrence_rules: Some(vec![RecurrenceRule::new("weekly")]),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
         recurrence_overrides: Some(
             [(
                 "2026-01-29T00:00:00".to_owned(),
@@ -6269,7 +6208,7 @@ fn an_observance_whose_until_cannot_be_read_costs_the_whole_zone() {
 /// recurrence that never ends — which the save path would then have patched over
 /// the server's, replacing an appointment that stops with one that repeats for
 /// ever. The unreadable value is kept instead, exactly as a zoned UTC instant
-/// is: it is no LocalDateTime, so the rule does not map and `recurrenceRules` is
+/// is: it is no LocalDateTime, so the rule does not map and `recurrenceRule` is
 /// left alone.
 #[test]
 fn a_rules_unreadable_until_is_kept_rather_than_read_as_no_end_at_all() {
@@ -6285,11 +6224,11 @@ fn a_rules_unreadable_until_is_kept_rather_than_read_as_no_end_at_all() {
         );
         let rules = ical_to_event(&ics)
             .expect("parse")
-            .recurrence_rules
+            .recurrence_rule
             .expect("a rule came back");
 
-        assert!(rules[0].until.is_some(), "{until}");
-        assert!(!maps_recurrence_rule(&rules[0]), "{until}");
+        assert!(rules.until.is_some(), "{until}");
+        assert!(!maps_recurrence_rule(&rules), "{until}");
     }
 }
 
@@ -6322,12 +6261,12 @@ fn an_until_no_parser_can_read_never_reaches_this_mapping() {
     );
     let rules = ical_to_event(ics)
         .expect("parse")
-        .recurrence_rules
+        .recurrence_rule
         .expect("a rule came back");
 
-    assert_eq!(rules[0].until, None, "no end survived the parser");
-    assert_eq!(rules[0].by_month, None, "nor the part written beside it");
-    assert_eq!(rules[0].frequency, "daily");
+    assert_eq!(rules.until, None, "no end survived the parser");
+    assert_eq!(rules.by_month, None, "nor the part written beside it");
+    assert_eq!(rules.frequency, "daily");
 }
 
 /// A zone the document *names* is left to the reader on the way back in, as it
@@ -6595,11 +6534,11 @@ fn instance_in_a_custom_zone() -> CalendarEvent {
         start: Some("2026-01-15T13:00:00".to_owned()),
         time_zone: Some("Europe/Berlin".to_owned()),
         duration: Some("PT1H".to_owned()),
-        recurrence_rules: serde_json::from_value(json!([{
+        recurrence_rule: serde_json::from_value(json!({
             "@type": "RecurrenceRule",
             "frequency": "weekly",
-        }]))
-        .expect("a list of recurrence rules"),
+        }))
+        .expect("a recurrence rule"),
         recurrence_overrides: serde_json::from_value(json!({
             "2026-01-22T13:00:00": {
                 "start": "2026-01-22T09:00:00",
@@ -6962,10 +6901,10 @@ fn a_value_that_is_no_offset_defines_no_zone() {
 #[test]
 fn an_instance_names_no_zone_the_series_did_not() {
     let event = CalendarEvent {
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             frequency: "daily".to_owned(),
             ..RecurrenceRule::default()
-        }]),
+        }),
         recurrence_overrides: serde_json::from_value(json!({
             "2026-01-16T13:00:00": {"timeZone": "/example.com/Elsewhere", "title": "Moved"},
         }))
@@ -8441,7 +8380,7 @@ fn event_with_unsupported_or_custom_alarm_action_drops_or_sanitizes_safely() {
 #[test]
 fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
     let mut event = fixture_event();
-    event.recurrence_rules = Some(vec![RecurrenceRule {
+    event.recurrence_rule = Some(RecurrenceRule {
         interval: Some(2),
         count: Some(8),
         by_day: Some(vec![
@@ -8455,7 +8394,7 @@ fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
             },
         ]),
         ..RecurrenceRule::new("weekly")
-    }]);
+    });
     event.recurrence_overrides = Some(
         [
             ("2026-08-17T09:00:00".to_owned(), json!({"excluded": true})),
@@ -8473,12 +8412,11 @@ fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
     assert!(ics.contains("EXDATE"), "missing EXDATE: {ics}");
 
     let parsed = ical_to_event(&ics).expect("parse");
-    let rules = parsed.recurrence_rules.expect("rules");
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].frequency, "weekly");
-    assert_eq!(rules[0].interval, Some(2));
-    assert_eq!(rules[0].count, Some(8));
-    let byday = rules[0].by_day.as_ref().expect("byday");
+    let rules = parsed.recurrence_rule.expect("rules");
+    assert_eq!(rules.frequency, "weekly");
+    assert_eq!(rules.interval, Some(2));
+    assert_eq!(rules.count, Some(8));
+    let byday = rules.by_day.as_ref().expect("byday");
     assert_eq!(byday.len(), 2);
     assert_eq!(byday[0].day, "mo");
     assert_eq!(byday[1].day, "fr");
@@ -8492,10 +8430,10 @@ fn event_with_complex_rrule_and_exdates_roundtrips_faithfully() {
 #[test]
 fn recurring_event_with_instance_overrides_emits_multiple_vevents_with_recurrence_id() {
     let mut event = fixture_event();
-    event.recurrence_rules = Some(vec![RecurrenceRule {
+    event.recurrence_rule = Some(RecurrenceRule {
         interval: Some(1),
         ..RecurrenceRule::new("daily")
-    }]);
+    });
     event.recurrence_overrides = Some(
         [(
             "2026-08-15T09:00:00".to_owned(),
@@ -8650,11 +8588,10 @@ fn maps_created_updated_and_rdate_series_faithfully() {
     assert_eq!(event.time_zone.as_deref(), Some("Etc/UTC"));
     assert_eq!(event.duration.as_deref(), Some("PT1H"));
 
-    let rules = event.recurrence_rules.as_ref().expect("rules");
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].frequency, "weekly");
-    assert_eq!(rules[0].interval, Some(2));
-    assert_eq!(rules[0].count, Some(5));
+    let rules = event.recurrence_rule.as_ref().expect("rules");
+    assert_eq!(rules.frequency, "weekly");
+    assert_eq!(rules.interval, Some(2));
+    assert_eq!(rules.count, Some(5));
 
     let rendered = event_to_ical(&event);
     assert!(rendered.contains("SUMMARY:Architecture Sync"), "{rendered}");
@@ -8665,7 +8602,7 @@ fn maps_created_updated_and_rdate_series_faithfully() {
 
     let back = ical_to_event(&rendered).expect("roundtrip");
     assert_eq!(back.title, event.title);
-    assert_eq!(back.recurrence_rules, event.recurrence_rules);
+    assert_eq!(back.recurrence_rule, event.recurrence_rule);
 }
 
 #[test]
@@ -8950,13 +8887,13 @@ fn emits_a_comprehensive_icalendar_via_calcard_and_roundtrips() {
         keywords: Some(keywords),
         participants: Some(participants),
         alerts: Some(alerts),
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             frequency: "weekly".to_owned(),
             interval: Some(2),
             by_day: Some(vec![NDay::new("tu"), NDay::new("th")]),
             count: Some(10),
             ..RecurrenceRule::default()
-        }]),
+        }),
         recurrence_overrides: Some(overrides),
         ..CalendarEvent::default()
     };
@@ -9079,14 +9016,10 @@ fn emits_a_comprehensive_icalendar_via_calcard_and_roundtrips() {
         Some("-PT10M")
     );
 
-    let rt_rules = roundtrip
-        .recurrence_rules
-        .as_ref()
-        .expect("recurrenceRules");
-    assert_eq!(rt_rules.len(), 1);
-    assert_eq!(rt_rules[0].frequency, "weekly");
-    assert_eq!(rt_rules[0].interval, Some(2));
-    assert_eq!(rt_rules[0].count, Some(10));
+    let rt_rules = roundtrip.recurrence_rule.as_ref().expect("recurrenceRule");
+    assert_eq!(rt_rules.frequency, "weekly");
+    assert_eq!(rt_rules.interval, Some(2));
+    assert_eq!(rt_rules.count, Some(10));
 
     let rt_overrides = roundtrip
         .recurrence_overrides
@@ -9174,8 +9107,8 @@ fn timezone_observance_onsets_and_transition_offset_resolution() {
         "END:VCALENDAR\r\n"
     );
     let event_rdate = ical_to_event(ics_rdate).expect("parse rdate zone");
-    let rules = event_rdate.recurrence_rules.expect("rules");
-    assert_eq!(rules[0].until.as_deref(), Some("1997-07-01T03:00:00"));
+    let rules = event_rdate.recurrence_rule.expect("rules");
+    assert_eq!(rules.until.as_deref(), Some("1997-07-01T03:00:00"));
 
     // 2. VTIMEZONE with RRULE carrying BYSECOND, BYMINUTE, BYHOUR
     let ics_bysec = concat!(
@@ -9205,8 +9138,8 @@ fn timezone_observance_onsets_and_transition_offset_resolution() {
         "END:VCALENDAR\r\n"
     );
     let event_bysec = ical_to_event(ics_bysec).expect("parse precise zone");
-    let rules_bysec = event_bysec.recurrence_rules.expect("rules");
-    assert_eq!(rules_bysec[0].until.as_deref(), Some("1995-06-01T14:00:00"));
+    let rules_bysec = event_bysec.recurrence_rule.expect("rules");
+    assert_eq!(rules_bysec.until.as_deref(), Some("1995-06-01T14:00:00"));
 
     // 3. VTIMEZONE with local UNTIL in RRULE (without trailing Z)
     let ics_local_until = concat!(
@@ -9236,8 +9169,8 @@ fn timezone_observance_onsets_and_transition_offset_resolution() {
         "END:VCALENDAR\r\n"
     );
     let event_local_until = ical_to_event(ics_local_until).expect("parse local until zone");
-    let rules_lu = event_local_until.recurrence_rules.expect("rules");
-    assert_eq!(rules_lu[0].until.as_deref(), Some("1990-06-01T13:00:00"));
+    let rules_lu = event_local_until.recurrence_rule.expect("rules");
+    assert_eq!(rules_lu.until.as_deref(), Some("1990-06-01T13:00:00"));
 
     // 4. VTIMEZONE with COUNT in RRULE
     let ics_count = concat!(
@@ -9267,8 +9200,8 @@ fn timezone_observance_onsets_and_transition_offset_resolution() {
         "END:VCALENDAR\r\n"
     );
     let event_count = ical_to_event(ics_count).expect("parse count zone");
-    let rules_cnt = event_count.recurrence_rules.expect("rules");
-    assert_eq!(rules_cnt[0].until.as_deref(), Some("2011-07-01T12:00:00"));
+    let rules_cnt = event_count.recurrence_rule.expect("rules");
+    assert_eq!(rules_cnt.until.as_deref(), Some("2011-07-01T12:00:00"));
 
     // 5. VTIMEZONE with negative BYMONTHDAY in WeekdayAmong and positive nth BYDAY
     let ics_neg_day = concat!(
@@ -9298,8 +9231,8 @@ fn timezone_observance_onsets_and_transition_offset_resolution() {
         "END:VCALENDAR\r\n"
     );
     let event_neg_day = ical_to_event(ics_neg_day).expect("parse neg day zone");
-    let rules_nd = event_neg_day.recurrence_rules.expect("rules");
-    assert_eq!(rules_nd[0].until.as_deref(), Some("2005-06-01T11:00:00"));
+    let rules_nd = event_neg_day.recurrence_rule.expect("rules");
+    assert_eq!(rules_nd.until.as_deref(), Some("2005-06-01T11:00:00"));
 
     // 6. Target instant before all onsets in multi-observance zone
     let ics_pre_onsets = concat!(
@@ -9327,8 +9260,8 @@ fn timezone_observance_onsets_and_transition_offset_resolution() {
         "END:VCALENDAR\r\n"
     );
     let event_pre = ical_to_event(ics_pre_onsets).expect("parse pre onsets");
-    let rules_pre = event_pre.recurrence_rules.expect("rules");
-    assert_eq!(rules_pre[0].until.as_deref(), Some("1980-06-01T13:00:00"));
+    let rules_pre = event_pre.recurrence_rule.expect("rules");
+    assert_eq!(rules_pre.until.as_deref(), Some("1980-06-01T13:00:00"));
 }
 
 #[test]
@@ -9445,7 +9378,7 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
     parent_event.description = Some("Parent event detailed description".to_owned());
     parent_event.status = Some("confirmed".to_owned());
     parent_event.show_without_time = Some(false);
-    parent_event.recurrence_rules = Some(vec![RecurrenceRule::new("daily")]);
+    parent_event.recurrence_rule = Some(RecurrenceRule::new("daily"));
     parent_event.recurrence_overrides = Some({
         let mut map = std::collections::BTreeMap::new();
         map.insert(
@@ -9576,10 +9509,10 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
     allday_event.show_without_time = Some(true);
     allday_event.start = Some("2026-01-01T00:00:00".to_owned());
     allday_event.time_zone = None;
-    allday_event.recurrence_rules = Some(vec![RecurrenceRule {
+    allday_event.recurrence_rule = Some(RecurrenceRule {
         by_hour: Some(vec![10]),
         ..RecurrenceRule::new("daily")
-    }]);
+    });
     let ics_allday_byhour = event_to_ical(&allday_event);
     assert!(!ics_allday_byhour.contains("VALUE=DATE:"));
     assert!(ics_allday_byhour.contains("DTSTART:20260101T000000\r\n"));
@@ -9590,7 +9523,7 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
     allday_override_event.start = Some("2026-01-01T00:00:00".to_owned());
     allday_override_event.duration = Some("P1D".to_owned());
     allday_override_event.time_zone = None;
-    allday_override_event.recurrence_rules = Some(vec![RecurrenceRule::new("daily")]);
+    allday_override_event.recurrence_rule = Some(RecurrenceRule::new("daily"));
     allday_override_event.recurrence_overrides = Some({
         let mut map = std::collections::BTreeMap::new();
         map.insert(
@@ -9615,8 +9548,8 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
         "END:VCALENDAR\r\n"
     );
     let event_byday = ical_to_event(ics_byday_nday).expect("parse byday");
-    let rrules = event_byday.recurrence_rules.expect("rrules");
-    let by_days = rrules[0].by_day.as_ref().expect("by_day");
+    let rrules = event_byday.recurrence_rule.expect("rrules");
+    let by_days = rrules.by_day.as_ref().expect("by_day");
     assert_eq!(by_days.len(), 3);
     assert_eq!(by_days[0].day, "0mo");
     assert_eq!(by_days[0].nth_of_period, None);
@@ -9656,7 +9589,10 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
     );
     let event_short = ical_to_event(ics_short_time_zone).expect("parse short");
     assert_eq!(
-        event_short.recurrence_rules.as_ref().unwrap()[0]
+        event_short
+            .recurrence_rule
+            .as_ref()
+            .unwrap()
             .until
             .as_deref(),
         Some("2026-01-20T13:00:00")
@@ -9683,28 +9619,25 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
         "END:VCALENDAR\r\n"
     );
     let event_kolkata = ical_to_event(ics_fractional_tz).expect("parse kolkata");
-    let kolkata_rules = event_kolkata.recurrence_rules.expect("kolkata rules");
-    assert_eq!(
-        kolkata_rules[0].until.as_deref(),
-        Some("2024-01-06T00:00:00")
-    );
+    let kolkata_rules = event_kolkata.recurrence_rule.expect("kolkata rules");
+    assert_eq!(kolkata_rules.until.as_deref(), Some("2024-01-06T00:00:00"));
 
     // 16. Century and era leap year roundtrips in proleptic Gregorian calendar
     for year in [1900, 2000, 2100, 2400] {
         let event_century = CalendarEvent {
             start: Some(format!("{year}-02-28T10:00:00")),
             time_zone: Some("Etc/UTC".to_owned()),
-            recurrence_rules: Some(vec![RecurrenceRule {
+            recurrence_rule: Some(RecurrenceRule {
                 until: Some(format!("{year}-03-02T10:00:00")),
                 ..RecurrenceRule::new("daily")
-            }]),
+            }),
             ..CalendarEvent::default()
         };
         let ics_cent = event_to_ical(&event_century);
         let parsed_cent = ical_to_event(&ics_cent).expect("century parse");
-        let rules_cent = parsed_cent.recurrence_rules.expect("century rules");
+        let rules_cent = parsed_cent.recurrence_rule.expect("century rules");
         assert_eq!(
-            rules_cent[0].until.as_deref(),
+            rules_cent.until.as_deref(),
             Some(format!("{year}-03-02T10:00:00").as_str())
         );
     }
@@ -9720,8 +9653,8 @@ fn calendar_event_mapping_and_override_predicates_fidelity() {
         "END:VCALENDAR\r\n"
     );
     let event_multidigit = ical_to_event(ics_multidigit_nday).expect("parse multidigit nday");
-    let md_rules = event_multidigit.recurrence_rules.expect("md_rules");
-    let md_days = md_rules[0].by_day.as_ref().expect("by_day");
+    let md_rules = event_multidigit.recurrence_rule.expect("md_rules");
+    let md_days = md_rules.by_day.as_ref().expect("by_day");
     assert_eq!(md_days.len(), 2);
     assert_eq!(md_days[0].day, "mo");
     assert_eq!(md_days[0].nth_of_period, Some(10));
@@ -9752,9 +9685,7 @@ fn timezone_advanced_transition_permutations_and_boundary_fidelity() {
     );
     let event_zmd = ical_to_event(ics_zero_monthday).expect("parse zero mday");
     assert_eq!(
-        event_zmd.recurrence_rules.as_ref().unwrap()[0]
-            .until
-            .as_deref(),
+        event_zmd.recurrence_rule.as_ref().unwrap().until.as_deref(),
         Some("2026-01-05T10:00:00Z")
     );
 
@@ -9789,7 +9720,10 @@ fn timezone_advanced_transition_permutations_and_boundary_fidelity() {
     );
     let event_prd1 = ical_to_event(ics_precise_rdate).expect("parse prd");
     assert_eq!(
-        event_prd1.recurrence_rules.as_ref().unwrap()[0]
+        event_prd1
+            .recurrence_rule
+            .as_ref()
+            .unwrap()
             .until
             .as_deref(),
         Some("2026-03-29T01:30:00")
@@ -9822,7 +9756,10 @@ fn timezone_advanced_transition_permutations_and_boundary_fidelity() {
     );
     let event_pos_nth = ical_to_event(ics_pos_nth).expect("parse pos nth");
     assert_eq!(
-        event_pos_nth.recurrence_rules.as_ref().unwrap()[0]
+        event_pos_nth
+            .recurrence_rule
+            .as_ref()
+            .unwrap()
             .until
             .as_deref(),
         Some("2024-04-01T14:00:00")
@@ -9855,7 +9792,10 @@ fn timezone_advanced_transition_permutations_and_boundary_fidelity() {
     );
     let event_neg_nth = ical_to_event(ics_neg_nth).expect("parse neg nth");
     assert_eq!(
-        event_neg_nth.recurrence_rules.as_ref().unwrap()[0]
+        event_neg_nth
+            .recurrence_rule
+            .as_ref()
+            .unwrap()
             .until
             .as_deref(),
         Some("2024-05-02T09:00:00")
