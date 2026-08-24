@@ -17893,3 +17893,263 @@ fn hyphenated_dates_bday_and_anniversary_variations_fidelity() {
     assert_eq!(export2, export3, "Export₂ == Export₃");
     assert_eq!(card2, card3, "Card₂ == Card₃");
 }
+
+#[test]
+fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
+    // 1. Server-side JSContact card with full spectrum of batch 5/6 modeled and unmodeled fields
+    let mut name_extra = BTreeMap::new();
+    name_extra.insert("fileAs".to_string(), json!("Sync, Fuzz (Name Extra)"));
+    name_extra.insert("sortAs".to_string(), json!("SYNC"));
+
+    let mut card_extra = BTreeMap::new();
+    card_extra.insert("fileAs".to_string(), json!("Sync, Fuzz (Card Extra)"));
+    card_extra.insert(
+        "cryptoKeys".to_string(),
+        json!({"k1": {"kind": "pgp", "uri": "https://example.com/sync_key.asc"}}),
+    );
+    card_extra.insert("unmodeledServerTag".to_string(), json!("server_state"));
+
+    let mut email_extra = BTreeMap::new();
+    email_extra.insert("label".to_string(), json!("Engineering"));
+
+    let mut phone_extra = BTreeMap::new();
+    phone_extra.insert("label".to_string(), json!("Mobile Work"));
+
+    let mut adr_extra = BTreeMap::new();
+    adr_extra.insert("label".to_string(), json!("Main HQ"));
+    adr_extra.insert("pref".to_string(), json!(1));
+
+    let mut rel_extra_spouse = BTreeMap::new();
+    rel_extra_spouse.insert("label".to_string(), json!("Spouse"));
+
+    let mut rel_extra_agent = BTreeMap::new();
+    rel_extra_agent.insert("label".to_string(), json!("Legal Representative"));
+
+    let card = ContactCard {
+        id: Some("C-GEN-SYNC-B6".into()),
+        name: Some(Name {
+            full: Some("Fuzz Sync".into()),
+            components: Some(vec![
+                NameComponent::new("given", "Fuzz"),
+                NameComponent::new("surname", "Sync"),
+            ]),
+            extra: name_extra,
+        }),
+        emails: Some(
+            [(
+                "e1".to_string(),
+                ContactEmail {
+                    address: "fuzz@example.com".into(),
+                    contexts: Some(json!({"work": true})),
+                    pref: Some(1),
+                    extra: email_extra,
+                },
+            )]
+            .into(),
+        ),
+        phones: Some(
+            [(
+                "p1".to_string(),
+                ContactPhone {
+                    number: "+1-555-0188".into(),
+                    features: Some(json!({"voice": true, "mobile": true})),
+                    contexts: Some(json!({"work": true})),
+                    pref: Some(1),
+                    extra: phone_extra,
+                },
+            )]
+            .into(),
+        ),
+        addresses: Some(
+            [(
+                "a1".to_string(),
+                Address {
+                    components: Some(vec![
+                        AddressComponent::new("name", "500 Silicon Ave"),
+                        AddressComponent::new("locality", "Palo Alto"),
+                        AddressComponent::new("region", "CA"),
+                        AddressComponent::new("postcode", "94301"),
+                        AddressComponent::new("country", "USA"),
+                    ]),
+                    contexts: Some(json!({"work": true})),
+                    full: Some("500 Silicon Ave, Palo Alto, CA 94301, USA".into()),
+                    extra: adr_extra,
+                },
+            )]
+            .into(),
+        ),
+        media: Some(
+            [
+                (
+                    "m1".to_string(),
+                    Media {
+                        kind: Some("photo".to_string()),
+                        uri: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string(),
+                        media_type: Some("image/jpeg".to_string()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "m2".to_string(),
+                    Media {
+                        kind: Some("sound".to_string()),
+                        uri: "https://example.com/audio.ogg".to_string(),
+                        media_type: Some("audio/ogg".to_string()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "m3".to_string(),
+                    Media {
+                        kind: Some("logo".to_string()),
+                        uri: "https://example.com/logo.png".to_string(),
+                        media_type: Some("image/png".to_string()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        related_to: Some(
+            [
+                (
+                    "Alice Spouse".to_string(),
+                    Relation {
+                        relation: Some([("spouse".to_string(), json!(true))].into()),
+                        extra: rel_extra_spouse,
+                    },
+                ),
+                (
+                    "Bob Agent".to_string(),
+                    Relation {
+                        relation: Some([("agent".to_string(), json!(true))].into()),
+                        extra: rel_extra_agent,
+                    },
+                ),
+                (
+                    "Carol Colleague".to_string(),
+                    Relation {
+                        relation: Some([("colleague".to_string(), json!(true))].into()),
+                        extra: BTreeMap::new(),
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        online_services: Some(
+            [
+                (
+                    "s1".to_string(),
+                    OnlineService {
+                        service: Some("Jabber".to_string()),
+                        user: Some("fuzz@jabber.org".to_string()),
+                        uri: None,
+                        extra: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "s2".to_string(),
+                    OnlineService {
+                        service: Some("Skype".to_string()),
+                        user: Some("fuzz_skype".to_string()),
+                        uri: None,
+                        extra: BTreeMap::new(),
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        extra: card_extra,
+        ..ContactCard::default()
+    };
+
+    // 2. Assert outbound vCard 3.0 emission strictly excludes unmodeled server fields, agent, sound, logo, keys
+    let vcard1 = card_to_vcard(&card);
+    assert!(vcard1.contains("X-EVOLUTION-FILE-AS:Sync\\, Fuzz (Name Extra)"));
+    assert!(vcard1.contains("X-EVOLUTION-SPOUSE:Alice Spouse"));
+    assert!(vcard1.contains("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:"));
+    assert!(!vcard1.contains("AGENT:"));
+    assert!(!vcard1.contains("AGENT;"));
+    assert!(!vcard1.contains("SOUND:"));
+    assert!(!vcard1.contains("SOUND;"));
+    assert!(!vcard1.contains("LOGO:"));
+    assert!(!vcard1.contains("LOGO;"));
+    assert!(!vcard1.contains("KEY:"));
+    assert!(!vcard1.contains("KEY;"));
+    assert!(!vcard1.contains("Bob Agent"));
+    assert!(!vcard1.contains("Carol Colleague"));
+    assert!(!vcard1.contains("cryptoKeys"));
+    assert!(!vcard1.contains("unmodeledServerTag"));
+
+    // 3. Round-trip reaches exact fixpoint stability
+    let parsed1 = vcard_to_card(&vcard1).expect("parse vcard1");
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("parse vcard2");
+    let vcard3 = card_to_vcard(&parsed2);
+    assert_eq!(vcard2, vcard3, "Export₂ == Export₃ fixpoint invariant");
+    assert_eq!(parsed1, parsed2, "Card₂ == Card₃ fixpoint invariant");
+
+    // 4. Inbound vCard 4.0 stream containing full batch-5/6 feature matrix
+    let raw_v4 = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\n",
+        "FN:Comprehensive v4 Fuzz\r\n",
+        "N:Fuzz;Comprehensive;;;\r\n",
+        "EMAIL;TYPE=\"work,pref\";PREF=1:v4user@example.com\r\n",
+        "TEL;TYPE=\"work,voice\";PREF=1:+1-555-0177\r\n",
+        "ADR;TYPE=\"work,pref\";LABEL=\"700 Tech Way\\nSan Jose, CA 95110\":;;700 Tech Way;San Jose;CA;95110;USA\r\n",
+        "BDAY;VALUE=date:1988-03-25\r\n",
+        "ANNIVERSARY:2016-10-14\r\n",
+        "PHOTO:data:image/jpeg;base64,/9j/4AAQSkZJRg==\r\n",
+        "IMPP:xmpp:v4user@jabber.example.com\r\n",
+        "IMPP:skype:v4user_skype\r\n",
+        "IMPP:matrix:v4user:matrix.org\r\n",
+        "IMPP:aim:v4user_aim\r\n",
+        "IMPP:icq:7654321\r\n",
+        "IMPP:msn:v4user@msn.com\r\n",
+        "IMPP:yahoo:v4user_yahoo\r\n",
+        "IMPP:groupwise:v4user_gw\r\n",
+        "IMPP:gg:554433\r\n",
+        "IMPP:gtalk:v4user@gmail.com\r\n",
+        "IMPP:xmpp:rejected@chat.org?action=call\r\n",
+        "RELATED;TYPE=spouse:Valerie Spouse\r\n",
+        "RELATED;TYPE=manager:Victor Manager\r\n",
+        "RELATED;TYPE=assistant:Vera Assistant\r\n",
+        "RELATED;TYPE=colleague:Vincent Colleague\r\n",
+        "AGENT:BEGIN:VCARD\\nVERSION:3.0\\nFN:Nested Agent\\nEND:VCARD\\n\r\n",
+        "SOUND;TYPE=BASIC;ENCODING=b:AQIDBA==\r\n",
+        "GENDER:F\r\n",
+        "CLIENTPIDMAP:1;urn:uuid:67e374d9-337e-4727-8803-a1e9c14e0999\r\n",
+        "MEMBER:urn:uuid:550e8400-e29b-41d4-a716-446655440000\r\n",
+        "NOTE;X-JMAP-KEY=n1:vCard 4.0 comprehensive generator synchronization test.\r\n",
+        "END:VCARD\r\n"
+    );
+
+    let parsed_v4 = vcard_to_card(raw_v4).expect("parse raw vCard 4.0");
+
+    // Assert accurate extraction of mapped properties
+    let p_anniv = parsed_v4.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(p_anniv.len(), 2);
+    let p_rel = parsed_v4.related_to.as_ref().expect("related_to");
+    assert_eq!(p_rel.len(), 4);
+    let p_im = parsed_v4.online_services.as_ref().expect("online_services");
+    assert_eq!(p_im.len(), 10); // 10 valid services, 1 action query rejected
+
+    // Outbound emission normalizes to standard vCard 3.0 and achieves fixed point
+    let export1_v4 = card_to_vcard(&parsed_v4);
+    assert!(!export1_v4.contains("AGENT"));
+    assert!(!export1_v4.contains("SOUND"));
+    assert!(!export1_v4.contains("GENDER"));
+    assert!(!export1_v4.contains("CLIENTPIDMAP"));
+    assert!(!export1_v4.contains("MEMBER"));
+
+    let card2_v4 = vcard_to_card(&export1_v4).expect("parse export1_v4");
+    let export2_v4 = card_to_vcard(&card2_v4);
+    let card3_v4 = vcard_to_card(&export2_v4).expect("parse export2_v4");
+    let export3_v4 = card_to_vcard(&card3_v4);
+
+    assert_eq!(
+        export2_v4, export3_v4,
+        "Export₂ == Export₃ (v4 normalization)"
+    );
+    assert_eq!(card2_v4, card3_v4, "Card₂ == Card₃ (v4 normalization)");
+}
