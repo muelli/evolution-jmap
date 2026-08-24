@@ -62,6 +62,11 @@ Evolution and EDS dlopen: build them against the versions they will be
 installed alongside. `ctest -R package-deb` builds the package and checks
 its contents and control fields.
 
+Packaging this for a distro? [docs/PACKAGING.md](docs/PACKAGING.md) is
+addressed to you: what's already lintian-clean and CI-checked, what the
+`debian/` skeleton does and doesn't solve, and the one open question
+(crate vendoring) an official upload needs answered.
+
 ### Poking at the mock server
 
 ```bash
