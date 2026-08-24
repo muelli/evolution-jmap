@@ -76,7 +76,10 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`X-EVOLUTION-VIDEO-URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: "video"`) | `E_CONTACT_VIDEO_URL` | `states_link`, `maps_link_kind` | EDS video stream URL field. Maps to `links` with `kind: "video"`. |
 | **`CALURI`** | `X-JMAP-KEY` | `card.calendars` (`Calendar.uri`, `kind: "calendar"`) | `E_CONTACT_CALENDAR_URI` | `states_calendar`, `calendar_property`, `calendar_kind` | vCard 4.0 property emitted on vCard 3.0 for EDS 3.52 compatibility. `ICSCALENDAR` excluded. |
 | **`FBURL`** | `X-JMAP-KEY` | `card.calendars` (`Calendar.uri`, `kind: "freeBusy"`) | `E_CONTACT_FREEBUSY_URL` | `states_calendar`, `calendar_property`, `calendar_kind` | vCard 4.0 property emitted on vCard 3.0 for EDS 3.52 compatibility. |
-| **`PHOTO`** | `TYPE`, `ENCODING=b`, `VALUE=uri`, `X-JMAP-KEY` | `card.media` (`Media.uri`, `media_type`, `kind: "photo"`) | `E_CONTACT_PHOTO` | `photo`, `read_photo`, [`states_media`], [`same_photo`], `image_subtype` | Only `kind: "photo"` mapped. Inline data uses base64; `TYPE` states subtype only (e.g. `JPEG` -> `image/jpeg`). URI references use `VALUE=uri`. Re-paired via `same_photo` since EDS drops `X-JMAP-KEY` on photo edit. |
+| **`ANNIVERSARY`** | `X-JMAP-KEY`, `VALUE=date` | `card.anniversaries` (`kind: "wedding"`, `date`) | `E_CONTACT_ANNIVERSARY` | `read_anniversary`, `Day` | vCard 4.0 standard anniversary property (RFC 6350 §6.4.3). Maps to `kind: "wedding"`. Outbound normalizes to `X-EVOLUTION-ANNIVERSARY`. |
+| **`RELATED`** | `TYPE` (`spouse`, `partner`, `manager`, `assistant`, custom) | `card.related_to` (Key = Person Name, `relation: { "<type>": true }`) | `E_CONTACT_SPOUSE`, `_MANAGER`, `_ASSISTANT` | `names_a_person`, `vcard_to_card` | vCard 4.0 standard relationship property (RFC 6350 §6.6.6). Maps `TYPE=spouse`/`partner` -> `spouse`, `TYPE=manager` -> `manager`, `TYPE=assistant` -> `assistant`, or custom relations when `names_a_person` holds. Outbound normalizes to standard `X-EVOLUTION-*`. |
+| **`IMPP`** | `TYPE` (`WORK`, `HOME`), `X-JMAP-KEY` | `card.online_services` (`service`, `user`) | `E_CONTACT_IM_<SERVICE>_HOME_1..3`, `_WORK_1..3` | `SERVICE_SCHEMES`, `plain_handle`, `vcard_to_card` | vCard 4.0 standard instant messaging property (RFC 4770 / RFC 6350 §6.4.3). Maps URI schemes (`xmpp:`, `skype:`, `matrix:`, `aim:`, `icq:`, `msn:`, `yahoo:`, `groupwise:`, `gg:`, `gtalk:`) to matching service handle. Action/query URIs safely rejected. Outbound normalizes to slotted `X-` properties (`X-JABBER`, `X-SKYPE`, `X-MATRIX`, etc.). |
+| **`PHOTO`** | `TYPE`, `MEDIATYPE`, `ENCODING=b`, `VALUE=uri`, `X-JMAP-KEY` | `card.media` (`Media.uri`, `media_type`, `kind: "photo"`) | `E_CONTACT_PHOTO` | `photo`, `read_photo`, [`states_media`], [`same_photo`], `image_subtype` | Only `kind: "photo"` mapped. Inbound accepts RFC 2397 `data:` URIs (direct without double-base64 encoding), direct HTTP/HTTPS URIs without `VALUE=uri`, and `MEDIATYPE` parameters (RFC 6350 §5.7). Outbound uses canonical vCard 3.0 base64 + `ENCODING=b`. Re-paired via `same_photo` since EDS drops `X-JMAP-KEY` on photo edit. |
 | **`CATEGORIES`** | — | `card.keywords` (`Set<String>`) | `E_CONTACT_CATEGORY_LIST` | `drawn_tags`, `read_keywords`, [`states_keyword`] | Single sorted line emitted. Comma-separated on wire. Trimming protection: tags with leading/trailing whitespace or carriage returns omitted from emission to prevent EDS corruption. |
 | **`BDAY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "birth"`, `date`) | `E_CONTACT_BIRTH_DATE` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`], [`states_a_point_in_time`], `Day` | Single calendar day formatted `YYYY-MM-DD`. Truncated/bare years (`1984`) or years < 1000 omitted to prevent EDS clamping corruption (`1000..=9999`). `Timestamp` converted to UTC day. |
 | **`X-EVOLUTION-ANNIVERSARY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "wedding"`, `date`) | `E_CONTACT_ANNIVERSARY` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`] | EDS wedding anniversary field. Same date validation and year >= 1000 clamping rules as `BDAY`. `kind: "death"` dropped. |
@@ -94,14 +97,18 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`X-SKYPE`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Skype"`, `uri: "skype:..."`) | `E_CONTACT_IM_SKYPE_HOME_1..3`, `_WORK_1..3` | (same as above) | Bare Skype usernames (`skype:echo123?call` action rejected). |
 | **`X-YAHOO`** | `TYPE`, `X-JMAP-KEY` | `card.online_services` (`service: "Yahoo"`, `uri: "yahoo:... / ymsgr:..."`) | `E_CONTACT_IM_YAHOO_HOME_1..3`, `_WORK_1..3` | (same as above) | Supports `yahoo` and `ymsgr` schemes. |
 | **`GEO`** | — | `Address.coordinates` (RFC 9553) | `E_CONTACT_GEO` (no UI) | — | Dropped by design on vCard 3.0 import/export. Evolution has no UI for coordinates. Server-side `Address.coordinates` preserved by `PatchObject`. |
-| **`TZ`** | — | `card.time_zone` (RFC 9553) | — | — | Dropped by design on vCard 3.0 import/export. Evolution has no per-contact timezone field. Server `time_zone` preserved by `PatchObject`. |
+| **`TZ`** | — | `card.time_zone` (RFC 9553) | — | — | Dropped by design on vCard 3.0 import/export. Text/Olson timezones in vCard 4.0 (`TZ:Europe/Berlin`) are safely ignored on import. Server `time_zone` preserved by `PatchObject`. |
 | **`MAILER`** | — | — | `E_CONTACT_MAILER` (legacy) | — | Dropped by design. Deprecated in RFC 6350 (vCard 4.0). Legacy email client software metadata. |
 | **`PRODID`** | — | `card.prod_id` (RFC 9553) | — | — | Dropped by design on import/export. Generator metadata belongs to serialization envelope; foreign `PRODID` not preserved across saves. |
 | **`REV`** | — | `card.updated` (RFC 9553) | `E_CONTACT_REV` | — | Dropped by design on import/export. Revision timestamp is strictly owned by the JMAP server upon commit. |
+| **`GENDER`** | — | — | — | — | vCard 4.0 property (RFC 6350 §6.5.1). Safely ignored by reader; does not pollute `card.extra`. |
+| **`CLIENTPIDMAP`** | — | — | — | — | vCard 4.0 property (RFC 6350 §6.7.7). Safely ignored by reader; does not pollute `card.extra`. |
+| **`MEMBER`** | — | — | — | — | vCard 4.0 group member property (RFC 6350 §6.6.5). Safely ignored for individual contacts. |
 | **`SORT-STRING`** | — | `Name.sortAs` / `Org.sortAs` | — | — | Dropped by design from vCard 3.0 emission. Replaced in RFC 6350 by `SORT-AS` parameter. JSContact `sortAs` preserved on server by `PatchObject` without clobbering `fileAs`. |
 | **`X-EVOLUTION-FILE-AS`** | — | `Name.extra["fileAs"]` / `card.extra["fileAs"]` | `E_CONTACT_FILE_AS` | `states_file_as` | Evolution "File Under" field. Inbound accepts `X-EVOLUTION-FILE-AS`, `FILE-AS`, and `X-FILE-AS`. Outbound normalizes to `X-EVOLUTION-FILE-AS`. Coexists with `sortAs` without clobbering. |
 | **`CLASS`** | — | `card.privacy` (RFC 9553) | — | — | Dropped by design. Deprecated/removed in RFC 6350. Legacy access classification with no Evolution editor UI. |
-| **`SOUND`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "sound"`) | — | [`states_media`] | Dropped by design from vCard 3.0. [`states_media`] permits only `kind: "photo"`. Server `sound` media entries preserved by `PatchObject`. |
+| **`SOUND`** | `TYPE`, `ENCODING=b`, `VALUE=uri`, `MEDIATYPE` | `card.media` (`kind: "sound"`) | — | [`states_media`] | Dropped by design from vCard 3.0. [`states_media`] permits only `kind: "photo"`. Inbound audio payloads and URIs safely ignored without corrupting photos. Server `sound` media entries preserved by `PatchObject`. |
+| **`AGENT`** | `VALUE=uri`, text, nested vCard | `card.related_to` (`relation: { "agent": true }`) | — | [`states_spouse`], [`states_manager`], [`states_assistant`] | Dropped by design from vCard 3.0 emission. Deprecated/removed in RFC 6350. Inbound nested vCards, URIs, and text safely ignored without corrupting surrounding card or polluting `card.extra`. Server `relatedTo` agent entries preserved by `PatchObject`. |
 | **`LOGO`** | `TYPE`, `ENCODING=b`, `VALUE=uri` | `card.media` (`kind: "logo"`) | `E_CONTACT_LOGO` (no UI) | [`states_media`] | Dropped by design from vCard 3.0. Evolution editor supports only personal photo (`E_CONTACT_PHOTO`). Server `logo` entries preserved by `PatchObject`. |
 | **`KEY`** | `TYPE` (`X509`, `PGP`), `ENCODING=b`, `VALUE=uri` | `card.extra["cryptoKeys"]` (RFC 9553 §2.7.1) | `E_CONTACT_X509_CERT`, `E_CONTACT_PGP_CERT` (no UI) | — | Dropped by design from vCard 3.0. Evolution editor provides no contact certificate UI. Server `cryptoKeys` entries preserved by `PatchObject`. |
 | **`itemN.PROPERTY`** | `X-ABLabel` companion | (associated property) | (associated EDS slot) | `clean_apple_label`, `vcard_to_card` | Apple property groups (RFC 2426 §2.1.1). Group prefix is parsed by `calcard`; companion `X-ABLabel` maps contexts (`Work`, `Home`), features (`Mobile`, `Pager`, `Fax`), or custom labels. |
@@ -385,8 +392,8 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
     - Compares URI strings directly.
   - This allows the sync layer to detect whether the photo was actually edited by the user, avoiding redundant image re-uploads on every sync.
 
-### 4.9 Deliberate Drop Rationale for Standard vCard 3.0 Properties (`GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, `LOGO`, `KEY`)
-`jmap-vcard` deliberately ignores standard vCard 3.0 properties for which Evolution/EDS lacks active UI editing support or for which client-side preservation is architecturally incorrect:
+### 4.9 Deliberate Drop Rationale for Standard vCard Properties (`GEO`, `TZ`, `MAILER`, `PRODID`, `REV`, `SORT-STRING`, `CLASS`, `SOUND`, `AGENT`, `LOGO`, `KEY`)
+`jmap-vcard` deliberately ignores standard vCard properties for which Evolution/EDS lacks active UI editing support or for which client-side preservation is architecturally incorrect:
 1. **`GEO` (RFC 2426 §3.4.2)**:
    - Evolution's contact editor has no UI controls or display for geographical coordinates.
    - JSContact (RFC 9553 §2.5.1) scopes coordinates to specific postal addresses (`Address.coordinates`), rather than top-level cards.
@@ -413,15 +420,21 @@ All product decisions and behavioral findings documented in `docs/AGY-LOG.md` ar
    - Access classification (`PUBLIC`, `PRIVATE`, `CONFIDENTIAL`). Deprecated/removed in vCard 4.0.
    - Evolution contact editor has no access classification controls.
    - *Rationale*: Dropped by design. Server-side privacy settings are preserved untouched by `PatchObject`.
-8. **`SOUND` (RFC 2426 §3.6.6)**:
+8. **`SOUND` (RFC 2426 §3.6.3 / RFC 6350 §6.6.5)**:
    - Digital audio clips / pronunciation guides (RFC 9553 §2.6.4 `media` with `kind: "sound"`).
+   - Audio encodings include 8-bit mu-law (`TYPE=BASIC`), WAV (`TYPE=WAV`), MP3 (`TYPE=MP3`), Ogg Vorbis (`TYPE=OGG`), remote/local URIs (`VALUE=uri`), and vCard 4.0 data URIs (`SOUND:data:audio/ogg;base64,...`) and `MEDIATYPE` parameters.
    - EDS has no `E_CONTACT_SOUND` field and Evolution has no audio playback in the contact editor.
-   - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `SOUND` lines are dropped on vCard parse to prevent misparsing as photos. Server-side `sound` media entries remain safe and untouched in `card.media` via `PatchObject`.
-9. **`LOGO` (RFC 2426 §3.5.3)**:
-   - Organization logo image (RFC 9553 §2.6.4 `media` with `kind: "logo"`).
-   - Although `E_CONTACT_LOGO` exists in EDS C enum definitions, Evolution's contact editor provides UI exclusively for personal photos (`E_CONTACT_PHOTO`).
-   - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `LOGO` lines are dropped on vCard parse to prevent colliding with or replacing the personal photo field. Server-side `logo` media entries remain safe and untouched in `card.media` via `PatchObject`.
-10. **`KEY` (RFC 2426 §3.7.2)**:
+   - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `SOUND` lines are safely dropped on vCard parse to prevent misparsing as photos or polluting `card.media`. Outbound emission strictly omits `SOUND`. Server-side `sound` media entries remain safe and untouched in `card.media` via `PatchObject`.
+9. **`AGENT` (RFC 2426 §3.5.4)**:
+   - Specifies information about another person who will act on behalf of the contact (RFC 9553 §2.1.8 & §2.7.2 `relatedTo` with `relation: { "agent": true }`). Deprecated and removed in RFC 6350 (replaced by `RELATED;TYPE=agent`).
+   - Value may be a URI (`AGENT;VALUE=uri:...`), plain text, or a structured nested vCard (`AGENT:BEGIN:VCARD\n...END:VCARD\n`).
+   - EDS provides slots exclusively for Spouse (`E_CONTACT_SPOUSE`), Manager (`E_CONTACT_MANAGER`), and Assistant (`E_CONTACT_ASSISTANT`). An agent is legally empowered to act on behalf of the contact, which is wider than an assistant; emitting an agent as an assistant would corrupt semantics.
+   - *Rationale*: Inbound `AGENT` lines (including escaped nested vCards, URIs, and text) parse safely without corrupting surrounding contact fields and are dropped on parse. Outbound emission strictly omits `AGENT` lines ([`states_spouse`], [`states_manager`], and [`states_assistant`] evaluate to `false` for `agent`). Server-side `relatedTo` agent relations remain safe and untouched on the server via `PatchObject`.
+10. **`LOGO` (RFC 2426 §3.5.3)**:
+    - Organization logo image (RFC 9553 §2.6.4 `media` with `kind: "logo"`).
+    - Although `E_CONTACT_LOGO` exists in EDS C enum definitions, Evolution's contact editor provides UI exclusively for personal photos (`E_CONTACT_PHOTO`).
+    - *Rationale*: [`states_media`] filters strictly for `kind: Some("photo")`. Inbound `LOGO` lines are dropped on vCard parse to prevent colliding with or replacing the personal photo field. Server-side `logo` media entries remain safe and untouched in `card.media` via `PatchObject`.
+11. **`KEY` (RFC 2426 §3.7.2)**:
     - Public key / certificates (X.509 `E_CONTACT_X509_CERT` and PGP `E_CONTACT_PGP_CERT`, RFC 9553 §2.7.1 `cryptoKeys`).
     - Evolution's contact editor GUI provides no UI for inspecting or editing certificates directly on individual contacts (certificates and keys are managed globally via S/MIME and GnuPG/Seahorse keyrings).
     - *Rationale*: Dropped by design from vCard 3.0 emission. Inbound `KEY` lines (`KEY;TYPE=X509;ENCODING=b:...`, `KEY;TYPE=PGP;ENCODING=b:...`, `KEY;VALUE=uri:...`) are safely dropped on vCard parse to avoid corrupting mapped fields. Server-side `cryptoKeys` in `card.extra["cryptoKeys"]` are preserved untouched across saves via `PatchObject`.
@@ -554,6 +567,43 @@ item6.X-ABLabel:_$!<Anniversary>!$_
    - Modern social platforms (Telegram, Discord, Signal, WhatsApp, Mastodon `acct:`, IRC) have no native UI fields in EDS.
    - In accordance with Section 4.1, they are omitted on vCard 3.0 emission and remain safely preserved on the server via `PatchObject`.
 
+### 4.13 vCard 4.0 Import Tolerance & Interoperability Contract
+
+Modern contact exporters (Google Contacts, iOS Share Sheet, Nextcloud, macOS Contacts, CardDAV servers) emit `VERSION:4.0` envelopes adhering to RFC 6350. To ensure robust headless import and lossless synchronization back to Evolution and JMAP, `jmap-vcard` implements strict import tolerance with clean outbound normalization to canonical vCard 3.0:
+
+1. **Instant Messaging (`IMPP`)**:
+   - RFC 4770 / RFC 6350 §6.4.3 standard property for instant messaging.
+   - Inbound `IMPP:<scheme>:<handle>` lines are parsed into `card.online_services` matching the protocol scheme (`xmpp` -> `Jabber`, `skype` -> `Skype`, `matrix` -> `Matrix`, `aim` -> `AIM`, `icq` -> `ICQ`, `msn` -> `MSN`, `yahoo` -> `Yahoo`, `groupwise` -> `GroupWise`, `gg` -> `Gadu-Gadu`, `gtalk` -> `Google Talk`).
+   - Action/query URIs (e.g. `skype:echo123?call`, `xmpp:alice?message`) are safely filtered out by [`plain_handle`].
+   - Outbound serialization maps to slotted `X-` properties (`X-JABBER`, `X-SKYPE`, `X-MATRIX`, etc.) carrying `TYPE=HOME`/`TYPE=WORK` and `X-JMAP-KEY`.
+
+2. **Relationships (`RELATED`)**:
+   - RFC 6350 §6.6.6 standard relationship property.
+   - Inbound `RELATED;TYPE=spouse:<name>` and `RELATED;TYPE=partner:<name>` map to `card.related_to` with `relation: { "spouse": true }`.
+   - `RELATED;TYPE=manager:<name>` maps to `relation: { "manager": true }`.
+   - `RELATED;TYPE=assistant:<name>` maps to `relation: { "assistant": true }`.
+   - Other relations or unannotated `RELATED:<name>` map to `relation: { "<type>": true }` or `relation: { "contact": true }` when `names_a_person` holds.
+   - Outbound serialization maps spouse, manager, and assistant to `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, `X-EVOLUTION-ASSISTANT`.
+
+3. **Anniversaries (`ANNIVERSARY`)**:
+   - RFC 6350 §6.4.3 standard anniversary property.
+   - Inbound `ANNIVERSARY:<date>` maps to `card.anniversaries` with `kind: "wedding"`.
+   - Outbound serialization maps wedding anniversaries to `X-EVOLUTION-ANNIVERSARY`.
+
+4. **Photos (`PHOTO`)**:
+   - Direct RFC 2397 `data:` URIs (e.g. `PHOTO:data:image/jpeg;base64,...`) are imported without requiring `VALUE=uri` and without double-base64 wrapping.
+   - Direct HTTP/HTTPS URIs (e.g. `PHOTO:https://example.com/photo.jpg`) are imported as URI references without requiring `VALUE=uri`.
+   - `MEDIATYPE` parameter (RFC 6350 §5.7, e.g. `PHOTO;MEDIATYPE=image/png:...`) is extracted into `Media.media_type`.
+   - Outbound serialization emits canonical vCard 3.0 inline base64 (`ENCODING=b;TYPE=<subtype>`) or URI reference (`VALUE=uri`).
+
+5. **Quoted and Comma-Delimited Parameters**:
+   - Inbound parameters in vCard 4.0 format (e.g. `TEL;TYPE="work,voice":...`, `TEL;TYPE="home,cell";PREF=1:...`) have quotes trimmed and comma-separated tokens split cleanly.
+   - `PREF=1` parameter maps to `pref: Some(1)` across phone, email, and address entries.
+
+6. **Ignored Metadata & Fixpoint Invariants**:
+   - Standard vCard 4.0 metadata properties (`GENDER`, `CLIENTPIDMAP`, `MEMBER`, text/Olson `TZ`) are safely dropped on import without polluting `card.extra`.
+   - Re-exporting an imported vCard 4.0 produces canonical vCard 3.0 that immediately achieves fixed-point convergence (`Export₂ == Export₃` and `Card₂ == Card₃`).
+
 ---
 
 ## 5. Function & Predicate Index
@@ -655,6 +705,59 @@ vCard₄ (Export₃: Stabilized vCard 3.0)
    - Whitespace-only values in set-based fields (such as `CATEGORIES: `) are cleanly rejected by validator predicates ([`states_keyword`]) to prevent EDS string-trimming bugs.
    - Whitespace-only values in text fields (such as `NICKNAME: ` or `NOTE: `) either parse into structured fields or evaluate to empty, reaching stable fixpoint convergence by Export₂.
 3. **Legacy `ENCODING=b` on Text Lines (BACKLOG Regression Pin)**:
-   - When legacy/fuzzed vCards declare binary parameters on non-binary properties (e.g. `NICKNAME;ENCODING=b:! `), the parser cleanly rejects non-base64 binary payloads via [`entry_text_list`] and normalizes the representation, reaching fixed-point stability on Export₂.
+   - When legacy/fuzzed vCards declare binary parameters on non-binary properties (e.g. `NICKNAME;ENCODING=b:! `), the parser cleanly rejects non-base64 binary payloads via `entry_text_list` and normalizes the representation, reaching fixed-point stability on Export₂.
+
+### 6.4 Fixpoint Proptest Generator Synchronization (Batches 3–4 Sync)
+
+1. **Synchronized Generator Coverage**:
+   - `arb_name`: Fuzzes name components alongside optional `fileAs` and `sortAs` in `Name.extra`, testing inbound `FILE-AS`, `X-FILE-AS`, `X-EVOLUTION-FILE-AS`, and `SORT-STRING`.
+   - `arb_card_extra`: Fuzzes `ContactCard.extra` with `fileAs`, `sortAs`, `cryptoKeys`, and unmodeled server fields.
+   - `arb_email`, `arb_phone`, `arb_address`, `arb_link`, `arb_relation`: Fuzz custom/Apple labels in `extra["label"]`, testing label extraction and roundtrip stability.
+   - `arb_apple_property_group_block`: Generates paired Apple property groups (`itemN.PROPERTY` with `itemN.X-ABLabel`) across telephony, email, postal address, links, extended relations (`X-ABRELATEDNAMES` / `X-AB-RELATED-NAMES`), and extended dates (`X-ABDATE` / `X-AB-DATE`).
+   - `arb_vcard_property_line`: Covers full current property surface including standard properties, vendor extensions, legacy parameters, and dropped-by-design markers (`AGENT`, `SOUND`, `LOGO`, `KEY`).
+2. **Domain Fixpoint Proptests**:
+   - `prop_fixpoint_name_and_file_as_domain`: Asserts fixpoint stability for `Name`, `fileAs`, and `sortAs`.
+   - `prop_fixpoint_apple_property_groups_domain`: Asserts that raw vCards with Apple property groups parse without panic and normalize outbound to standard vCard 3.0 reaching fixpoints.
+   - `prop_fixpoint_links_domain`: Asserts fixpoint stability across URL kinds and labels.
+   - `prop_fixpoint_crypto_keys_and_logo_preservation_domain`: Asserts that `cryptoKeys` and non-photo media do not leak into vCard 3.0 emissions while maintaining roundtrip stability.
+   - `identify_oscillating_card_field`: Enhanced with `card.extra` divergence inspection during proptest shrinkage.
+
+---
+
+## 7. Real-Exporter Fixture Corpus & Whole-File Regression Net
+
+To ensure long-term stability and guard against edge-case regressions from third-party contact applications, `jmap-vcard` maintains a dedicated real-exporter fixture corpus in `tests/fixtures/` and a whole-file table-driven test net in `tests/mapping.rs`.
+
+### 7.1 Exporter Fixture Corpus
+
+| Exporter / Platform | Fixture File | Protocol / Format | Key Characteristics & Mapped Surface | Preservation & Drop Invariants |
+| :--- | :--- | :--- | :--- | :--- |
+| **Google Contacts** | `google_contacts_export.vcf` | vCard 3.0 | • Apple group labels (`itemN.X-ABLabel`)<br>• Phonetic names (`X-PHONETIC-*`)<br>• Multi-unit `ORG` (3 components)<br>• Multiple emails, phones, addresses<br>• BDAY, anniversary, relations (Spouse, Manager, Assistant)<br>• Base64 JPEG `PHOTO` | • `X-GENDER` & `X-PHONETIC-*` dropped on export<br>• Group labels map to native contexts & EDS slots<br>• Relations normalize to `X-EVOLUTION-*`<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **Apple iCloud / macOS Contacts** | `icloud_macos_export.vcf` | vCard 3.0 | • `PRODID:-//Apple Inc.//...`<br>• Grouped properties with `_$!<Label>!$_`<br>• `MAIN` phone (`voice` + `work`)<br>• Structured `ADR` with escaped commas<br>• `X-ABRELATEDNAMES` (Spouse, Manager, Assistant)<br>• `X-ABDATE` (Anniversary)<br>• Base64 PNG `PHOTO` | • `PRODID` & `X-ABShowAs` dropped on export<br>• Standard Apple labels map to native fields<br>• Custom labels preserved in `extra["label"]`<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **Microsoft Outlook Modern** | `outlook_vcard30_export.vcf` | vCard 3.0 | • `PRODID:-//Microsoft Corporation//...`<br>• 4-unit `ORG` hierarchy (Company, Unit 1, Unit 2, Office)<br>• Structured `N` with prefixes/suffixes<br>• Multi-role telephony (`TYPE=WORK,VOICE`, `TYPE=WORK,FAX`)<br>• Structured `ADR` + standalone `LABEL`<br>• Multiline notes with URL links | • Proprietary `X-MS-*` extensions dropped cleanly<br>• 4th `ORG` unit maps to `E_CONTACT_OFFICE`<br>• Standalone labels paired to matching `ADR`s<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **Microsoft Outlook Classic** | `outlook_vcard21_export.vcf` | vCard 2.1 | • Legacy `VERSION:2.1`<br>• Quoted-Printable encoded text & newlines<br>• ISO-8859-1 German umlauts (`ä`, `ö`, `ü`, `ß`)<br>• Bare type parameter words (`TEL;WORK;VOICE`)<br>• `ADR` & `LABEL` in QP format | • Asymmetric tolerance: imports 2.1 QP<br>• Outbound normalizes to strict vCard 3.0 UTF-8<br>• Legacy `CHARSET` / `ENCODING` never emitted<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **Nextcloud / CardDAV** | `nextcloud_carddav_export.vcf` | vCard 4.0 | • Modern `VERSION:4.0`<br>• Inline `PHOTO:data:image/jpeg;base64,...`<br>• RFC 4770 `IMPP` (Matrix, Jabber)<br>• RFC 6350 `RELATED;TYPE=spouse` & `assistant`<br>• RFC 6350 `ANNIVERSARY`<br>• `ADR;LABEL=...` property parameters | • Asymmetric tolerance: imports vCard 4.0<br>• `IMPP` maps to native slotted IM properties<br>• Outbound normalizes to canonical vCard 3.0<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **GNOME Evolution Native** | `evolution_native_export.vcf` | vCard 3.0 | • Full native Evolution vCard 3.0<br>• `X-EVOLUTION-FILE-AS`<br>• `X-EVOLUTION-SPOUSE`, `_MANAGER`, `_ASSISTANT`<br>• `X-EVOLUTION-BLOG-URL`, `_VIDEO-URL`<br>• Slotted IMs (`X-JABBER`, `X-MATRIX`)<br>• 19-field telephony matrix & 3-slot addresses | • 100% lossless retention of all Evolution fields<br>• Deterministic `X-JMAP-KEY` preservation<br>• Multi-pass fixpoint: `Export₁ == Export₂ == Export₃` |
+
+### 7.2 Table-Driven Whole-File Regression Net
+
+The table-driven test suite (`real_exporter_fixture_corpus_table_driven_roundtrip` in `tests/mapping.rs`) executes the complete multi-stage lifecycle across the entire fixture corpus:
+
+1. **Inbound Import (`vcard_to_card`)**:
+   - Parses the complete realistic card into JSContact / EContact model.
+   - Asserts full names, structured components, email counts, phone counts & features, address counts & components, organization unit hierarchies, titles & roles, anniversary dates, relations, photos, and categories.
+
+2. **Outbound Normalization (`card_to_vcard`)**:
+   - Asserts valid RFC 2426 vCard 3.0 envelope (`BEGIN:VCARD\r\nVERSION:3.0\r\n` ... `END:VCARD\r\n`).
+   - Verifies that all unmapped vendor properties (`X-GENDER`, `X-PHONETIC-*`, `X-MS-*`, `PRODID`, `GENDER`) are cleanly excluded on export.
+
+3. **Multi-Stage Fixpoint Convergence**:
+   - Executes passes 1, 2, and 3: `vCard₁ → Card₁ → vCard₂ (Export₁) → Card₂ → vCard₃ (Export₂) → Card₃ → vCard₄ (Export₃)`.
+   - Validates standing invariants:
+     $$\text{Export}_2 \equiv \text{Export}_3 \quad\text{and}\quad \text{Card}_2 \equiv \text{Card}_3$$
+
+4. **Lossless Surface Preservation**:
+   - Verifies that all mapped data on `Card₂` (Name, Nicknames, Organizations, Titles, Anniversaries, Relations, Links, Keywords, Photos, Emails, Phones, Addresses) is identical to `Card₃` and preserved losslessly from `Card₁`.
+
 
 

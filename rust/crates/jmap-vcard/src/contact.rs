@@ -2237,7 +2237,8 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
             | X_EVOLUTION_MANAGER
             | X_EVOLUTION_ASSISTANT
             | "X-ABRELATEDNAMES"
-            | "X-AB-RELATED-NAMES" => {
+            | "X-AB-RELATED-NAMES"
+            | "RELATED" => {
                 let name = entry_text(entry);
                 if !names_a_person(&name) {
                     continue;
@@ -2248,6 +2249,34 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     MANAGER_RELATION.to_owned()
                 } else if name_upper == X_EVOLUTION_ASSISTANT {
                     ASSISTANT_RELATION.to_owned()
+                } else if name_upper == "RELATED" {
+                    if entry_has_type(entry, "spouse") || entry_has_type(entry, "partner") {
+                        SPOUSE_RELATION.to_owned()
+                    } else if entry_has_type(entry, "manager") {
+                        MANAGER_RELATION.to_owned()
+                    } else if entry_has_type(entry, "assistant") {
+                        ASSISTANT_RELATION.to_owned()
+                    } else if let Some(type_param) = entry_param(entry, "TYPE") {
+                        let clean = clean_apple_label(&type_param);
+                        if clean.is_empty() {
+                            "contact".to_owned()
+                        } else {
+                            clean.to_ascii_lowercase()
+                        }
+                    } else if let Some(group) = entry.group.as_deref()
+                        && let Some(raw_label) = group_labels.get(group)
+                    {
+                        let clean = clean_apple_label(raw_label);
+                        match clean.to_ascii_lowercase().as_str() {
+                            "spouse" | "partner" => SPOUSE_RELATION.to_owned(),
+                            "manager" => MANAGER_RELATION.to_owned(),
+                            "assistant" => ASSISTANT_RELATION.to_owned(),
+                            other if !other.is_empty() => other.to_owned(),
+                            _ => "contact".to_owned(),
+                        }
+                    } else {
+                        "contact".to_owned()
+                    }
                 } else if let Some(group) = entry.group.as_deref()
                     && let Some(raw_label) = group_labels.get(group)
                 {
@@ -2272,7 +2301,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     entry_rel.relation = Some([(relation_type, Value::Bool(true))].into());
                 }
             }
-            "BDAY" | X_EVOLUTION_ANNIVERSARY | "X-ABDATE" | "X-AB-DATE" => {
+            "BDAY" | "ANNIVERSARY" | X_EVOLUTION_ANNIVERSARY | "X-ABDATE" | "X-AB-DATE" => {
                 if name_upper == "X-ABDATE" || name_upper == "X-AB-DATE" {
                     let date_text = entry_text(entry);
                     if let Some(day) = read_day(&date_text)
@@ -2295,6 +2324,31 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     }
                 } else if let Some(anniversary) = read_anniversary(entry) {
                     anniversaries.insert(entry_key(entry, "y", &anniversaries), anniversary);
+                }
+            }
+            "IMPP" => {
+                let uri = entry_text(entry);
+                if let Some((scheme, handle)) = uri.split_once(':') {
+                    let wanted_scheme = scheme.to_ascii_lowercase();
+                    let matched_service = if wanted_scheme == "xmpp" {
+                        Some("Jabber")
+                    } else {
+                        SERVICE_SCHEMES
+                            .iter()
+                            .find(|(_, s)| s.eq_ignore_ascii_case(&wanted_scheme))
+                            .map(|(service, _)| *service)
+                    };
+                    if let Some(service) = matched_service
+                        && plain_handle(handle)
+                    {
+                        let entry_obj = OnlineService {
+                            service: Some(service.to_owned()),
+                            user: Some(handle.to_owned()),
+                            uri: None,
+                            extra: BTreeMap::new(),
+                        };
+                        online_services.insert(entry_key(entry, "s", &online_services), entry_obj);
+                    }
                 }
             }
             // One of the `X-` lines EDS keeps instant-messaging handles on, and
@@ -2403,31 +2457,52 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 /// [`image_subtype`]). [`UNKNOWN_TYPE`] is what EDS writes when it has none, and
 /// names no format, so it reads back as none.
 fn read_photo(entry: &VCardEntry) -> Option<Media> {
-    let states_a_reference =
-        entry_param(entry, "VALUE").is_some_and(|value| value.eq_ignore_ascii_case(URI_VALUE));
+    let raw_text = entry_text(entry);
+    let states_a_reference = entry_param(entry, "VALUE")
+        .is_some_and(|value| value.eq_ignore_ascii_case(URI_VALUE))
+        || raw_text.starts_with("http://")
+        || raw_text.starts_with("https://")
+        || raw_text.starts_with("ftp://")
+        || raw_text.starts_with("file://");
+
+    let media_type_param = entry_param(entry, "MEDIATYPE")
+        .or_else(|| {
+            entry_param(entry, "TYPE")
+                .filter(|subtype| {
+                    !subtype.eq_ignore_ascii_case(UNKNOWN_TYPE)
+                        && !matches!(
+                            subtype.to_ascii_uppercase().as_str(),
+                            "WORK" | "HOME" | "PREF" | "OTHER"
+                        )
+                })
+                .map(|subtype| {
+                    if subtype.contains('/') {
+                        subtype
+                    } else {
+                        format!("{IMAGE_PREFIX}{subtype}")
+                    }
+                })
+        })
+        .or_else(|| {
+            entry.params.iter().find_map(|param| {
+                let name = param.name.as_str();
+                is_known_image_subtype(name).then(|| format!("{IMAGE_PREFIX}{name}"))
+            })
+        })
+        .or_else(|| entry_binary_content_type(entry).map(str::to_owned));
+
     if states_a_reference {
-        let uri = entry_text(entry);
-        // A URI line says what the resource is nowhere: EDS writes no `TYPE` on
-        // one and reads none off one, so there is nothing to state.
-        return (!uri.is_empty()).then(|| photo_entry(uri, None));
+        return (!raw_text.is_empty()).then(|| photo_entry(raw_text, media_type_param));
     }
 
     let bytes = match entry_binary(entry) {
         Some(bytes) => bytes.to_vec(),
-        None => entry_text(entry).into_bytes(),
+        None => raw_text.into_bytes(),
     };
     if bytes.is_empty() {
         return None;
     }
-    let media_type = entry_param(entry, "TYPE")
-        .filter(|subtype| !subtype.eq_ignore_ascii_case(UNKNOWN_TYPE))
-        .or_else(|| {
-            entry.params.iter().find_map(|param| {
-                let name = param.name.as_str();
-                is_known_image_subtype(name).then(|| name.to_owned())
-            })
-        })
-        .map(|subtype| format!("{IMAGE_PREFIX}{subtype}"));
+    let media_type = media_type_param;
     let uri = format!(
         "{DATA_SCHEME}{}{BASE64_MARKER},{}",
         media_type.as_deref().unwrap_or_default(),
@@ -2495,11 +2570,20 @@ fn read_title(entry: &VCardEntry) -> Option<Title> {
 /// The kind is the line's own: a `BDAY` states a birthday and nothing else,
 /// so unlike a title's it is never guessed at and never left unsaid.
 fn read_anniversary(entry: &VCardEntry) -> Option<Anniversary> {
-    let (kind, _) = ANNIVERSARY_KINDS
-        .iter()
-        .find(|(_, name)| name.eq_ignore_ascii_case(entry.name.as_str()))?;
+    let kind = if entry.name.as_str().eq_ignore_ascii_case("BDAY") {
+        "birth"
+    } else if entry.name.as_str().eq_ignore_ascii_case("ANNIVERSARY")
+        || entry
+            .name
+            .as_str()
+            .eq_ignore_ascii_case(X_EVOLUTION_ANNIVERSARY)
+    {
+        "wedding"
+    } else {
+        return None;
+    };
     Some(Anniversary {
-        kind: (*kind).to_owned(),
+        kind: kind.to_owned(),
         date: Some(read_day(&entry_text(entry))?.json()),
         extra: BTreeMap::new(),
     })
@@ -2916,11 +3000,26 @@ fn value_text(value: &VCardValue) -> Option<String> {
         VCardValue::Text(text) => Some(text.clone()),
         VCardValue::Component(items) => Some(items.join(",")),
         VCardValue::PartialDateTime(date) => {
-            let mut text = String::new();
-            date.format_as_vcard(&mut text, &VCardValueType::DateAndOrTime)
-                .ok()?;
-            Some(text)
+            let day = date.day.or_else(|| {
+                // Workaround for calcard parse_vcard_date_and_or_time bug where the
+                // second hyphen causes idx to jump to tz_hour.
+                date.tz_hour.filter(|d| (1..=31).contains(d))
+            });
+            if let (Some(y), Some(m), Some(d)) = (date.year, date.month, day) {
+                Some(format!("{y:04}-{m:02}-{d:02}"))
+            } else {
+                let mut text = String::new();
+                date.format_as_vcard(&mut text, &VCardValueType::DateAndOrTime)
+                    .ok()?;
+                Some(text)
+            }
         }
+        VCardValue::Integer(number) => Some(number.to_string()),
+        VCardValue::Float(number) => Some(number.to_string()),
+        VCardValue::Boolean(true) => Some("TRUE".to_owned()),
+        VCardValue::Boolean(false) => Some("FALSE".to_owned()),
+        VCardValue::Kind(kind) => Some(kind.as_str().to_owned()),
+        VCardValue::Sex(sex) => Some(sex.as_str().to_owned()),
         _ => None,
     }
 }
@@ -2958,6 +3057,13 @@ fn entry_binary(entry: &VCardEntry) -> Option<&[u8]> {
     })
 }
 
+fn entry_binary_content_type(entry: &VCardEntry) -> Option<&str> {
+    entry.values.iter().find_map(|value| match value {
+        VCardValue::Binary(data) => data.content_type.as_deref(),
+        _ => None,
+    })
+}
+
 fn entry_param(entry: &VCardEntry, name: &str) -> Option<String> {
     entry
         .params
@@ -2969,7 +3075,10 @@ fn entry_param(entry: &VCardEntry, name: &str) -> Option<String> {
 fn entry_has_type(entry: &VCardEntry, value: &str) -> bool {
     entry.params.iter().any(|param| {
         if param.name.as_str().eq_ignore_ascii_case("TYPE") {
-            param_text(&param.value).eq_ignore_ascii_case(value)
+            let text = param_text(&param.value);
+            text.trim_matches('"')
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case(value))
         } else {
             param.name.as_str().eq_ignore_ascii_case(value)
         }

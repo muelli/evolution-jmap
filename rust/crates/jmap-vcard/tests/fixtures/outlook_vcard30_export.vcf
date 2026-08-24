@@ -1,0 +1,31 @@
+BEGIN:VCARD
+VERSION:3.0
+PRODID:-//Microsoft Corporation//Outlook 16.0 MIMEDIR//EN
+N:Lindqvist;Erik;Magnus;Mr.;
+FN:Mr. Erik Magnus Lindqvist
+NICKNAME:Erik
+ORG:Nordic Solutions AB;Cloud Infrastructure;Platform Security;Executive Team
+TITLE:Chief Architect
+ROLE:Executive Technical Advisor
+TEL;TYPE=WORK,VOICE:+46 8 123 45 67
+TEL;TYPE=HOME,VOICE:+46 8 765 43 21
+TEL;TYPE=CELL,VOICE:+46 70 123 4567
+TEL;TYPE=WORK,FAX:+46 8 123 45 68
+ADR;TYPE=WORK,POSTAL,PARCEL:;;Stureplan 4\, 5 tr;Stockholm;Stockholms län;114 35;Sweden
+LABEL;TYPE=WORK,POSTAL,PARCEL:Stureplan 4\, 5 tr\n114 35 Stockholm\nSweden
+ADR;TYPE=HOME:;;Strandvägen 12;Stockholm;Stockholms län;114 56;Sweden
+LABEL;TYPE=HOME:Strandvägen 12\n114 56 Stockholm\nSweden
+EMAIL;TYPE=PREF,INTERNET:erik.lindqvist@nordicsolutions.example
+EMAIL;TYPE=WORK,INTERNET:erik.l@security.example
+EMAIL;TYPE=HOME,INTERNET:erik.personal@privat.example
+URL;TYPE=WORK:https://www.nordicsolutions.example
+URL;TYPE=HOME:https://eriklindqvist.example
+BDAY:19800512
+NOTE:Primary escalation contact for European cloud infrastructure.\nLanguages: Swedish, English, German.\nIntranet profile: https://intranet.nordicsolutions.example/u/erik
+CATEGORIES:Partners,Security,Stockholm Office
+X-MS-OL-DESIGN;CHARSET=utf-8:<card xmlns="http://schemas.microsoft.com/office/outlook/12/cardDesign.xml">cardLayout</card>
+X-MS-CARDPICTURE;TYPE=PNG;ENCODING=B:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+X-MS-TEL-ASSISTANT:+46 8 123 45 99
+X-MS-IMADDRESS:sip:erik@nordicsolutions.example
+REV:20260820T112233Z
+END:VCARD
