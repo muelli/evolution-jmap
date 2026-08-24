@@ -212,6 +212,34 @@ fn an_access_token_is_sent_as_bearer_credentials() {
     assert_eq!(sync.address_book_id(), &fixture.default_book.unwrap());
 }
 
+/// The EDS-side sibling of `jmap_mail::connect::StoreError`'s reclassification
+/// (`jmap-mail/tests/connect.rs::a_401_on_a_bearer_token_reclassifies_to_the_
+/// same_oauth2_failure_a_fetch_would_get`): a 401 on a bearer token this
+/// backend itself just sent must not be treated like a wrong Basic password,
+/// because `REJECTED` here tells EDS to throw away a refresh token a
+/// transient rejection has not invalidated. The 401 itself is real, from
+/// `jmap-mock`, not hand-built — only the reclassification (which needs to
+/// know the attempt was OAuth 2.0, something `open_book` alone is never told;
+/// that is `connect_with`'s job) is applied by hand, the same way the mail
+/// sibling test does for `open_mail`.
+#[test]
+fn a_401_on_a_bearer_token_reclassifies_to_required_not_rejected() {
+    let fixture = Fixture::start_with(MockServer::builder().bearer_token("good-token"), true);
+
+    let error = expect_error(connect::open_book(
+        &fixture.config(),
+        Credentials::bearer("wrong-token"),
+    ));
+    assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_REJECTED);
+
+    let reclassified = error.reclassify_oauth2_rejection();
+    assert!(
+        matches!(reclassified, ConnectError::OAuth2(_)),
+        "expected OAuth2, got {reclassified}"
+    );
+    assert_eq!(reclassified.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
+}
+
 /// EDS re-prompts on `REJECTED` and gives up on `ERROR`, so a wrong password
 /// has to be told apart from a broken server.
 #[test]

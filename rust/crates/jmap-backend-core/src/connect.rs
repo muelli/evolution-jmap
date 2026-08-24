@@ -157,6 +157,35 @@ impl ConnectError {
         }
     }
 
+    /// Turns a server's 401 on an OAuth 2.0 bearer token into the same
+    /// [`Self::OAuth2`] failure a failed *fetch* of that token already gets.
+    ///
+    /// Call only where the credentials just tried were themselves an OAuth
+    /// 2.0 access token — every caller already knows that from the same
+    /// [`crate::oauth2::source_uses_oauth2`] read that chose the credential in
+    /// the first place. A 401 on a Basic or API-token attempt is left alone:
+    /// there, [`is_wrong_password`] correctly means the password was wrong,
+    /// and `REJECTED` (ask again, discard what is stored) is the right
+    /// answer.
+    ///
+    /// For OAuth 2.0 it is not, for the same reason [`Self::OAuth2`]'s own doc
+    /// gives a failed fetch: `REQUIRED` opens a fresh consent window without
+    /// discarding the stored refresh token, which a 401 moments after that
+    /// token was successfully fetched has not invalidated — a transient
+    /// rejection and a genuinely revoked grant look identical from here, and
+    /// `REQUIRED` is the answer that does not overreact to the more common,
+    /// transient case the way `REJECTED` would.
+    ///
+    /// Mirrors `jmap_mail::connect::StoreError::reclassify_oauth2_rejection` —
+    /// same reasoning, applied to EDS's four-valued
+    /// `ESourceAuthenticationResult` instead of Camel's three-valued one.
+    pub fn reclassify_oauth2_rejection(self) -> Self {
+        match self {
+            Self::Client(error) if is_wrong_password(&error) => Self::OAuth2(error.to_string()),
+            other => other,
+        }
+    }
+
     /// Allocates a `GError` describing this failure. Ownership passes to the
     /// caller, as with [`crate::error::to_gerror`].
     pub fn to_gerror(&self) -> *mut GError {
@@ -351,10 +380,15 @@ where
     // Which authentication scheme this account uses is decided here, once, for
     // the same reason the `out_auth_result` classification is: an address book
     // and a calendar on one account must not disagree about how to log in.
+    // Kept, not just asked once: `open`'s own failure needs to know it too,
+    // to tell a 401 on the token this call just fetched apart from one on an
+    // ordinary password.
+    // SAFETY: `source` is a valid ESource, checked non-NULL above.
+    let uses_oauth2 = unsafe { source_uses_oauth2(source) };
     // SAFETY: `source` is a valid ESource, checked non-NULL above, and
     // `cancellable` satisfies `access_token`'s contract by this function's.
     let resolved = unsafe {
-        if source_uses_oauth2(source) {
+        if uses_oauth2 {
             access_token(source, cancellable).map(Credentials::bearer)
         } else if source_uses_api_token(source) {
             bearer_credentials(password.as_deref())
@@ -374,7 +408,7 @@ where
         }
     };
 
-    match open(&config, resolved) {
+    match finish_connect(uses_oauth2, open(&config, resolved)) {
         Ok(opened) => {
             // SAFETY: as above.
             unsafe { write_auth_result(out_auth_result, ACCEPTED_AUTH_RESULT) };
@@ -388,6 +422,25 @@ where
             }
             None
         }
+    }
+}
+
+/// What `connect_with` reports, given what `open` itself answered.
+///
+/// Split out so the reclassification decision — apply
+/// [`ConnectError::reclassify_oauth2_rejection`] only to an OAuth 2.0
+/// attempt's failure, leave every other outcome exactly as `open` gave it —
+/// is a plain function a test can drive without a live `ESource`, the same
+/// way `jmap_mail::service::finish_authenticate` is split out of `attempt`
+/// for a `CamelService`.
+fn finish_connect<T>(
+    uses_oauth2: bool,
+    outcome: Result<T, ConnectError>,
+) -> Result<T, ConnectError> {
+    if uses_oauth2 {
+        outcome.map_err(ConnectError::reclassify_oauth2_rejection)
+    } else {
+        outcome
     }
 }
 
@@ -545,6 +598,66 @@ mod tests {
             .unwrap(),
             id("B")
         );
+    }
+
+    /// The reclassification only fires for the one shape it exists for — a
+    /// 401 — and only turns it into `OAuth2`, never touching any other
+    /// failure, mirroring `jmap_mail`'s
+    /// `only_the_401_shape_is_reclassified`.
+    #[test]
+    fn only_a_401_is_reclassified_to_oauth2_required() {
+        let unauthorized = ConnectError::Client(Error::Http {
+            status: 401,
+            problem: None,
+        });
+        let reclassified = unauthorized.reclassify_oauth2_rejection();
+        assert!(
+            matches!(reclassified, ConnectError::OAuth2(_)),
+            "expected OAuth2, got {reclassified}"
+        );
+        assert_eq!(reclassified.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
+
+        for error in [
+            ConnectError::Client(Error::Http {
+                status: 403,
+                problem: None,
+            }),
+            ConnectError::Client(Error::Transport("down".to_owned())),
+        ] {
+            let message = error.to_string();
+            let reclassified = error.reclassify_oauth2_rejection();
+            assert!(
+                matches!(reclassified, ConnectError::Client(_)),
+                "expected the error left alone, got {reclassified}"
+            );
+            assert_eq!(reclassified.to_string(), message);
+        }
+    }
+
+    /// The gate `connect_with` applies around `open`'s outcome: only an
+    /// OAuth 2.0 attempt's 401 is reclassified, and success passes through
+    /// unchanged either way — the same two cases
+    /// `jmap_mail::service::finish_authenticate_tests` pins for the mail
+    /// side.
+    #[test]
+    fn finish_connect_reclassifies_only_when_the_attempt_was_oauth2() {
+        let unauthorized = || {
+            Err::<(), _>(ConnectError::Client(Error::Http {
+                status: 401,
+                problem: None,
+            }))
+        };
+
+        assert!(matches!(
+            finish_connect(true, unauthorized()),
+            Err(ConnectError::OAuth2(_))
+        ));
+        assert!(matches!(
+            finish_connect(false, unauthorized()),
+            Err(ConnectError::Client(_))
+        ));
+        assert!(finish_connect(true, Ok(())).is_ok());
+        assert!(finish_connect(false, Ok(())).is_ok());
     }
 
     /// The API-token sibling of [`credentials`]'s own user/password matrix:
