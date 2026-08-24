@@ -16809,6 +16809,25 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             ],
         },
         RealExporterTestCase {
+            name: "Google Contacts Export (vCard 4.0 with Data URIs, IMPP & Related)",
+            fixture_file: "google_contacts_vcard40_export.vcf",
+            exporter_name: "Google Contacts (vCard 4.0)",
+            expected_full_name: "Dr. Jane Marie Doe",
+            expected_surname: "Doe",
+            expected_given_name: "Jane",
+            expected_email_count: 2,
+            expected_phone_count: 3,
+            expected_address_count: 2,
+            expected_org_name: Some("Alphabet Inc."),
+            expected_org_units_count: 2,
+            expected_title_count: 2,
+            expected_anniversaries_count: 2, // BDAY + Anniversary
+            expected_relations_count: 3,     // Spouse, Manager, Assistant
+            expected_has_photo: true,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &["GENDER", "CLIENTPIDMAP", "PRODID"],
+        },
+        RealExporterTestCase {
             name: "Apple iCloud & macOS Contacts Export (vCard 3.0 with X-ABLabel Groups)",
             fixture_file: "icloud_macos_export.vcf",
             exporter_name: "Apple iCloud / macOS Contacts",
@@ -17202,6 +17221,163 @@ fn real_exporter_fixture_google_contacts_detailed_roundtrip() {
     assert!(export1.contains("X-EVOLUTION-MANAGER:Dr. Alan Turing"));
     assert!(export1.contains("X-EVOLUTION-ASSISTANT:Sarah Connor"));
 
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_google_contacts_vcard40_detailed_roundtrip() {
+    let vcard_text = read_fixture("google_contacts_vcard40_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Google Contacts vCard 4.0 fixture");
+
+    // 1. Verify GENDER, CLIENTPIDMAP, PRODID, and REV do not pollute extra
+    assert!(
+        card.extra.is_empty(),
+        "card.extra must be clean, got: {:?}",
+        card.extra
+    );
+
+    // 2. Verify email properties and PREF rank
+    let emails = card.emails.as_ref().unwrap();
+    let work_email = emails
+        .values()
+        .find(|e| e.address == "jane.doe@research.example")
+        .expect("work email");
+    assert_eq!(
+        work_email.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(work_email.pref, Some(1));
+
+    let home_email = emails
+        .values()
+        .find(|e| e.address == "janedoe.personal@private.example")
+        .expect("home email");
+    assert_eq!(
+        home_email.contexts.as_ref().and_then(|c| c.get("private")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 3. Verify telephony features and quoted TYPE parameters
+    let phones = card.phones.as_ref().unwrap();
+    let work_phone = phones
+        .values()
+        .find(|p| p.number == "+1 (650) 555-0199")
+        .expect("work phone");
+    assert_eq!(
+        work_phone.features.as_ref().and_then(|f| f.get("voice")),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        work_phone.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(work_phone.pref, Some(1));
+
+    let cell_phone = phones
+        .values()
+        .find(|p| p.number == "+1 (650) 555-0142")
+        .expect("cell phone");
+    assert_eq!(
+        cell_phone.features.as_ref().and_then(|f| f.get("mobile")),
+        Some(&serde_json::json!(true))
+    );
+
+    let fax_phone = phones
+        .values()
+        .find(|p| p.number == "+1 (650) 555-0198")
+        .expect("fax phone");
+    assert_eq!(
+        fax_phone.features.as_ref().and_then(|f| f.get("fax")),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        fax_phone.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 4. Verify postal addresses and inline LABEL parameter extraction
+    let addresses = card.addresses.as_ref().unwrap();
+    let work_adr = addresses
+        .values()
+        .find(|a| a.contexts.as_ref().and_then(|c| c.get("work")) == Some(&serde_json::json!(true)))
+        .expect("work adr");
+    assert!(
+        work_adr
+            .full
+            .as_ref()
+            .unwrap()
+            .contains("1600 Amphitheatre Pkwy")
+    );
+    assert_eq!(work_adr.extra.get("pref"), Some(&serde_json::json!(1)));
+
+    // 5. Verify IMPP online services mapped to Jabber / Google Talk
+    let services = card.online_services.as_ref().unwrap();
+    let impp = services
+        .values()
+        .find(|s| s.user.as_deref() == Some("janedoe@google.example"))
+        .expect("IMPP service");
+    assert_eq!(impp.service.as_deref(), Some("Jabber"));
+
+    // 6. Verify relations (Spouse, Manager, Assistant)
+    let relations = card.related_to.as_ref().unwrap();
+    assert!(states_spouse(
+        "John Michael Doe",
+        &relations["John Michael Doe"]
+    ));
+    assert!(states_manager(
+        "Dr. Alan Turing",
+        &relations["Dr. Alan Turing"]
+    ));
+    assert!(states_assistant("Sarah Connor", &relations["Sarah Connor"]));
+
+    // 7. Verify hyphenated anniversary dates
+    let anniversaries = card.anniversaries.as_ref().unwrap();
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("birthday");
+    assert_eq!(
+        bday.date,
+        Some(serde_json::json!({"@type": "PartialDate", "year": 1982, "month": 7, "day": 15}))
+    );
+
+    let anniversary = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("anniversary");
+    assert_eq!(
+        anniversary.date,
+        Some(serde_json::json!({"@type": "PartialDate", "year": 2010, "month": 9, "day": 18}))
+    );
+
+    // 8. Verify inline data URI photo
+    let media = card.media.as_ref().unwrap();
+    let photo = media
+        .values()
+        .find(|m| m.kind.as_deref() == Some("photo"))
+        .expect("photo");
+    assert_eq!(photo.media_type.as_deref(), Some("image/jpeg"));
+    assert!(photo.uri.starts_with("data:image/jpeg;base64,"));
+
+    // 9. Export to canonical vCard 3.0 and verify field normalizations
+    let export1 = card_to_vcard(&card);
+    assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(!export1.contains("GENDER"));
+    assert!(!export1.contains("CLIENTPIDMAP"));
+    assert!(!export1.contains("PRODID"));
+    assert!(export1.contains("X-EVOLUTION-SPOUSE:John Michael Doe"));
+    assert!(export1.contains("X-EVOLUTION-MANAGER:Dr. Alan Turing"));
+    assert!(export1.contains("X-EVOLUTION-ASSISTANT:Sarah Connor"));
+    assert!(export1.contains("PHOTO;"));
+    assert!(export1.contains("ENCODING=b"));
+
+    // 10. Multi-stage roundtrip fixpoint execution
     let card2 = vcard_to_card(&export1).expect("parse export1");
     let export2 = card_to_vcard(&card2);
     let card3 = vcard_to_card(&export2).expect("parse export2");

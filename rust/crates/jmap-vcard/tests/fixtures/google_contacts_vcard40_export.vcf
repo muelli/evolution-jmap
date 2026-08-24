@@ -1,0 +1,32 @@
+BEGIN:VCARD
+VERSION:4.0
+PRODID:-//Google Inc.//Google Contacts 4.0//EN
+UID:urn:uuid:7c9e6679-7425-40de-944b-e07fc1f90ae7
+FN:Dr. Jane Marie Doe
+N:Doe;Jane;Marie;Dr.;
+NICKNAME:Janey
+GENDER:F
+PHOTO:data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=
+EMAIL;TYPE=work;PREF=1:jane.doe@research.example
+EMAIL;TYPE=home:janedoe.personal@private.example
+TEL;TYPE="work,voice";PREF=1:+1 (650) 555-0199
+TEL;TYPE="cell,voice":+1 (650) 555-0142
+TEL;TYPE="work,fax":+1 (650) 555-0198
+ADR;TYPE=work;PREF=1;LABEL="1600 Amphitheatre Pkwy\nMountain View\, CA 94043\nUnited States":;;1600 Amphitheatre Pkwy;Mountain View;CA;94043;United States
+ADR;TYPE=home;LABEL="456 Elm Street\nPalo Alto\, CA 94301\nUnited States":;;456 Elm Street;Palo Alto;CA;94301;United States
+ORG:Alphabet Inc.;Google Research;Machine Learning Division
+TITLE:Principal Research Scientist
+ROLE:AI Engineering Lead
+BDAY:1982-07-15
+ANNIVERSARY:2010-09-18
+URL;TYPE=work:https://research.google.example/jane
+URL;TYPE=home:https://blog.janedoe.example
+IMPP;TYPE=work;PREF=1:xmpp:janedoe@google.example
+RELATED;TYPE=spouse:John Michael Doe
+RELATED;TYPE=manager:Dr. Alan Turing
+RELATED;TYPE=assistant:Sarah Connor
+NOTE:Met at NeurIPS 2024 conference.\nKey collaborator on transformer optimizations.\nPrefers asynchronous communication.
+CATEGORIES:Research,Colleagues,Conference
+CLIENTPIDMAP:1;urn:uuid:3b40392d-be6e-446a-97ba-03b3c303f007
+REV:20260824T120000Z
+END:VCARD
