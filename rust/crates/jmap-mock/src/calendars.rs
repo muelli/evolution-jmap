@@ -137,6 +137,14 @@ pub fn calendar_event_set(state: &mut ServerState, arguments: Value) -> Result<V
                 SetError::new(error::set::INVALID_PROPERTIES).with_description("start is required")
             );
         }
+        // jscalendarbis §3.1.2: a standalone Event MUST set `version`. Enforced
+        // exactly the way Fastmail does — same type, same property list, no
+        // description — because reproducing the strictest real deployment is
+        // what keeps the mock honest (found 2026-08-24: every real create was
+        // refused over this while the mock waved it through).
+        if event.version.is_none() {
+            return Err(SetError::new(error::set::INVALID_PROPERTIES).with_properties(["version"]));
+        }
         event.id = Some(id.clone());
         if event.event_type.is_none() {
             event.event_type = Some("Event".to_owned());

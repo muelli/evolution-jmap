@@ -77,6 +77,14 @@ impl SetError {
         self.description = Some(description.into());
         self
     }
+
+    pub fn with_properties<P: Into<String>>(
+        mut self,
+        properties: impl IntoIterator<Item = P>,
+    ) -> Self {
+        self.properties = Some(properties.into_iter().map(Into::into).collect());
+        self
+    }
 }
 
 /// Well-known method-level error types (RFC 8620 §3.6.2).

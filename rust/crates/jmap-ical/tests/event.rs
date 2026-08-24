@@ -7018,6 +7018,9 @@ fn the_fixture_survives_a_round_trip() {
             // Membership follows from which EDS source is being served, not
             // from the component, so the backend fills it in on create.
             calendar_ids: None,
+            // Re-import stamps the standalone object's JSCalendar version
+            // (jscalendarbis §3.1.2) regardless of what the fixture carried.
+            version: Some("1.0".to_owned()),
             ..fixture_event()
         }
     );
