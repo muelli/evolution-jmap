@@ -10,7 +10,7 @@
 //! Without this, `jmap_backend_core::oauth2::source_uses_oauth2` answers
 //! `false` for every calendar in this process even when EDS itself can fetch
 //! the account's token just fine, because the alias check it makes
-//! (`e_oauth2_services_is_oauth2_alias_static`) is a query against *this
+//! (`e_oauth2_services_is_oauth2_alias`) is a query against *this
 //! process's* `EOAuth2Services` singleton, not a D-Bus round trip — CURRENT
 //! PRIORITY item 12's own diagnosis of the endless consent loop.
 
