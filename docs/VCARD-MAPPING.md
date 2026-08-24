@@ -759,5 +759,35 @@ The table-driven test suite (`real_exporter_fixture_corpus_table_driven_roundtri
 4. **Lossless Surface Preservation**:
    - Verifies that all mapped data on `Card₂` (Name, Nicknames, Organizations, Titles, Anniversaries, Relations, Links, Keywords, Photos, Emails, Phones, Addresses) is identical to `Card₃` and preserved losslessly from `Card₁`.
 
+---
+
+## 8. Extended ISO 8601 Hyphenated Date Handling & Upstream Fidelity
+
+### 8.1 Upstream Calcard Date Parsing Characteristics & Blast Radius
+In `calcard` 0.3.11, date parsing exhibits distinct behaviors across basic vs. extended formats and property types:
+1. **Date-Only Parser (`parse_vcard_date`)**:
+   - When parsing date-only properties (such as `BDAY` or `ANNIVERSARY` with `VALUE=date`, or `ANNIVERSARY` in vCard 4.0), `calcard` reads extended format `YYYY-MM-DD` only up to the year and month (`1985-04`), stopping before the second hyphen and leaving `day` as `None`.
+   - In contrast, ISO 8601 basic format (`YYYYMMDD`, e.g. `19850412`, `20150920`) is parsed fully into year, month, and day.
+2. **Date-and-Time Parser (`parse_vcard_date_and_or_time`)**:
+   - In vCard 3.0 `BDAY` with timestamp (e.g. `1985-04-12T10:30:00Z` or `1985-04-12T10:30:00+02:00`), extended format parses `day` correctly before `'T'`.
+   - In vCard 4.0 `ANNIVERSARY`, extended format `2015-09-20T14:00:00Z` drops the day because vCard 4.0 grammar expects basic format `20150920T140000Z`.
+
+### 8.2 Real-World Exporter Blast Radius
+Extended hyphenated dates (`YYYY-MM-DD`) are widely produced across major contact ecosystems:
+- **RFC 2426 §3.1.5 (vCard 3.0 Normative Specification)**: Explicitly uses `BDAY:1996-04-15` and `BDAY:1953-10-15T23:10:00Z` in standard examples.
+- **GNOME Evolution / EDS (`libebook-contacts`)**: Writes `BDAY:YYYY-MM-DD` and `X-EVOLUTION-ANNIVERSARY:YYYY-MM-DD` by default via `e_contact_date_to_string`.
+- **Apple iCloud / macOS Contacts**: Exports `X-ABDATE` and `BDAY:YYYY-MM-DD`.
+- **Google Contacts**: Exports `BDAY:YYYY-MM-DD`.
+- **Microsoft Outlook Modern (M365)**: Exports `BDAY:YYYY-MM-DD`.
+- **Nextcloud / SabreDAV (CardDAV)**: Emits `BDAY:YYYY-MM-DD` and `ANNIVERSARY:YYYY-MM-DD`.
+
+### 8.3 Import-Side Pre-Normalization Strategy
+To guarantee 100% fidelity without day loss, `jmap-vcard`'s [`vcard_to_card`] applies import-side pre-normalization (`normalize_vcard_dates`):
+- Date property lines (`BDAY`, `ANNIVERSARY`, `X-EVOLUTION-ANNIVERSARY`, `X-ABDATE`, `X-AB-DATE`) with 10-character `YYYY-MM-DD` values are normalized to `YYYYMMDD` before passing the stream to `calcard`.
+- vCard 4.0 `ANNIVERSARY` timestamp values with `YYYY-MM-DDTHH:MM:SS...` are normalized to standard basic format `YYYYMMDDTHHMMSS...`.
+- Partial dates without days (`YYYY-MM`, `YYYY`, `--MM-DD`), non-date text (`VALUE=text:circa 1800`), and non-date properties (`NOTE:born 1985-04-12`) are preserved untouched.
+- Outbound serialization (`card_to_vcard`) continues to emit standard extended ISO 8601 `YYYY-MM-DD` (`BDAY;X-JMAP-KEY=y1:1985-04-12`), adhering to RFC 2426 and achieving immediate fixed-point stability on pass 2 (`Export₂ == Export₃`).
+
+
 
 

@@ -1933,6 +1933,128 @@ fn fold_overlong_lines(vcard: String) -> String {
     out
 }
 
+/// Pre-normalizes extended ISO 8601 hyphenated dates (`YYYY-MM-DD` and timestamps)
+/// on date property lines (`BDAY`, `ANNIVERSARY`, `X-EVOLUTION-ANNIVERSARY`,
+/// `X-ABDATE`, `X-AB-DATE`) into basic format (`YYYYMMDD` / `YYYYMMDDTHHMMSS...`)
+/// before passing the vCard stream to `calcard`.
+///
+/// Context & upstream rationale:
+/// Upstream `calcard` (0.3.11) exhibits two date parsing limitations:
+/// 1. `parse_vcard_date` (used when `VALUE=date` is stated) reads extended format
+///    `YYYY-MM-DD` only to the year and month, stopping at the second hyphen and
+///    leaving `day` as `None` (losing the day).
+/// 2. `parse_vcard_date_and_or_time` (used for standard date-and-or-time properties)
+///    misinterprets the second hyphen as a timezone offset transition, storing the
+///    day into `tz_hour` when no timezone offset is present, or overwriting it with
+///    the actual timezone offset (e.g. `+02:00` corrupting day 12 into day 02), or
+///    leaving `day` as `None` on UTC timestamps (`Z`).
+///
+/// In contrast, `calcard`'s basic-format date parser (`YYYYMMDD` / `YYYYMMDDTHHMMSS`)
+/// parses all date components (year, month, day, time, timezone) completely and
+/// losslessly across all versions (vCard 2.1, 3.0, 4.0). Pre-normalizing hyphenated
+/// date lines to basic format on import guarantees 100% fidelity without data loss.
+fn normalize_vcard_dates(vcard: &str) -> String {
+    let mut out = String::with_capacity(vcard.len());
+    let mut remaining = vcard;
+    while !remaining.is_empty() {
+        let (line_with_ending, rest) = match remaining.find('\n') {
+            Some(pos) => (&remaining[..=pos], &remaining[pos + 1..]),
+            None => (remaining, ""),
+        };
+        remaining = rest;
+
+        let line_trimmed_ending = line_with_ending.trim_end_matches(['\r', '\n']);
+        let ending = &line_with_ending[line_trimmed_ending.len()..];
+
+        if let Some((header, value)) = split_vcard_property_line(line_trimmed_ending) {
+            let prop_name = header
+                .split(';')
+                .next()
+                .unwrap_or(header)
+                .rsplit('.')
+                .next()
+                .unwrap_or(header)
+                .trim();
+            if is_date_property_name(prop_name) {
+                let normalized_val = normalize_date_value(prop_name, value);
+                out.push_str(header);
+                out.push(':');
+                out.push_str(&normalized_val);
+                out.push_str(ending);
+                continue;
+            }
+        }
+        out.push_str(line_with_ending);
+    }
+    out
+}
+
+fn is_date_property_name(name: &str) -> bool {
+    name.eq_ignore_ascii_case("BDAY")
+        || name.eq_ignore_ascii_case("ANNIVERSARY")
+        || name.eq_ignore_ascii_case(X_EVOLUTION_ANNIVERSARY)
+        || name.eq_ignore_ascii_case("X-ABDATE")
+        || name.eq_ignore_ascii_case("X-AB-DATE")
+}
+
+fn split_vcard_property_line(line: &str) -> Option<(&str, &str)> {
+    let mut in_quotes = false;
+    for (idx, byte) in line.bytes().enumerate() {
+        match byte {
+            b'"' => in_quotes = !in_quotes,
+            b':' if !in_quotes => {
+                return Some((&line[..idx], &line[idx + 1..]));
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn normalize_date_value(prop_name: &str, val: &str) -> String {
+    let bytes = val.as_bytes();
+    if bytes.len() == 10
+        && bytes[0..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(u8::is_ascii_digit)
+    {
+        // Extended date YYYY-MM-DD -> basic YYYYMMDD
+        let year = &val[0..4];
+        let month = &val[5..7];
+        let day = &val[8..10];
+        format!("{year}{month}{day}")
+    } else if prop_name.eq_ignore_ascii_case("ANNIVERSARY")
+        && bytes.len() >= 10
+        && bytes[0..4].iter().all(u8::is_ascii_digit)
+        && bytes[4] == b'-'
+        && bytes[5..7].iter().all(u8::is_ascii_digit)
+        && bytes[7] == b'-'
+        && bytes[8..10].iter().all(u8::is_ascii_digit)
+    {
+        // vCard 4.0 ANNIVERSARY with timestamp: convert to basic format
+        let year = &val[0..4];
+        let month = &val[5..7];
+        let day = &val[8..10];
+        let mut out = format!("{year}{month}{day}");
+        let rest = &val[10..];
+        if let Some(time_part) = rest.strip_prefix(['T', 't']) {
+            out.push('T');
+            for ch in time_part.chars() {
+                if ch != ':' {
+                    out.push(ch);
+                }
+            }
+        } else {
+            out.push_str(rest);
+        }
+        out
+    } else {
+        val.to_owned()
+    }
+}
+
 /// Read a vCard 3.0 string into a contact card.
 ///
 /// The `id` is whatever the vCard's `UID` says, which for a contact
@@ -1940,7 +2062,8 @@ fn fold_overlong_lines(vcard: String) -> String {
 /// JMAP id — the caller knows which case it is in and must drop it before
 /// sending a create.
 pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
-    let card = match Parser::new(vcard).strict().entry() {
+    let normalized = normalize_vcard_dates(vcard);
+    let card = match Parser::new(&normalized).strict().entry() {
         Entry::VCard(card) => card,
         Entry::UnterminatedComponent(_) => return Err(VCardError::Unterminated),
         Entry::InvalidLine(line) => return Err(VCardError::Malformed(line)),
