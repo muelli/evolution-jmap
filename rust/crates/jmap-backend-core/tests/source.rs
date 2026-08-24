@@ -20,7 +20,7 @@ use eds_sys::{
 };
 use glib_sys::GFALSE;
 use gobject_sys::g_object_unref;
-use jmap_backend_core::source::{ConnectTarget, SourceConfig, SourceError};
+use jmap_backend_core::source::{ConnectTarget, SourceConfig, SourceError, destination_address};
 
 /// An `ESource` that is not backed by the registry — `e_source_new_with_uid`
 /// with a NULL D-Bus object is exactly what EDS itself uses for a source read
@@ -355,4 +355,51 @@ fn the_refusal_reaches_evolution_as_a_tls_error_not_a_generic_one() {
         assert_eq!((*gerror).code, eds_sys::E_CLIENT_ERROR_INVALID_ARG as i32);
         glib_sys::g_error_free(gerror);
     }
+}
+
+#[test]
+fn destination_address_reads_the_explicit_host_and_port() {
+    let source = TestSource::new().host("jmap.example.com").port(8443);
+
+    // SAFETY: a live source, only read from.
+    let address = unsafe { destination_address(source.0) };
+
+    assert_eq!(address, Some(("jmap.example.com".into(), 8443)));
+}
+
+#[test]
+fn destination_address_defaults_an_unset_port_to_443() {
+    // A bare-domain, SRV-eligible account (`ConnectTarget::Domain`) never has
+    // a port in its `[Authentication]` group — EDS reads that back as 0, "not
+    // set" — but a network monitor asked to watch port 0 learns nothing.
+    let source = TestSource::new().host("jmap.example.com");
+
+    // SAFETY: as above.
+    let address = unsafe { destination_address(source.0) };
+
+    assert_eq!(address, Some(("jmap.example.com".into(), 443)));
+}
+
+#[test]
+fn destination_address_is_none_without_a_host() {
+    let source = TestSource::new().user("vera@example.com");
+
+    // SAFETY: as above.
+    let address = unsafe { destination_address(source.0) };
+
+    assert_eq!(address, None);
+}
+
+#[test]
+fn destination_address_does_not_create_an_authentication_group_it_lacks() {
+    let source = TestSource::new();
+
+    // SAFETY: as above.
+    let address = unsafe { destination_address(source.0) };
+
+    assert_eq!(address, None);
+    assert!(
+        !source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
+        "reading a source must not create the [Authentication] group it lacks"
+    );
 }

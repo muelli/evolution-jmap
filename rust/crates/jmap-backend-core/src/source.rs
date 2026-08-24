@@ -347,6 +347,48 @@ pub fn connect_target(
     }))
 }
 
+/// The host and port EDS's own network-reachability monitor should watch for
+/// this account — `EBackendClass::get_destination_address`'s job.
+///
+/// Read directly off `[Authentication]`, the same fields
+/// [`SourceConfig::from_source`] reads, but without [`connect_target`]'s host
+/// validation or TLS refusal: a malformed or insecure-mode host is still a
+/// real host to watch, and this is advisory only — nothing here is ever
+/// dialled. Mirrors evolution-ews's own `ews_backend_get_destination_address`
+/// fallback branch (used whenever there is no dedicated connection-URL
+/// setting to parse instead, which for a JMAP account is always the case —
+/// there is no such setting). The one addition over that literal read: a
+/// port of 0 — EDS's "not set" reading, and what every bare-domain
+/// SRV-eligible account has — becomes 443, the port a JMAP connection
+/// actually defaults to (`connect_target`'s own default for exactly this
+/// case), rather than a monitor asked to watch port 0.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`, only read from, alive for the call.
+pub unsafe fn destination_address(source: *mut ESource) -> Option<(String, u16)> {
+    // SAFETY: registers the extension type, as `SourceConfig::from_source`
+    // does, so a process that has never looked it up yet can find it.
+    unsafe { e_source_authentication_get_type() };
+
+    // `extension_if_present`, not `e_source_get_extension`: a source read for
+    // reachability monitoring, not owned by the caller, must not gain an
+    // empty `[Authentication]` group merely because something looked.
+    // SAFETY: the source is valid for the whole call and the name is a
+    // header constant.
+    let auth = unsafe {
+        extension_if_present::<ESourceAuthentication>(source, E_SOURCE_EXTENSION_AUTHENTICATION)
+    }?;
+    // SAFETY: a live extension, by `extension_if_present`'s contract.
+    let host = unsafe { read_string(e_source_authentication_get_host(auth)) }?;
+    if host.is_empty() {
+        return None;
+    }
+    // SAFETY: as above.
+    let port = unsafe { e_source_authentication_get_port(auth) };
+    Some((host, if port == 0 { 443 } else { port }))
+}
+
 /// Assembles the origin string [`connect_target`] would connect to, for a
 /// caller that only wants the resulting endpoint and not the SRV-eligibility
 /// distinction — `jmap-backend-collection`'s `Server::origin`, a display
