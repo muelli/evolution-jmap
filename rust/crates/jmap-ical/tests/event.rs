@@ -9811,7 +9811,7 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
         start: Some("2026-09-01T10:00:00".to_owned()),
         duration: Some("PT1H".to_owned()),
         time_zone: Some("Europe/Berlin".to_owned()),
-        recurrence_rules: Some(vec![RecurrenceRule {
+        recurrence_rule: Some(RecurrenceRule {
             rule_type: Some("RecurrenceRule".to_owned()),
             frequency: "monthly".to_owned(),
             interval: Some(2),
@@ -9875,7 +9875,7 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
             ]),
             by_set_position: Some(vec![1, 2, 3, -1, -2]),
             ..RecurrenceRule::default()
-        }]),
+        }),
         ..CalendarEvent::default()
     };
 
@@ -10212,11 +10212,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
         );
 
         assert_eq!(
-            event
-                .recurrence_rules
-                .as_ref()
-                .map(|r| r.len())
-                .unwrap_or(0),
+            usize::from(event.recurrence_rule.is_some()),
             case.expected_recurrence_rules_count,
             "Recurrence rules count mismatch for {}",
             case.name
@@ -10328,7 +10324,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             case.name
         );
         assert_eq!(
-            event2.recurrence_rules, event3.recurrence_rules,
+            event2.recurrence_rule, event3.recurrence_rule,
             "Recurrence rules preserved losslessly for {}",
             case.name
         );
@@ -10397,7 +10393,7 @@ fn real_exporter_fixture_google_calendar_detailed_roundtrip() {
     assert_eq!(drive_link["size"], json!(102_400));
 
     // 4. Validate Recurrence Rules and Overrides (EXDATE + RECURRENCE-ID)
-    let rules = event.recurrence_rules.as_ref().expect("recurrence_rules");
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].frequency, "weekly");
     assert_eq!(rules[0].interval, Some(1));
@@ -10473,7 +10469,7 @@ fn real_exporter_fixture_outlook_modern_m365_detailed_roundtrip() {
     );
 
     // 4. Validate monthly 3rd Sunday recurrence
-    let rules = event.recurrence_rules.as_ref().expect("recurrence_rules");
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].frequency, "monthly");
     assert_eq!(rules[0].count, Some(6));
@@ -10518,7 +10514,7 @@ fn real_exporter_fixture_apple_calendar_macos_detailed_roundtrip() {
     );
 
     // 4. Validate bi-weekly Friday recurrence with EXDATE
-    let rules = event.recurrence_rules.as_ref().expect("recurrence_rules");
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
     assert_eq!(rules[0].frequency, "weekly");
     assert_eq!(rules[0].interval, Some(2));
     assert_eq!(rules[0].count, Some(5));
@@ -10566,7 +10562,7 @@ fn real_exporter_fixture_nextcloud_caldav_detailed_roundtrip() {
     assert_eq!(event.priority, Some(3));
 
     // 3. Validate daily recurrence
-    let rules = event.recurrence_rules.as_ref().expect("recurrence_rules");
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
     assert_eq!(rules[0].frequency, "daily");
     assert_eq!(rules[0].count, Some(3));
 
@@ -10628,7 +10624,7 @@ fn real_exporter_fixture_evolution_native_detailed_roundtrip() {
     assert!(links.contains_key("l2"));
 
     // 4. Validate monthly last Monday recurrence
-    let rules = event.recurrence_rules.as_ref().expect("recurrence_rules");
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
     assert_eq!(rules[0].frequency, "monthly");
     assert_eq!(rules[0].count, Some(12));
     let by_day = rules[0].by_day.as_ref().expect("by_day");
