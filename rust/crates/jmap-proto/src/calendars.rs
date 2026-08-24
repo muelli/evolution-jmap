@@ -48,6 +48,13 @@ pub struct CalendarEvent {
     pub calendar_ids: Option<BTreeMap<Id, bool>>,
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub event_type: Option<String>,
+    /// The JSCalendar version this object conforms to — jscalendarbis §3.1.2,
+    /// which a standalone Event MUST set: `"1.0"` declares RFC 8984-conformant
+    /// data (what this crate models), `"2.0"` jscalendarbis-conformant data.
+    /// Fastmail enforces the MUST on create (observed 2026-08-24: a version-less
+    /// create is refused with `invalidProperties: ["version"]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
     /// When the event first arrived — RFC 8984 §4.1.7's `created`, a
@@ -244,6 +251,10 @@ impl CalendarEvent {
         Self {
             calendar_ids: Some([(calendar_id.into(), true)].into()),
             event_type: Some("Event".to_owned()),
+            // A standalone Event MUST state its JSCalendar version
+            // (jscalendarbis §3.1.2); "1.0" = RFC 8984-conformant, which is
+            // what this type models.
+            version: Some("1.0".to_owned()),
             title: Some(title.to_owned()),
             start: Some(start.to_owned()),
             time_zone: Some("Etc/UTC".to_owned()),
