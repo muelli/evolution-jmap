@@ -9,7 +9,7 @@ this project does not control. `rust/crates/jmap-client/tests/live_server.rs`
 is the other half, and this is its recipe.
 
 Almost all of it is read-only — session discovery, `Core/echo`, or listing
-what already exists. Six tests write: `mailbox_create_rename_then_destroy_
+what already exists. Seven tests write: `mailbox_create_rename_then_destroy_
 round_trips_through_the_real_api` (`Mailbox/set` create, then a rename via
 `mailbox_update`, then destroy),
 `address_book_create_then_destroy_round_trips_through_the_real_api`
@@ -22,10 +22,13 @@ inside one),
 address-book test),
 `calendar_event_create_update_then_destroy_round_trips_through_the_real_api`
 (`CalendarEvent/set` create, then a title change via `event_update`, then
-destroy), and
+destroy),
+`a_recurring_event_created_with_the_singular_recurrence_rule_round_trips_through_the_real_api`
+(`CalendarEvent/set` create with a `recurrenceRule`, then destroy — proves the
+singular-object wire shape, jscalendarbis §3.3.3, against a real server), and
 `email_import_update_then_destroy_round_trips_through_the_real_api`
 (`Email/import` via `upload_blob`, a mark-as-read via `email_update`, then
-`download_blob`). All six run only against a separate, dedicated throwaway
+`download_blob`). All seven run only against a separate, dedicated throwaway
 account (see step 3) so they can never touch whatever account the read-only
 tests are pointed at.
 
@@ -213,6 +216,18 @@ in the invocation, worth failing loudly on.
   and `CalendarEventQueryFilter::in_calendar`, mirroring
   `jmap-cal-sync::list_existing_sync`'s equivalent call to enumerate a
   calendar.
+- `a_recurring_event_created_with_the_singular_recurrence_rule_round_trips_through_the_real_api`
+  — creates a `CalendarEvent` whose `recurrenceRule` is set (a daily rule,
+  three occurrences), confirms it via `CalendarEvent/get`, then destroys it.
+  This property's wire shape changed from RFC 8984's plural `recurrenceRules`
+  array to jscalendarbis §3.3.3's singular `recurrenceRule` object
+  (`docs/ROADMAP.md`'s CURRENT PRIORITY item 14 follow-up (a)); a server that
+  still expected the old array would reject this create with
+  `invalidProperties`, the exact failure mode item 14's own text describes.
+  Narrower than the plain create/update/destroy test above (no update, no
+  `all_changes`/`query` checks) — its only job is proving the property shape
+  itself against a real, independent JSCalendar implementation, which
+  nothing else in this suite exercises.
 - `email_import_update_then_destroy_round_trips_through_the_real_api` — the
   mail write path's other shape: uploads a small message's bytes via
   `Client::upload_blob`, imports it into the account's Inbox via
