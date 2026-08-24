@@ -35,3 +35,8 @@ tracing = { workspace = true }
 evolution-jmap-mock = { workspace = true }
 proptest = { workspace = true }
 tiny_http = { workspace = true }
+
+[[test]]
+name = "live_server"
+path = "tests/live_server.rs"
+required-features = ["live-server"]
