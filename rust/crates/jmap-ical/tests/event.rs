@@ -9858,3 +9858,163 @@ fn timezone_advanced_transition_permutations_and_boundary_fidelity() {
         Some("2024-05-02T09:00:00")
     );
 }
+
+#[test]
+fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
+    // 1. Long RRULE exceeding 75 octets must be folded strictly to <= 75 octets
+    let long_rrule_event = CalendarEvent {
+        uid: Some("long-rrule-uid-1".to_owned()),
+        title: Some("Team Planning Session".to_owned()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        recurrence_rules: Some(vec![RecurrenceRule {
+            rule_type: Some("RecurrenceRule".to_owned()),
+            frequency: "monthly".to_owned(),
+            interval: Some(2),
+            by_day: Some(vec![
+                NDay {
+                    day_type: Some("NDay".to_owned()),
+                    day: "mo".to_owned(),
+                    nth_of_period: Some(1),
+                    extra: Default::default(),
+                },
+                NDay {
+                    day_type: Some("NDay".to_owned()),
+                    day: "tu".to_owned(),
+                    nth_of_period: Some(2),
+                    extra: Default::default(),
+                },
+                NDay {
+                    day_type: Some("NDay".to_owned()),
+                    day: "we".to_owned(),
+                    nth_of_period: Some(3),
+                    extra: Default::default(),
+                },
+                NDay {
+                    day_type: Some("NDay".to_owned()),
+                    day: "th".to_owned(),
+                    nth_of_period: Some(4),
+                    extra: Default::default(),
+                },
+                NDay {
+                    day_type: Some("NDay".to_owned()),
+                    day: "fr".to_owned(),
+                    nth_of_period: Some(5),
+                    extra: Default::default(),
+                },
+                NDay {
+                    day_type: Some("NDay".to_owned()),
+                    day: "sa".to_owned(),
+                    nth_of_period: Some(-1),
+                    extra: Default::default(),
+                },
+                NDay {
+                    day_type: Some("NDay".to_owned()),
+                    day: "su".to_owned(),
+                    nth_of_period: Some(-2),
+                    extra: Default::default(),
+                },
+            ]),
+            by_month: Some(vec![
+                "1".to_owned(),
+                "2".to_owned(),
+                "3".to_owned(),
+                "4".to_owned(),
+                "5".to_owned(),
+                "6".to_owned(),
+                "7".to_owned(),
+                "8".to_owned(),
+                "9".to_owned(),
+                "10".to_owned(),
+                "11".to_owned(),
+                "12".to_owned(),
+            ]),
+            by_set_position: Some(vec![1, 2, 3, -1, -2]),
+            ..RecurrenceRule::default()
+        }]),
+        ..CalendarEvent::default()
+    };
+
+    let ics = event_to_ical(&long_rrule_event);
+    for line in ics.split("\r\n") {
+        assert!(
+            line.len() <= 75,
+            "physical line exceeds 75 octets (len = {}): {line:?}",
+            line.len()
+        );
+        assert!(
+            std::str::from_utf8(line.as_bytes()).is_ok(),
+            "invalid UTF-8 in emitted line: {line:?}"
+        );
+    }
+
+    // Round-trip must restore the exact same event
+    let parsed = ical_to_event(&ics).expect("parse long rrule event");
+    let re_emitted = event_to_ical(&parsed);
+    assert_eq!(ics, re_emitted, "emission must reach fixed point");
+
+    // 2. Multibyte unicode character sequences near 75-octet fold boundary
+    let multibyte_event = CalendarEvent {
+        uid: Some("multibyte-uid-1".to_owned()),
+        title: Some("ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প Event Title Multibyte Boundary Test".to_owned()),
+        description: Some("Long description with 🌟 emojis and special chars: ொ\u{a980}ꧏ a¡ₐA A𐕼Σ𞴁AAವ⺛𫝀\u{fffc}\u{1a60}aA0প".to_owned()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+
+    let ics_mb = event_to_ical(&multibyte_event);
+    for line in ics_mb.split("\r\n") {
+        assert!(
+            line.len() <= 75,
+            "multibyte physical line exceeds 75 octets (len = {}): {line:?}",
+            line.len()
+        );
+        assert!(
+            std::str::from_utf8(line.as_bytes()).is_ok(),
+            "invalid UTF-8 in multibyte line: {line:?}"
+        );
+    }
+
+    let parsed_mb = ical_to_event(&ics_mb).expect("parse multibyte event");
+    let re_emitted_mb = event_to_ical(&parsed_mb);
+    assert_eq!(
+        ics_mb, re_emitted_mb,
+        "multibyte emission must reach fixed point"
+    );
+
+    // 3. Freebusy emission (busy_periods_to_vfreebusy) holds to 75 octets
+    let starts = (1..=10)
+        .map(|i| format!("2026-09-{:02}T10:00:00Z", i))
+        .collect::<Vec<_>>();
+    let ends = (1..=10)
+        .map(|i| format!("2026-09-{:02}T18:00:00Z", i))
+        .collect::<Vec<_>>();
+    let periods = (0..10)
+        .map(|i| jmap_proto::principals::BusyPeriod {
+            busy_status: "confirmed".to_owned(),
+            utc_start: jmap_proto::state::UtcDate::new(&starts[i]),
+            utc_end: jmap_proto::state::UtcDate::new(&ends[i]),
+            event: None,
+        })
+        .collect::<Vec<_>>();
+    let fb_ics = jmap_ical::busy_periods_to_vfreebusy(
+        "very-long-attendee-email-address-for-testing-75-octet-line-folding-limits@example.enterprise.department.organization.com",
+        &jmap_proto::state::UtcDate::new("2026-09-01T00:00:00Z"),
+        &jmap_proto::state::UtcDate::new("2026-09-30T23:59:59Z"),
+        &periods,
+    ).expect("vfreebusy");
+
+    for line in fb_ics.split("\r\n") {
+        assert!(
+            line.len() <= 75,
+            "vfreebusy line exceeds 75 octets (len = {}): {line:?}",
+            line.len()
+        );
+        assert!(
+            std::str::from_utf8(line.as_bytes()).is_ok(),
+            "invalid UTF-8 in vfreebusy line: {line:?}"
+        );
+    }
+}
