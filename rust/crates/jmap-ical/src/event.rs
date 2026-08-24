@@ -2658,11 +2658,14 @@ pub fn ical_to_event(text: &str) -> Result<CalendarEvent, ICalError> {
     let zones = stated_zones(components);
     let mut event = read_vevent(series, &zones, components);
     // A standalone Event MUST state its JSCalendar version (jscalendarbis
-    // §3.1.2) — Fastmail refuses a create without it. `"1.0"` is the honest
-    // value: it declares RFC 8984-conformant data, which is what this crate
-    // produces. Stamped here, not in `read_vevent`, because embedded objects
-    // (recurrence-override instances) must NOT carry it.
-    event.version = Some("1.0".to_owned());
+    // §3.1.2) — Fastmail refuses a create without it. The value is `"2.0"`:
+    // draft-ietf-jmap-calendars-28 §1.4 defines CalendarEvent as a
+    // *jscalendarbis* Event, and Fastmail rejects `"1.0"` in this context
+    // (observed 2026-08-24 — both a version-less create and a `"1.0"` one
+    // came back `invalidProperties: ["version"]`). Stamped here, not in
+    // `read_vevent`, because embedded objects (recurrence-override
+    // instances) must NOT carry it.
+    event.version = Some("2.0".to_owned());
     event.recurrence_overrides = read_overrides(series, &vevents, &event, &zones, components);
     // After the overrides, because which definitions the document is carrying for
     // us is decided by which zones the event turned out to refer to — the series'

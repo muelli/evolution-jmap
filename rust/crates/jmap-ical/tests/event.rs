@@ -7020,7 +7020,7 @@ fn the_fixture_survives_a_round_trip() {
             calendar_ids: None,
             // Re-import stamps the standalone object's JSCalendar version
             // (jscalendarbis §3.1.2) regardless of what the fixture carried.
-            version: Some("1.0".to_owned()),
+            version: Some("2.0".to_owned()),
             ..fixture_event()
         }
     );
