@@ -61,7 +61,7 @@
 use std::env;
 
 use jmap_client::{Client, Credentials};
-use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter};
+use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter, RecurrenceRule};
 use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
@@ -831,6 +831,64 @@ fn calendar_event_create_update_then_destroy_round_trips_through_the_real_api() 
         !query_after_destroy.ids.contains(&id),
         "CalendarEvent/query for the calendar still lists the destroyed event"
     );
+}
+
+/// The recurring-event counterpart to the test above, and the first
+/// real-server exercise of `CalendarEvent`'s singular `recurrenceRule`
+/// property (jscalendarbis §3.3.3; this codebase sent RFC 8984's plural
+/// `recurrenceRules` array until the fix this test pins). Item 14's own
+/// operator verification against Fastmail only ever covered a plain,
+/// non-recurring create/edit, so a real, independent JSCalendar
+/// implementation had never seen the singular shape — a server that still
+/// expected the old array would reject this create with `invalidProperties`,
+/// exactly item 14's own original failure mode.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn a_recurring_event_created_with_the_singular_recurrence_rule_round_trips_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let title = format!("agent-livewrite-recurring-{}", unique_suffix());
+    let mut event = CalendarEvent::simple(calendar_id, &title, "2026-09-07T09:00:00", "PT30M");
+    let mut rule = RecurrenceRule::new("daily");
+    rule.count = Some(3);
+    event.recurrence_rule = Some(rule);
+
+    let created = client
+        .event_create(&account_id, &event)
+        .expect("CalendarEvent/set create with a recurrenceRule failed against the real server");
+    let id = created.id.clone().expect("the server named the new event");
+
+    let round_tripped = client
+        .event_get(&account_id, std::slice::from_ref(&id))
+        .unwrap()
+        .list
+        .into_iter()
+        .next()
+        .expect("the created recurring event does not show up in CalendarEvent/get afterwards");
+    let round_tripped_rule = round_tripped
+        .recurrence_rule
+        .as_ref()
+        .expect("the server dropped the recurrenceRule the client sent");
+    assert_eq!(round_tripped_rule.frequency, "daily");
+    assert_eq!(round_tripped_rule.count, Some(3));
+
+    client
+        .event_destroy(&account_id, &id)
+        .expect("CalendarEvent/set destroy failed against the real server");
 }
 
 /// The mail write path's other shape: `Email/import` puts bytes the caller
