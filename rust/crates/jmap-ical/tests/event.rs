@@ -10018,3 +10018,691 @@ fn emitted_icalendar_lines_hold_strictly_to_75_octets_and_valid_utf8() {
         );
     }
 }
+
+fn read_fixture(file_name: &str) -> String {
+    let path = format!("{}/tests/fixtures/{file_name}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+struct RealExporterTestCase {
+    name: &'static str,
+    fixture_file: &'static str,
+    exporter_name: &'static str,
+    expected_title: &'static str,
+    expected_start: &'static str,
+    expected_time_zone: Option<&'static str>,
+    expected_duration: Option<&'static str>,
+    expected_privacy: Option<&'static str>,
+    expected_status: Option<&'static str>,
+    expected_free_busy: Option<&'static str>,
+    expected_priority: Option<i64>,
+    expected_has_location: bool,
+    expected_virtual_location_count: usize,
+    expected_links_count: usize,
+    expected_keywords_count: usize,
+    expected_alerts_count: usize,
+    expected_recurrence_rules_count: usize,
+    expected_recurrence_overrides_count: usize,
+    unmapped_vendor_properties_dropped_on_export: &'static [&'static str],
+}
+
+#[test]
+fn real_exporter_fixture_corpus_table_driven_roundtrip() {
+    let corpus = [
+        RealExporterTestCase {
+            name: "Google Calendar Export (vCalendar 2.0 with Recurrence, Overrides, Meet & Alerts)",
+            fixture_file: "google_calendar_export.ics",
+            exporter_name: "Google Calendar",
+            expected_title: "Q3 Product Architecture Sync",
+            expected_start: "2026-09-15T10:00:00",
+            expected_time_zone: Some("America/New_York"),
+            expected_duration: Some("PT1H30M"),
+            expected_privacy: Some("public"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("busy"),
+            expected_priority: Some(1),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 1,
+            expected_keywords_count: 3,
+            expected_alerts_count: 1,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 2,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-WR-CALNAME",
+                "X-WR-TIMEZONE",
+                "X-NUM-GUESTS",
+            ],
+        },
+        RealExporterTestCase {
+            name: "Microsoft Outlook Modern Export (vCalendar 2.0 with Teams, Attachments & Alerts)",
+            fixture_file: "outlook_m365_export.ics",
+            exporter_name: "Microsoft Outlook / M365",
+            expected_title: "Executive Leadership & Financial Review",
+            expected_start: "2026-09-20T14:30:00",
+            expected_time_zone: Some("Europe/London"),
+            expected_duration: Some("PT1H30M"),
+            expected_privacy: Some("private"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("busy"),
+            expected_priority: Some(2),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 2,
+            expected_keywords_count: 3,
+            expected_alerts_count: 1,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 0,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-MS-OLK-FORCEINSPECTOROPEN",
+                "X-MICROSOFT-CDO-BUSYSTATUS",
+                "X-MICROSOFT-CDO-IMPORTANCE",
+                "X-MICROSOFT-DISALLOW-COUNTER",
+                "X-MS-OLK-AUTOFILLLOCATION",
+            ],
+        },
+        RealExporterTestCase {
+            name: "Apple Calendar macOS Export (vCalendar 2.0 with Multi-Alarms, Token Workshop & Structured Locations)",
+            fixture_file: "apple_calendar_export.ics",
+            exporter_name: "Apple Calendar / macOS",
+            expected_title: "Design Systems Workshop",
+            expected_start: "2026-09-25T09:00:00",
+            expected_time_zone: Some("Europe/Paris"),
+            expected_duration: Some("PT3H"),
+            expected_privacy: Some("secret"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("busy"),
+            expected_priority: Some(1),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 1,
+            expected_keywords_count: 3,
+            expected_alerts_count: 2,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 1,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-APPLE-STRUCTURED-LOCATION",
+                "X-APPLE-TRAVEL-ADVISORY-BEHAVIOR",
+            ],
+        },
+        RealExporterTestCase {
+            name: "Nextcloud & CalDAV Export (vCalendar 2.0 with Jitsi, Badge Image & 2-Day Reminders)",
+            fixture_file: "nextcloud_calendar_export.ics",
+            exporter_name: "Nextcloud Calendar / SabreDAV",
+            expected_title: "Open Source Infrastructure Summit",
+            expected_start: "2026-10-05T09:00:00",
+            expected_time_zone: Some("Europe/Berlin"),
+            expected_duration: Some("PT8H"),
+            expected_privacy: Some("public"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("busy"),
+            expected_priority: Some(3),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 2,
+            expected_keywords_count: 3,
+            expected_alerts_count: 1,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 0,
+            unmapped_vendor_properties_dropped_on_export: &[],
+        },
+        RealExporterTestCase {
+            name: "GNOME Evolution Native Export (vCalendar 2.0 with X-JMAP-UID, Slotted Keys & BigBlueButton)",
+            fixture_file: "evolution_calendar_export.ics",
+            exporter_name: "GNOME Evolution / EDS",
+            expected_title: "GNOME Foundation Board Meeting",
+            expected_start: "2026-09-28T16:00:00",
+            expected_time_zone: Some("Europe/Berlin"),
+            expected_duration: Some("PT2H"),
+            expected_privacy: Some("private"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("busy"),
+            expected_priority: Some(1),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 2,
+            expected_keywords_count: 3,
+            expected_alerts_count: 2,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 0,
+            unmapped_vendor_properties_dropped_on_export: &[],
+        },
+    ];
+
+    for case in &corpus {
+        assert!(!case.exporter_name.is_empty(), "Exporter name specified");
+        let ics_text = read_fixture(case.fixture_file);
+
+        // 1. Inbound Parsing to CalendarEvent / JSCalendar model
+        let event = ical_to_event(&ics_text).unwrap_or_else(|e| {
+            panic!(
+                "Failed to parse fixture {} ({}): {e}",
+                case.fixture_file, case.exporter_name
+            )
+        });
+
+        // 2. Validate Parsed Mapped Surface
+        assert_eq!(
+            event.title.as_deref(),
+            Some(case.expected_title),
+            "Title mismatch for {} ({})",
+            case.name,
+            case.exporter_name
+        );
+        assert_eq!(
+            event.start.as_deref(),
+            Some(case.expected_start),
+            "Start mismatch for {}",
+            case.name
+        );
+        assert_eq!(
+            event.time_zone.as_deref(),
+            case.expected_time_zone,
+            "TimeZone mismatch for {}",
+            case.name
+        );
+        assert_eq!(
+            event.duration.as_deref(),
+            case.expected_duration,
+            "Duration mismatch for {}",
+            case.name
+        );
+        assert_eq!(
+            event.privacy.as_deref(),
+            case.expected_privacy,
+            "Privacy mismatch for {}",
+            case.name
+        );
+        assert_eq!(
+            event.status.as_deref(),
+            case.expected_status,
+            "Status mismatch for {}",
+            case.name
+        );
+        assert_eq!(
+            event.free_busy_status.as_deref(),
+            case.expected_free_busy,
+            "Free/busy mismatch for {}",
+            case.name
+        );
+        assert_eq!(
+            event.priority, case.expected_priority,
+            "Priority mismatch for {}",
+            case.name
+        );
+
+        if case.expected_has_location {
+            let locs = event.locations.as_ref().expect("locations present");
+            assert!(!locs.is_empty(), "Location empty for {}", case.name);
+        }
+
+        assert_eq!(
+            event
+                .virtual_locations
+                .as_ref()
+                .map(|v| v.len())
+                .unwrap_or(0),
+            case.expected_virtual_location_count,
+            "Virtual locations count mismatch for {}",
+            case.name
+        );
+
+        assert_eq!(
+            event.links.as_ref().map(|l| l.len()).unwrap_or(0),
+            case.expected_links_count,
+            "Links count mismatch for {}",
+            case.name
+        );
+
+        assert_eq!(
+            event.keywords.as_ref().map(|k| k.len()).unwrap_or(0),
+            case.expected_keywords_count,
+            "Keywords count mismatch for {}",
+            case.name
+        );
+
+        assert_eq!(
+            event.alerts.as_ref().map(|a| a.len()).unwrap_or(0),
+            case.expected_alerts_count,
+            "Alerts count mismatch for {}",
+            case.name
+        );
+
+        assert_eq!(
+            event
+                .recurrence_rules
+                .as_ref()
+                .map(|r| r.len())
+                .unwrap_or(0),
+            case.expected_recurrence_rules_count,
+            "Recurrence rules count mismatch for {}",
+            case.name
+        );
+
+        assert_eq!(
+            event
+                .recurrence_overrides
+                .as_ref()
+                .map(|o| o.len())
+                .unwrap_or(0),
+            case.expected_recurrence_overrides_count,
+            "Recurrence overrides count mismatch for {}",
+            case.name
+        );
+
+        // 3. First Export (Export₁) to canonical iCalendar 2.0
+        let export1 = event_to_ical(&event);
+        assert!(
+            export1.starts_with("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:"),
+            "Export₁ must start with iCalendar 2.0 envelope for {}:\n{export1}",
+            case.name
+        );
+        assert!(
+            export1.ends_with("END:VCALENDAR\r\n"),
+            "Export₁ must end with END:VCALENDAR for {}:\n{export1}",
+            case.name
+        );
+
+        // Verify unmapped vendor properties are cleanly dropped
+        for dropped_prop in case.unmapped_vendor_properties_dropped_on_export {
+            assert!(
+                !export1.contains(dropped_prop),
+                "Export₁ must drop unmapped vendor property '{}' for {}:\n{export1}",
+                dropped_prop,
+                case.name
+            );
+        }
+
+        // 4. Multi-Stage Round-Trip Fixpoint Execution
+        let event2 = ical_to_event(&export1)
+            .unwrap_or_else(|e| panic!("Failed to parse Export₁ for {}: {e}", case.name));
+        let export2 = event_to_ical(&event2);
+        let event3 = ical_to_event(&export2)
+            .unwrap_or_else(|e| panic!("Failed to parse Export₂ for {}: {e}", case.name));
+        let export3 = event_to_ical(&event3);
+
+        // 5. Standing Fixpoint Invariants
+        assert_eq!(
+            export2, export3,
+            "Export₂ == Export₃ fixpoint invariant violated for {}",
+            case.name
+        );
+        assert_eq!(
+            event2, event3,
+            "Event₂ == Event₃ fixpoint invariant violated for {}",
+            case.name
+        );
+
+        // 6. Lossless Preservation of Mapped Surface
+        assert_eq!(
+            event2.title, event3.title,
+            "Title preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.description, event3.description,
+            "Description preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.start, event3.start,
+            "Start preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.time_zone, event3.time_zone,
+            "TimeZone preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.duration, event3.duration,
+            "Duration preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.privacy, event3.privacy,
+            "Privacy preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.status, event3.status,
+            "Status preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.free_busy_status, event3.free_busy_status,
+            "Free/busy preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.priority, event3.priority,
+            "Priority preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.keywords, event3.keywords,
+            "Keywords preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.recurrence_rules, event3.recurrence_rules,
+            "Recurrence rules preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.recurrence_overrides, event3.recurrence_overrides,
+            "Recurrence overrides preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.alerts, event3.alerts,
+            "Alerts preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.links, event3.links,
+            "Links preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.virtual_locations, event3.virtual_locations,
+            "Virtual locations preserved losslessly for {}",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn real_exporter_fixture_google_calendar_detailed_roundtrip() {
+    let ics_text = read_fixture("google_calendar_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse Google Calendar fixture");
+
+    // 1. Verify calendar name and non-standard properties do not pollute event.extra
+    assert!(
+        event.extra.is_empty(),
+        "event.extra must be empty, found: {:?}",
+        event.extra
+    );
+
+    // 2. Validate primary event details
+    assert_eq!(event.title.as_deref(), Some("Q3 Product Architecture Sync"));
+    assert_eq!(event.start.as_deref(), Some("2026-09-15T10:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("America/New_York"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H30M"));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(event.priority, Some(1));
+    assert_eq!(event.privacy.as_deref(), Some("public"));
+
+    // 3. Validate Google Meet conference and Google Drive link
+    let vlocs = event.virtual_locations.as_ref().expect("virtual_locations");
+    assert_eq!(vlocs.len(), 1);
+    let meet = vlocs.values().next().expect("meet");
+    assert_eq!(meet["uri"], json!("https://meet.google.com/abc-defg-hij"));
+    assert_eq!(meet["name"], json!("Google Meet"));
+    assert_eq!(meet["features"]["audio"], json!(true));
+    assert_eq!(meet["features"]["video"], json!(true));
+
+    let links = event.links.as_ref().expect("links");
+    assert_eq!(links.len(), 1);
+    let drive_link = links.values().next().expect("drive link");
+    assert_eq!(
+        drive_link["href"],
+        json!("https://drive.google.com/file/d/12345/view")
+    );
+    assert_eq!(drive_link["contentType"], json!("application/pdf"));
+    assert_eq!(drive_link["size"], json!(102_400));
+
+    // 4. Validate Recurrence Rules and Overrides (EXDATE + RECURRENCE-ID)
+    let rules = event.recurrence_rules.as_ref().expect("recurrence_rules");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].frequency, "weekly");
+    assert_eq!(rules[0].interval, Some(1));
+    assert_eq!(rules[0].until.as_deref(), Some("2026-11-20T10:00:00"));
+    let by_day = rules[0].by_day.as_ref().expect("by_day");
+    assert_eq!(by_day.len(), 2);
+    assert_eq!(by_day[0].day, "tu");
+    assert_eq!(by_day[1].day, "th");
+
+    let overrides = event
+        .recurrence_overrides
+        .as_ref()
+        .expect("recurrence_overrides");
+    assert_eq!(overrides.len(), 2);
+    assert_eq!(overrides["2026-10-15T10:00:00"], json!({"excluded": true}));
+    let modified = &overrides["2026-10-20T10:00:00"];
+    assert_eq!(
+        modified["title"],
+        json!("Q3 Product Architecture Sync (Performance Deep Dive)")
+    );
+    assert_eq!(modified["start"], json!("2026-10-20T10:30:00"));
+
+    // 5. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_outlook_modern_m365_detailed_roundtrip() {
+    let ics_text = read_fixture("outlook_m365_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse Outlook M365 fixture");
+
+    // 1. Verify Outlook CDO/OLK vendor properties do not pollute extra
+    assert!(event.extra.is_empty());
+
+    // 2. Validate mapped details
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Executive Leadership & Financial Review")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-09-20T14:30:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/London"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H30M"));
+    assert_eq!(event.privacy.as_deref(), Some("private"));
+    assert_eq!(event.priority, Some(2));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("busy"));
+
+    // 3. Validate Teams conference, presentation attachment, company logo badge
+    let vlocs = event.virtual_locations.as_ref().expect("virtual_locations");
+    assert_eq!(vlocs.len(), 1);
+    let teams = vlocs.values().next().expect("teams");
+    assert_eq!(
+        teams["uri"],
+        json!("https://teams.microsoft.com/l/meetup-join/19%3ameeting_123")
+    );
+    assert_eq!(teams["name"], json!("Microsoft Teams Meeting"));
+
+    let links = event.links.as_ref().expect("links");
+    assert_eq!(links.len(), 2);
+    assert!(links.values().any(|l| l["contentType"]
+        == "application/vnd.openxmlformats-officedocument.presentationml.presentation"));
+    assert!(
+        links
+            .values()
+            .any(|l| l["display"] == "badge" && l["rel"] == "icon")
+    );
+
+    // 4. Validate monthly 3rd Sunday recurrence
+    let rules = event.recurrence_rules.as_ref().expect("recurrence_rules");
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].frequency, "monthly");
+    assert_eq!(rules[0].count, Some(6));
+    let by_day = rules[0].by_day.as_ref().expect("by_day");
+    assert_eq!(by_day.len(), 1);
+    assert_eq!(by_day[0].day, "su");
+    assert_eq!(by_day[0].nth_of_period, Some(3));
+
+    // 5. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_apple_calendar_macos_detailed_roundtrip() {
+    let ics_text = read_fixture("apple_calendar_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse Apple Calendar fixture");
+
+    // 1. Verify Apple travel/location extensions do not pollute extra
+    assert!(event.extra.is_empty());
+
+    // 2. Validate mapped details
+    assert_eq!(event.title.as_deref(), Some("Design Systems Workshop"));
+    assert_eq!(event.start.as_deref(), Some("2026-09-25T09:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Paris"));
+    assert_eq!(event.duration.as_deref(), Some("PT3H"));
+    assert_eq!(event.privacy.as_deref(), Some("secret"));
+    assert_eq!(event.priority, Some(1));
+
+    // 3. Validate escaped comma unescaping in location
+    let locs = event.locations.as_ref().expect("locations");
+    let loc = locs.values().next().expect("loc");
+    assert_eq!(
+        loc["name"],
+        json!("Paris Design Lab, Amphithéâtre Marie Curie")
+    );
+
+    // 4. Validate bi-weekly Friday recurrence with EXDATE
+    let rules = event.recurrence_rules.as_ref().expect("recurrence_rules");
+    assert_eq!(rules[0].frequency, "weekly");
+    assert_eq!(rules[0].interval, Some(2));
+    assert_eq!(rules[0].count, Some(5));
+
+    let overrides = event
+        .recurrence_overrides
+        .as_ref()
+        .expect("recurrence_overrides");
+    assert_eq!(overrides["2026-10-23T09:00:00"], json!({"excluded": true}));
+
+    // 5. Validate multiple alarms (1 day, 2 hours)
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 2);
+    assert!(alerts.values().any(|a| a["trigger"]["offset"] == "-P1D"));
+    assert!(alerts.values().any(|a| a["trigger"]["offset"] == "-PT2H"));
+
+    // 6. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_nextcloud_caldav_detailed_roundtrip() {
+    let ics_text = read_fixture("nextcloud_calendar_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse Nextcloud fixture");
+
+    // 1. Verify clean extra map
+    assert!(event.extra.is_empty());
+
+    // 2. Validate event metadata
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Open Source Infrastructure Summit")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-10-05T09:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(event.duration.as_deref(), Some("PT8H"));
+    assert_eq!(event.privacy.as_deref(), Some("public"));
+    assert_eq!(event.priority, Some(3));
+
+    // 3. Validate daily recurrence
+    let rules = event.recurrence_rules.as_ref().expect("recurrence_rules");
+    assert_eq!(rules[0].frequency, "daily");
+    assert_eq!(rules[0].count, Some(3));
+
+    // 4. Validate 2-day reminder alert
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(
+        alerts.values().next().unwrap()["trigger"]["offset"],
+        json!("-P2D")
+    );
+
+    // 5. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_evolution_native_detailed_roundtrip() {
+    let ics_text = read_fixture("evolution_calendar_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse Evolution native fixture");
+
+    // 1. Verify clean extra map and preserved UID
+    assert!(event.extra.is_empty());
+    assert_eq!(
+        event.id.as_ref().map(|id| id.as_str()),
+        Some("evolution-native-event-456789")
+    );
+    assert_eq!(
+        event.uid.as_deref(),
+        Some("urn:uuid:8f2b1c94-0d3a-4f7e-9c11-2a6d5e8b7f30")
+    );
+
+    // 2. Validate mapped details
+    assert_eq!(
+        event.title.as_deref(),
+        Some("GNOME Foundation Board Meeting")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-09-28T16:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(event.duration.as_deref(), Some("PT2H"));
+    assert_eq!(event.privacy.as_deref(), Some("private"));
+    assert_eq!(event.priority, Some(1));
+
+    // 3. Validate explicit X-JMAP-KEY preservation on locations, virtual locations, links
+    let locs = event.locations.as_ref().expect("locations");
+    assert!(locs.contains_key("loc1"));
+
+    let vlocs = event.virtual_locations.as_ref().expect("virtual_locations");
+    assert!(vlocs.contains_key("v1"));
+
+    let links = event.links.as_ref().expect("links");
+    assert!(links.contains_key("l1"));
+    assert!(links.contains_key("l2"));
+
+    // 4. Validate monthly last Monday recurrence
+    let rules = event.recurrence_rules.as_ref().expect("recurrence_rules");
+    assert_eq!(rules[0].frequency, "monthly");
+    assert_eq!(rules[0].count, Some(12));
+    let by_day = rules[0].by_day.as_ref().expect("by_day");
+    assert_eq!(by_day[0].day, "mo");
+    assert_eq!(by_day[0].nth_of_period, Some(-1));
+
+    // 5. Validate multi-alarm sequence (15m, 1h)
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 2);
+
+    // 6. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
