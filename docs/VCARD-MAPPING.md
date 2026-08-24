@@ -707,19 +707,22 @@ vCard₄ (Export₃: Stabilized vCard 3.0)
 3. **Legacy `ENCODING=b` on Text Lines (BACKLOG Regression Pin)**:
    - When legacy/fuzzed vCards declare binary parameters on non-binary properties (e.g. `NICKNAME;ENCODING=b:! `), the parser cleanly rejects non-base64 binary payloads via `entry_text_list` and normalizes the representation, reaching fixed-point stability on Export₂.
 
-### 6.4 Fixpoint Proptest Generator Synchronization (Batches 3–4 Sync)
+### 6.4 Fixpoint Proptest Generator Synchronization (Batches 3–6 Sync)
 
 1. **Synchronized Generator Coverage**:
    - `arb_name`: Fuzzes name components alongside optional `fileAs` and `sortAs` in `Name.extra`, testing inbound `FILE-AS`, `X-FILE-AS`, `X-EVOLUTION-FILE-AS`, and `SORT-STRING`.
    - `arb_card_extra`: Fuzzes `ContactCard.extra` with `fileAs`, `sortAs`, `cryptoKeys`, and unmodeled server fields.
    - `arb_email`, `arb_phone`, `arb_address`, `arb_link`, `arb_relation`: Fuzz custom/Apple labels in `extra["label"]`, testing label extraction and roundtrip stability.
-   - `arb_apple_property_group_block`: Generates paired Apple property groups (`itemN.PROPERTY` with `itemN.X-ABLabel`) across telephony, email, postal address, links, extended relations (`X-ABRELATEDNAMES` / `X-AB-RELATED-NAMES`), and extended dates (`X-ABDATE` / `X-AB-DATE`).
-   - `arb_vcard_property_line`: Covers full current property surface including standard properties, vendor extensions, legacy parameters, and dropped-by-design markers (`AGENT`, `SOUND`, `LOGO`, `KEY`).
+   - `arb_apple_property_group_block`: Generates paired Apple property groups (`itemN.PROPERTY` with `itemN.X-ABLabel`) across telephony, email, postal address, links, instant messaging (`IMPP`), birthdays (`BDAY`), extended relations (`X-ABRELATEDNAMES` / `X-AB-RELATED-NAMES`), and extended dates (`X-ABDATE` / `X-AB-DATE`).
+   - `arb_vcard_property_line`: Covers full current property surface including standard properties, vendor extensions, legacy parameters, vCard 4.0 parameters (`MEDIATYPE`, `PREF=1..10`, quoted `TYPE="work,voice"`, `VALUE=date`, `VALUE=date-and-or-time`, `VALUE=text`), all 10 IM protocol schemes (`xmpp`, `skype`, `matrix`, `aim`, `icq`, `msn`, `yahoo`, `groupwise`, `gg`, `gtalk`, `sip`), extended/hyphenated dates, and dropped-by-design markers (`AGENT`, `SOUND`, `LOGO`, `KEY`).
 2. **Domain Fixpoint Proptests**:
    - `prop_fixpoint_name_and_file_as_domain`: Asserts fixpoint stability for `Name`, `fileAs`, and `sortAs`.
    - `prop_fixpoint_apple_property_groups_domain`: Asserts that raw vCards with Apple property groups parse without panic and normalize outbound to standard vCard 3.0 reaching fixpoints.
    - `prop_fixpoint_links_domain`: Asserts fixpoint stability across URL kinds and labels.
-   - `prop_fixpoint_crypto_keys_and_logo_preservation_domain`: Asserts that `cryptoKeys` and non-photo media do not leak into vCard 3.0 emissions while maintaining roundtrip stability.
+   - `prop_fixpoint_crypto_keys_and_logo_preservation_domain`: Asserts that `cryptoKeys` and non-photo media (`logo`, `sound`) do not leak into vCard 3.0 emissions while maintaining roundtrip stability.
+   - `prop_fixpoint_relation_domain`: Asserts that unmapped relations (`agent`, `child`, `colleague`, `emergency`) strictly omit `AGENT:` properties on export and reach fixed-point stability.
+   - `prop_fixpoint_vcard_40_import_domain`: Asserts multi-pass fixed-point stability across all vCard 4.0 property variations (`IMPP` across all services, `RELATED` relation types, `BDAY` / `ANNIVERSARY` date formats, inline `PHOTO` data URIs, `ADR` with quoted `LABEL`, `EMAIL` / `TEL` with quoted types and `PREF`, and unmapped metadata).
+   - `prop_fixpoint_agent_and_sound_preservation_domain`: Asserts that inbound `AGENT` (nested vCards, URIs, text) and `SOUND` (audio formats, data URIs, media types) lines parse safely and are omitted from vCard 3.0 emissions.
    - `identify_oscillating_card_field`: Enhanced with `card.extra` divergence inspection during proptest shrinkage.
 
 ---

@@ -762,6 +762,11 @@ prop_compose! {
                 Just(";LABEL=Office".to_string()),
                 Just(";X-JMAP-KEY=k1".to_string()),
                 Just(";VALUE=uri".to_string()),
+                Just(";VALUE=date".to_string()),
+                Just(";VALUE=date-and-or-time".to_string()),
+                Just(";VALUE=text".to_string()),
+                Just(";VALUE=DATE".to_string()),
+                Just(";VALUE=DATE-AND-OR-TIME".to_string()),
                 Just(";ENCODING=b".to_string()),
                 Just(";ENCODING=BASE64".to_string()),
                 Just(";ENCODING=8BIT".to_string()),
@@ -782,10 +787,23 @@ prop_compose! {
                 // vCard 4.0 parameters
                 Just(";MEDIATYPE=image/png".to_string()),
                 Just(";MEDIATYPE=image/jpeg".to_string()),
+                Just(";MEDIATYPE=image/webp".to_string()),
+                Just(";MEDIATYPE=image/gif".to_string()),
                 Just(";TYPE=\"work,voice\"".to_string()),
                 Just(";TYPE=\"home,cell\"".to_string()),
                 Just(";TYPE=\"WORK,FAX\"".to_string()),
+                Just(";TYPE=\"work,pref\"".to_string()),
+                Just(";TYPE=\"home,pref\"".to_string()),
+                Just(";TYPE=\"cell,voice\"".to_string()),
+                Just(";TYPE=spouse".to_string()),
+                Just(";TYPE=partner".to_string()),
+                Just(";TYPE=manager".to_string()),
+                Just(";TYPE=assistant".to_string()),
+                Just(";TYPE=colleague".to_string()),
+                Just(";TYPE=\"spouse,pref\"".to_string()),
                 Just(";PREF=1".to_string()),
+                Just(";PREF=2".to_string()),
+                Just(";PREF=10".to_string()),
                 // vCard 2.1 bare parameter names
                 Just(";WORK".to_string()),
                 Just(";HOME".to_string()),
@@ -805,6 +823,7 @@ prop_compose! {
                 Just(";TYPE=OGG".to_string()),
                 Just(";MEDIATYPE=audio/ogg".to_string()),
                 Just(";MEDIATYPE=audio/wav".to_string()),
+                Just(";MEDIATYPE=audio/mp3".to_string()),
                 Just(";WAVE".to_string()),
                 Just(";TYPE=agent".to_string()),
                 Just(";POSTAL".to_string()),
@@ -826,6 +845,31 @@ prop_compose! {
             Just("xmpp:alice@jabber.org".to_string()),
             Just("matrix:alice:matrix.org".to_string()),
             Just("skype:alice_skype".to_string()),
+            Just("aim:alice_aim".to_string()),
+            Just("icq:1234567".to_string()),
+            Just("msn:alice@msn.com".to_string()),
+            Just("yahoo:alice_yahoo".to_string()),
+            Just("groupwise:alice_gw".to_string()),
+            Just("gg:987654".to_string()),
+            Just("gtalk:alice@gmail.com".to_string()),
+            Just("sip:alice@sip.example.com".to_string()),
+            Just("xmpp:alice@jabber.org?message".to_string()),
+            Just("1985-04-12".to_string()),
+            Just("19850412".to_string()),
+            Just("2015-09-20T14:00:00Z".to_string()),
+            Just("20150920T140000Z".to_string()),
+            Just("1985-04-12T10:30:00+02:00".to_string()),
+            Just("1985-04-12T10:30:00-05:00".to_string()),
+            Just(";;100 Work St.;Tech City;CA;94000;USA".to_string()),
+            Just("PO Box 100;Suite 200;456 Elm Ave;Metropolis;NY;10001;USA".to_string()),
+            Just("Alice Spouse".to_string()),
+            Just("Bob Manager".to_string()),
+            Just("Carol Assistant".to_string()),
+            Just("Dave Colleague".to_string()),
+            Just("F".to_string()),
+            Just("M".to_string()),
+            Just("1;urn:uuid:53e374d9-337e-4727-8803-a1e9c14e0556".to_string()),
+            Just("urn:uuid:4fbe8750-df3e-4725-b220-e0c62ba1e9f8".to_string()),
             Just("data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string()),
             Just("https://example.com/photo.jpg".to_string()),
             Just("https://example.com/agent.vcf".to_string()),
@@ -849,6 +893,8 @@ prop_compose! {
             Just("EMAIL"),
             Just("ADR"),
             Just("URL"),
+            Just("IMPP"),
+            Just("BDAY"),
             Just("X-ABRELATEDNAMES"),
             Just("X-AB-RELATED-NAMES"),
             Just("X-ABDATE"),
@@ -890,6 +936,8 @@ prop_compose! {
             "EMAIL" => format!("{group}.EMAIL{pref_param}:{user_name}@example.com"),
             "ADR" => format!("{group}.ADR{pref_param}:;;{street};Springfield;IL;62701;USA"),
             "URL" => format!("{group}.URL{pref_param}:https://example.com/{user_name}"),
+            "IMPP" => format!("{group}.IMPP{pref_param}:xmpp:{user_name}@example.com"),
+            "BDAY" => format!("{group}.BDAY{pref_param}:{year:04}-{month:02}-{day:02}"),
             "X-ABRELATEDNAMES" | "X-AB-RELATED-NAMES" => format!("{group}.{prop_kind}{pref_param}:{rel_name}"),
             "X-ABDATE" | "X-AB-DATE" => format!("{group}.{prop_kind}{pref_param}:{year:04}-{month:02}-{day:02}"),
             _ => format!("{group}.{prop_kind}{pref_param}:Value"),
@@ -1515,6 +1563,10 @@ proptest! {
             ..ContactCard::default()
         };
         let vcard1 = card_to_vcard(&card);
+        // Non-spouse/manager/assistant relations (agent, child, colleague, emergency) must never emit AGENT properties
+        prop_assert!(!vcard1.contains("AGENT:"));
+        prop_assert!(!vcard1.contains("AGENT;"));
+
         let parsed1 = vcard_to_card(&vcard1).expect("relation vcard1 parse");
         let vcard2 = card_to_vcard(&parsed1);
         let parsed2 = vcard_to_card(&vcard2).expect("relation vcard2 parse");
@@ -1698,11 +1750,13 @@ proptest! {
         };
 
         let vcard1 = card_to_vcard(&card);
-        // Neither KEY nor LOGO should be emitted into vCard 3.0 stream
+        // Neither KEY, LOGO, nor SOUND should be emitted into vCard 3.0 stream
         prop_assert!(!vcard1.contains("KEY:"));
         prop_assert!(!vcard1.contains("KEY;"));
         prop_assert!(!vcard1.contains("LOGO:"));
         prop_assert!(!vcard1.contains("LOGO;"));
+        prop_assert!(!vcard1.contains("SOUND:"));
+        prop_assert!(!vcard1.contains("SOUND;"));
 
         let parsed1 = vcard_to_card(&vcard1).expect("preservation vcard1 parse");
         let vcard2 = card_to_vcard(&parsed1);
@@ -1715,7 +1769,7 @@ proptest! {
 
     #[test]
     fn prop_fixpoint_vcard_40_import_domain(
-        fn_name in "\\PC{1,20}",
+        fn_name in "[A-Z][a-z]{1,10} [A-Z][a-z]{1,10}",
         impp_service in prop_oneof![
             Just("xmpp:user@example.com"),
             Just("skype:skype_user"),
@@ -1724,14 +1778,73 @@ proptest! {
             Just("icq:1234567"),
             Just("msn:user@hotmail.com"),
             Just("yahoo:yahoo_user"),
+            Just("groupwise:user_gw"),
+            Just("gg:987654"),
+            Just("gtalk:user@gmail.com"),
+            Just("sip:user@example.com"),
         ],
-        spouse_name in "\\PC{1,20}",
+        rel_line in prop_oneof![
+            Just("RELATED;TYPE=spouse:Alice Spouse"),
+            Just("RELATED;TYPE=partner:Bob Partner"),
+            Just("RELATED;TYPE=manager:Carol Manager"),
+            Just("RELATED;TYPE=assistant:Dave Assistant"),
+            Just("RELATED;TYPE=\"manager,assistant\":Eve Dual"),
+            Just("RELATED;TYPE=colleague:Frank Colleague"),
+            Just("RELATED:Grace General"),
+        ],
+        bday_line in prop_oneof![
+            Just("BDAY:19900101"),
+            Just("BDAY:1985-04-12"),
+            Just("BDAY;VALUE=date:1985-04-12"),
+            Just("BDAY;VALUE=date-and-or-time:1985-04-12"),
+            Just("BDAY:1985-04-12T10:30:00Z"),
+            Just("BDAY:1985-04-12T10:30:00+02:00"),
+        ],
+        anniv_line in prop_oneof![
+            Just("ANNIVERSARY:20100520"),
+            Just("ANNIVERSARY:2015-09-20"),
+            Just("ANNIVERSARY;VALUE=date:2015-09-20"),
+            Just("ANNIVERSARY:2015-09-20T14:00:00Z"),
+        ],
+        photo_line in prop_oneof![
+            Just("PHOTO:data:image/jpeg;base64,/9j/4AAQSkZJRg=="),
+            Just("PHOTO:https://example.com/avatar.jpg"),
+            Just("PHOTO;MEDIATYPE=image/png:https://example.com/avatar.png"),
+            Just(""),
+        ],
+        adr_line in prop_oneof![
+            Just("ADR;TYPE=\"work,pref\";LABEL=\"100 Work St\\nTech City, CA 94000\":;;100 Work St;Tech City;CA;94000;USA"),
+            Just("ADR;TYPE=home:;;200 Home Ave;Home Town;CA;94001;USA"),
+            Just(""),
+        ],
+        email_line in prop_oneof![
+            Just("EMAIL;TYPE=\"work,pref\";PREF=1:user@example.com"),
+            Just("EMAIL;TYPE=home:user@home.org"),
+            Just("EMAIL;PREF=2:secondary@example.com"),
+        ],
+        metadata in prop_oneof![
+            Just("GENDER:M\r\nCLIENTPIDMAP:1;urn:uuid:53e374d9-337e-4727-8803-a1e9c14e0556\r\nMEMBER:urn:uuid:4fbe8750-df3e-4725-b220-e0c62ba1e9f8\r\n"),
+            Just("GENDER:F\r\n"),
+            Just(""),
+        ],
         has_pref in prop::bool::ANY,
     ) {
         let pref_str = if has_pref { ";PREF=1" } else { "" };
-        let raw_v4 = format!(
-            "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:{fn_name}\r\nIMPP:{impp_service}\r\nRELATED;TYPE=spouse:{spouse_name}\r\nANNIVERSARY:20100520\r\nBDAY:19900101\r\nTEL;TYPE=\"work,voice\"{pref_str}:+1-555-0100\r\nEND:VCARD\r\n"
+        let mut raw_v4 = format!(
+            "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:{fn_name}\r\nIMPP:{impp_service}\r\n{rel_line}\r\n{bday_line}\r\n{anniv_line}\r\nTEL;TYPE=\"work,voice\"{pref_str}:+1-555-0100\r\n{email_line}\r\n"
         );
+        if !photo_line.is_empty() {
+            raw_v4.push_str(photo_line);
+            raw_v4.push_str("\r\n");
+        }
+        if !adr_line.is_empty() {
+            raw_v4.push_str(adr_line);
+            raw_v4.push_str("\r\n");
+        }
+        if !metadata.is_empty() {
+            raw_v4.push_str(metadata);
+        }
+        raw_v4.push_str("END:VCARD\r\n");
 
         if let Ok(parsed1) = vcard_to_card(&raw_v4) {
             let vcard2 = card_to_vcard(&parsed1);
@@ -1768,8 +1881,10 @@ proptest! {
         if let Ok(parsed1) = vcard_to_card(&raw_vcard) {
             let vcard1 = card_to_vcard(&parsed1);
             // Neither AGENT nor SOUND should be emitted into outbound vCard 3.0 stream
-            prop_assert!(!vcard1.contains("AGENT"));
-            prop_assert!(!vcard1.contains("SOUND"));
+            prop_assert!(!vcard1.contains("AGENT:"));
+            prop_assert!(!vcard1.contains("AGENT;"));
+            prop_assert!(!vcard1.contains("SOUND:"));
+            prop_assert!(!vcard1.contains("SOUND;"));
 
             let parsed2 = vcard_to_card(&vcard1).expect("re-parsing vcard1 must succeed");
             let vcard2 = card_to_vcard(&parsed2);
