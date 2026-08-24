@@ -54,9 +54,10 @@
 //!   it sends mail; and RFC 8984 §4.5.1's `useDefaultAlerts` says the property
 //!   is ignored altogether. Either way the reminders were not shown, so they
 //!   are not written — see `diff_alerts`.
-//! - **`recurrenceRules` is one property, not a merge point.** A rule with
-//!   `rscale` cannot be spelled as an `RRULE` this crate emits, so patching
-//!   the array at all would narrow the user's recurrence behind their back.
+//! - **`recurrenceRule` is one property, not a merge point** (jscalendarbis
+//!   §3.3.3: singular, not RFC 8984's plural `recurrenceRules` array). A rule
+//!   with `rscale` cannot be spelled as an `RRULE` this crate emits, so
+//!   patching it at all would narrow the user's recurrence behind their back.
 //!   If any rule the server holds fails [`maps_recurrence_rule`], the
 //!   property is left alone entirely — as does one the *save* brings that
 //!   cannot be sent, which is the same check the series' `timeZone` gets
@@ -704,22 +705,23 @@ fn diff_recurrence(
 ) {
     if [current, edited].iter().any(|event| {
         event
-            .recurrence_rules
+            .recurrence_rule
             .iter()
-            .flatten()
             .any(|rule| !maps_recurrence_rule(rule))
     }) {
         return;
     }
-    if baseline.recurrence_rules == edited.recurrence_rules {
+    if baseline.recurrence_rule == edited.recurrence_rule {
         return;
     }
     patch.insert(
-        "recurrenceRules".to_owned(),
-        match &edited.recurrence_rules {
-            // Serialising rules built from an RRULE cannot fail: they hold
+        // jscalendarbis §3.3.3: singular `recurrenceRule`, not RFC 8984's
+        // plural `recurrenceRules` array.
+        "recurrenceRule".to_owned(),
+        match &edited.recurrence_rule {
+            // Serialising a rule built from an RRULE cannot fail: it holds
             // strings and numbers.
-            Some(rules) => serde_json::to_value(rules).unwrap_or(Value::Null),
+            Some(rule) => serde_json::to_value(rule).unwrap_or(Value::Null),
             None => Value::Null,
         },
     );

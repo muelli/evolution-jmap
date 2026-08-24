@@ -34,13 +34,11 @@
       "action": "email"
     }
   },
-  "recurrenceRules": [
-    {
-      "@type": "RecurrenceRule",
-      "frequency": "weekly",
-      "byDay": [{"@type": "NDay", "day": "th"}]
-    }
-  ],
+  "recurrenceRule": {
+    "@type": "RecurrenceRule",
+    "frequency": "weekly",
+    "byDay": [{"@type": "NDay", "day": "th"}]
+  },
   "recurrenceOverrides": {
     "2026-01-22T13:00:00": {"excluded": true},
     "2026-01-29T13:00:00": {"title": "Team sync (long)", "duration": "PT2H"}

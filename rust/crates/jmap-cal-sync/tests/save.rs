@@ -998,7 +998,7 @@ fn an_occurrence_whose_length_the_component_could_not_state_is_left_alone() {
     // One level down, where the property is replaced whole rather than patched
     // key by key. An override the component cannot describe comes back as the
     // empty patch, so writing the map would delete the length the server holds —
-    // the same reason a rule with a `byDay` leaves `recurrenceRules` untouched.
+    // the same reason a rule with a `byDay` leaves `recurrenceRule` untouched.
     let fixture = Fixture::start();
     let id = seed_daily(&fixture);
     fixture.patch(
@@ -1033,9 +1033,8 @@ fn a_recurrence_the_mapping_can_carry_is_patched() {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [
-            {"@type": "RecurrenceRule", "frequency": "daily", "count": 10},
-        ]}),
+        json!({"recurrenceRule":
+            {"@type": "RecurrenceRule", "frequency": "daily", "count": 10}}),
     );
     let sync = fixture.sync();
 
@@ -1047,10 +1046,9 @@ fn a_recurrence_the_mapping_can_carry_is_patched() {
     let edited = icalendar.replace("COUNT=10", "COUNT=5");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].frequency, "daily");
-    assert_eq!(rules[0].count, Some(5));
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
+    assert_eq!(rules.frequency, "daily");
+    assert_eq!(rules.count, Some(5));
 }
 
 #[test]
@@ -1062,11 +1060,11 @@ fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     // the RRULE the user edited is a narrower rule than the one on the server.
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "monthly",
             "rscale": "chinese",
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1074,15 +1072,14 @@ fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     let edited = icalendar.replace("RRULE:FREQ=MONTHLY", "RRULE:FREQ=MONTHLY;COUNT=4");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules.len(), 1);
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
     assert_eq!(
-        rules[0].extra.get("rscale"),
+        rules.extra.get("rscale"),
         Some(&json!("chinese")),
         "a rule part the RRULE could not carry was dropped"
     );
     assert_eq!(
-        rules[0].count, None,
+        rules.count, None,
         "narrowing a rule we cannot fully see is worse than ignoring the edit"
     );
 }
@@ -1095,11 +1092,11 @@ fn a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence() {
         &id,
         json!({
             "timeZone": "Europe/Zurich",
-            "recurrenceRules": [{
+            "recurrenceRule":{
                 "@type": "RecurrenceRule",
                 "frequency": "daily",
                 "until": "2026-09-01T09:00:00",
-            }],
+            },
         }),
     );
     let sync = fixture.sync();
@@ -1123,10 +1120,9 @@ fn a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence() {
     assert_ne!(edited, icalendar);
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules.len(), 1);
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
     assert_eq!(
-        rules[0].until.as_deref(),
+        rules.until.as_deref(),
         Some("2026-09-01T09:00:00"),
         "the end of the series moved on a save that never edited it"
     );
@@ -1146,15 +1142,11 @@ fn a_new_events_recurrence_reaches_the_server() {
 
     let rules = fixture
         .event(&saved.uid.as_str().into())
-        .recurrence_rules
+        .recurrence_rule
         .unwrap();
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].frequency, "weekly");
-    assert_eq!(rules[0].count, Some(10));
-    assert_eq!(
-        rules[0].by_day.as_deref(),
-        Some([NDay::new("th")].as_slice())
-    );
+    assert_eq!(rules.frequency, "weekly");
+    assert_eq!(rules.count, Some(10));
+    assert_eq!(rules.by_day.as_deref(), Some([NDay::new("th")].as_slice()));
 }
 
 #[test]
@@ -1166,7 +1158,7 @@ fn a_new_event_whose_series_end_cannot_be_stated_is_not_created_at_all() {
     // rule cannot be sent. This is the commonest such rule there is: every
     // "repeat until <date>" a conformant editor writes in a zoned calendar.
     //
-    // An edit leaves `recurrenceRules` alone and the server's own rule stands
+    // An edit leaves `recurrenceRule` alone and the server's own rule stands
     // (see `a_series_end_restated_as_a_utc_instant_does_not_move_the_recurrence`).
     // A create has no rule to leave standing, so the save is refused instead:
     // sending it invites a strict server to reject the whole set, and a lenient
@@ -1300,11 +1292,10 @@ fn a_new_events_series_end_converts_through_the_zone_the_document_defines() {
 
     let rules = fixture
         .event(&saved.uid.as_str().into())
-        .recurrence_rules
+        .recurrence_rule
         .unwrap();
-    assert_eq!(rules.len(), 1);
     // Two hours on, the last Sunday of March having passed two days earlier.
-    assert_eq!(rules[0].until.as_deref(), Some("2026-03-31T14:00:00"));
+    assert_eq!(rules.until.as_deref(), Some("2026-03-31T14:00:00"));
 }
 
 #[test]
@@ -1345,11 +1336,11 @@ fn the_days_a_weekly_rule_repeats_on_reach_the_server() {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "weekly",
             "byDay": [{"@type": "NDay", "day": "mo"}],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1363,9 +1354,9 @@ fn the_days_a_weekly_rule_repeats_on_reach_the_server() {
     let edited = icalendar.replace("BYDAY=MO", "BYDAY=MO,TH");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
     assert_eq!(
-        rules[0].by_day.as_deref(),
+        rules.by_day.as_deref(),
         Some(&[NDay::new("mo"), NDay::new("th")][..])
     );
 }
@@ -1376,11 +1367,11 @@ fn the_days_of_the_month_a_rule_repeats_on_reach_the_server() {
     let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "monthly",
             "byMonthDay": [15],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1394,8 +1385,8 @@ fn the_days_of_the_month_a_rule_repeats_on_reach_the_server() {
     let edited = icalendar.replace("BYMONTHDAY=15", "BYMONTHDAY=-1");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules[0].by_month_day.as_deref(), Some(&[-1][..]));
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
+    assert_eq!(rules.by_month_day.as_deref(), Some(&[-1][..]));
 }
 
 #[test]
@@ -1404,11 +1395,11 @@ fn the_months_a_yearly_rule_repeats_in_reach_the_server() {
     let id = fixture.seed(&fixture.ours, "Tax return", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "yearly",
             "byMonth": ["3"],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1422,9 +1413,9 @@ fn the_months_a_yearly_rule_repeats_in_reach_the_server() {
     let edited = icalendar.replace("BYMONTH=3", "BYMONTH=3,9");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
     assert_eq!(
-        rules[0].by_month.as_deref(),
+        rules.by_month.as_deref(),
         Some(&["3".to_owned(), "9".to_owned()][..])
     );
 }
@@ -1435,11 +1426,11 @@ fn the_days_of_the_year_a_rule_repeats_on_reach_the_server() {
     let id = fixture.seed(&fixture.ours, "New Year", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "yearly",
             "byYearDay": [1],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1453,24 +1444,23 @@ fn the_days_of_the_year_a_rule_repeats_on_reach_the_server() {
     let edited = icalendar.replace("BYYEARDAY=1", "BYYEARDAY=1,-1");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules[0].by_year_day.as_deref(), Some(&[1, -1][..]));
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
+    assert_eq!(rules.by_year_day.as_deref(), Some(&[1, -1][..]));
 }
 
 #[test]
 fn a_day_of_the_year_the_rrule_should_not_carry_is_not_sent() {
     // `FREQ=MONTHLY;BYYEARDAY=100` is a rule RFC 5545 §3.3.10 does not admit — a
     // month is not a period a day of the year sits inside — and neither calcard
-    // nor libical judges it, so the check is on the way out: `recurrenceRules` goes
+    // nor libical judges it, so the check is on the way out: `recurrenceRule` goes
     // to the server replaced whole, and one part it is entitled to reject would
     // cost every other edit in the save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [
-            {"@type": "RecurrenceRule", "frequency": "monthly"},
-        ]}),
+        json!({"recurrenceRule":
+            {"@type": "RecurrenceRule", "frequency": "monthly"}}),
     );
     let sync = fixture.sync();
 
@@ -1481,7 +1471,7 @@ fn a_day_of_the_year_the_rrule_should_not_carry_is_not_sent() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    assert_eq!(stored.recurrence_rules.unwrap()[0].by_year_day, None);
+    assert_eq!(stored.recurrence_rule.unwrap().by_year_day, None);
     assert_eq!(
         stored.title.as_deref(),
         Some("Rent, due"),
@@ -1493,16 +1483,15 @@ fn a_day_of_the_year_the_rrule_should_not_carry_is_not_sent() {
 fn a_leap_month_is_not_sent() {
     // A month iCalendar can only name under RFC 7529's `RSCALE` (RFC 8984
     // §4.3.3's `5L`). calcard carries the token rather than judging it, so the
-    // check is on the way out: `recurrenceRules` goes to the server replaced
+    // check is on the way out: `recurrenceRule` goes to the server replaced
     // whole, and one part it is entitled to reject would cost every other edit in
     // the save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Festival", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [
-            {"@type": "RecurrenceRule", "frequency": "yearly"},
-        ]}),
+        json!({"recurrenceRule":
+            {"@type": "RecurrenceRule", "frequency": "yearly"}}),
     );
     let sync = fixture.sync();
 
@@ -1513,7 +1502,7 @@ fn a_leap_month_is_not_sent() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    assert_eq!(stored.recurrence_rules.unwrap()[0].by_month, None);
+    assert_eq!(stored.recurrence_rule.unwrap().by_month, None);
     assert_eq!(
         stored.title.as_deref(),
         Some("Spring festival"),
@@ -1527,13 +1516,13 @@ fn the_day_a_rules_weeks_start_on_reaches_the_server() {
     let id = fixture.seed(&fixture.ours, "Sprint review", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "weekly",
             "interval": 2,
             "byDay": [{"@type": "NDay", "day": "tu"}],
             "firstDayOfWeek": "su",
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1547,8 +1536,8 @@ fn the_day_a_rules_weeks_start_on_reaches_the_server() {
     let edited = icalendar.replace("WKST=SU", "WKST=SA");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules[0].first_day_of_week.as_deref(), Some("sa"));
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
+    assert_eq!(rules.first_day_of_week.as_deref(), Some("sa"));
 }
 
 #[test]
@@ -1556,18 +1545,18 @@ fn a_day_no_week_starts_on_is_not_sent() {
     // A `firstDayOfWeek` outside RFC 8984 §4.3.3's closed vocabulary is one no
     // `WKST` can say, and libical refuses a component carrying `WKST=XX` outright
     // — so the rule is shown without it, and a save must not write the property
-    // back: `recurrenceRules` goes to the server replaced whole, so the day would
+    // back: `recurrenceRule` goes to the server replaced whole, so the day would
     // be dropped from the server's own rule by a save that never touched the
     // recurrence.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "weekly",
             "firstDayOfWeek": "xx",
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1584,14 +1573,14 @@ fn a_day_no_week_starts_on_is_not_sent() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    let rules = stored.recurrence_rules.unwrap();
+    let rules = stored.recurrence_rule.unwrap();
     assert_eq!(
-        rules[0].first_day_of_week.as_deref(),
+        rules.first_day_of_week.as_deref(),
         Some("xx"),
         "the day the server holds is left alone rather than cleared"
     );
     assert_eq!(
-        rules[0].count, None,
+        rules.count, None,
         "narrowing a rule we cannot fully see is worse than ignoring the edit"
     );
     assert_eq!(
@@ -1607,12 +1596,12 @@ fn the_weeks_of_the_year_a_rule_repeats_in_reach_the_server() {
     let id = fixture.seed(&fixture.ours, "Payroll", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "yearly",
             "byWeekNo": [1],
             "firstDayOfWeek": "su",
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1626,10 +1615,10 @@ fn the_weeks_of_the_year_a_rule_repeats_in_reach_the_server() {
     let edited = icalendar.replace("BYWEEKNO=1;", "BYWEEKNO=1,-1;");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules[0].by_week_no.as_deref(), Some(&[1, -1][..]));
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
+    assert_eq!(rules.by_week_no.as_deref(), Some(&[1, -1][..]));
     assert_eq!(
-        rules[0].first_day_of_week.as_deref(),
+        rules.first_day_of_week.as_deref(),
         Some("su"),
         "the day the weeks are counted from goes with them"
     );
@@ -1639,16 +1628,15 @@ fn the_weeks_of_the_year_a_rule_repeats_in_reach_the_server() {
 fn a_week_of_the_year_the_rrule_should_not_carry_is_not_sent() {
     // `FREQ=MONTHLY;BYWEEKNO=20` is a rule RFC 5545 §3.3.10 does not admit — it
     // admits `BYWEEKNO` beside `YEARLY` and nothing else — and neither calcard nor
-    // libical judges it, so the check is on the way out: `recurrenceRules` goes to
+    // libical judges it, so the check is on the way out: `recurrenceRule` goes to
     // the server replaced whole, and one part it is entitled to reject would cost
     // every other edit in the save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [
-            {"@type": "RecurrenceRule", "frequency": "monthly"},
-        ]}),
+        json!({"recurrenceRule":
+            {"@type": "RecurrenceRule", "frequency": "monthly"}}),
     );
     let sync = fixture.sync();
 
@@ -1659,7 +1647,7 @@ fn a_week_of_the_year_the_rrule_should_not_carry_is_not_sent() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    assert_eq!(stored.recurrence_rules.unwrap()[0].by_week_no, None);
+    assert_eq!(stored.recurrence_rule.unwrap().by_week_no, None);
     assert_eq!(
         stored.title.as_deref(),
         Some("Rent, due"),
@@ -1671,18 +1659,18 @@ fn a_week_of_the_year_the_rrule_should_not_carry_is_not_sent() {
 fn a_week_no_year_has_is_not_cleared_from_the_servers_rule() {
     // A `byWeekNo` outside RFC 5545's `ordwk` is one no `BYWEEKNO` this mapping
     // will write can carry — 54 is a week no year has — so the rule is shown
-    // without it, and a save must not write the property back: `recurrenceRules`
+    // without it, and a save must not write the property back: `recurrenceRule`
     // goes to the server replaced whole, so the week would be dropped from the
     // server's own rule by a save that only narrowed it.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Stocktake", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "yearly",
             "byWeekNo": [54],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1699,14 +1687,14 @@ fn a_week_no_year_has_is_not_cleared_from_the_servers_rule() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    let rules = stored.recurrence_rules.unwrap();
+    let rules = stored.recurrence_rule.unwrap();
     assert_eq!(
-        rules[0].by_week_no.as_deref(),
+        rules.by_week_no.as_deref(),
         Some(&[54][..]),
         "the week the server holds is left alone rather than cleared"
     );
     assert_eq!(
-        rules[0].count, None,
+        rules.count, None,
         "narrowing a rule we cannot fully see is worse than ignoring the edit"
     );
     assert_eq!(
@@ -1722,12 +1710,12 @@ fn the_occurrence_of_the_set_a_rule_takes_reaches_the_server() {
     let id = fixture.seed(&fixture.ours, "Retro", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "monthly",
             "byDay": [{"@type": "NDay", "day": "fr"}],
             "bySetPosition": [-1],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1741,10 +1729,10 @@ fn the_occurrence_of_the_set_a_rule_takes_reaches_the_server() {
     let edited = icalendar.replace("BYSETPOS=-1", "BYSETPOS=1,-1");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules[0].by_set_position.as_deref(), Some(&[1, -1][..]));
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
+    assert_eq!(rules.by_set_position.as_deref(), Some(&[1, -1][..]));
     assert_eq!(
-        rules[0].by_day.as_ref().unwrap()[0].day,
+        rules.by_day.as_ref().unwrap()[0].day,
         "fr",
         "the days it selects from go with it"
     );
@@ -1761,9 +1749,8 @@ fn a_position_with_nothing_to_select_from_is_not_sent() {
     let id = fixture.seed(&fixture.ours, "Rent", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [
-            {"@type": "RecurrenceRule", "frequency": "monthly"},
-        ]}),
+        json!({"recurrenceRule":
+            {"@type": "RecurrenceRule", "frequency": "monthly"}}),
     );
     let sync = fixture.sync();
 
@@ -1774,7 +1761,7 @@ fn a_position_with_nothing_to_select_from_is_not_sent() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    assert_eq!(stored.recurrence_rules.unwrap()[0].by_set_position, None);
+    assert_eq!(stored.recurrence_rule.unwrap().by_set_position, None);
     assert_eq!(
         stored.title.as_deref(),
         Some("Rent, due"),
@@ -1787,17 +1774,17 @@ fn a_position_the_server_holds_alone_is_not_cleared_from_its_rule() {
     // The mirror of the above, in the direction that loses data. A
     // `bySetPosition` the server holds with no other `by*` beside it is one no
     // `RRULE` this mapping writes can carry, so the rule is shown without it —
-    // and `recurrenceRules` goes back replaced whole, so a save that only
+    // and `recurrenceRule` goes back replaced whole, so a save that only
     // narrowed the rule would delete the position from the server's own copy.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Stocktake", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "yearly",
             "bySetPosition": [-1],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1812,14 +1799,14 @@ fn a_position_the_server_holds_alone_is_not_cleared_from_its_rule() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    let rules = stored.recurrence_rules.unwrap();
+    let rules = stored.recurrence_rule.unwrap();
     assert_eq!(
-        rules[0].by_set_position.as_deref(),
+        rules.by_set_position.as_deref(),
         Some(&[-1][..]),
         "the position the server holds is left alone rather than cleared"
     );
     assert_eq!(
-        rules[0].count, None,
+        rules.count, None,
         "narrowing a rule we cannot fully see is worse than ignoring the edit"
     );
     assert_eq!(
@@ -1835,11 +1822,11 @@ fn the_hours_of_the_day_a_rule_repeats_at_reach_the_server() {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "daily",
             "byHour": [9],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1853,8 +1840,8 @@ fn the_hours_of_the_day_a_rule_repeats_at_reach_the_server() {
     let edited = icalendar.replace("BYHOUR=9", "BYHOUR=9,14");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules[0].by_hour.as_deref(), Some(&[9, 14][..]));
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
+    assert_eq!(rules.by_hour.as_deref(), Some(&[9, 14][..]));
 }
 
 #[test]
@@ -1866,9 +1853,8 @@ fn an_hour_no_day_has_is_not_sent() {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [
-            {"@type": "RecurrenceRule", "frequency": "daily"},
-        ]}),
+        json!({"recurrenceRule":
+            {"@type": "RecurrenceRule", "frequency": "daily"}}),
     );
     let sync = fixture.sync();
 
@@ -1879,7 +1865,7 @@ fn an_hour_no_day_has_is_not_sent() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    assert_eq!(stored.recurrence_rules.unwrap()[0].by_hour, None);
+    assert_eq!(stored.recurrence_rule.unwrap().by_hour, None);
     assert_eq!(
         stored.title.as_deref(),
         Some("Daily standup"),
@@ -1892,16 +1878,16 @@ fn hours_the_server_holds_are_not_cleared_by_a_save_that_narrowed_the_rule() {
     // The direction that loses data. The server's own `byHour` is one this mapping
     // *can* write — so what has to be checked is that it goes back out again
     // rather than being dropped by a save that touched the rule for another
-    // reason, since `recurrenceRules` is replaced whole.
+    // reason, since `recurrenceRule` is replaced whole.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "daily",
             "byHour": [9, 14],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1912,9 +1898,9 @@ fn hours_the_server_holds_are_not_cleared_by_a_save_that_narrowed_the_rule() {
     );
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules[0].by_hour.as_deref(), Some(&[9, 14][..]));
-    assert_eq!(rules[0].count, Some(4), "the edit itself still has to land");
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
+    assert_eq!(rules.by_hour.as_deref(), Some(&[9, 14][..]));
+    assert_eq!(rules.count, Some(4), "the edit itself still has to land");
 }
 
 #[test]
@@ -1923,12 +1909,12 @@ fn the_minutes_and_seconds_a_rule_repeats_at_reach_the_server() {
     let id = fixture.seed(&fixture.ours, "Sensor poll", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "hourly",
             "byMinute": [0],
             "bySecond": [0],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -1942,9 +1928,9 @@ fn the_minutes_and_seconds_a_rule_repeats_at_reach_the_server() {
     let edited = icalendar.replace("BYMINUTE=0", "BYMINUTE=0,30");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules[0].by_minute.as_deref(), Some(&[0, 30][..]));
-    assert_eq!(rules[0].by_second.as_deref(), Some(&[0][..]));
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
+    assert_eq!(rules.by_minute.as_deref(), Some(&[0, 30][..]));
+    assert_eq!(rules.by_second.as_deref(), Some(&[0][..]));
 }
 
 #[test]
@@ -1958,9 +1944,8 @@ fn the_sixtieth_second_is_sent_and_the_sixtieth_minute_is_not() {
     let id = fixture.seed(&fixture.ours, "Sensor poll", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [
-            {"@type": "RecurrenceRule", "frequency": "minutely"},
-        ]}),
+        json!({"recurrenceRule":
+            {"@type": "RecurrenceRule", "frequency": "minutely"}}),
     );
     let sync = fixture.sync();
 
@@ -1970,7 +1955,10 @@ fn the_sixtieth_second_is_sent_and_the_sixtieth_minute_is_not() {
         .replace("SUMMARY:Sensor poll", "SUMMARY:Poll on the second");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
     assert_eq!(
-        fixture.event(&id).recurrence_rules.unwrap()[0]
+        fixture
+            .event(&id)
+            .recurrence_rule
+            .unwrap()
             .by_second
             .as_deref(),
         Some(&[60][..]),
@@ -1984,7 +1972,7 @@ fn the_sixtieth_second_is_sent_and_the_sixtieth_minute_is_not() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    assert_eq!(stored.recurrence_rules.unwrap()[0].by_minute, None);
+    assert_eq!(stored.recurrence_rule.unwrap().by_minute, None);
     assert_eq!(
         stored.title.as_deref(),
         Some("Sensor poll"),
@@ -1994,19 +1982,19 @@ fn the_sixtieth_second_is_sent_and_the_sixtieth_minute_is_not() {
 
 #[test]
 fn minutes_the_server_holds_are_not_cleared_by_a_save_that_narrowed_the_rule() {
-    // The direction that loses data: `recurrenceRules` is replaced whole, so a
+    // The direction that loses data: `recurrenceRule` is replaced whole, so a
     // save that touched the rule for another reason has to carry the minutes and
     // seconds the server already held back out with it.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Sensor poll", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [{
+        json!({"recurrenceRule":{
             "@type": "RecurrenceRule",
             "frequency": "hourly",
             "byMinute": [0, 30],
             "bySecond": [15],
-        }]}),
+        }}),
     );
     let sync = fixture.sync();
 
@@ -2014,26 +2002,25 @@ fn minutes_the_server_holds_are_not_cleared_by_a_save_that_narrowed_the_rule() {
     let edited = icalendar.replace("BYMINUTE=0,30", "BYMINUTE=0,30;COUNT=4");
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
-    let rules = fixture.event(&id).recurrence_rules.unwrap();
-    assert_eq!(rules[0].by_minute.as_deref(), Some(&[0, 30][..]));
-    assert_eq!(rules[0].by_second.as_deref(), Some(&[15][..]));
-    assert_eq!(rules[0].count, Some(4), "the edit itself still has to land");
+    let rules = fixture.event(&id).recurrence_rule.unwrap();
+    assert_eq!(rules.by_minute.as_deref(), Some(&[0, 30][..]));
+    assert_eq!(rules.by_second.as_deref(), Some(&[15][..]));
+    assert_eq!(rules.count, Some(4), "the edit itself still has to land");
 }
 
 #[test]
 fn a_day_of_the_month_the_rrule_should_not_carry_is_not_sent() {
     // `FREQ=WEEKLY;BYMONTHDAY=15` is a rule RFC 5545 §3.3.10 does not admit, and
     // calcard hands it back rather than judging it — so, as with an ordinal
-    // weekday, the check is on the way out: `recurrenceRules` goes to the server
+    // weekday, the check is on the way out: `recurrenceRule` goes to the server
     // replaced whole, and one part it may reject would cost every other edit in
     // the save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [
-            {"@type": "RecurrenceRule", "frequency": "weekly"},
-        ]}),
+        json!({"recurrenceRule":
+            {"@type": "RecurrenceRule", "frequency": "weekly"}}),
     );
     let sync = fixture.sync();
 
@@ -2044,7 +2031,7 @@ fn a_day_of_the_month_the_rrule_should_not_carry_is_not_sent() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    assert_eq!(stored.recurrence_rules.unwrap()[0].by_month_day, None);
+    assert_eq!(stored.recurrence_rule.unwrap().by_month_day, None);
     assert_eq!(
         stored.title.as_deref(),
         Some("Daily standup"),
@@ -2057,15 +2044,14 @@ fn a_days_ordinal_the_rrule_should_not_carry_is_not_sent() {
     // `FREQ=WEEKLY;BYDAY=2MO` is a rule RFC 5545 §3.3.10 does not admit — an
     // ordinal needs a month or a year to count within. calcard hands it back
     // rather than judging it, so the check is on the way out, like the series'
-    // own `timeZone`: `recurrenceRules` goes to the server replaced whole, and
+    // own `timeZone`: `recurrenceRule` goes to the server replaced whole, and
     // one part it is entitled to reject would cost every other edit in the save.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [
-            {"@type": "RecurrenceRule", "frequency": "weekly"},
-        ]}),
+        json!({"recurrenceRule":
+            {"@type": "RecurrenceRule", "frequency": "weekly"}}),
     );
     let sync = fixture.sync();
 
@@ -2076,7 +2062,7 @@ fn a_days_ordinal_the_rrule_should_not_carry_is_not_sent() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.event(&id);
-    assert_eq!(stored.recurrence_rules.unwrap()[0].by_day, None);
+    assert_eq!(stored.recurrence_rule.unwrap().by_day, None);
     assert_eq!(
         stored.title.as_deref(),
         Some("Daily standup"),
@@ -2090,9 +2076,8 @@ fn seed_daily(fixture: &Fixture) -> jmap_proto::Id {
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
     fixture.patch(
         &id,
-        json!({"recurrenceRules": [
-            {"@type": "RecurrenceRule", "frequency": "daily"},
-        ]}),
+        json!({"recurrenceRule":
+            {"@type": "RecurrenceRule", "frequency": "daily"}}),
     );
     id
 }
@@ -2120,7 +2105,7 @@ fn deleting_one_occurrence_reaches_the_server_as_an_excluded_override() {
         "the instance the user deleted is off, and only that one"
     );
     // The rule it is an exception to is untouched.
-    assert_eq!(stored.recurrence_rules.unwrap()[0].frequency, "daily");
+    assert_eq!(stored.recurrence_rule.unwrap().frequency, "daily");
 }
 
 #[test]
@@ -2230,7 +2215,7 @@ fn editing_one_occurrence_reaches_the_server_as_a_patched_override() {
     // occurrences still carry.
     let stored = fixture.event(&id);
     assert_eq!(stored.title.as_deref(), Some("Standup"));
-    assert_eq!(stored.recurrence_rules.unwrap()[0].frequency, "daily");
+    assert_eq!(stored.recurrence_rule.unwrap().frequency, "daily");
 }
 
 #[test]
@@ -2344,11 +2329,11 @@ fn a_save_that_changes_nothing_sends_no_patch() {
         &id,
         json!({
             "timeZone": "UTC",
-            "recurrenceRules": [{
+            "recurrenceRule":{
                 "@type": "RecurrenceRule",
                 "frequency": "weekly",
                 "bySetPosition": [-1],
-            }],
+            },
             "recurrenceOverrides": {
                 "2026-01-22T09:00:00": {"title": "Standup (long)"},
             },
@@ -3469,7 +3454,7 @@ fn refiling_one_occurrence_reaches_the_server_as_an_override() {
     // PatchObject naming `keywords` means.
     let fixture = Fixture::start();
     let (id, _) = tagged(&fixture, json!({"offsite": true}));
-    fixture.patch(&id, json!({"recurrenceRules": [{"frequency": "weekly"}]}));
+    fixture.patch(&id, json!({"recurrenceRule":{"frequency": "weekly"}}));
     let sync = fixture.sync();
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
 
@@ -3515,7 +3500,7 @@ fn a_tag_one_occurrence_could_not_show_leaves_the_overrides_alone() {
     fixture.patch(
         &id,
         json!({
-            "recurrenceRules": [{"frequency": "weekly"}],
+            "recurrenceRule":{"frequency": "weekly"},
             "recurrenceOverrides": overrides,
         }),
     );
@@ -3739,7 +3724,7 @@ fn setting_a_reminder_on_one_occurrence_reaches_the_server_as_an_override() {
     // PatchObject naming `alerts` means.
     let fixture = Fixture::start();
     let (id, _) = reminded(&fixture, json!({"k1": quarter_of_an_hour_before()}));
-    fixture.patch(&id, json!({"recurrenceRules": [{"frequency": "weekly"}]}));
+    fixture.patch(&id, json!({"recurrenceRule":{"frequency": "weekly"}}));
     let sync = fixture.sync();
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
 
@@ -3793,7 +3778,7 @@ fn a_reminder_one_occurrence_could_not_show_leaves_the_overrides_alone() {
     fixture.patch(
         &id,
         json!({
-            "recurrenceRules": [{"frequency": "weekly"}],
+            "recurrenceRule":{"frequency": "weekly"},
             "recurrenceOverrides": overrides,
         }),
     );
@@ -3846,7 +3831,7 @@ fn an_occurrence_of_an_event_that_takes_the_default_reminders_keeps_its_own() {
         &id,
         json!({
             "useDefaultAlerts": true,
-            "recurrenceRules": [{"frequency": "weekly"}],
+            "recurrenceRule":{"frequency": "weekly"},
             "recurrenceOverrides": overrides,
         }),
     );
@@ -4024,7 +4009,7 @@ fn marking_one_occurrence_free_reaches_the_server_as_an_override() {
     // is the one property of it that differs.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    fixture.patch(&id, json!({"recurrenceRules": [{"frequency": "weekly"}]}));
+    fixture.patch(&id, json!({"recurrenceRule":{"frequency": "weekly"}}));
     let sync = fixture.sync();
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
 
@@ -4168,7 +4153,7 @@ fn making_one_occurrence_urgent_reaches_the_server_as_an_override() {
     // one property of it that differs.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    fixture.patch(&id, json!({"recurrenceRules": [{"frequency": "weekly"}]}));
+    fixture.patch(&id, json!({"recurrenceRule":{"frequency": "weekly"}}));
     let sync = fixture.sync();
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
 
@@ -4366,7 +4351,7 @@ fn hiding_one_occurrence_reaches_the_server_as_an_override() {
     // is the one property of it that differs.
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
-    fixture.patch(&id, json!({"recurrenceRules": [{"frequency": "weekly"}]}));
+    fixture.patch(&id, json!({"recurrenceRule":{"frequency": "weekly"}}));
     let sync = fixture.sync();
     let icalendar = sync.load_component(id.as_str()).unwrap().icalendar;
 
@@ -4782,18 +4767,18 @@ fn removing_all_alerts_generates_targeted_null_patch() {
 }
 
 #[test]
-fn editing_recurring_event_summary_preserves_recurrence_rules_and_overrides() {
+fn editing_recurring_event_summary_preserves_recurrence_rule_and_overrides() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Sprint Planning", "2026-01-15T13:00:00");
     fixture.patch(
         &id,
         json!({
-            "recurrenceRules": [{
+            "recurrenceRule":{
                 "@type": "RecurrenceRule",
                 "frequency": "weekly",
                 "interval": 2,
                 "count": 10
-            }],
+            },
             "recurrenceOverrides": {
                 "2026-01-29T13:00:00": {
                     "title": "Sprint Review & Retro",
@@ -4828,11 +4813,10 @@ fn editing_recurring_event_summary_preserves_recurrence_rules_and_overrides() {
     let stored = fixture.event(&id);
     assert_eq!(stored.title.as_deref(), Some("Weekly Sprint Planning"));
 
-    let rules = stored.recurrence_rules.expect("rules");
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].frequency, "weekly");
-    assert_eq!(rules[0].interval, Some(2));
-    assert_eq!(rules[0].count, Some(10));
+    let rules = stored.recurrence_rule.expect("rules");
+    assert_eq!(rules.frequency, "weekly");
+    assert_eq!(rules.interval, Some(2));
+    assert_eq!(rules.count, Some(10));
 
     let overrides = stored.recurrence_overrides.expect("overrides");
     assert_eq!(
@@ -4855,12 +4839,12 @@ fn clearing_exdates_and_overrides_patches_server_recurrence_map() {
     fixture.patch(
         &id,
         json!({
-            "recurrenceRules": [{
+            "recurrenceRule":{
                 "@type": "RecurrenceRule",
                 "frequency": "daily",
                 "interval": 1,
                 "count": 5
-            }],
+            },
             "recurrenceOverrides": {
                 "2026-01-17T09:00:00": {
                     "excluded": true
@@ -4895,9 +4879,8 @@ fn clearing_exdates_and_overrides_patches_server_recurrence_map() {
     assert_eq!(stored.title.as_deref(), Some("Daily Standup"));
     assert_eq!(stored.recurrence_overrides, None);
 
-    let rules = stored.recurrence_rules.expect("rules");
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].frequency, "daily");
+    let rules = stored.recurrence_rule.expect("rules");
+    assert_eq!(rules.frequency, "daily");
 
     let alerts = stored.alerts.expect("alerts");
     assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT10M"));

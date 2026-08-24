@@ -416,19 +416,19 @@ fn a_recurrence_ending_at_a_utc_instant_converts_through_the_definition_libical_
         let saved = marshal::icalendar_from_instances(list, ptr::null_mut()).expect("a master");
         let rules = jmap_ical::ical_to_event(&saved.icalendar)
             .expect("the envelope is a calendar object")
-            .recurrence_rules
+            .recurrence_rule
             .expect("the rule survived the mapping");
 
         // 07:00 UTC is 09:00 in Berlin at the start of September, and the rule
         // has to be sendable or the server never hears that the series ends.
         assert_eq!(
-            rules[0].until.as_deref(),
+            rules.until.as_deref(),
             Some("2026-09-01T09:00:00"),
             "the end of the series did not convert: {}",
             saved.icalendar
         );
         assert!(
-            jmap_ical::maps_recurrence_rule(&rules[0]),
+            jmap_ical::maps_recurrence_rule(&rules),
             "the rule cannot be sent, so a create carrying it is refused: {}",
             saved.icalendar
         );

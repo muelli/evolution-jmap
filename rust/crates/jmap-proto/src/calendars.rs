@@ -1,12 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Calendars types (draft-ietf-jmap-calendars). A `CalendarEvent` is a
-//! JSCalendar Event (RFC 8984) carrying the JMAP-side `id` and
+//! JMAP Calendars types (draft-ietf-jmap-calendars-28). A `CalendarEvent` is a
+//! jscalendarbis (`draft-ietf-calext-jscalendarbis`, the JSCalendar 2.0 base
+//! that obsoletes RFC 8984) Event carrying the JMAP-side `id` and
 //! `calendarIds` properties.
 //!
 //! The draft is in final approval as of mid-2026; property names follow
-//! draft-ietf-jmap-calendars-27. Unmodeled properties ride in `extra`.
+//! draft-ietf-jmap-calendars-28. Unmodeled properties ride in `extra`.
 
 use std::collections::BTreeMap;
 
@@ -208,8 +209,15 @@ pub struct CalendarEvent {
     /// it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub participants: Option<BTreeMap<String, Value>>,
+    /// jscalendarbis §3.3.3 (draft-ietf-calext-jscalendarbis): a single
+    /// `RecurrenceRule`, not RFC 8984's plural `recurrenceRules` array — the
+    /// property was renamed and restructured from array-valued to
+    /// singular/object-valued in the base that obsoletes it. Confirmed
+    /// against the draft's own text (three independent fetches, one a
+    /// full-text search for every "recurrenceRule" occurrence): no plural
+    /// form appears anywhere, including the IANA properties registry entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recurrence_rules: Option<Vec<RecurrenceRule>>,
+    pub recurrence_rule: Option<RecurrenceRule>,
     /// The instances named one at a time rather than by a rule (RFC 8984
     /// §4.3.4): a map from an instance's start, as a LocalDateTime, to a
     /// PatchObject describing how that instance differs.

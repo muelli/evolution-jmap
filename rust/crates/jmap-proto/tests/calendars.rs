@@ -34,9 +34,9 @@ fn calendar_event_roundtrip() {
     assert_eq!(event.start.as_deref(), Some("2026-01-15T13:00:00"));
     assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
     assert_eq!(event.duration.as_deref(), Some("PT1H"));
-    let rules = event.recurrence_rules.as_ref().unwrap();
-    assert_eq!(rules[0].frequency, "weekly");
-    assert_eq!(rules[0].by_day.as_deref(), Some(&[NDay::new("th")][..]));
+    let rule = event.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rule.frequency, "weekly");
+    assert_eq!(rule.by_day.as_deref(), Some(&[NDay::new("th")][..]));
     // An override's patch stays JSON: "this instance is off" and "this instance
     // was edited" are both PatchObjects, and only the caller knows which of
     // them it can represent.
