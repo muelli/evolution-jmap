@@ -24,6 +24,7 @@
 
 use std::ffi::{CStr, CString, c_char};
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, EOAuth2Service, EOAuth2Services, ESource,
@@ -50,8 +51,28 @@ use jmap_config::oauth2_service::{NAME, Service};
 struct TestSource(*mut ESource);
 
 impl TestSource {
+    /// A source with a uid of its own.
+    ///
+    /// The uid has to differ per source, not merely per test: `oauth2_service`
+    /// stashes the PKCE verifier it generated in a **process-global map keyed
+    /// by source uid** (`pkce_verifiers()`, which is right — both halves of one
+    /// authorization flow run in the credentials prompter's process, and the
+    /// uid is what identifies the account between them). Every source here
+    /// used to be built with the same literal uid, so two tests running in
+    /// parallel shared one entry in that map: whichever one was between its
+    /// `prepare_authentication_uri_query` and its `prepare_get_token_form`
+    /// could have the other's verifier written over its own, or find one after
+    /// having just redeemed its own and be told a single-use secret was reused.
+    /// That is the intermittent `the_token_form_redeems_the_verifier_behind_
+    /// the_authorization_challenge` failure logged in `docs/NIGHT-LOG.md` on
+    /// 2026-08-24 — collisions between tests, not a defect in the keying.
     fn new() -> Self {
-        let uid = CString::new("jmap-oauth2-service-test").expect("no NUL in a literal");
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let uid = format!(
+            "jmap-oauth2-service-test-{}",
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        let uid = CString::new(uid).expect("no NUL in a generated uid");
         let mut error = ptr::null_mut();
         // SAFETY: a NUL-terminated uid, no D-Bus object and a GError
         // out-parameter are the documented arguments.
