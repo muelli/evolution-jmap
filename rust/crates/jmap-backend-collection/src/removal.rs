@@ -98,6 +98,11 @@ pub unsafe fn obsolete(fanout: &Fanout, children: &[*mut ESource]) -> Vec<*mut E
 pub unsafe fn remove_obsolete(fanout: &Fanout, children: &[*mut ESource]) -> Vec<NotRemoved> {
     // SAFETY: the caller's contract is this function's.
     let obsolete = unsafe { named_obsolete(fanout, children) };
+    tracing::debug!(
+        obsolete_count = obsolete.len(),
+        total_children_count = children.len(),
+        "removing obsolete collection child sources"
+    );
 
     obsolete
         .into_iter()
@@ -138,6 +143,12 @@ pub unsafe fn remove_source(
     source: *mut ESource,
     cancellable: *mut GCancellable,
 ) -> Result<(), String> {
+    let resource_id = unsafe { resource_id_of(source) };
+    tracing::debug!(
+        resource_id = resource_id.as_deref(),
+        "removing child source from registry server"
+    );
+
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: a valid child source, a cancellable satisfying this function's
     // contract and an out-parameter initialised to NULL are the documented

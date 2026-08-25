@@ -225,7 +225,13 @@ pub unsafe fn doomed_of(source: *mut ESource) -> Option<Doomed> {
 /// contract.
 pub unsafe fn offer_deletion(child: *mut ESource) -> bool {
     // SAFETY: the caller's contract is `doomed_of`'s, NULL included.
-    if unsafe { doomed_of(child) }.is_none() {
+    let doomed = unsafe { doomed_of(child) };
+    let deletable = doomed.is_some();
+    tracing::debug!(
+        remote_deletable = deletable,
+        "evaluating child source remote-deletable offer"
+    );
+    if !deletable {
         return false;
     }
 
@@ -249,5 +255,11 @@ pub fn delete_on_server(
     doomed: &Doomed,
 ) -> Result<(), DeleteError> {
     let client = source::connect(target, credentials)?;
-    Ok(delete_collection(&client, doomed)?)
+    delete_collection(&client, doomed)?;
+    tracing::debug!(
+        collection_id = doomed.collection_id.as_str(),
+        kind = ?doomed.kind,
+        "deleted collection resource on server"
+    );
+    Ok(())
 }

@@ -243,6 +243,13 @@ pub unsafe fn populate<P: Populating + ?Sized>(
     parts: Parts,
     user: Option<&str>,
 ) -> Option<Restored> {
+    tracing::debug!(
+        contacts_wanted = parts.contacts,
+        calendars_wanted = parts.calendars,
+        has_user = user.is_some(),
+        "populating collection from cache"
+    );
+
     let held = collection.freeze();
     // Constructed whatever the answer was, and before the early return below:
     // the freeze incremented the counter either way, so the debt exists either
@@ -307,6 +314,15 @@ pub unsafe fn populate<P: Populating + ?Sized>(
     } else {
         Asked::Nothing
     };
+
+    tracing::debug!(
+        contacts_wanted = parts.contacts,
+        calendars_wanted = parts.calendars,
+        cached_count = report.children.len(),
+        unidentified_count = report.unidentified,
+        asked_auth = ?report.asked,
+        "populated collection from cache"
+    );
 
     Some(report)
 }

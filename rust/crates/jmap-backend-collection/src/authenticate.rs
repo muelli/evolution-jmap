@@ -78,6 +78,7 @@ use std::fmt;
 
 use eds_sys::{
     E_SOURCE_AUTHENTICATION_ERROR, ENamedParameters, ESource, ESourceAuthenticationResult,
+    e_source_get_uid,
 };
 use gio_sys::GCancellable;
 use glib_sys::GError;
@@ -87,7 +88,7 @@ use jmap_backend_core::connect::{
     ACCEPTED_AUTH_RESULT, ConnectError, bearer_credentials, credentials as login_as,
 };
 use jmap_backend_core::error::{invalid_arg_gerror, set_raw_gerror};
-use jmap_backend_core::marshal::password as stored_password;
+use jmap_backend_core::marshal::{password as stored_password, read_string};
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
 use jmap_backend_core::source::SourceError;
 use jmap_client::{Credentials, Error};
@@ -179,10 +180,17 @@ where
         return E_SOURCE_AUTHENTICATION_ERROR;
     }
 
+    let account_id = unsafe { read_string(e_source_get_uid(source)) };
+    let account_id_str = account_id.as_deref();
+
     // Parts before server: see the module comment on the order.
     // SAFETY: a valid source, checked non-NULL above.
     let parts = unsafe { parts_of(source) };
     if !parts.any() {
+        tracing::debug!(
+            account_id = account_id_str,
+            "no collection parts enabled; accepting authentication without network request"
+        );
         return ACCEPTED_AUTH_RESULT;
     }
 
@@ -195,11 +203,22 @@ where
     // fetched apart from one on an ordinary password — see `finish_fan_out`.
     // SAFETY: a valid source, checked non-NULL above.
     let uses_oauth2 = unsafe { source_uses_oauth2(source) };
+    tracing::debug!(
+        account_id = account_id_str,
+        uses_oauth2,
+        "authenticating collection backend"
+    );
     // SAFETY: a valid source, checked non-NULL above, and a cancellable that
     // satisfies `login_of`'s contract by this function's own.
     let login = match unsafe { login_of(source, parts, password.as_deref(), cancellable) } {
         Ok(login) => login,
         Err(failure) => {
+            tracing::debug!(
+                account_id = account_id_str,
+                uses_oauth2,
+                ?failure,
+                "collection backend credential resolution failed"
+            );
             // SAFETY: the out-parameter satisfies the contract by this
             // function's.
             unsafe { set_raw_gerror(error, failure.to_gerror()) };
@@ -217,10 +236,21 @@ where
 
     match finish_fan_out(uses_oauth2, fan_out(login)) {
         Ok(()) => {
+            tracing::debug!(
+                account_id = account_id_str,
+                uses_oauth2,
+                "collection backend authentication accepted"
+            );
             push_credentials(credentials);
             ACCEPTED_AUTH_RESULT
         }
         Err(failure) => {
+            tracing::debug!(
+                account_id = account_id_str,
+                uses_oauth2,
+                ?failure,
+                "collection backend authentication failed"
+            );
             // SAFETY: as above.
             unsafe { set_raw_gerror(error, failure.to_gerror()) };
             failure.auth_result()
@@ -288,6 +318,16 @@ pub unsafe fn login_of(
     // SAFETY: a valid source by this function's contract.
     let server = unsafe { server_of(source) }?;
 
+    let uses_oauth2 = unsafe { source_uses_oauth2(source) };
+    let uses_api_token = unsafe { source_uses_api_token(source) };
+    let has_password = password.is_some();
+    tracing::debug!(
+        uses_oauth2,
+        uses_api_token,
+        has_password,
+        "resolving collection backend login credentials"
+    );
+
     // Which authentication scheme this account uses is decided the same way
     // `connect_with` decides it for the address book and calendar backends —
     // see `jmap_backend_core::oauth2`'s module docs for whose rule this is.
@@ -298,9 +338,9 @@ pub unsafe fn login_of(
     // SAFETY: a valid source by this function's contract; `cancellable`
     // satisfies `access_token`'s contract by this function's own.
     let credentials = unsafe {
-        if source_uses_oauth2(source) {
+        if uses_oauth2 {
             access_token(source, cancellable).map(Credentials::bearer)
-        } else if source_uses_api_token(source) {
+        } else if uses_api_token {
             bearer_credentials(password)
         } else {
             login_as(server.connection.user.as_deref(), password)

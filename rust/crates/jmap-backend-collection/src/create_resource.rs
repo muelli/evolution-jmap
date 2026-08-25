@@ -265,7 +265,16 @@ pub fn create_on_server(
     requested: &Requested,
 ) -> Result<Child, CreateError> {
     let client = source::connect(target, credentials)?;
-    Ok(create_collection(&client, requested)?)
+    let child = create_collection(&client, requested)?;
+    tracing::debug!(
+        account_id = child.account_id.as_str(),
+        kind = ?child.kind,
+        display_name = child.display_name.as_str(),
+        resource_id = child.resource_id.as_str(),
+        collection_id = child.collection_id.as_str(),
+        "created collection resource on server"
+    );
+    Ok(child)
 }
 
 /// Finishes the scratch source into the child of this collection that `child`
@@ -314,6 +323,13 @@ pub unsafe fn adopt_created(
     account_uid: &str,
     cache_dir: Option<&str>,
 ) -> Result<(), UnwritableSetting> {
+    tracing::debug!(
+        account_uid,
+        resource_id = child.resource_id.as_str(),
+        kind = ?child.kind,
+        "adopting created collection child source"
+    );
+
     // SAFETY: a valid source by this function's contract.
     unsafe { apply(scratch, &child.settings(connection)) }?;
 
@@ -387,6 +403,13 @@ pub unsafe fn stored_password_of(
     // SAFETY: a valid source by this function's own contract; the uid comes
     // back `(transfer none)`, borrowed for the length of this call.
     let account_id = unsafe { read_string(e_source_get_uid(source)) };
+    let has_server = !server.is_null();
+    tracing::debug!(
+        account_id = account_id.as_deref(),
+        has_server,
+        context,
+        "querying stored password for collection resource"
+    );
 
     if server.is_null() {
         // The registry server is a weak reference on the backend, so NULL means
