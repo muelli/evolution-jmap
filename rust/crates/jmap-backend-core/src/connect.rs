@@ -347,6 +347,10 @@ where
     // NULL dereference in `evolution-addressbook-factory` takes every other
     // account in the process down with it.
     if source.is_null() {
+        tracing::error!(
+            collection = %kind,
+            "the collection backend has no account source to connect to"
+        );
         // SAFETY: the out-parameters satisfy the contract by this function's.
         unsafe {
             write_auth_result(out_auth_result, E_SOURCE_AUTHENTICATION_ERROR);
@@ -356,11 +360,20 @@ where
     }
 
     // SAFETY: `source` is a valid ESource, checked non-NULL above.
+    let account_id = unsafe { crate::marshal::read_string(eds_sys::e_source_get_uid(source)) };
+
+    // SAFETY: `source` is a valid ESource, checked non-NULL above.
     let config = match unsafe { SourceConfig::from_source(source) } {
         Ok(config) => config,
         Err(failure) => {
             // A misconfigured account: re-prompting for a password cannot fix
             // a missing host or a plaintext origin, so this is never REJECTED.
+            tracing::error!(
+                collection = %kind,
+                ?account_id,
+                %failure,
+                "source configuration error"
+            );
             // SAFETY: as above.
             unsafe {
                 write_auth_result(out_auth_result, E_SOURCE_AUTHENTICATION_ERROR);
@@ -385,20 +398,42 @@ where
     // ordinary password.
     // SAFETY: `source` is a valid ESource, checked non-NULL above.
     let uses_oauth2 = unsafe { source_uses_oauth2(source) };
+    let uses_api_token = unsafe { source_uses_api_token(source) };
     // SAFETY: `source` is a valid ESource, checked non-NULL above, and
     // `cancellable` satisfies `access_token`'s contract by this function's.
     let resolved = unsafe {
         if uses_oauth2 {
+            tracing::debug!(
+                collection = %kind,
+                ?account_id,
+                "authenticating with OAuth 2.0"
+            );
             access_token(source, cancellable).map(Credentials::bearer)
-        } else if source_uses_api_token(source) {
+        } else if uses_api_token {
+            tracing::debug!(
+                collection = %kind,
+                ?account_id,
+                "authenticating with an API token"
+            );
             bearer_credentials(password.as_deref())
         } else {
+            tracing::debug!(
+                collection = %kind,
+                ?account_id,
+                "authenticating with a password"
+            );
             self::credentials(config.user.as_deref(), password.as_deref())
         }
     };
     let resolved = match resolved {
         Ok(resolved) => resolved,
         Err(failure) => {
+            tracing::debug!(
+                collection = %kind,
+                ?account_id,
+                ?failure,
+                "credentials resolution failed"
+            );
             // SAFETY: as above.
             unsafe {
                 write_auth_result(out_auth_result, failure.auth_result());
@@ -408,7 +443,12 @@ where
         }
     };
 
-    match finish_connect(uses_oauth2, open(&config, resolved)) {
+    match finish_connect(
+        kind,
+        account_id.as_deref(),
+        uses_oauth2,
+        open(&config, resolved),
+    ) {
         Ok(opened) => {
             // SAFETY: as above.
             unsafe { write_auth_result(out_auth_result, ACCEPTED_AUTH_RESULT) };
@@ -434,14 +474,34 @@ where
 /// way `jmap_mail::service::finish_authenticate` is split out of `attempt`
 /// for a `CamelService`.
 fn finish_connect<T>(
+    collection: Collection,
+    account_id: Option<&str>,
     uses_oauth2: bool,
     outcome: Result<T, ConnectError>,
 ) -> Result<T, ConnectError> {
-    if uses_oauth2 {
+    let outcome = if uses_oauth2 {
         outcome.map_err(ConnectError::reclassify_oauth2_rejection)
     } else {
         outcome
+    };
+    match &outcome {
+        Ok(_) => tracing::debug!(
+            collection = %collection,
+            ?account_id,
+            uses_oauth2,
+            "backend connected"
+        ),
+        Err(error) => {
+            tracing::debug!(
+                collection = %collection,
+                ?account_id,
+                uses_oauth2,
+                ?error,
+                "backend connect failed"
+            );
+        }
     }
+    outcome
 }
 
 fn no_source_gerror(kind: Collection) -> *mut GError {
@@ -649,15 +709,15 @@ mod tests {
         };
 
         assert!(matches!(
-            finish_connect(true, unauthorized()),
+            finish_connect(Collection::AddressBook, Some("acc-1"), true, unauthorized()),
             Err(ConnectError::OAuth2(_))
         ));
         assert!(matches!(
-            finish_connect(false, unauthorized()),
+            finish_connect(Collection::Calendar, Some("acc-2"), false, unauthorized()),
             Err(ConnectError::Client(_))
         ));
-        assert!(finish_connect(true, Ok(())).is_ok());
-        assert!(finish_connect(false, Ok(())).is_ok());
+        assert!(finish_connect(Collection::AddressBook, Some("acc-1"), true, Ok(())).is_ok());
+        assert!(finish_connect(Collection::Calendar, Some("acc-2"), false, Ok(())).is_ok());
     }
 
     /// The API-token sibling of [`credentials`]'s own user/password matrix:
@@ -673,5 +733,119 @@ mod tests {
             bearer_credentials(None),
             Err(ConnectError::CredentialsRequired)
         ));
+    }
+
+    struct CapturingSubscriber {
+        captured: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    struct Recorder<'a>(&'a std::sync::Mutex<Vec<(String, String)>>);
+
+    impl tracing::field::Visit for Recorder<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), format!("{value:?}")));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), value.to_owned()));
+        }
+
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), value.to_string()));
+        }
+    }
+
+    impl tracing::Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut Recorder(&self.captured));
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    #[test]
+    fn finish_connect_traces_successful_connection_with_structured_fields() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        let result = tracing::subscriber::with_default(subscriber, || {
+            finish_connect(Collection::AddressBook, Some("account-abc"), true, Ok(()))
+        });
+        assert!(result.is_ok());
+
+        let entries = captured.lock().unwrap();
+        assert!(
+            entries.contains(&("collection".to_owned(), "address book".to_owned())),
+            "expected collection='address book', got {entries:?}"
+        );
+        assert!(
+            entries.contains(&("account_id".to_owned(), "Some(\"account-abc\")".to_owned())),
+            "expected account_id=Some(\"account-abc\"), got {entries:?}"
+        );
+        assert!(
+            entries.contains(&("uses_oauth2".to_owned(), "true".to_owned())),
+            "expected uses_oauth2=true, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn finish_connect_traces_failed_connection_with_error_and_structured_fields() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        let result = tracing::subscriber::with_default(subscriber, || {
+            finish_connect(
+                Collection::Calendar,
+                Some("account-xyz"),
+                false,
+                Err::<(), _>(ConnectError::CredentialsRequired),
+            )
+        });
+        assert!(result.is_err());
+
+        let entries = captured.lock().unwrap();
+        assert!(
+            entries.contains(&("collection".to_owned(), "calendar".to_owned())),
+            "expected collection='calendar', got {entries:?}"
+        );
+        assert!(
+            entries.contains(&("account_id".to_owned(), "Some(\"account-xyz\")".to_owned())),
+            "expected account_id=Some(\"account-xyz\"), got {entries:?}"
+        );
+        assert!(
+            entries.contains(&("uses_oauth2".to_owned(), "false".to_owned())),
+            "expected uses_oauth2=false, got {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|(k, _)| k == "error"),
+            "expected error field, got {entries:?}"
+        );
     }
 }

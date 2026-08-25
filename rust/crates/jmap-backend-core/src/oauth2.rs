@@ -258,6 +258,8 @@ pub unsafe fn access_token(
     source: *mut ESource,
     cancellable: *mut GCancellable,
 ) -> Result<String, ConnectError> {
+    let account_id = unsafe { read_string(eds_sys::e_source_get_uid(source)) };
+    tracing::debug!(?account_id, "fetching OAuth 2.0 access token via EDS");
     let mut token = ptr::null_mut();
     let mut expires_in = 0;
     let mut error: *mut GError = ptr::null_mut();
@@ -290,6 +292,11 @@ pub unsafe fn access_token(
             }
             message
         };
+        tracing::debug!(
+            ?account_id,
+            ?message,
+            "failed to obtain OAuth 2.0 access token"
+        );
         // A failure with no GError should not happen — EDS sets one on every
         // path — but a NULL message is not worth turning into a panic in a
         // backend, so it becomes a sentence that says exactly what is known.
@@ -314,11 +321,17 @@ pub unsafe fn access_token(
     // already ruled out; an empty token is a token the server would reject, and
     // saying so here is better than sending `Authorization: Bearer `.
     match value {
-        Some(value) if !value.is_empty() => Ok(value),
-        _ => Err(ConnectError::OAuth2(translate(
-            // TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
-            // token that was empty rather than absent.
-            c"the OAuth 2.0 service returned an empty access token",
-        ))),
+        Some(value) if !value.is_empty() => {
+            tracing::debug!(?account_id, expires_in, "obtained OAuth 2.0 access token");
+            Ok(value)
+        }
+        _ => {
+            tracing::debug!(?account_id, "empty OAuth 2.0 access token received");
+            Err(ConnectError::OAuth2(translate(
+                // TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
+                // token that was empty rather than absent.
+                c"the OAuth 2.0 service returned an empty access token",
+            )))
+        }
     }
 }

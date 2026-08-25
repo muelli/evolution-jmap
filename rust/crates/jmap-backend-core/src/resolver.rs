@@ -58,11 +58,26 @@ pub struct SystemResolver;
 
 impl Resolver for SystemResolver {
     fn lookup_srv(&self, domain: &str) -> Option<SrvTarget> {
+        tracing::debug!(domain, "resolving _jmap._tcp SRV record");
         // A domain with an interior NUL cannot be a C string, and it cannot be
         // a real domain either — treat it as unresolvable rather than as an
         // error the vfunc above has to have a story for.
-        let domain = CString::new(domain).ok()?;
-        lookup_first_service_target(c"jmap", c"tcp", &domain)
+        let domain_c = CString::new(domain).ok()?;
+        let target = lookup_first_service_target(c"jmap", c"tcp", &domain_c);
+        match &target {
+            Some(target) => {
+                tracing::debug!(
+                    domain,
+                    target_host = %target.host,
+                    target_port = target.port,
+                    "SRV record resolved"
+                );
+            }
+            None => {
+                tracing::debug!(domain, "no SRV record found or lookup failed");
+            }
+        }
+        target
     }
 }
 
@@ -187,6 +202,8 @@ fn srv_host(host: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use jmap_client::resolver::Resolver;
+
     use super::srv_host;
 
     #[test]
@@ -209,5 +226,67 @@ mod tests {
     fn the_root_target_means_no_service_here() {
         assert_eq!(srv_host("."), None);
         assert_eq!(srv_host(""), None);
+    }
+
+    struct CapturingSubscriber {
+        captured: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    struct Recorder<'a>(&'a std::sync::Mutex<Vec<(String, String)>>);
+
+    impl tracing::field::Visit for Recorder<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), format!("{value:?}")));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), value.to_owned()));
+        }
+    }
+
+    impl tracing::Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut Recorder(&self.captured));
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    #[test]
+    fn lookup_srv_traces_domain_field() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        let _ = tracing::subscriber::with_default(subscriber, || {
+            super::SystemResolver.lookup_srv("invalid.domain.invalid")
+        });
+
+        let entries = captured.lock().unwrap();
+        assert!(
+            entries.contains(&("domain".to_owned(), "invalid.domain.invalid".to_owned())),
+            "expected domain field, got {entries:?}"
+        );
     }
 }
