@@ -274,6 +274,7 @@ unsafe extern "C" fn connect_sync(
             // including when it is not. Re-opening a live one would drop a
             // socket other threads are mid-request on.
             if backend.is_connected() {
+                tracing::debug!("reusing existing calendar connection");
                 write_auth_result(out_auth_result, ACCEPTED_AUTH_RESULT);
                 return GTRUE;
             }
@@ -285,6 +286,11 @@ unsafe extern "C" fn connect_sync(
                 return GFALSE;
             };
 
+            tracing::debug!(
+                account_id = sync.account_id().as_str(),
+                calendar_id = sync.calendar_id().as_str(),
+                "calendar backend connected"
+            );
             backend.store_connection(sync);
             // Without this the calendar is read-only: every write comes back
             // as "Permission denied" and Evolution greys the calendar out.
@@ -320,7 +326,8 @@ unsafe extern "C" fn disconnect_sync(
             // shutdown after a failed connect, so it is a success, not a
             // failure: there is nothing left to do and nothing went wrong.
             if let Some(backend) = instance(meta_backend) {
-                backend.drop_connection();
+                let dropped = backend.drop_connection();
+                tracing::debug!(dropped, "calendar backend disconnected");
             }
             GTRUE
         })

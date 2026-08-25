@@ -55,6 +55,12 @@ pub fn open_calendar(
             .map(|calendar| (calendar.id.as_ref(), calendar.is_default)),
     )?;
 
+    tracing::debug!(
+        account_id = account_id.as_str(),
+        calendar_id = calendar_id.as_str(),
+        "opened JMAP calendar"
+    );
+
     Ok(CalSync::new(client, account_id, calendar_id))
 }
 
