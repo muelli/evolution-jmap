@@ -3257,7 +3257,10 @@ fn zone_of(tzid: &str, zones: &Zones) -> String {
     if let Some(name) = zones.get(tzid).and_then(|zone| zone.name.clone()) {
         return name;
     }
-    if let Some(iana) = resolve_canonical_time_zone(tzid) {
+    if names_time_zone(tzid) {
+        return tzid.to_owned();
+    }
+    if let Some(iana) = unique_tzid_to_iana(tzid) {
         return iana.to_owned();
     }
     tzid.to_owned()

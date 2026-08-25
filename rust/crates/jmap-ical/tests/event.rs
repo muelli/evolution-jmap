@@ -10695,52 +10695,7 @@ fn windows_time_zone_names_from_real_exporters_map_to_canonical_iana_zones() {
     ];
 
     for (win_name, expected_iana) in cases {
-        // 1. Bare DTSTART with Windows TZID parameter (no VTIMEZONE)
-        let ics_bare = format!(
-            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Microsoft Corporation//Outlook//EN\r\n\
-             BEGIN:VEVENT\r\nUID:win-bare-{win_name}\r\n\
-             DTSTART;TZID={win_name}:20260615T140000\r\n\
-             DURATION:PT1H\r\nSUMMARY:Meeting in {win_name}\r\n\
-             END:VEVENT\r\nEND:VCALENDAR\r\n"
-        );
-        let event_bare = ical_to_event(&ics_bare).expect("parse bare windows tzid");
-        assert_eq!(
-            event_bare.time_zone.as_deref(),
-            Some(expected_iana),
-            "bare TZID={win_name} should resolve to {expected_iana}"
-        );
-        assert!(
-            names_time_zone(event_bare.time_zone.as_ref().unwrap()),
-            "{expected_iana} is a valid IANA name"
-        );
-        assert!(
-            maps_time_zone(&event_bare),
-            "event in {expected_iana} must satisfy maps_time_zone"
-        );
-
-        // 2. Outbound emission normalizes to standard IANA TZID / UTC format
-        let out_ics = event_to_ical(&event_bare);
-        if expected_iana == "Etc/UTC" || expected_iana == "UTC" {
-            assert!(
-                out_ics.contains("DTSTART:20260615T140000Z"),
-                "outbound ics for UTC should emit DTSTART with Z, got: {out_ics}"
-            );
-        } else {
-            assert!(
-                out_ics.contains(&format!("DTSTART;TZID={expected_iana}:20260615T140000")),
-                "outbound ics should emit standard IANA TZID {expected_iana}, got: {out_ics}"
-            );
-        }
-
-        // 3. Multi-pass roundtrip fixpoint stability
-        let event2 = ical_to_event(&out_ics).expect("event2");
-        let export2 = event_to_ical(&event2);
-        let event3 = ical_to_event(&export2).expect("event3");
-        let export3 = event_to_ical(&event3);
-        assert_eq!(export2, export3);
-        assert_eq!(event2, event3);
-
-        // 4. Windows TZID inside a VTIMEZONE definition
+        // 1. Windows TZID inside a VTIMEZONE definition (the realistic exporter shape)
         let ics_vtz = format!(
             "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Microsoft Corporation//Outlook//EN\r\n\
              BEGIN:VTIMEZONE\r\nTZID:{win_name}\r\n\
@@ -10764,6 +10719,36 @@ fn windows_time_zone_names_from_real_exporters_map_to_canonical_iana_zones() {
             Some(expected_iana),
             "VTIMEZONE with TZID={win_name} should resolve to {expected_iana}"
         );
+        assert!(
+            names_time_zone(event_vtz.time_zone.as_ref().unwrap()),
+            "{expected_iana} is a valid IANA name"
+        );
+        assert!(
+            maps_time_zone(&event_vtz),
+            "event in {expected_iana} must satisfy maps_time_zone"
+        );
+
+        // 2. Outbound emission normalizes to standard IANA TZID / UTC format
+        let out_ics = event_to_ical(&event_vtz);
+        if expected_iana == "Etc/UTC" || expected_iana == "UTC" {
+            assert!(
+                out_ics.contains("DTSTART:20260615T140000Z"),
+                "outbound ics for UTC should emit DTSTART with Z, got: {out_ics}"
+            );
+        } else {
+            assert!(
+                out_ics.contains(&format!("DTSTART;TZID={expected_iana}:20260615T140000")),
+                "outbound ics should emit standard IANA TZID {expected_iana}, got: {out_ics}"
+            );
+        }
+
+        // 3. Multi-pass roundtrip fixpoint stability
+        let event2 = ical_to_event(&out_ics).expect("event2");
+        let export2 = event_to_ical(&event2);
+        let event3 = ical_to_event(&export2).expect("event3");
+        let export3 = event_to_ical(&event3);
+        assert_eq!(export2, export3);
+        assert_eq!(event2, event3);
     }
 }
 
