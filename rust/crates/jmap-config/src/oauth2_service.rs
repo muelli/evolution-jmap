@@ -209,11 +209,13 @@ unsafe extern "C" fn prepare_authentication_uri_query(
         "JmapOAuth2Service::prepare_authentication_uri_query",
         (),
         || unsafe {
+            let uid = read_string(e_source_get_uid(source));
             if let Some(default) = DEFAULT_PREPARE_AUTHENTICATION_URI_QUERY.get() {
                 default(service, source, uri_query);
             }
             let scope = oauth2::scope(source);
-            if !scope.is_null() && *scope != 0 {
+            let has_scope = !scope.is_null() && *scope != 0;
+            if has_scope {
                 // The table frees both halves (EDS builds it with g_free
                 // destroyers), so both are handed over as fresh copies.
                 g_hash_table_replace(
@@ -243,12 +245,18 @@ unsafe extern "C" fn prepare_authentication_uri_query(
                 g_strdup(c"code_challenge_method".as_ptr()).cast(),
                 g_strdup(c"S256".as_ptr()).cast(),
             );
-            if let Some(uid) = read_string(e_source_get_uid(source)) {
+            if let Some(ref uid) = uid {
                 pkce_verifiers()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(uid, verifier.secret().to_owned());
+                    .insert(uid.clone(), verifier.secret().to_owned());
             }
+            tracing::debug!(
+                account_uid = ?uid,
+                has_scope,
+                pkce_challenge_method = "S256",
+                "prepared OAuth 2.0 authentication uri query"
+            );
         },
     );
 }
@@ -307,24 +315,33 @@ unsafe extern "C" fn prepare_get_token_form(
     form: *mut GHashTable,
 ) {
     guard("JmapOAuth2Service::prepare_get_token_form", (), || unsafe {
+        let uid = read_string(e_source_get_uid(source));
         if let Some(default) = DEFAULT_PREPARE_GET_TOKEN_FORM.get() {
             default(service, source, authorization_code, form);
         }
         add_resource(source, form);
         // Redeem the PKCE verifier stashed when the authorization query was
         // built (RFC 7636 §4.5). Taken, not copied: a verifier is single-use.
-        if let Some(uid) = read_string(e_source_get_uid(source))
+        let has_pkce = if let Some(ref uid) = uid
             && let Some(verifier) = pkce_verifiers()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .remove(&uid)
+                .remove(uid)
         {
             g_hash_table_replace(
                 form,
                 g_strdup(c"code_verifier".as_ptr()).cast(),
                 g_strdup(cstring_lossy(&verifier).as_ptr()).cast(),
             );
-        }
+            true
+        } else {
+            false
+        };
+        tracing::debug!(
+            account_uid = ?uid,
+            has_pkce,
+            "prepared OAuth 2.0 get token form"
+        );
     });
 }
 
@@ -339,10 +356,15 @@ unsafe extern "C" fn prepare_refresh_token_form(
         "JmapOAuth2Service::prepare_refresh_token_form",
         (),
         || unsafe {
+            let uid = read_string(e_source_get_uid(source));
             if let Some(default) = DEFAULT_PREPARE_REFRESH_TOKEN_FORM.get() {
                 default(service, source, refresh_token, form);
             }
             add_resource(source, form);
+            tracing::debug!(
+                account_uid = ?uid,
+                "prepared OAuth 2.0 refresh token form"
+            );
         },
     );
 }

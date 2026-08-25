@@ -156,7 +156,7 @@ pub const REDIRECT_URI: &str = "org.gnome.evolution.jmap:/redirect";
 /// [`parse_target`] reads back out; an SRV target is rendered `host:port`,
 /// which `parse_target` parses as a bare, secure host with that port, the
 /// right reading for a target a JMAP SRV record ever names.
-pub(crate) fn probe_host(
+pub fn probe_host(
     email_address: &str,
     servers: Option<&str>,
     resolver: &dyn jmap_client::resolver::Resolver,
@@ -164,6 +164,10 @@ pub(crate) fn probe_host(
     if let Some(servers) = servers
         && let Some(first) = servers.split(';').map(str::trim).find(|s| !s.is_empty())
     {
+        tracing::debug!(
+            explicit_server = first,
+            "using explicit server for JMAP config lookup"
+        );
         return Some(first.to_owned());
     }
     let (_, domain) = email_address.split_once('@')?;
@@ -171,8 +175,15 @@ pub(crate) fn probe_host(
         return None;
     }
     if let Some(target) = resolver.lookup_srv(domain) {
+        tracing::debug!(
+            domain,
+            target_host = target.host,
+            target_port = target.port,
+            "found JMAP SRV record for domain"
+        );
         return Some(format!("{}:{}", target.host, target.port));
     }
+    tracing::debug!(domain, "no SRV record found, falling back to bare domain");
     Some(domain.to_owned())
 }
 
@@ -562,6 +573,13 @@ unsafe extern "C" fn run(
             return;
         };
 
+        tracing::debug!(
+            target_host = target.host,
+            target_port = target.port,
+            secure = target.secure,
+            "running JMAP config lookup worker"
+        );
+
         // SAFETY: `cancellable` is NULL or a valid `GCancellable` that EDS
         // keeps alive for the duration of this call, per `run`'s own
         // contract (mirroring `e_config_lookup_worker_run`'s C signature).
@@ -577,8 +595,18 @@ unsafe extern "C" fn run(
             REDIRECT_URI,
             Some(&cancel_flag),
         ) else {
+            tracing::debug!(
+                target_host = target.host,
+                "JMAP config lookup worker: discovery and registration yielded no configuration"
+            );
             return;
         };
+
+        tracing::debug!(
+            target_host = target.host,
+            client_id = ?config.client_id,
+            "JMAP config lookup worker added result"
+        );
 
         add_result(config_lookup, &email, &target, &config);
     });

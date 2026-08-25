@@ -92,12 +92,32 @@ pub fn discover_and_register(
     cancel: Option<&CancelFlag>,
 ) -> Result<Config, Error> {
     let issuer = source::origin(Some(host), port, secure).map_err(Error::Host)?;
+    tracing::debug!(
+        issuer,
+        "discovering OAuth 2.0 authorization server metadata"
+    );
 
-    let server = oauth::discover(transport, &issuer, cancel).map_err(Error::Client)?;
+    let server = match oauth::discover(transport, &issuer, cancel) {
+        Ok(server) => server,
+        Err(error) => {
+            tracing::warn!(issuer, %error, "OAuth 2.0 discovery failed");
+            return Err(Error::Client(error));
+        }
+    };
     if !server.supports_authorization_code() {
+        tracing::warn!(
+            issuer,
+            "OAuth 2.0 server does not offer authorization code grant"
+        );
         return Err(Error::UnsupportedGrant);
     }
-    let registration_endpoint = server.registration_endpoint.ok_or(Error::NoRegistration)?;
+    let registration_endpoint = match server.registration_endpoint {
+        Some(endpoint) => endpoint,
+        None => {
+            tracing::warn!(issuer, "OAuth 2.0 server offers no registration endpoint");
+            return Err(Error::NoRegistration);
+        }
+    };
 
     // Register — and later request — exactly the scopes this client uses,
     // chosen from those the deployment advertises: the JMAP data scopes (as
@@ -125,7 +145,14 @@ pub fn discover_and_register(
         .collect();
     let scope = (!picked.is_empty()).then(|| picked.join(" "));
 
-    let registered = oauth::register_client(
+    tracing::debug!(
+        issuer,
+        registration_endpoint,
+        ?scope,
+        "registering OAuth 2.0 dynamic client"
+    );
+
+    let registered = match oauth::register_client(
         transport,
         &registration_endpoint,
         &ClientRegistrationRequest {
@@ -135,8 +162,24 @@ pub fn discover_and_register(
             scope: scope.as_deref(),
         },
         cancel,
-    )
-    .map_err(Error::Client)?;
+    ) {
+        Ok(reg) => reg,
+        Err(error) => {
+            tracing::warn!(
+                issuer,
+                registration_endpoint,
+                %error,
+                "OAuth 2.0 client registration failed"
+            );
+            return Err(Error::Client(error));
+        }
+    };
+
+    tracing::debug!(
+        issuer,
+        client_id = registered.client_id,
+        "registered OAuth 2.0 dynamic client"
+    );
 
     Ok(Config {
         client_id: Some(registered.client_id),
@@ -169,15 +212,34 @@ fn probe_resource(
     cancel: Option<&CancelFlag>,
 ) -> Option<String> {
     let url = format!("{issuer}/.well-known/jmap");
-    let response = transport
-        .execute(HttpRequest {
-            method: HttpMethod::Get,
-            url: &url,
-            headers: &[("Accept".to_owned(), "application/json".to_owned())],
-            body: None,
-            cancel,
-            max_response_bytes: 64 * 1024,
-        })
-        .ok()?;
-    matches!(response.status, 200 | 401 | 403).then_some(response.final_url)
+    tracing::debug!(issuer, url, "probing RFC 8707 protected-resource indicator");
+    let response = match transport.execute(HttpRequest {
+        method: HttpMethod::Get,
+        url: &url,
+        headers: &[("Accept".to_owned(), "application/json".to_owned())],
+        body: None,
+        cancel,
+        max_response_bytes: 64 * 1024,
+    }) {
+        Ok(resp) => resp,
+        Err(error) => {
+            tracing::debug!(
+                issuer,
+                url,
+                ?error,
+                "protected-resource indicator probe failed"
+            );
+            return None;
+        }
+    };
+    let matched = matches!(response.status, 200 | 401 | 403);
+    tracing::debug!(
+        issuer,
+        url,
+        status = response.status,
+        final_url = response.final_url,
+        matched,
+        "protected-resource indicator probe finished"
+    );
+    matched.then_some(response.final_url)
 }
