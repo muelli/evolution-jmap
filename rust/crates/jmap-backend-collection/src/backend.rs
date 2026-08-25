@@ -183,7 +183,12 @@ unsafe extern "C" fn dup_resource_id(
     let _ = backend;
     guard("dup_resource_id", ptr::null_mut(), || {
         // SAFETY: EDS hands us one of its own sources, alive for the call.
-        match unsafe { resource_id_of(child_source) } {
+        let id_opt = unsafe { resource_id_of(child_source) };
+        tracing::debug!(
+            resource_id = id_opt.as_deref(),
+            "duplicated resource id for child source"
+        );
+        match id_opt {
             // SAFETY: ownership of the duplicate passes to EDS, which puts it
             // in its hash table and frees it with `g_free`.
             Some(id) => unsafe { dup_string(&id) },
@@ -451,6 +456,12 @@ unsafe extern "C" fn get_destination_address(
         let Some((address_host, address_port)) = (unsafe { destination_address(source) }) else {
             return GFALSE;
         };
+
+        tracing::debug!(
+            host = address_host.as_str(),
+            port = address_port,
+            "resolved destination address for collection backend"
+        );
 
         // SAFETY: `host`/`port` are the vfunc's own out-parameters, written
         // only on this success path; ownership of the duplicated string

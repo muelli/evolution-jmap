@@ -197,6 +197,11 @@ pub unsafe fn fan_out<C: Collection + ?Sized>(
 ) -> Result<Populated, jmap_client::Error> {
     let client = source::connect(&login.server.target, login.credentials.clone())?;
     let fanout = Fanout::discover(&client, login.parts)?;
+    tracing::debug!(
+        address_books_count = fanout.address_books.len(),
+        calendars_count = fanout.calendars.len(),
+        "discovered collection fan-out resources"
+    );
 
     // SAFETY: the caller's contract is this function's.
     Ok(unsafe { apply_fanout(collection, &fanout, &login.server.connection) })
