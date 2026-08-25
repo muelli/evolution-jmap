@@ -116,6 +116,7 @@ impl JmapTransport {
     /// [`JmapStore::store_connection`]: crate::store::JmapStore::store_connection
     pub fn install_connection(&self, sync: MailSync) {
         if let Some(connection) = self.connection() {
+            tracing::debug!("installing connection in transport");
             *write(connection) = Some(sync);
         }
     }
@@ -127,7 +128,11 @@ impl JmapTransport {
     /// sent anything has a transport that never connected.
     pub fn drop_connection(&self) -> bool {
         match self.connection() {
-            Some(connection) => write(connection).take().is_some(),
+            Some(connection) => {
+                let dropped = write(connection).take().is_some();
+                tracing::debug!(dropped, "dropping connection from transport");
+                dropped
+            }
             None => false,
         }
     }
@@ -161,20 +166,42 @@ impl JmapTransport {
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
 
-        let identity = sync.identity_for(&envelope.mail_from.email)?;
-        let mailboxes = sync.outgoing_mailboxes()?;
-        let uid = sync.send_message(Outgoing {
+        tracing::debug!(size = source.len(), "sending message");
+
+        let identity = match sync.identity_for(&envelope.mail_from.email) {
+            Ok(identity) => identity,
+            Err(failure) => {
+                tracing::debug!(?failure, "looking up sender identity failed");
+                return Err(failure.into());
+            }
+        };
+        let mailboxes = match sync.outgoing_mailboxes() {
+            Ok(mailboxes) => mailboxes,
+            Err(failure) => {
+                tracing::debug!(?failure, "looking up outgoing mailboxes failed");
+                return Err(failure.into());
+            }
+        };
+        let uid = match sync.send_message(Outgoing {
             source,
             identity,
             envelope: Some(envelope),
             staging: mailboxes.staging,
             destination: mailboxes.destination,
-        })?;
+        }) {
+            Ok(uid) => uid,
+            Err(failure) => {
+                tracing::debug!(?failure, "sending message failed");
+                return Err(failure.into());
+            }
+        };
 
-        Ok(Sent {
+        let sent = Sent {
             uid,
             saved: mailboxes.saves_sent_copy,
-        })
+        };
+        tracing::debug!(uid = sent.uid.as_str(), saved = sent.saved, "sent message");
+        Ok(sent)
     }
 
     /// Whether a send would find a connection.
