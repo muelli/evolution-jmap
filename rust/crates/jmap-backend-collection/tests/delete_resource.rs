@@ -43,6 +43,7 @@ use jmap_proto::Id;
 /// process never share an `ESource` uid — EDS derives the uid from the file
 /// name.
 static NEXT: AtomicU32 = AtomicU32::new(0);
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The account this collection belongs to, as a child's settings were written
 /// from.
@@ -208,6 +209,7 @@ impl Drop for ServerSide {
 
 #[test]
 fn an_address_book_child_names_the_address_book_it_stands_for() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let source = Source::child_of(ChildKind::AddressBook, "AB1");
 
     assert_eq!(
@@ -221,6 +223,7 @@ fn an_address_book_child_names_the_address_book_it_stands_for() {
 
 #[test]
 fn a_calendar_child_names_the_calendar_it_stands_for() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // The pair, not the id: a server that numbers its objects from one gives an
     // address book and a calendar the same id (RFC 8620 §1.2), and the kind is
     // what decides which `/set` call destroys this one.
@@ -237,6 +240,7 @@ fn a_calendar_child_names_the_calendar_it_stands_for() {
 
 #[test]
 fn a_source_that_is_not_a_child_of_this_backend_names_nothing() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // The rule the whole feature rests on. `delete_resource_sync` is handed
     // whatever source the user clicked "Delete" on, and a source with no
     // `[Resource] Identity` of ours — a mail source of this account, a child of
@@ -250,6 +254,7 @@ fn a_source_that_is_not_a_child_of_this_backend_names_nothing() {
 
 #[test]
 fn a_child_that_names_a_kind_and_no_identity_names_nothing() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Halfway is still not ours: the address book extension alone says which
     // `/set` call would be used and nothing about which object.
     let source = Source::new("jmap-half-written");
@@ -266,6 +271,7 @@ fn a_child_that_names_a_kind_and_no_identity_names_nothing() {
 
 #[test]
 fn reading_the_doomed_collection_does_not_give_the_source_an_extension_it_lacked() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // `e_source_get_extension` *creates* what it cannot find, and this vfunc is
     // handed sources belonging to other parts of Evolution. A read that reached
     // for `[Resource]` would write a group into every one of them.
@@ -279,6 +285,7 @@ fn reading_the_doomed_collection_does_not_give_the_source_an_extension_it_lacked
 
 #[test]
 fn a_child_of_this_backend_is_offered_for_deletion() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // What makes Evolution show "Delete" on a JMAP address book at all:
     // `server_side_source_remote_delete_sync()` refuses outright unless the
     // child's own `remote-deletable` is set, so without this the vfunc below is
@@ -298,6 +305,7 @@ fn a_child_of_this_backend_is_offered_for_deletion() {
 
 #[test]
 fn a_source_this_backend_did_not_write_is_not_offered_for_deletion() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // `child_added` fires for every source under this collection, mail sources
     // included. Offering deletion on one of those would put a "Delete" in front
     // of the user that this backend cannot honour — and `delete_resource_sync`
@@ -313,6 +321,7 @@ fn a_source_this_backend_did_not_write_is_not_offered_for_deletion() {
 
 #[test]
 fn deleting_a_child_takes_its_collection_off_the_server() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // The whole vfunc minus the instance: a collection created on a real mock,
     // a child source written for it the way a fan-out writes one, and the
     // delete driven from what that source says about itself.
