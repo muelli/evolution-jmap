@@ -49,6 +49,12 @@ pub fn open_book(
         books.iter().map(|book| (book.id.as_ref(), book.is_default)),
     )?;
 
+    tracing::debug!(
+        account_id = account_id.as_str(),
+        address_book_id = address_book_id.as_str(),
+        "opened JMAP address book"
+    );
+
     Ok(BookSync::new(client, account_id, address_book_id))
 }
 

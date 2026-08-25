@@ -652,6 +652,7 @@ dependencies = [
  "jmap-backend-book",
  "jmap-backend-core",
  "jmap-config",
+ "tracing",
 ]
 
 [[package]]

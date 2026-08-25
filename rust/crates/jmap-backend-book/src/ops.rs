@@ -61,12 +61,35 @@ pub unsafe fn list_existing(
     out_existing_objects: *mut *mut GSList,
     error: *mut *mut GError,
 ) -> gboolean {
+    let account_id = sync.account_id().as_str();
+    let address_book_id = sync.address_book_id().as_str();
+    tracing::debug!(
+        account_id,
+        address_book_id,
+        "listing existing address book contacts"
+    );
     let (state, contacts) = match sync.list_existing() {
         Ok(listed) => listed,
         // SAFETY: `error` satisfies set_raw_gerror's contract by this
         // function's own.
-        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
+        Err(failure) => {
+            tracing::debug!(
+                account_id,
+                address_book_id,
+                ?failure,
+                "listing existing address book contacts failed"
+            );
+            return unsafe { fail_bool(error, &failure, to_gerror) };
+        }
     };
+
+    tracing::debug!(
+        account_id,
+        address_book_id,
+        state = state.as_str(),
+        count = contacts.len(),
+        "listed existing address book contacts"
+    );
 
     // SAFETY: as above for the out-parameters; both allocations are GLib ones
     // ownership of which passes to the caller.
@@ -109,20 +132,56 @@ pub unsafe fn get_changes(
     out_removed_objects: *mut *mut GSList,
     error: *mut *mut GError,
 ) -> Outcome {
+    let account_id = sync.account_id().as_str();
+    let address_book_id = sync.address_book_id().as_str();
     // SAFETY: the caller guarantees a valid string or NULL.
     let Some(tag) = (unsafe { read_string(last_sync_tag) }) else {
+        tracing::debug!(
+            account_id,
+            address_book_id,
+            "get_changes called with no last_sync_tag; listing address book instead"
+        );
         return Outcome::ListInstead;
     };
 
+    tracing::debug!(
+        account_id,
+        address_book_id,
+        last_sync_tag = tag.as_str(),
+        "getting address book changes"
+    );
+
     let changes = match sync.get_changes(&State::from(tag)) {
         Ok(changes) => changes,
-        Err(failure) if failure.is_cannot_calculate_changes() => return Outcome::ListInstead,
+        Err(failure) if failure.is_cannot_calculate_changes() => {
+            tracing::debug!(
+                account_id,
+                address_book_id,
+                "server cannot calculate changes; listing address book instead"
+            );
+            return Outcome::ListInstead;
+        }
         Err(failure) => {
+            tracing::debug!(
+                account_id,
+                address_book_id,
+                ?failure,
+                "getting address book changes failed"
+            );
             // SAFETY: `error` satisfies the contract by this function's own.
             unsafe { set_raw_gerror(error, to_gerror(&failure)) };
             return Outcome::Failed;
         }
     };
+
+    tracing::debug!(
+        account_id,
+        address_book_id,
+        new_sync_tag = changes.new_state.as_str(),
+        changed_count = changes.changed.len(),
+        removed_count = changes.removed.len(),
+        "reported address book changes"
+    );
 
     // SAFETY: as above for the out-parameters; the allocations are GLib ones
     // ownership of which passes to the caller.
@@ -159,23 +218,49 @@ pub unsafe fn load_contact(
     _out_extra: *mut *mut gchar,
     error: *mut *mut GError,
 ) -> gboolean {
+    let account_id = sync.account_id().as_str();
+    let address_book_id = sync.address_book_id().as_str();
     // SAFETY: the caller guarantees a valid string or NULL.
     let Some(uid) = (unsafe { read_string(uid) }) else {
+        tracing::debug!(
+            account_id,
+            address_book_id,
+            "contact was asked for without an identifier"
+        );
         // SAFETY: `error` satisfies the contract by this function's own.
         return unsafe { fail_invalid(error, "a contact was asked for without an identifier") };
     };
 
+    tracing::debug!(
+        account_id,
+        address_book_id,
+        uid = uid.as_str(),
+        "loading contact"
+    );
+
     let info = match sync.load_contact(&uid) {
         Ok(info) => info,
         // SAFETY: as above.
-        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
+        Err(failure) => {
+            tracing::debug!(
+                account_id,
+                address_book_id,
+                uid = uid.as_str(),
+                ?failure,
+                "loading contact failed"
+            );
+            return unsafe { fail_bool(error, &failure, to_gerror) };
+        }
     };
 
     let contact = marshal::contact_from_vcard(&info.vcard);
     if contact.is_null() {
-        // Our own rendering of the card is not a vCard, which is a bug here
-        // rather than anything the server did — but it still has to reach EDS
-        // as a failure rather than as an empty contact.
+        tracing::debug!(
+            account_id,
+            address_book_id,
+            uid = uid.as_str(),
+            "contact could not be rendered as a vCard"
+        );
         // SAFETY: as above.
         return unsafe {
             fail_invalid(
@@ -184,6 +269,14 @@ pub unsafe fn load_contact(
             )
         };
     }
+
+    tracing::debug!(
+        account_id,
+        address_book_id,
+        uid = uid.as_str(),
+        revision = info.revision.as_str(),
+        "loaded contact"
+    );
 
     // SAFETY: `out_contact` satisfies the contract by this function's own; the
     // reference taken by `contact_from_vcard` passes to the caller, or is
@@ -213,13 +306,22 @@ pub unsafe fn save_contact(
     _out_new_extra: *mut *mut gchar,
     error: *mut *mut GError,
 ) -> gboolean {
+    let account_id = sync.account_id().as_str();
+    let address_book_id = sync.address_book_id().as_str();
+    let is_overwrite = overwrite_existing != GFALSE;
+
     // SAFETY: the caller guarantees a valid EContact or NULL.
     let Some(vcard) = (unsafe { marshal::vcard_from_contact(contact) }) else {
+        tracing::debug!(
+            account_id,
+            address_book_id,
+            "contact to save is not a vCard"
+        );
         // SAFETY: `error` satisfies the contract by this function's own.
         return unsafe { fail_invalid(error, "the contact to save is not a vCard") };
     };
 
-    let existing_uid = if overwrite_existing == GFALSE {
+    let existing_uid = if !is_overwrite {
         // A create. The vCard's UID is a name Evolution invented locally
         // (`pas-id-…`) and never a JMAP id, so the server assigns the real one.
         None
@@ -231,6 +333,11 @@ pub unsafe fn save_contact(
             // contact on the server, which is worse than a visible failure.
             // SAFETY: as above.
             None => {
+                tracing::debug!(
+                    account_id,
+                    address_book_id,
+                    "contact was edited without an identifier"
+                );
                 return unsafe {
                     fail_invalid(error, "a contact was edited without an identifier")
                 };
@@ -238,11 +345,37 @@ pub unsafe fn save_contact(
         }
     };
 
+    tracing::debug!(
+        account_id,
+        address_book_id,
+        overwrite_existing = is_overwrite,
+        existing_uid = existing_uid.as_deref(),
+        "saving contact"
+    );
+
     let info = match sync.save_contact(&vcard, existing_uid.as_deref()) {
         Ok(info) => info,
         // SAFETY: as above.
-        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
+        Err(failure) => {
+            tracing::debug!(
+                account_id,
+                address_book_id,
+                overwrite_existing = is_overwrite,
+                existing_uid = existing_uid.as_deref(),
+                ?failure,
+                "saving contact failed"
+            );
+            return unsafe { fail_bool(error, &failure, to_gerror) };
+        }
     };
+
+    tracing::debug!(
+        account_id,
+        address_book_id,
+        uid = info.uid.as_str(),
+        revision = info.revision.as_str(),
+        "saved contact"
+    );
 
     // SAFETY: `out_new_uid` satisfies the contract by this function's own, and
     // ownership of the duplicate passes through it.
@@ -261,16 +394,47 @@ pub unsafe fn remove_contact(
     uid: *const gchar,
     error: *mut *mut GError,
 ) -> gboolean {
+    let account_id = sync.account_id().as_str();
+    let address_book_id = sync.address_book_id().as_str();
     // SAFETY: the caller guarantees a valid string or NULL.
     let Some(uid) = (unsafe { read_string(uid) }) else {
+        tracing::debug!(
+            account_id,
+            address_book_id,
+            "contact was removed without an identifier"
+        );
         // SAFETY: `error` satisfies the contract by this function's own.
         return unsafe { fail_invalid(error, "a contact was removed without an identifier") };
     };
 
+    tracing::debug!(
+        account_id,
+        address_book_id,
+        uid = uid.as_str(),
+        "removing contact"
+    );
+
     match sync.remove_contact(&uid) {
-        Ok(()) => GTRUE,
+        Ok(()) => {
+            tracing::debug!(
+                account_id,
+                address_book_id,
+                uid = uid.as_str(),
+                "removed contact"
+            );
+            GTRUE
+        }
         // SAFETY: as above.
-        Err(failure) => unsafe { fail_bool(error, &failure, to_gerror) },
+        Err(failure) => {
+            tracing::debug!(
+                account_id,
+                address_book_id,
+                uid = uid.as_str(),
+                ?failure,
+                "removing contact failed"
+            );
+            unsafe { fail_bool(error, &failure, to_gerror) }
+        }
     }
 }
 
