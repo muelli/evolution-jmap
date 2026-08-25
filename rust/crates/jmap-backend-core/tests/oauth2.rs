@@ -134,3 +134,71 @@ fn a_source_with_no_token_is_a_required_not_a_rejected() {
     assert!(matches!(error, ConnectError::OAuth2(_)));
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
 }
+
+struct CapturingSubscriber {
+    captured: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+}
+
+struct Recorder<'a>(&'a std::sync::Mutex<Vec<(String, String)>>);
+
+impl tracing::field::Visit for Recorder<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((field.name().to_owned(), format!("{value:?}")));
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((field.name().to_owned(), value.to_owned()));
+    }
+}
+
+impl tracing::Subscriber for CapturingSubscriber {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        event.record(&mut Recorder(&self.captured));
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+#[test]
+fn access_token_traces_account_id_on_attempt() {
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let subscriber = CapturingSubscriber {
+        captured: captured.clone(),
+    };
+
+    let source = TestSource::new("jmap-oauth2-trace-uid").with_method("OAuth2");
+
+    let _ = tracing::subscriber::with_default(subscriber, || {
+        // SAFETY: a live source and NULL cancellable.
+        unsafe { access_token(source.0, ptr::null_mut()) }
+    });
+
+    let entries = captured.lock().unwrap();
+    assert!(
+        entries.contains(&(
+            "account_id".to_owned(),
+            "Some(\"jmap-oauth2-trace-uid\")".to_owned()
+        )),
+        "expected account_id field, got {entries:?}"
+    );
+}

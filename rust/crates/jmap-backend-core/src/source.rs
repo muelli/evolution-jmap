@@ -287,11 +287,17 @@ pub fn connect(
     credentials: jmap_client::Credentials,
 ) -> Result<jmap_client::Client, jmap_client::Error> {
     match target {
-        ConnectTarget::Origin(origin) => jmap_client::Client::connect(origin, credentials),
-        ConnectTarget::Domain(domain) => jmap_client::Client::builder()
-            .rebase_urls_to_origin(jmap_client::rebase_urls_from_env())
-            .resolver(crate::resolver::SystemResolver)
-            .connect_domain(domain, credentials),
+        ConnectTarget::Origin(origin) => {
+            tracing::debug!(origin, "connecting to JMAP origin");
+            jmap_client::Client::connect(origin, credentials)
+        }
+        ConnectTarget::Domain(domain) => {
+            tracing::debug!(domain, "connecting to JMAP domain via SRV autodiscovery");
+            jmap_client::Client::builder()
+                .rebase_urls_to_origin(jmap_client::rebase_urls_from_env())
+                .resolver(crate::resolver::SystemResolver)
+                .connect_domain(domain, credentials)
+        }
     }
 }
 
@@ -585,5 +591,87 @@ mod tests {
         ] {
             assert!(!is_loopback(host), "{host} should not be loopback");
         }
+    }
+
+    struct CapturingSubscriber {
+        captured: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    }
+
+    struct Recorder<'a>(&'a std::sync::Mutex<Vec<(String, String)>>);
+
+    impl tracing::field::Visit for Recorder<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), format!("{value:?}")));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), value.to_owned()));
+        }
+    }
+
+    impl tracing::Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut Recorder(&self.captured));
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    #[test]
+    fn connect_traces_origin_field_when_connecting_to_origin() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        let target = ConnectTarget::Origin("http://127.0.0.1:1".to_owned());
+        let _ = tracing::subscriber::with_default(subscriber, || {
+            connect(&target, jmap_client::Credentials::none())
+        });
+
+        let entries = captured.lock().unwrap();
+        assert!(
+            entries.contains(&("origin".to_owned(), "http://127.0.0.1:1".to_owned())),
+            "expected origin field, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn connect_traces_domain_field_when_connecting_to_domain() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        let target = ConnectTarget::Domain("invalid.domain.invalid".to_owned());
+        let _ = tracing::subscriber::with_default(subscriber, || {
+            connect(&target, jmap_client::Credentials::none())
+        });
+
+        let entries = captured.lock().unwrap();
+        assert!(
+            entries.contains(&("domain".to_owned(), "invalid.domain.invalid".to_owned())),
+            "expected domain field, got {entries:?}"
+        );
     }
 }
