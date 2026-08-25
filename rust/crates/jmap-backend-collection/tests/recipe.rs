@@ -59,6 +59,9 @@ use jmap_collection_sync::Parts;
 use jmap_mail::server::ServerConfig;
 use jmap_mail::settings::settings_type;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
 static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Every keyfile the recipe tells the reader to copy, in the order the document
@@ -272,25 +275,27 @@ impl Drop for RegistrySource {
 
 #[test]
 fn the_recipes_keyfile_describes_the_mock_server() {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let source = RegistrySource::load(&keyfile());
-    // SAFETY: a source alive for the length of each call, which is all
-    // `collection_source`'s functions ask for.
-    let (server, user) = unsafe { (server_of(source.source), user_of(source.source)) };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = RegistrySource::load(&keyfile());
+        // SAFETY: a source alive for the length of each call, which is all
+        // `collection_source`'s functions ask for.
+        let (server, user) = unsafe { (server_of(source.source), user_of(source.source)) };
 
-    // `jmap-mockd`'s default port, in the clear, which the shared `origin` rules
-    // allow for loopback and nothing else.
-    assert_eq!(
-        server
-            .expect("the documented account names a server")
-            .target,
-        ConnectTarget::Origin("http://127.0.0.1:8080".into())
-    );
-    // No user, on purpose. An account that names one makes `populate` ask EDS to
-    // resolve a password before anything is contacted, and the recipe's first run
-    // would be a prompt rather than a fan-out; `jmap-mockd` with no
-    // `--basic`/`--bearer` wants no credentials at all.
-    assert_eq!(user, None);
+        // `jmap-mockd`'s default port, in the clear, which the shared `origin` rules
+        // allow for loopback and nothing else.
+        assert_eq!(
+            server
+                .expect("the documented account names a server")
+                .target,
+            ConnectTarget::Origin("http://127.0.0.1:8080".into())
+        );
+        // No user, on purpose. An account that names one makes `populate` ask EDS to
+        // resolve a password before anything is contacted, and the recipe's first run
+        // would be a prompt rather than a fan-out; `jmap-mockd` with no
+        // `--basic`/`--bearer` wants no credentials at all.
+        assert_eq!(user, None);
+    });
 }
 
 /// The three switches that decide what a populate lists — and the reason the
@@ -303,218 +308,245 @@ fn the_recipes_keyfile_describes_the_mock_server() {
 /// returns having done nothing.
 #[test]
 fn the_recipes_keyfile_switches_on_the_parts_the_backend_fans_out_to() {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let source = RegistrySource::load(&keyfile());
-    // SAFETY: as above.
-    let parts = unsafe { parts_of(source.source) };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = RegistrySource::load(&keyfile());
+        // SAFETY: as above.
+        let parts = unsafe { parts_of(source.source) };
 
-    assert_eq!(
-        parts,
-        Parts {
-            mail: false,
-            contacts: true,
-            calendars: true,
-        }
-    );
-    assert!(
-        parts.any(),
-        "an account with no part enabled is one whose populate does nothing at \
-         all, which is not what this recipe is testing"
-    );
+        assert_eq!(
+            parts,
+            Parts {
+                mail: false,
+                contacts: true,
+                calendars: true,
+            }
+        );
+        assert!(
+            parts.any(),
+            "an account with no part enabled is one whose populate does nothing at \
+             all, which is not what this recipe is testing"
+        );
+    });
 }
 
 #[test]
 fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // The registry files each collection factory under
-    // `"<factory_name>:Collection"` and asks for the key built from this string.
-    // A mismatch is silent — `e_source_registry_server_ref_backend_factory`
-    // answers NULL and the account keeps sitting there with no children.
-    assert_eq!(
-        RegistrySource::load(&keyfile()).backend_name().as_deref(),
-        Some(FACTORY_NAME.to_str().expect("the factory name is UTF-8"))
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The registry files each collection factory under
+        // `"<factory_name>:Collection"` and asks for the key built from this string.
+        // A mismatch is silent — `e_source_registry_server_ref_backend_factory`
+        // answers NULL and the account keeps sitting there with no children.
+        assert_eq!(
+            RegistrySource::load(&keyfile()).backend_name().as_deref(),
+            Some(FACTORY_NAME.to_str().expect("the factory name is UTF-8"))
+        );
+    });
 }
 
 #[test]
 fn the_recipe_quotes_every_keyfile_verbatim() {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // The reader copies the files, but reads the document; if the two drift
-    // apart, whichever one they trusted is the wrong one. So an `ini` block in
-    // this document is a whole keyfile quoted verbatim and nothing else — the
-    // fragment showing what a mail source *grows* is fenced without a language,
-    // because it is not a file anybody copies.
-    let recipe = fs::read_to_string(recipe()).expect("the recipe is in docs/");
-    let quoted = fenced_blocks(&recipe, "ini");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The reader copies the files, but reads the document; if the two drift
+        // apart, whichever one they trusted is the wrong one. So an `ini` block in
+        // this document is a whole keyfile quoted verbatim and nothing else — the
+        // fragment showing what a mail source *grows* is fenced without a language,
+        // because it is not a file anybody copies.
+        let recipe = fs::read_to_string(recipe()).expect("the recipe is in docs/");
+        let quoted = fenced_blocks(&recipe, "ini");
 
-    assert_eq!(
-        quoted.len(),
-        KEYFILES.len(),
-        "expected one ini block per keyfile in docs/examples/, found {}",
-        quoted.len()
-    );
-    for (block, name) in quoted.iter().zip(KEYFILES) {
         assert_eq!(
-            block,
-            &fs::read_to_string(example(name)).expect("the keyfile is in docs/examples/"),
-            "docs/manual-test-collection-backend.md and docs/examples/{name} disagree"
+            quoted.len(),
+            KEYFILES.len(),
+            "expected one ini block per keyfile in docs/examples/, found {}",
+            quoted.len()
         );
-    }
+        for (block, name) in quoted.iter().zip(KEYFILES) {
+            assert_eq!(
+                block,
+                &fs::read_to_string(example(name)).expect("the keyfile is in docs/examples/"),
+                "docs/manual-test-collection-backend.md and docs/examples/{name} disagree"
+            );
+        }
+    });
 }
 
 #[test]
 fn the_mail_runs_account_switches_on_every_part() {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // The other account in the recipe, and the one difference that matters:
-    // `MailEnabled=true`. EDS binds each mail source's `enabled` to the
-    // account's `mail-enabled` in `collection_backend_bind_child_enabled()`, so
-    // the three sources the reader hand-writes under an account with mail off
-    // are three sources that arrive disabled — present in
-    // `~/.config/evolution/sources/`, absent from Evolution, and with no error
-    // anywhere saying why.
-    let account = RegistrySource::load(&example(MAIL_COLLECTION));
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The other account in the recipe, and the one difference that matters:
+        // `MailEnabled=true`. EDS binds each mail source's `enabled` to the
+        // account's `mail-enabled` in `collection_backend_bind_child_enabled()`, so
+        // the three sources the reader hand-writes under an account with mail off
+        // are three sources that arrive disabled — present in
+        // `~/.config/evolution/sources/`, absent from Evolution, and with no error
+        // anywhere saying why.
+        let account = RegistrySource::load(&example(MAIL_COLLECTION));
 
-    // SAFETY: a source alive for the length of the call, which is all
-    // `collection_source`'s functions ask for.
-    assert_eq!(
-        unsafe { parts_of(account.source) },
-        Parts {
-            mail: true,
-            contacts: true,
-            calendars: true,
-        }
-    );
-    assert_eq!(
-        account.backend_name().as_deref(),
-        Some(FACTORY_NAME.to_str().expect("the factory name is UTF-8"))
-    );
-    // SAFETY: a source alive for the length of each call.
-    let (server, user) = unsafe { (server_of(account.source), user_of(account.source)) };
-    assert_eq!(
-        server
-            .expect("the documented account names a server")
-            .target,
-        ConnectTarget::Origin("http://127.0.0.1:8080".into())
-    );
-    assert_eq!(user, None);
+        // SAFETY: a source alive for the length of the call, which is all
+        // `collection_source`'s functions ask for.
+        assert_eq!(
+            unsafe { parts_of(account.source) },
+            Parts {
+                mail: true,
+                contacts: true,
+                calendars: true,
+            }
+        );
+        assert_eq!(
+            account.backend_name().as_deref(),
+            Some(FACTORY_NAME.to_str().expect("the factory name is UTF-8"))
+        );
+        // SAFETY: a source alive for the length of each call.
+        let (server, user) = unsafe { (server_of(account.source), user_of(account.source)) };
+        assert_eq!(
+            server
+                .expect("the documented account names a server")
+                .target,
+            ConnectTarget::Origin("http://127.0.0.1:8080".into())
+        );
+        assert_eq!(user, None);
+    });
 }
 
 #[test]
 fn the_documented_mail_sources_hang_off_the_documented_account() {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // `Parent=` is the whole reason `child_added` ever sees these files: EDS
-    // emits `child-added` on the collection whose uid a source names, and a uid
-    // is a file name here. A typo is three sources that belong to nothing —
-    // Evolution shows the account without them, and nothing is logged.
-    let account = RegistrySource::load(&example(MAIL_COLLECTION));
-    let uid = account
-        .uid()
-        .expect("a source loaded from a file has a uid");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `Parent=` is the whole reason `child_added` ever sees these files: EDS
+        // emits `child-added` on the collection whose uid a source names, and a uid
+        // is a file name here. A typo is three sources that belong to nothing —
+        // Evolution shows the account without them, and nothing is logged.
+        let account = RegistrySource::load(&example(MAIL_COLLECTION));
+        let uid = account
+            .uid()
+            .expect("a source loaded from a file has a uid");
 
-    for name in [MAIL_STORE, MAIL_IDENTITY, MAIL_TRANSPORT] {
-        assert_eq!(
-            RegistrySource::load(&example(name)).parent().as_deref(),
-            Some(uid.as_str()),
-            "docs/examples/{name} is parented to something else"
-        );
-    }
+        for name in [MAIL_STORE, MAIL_IDENTITY, MAIL_TRANSPORT] {
+            assert_eq!(
+                RegistrySource::load(&example(name)).parent().as_deref(),
+                Some(uid.as_str()),
+                "docs/examples/{name} is parented to something else"
+            );
+        }
+    });
 }
 
 #[test]
 fn the_documented_mail_sources_point_at_each_other() {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // The chain `prepare_mail` describes and Evolution walks when the user hits
-    // send: the receiving account names the identity, and the identity names the
-    // transport that identity sends through. Written out by hand here, so the
-    // two uids are two more strings that can be wrong.
-    let store = RegistrySource::load(&example(MAIL_STORE));
-    let identity = RegistrySource::load(&example(MAIL_IDENTITY));
-    let transport = RegistrySource::load(&example(MAIL_TRANSPORT));
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The chain `prepare_mail` describes and Evolution walks when the user hits
+        // send: the receiving account names the identity, and the identity names the
+        // transport that identity sends through. Written out by hand here, so the
+        // two uids are two more strings that can be wrong.
+        let store = RegistrySource::load(&example(MAIL_STORE));
+        let identity = RegistrySource::load(&example(MAIL_IDENTITY));
+        let transport = RegistrySource::load(&example(MAIL_TRANSPORT));
 
-    // SAFETY: referencing the GTypes registers them, so the lookups below can
-    // find the extensions; each is present on the source it is read from, so
-    // nothing is created here.
-    let (named_identity, named_transport) = unsafe {
-        e_source_mail_account_get_type();
-        e_source_mail_submission_get_type();
-        let account: *mut ESourceMailAccount =
-            e_source_get_extension(store.source, E_SOURCE_EXTENSION_MAIL_ACCOUNT.as_ptr()).cast();
-        let submission: *mut ESourceMailSubmission =
-            e_source_get_extension(identity.source, E_SOURCE_EXTENSION_MAIL_SUBMISSION.as_ptr())
-                .cast();
-        (
-            read_string(e_source_mail_account_get_identity_uid(account)),
-            read_string(e_source_mail_submission_get_transport_uid(submission)),
-        )
-    };
+        // SAFETY: referencing the GTypes registers them, so the lookups below can
+        // find the extensions; each is present on the source it is read from, so
+        // nothing is created here.
+        let (named_identity, named_transport) = unsafe {
+            e_source_mail_account_get_type();
+            e_source_mail_submission_get_type();
+            let account: *mut ESourceMailAccount =
+                e_source_get_extension(store.source, E_SOURCE_EXTENSION_MAIL_ACCOUNT.as_ptr())
+                    .cast();
+            let submission: *mut ESourceMailSubmission = e_source_get_extension(
+                identity.source,
+                E_SOURCE_EXTENSION_MAIL_SUBMISSION.as_ptr(),
+            )
+            .cast();
+            (
+                read_string(e_source_mail_account_get_identity_uid(account)),
+                read_string(e_source_mail_submission_get_transport_uid(submission)),
+            )
+        };
 
-    assert_eq!(named_identity, identity.uid());
-    assert_eq!(named_transport, transport.uid());
+        assert_eq!(named_identity, identity.uid());
+        assert_eq!(named_transport, transport.uid());
+    });
 }
 
 #[test]
 fn the_documented_services_are_this_accounts_and_the_identity_is_not() {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // Which of the three `child_added` writes a server onto, decided by the same
-    // function the registry's callback reaches — so the `BackendName=jmap` lines
-    // in two of these files are load-bearing and the identity's absence of one
-    // is deliberate.
-    for (name, extension) in [
-        (MAIL_STORE, E_SOURCE_EXTENSION_MAIL_ACCOUNT),
-        (MAIL_TRANSPORT, E_SOURCE_EXTENSION_MAIL_TRANSPORT),
-    ] {
-        let service = RegistrySource::load(&example(name));
-        // SAFETY: a live source.
-        assert_eq!(
-            unsafe { mail_service_of(service.source) },
-            Some(extension),
-            "docs/examples/{name} is not a mail service of this account"
-        );
-    }
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Which of the three `child_added` writes a server onto, decided by the same
+        // function the registry's callback reaches — so the `BackendName=jmap` lines
+        // in two of these files are load-bearing and the identity's absence of one
+        // is deliberate.
+        for (name, extension) in [
+            (MAIL_STORE, E_SOURCE_EXTENSION_MAIL_ACCOUNT),
+            (MAIL_TRANSPORT, E_SOURCE_EXTENSION_MAIL_TRANSPORT),
+        ] {
+            let service = RegistrySource::load(&example(name));
+            // SAFETY: a live source.
+            assert_eq!(
+                unsafe { mail_service_of(service.source) },
+                Some(extension),
+                "docs/examples/{name} is not a mail service of this account"
+            );
+        }
 
-    let identity = RegistrySource::load(&example(MAIL_IDENTITY));
-    // SAFETY: a live source.
-    assert_eq!(unsafe { mail_service_of(identity.source) }, None);
+        let identity = RegistrySource::load(&example(MAIL_IDENTITY));
+        // SAFETY: a live source.
+        assert_eq!(unsafe { mail_service_of(identity.source) }, None);
+    });
 }
 
 #[test]
 fn the_documented_transport_reaches_the_mock_server() {
-    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // What the recipe's mail run is for, asserted at the far end: the transport
-    // the reader writes carries a provider and no server at all, and what comes
-    // back out of `~/.config/evolution/sources/` after the registry has seen it
-    // is a source whose Camel settings name the mock. Read through `jmap-mail`'s
-    // own reader, which is what `connect_sync` calls.
-    let account = RegistrySource::load(&example(MAIL_COLLECTION));
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // What the recipe's mail run is for, asserted at the far end: the transport
+        // the reader writes carries a provider and no server at all, and what comes
+        // back out of `~/.config/evolution/sources/` after the registry has seen it
+        // is a source whose Camel settings name the mock. Read through `jmap-mail`'s
+        // own reader, which is what `connect_sync` calls.
+        let account = RegistrySource::load(&example(MAIL_COLLECTION));
 
-    for name in [MAIL_STORE, MAIL_TRANSPORT] {
-        let service = RegistrySource::load(&example(name));
-        assert!(
-            !service.has(E_SOURCE_EXTENSION_AUTHENTICATION),
-            "docs/examples/{name} was written with a server of its own, so this \
-             test would pass without the binding it is checking"
-        );
+        for name in [MAIL_STORE, MAIL_TRANSPORT] {
+            let service = RegistrySource::load(&example(name));
+            assert!(
+                !service.has(E_SOURCE_EXTENSION_AUTHENTICATION),
+                "docs/examples/{name} was written with a server of its own, so this \
+                 test would pass without the binding it is checking"
+            );
 
-        // SAFETY: two live sources.
-        unsafe { follow_collection(account.source, service.source) };
+            // SAFETY: two live sources.
+            unsafe { follow_collection(account.source, service.source) };
 
-        assert_eq!(
-            service.server(),
-            Ok(ServerConfig {
-                target: jmap_backend_core::source::ConnectTarget::Origin(
-                    "http://127.0.0.1:8080".to_owned()
-                ),
-                user: None,
-            }),
-            "docs/examples/{name} does not reach the mock server"
-        );
-        // The mock speaks no TLS, and a mail source left claiming it does not
-        // connect at all — the failure the recipe's reader would see first.
-        assert_eq!(
-            service.camel_security_method(),
-            CAMEL_NETWORK_SECURITY_METHOD_NONE,
-        );
-    }
+            assert_eq!(
+                service.server(),
+                Ok(ServerConfig {
+                    target: jmap_backend_core::source::ConnectTarget::Origin(
+                        "http://127.0.0.1:8080".to_owned()
+                    ),
+                    user: None,
+                }),
+                "docs/examples/{name} does not reach the mock server"
+            );
+            // The mock speaks no TLS, and a mail source left claiming it does not
+            // connect at all — the failure the recipe's reader would see first.
+            assert_eq!(
+                service.camel_security_method(),
+                CAMEL_NETWORK_SECURITY_METHOD_NONE,
+            );
+        }
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_recipe_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }
 
 /// The contents of every ```` ```<language> ```` block in `markdown`.
