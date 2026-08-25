@@ -38,6 +38,7 @@ evolution-jmap-proto = { workspace = true }
 gio-sys = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 # To read `mallinfo2`'s byte-exact heap accounting in `tests/references.rs`,

@@ -69,12 +69,35 @@ pub unsafe fn list_existing(
     out_existing_objects: *mut *mut GSList,
     error: *mut *mut GError,
 ) -> gboolean {
+    let account_id = sync.account_id().as_str();
+    let calendar_id = sync.calendar_id().as_str();
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        "listing existing calendar components"
+    );
     let (state, components) = match sync.list_existing() {
         Ok(listed) => listed,
         // SAFETY: `error` satisfies set_raw_gerror's contract by this
         // function's own.
-        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
+        Err(failure) => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                ?failure,
+                "listing existing calendar components failed"
+            );
+            return unsafe { fail_bool(error, &failure, to_gerror) };
+        }
     };
+
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        state = state.as_str(),
+        count = components.len(),
+        "listed existing calendar components"
+    );
 
     // SAFETY: as above for the out-parameters; both allocations are GLib ones
     // ownership of which passes to the caller.
@@ -124,20 +147,56 @@ pub unsafe fn get_changes(
     out_removed_objects: *mut *mut GSList,
     error: *mut *mut GError,
 ) -> Outcome {
+    let account_id = sync.account_id().as_str();
+    let calendar_id = sync.calendar_id().as_str();
     // SAFETY: the caller guarantees a valid string or NULL.
     let Some(tag) = (unsafe { read_string(last_sync_tag) }) else {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            "get_changes called with no last_sync_tag; listing calendar instead"
+        );
         return Outcome::ListInstead;
     };
 
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        last_sync_tag = tag.as_str(),
+        "getting calendar changes"
+    );
+
     let changes = match sync.get_changes(&State::from(tag)) {
         Ok(changes) => changes,
-        Err(failure) if failure.is_cannot_calculate_changes() => return Outcome::ListInstead,
+        Err(failure) if failure.is_cannot_calculate_changes() => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                "server cannot calculate changes; listing calendar instead"
+            );
+            return Outcome::ListInstead;
+        }
         Err(failure) => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                ?failure,
+                "getting calendar changes failed"
+            );
             // SAFETY: `error` satisfies the contract by this function's own.
             unsafe { set_raw_gerror(error, to_gerror(&failure)) };
             return Outcome::Failed;
         }
     };
+
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        new_sync_tag = changes.new_state.as_str(),
+        changed_count = changes.changed.len(),
+        removed_count = changes.removed.len(),
+        "reported calendar changes"
+    );
 
     // SAFETY: as above for the out-parameters; the allocations are GLib ones
     // ownership of which passes to the caller.
@@ -174,20 +233,49 @@ pub unsafe fn load_component(
     _out_extra: *mut *mut gchar,
     error: *mut *mut GError,
 ) -> gboolean {
+    let account_id = sync.account_id().as_str();
+    let calendar_id = sync.calendar_id().as_str();
     // SAFETY: the caller guarantees a valid string or NULL.
     let Some(uid) = (unsafe { read_string(uid) }) else {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            "component was asked for without an identifier"
+        );
         // SAFETY: `error` satisfies the contract by this function's own.
         return unsafe { fail_invalid(error, "a component was asked for without an identifier") };
     };
 
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        uid = uid.as_str(),
+        "loading component"
+    );
+
     let info = match sync.load_component(&uid) {
         Ok(info) => info,
         // SAFETY: as above.
-        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
+        Err(failure) => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                uid = uid.as_str(),
+                ?failure,
+                "loading component failed"
+            );
+            return unsafe { fail_bool(error, &failure, to_gerror) };
+        }
     };
 
     let component = marshal::component_from_ical(&info.icalendar);
     if component.is_null() {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            uid = uid.as_str(),
+            "component could not be rendered as iCalendar"
+        );
         // Our own rendering of the event is not a calendar object, which is a
         // bug here rather than anything the server did — but it still has to
         // reach EDS as a failure rather than as an empty appointment.
@@ -199,6 +287,14 @@ pub unsafe fn load_component(
             )
         };
     }
+
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        uid = uid.as_str(),
+        revision = info.revision.as_str(),
+        "loaded component"
+    );
 
     // SAFETY: `out_component` satisfies the contract by this function's own; the
     // reference taken by `component_from_ical` passes to the caller, or is
@@ -240,8 +336,17 @@ pub unsafe fn save_component(
     _out_new_extra: *mut *mut gchar,
     error: *mut *mut GError,
 ) -> gboolean {
+    let account_id = sync.account_id().as_str();
+    let calendar_id = sync.calendar_id().as_str();
+    let is_overwrite = overwrite_existing != GFALSE;
+
     // SAFETY: the caller guarantees the list's shape.
     let Some(saved) = (unsafe { marshal::icalendar_from_instances(instances, zones) }) else {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            "component to save has no master instance to send"
+        );
         // SAFETY: `error` satisfies the contract by this function's own.
         return unsafe {
             fail_invalid(
@@ -251,7 +356,7 @@ pub unsafe fn save_component(
         };
     };
 
-    let existing_uid = if overwrite_existing == GFALSE {
+    let existing_uid = if !is_overwrite {
         // A create. The component's `UID` is a name Evolution invented locally
         // and never a JMAP id, so the server assigns the real one — and the
         // local name survives as the JSCalendar `uid`, which is `CalSync`'s
@@ -264,6 +369,11 @@ pub unsafe fn save_component(
             // appointment on the server, which is worse than a visible failure.
             // SAFETY: as above.
             None => {
+                tracing::debug!(
+                    account_id,
+                    calendar_id,
+                    "component was edited without an identifier"
+                );
                 return unsafe {
                     fail_invalid(error, "a component was edited without an identifier")
                 };
@@ -271,11 +381,37 @@ pub unsafe fn save_component(
         }
     };
 
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        overwrite_existing = is_overwrite,
+        existing_uid = existing_uid.as_deref(),
+        "saving component"
+    );
+
     let info = match sync.save_component(&saved.icalendar, existing_uid.as_deref()) {
         Ok(info) => info,
         // SAFETY: as above.
-        Err(failure) => return unsafe { fail_bool(error, &failure, to_gerror) },
+        Err(failure) => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                overwrite_existing = is_overwrite,
+                existing_uid = existing_uid.as_deref(),
+                ?failure,
+                "saving component failed"
+            );
+            return unsafe { fail_bool(error, &failure, to_gerror) };
+        }
     };
+
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        uid = info.uid.as_str(),
+        revision = info.revision.as_str(),
+        "saved component"
+    );
 
     // SAFETY: `out_new_uid` satisfies the contract by this function's own, and
     // ownership of the duplicate passes through it.
@@ -294,16 +430,47 @@ pub unsafe fn remove_component(
     uid: *const gchar,
     error: *mut *mut GError,
 ) -> gboolean {
+    let account_id = sync.account_id().as_str();
+    let calendar_id = sync.calendar_id().as_str();
     // SAFETY: the caller guarantees a valid string or NULL.
     let Some(uid) = (unsafe { read_string(uid) }) else {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            "component was removed without an identifier"
+        );
         // SAFETY: `error` satisfies the contract by this function's own.
         return unsafe { fail_invalid(error, "a component was removed without an identifier") };
     };
 
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        uid = uid.as_str(),
+        "removing component"
+    );
+
     match sync.remove_component(&uid) {
-        Ok(()) => GTRUE,
+        Ok(()) => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                uid = uid.as_str(),
+                "removed component"
+            );
+            GTRUE
+        }
         // SAFETY: as above.
-        Err(failure) => unsafe { fail_bool(error, &failure, to_gerror) },
+        Err(failure) => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                uid = uid.as_str(),
+                ?failure,
+                "removing component failed"
+            );
+            unsafe { fail_bool(error, &failure, to_gerror) }
+        }
     }
 }
 
@@ -426,9 +593,16 @@ pub unsafe fn get_free_busy(
     out_freebusy: *mut *mut GSList,
     error: *mut *mut GError,
 ) -> FreeBusyOutcome {
+    let account_id = sync.account_id().as_str();
+    let calendar_id = sync.calendar_id().as_str();
     // SAFETY: the caller guarantees a well-formed list of live strings.
     let users = unsafe { marshal::user_list(users) };
     if users.is_empty() {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            "get_free_busy called with empty user list; falling through to parent"
+        );
         return FreeBusyOutcome::NothingKnown;
     }
 
@@ -437,12 +611,35 @@ pub unsafe fn get_free_busy(
     // conversion, so this is a reason to let it answer, not to fail.
     let (Some(utc_start), Some(utc_end)) = (marshal::utc_date(start), marshal::utc_date(end))
     else {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            start,
+            end,
+            "get_free_busy called with invalid time range; falling through to parent"
+        );
         return FreeBusyOutcome::NothingKnown;
     };
+
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        user_count = users.len(),
+        start,
+        end,
+        "querying free-busy"
+    );
 
     let answers = match sync.free_busy(&users, &utc_start, &utc_end) {
         Ok(answers) => answers,
         Err(failure) => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                user_count = users.len(),
+                ?failure,
+                "querying free-busy failed"
+            );
             // SAFETY: `error` satisfies set_raw_gerror's contract by this
             // function's own.
             unsafe { fail_bool(error, &failure, to_gerror) };
@@ -450,8 +647,20 @@ pub unsafe fn get_free_busy(
         }
     };
     if answers.is_empty() {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            "querying free-busy returned no answers; falling through to parent"
+        );
         return FreeBusyOutcome::NothingKnown;
     }
+
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        answer_count = answers.len(),
+        "querying free-busy returned answers"
+    );
 
     // SAFETY: as above for the out-parameter; the list and its strings are GLib
     // allocations ownership of which passes to the caller.
@@ -489,11 +698,44 @@ pub fn on_source_changed(
     current: Option<&str>,
     baseline: Option<&str>,
 ) -> ColorOutcome {
+    let account_id = sync.account_id().as_str();
+    let calendar_id = sync.calendar_id().as_str();
     if current == baseline {
+        tracing::debug!(
+            account_id,
+            calendar_id,
+            current,
+            baseline,
+            "calendar color unchanged"
+        );
         return ColorOutcome::Unchanged;
     }
+    tracing::debug!(
+        account_id,
+        calendar_id,
+        current,
+        baseline,
+        "pushing calendar color change"
+    );
     match sync.set_color(current) {
-        Ok(()) => ColorOutcome::Pushed(current.map(str::to_owned)),
-        Err(_) => ColorOutcome::Failed,
+        Ok(()) => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                current,
+                "pushed calendar color change"
+            );
+            ColorOutcome::Pushed(current.map(str::to_owned))
+        }
+        Err(failure) => {
+            tracing::debug!(
+                account_id,
+                calendar_id,
+                current,
+                ?failure,
+                "pushing calendar color change failed"
+            );
+            ColorOutcome::Failed
+        }
     }
 }

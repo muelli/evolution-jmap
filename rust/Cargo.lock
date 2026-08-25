@@ -681,6 +681,7 @@ dependencies = [
  "jmap-config",
  "libc",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]
