@@ -59,6 +59,8 @@ use jmap_collection_sync::Parts;
 use jmap_mail::server::ServerConfig;
 use jmap_mail::settings::settings_type;
 
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Every keyfile the recipe tells the reader to copy, in the order the document
 /// quotes them — one `.source` file per ```` ```ini ```` block, checked against
 /// the block below.
@@ -270,6 +272,7 @@ impl Drop for RegistrySource {
 
 #[test]
 fn the_recipes_keyfile_describes_the_mock_server() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let source = RegistrySource::load(&keyfile());
     // SAFETY: a source alive for the length of each call, which is all
     // `collection_source`'s functions ask for.
@@ -300,6 +303,7 @@ fn the_recipes_keyfile_describes_the_mock_server() {
 /// returns having done nothing.
 #[test]
 fn the_recipes_keyfile_switches_on_the_parts_the_backend_fans_out_to() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let source = RegistrySource::load(&keyfile());
     // SAFETY: as above.
     let parts = unsafe { parts_of(source.source) };
@@ -321,6 +325,7 @@ fn the_recipes_keyfile_switches_on_the_parts_the_backend_fans_out_to() {
 
 #[test]
 fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // The registry files each collection factory under
     // `"<factory_name>:Collection"` and asks for the key built from this string.
     // A mismatch is silent — `e_source_registry_server_ref_backend_factory`
@@ -333,6 +338,7 @@ fn the_recipes_keyfile_names_the_backend_the_factory_answers_to() {
 
 #[test]
 fn the_recipe_quotes_every_keyfile_verbatim() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // The reader copies the files, but reads the document; if the two drift
     // apart, whichever one they trusted is the wrong one. So an `ini` block in
     // this document is a whole keyfile quoted verbatim and nothing else — the
@@ -358,6 +364,7 @@ fn the_recipe_quotes_every_keyfile_verbatim() {
 
 #[test]
 fn the_mail_runs_account_switches_on_every_part() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // The other account in the recipe, and the one difference that matters:
     // `MailEnabled=true`. EDS binds each mail source's `enabled` to the
     // account's `mail-enabled` in `collection_backend_bind_child_enabled()`, so
@@ -394,6 +401,7 @@ fn the_mail_runs_account_switches_on_every_part() {
 
 #[test]
 fn the_documented_mail_sources_hang_off_the_documented_account() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // `Parent=` is the whole reason `child_added` ever sees these files: EDS
     // emits `child-added` on the collection whose uid a source names, and a uid
     // is a file name here. A typo is three sources that belong to nothing —
@@ -414,6 +422,7 @@ fn the_documented_mail_sources_hang_off_the_documented_account() {
 
 #[test]
 fn the_documented_mail_sources_point_at_each_other() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // The chain `prepare_mail` describes and Evolution walks when the user hits
     // send: the receiving account names the identity, and the identity names the
     // transport that identity sends through. Written out by hand here, so the
@@ -445,6 +454,7 @@ fn the_documented_mail_sources_point_at_each_other() {
 
 #[test]
 fn the_documented_services_are_this_accounts_and_the_identity_is_not() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Which of the three `child_added` writes a server onto, decided by the same
     // function the registry's callback reaches — so the `BackendName=jmap` lines
     // in two of these files are load-bearing and the identity's absence of one
@@ -469,6 +479,7 @@ fn the_documented_services_are_this_accounts_and_the_identity_is_not() {
 
 #[test]
 fn the_documented_transport_reaches_the_mock_server() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // What the recipe's mail run is for, asserted at the far end: the transport
     // the reader writes carries a provider and no server at all, and what comes
     // back out of `~/.config/evolution/sources/` after the registry has seen it

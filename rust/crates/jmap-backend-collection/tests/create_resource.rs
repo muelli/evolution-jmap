@@ -49,6 +49,7 @@ use jmap_mock::MockServer;
 /// A distinct file name per source, so two sources in one test process never
 /// share an `ESource` uid — EDS derives the uid from the file name.
 static NEXT: AtomicU32 = AtomicU32::new(0);
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The account this collection belongs to, as `create_resource_sync` reads it
 /// off the account `ESource`. Deliberately not the mock's address: the child has
@@ -203,6 +204,7 @@ fn create(server: &MockServer, scratch: &Scratch) -> Child {
 
 #[test]
 fn a_scratch_address_book_asks_for_an_address_book_under_its_display_name() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
 
     assert_eq!(
@@ -216,6 +218,7 @@ fn a_scratch_address_book_asks_for_an_address_book_under_its_display_name() {
 
 #[test]
 fn a_scratch_calendar_asks_for_a_calendar_under_its_display_name() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let scratch = Scratch::new(Some(ChildKind::Calendar), "Trips");
 
     assert_eq!(
@@ -229,6 +232,7 @@ fn a_scratch_calendar_asks_for_a_calendar_under_its_display_name() {
 
 #[test]
 fn a_scratch_source_that_names_no_kind_asks_for_nothing() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // EDS's own documentation of the vfunc: "If this cannot be determined
     // without ambiguity, the function must return an error." Guessing a kind
     // would create the wrong sort of collection under a name the user chose for
@@ -240,6 +244,7 @@ fn a_scratch_source_that_names_no_kind_asks_for_nothing() {
 
 #[test]
 fn reading_the_kind_does_not_give_the_scratch_source_an_extension_it_lacked() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // `e_source_get_extension` *creates* what it cannot find, and a scratch
     // source is a real source that gets written to disk — so a read that reached
     // for `[Calendar]` would turn every new address book into a source both
@@ -257,6 +262,7 @@ fn reading_the_kind_does_not_give_the_scratch_source_an_extension_it_lacked() {
 
 #[test]
 fn a_created_address_book_leaves_a_source_this_backend_reads_back_as_its_child() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // The join, and the property that keeps a create from doubling: EDS pairs a
     // published child with a resource id by asking `dup_resource_id` about it
     // (`collection_backend_ref_child_source`), so a created source whose
@@ -277,6 +283,7 @@ fn a_created_address_book_leaves_a_source_this_backend_reads_back_as_its_child()
 
 #[test]
 fn a_created_calendar_leaves_a_source_this_backend_reads_back_as_its_child() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let server = MockServer::builder().start();
     let scratch = Scratch::new(Some(ChildKind::Calendar), "Trips");
 
@@ -292,6 +299,7 @@ fn a_created_calendar_leaves_a_source_this_backend_reads_back_as_its_child() {
 
 #[test]
 fn a_created_child_reaches_the_server_the_account_names() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Written from the *account's* connection, not from wherever the create
     // happened to connect. A child that named the discovery URL would work for
     // exactly as long as the two agreed.
@@ -317,6 +325,7 @@ fn a_created_child_reaches_the_server_the_account_names() {
 
 #[test]
 fn a_created_child_is_parented_writable_and_written_back_to_the_collections_cache() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // The three things `collection_backend_new_source()` sets on a child EDS
     // mints and that a scratch source therefore lacks. Without the parent the
     // source is not a child of this account at all — `child_added` never fires
@@ -338,6 +347,7 @@ fn a_created_child_is_parented_writable_and_written_back_to_the_collections_cach
 
 #[test]
 fn adopting_a_created_child_is_not_what_offers_it_for_deletion() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Deliberate, and where it would be noticed if it changed: evolution-ews
     // sets `remote-deletable` at each of the three sites that mint a child, this
     // one included, while this backend sets it in one place —
@@ -408,6 +418,7 @@ impl tracing::Subscriber for CapturingSubscriber {
 
 #[test]
 fn stored_password_of_a_gone_registry_server_names_the_account_in_a_structured_field() {
+    let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // `server.is_null()` is the "registry server is gone" branch — reachable
     // with no `ESourceRegistryServer` at all, which keeps this test to the one
     // thing under test (the `account_id` field) rather than also standing up a
