@@ -97,6 +97,7 @@ impl JmapStore {
         if let Some(connection) = self.connection() {
             let mut connection = write(connection);
             self.forget_folders();
+            tracing::debug!("storing mail connection in store");
             *connection = Some(sync);
         }
     }
@@ -118,7 +119,9 @@ impl JmapStore {
             Some(connection) => {
                 let mut connection = write(connection);
                 self.forget_folders();
-                connection.take().is_some()
+                let dropped = connection.take().is_some();
+                tracing::debug!(dropped, "dropping mail connection from store");
+                dropped
             }
             None => false,
         }
@@ -164,33 +167,48 @@ impl JmapStore {
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
 
+        tracing::debug!(flags, "fetching folder tree");
+
         let held = read(folders)
             .as_ref()
             .map(|listing| (listing.state.clone(), Arc::clone(&listing.tree)));
 
         let listing = match held {
             Some((_, tree)) if flags & CAMEL_STORE_FOLDER_INFO_REFRESH == 0 => return Ok(tree),
-            Some((state, tree)) => match sync.folder_tree_since(&state)? {
+            Some((state, tree)) => match sync.folder_tree_since(&state) {
                 // The tree is kept, not rebuilt from an equal one: Camel diffs
                 // the forests it is handed to decide which folders to announce
                 // as created or deleted, and every caller above holds the same
                 // `Arc` as before.
-                FolderUpdate::Unchanged(state) => Listing { state, tree },
-                FolderUpdate::Rebuilt { state, tree } => Listing {
+                Ok(FolderUpdate::Unchanged(state)) => Listing { state, tree },
+                Ok(FolderUpdate::Rebuilt { state, tree }) => Listing {
                     state,
                     tree: Arc::new(tree),
                 },
+                Err(failure) => {
+                    tracing::debug!(flags, ?failure, "fetching folder tree failed");
+                    return Err(failure.into());
+                }
             },
-            None => {
-                let (state, tree) = sync.folder_tree()?;
-                Listing {
+            None => match sync.folder_tree() {
+                Ok((state, tree)) => Listing {
                     state,
                     tree: Arc::new(tree),
+                },
+                Err(failure) => {
+                    tracing::debug!(flags, ?failure, "fetching folder tree failed");
+                    return Err(failure.into());
                 }
-            }
+            },
         };
 
         let tree = Arc::clone(&listing.tree);
+        tracing::debug!(
+            flags,
+            state = listing.state.as_str(),
+            count = listing.tree.len(),
+            "fetched folder tree"
+        );
         *write(folders) = Some(listing);
         drop(connection);
         Ok(tree)
@@ -220,7 +238,26 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        Ok(sync.messages(mailbox)?)
+        tracing::debug!(mailbox_id = mailbox.as_str(), "listing messages in mailbox");
+        match sync.messages(mailbox) {
+            Ok((state, list)) => {
+                tracing::debug!(
+                    mailbox_id = mailbox.as_str(),
+                    state = state.as_str(),
+                    count = list.len(),
+                    "listed messages in mailbox"
+                );
+                Ok((state, list))
+            }
+            Err(failure) => {
+                tracing::debug!(
+                    mailbox_id = mailbox.as_str(),
+                    ?failure,
+                    "listing messages in mailbox failed"
+                );
+                Err(failure.into())
+            }
+        }
     }
 
     /// What one mailbox looks like now, given the state a folder's summary says
@@ -249,7 +286,31 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        Ok(sync.messages_since(mailbox, since, held)?)
+        tracing::debug!(
+            mailbox_id = mailbox.as_str(),
+            since = since.as_str(),
+            held,
+            "fetching message changes"
+        );
+        match sync.messages_since(mailbox, since, held) {
+            Ok(update) => {
+                tracing::debug!(
+                    mailbox_id = mailbox.as_str(),
+                    since = since.as_str(),
+                    "fetched message changes"
+                );
+                Ok(update)
+            }
+            Err(failure) => {
+                tracing::debug!(
+                    mailbox_id = mailbox.as_str(),
+                    since = since.as_str(),
+                    ?failure,
+                    "fetching message changes failed"
+                );
+                Err(failure.into())
+            }
+        }
     }
 
     /// The RFC 5322 bytes of one message — what `get_message_sync` will parse.
@@ -263,7 +324,25 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        Ok(sync.message_source(uid)?)
+        tracing::debug!(uid = uid.as_str(), "fetching message source");
+        match sync.message_source(uid) {
+            Ok(source) => {
+                tracing::debug!(
+                    uid = uid.as_str(),
+                    size = source.len(),
+                    "fetched message source"
+                );
+                Ok(source)
+            }
+            Err(failure) => {
+                tracing::debug!(
+                    uid = uid.as_str(),
+                    ?failure,
+                    "fetching message source failed"
+                );
+                Err(failure.into())
+            }
+        }
     }
 
     /// Puts one message's keyword change on the server — the write half of what
@@ -282,7 +361,21 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        Ok(sync.set_keywords(uid, change)?)
+        tracing::debug!(uid = uid.as_str(), "setting message keywords");
+        match sync.set_keywords(uid, change) {
+            Ok(()) => {
+                tracing::debug!(uid = uid.as_str(), "set message keywords");
+                Ok(())
+            }
+            Err(failure) => {
+                tracing::debug!(
+                    uid = uid.as_str(),
+                    ?failure,
+                    "setting message keywords failed"
+                );
+                Err(failure.into())
+            }
+        }
     }
 
     /// Files one message into another mailbox — the write behind
@@ -296,7 +389,17 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        Ok(sync.file_message(uid, filing)?)
+        tracing::debug!(uid = uid.as_str(), "filing message");
+        match sync.file_message(uid, filing) {
+            Ok(()) => {
+                tracing::debug!(uid = uid.as_str(), "filed message");
+                Ok(())
+            }
+            Err(failure) => {
+                tracing::debug!(uid = uid.as_str(), ?failure, "filing message failed");
+                Err(failure.into())
+            }
+        }
     }
 
     /// Makes one message leave a mailbox for good — the write behind
@@ -316,7 +419,30 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        Ok(sync.expunge_message(uid, mailbox)?)
+        tracing::debug!(
+            uid = uid.as_str(),
+            mailbox_id = mailbox.as_str(),
+            "expunging message"
+        );
+        match sync.expunge_message(uid, mailbox) {
+            Ok(()) => {
+                tracing::debug!(
+                    uid = uid.as_str(),
+                    mailbox_id = mailbox.as_str(),
+                    "expunged message"
+                );
+                Ok(())
+            }
+            Err(failure) => {
+                tracing::debug!(
+                    uid = uid.as_str(),
+                    mailbox_id = mailbox.as_str(),
+                    ?failure,
+                    "expunging message failed"
+                );
+                Err(failure.into())
+            }
+        }
     }
 
     /// Puts a message the account does not have into one of its mailboxes —
@@ -340,7 +466,29 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        Ok(sync.import_message(mailbox, source, keywords, received_at)?)
+        tracing::debug!(
+            mailbox_id = mailbox.as_str(),
+            size = source.len(),
+            "importing message"
+        );
+        match sync.import_message(mailbox, source, keywords, received_at) {
+            Ok(id) => {
+                tracing::debug!(
+                    mailbox_id = mailbox.as_str(),
+                    uid = id.as_str(),
+                    "imported message"
+                );
+                Ok(id)
+            }
+            Err(failure) => {
+                tracing::debug!(
+                    mailbox_id = mailbox.as_str(),
+                    ?failure,
+                    "importing message failed"
+                );
+                Err(failure.into())
+            }
+        }
     }
 
     /// Says whether the user wants to see a folder — the write behind
@@ -374,7 +522,20 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        sync.set_subscribed(mailbox, subscribed)?;
+        tracing::debug!(
+            mailbox_id = mailbox.as_str(),
+            subscribed,
+            "setting folder subscription"
+        );
+        if let Err(failure) = sync.set_subscribed(mailbox, subscribed) {
+            tracing::debug!(
+                mailbox_id = mailbox.as_str(),
+                subscribed,
+                ?failure,
+                "setting folder subscription failed"
+            );
+            return Err(failure.into());
+        }
 
         // Only after the server agreed, and while the connection it agreed over
         // is still ours — the ordering rule the `folders` field documents.
@@ -383,6 +544,11 @@ impl JmapStore {
         {
             Arc::make_mut(&mut listing.tree).set_subscribed(mailbox, subscribed);
         }
+        tracing::debug!(
+            mailbox_id = mailbox.as_str(),
+            subscribed,
+            "set folder subscription"
+        );
         Ok(())
     }
 
@@ -410,7 +576,23 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        let created = sync.create_folder(parent, name)?;
+        tracing::debug!(
+            parent_id = parent.map(|p| p.id.as_str()),
+            name,
+            "creating mail folder"
+        );
+        let created = match sync.create_folder(parent, name) {
+            Ok(created) => created,
+            Err(failure) => {
+                tracing::debug!(
+                    parent_id = parent.map(|p| p.id.as_str()),
+                    name,
+                    ?failure,
+                    "creating mail folder failed"
+                );
+                return Err(failure.into());
+            }
+        };
 
         // Only after the server made it, and while the connection it made it
         // over is still ours — the ordering rule the `folders` field documents.
@@ -419,6 +601,7 @@ impl JmapStore {
         {
             Arc::make_mut(&mut listing.tree).insert(created.clone());
         }
+        tracing::debug!(folder_id = created.id.as_str(), name, "created mail folder");
         Ok(created)
     }
 
@@ -435,7 +618,15 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        sync.delete_folder(mailbox)?;
+        tracing::debug!(mailbox_id = mailbox.as_str(), "deleting mail folder");
+        if let Err(failure) = sync.delete_folder(mailbox) {
+            tracing::debug!(
+                mailbox_id = mailbox.as_str(),
+                ?failure,
+                "deleting mail folder failed"
+            );
+            return Err(failure.into());
+        }
 
         // As above: only after the server agreed.
         if let Some(folders) = self.folder_listing()
@@ -443,6 +634,7 @@ impl JmapStore {
         {
             Arc::make_mut(&mut listing.tree).remove(mailbox);
         }
+        tracing::debug!(mailbox_id = mailbox.as_str(), "deleted mail folder");
         Ok(())
     }
 
@@ -478,7 +670,24 @@ impl JmapStore {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
-        let path = sync.rename_folder(&folder.id, parent, name)?;
+        tracing::debug!(
+            mailbox_id = folder.id.as_str(),
+            parent_id = parent.map(|p| p.id.as_str()),
+            name,
+            "renaming mail folder"
+        );
+        let path = match sync.rename_folder(&folder.id, parent, name) {
+            Ok(path) => path,
+            Err(failure) => {
+                tracing::debug!(
+                    mailbox_id = folder.id.as_str(),
+                    name,
+                    ?failure,
+                    "renaming mail folder failed"
+                );
+                return Err(failure.into());
+            }
+        };
 
         // Only after the server agreed, and while the connection it agreed over
         // is still ours — the ordering rule the `folders` field documents.
@@ -490,12 +699,19 @@ impl JmapStore {
             tree.find(&path).cloned()
         });
 
-        Ok(renamed.unwrap_or_else(|| FolderInfo {
-            path,
+        let result = renamed.unwrap_or_else(|| FolderInfo {
+            path: path.clone(),
             display_name: name.to_owned(),
             children: Vec::new(),
             ..folder.clone()
-        }))
+        });
+        tracing::debug!(
+            mailbox_id = folder.id.as_str(),
+            path = result.path.as_str(),
+            name,
+            "renamed mail folder"
+        );
+        Ok(result)
     }
 
     /// The folder listing the store is holding, if it is holding one — and

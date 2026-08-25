@@ -308,8 +308,10 @@ unsafe extern "C" fn connect_sync<T: Connected>(
                 return fail_disconnected(error);
             };
             if connected.holds_connection() {
+                tracing::debug!("reusing existing mail service connection");
                 return GTRUE;
             }
+            tracing::debug!("initiating mail service connection");
 
             // The one object allowed to read a stored password or prompt for a
             // new one. A service without a session is a service nothing can
@@ -398,7 +400,7 @@ unsafe fn attempt<T: Connected>(
     // alongside the `ESource` side of the same choice. See `oauth2`'s module
     // docs for why asking a second time here cannot disagree with them.
     let credentials = if uses_oauth2 {
-        tracing::debug!("authenticating with OAuth 2.0");
+        tracing::debug!(uses_oauth2 = true, "authenticating with OAuth 2.0");
         // The one object allowed to fetch an OAuth 2.0 token, as it is the
         // only object allowed to fetch a password. `session` releases the
         // reference `ref_session` handed over when it drops at the end of the
@@ -414,7 +416,7 @@ unsafe fn attempt<T: Connected>(
         let token = unsafe { oauth2::access_token(session.as_ptr(), service, cancellable) };
         Credentials::bearer(token?)
     } else if uses_api_token {
-        tracing::debug!("authenticating with an API token");
+        tracing::debug!(uses_api_token = true, "authenticating with an API token");
         // The pasted token rides the same password prompt Basic uses — see
         // `jmap_backend_core::api_token`'s module docs for why — so it is
         // read exactly where the password is, just below.
@@ -479,6 +481,7 @@ unsafe extern "C" fn disconnect_sync<T: Connected>(
     // SAFETY: as `connect_sync`.
     unsafe {
         guard_bool("disconnect_sync", error, || {
+            tracing::debug!("disconnecting mail service");
             if let Some(connected) = instance::<T>(service) {
                 connected.release_connection();
             }
