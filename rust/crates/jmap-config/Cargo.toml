@@ -49,6 +49,7 @@ gio-sys = { workspace = true }
 # nothing else: every other GObject call this crate makes is behind
 # `jmap-backend-core`'s subclass helpers.
 gobject-sys = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 # Self dev-dependency to turn on `testing` (and so `detached()`) for this
