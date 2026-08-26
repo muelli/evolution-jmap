@@ -42,6 +42,7 @@ use jmap_backend_core::error::{cstring_lossy, fail_bool, fail_invalid};
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::{dup_string, read_string};
+use jmap_backend_core::oauth2::source_uses_oauth2;
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::source::destination_address;
 use jmap_backend_core::subclass::ObjectSubclass;
@@ -220,21 +221,28 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
         // SAFETY: EDS hands us one of its own backends, alive for the call, and
         // `ECollectionBackend` derives from `EBackend`.
         let source = unsafe { e_backend_get_source(backend.cast()) };
-        let (parts, user, account_id) = if source.is_null() {
+        let (parts, user, uses_oauth2, account_id) = if source.is_null() {
             log_critical("populate: the collection backend has no account source");
-            (Parts::NONE, None, None)
+            (Parts::NONE, None, false, None)
         } else {
             // SAFETY: a valid `ESource` owned by the backend, only read from.
-            let (parts, user) = unsafe { (parts_of(source), user_of(source)) };
+            let (parts, user, uses_oauth2) = unsafe {
+                (
+                    parts_of(source),
+                    user_of(source),
+                    source_uses_oauth2(source),
+                )
+            };
             // SAFETY: as above; the uid comes back `(transfer none)`.
             let account_id = unsafe { read_string(e_source_get_uid(source)) };
-            (parts, user, account_id)
+            (parts, user, uses_oauth2, account_id)
         };
 
         let collection = Live(backend);
         // SAFETY: `Live`'s methods are the EDS calls `Populating` documents, made
         // on a backend that is valid for the length of the vfunc.
-        let report = unsafe { crate::populate::populate(&collection, parts, user.as_deref()) };
+        let report =
+            unsafe { crate::populate::populate(&collection, parts, user.as_deref(), uses_oauth2) };
         // `None` is another populate of this account already running; it will do
         // the work.
         let Some(report) = report else { return };

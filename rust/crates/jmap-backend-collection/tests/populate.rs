@@ -209,9 +209,46 @@ unsafe impl Populating for Collection {
 }
 
 /// The populate under test, with the account's two answers spelled out.
-fn run(collection: &Collection, parts: Parts, user: Option<&str>) -> Option<Restored> {
+fn run(
+    collection: &Collection,
+    parts: Parts,
+    user: Option<&str>,
+    uses_oauth2: bool,
+) -> Option<Restored> {
     // SAFETY: the stand-in satisfies `Populating`'s contract — see the impl.
-    unsafe { populate(collection, parts, user) }
+    unsafe { populate(collection, parts, user, uses_oauth2) }
+}
+
+#[test]
+fn an_oauth2_account_is_authenticated_silently_rather_than_prompted() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `e_backend_schedule_credentials_required` routes an OAuth 2.0 source
+        // straight to the consent window: EDS's OAuth2 credentials provider
+        // can neither look a token up nor store one on that path
+        // (e-source-credentials-provider-impl-oauth2.c answers can_store FALSE
+        // and can_prompt TRUE), so "resolve credentials" degenerates to "open
+        // the browser". `authenticate_sync` needs no resolving at all —
+        // `login_of` fetches the account's token itself, silently — so an
+        // OAuth 2.0 account is asked for the way an anonymous one is:
+        // `e_backend_schedule_authenticate`, now. Observed live 2026-08-26 as
+        // a consent window looping at every populate of an account whose
+        // token every silent path could fetch fine.
+        let collection = Collection::with(vec![]);
+
+        let report = run(&collection, Parts::ALL, Some("vera@example.com"), true)
+            .expect("nothing holds the freeze");
+
+        assert_eq!(report.asked, Asked::Silently);
+        assert!(
+            collection.calls().contains(&"authenticate_anonymously"),
+            "the OAuth2 account must be driven to authenticate_sync, not to a prompt"
+        );
+        assert!(
+            !collection.calls().contains(&"request_credentials"),
+            "scheduling credentials-required opens the consent window"
+        );
+    });
 }
 
 #[test]
@@ -230,7 +267,7 @@ fn the_cached_children_of_previous_sessions_are_exported_again() {
             Source::cached(ChildKind::Calendar, "C1"),
         ]);
 
-        let report = run(&collection, Parts::ALL, Some("vera@example.com"))
+        let report = run(&collection, Parts::ALL, Some("vera@example.com"), false)
             .expect("nothing else holds the freeze");
 
         assert_eq!(
@@ -259,7 +296,8 @@ fn the_cache_is_claimed_after_the_chain_up_and_before_any_password_is_asked_for(
         //   before a login that may never succeed.
         let collection = Collection::with(vec![Source::cached(ChildKind::AddressBook, "B1")]);
 
-        run(&collection, Parts::ALL, Some("vera@example.com")).expect("nothing holds the freeze");
+        run(&collection, Parts::ALL, Some("vera@example.com"), false)
+            .expect("nothing holds the freeze");
 
         assert_eq!(
             collection.calls(),
@@ -292,7 +330,7 @@ fn every_reference_the_claim_handed_over_is_given_back() {
         let before: Vec<u32> = cached.iter().map(Source::ref_count).collect();
         let collection = Collection::with(cached);
 
-        run(&collection, Parts::ALL, None).expect("nothing holds the freeze");
+        run(&collection, Parts::ALL, None, false).expect("nothing holds the freeze");
 
         let after: Vec<u32> = collection.cached.iter().map(Source::ref_count).collect();
         assert_eq!(
@@ -316,7 +354,10 @@ fn a_populate_that_lost_the_freeze_does_nothing_but_give_it_back() {
         // Another populate, already running.
         assert!(collection.freeze());
 
-        assert_eq!(run(&collection, Parts::ALL, Some("vera@example.com")), None);
+        assert_eq!(
+            run(&collection, Parts::ALL, Some("vera@example.com"), false),
+            None
+        );
 
         assert_eq!(collection.calls(), ["freeze", "freeze", "thaw"]);
         assert_eq!(
@@ -344,7 +385,7 @@ fn the_freeze_is_given_back_even_when_the_work_panics() {
         };
 
         let panicked = catch_unwind(AssertUnwindSafe(|| {
-            run(&collection, Parts::ALL, Some("vera@example.com"))
+            run(&collection, Parts::ALL, Some("vera@example.com"), false)
         }));
 
         assert!(panicked.is_err(), "this test needs the publish to panic");
@@ -371,7 +412,7 @@ fn an_account_with_nothing_switched_on_still_gets_its_children_back() {
         // to do, reached from the other side.
         let collection = Collection::with(vec![Source::cached(ChildKind::AddressBook, "B1")]);
 
-        let report = run(&collection, Parts::NONE, Some("vera@example.com"))
+        let report = run(&collection, Parts::NONE, Some("vera@example.com"), false)
             .expect("nothing holds the freeze");
 
         assert_eq!(collection.published_ids(), ["addressbook:B1"]);
@@ -404,6 +445,7 @@ fn an_account_with_only_mail_switched_on_is_not_asked_for_a_password() {
                 calendars: false,
             },
             Some("vera@example.com"),
+            false,
         )
         .expect("nothing holds the freeze");
 
@@ -444,7 +486,7 @@ fn an_account_that_makes_children_is_offered_as_a_place_to_create_them() {
         ] {
             let collection = Collection::with(vec![]);
 
-            let report = run(&collection, parts, Some("vera@example.com"))
+            let report = run(&collection, parts, Some("vera@example.com"), false)
                 .expect("nothing holds the freeze");
 
             assert!(report.creatable, "{parts:?} makes children of this backend");
@@ -474,6 +516,7 @@ fn an_account_that_makes_no_children_is_not_offered_as_a_place_to_create_them() 
                 calendars: false,
             },
             Some("vera@example.com"),
+            false,
         )
         .expect("nothing holds the freeze");
 
@@ -503,7 +546,7 @@ fn one_switched_on_part_is_enough_to_ask_for_a_password() {
         ] {
             let collection = Collection::with(vec![]);
 
-            let report = run(&collection, parts, Some("vera@example.com"))
+            let report = run(&collection, parts, Some("vera@example.com"), false)
                 .expect("nothing holds the freeze");
 
             assert_eq!(report.asked, Asked::Credentials, "{parts:?}");
@@ -528,7 +571,7 @@ fn an_account_that_names_no_user_is_authenticated_without_a_password() {
         // typed would be dropped on the floor by `credentials()` anyway.
         let collection = Collection::with(vec![]);
 
-        let report = run(&collection, Parts::ALL, None).expect("nothing holds the freeze");
+        let report = run(&collection, Parts::ALL, None, false).expect("nothing holds the freeze");
 
         assert_eq!(report.asked, Asked::Anonymously);
         assert_eq!(
@@ -563,7 +606,7 @@ fn a_cached_source_this_backend_cannot_name_is_not_exported() {
             Source::bare("jmap-cached-nameless"),
         ]);
 
-        let report = run(&collection, Parts::ALL, None).expect("nothing holds the freeze");
+        let report = run(&collection, Parts::ALL, None, false).expect("nothing holds the freeze");
 
         assert_eq!(collection.published_ids(), ["addressbook:B1"]);
         assert_eq!(report.children, ["addressbook:B1"]);
