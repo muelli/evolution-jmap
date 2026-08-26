@@ -43,11 +43,13 @@
 //! judgement about it.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 
 /// A scratch EDS installation: XDG directories, a sources directory, and a
 /// module directory, all under one root that is wiped when the session is
@@ -262,6 +264,13 @@ impl Session {
         self.root.join("data/keyrings/login.keyring")
     }
 
+    /// This session's own `XDG_RUNTIME_DIR`, unique to it — what
+    /// [`Self::reap_keyring_daemon`] matches against, and what a test can
+    /// use to check that no daemon [`Self::run`] started is still alive.
+    pub fn runtime_directory(&self) -> PathBuf {
+        self.root.join("runtime")
+    }
+
     /// Run `program` on a private session bus in this session's environment,
     /// and return what it said. The bus — and every daemon activated on it —
     /// is gone by the time this returns.
@@ -283,6 +292,15 @@ impl Session {
     /// secret-store call against such a freshly-activated, keyring-less
     /// service loses to "cannot open display" in ~20ms). Unlocking up front,
     /// before anything asks, avoids both failure modes entirely.
+    ///
+    /// `--daemonize` detaches the keyring daemon from this call's own
+    /// process group, so it outlives `dbus-run-session` and this method:
+    /// nothing here waits for the bus to be the daemon's only owner. Left
+    /// alone, that is a process leaked onto the machine on every call — this
+    /// reaps it (by matching its own `XDG_RUNTIME_DIR`, unique to this
+    /// session, against `/proc/<pid>/environ`) before returning, the same
+    /// mechanism `jmap-backend-core/tests/secret_store.rs` uses for the same
+    /// daemon.
     pub fn run(&self, program: &Path, arguments: &[&str]) -> Output {
         // `sh -c SCRIPT ARG0 ARG1...`: ARG0 becomes $0, the rest become the
         // "$@" the final `exec` forwards — so `program`'s own path never has
@@ -292,7 +310,17 @@ impl Session {
                 { echo "gnome-keyring-daemon --unlock failed; is gnome-keyring installed? (docs/ROADMAP.md item 18)" >&2; exit 97; }
             exec "$0" "$@"
         "#;
-        Command::new("dbus-run-session")
+        let stdout_path = self.root.join("run.stdout");
+        let stderr_path = self.root.join("run.stderr");
+        // Files, not pipes: `Command::output()` waits for end-of-file on the
+        // child's stdout, which arrives only once every process holding the
+        // write end has exited — and the private bus's `dbus-daemon`, plus
+        // the keyring daemon it activates, inherit that handle and outlive
+        // `dbus-run-session`. Waiting on the shell's own exit status, with
+        // its stdout/stderr going to files, is what this call actually
+        // means, and it cannot hang on a daemon this method is about to reap
+        // anyway.
+        let status = Command::new("dbus-run-session")
             .arg("--")
             .arg("sh")
             .arg("-c")
@@ -301,11 +329,80 @@ impl Session {
             .args(arguments)
             .env_clear()
             .envs(&self.environment)
-            .output()
+            .stdin(Stdio::null())
+            .stdout(fs::File::create(&stdout_path).expect("create the run's stdout file"))
+            .stderr(fs::File::create(&stderr_path).expect("create the run's stderr file"))
+            .status()
             .unwrap_or_else(|error| {
                 panic!("run {} under dbus-run-session: {error}", program.display())
-            })
+            });
+        self.reap_keyring_daemon();
+        Output {
+            status,
+            stdout: fs::read(&stdout_path).expect("read the run's stdout"),
+            stderr: fs::read(&stderr_path).expect("read the run's stderr"),
+        }
     }
+
+    /// Terminate the `gnome-keyring-daemon` [`Self::run`] started, if it is
+    /// still alive, and wait for it to actually go. Matches by this
+    /// session's own `XDG_RUNTIME_DIR`, so it can only ever find and kill
+    /// this session's own daemon, never another session's or the
+    /// developer's.
+    fn reap_keyring_daemon(&self) {
+        for pid in self.keyring_daemons() {
+            // SAFETY: a plain signal to a pid `keyring_daemons` just read out
+            // of `/proc`, filtered to processes whose own `XDG_RUNTIME_DIR`
+            // is this session's scratch directory — nothing else can have
+            // that value.
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+        }
+        // SIGTERM is a request, not a guarantee, so poll for the exit this
+        // is actually meant to produce rather than assume it. Half a second
+        // is far more than a keyring daemon needs to shut down.
+        for _ in 0..50 {
+            if self.keyring_daemons().is_empty() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Every `gnome-keyring-daemon` process whose own `XDG_RUNTIME_DIR`
+    /// environment variable is this session's scratch runtime directory.
+    fn keyring_daemons(&self) -> Vec<i32> {
+        let Some(runtime_directory) = self.environment.get(OsStr::new("XDG_RUNTIME_DIR")) else {
+            return Vec::new();
+        };
+        let mut marker = b"XDG_RUNTIME_DIR=".to_vec();
+        marker.extend_from_slice(runtime_directory.as_bytes());
+
+        let Ok(entries) = fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
+                // Both spellings: `gnome-keyring-daemon` as started by the
+                // script above, and `/usr/bin/gnome-keyring-daemon` as D-Bus
+                // activation would start it.
+                let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
+                let environ = fs::read(entry.path().join("environ")).ok()?;
+                (contains(&cmdline, b"gnome-keyring-daemon")
+                    && environ
+                        .split(|byte| *byte == 0)
+                        .any(|value| value == marker.as_slice()))
+                .then_some(pid)
+            })
+            .collect()
+    }
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 /// A path handed to the test by CTest, which knows where CMake put things

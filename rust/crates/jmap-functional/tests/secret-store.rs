@@ -24,7 +24,8 @@
 //! `gnome-keyring`.
 
 use jmap_functional::Session;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn a_session_creates_a_usable_login_keyring_before_running_its_client() {
@@ -47,4 +48,55 @@ fn a_session_creates_a_usable_login_keyring_before_running_its_client() {
          not run or did not create one\n--- stderr ---\n{stderr}",
         keyring.display()
     );
+}
+
+#[test]
+fn running_a_client_does_not_leave_a_keyring_daemon_behind() {
+    // docs/BACKLOG.md: "`jmap_functional::Session::run` leaks a
+    // `gnome-keyring-daemon` per run" — `--daemonize` detaches it from the
+    // private bus, so it outlives `dbus-run-session` unless `run` itself
+    // reaps it.
+    let session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/secret-store-no-leak"
+    ));
+
+    let output = session.run(&PathBuf::from("/bin/true"), &[]);
+    assert!(output.status.success());
+
+    assert!(
+        keyring_daemons(&session.runtime_directory()).is_empty(),
+        "a gnome-keyring-daemon for this session's own XDG_RUNTIME_DIR ({}) is \
+         still alive after Session::run returned",
+        session.runtime_directory().display()
+    );
+}
+
+/// Every `gnome-keyring-daemon` process whose own `XDG_RUNTIME_DIR`
+/// environment variable is `runtime_directory` — the same match
+/// `jmap-backend-core/tests/secret_store.rs` makes for the same daemon.
+fn keyring_daemons(runtime_directory: &Path) -> Vec<i32> {
+    let marker = format!("XDG_RUNTIME_DIR={}", runtime_directory.display());
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
+            let cmdline = fs::read(entry.path().join("cmdline")).ok()?;
+            let environ = fs::read(entry.path().join("environ")).ok()?;
+            (contains(&cmdline, b"gnome-keyring-daemon")
+                && environ
+                    .split(|byte| *byte == 0)
+                    .any(|value| value == marker.as_bytes()))
+            .then_some(pid)
+        })
+        .collect()
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
