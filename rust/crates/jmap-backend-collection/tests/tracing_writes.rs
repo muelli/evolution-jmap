@@ -634,7 +634,8 @@ fn populate_traces_structured_fields() {
         let populating = MockPopulating::default();
 
         let captured = capture(|| {
-            let restored = unsafe { populate(&populating, Parts::ALL, Some("vera@example.com")) };
+            let restored =
+                unsafe { populate(&populating, Parts::ALL, Some("vera@example.com"), false) };
             assert!(restored.is_some());
         });
 

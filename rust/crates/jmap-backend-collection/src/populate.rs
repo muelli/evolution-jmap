@@ -191,6 +191,16 @@ pub enum Asked {
     /// `e_backend_schedule_authenticate` with NULL: the account names no user,
     /// so there is no password to resolve and the fan-out is anonymous.
     Anonymously,
+    /// `e_backend_schedule_authenticate` with NULL, like [`Asked::Anonymously`]
+    /// — but because the account authenticates by OAuth 2.0, whose token
+    /// [`crate::authenticate::login_of`] fetches itself. Scheduling
+    /// credentials-required instead routes an OAuth 2.0 source straight to the
+    /// consent window: EDS's OAuth2 credentials provider cannot look a token
+    /// up on that path, only prompt (e-source-credentials-provider-impl-
+    /// oauth2.c: can_store FALSE, can_prompt TRUE) — observed live 2026-08-26
+    /// as a consent window looping at every populate while every silent path
+    /// could fetch the token fine.
+    Silently,
 }
 
 /// What one populate did, and everything about it that is worth a log line.
@@ -217,10 +227,12 @@ pub struct Restored {
 /// `ECollectionBackendClass::populate` for a JMAP collection, minus the
 /// instance.
 ///
-/// `parts` and `user` are what the account itself says, read by
-/// [`parts_of`](crate::collection_source::parts_of) and
-/// [`user_of`](crate::collection_source::user_of) — everything a populate knows,
-/// since it is handed nothing else and cannot contact anything.
+/// `parts`, `user` and `uses_oauth2` are what the account itself says, read by
+/// [`parts_of`](crate::collection_source::parts_of),
+/// [`user_of`](crate::collection_source::user_of) and
+/// [`source_uses_oauth2`](jmap_backend_core::oauth2::source_uses_oauth2) —
+/// everything a populate knows, since it is handed nothing else and cannot
+/// contact anything.
 ///
 /// `None` is a populate that lost the freeze to another one and did nothing but
 /// give it back.
@@ -242,11 +254,13 @@ pub unsafe fn populate<P: Populating + ?Sized>(
     collection: &P,
     parts: Parts,
     user: Option<&str>,
+    uses_oauth2: bool,
 ) -> Option<Restored> {
     tracing::debug!(
         contacts_wanted = parts.contacts,
         calendars_wanted = parts.calendars,
         has_user = user.is_some(),
+        uses_oauth2,
         "populating collection from cache"
     );
 
@@ -301,14 +315,23 @@ pub unsafe fn populate<P: Populating + ?Sized>(
     // Last, because the cached children have to be in the sidebar before a login
     // that may never succeed — see the module comment on the order.
     report.asked = if report.creatable {
-        match user {
-            Some(_) => {
-                collection.request_credentials();
-                Asked::Credentials
-            }
-            None => {
-                collection.authenticate_anonymously();
-                Asked::Anonymously
+        if uses_oauth2 {
+            // The same EDS call the anonymous arm makes, for [`Asked::Silently`]'s
+            // reason: `authenticate_sync` fetches the token itself, and the
+            // credentials-required path has nothing silent to offer an OAuth 2.0
+            // source — only the consent window.
+            collection.authenticate_anonymously();
+            Asked::Silently
+        } else {
+            match user {
+                Some(_) => {
+                    collection.request_credentials();
+                    Asked::Credentials
+                }
+                None => {
+                    collection.authenticate_anonymously();
+                    Asked::Anonymously
+                }
             }
         }
     } else {
