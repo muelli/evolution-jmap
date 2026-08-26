@@ -22,7 +22,7 @@
 use std::fmt;
 
 use eds_sys::{
-    E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_INVALID_ARG,
+    E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_DBUS_ERROR, E_CLIENT_ERROR_INVALID_ARG,
     E_SOURCE_AUTHENTICATION_ACCEPTED, E_SOURCE_AUTHENTICATION_ERROR,
     E_SOURCE_AUTHENTICATION_REJECTED, E_SOURCE_AUTHENTICATION_REQUIRED, EClientError,
     ENamedParameters, ESource, ESourceAuthenticationResult, e_client_error_create,
@@ -99,6 +99,14 @@ pub enum ConnectError {
     /// during the exchange has not invalidated — discarding it would turn a
     /// transient failure into a re-consent the user has to click through.
     OAuth2(String),
+    /// An OAuth 2.0 token fetch failed *underneath* the authorization
+    /// decision — the secret store or the network call a refresh makes —
+    /// rather than because of anything a fresh consent could fix. See
+    /// `crate::oauth2::is_secret_store_failure` for how the two are told
+    /// apart. Classified as `ERROR`, not `REQUIRED`: opening another consent
+    /// window on a dead keyring is exactly the loop this variant exists to
+    /// stop.
+    SecretStore(String),
     /// The server refused, failed, or is unreachable.
     Client(Error),
     /// The account names a collection the server does not have.
@@ -122,6 +130,7 @@ impl fmt::Display for ConnectError {
                 c"the account has no password yet",
             )),
             Self::OAuth2(message) => f.write_str(message),
+            Self::SecretStore(message) => f.write_str(message),
             Self::Client(error) => error.fmt(f),
             Self::NoSuchCollection(kind, id) => f.write_str(&translate_with(
                 // TRANSLATORS: %1$s is "address book" or "calendar"; %2$s is
@@ -153,6 +162,11 @@ impl ConnectError {
         match self {
             Self::CredentialsRequired | Self::OAuth2(_) => E_SOURCE_AUTHENTICATION_REQUIRED,
             Self::Client(error) if is_wrong_password(error) => E_SOURCE_AUTHENTICATION_REJECTED,
+            // Every other case, `SecretStore` included: deliberately not
+            // `REQUIRED` for that one — a dead secret store is not fixed by
+            // asking the user to consent again, only by asking again and
+            // again, which is the loop `docs/ROADMAP.md` item 17 exists to
+            // stop.
             _ => E_SOURCE_AUTHENTICATION_ERROR,
         }
     }
@@ -201,6 +215,9 @@ impl ConnectError {
     fn client_error_code(&self) -> EClientError {
         match self {
             Self::CredentialsRequired | Self::OAuth2(_) => E_CLIENT_ERROR_AUTHENTICATION_REQUIRED,
+            // Not an authentication problem and not fixed by editing the
+            // account either — the secret store itself is unreachable.
+            Self::SecretStore(_) => E_CLIENT_ERROR_DBUS_ERROR,
             // Both collection failures are fixed by editing the account (or by
             // creating the collection on the server), never by retrying, so
             // they are reported the same way a malformed host is.
@@ -558,6 +575,7 @@ mod tests {
             ConnectError::Client(Error::Transport("down".to_owned())),
             ConnectError::NoDefaultCollection(Collection::Calendar),
             ConnectError::NoSuchCollection(Collection::AddressBook, "Ab1".to_owned()),
+            ConnectError::SecretStore("the login keyring is locked".to_owned()),
         ] {
             assert_eq!(
                 error.auth_result(),
@@ -569,6 +587,18 @@ mod tests {
             ConnectError::CredentialsRequired.auth_result(),
             E_SOURCE_AUTHENTICATION_REQUIRED
         );
+    }
+
+    /// Item 17's own concern, pinned directly: a secret-store failure must
+    /// not come back `REQUIRED` — that is exactly the "try harder and harder
+    /// to acquire a token" loop it exists to stop — and its message reaches
+    /// the user rather than being swallowed.
+    #[test]
+    fn a_secret_store_failure_does_not_reopen_consent() {
+        let error = ConnectError::SecretStore("the login keyring is locked".to_owned());
+        assert_ne!(error.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
+        assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
+        assert_eq!(error.to_string(), "the login keyring is locked");
     }
 
     /// The collection is named in the message because the message is what the
