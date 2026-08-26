@@ -2513,7 +2513,7 @@ fn a_new_events_unsendable_zone_keeps_the_definition_an_occurrence_still_names()
     let fixture = Fixture::start();
     let icalendar = with_instance(
         &NEW_EVENT
-            .replace("TZID=Europe/Berlin", "TZID=W. Europe Standard Time")
+            .replace("TZID=Europe/Berlin", "TZID=Unknown Vendor Standard Time")
             .replace(
                 "DURATION:PT90M",
                 "DURATION:PT90M\r\nRRULE:FREQ=DAILY;COUNT=3",
@@ -2522,7 +2522,7 @@ fn a_new_events_unsendable_zone_keeps_the_definition_an_occurrence_still_names()
         &format!(
             "BEGIN:VEVENT\r\n\
              UID:20260808T101500Z-4711-1000-1-0@localhost\r\n\
-             RECURRENCE-ID;TZID=W. Europe Standard Time:20260116T130000\r\n\
+             RECURRENCE-ID;TZID=Unknown Vendor Standard Time:20260116T130000\r\n\
              DTSTART;TZID={CUSTOM_TZID}:20260116T150000\r\n\
              DURATION:PT90M\r\n\
              SUMMARY:Planning\r\n\
@@ -2581,7 +2581,7 @@ END:VTIMEZONE\r\n";
 /// change to something unresolvable is not seen either.
 #[test]
 fn a_zone_the_document_could_not_name_leaves_the_servers_alone() {
-    for tzid in ["W. Europe Standard Time", LIBICAL_TZID] {
+    for tzid in ["Unknown Vendor Standard Time", LIBICAL_TZID] {
         let fixture = Fixture::start();
         let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
         fixture.patch(&id, json!({"timeZone": "Europe/Berlin"}));
@@ -2611,7 +2611,7 @@ fn a_zone_the_document_could_not_name_leaves_the_servers_alone() {
 fn a_new_events_unnameable_zone_is_not_sent() {
     let fixture = Fixture::start();
     let sync = fixture.sync();
-    let icalendar = NEW_EVENT.replace("TZID=Europe/Berlin", "TZID=W. Europe Standard Time");
+    let icalendar = NEW_EVENT.replace("TZID=Europe/Berlin", "TZID=Unknown Vendor Standard Time");
 
     let saved = sync.save_component(&icalendar, None).unwrap();
 
@@ -2714,7 +2714,7 @@ fn an_occurrences_unnameable_zone_leaves_the_overrides_alone() {
             "BEGIN:VEVENT\r\n\
              UID:{id}\r\n\
              RECURRENCE-ID:20260116T090000Z\r\n\
-             DTSTART;TZID=W. Europe Standard Time:20260116T100000\r\n\
+             DTSTART;TZID=Unknown Vendor Standard Time:20260116T100000\r\n\
              DURATION:PT1H\r\n\
              STATUS:CONFIRMED\r\n\
              SUMMARY:Standup (daily)\r\n\
