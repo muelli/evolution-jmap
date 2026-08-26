@@ -116,7 +116,7 @@ use eds_sys::{
     e_oauth2_services_is_oauth2_alias, e_oauth2_services_new, e_source_authentication_get_method,
     e_source_authentication_get_type, e_source_get_oauth2_access_token_sync,
 };
-use gio_sys::{GCancellable, g_dbus_error_quark};
+use gio_sys::{G_IO_ERROR_NOT_FOUND, GCancellable, g_dbus_error_quark, g_io_error_quark};
 use glib_sys::{GError, GFALSE, g_error_free, g_free};
 
 use crate::connect::ConnectError;
@@ -264,9 +264,10 @@ pub unsafe fn source_uses_oauth2(source: *mut ESource) -> bool {
 /// or the user dismisses it), answers libsecret's search as "not found" —
 /// by that API's own documented contract a dismissed or unshowable prompt
 /// is not an error — so it is indistinguishable here from "nobody has ever
-/// consented" and stays `REQUIRED`. No GError reaches this function to
-/// classify in that case; there is nothing this function could do
-/// differently.
+/// consented". No GError reaches this function to classify in that case;
+/// there is nothing this function could do differently, and
+/// [`is_secret_not_found`] plus [`crate::secret_store`] are what answer it
+/// instead.
 ///
 /// # Safety
 ///
@@ -274,6 +275,33 @@ pub unsafe fn source_uses_oauth2(source: *mut ESource) -> bool {
 unsafe fn is_secret_store_failure(error: *const GError) -> bool {
     // SAFETY: the caller's contract; `g_dbus_error_quark` takes no arguments.
     unsafe { (*error).domain == g_dbus_error_quark() }
+}
+
+/// Whether `error` is EDS's "this account has no stored secret" — the one
+/// outcome a *locked* keyring is indistinguishable from, and so the only one
+/// worth asking the secret store itself about.
+///
+/// `eos_lookup_token_sync` (`e-oauth2-service.c`) sets exactly this for both
+/// "nobody has ever consented" and "the lookup came back empty", which is
+/// what a collection whose unlock prompt cannot be shown produces — see
+/// [`is_secret_store_failure`] above and [`crate::secret_store`] for why the
+/// two arrive here identical.
+///
+/// Domain **and** code, not message text, per `docs/ROADMAP.md` item 17's own
+/// ask. The narrowness is load-bearing rather than tidiness: EDS's other
+/// deliberate `G_IO_ERROR`-domain outcomes must keep going to
+/// [`ConnectError::OAuth2`]/`REQUIRED` untouched, and `G_IO_ERROR_NOT_SUPPORTED`
+/// — what a bare `ESource` with no registry behind it answers, which is every
+/// `ESource` this crate's own tests build — is the one that would otherwise
+/// make those tests depend on whether the machine running them has a locked
+/// keyring.
+///
+/// # Safety
+///
+/// `error` must be a valid, non-NULL `GError`.
+unsafe fn is_secret_not_found(error: *const GError) -> bool {
+    // SAFETY: the caller's contract; `g_io_error_quark` takes no arguments.
+    unsafe { (*error).domain == g_io_error_quark() && (*error).code == G_IO_ERROR_NOT_FOUND }
 }
 
 /// The OAuth 2.0 access token to send this account's requests as, from
@@ -321,13 +349,14 @@ pub unsafe fn access_token(
         // message and classifying its domain/code borrow fields the struct
         // owns, and freeing it afterwards is what the out-parameter contract
         // asks for.
-        let (message, store_failure) = unsafe {
+        let (message, store_failure, secret_not_found) = unsafe {
             let outcome = if error.is_null() {
-                (None, false)
+                (None, false, false)
             } else {
                 (
                     read_string((*error).message),
                     is_secret_store_failure(error),
+                    is_secret_not_found(error),
                 )
             };
             if !error.is_null() {
@@ -339,6 +368,7 @@ pub unsafe fn access_token(
             ?account_id,
             ?message,
             store_failure,
+            secret_not_found,
             "failed to obtain OAuth 2.0 access token"
         );
 
@@ -348,6 +378,35 @@ pub unsafe fn access_token(
                 // account's secret store (keyring) could not be reached.
                 c"the account's secret store (keyring) could not be reached: %1$s",
                 &[&message.unwrap_or_else(|| translate(c"no further detail was given"))],
+            )));
+        }
+
+        // "No stored secret" is the one answer EDS gives for two different
+        // situations — nobody has consented yet, and the keyring holding the
+        // consent is locked — so it is the one answer worth a second
+        // question. Asked here, *after* the fetch has already failed and
+        // only to classify that failure, which is what makes the inherent
+        // race harmless: a store unlocked between the fetch and this call
+        // answers "not locked" and the account gets the consent window it
+        // would have got anyway, while one locked in that window is a store
+        // that really is locked. Nothing is skipped or retried on the
+        // strength of the answer, so it can only ever change the message.
+        //
+        // `Some(true)` and nothing else: a secret service that could not be
+        // reached, or that is not there at all, answers `None`, and a
+        // machine with no keyring must keep behaving exactly as before —
+        // see `crate::secret_store`.
+        if secret_not_found && crate::secret_store::default_collection_is_locked() == Some(true) {
+            tracing::debug!(
+                ?account_id,
+                "the secret store is locked; not asking for consent"
+            );
+            return Err(ConnectError::SecretStore(translate(
+                // TRANSLATORS: shown instead of a fresh sign-in window when
+                // the account's stored token cannot be read because the
+                // system keyring is locked, which signing in again cannot
+                // fix.
+                c"the login keyring is locked, so this account's OAuth 2.0 token can be neither read nor stored; unlock the keyring and try again",
             )));
         }
 
@@ -443,6 +502,40 @@ mod tests {
             G_DBUS_ERROR_SPAWN_EXEC_FAILED,
         );
         assert!(unsafe { is_secret_store_failure(error) });
+        unsafe { g_error_free(error) };
+    }
+
+    /// The shape `eos_lookup_token_sync` gives both for "nobody has ever
+    /// consented" and for a lookup a locked collection answered empty — the
+    /// only outcome [`access_token`] asks the secret store itself about.
+    #[test]
+    fn a_missing_secret_is_the_one_ambiguous_outcome() {
+        let error = error(unsafe { g_io_error_quark() }, G_IO_ERROR_NOT_FOUND);
+        assert!(unsafe { is_secret_not_found(error) });
+        unsafe { g_error_free(error) };
+    }
+
+    /// `G_IO_ERROR_NOT_SUPPORTED` is what an `ESource` with no registry
+    /// behind it answers — every `ESource` this crate's own tests build, and
+    /// `tests/oauth2.rs`/`jmap-backend-collection`'s `tests/authenticate.rs`
+    /// both pin it to `REQUIRED`. It must not reach the secret store
+    /// question, or those tests would start depending on whether the machine
+    /// running them has a locked keyring.
+    #[test]
+    fn no_registered_service_is_not_a_missing_secret() {
+        let error = error(unsafe { g_io_error_quark() }, G_IO_ERROR_NOT_SUPPORTED);
+        assert!(!unsafe { is_secret_not_found(error) });
+        unsafe { g_error_free(error) };
+    }
+
+    /// Domain and code, not code alone: `G_IO_ERROR_NOT_FOUND` is the
+    /// integer 1, which is a perfectly ordinary code in every other error
+    /// domain too — including the D-Bus one this module already classifies
+    /// separately.
+    #[test]
+    fn a_missing_secret_is_recognised_by_domain_not_by_code_alone() {
+        let error = error(unsafe { g_dbus_error_quark() }, G_IO_ERROR_NOT_FOUND);
+        assert!(!unsafe { is_secret_not_found(error) });
         unsafe { g_error_free(error) };
     }
 }

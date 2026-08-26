@@ -46,6 +46,7 @@ pub mod marshal;
 pub mod oauth2;
 pub mod owned;
 pub mod resolver;
+pub mod secret_store;
 pub mod source;
 pub mod subclass;
 pub mod trampoline;

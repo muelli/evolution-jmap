@@ -436,4 +436,25 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT "CARGO_INCREMENTAL=0"
 	)
+
+	# The other half of the secret-store story: not the harness's own unlock
+	# step but the PRODUCT reading a real keyring's lock state
+	# (`docs/ROADMAP.md` item 17(a)). Registered here rather than left to
+	# `rust-test-eds` because it needs `gnome-keyring-daemon` and
+	# `dbus-run-session`, which only ci/install-deps-functional.sh installs —
+	# hence the `#[ignore]` on every test in the file and the `--ignored`
+	# here. `--test-threads=1`: each test starts a keyring daemon of its own,
+	# and running them concurrently would have them race for the same
+	# `gnome-keyring-daemon` control socket discovery.
+	add_test(
+		NAME functional-secret-store-lock
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-backend-core
+			--test secret_store -- --ignored --test-threads=1
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-secret-store-lock PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT "CARGO_INCREMENTAL=0"
+	)
 endif()
