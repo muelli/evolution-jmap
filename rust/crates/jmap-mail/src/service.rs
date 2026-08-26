@@ -58,14 +58,14 @@
 use std::ptr;
 
 use eds_sys::{
-    CAMEL_AUTHENTICATION_ERROR, CAMEL_SERVICE_ERROR_INVALID, CamelAuthenticationResult,
-    CamelService, CamelServiceClass, camel_network_settings_dup_host,
-    camel_network_settings_dup_user, camel_network_settings_get_port, camel_service_error_quark,
-    camel_service_get_password, camel_service_ref_session, camel_service_ref_settings,
-    camel_session_authenticate_sync,
+    CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_SERVICE_ERROR_INVALID,
+    CamelAuthenticationResult, CamelService, CamelServiceClass, camel_network_settings_dup_host,
+    camel_network_settings_dup_user, camel_network_settings_get_port,
+    camel_service_authenticate_sync, camel_service_error_quark, camel_service_get_password,
+    camel_service_ref_session, camel_service_ref_settings, camel_session_authenticate_sync,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, GTRUE, g_error_new_literal, gboolean, gchar};
+use glib_sys::{GError, GFALSE, GTRUE, g_error_free, g_error_new_literal, gboolean, gchar};
 use gobject_sys::g_type_class_peek;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
@@ -321,6 +321,56 @@ unsafe extern "C" fn connect_sync<T: Connected>(
             let Some(session) = Owned::from_raw(camel_service_ref_session(service)) else {
                 return fail_disconnected(error);
             };
+
+            // An OAuth 2.0 account authenticates ITSELF first — silently, with
+            // the token the engine session resolves through the collection
+            // (e-mail-session.c's `get_oauth2_access_token_sync`). It cannot be
+            // left to the session call below: `mail_ui_session_authenticate_sync`
+            // (e-mail-ui-session.c, 3.52) treats a NULL mechanism as
+            // prompt-first — it sets `result = CAMEL_AUTHENTICATION_REJECTED`
+            // without ever calling this service's authenticate, and goes
+            // straight to the credentials prompter, which for an OAuth2-method
+            // source is the consent window. Observed live 2026-08-26: a consent
+            // at every send while every silent token path answered fine. EWS
+            // avoids it by shipping a named CamelSasl subclass per service;
+            // this branch is the same semantics without the registration:
+            // silent attempt first, the session's interactive loop only as the
+            // recovery for a real rejection.
+            let settings = Owned::from_raw(camel_service_ref_settings(service));
+            if settings
+                .as_ref()
+                .is_some_and(|settings| crate::oauth2::uses_oauth2(settings.as_ptr()))
+            {
+                let mut attempt_error: *mut GError = ptr::null_mut();
+                let result = camel_service_authenticate_sync(
+                    service,
+                    ptr::null(),
+                    cancellable,
+                    &mut attempt_error,
+                );
+                if result == CAMEL_AUTHENTICATION_ACCEPTED {
+                    return GTRUE;
+                }
+                if result == CAMEL_AUTHENTICATION_ERROR {
+                    // A token fetch that failed outright (dead keyring, no
+                    // network to the token endpoint): a message the user can
+                    // read, never a consent loop that cannot help.
+                    if !error.is_null() {
+                        *error = attempt_error;
+                    } else if !attempt_error.is_null() {
+                        g_error_free(attempt_error);
+                    }
+                    return GFALSE;
+                }
+                // REJECTED: the server refused the token itself — re-consent
+                // through the session's loop below is the correct recovery.
+                if !attempt_error.is_null() {
+                    g_error_free(attempt_error);
+                }
+                tracing::debug!(
+                    "server rejected the OAuth 2.0 token; deferring to the session's interactive recovery"
+                );
+            }
 
             // NULL mechanism: JMAP authenticates over HTTP and offers no SASL
             // mechanisms to pick between, which is also why
