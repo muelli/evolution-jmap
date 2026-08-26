@@ -111,10 +111,10 @@ use eds_sys::compat::{CamelSummaryFolderRecord, summary_dup_uids, summary_free_u
 use eds_sys::{
     CamelFolder, CamelFolderSummary, CamelFolderSummaryClass, camel_folder_summary_add,
     camel_folder_summary_check_uid, camel_folder_summary_count, camel_folder_summary_get,
-    camel_folder_summary_get_type, camel_folder_summary_lock, camel_folder_summary_remove_uid,
-    camel_folder_summary_touch, camel_folder_summary_unlock, camel_folder_take_folder_summary,
-    camel_util_bdata_get_number, camel_util_bdata_get_string, camel_util_bdata_put_number,
-    camel_util_bdata_put_string,
+    camel_folder_summary_get_type, camel_folder_summary_load, camel_folder_summary_lock,
+    camel_folder_summary_remove_uid, camel_folder_summary_touch, camel_folder_summary_unlock,
+    camel_folder_take_folder_summary, camel_util_bdata_get_number, camel_util_bdata_get_string,
+    camel_util_bdata_put_number, camel_util_bdata_put_string,
 };
 use glib_sys::{
     GError, GFALSE, GTRUE, GType, g_free, g_string_free, g_string_new, gboolean, gchar,
@@ -542,6 +542,11 @@ pub unsafe fn attach_summary(folder: *mut CamelFolder) {
             ptr::null::<gchar>(),
         )
         .cast::<CamelFolderSummary>();
+        let mut error: *mut GError = ptr::null_mut();
+        camel_folder_summary_load(summary, ptr::addr_of_mut!(error));
+        if !error.is_null() {
+            glib_sys::g_error_free(error);
+        }
         camel_folder_take_folder_summary(folder, summary);
     }
 }
