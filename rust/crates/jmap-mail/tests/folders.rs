@@ -58,7 +58,7 @@ use jmap_mail::folders::Request;
 use jmap_mail::store::{JmapStore, store_type};
 use jmap_mail::subscribe;
 use jmap_mail_sync::{FolderInfo, FolderTree, MailSync};
-use jmap_mock::MockServer;
+use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::{Mailbox, role};
 
@@ -1811,4 +1811,67 @@ fn the_inherited_answer_checks_nothing_but_the_inbox() {
         ["Inbox"],
         "CamelStore's default has changed; the override may no longer be needed"
     );
+}
+
+/// Opening a folder that has server-side messages answers a non-empty summary
+/// on the very first open, without requiring a second open or manual refresh.
+///
+/// Operator-observed 2026-08-27 on a freshly added account: the first view of
+/// the Inbox listed "no messages" until cycling away and back.
+#[test]
+fn opening_a_folder_with_messages_answers_non_empty_summary_on_first_open() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let inbox = account.seed_mailbox("Inbox", Some(role::INBOX));
+        account.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Alice", "alice@example.com"),
+            "Welcome",
+            "Welcome to JMAP!",
+            "2026-01-01T09:00:00Z",
+        ));
+        account.seed_email(EmailSeed::new(
+            inbox,
+            ("Bob", "bob@example.com"),
+            "Hello",
+            "Hello world!",
+            "2026-01-02T10:00:00Z",
+        ));
+    }
+
+    let account = Account::open();
+    account.connect(sync_against(&server));
+
+    let path = CString::new("Inbox").expect("a path with no NUL");
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: a live store of ours, a NUL-terminated path, and an error out-parameter.
+    let folder = unsafe {
+        camel_store_get_folder_sync(
+            account.store,
+            path.as_ptr(),
+            CAMEL_STORE_FOLDER_NONE,
+            ptr::null_mut(),
+            &mut error,
+        )
+    };
+    assert!(!folder.is_null(), "opening folder returned NULL");
+    assert!(error.is_null(), "opening folder set error");
+
+    // On the FIRST open (no second open, no manual refresh), summary must contain the 2 messages.
+    unsafe {
+        assert_eq!(
+            eds_sys::camel_folder_get_message_count(folder),
+            2,
+            "opening a folder with server-side messages must answer a non-empty summary on the first open"
+        );
+        let array = eds_sys::compat::folder_dup_uids(folder);
+        assert!(!array.is_null());
+        assert_eq!((*array).len, 2);
+        eds_sys::compat::folder_free_uids(folder, array);
+        g_object_unref(folder.cast());
+    }
 }
