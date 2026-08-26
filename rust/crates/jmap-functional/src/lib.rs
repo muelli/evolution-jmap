@@ -255,12 +255,48 @@ impl Session {
             .insert(variable.into(), directory.into_os_string());
     }
 
+    /// Where `gnome-keyring-daemon` (started by [`Self::run`], below) writes
+    /// the login keyring this session's secret store lives in. Exists only
+    /// after a client has actually run.
+    pub fn login_keyring_file(&self) -> PathBuf {
+        self.root.join("data/keyrings/login.keyring")
+    }
+
     /// Run `program` on a private session bus in this session's environment,
     /// and return what it said. The bus — and every daemon activated on it —
     /// is gone by the time this returns.
+    ///
+    /// Before `program` runs, a login keyring is unlocked (created, on a
+    /// fresh session) on the same bus with an empty password. Every account
+    /// with an `[Authentication]` extension makes EDS's credential lookup —
+    /// `create_resource_sync`'s `stored_password_of`, `authenticate_sync`'s
+    /// resolution, and any real password store this session's client stages
+    /// — ask a `org.freedesktop.secrets` provider, and without this step
+    /// that ask either finds no provider at all (a functional container
+    /// carrying only `evolution-data-server`/`dbus-daemon`, no
+    /// `gnome-keyring`, per `docs/ROADMAP.md` item 18) or, once one is
+    /// installed, hits `gnome-keyring-daemon`'s own default D-Bus activation
+    /// (`--start --foreground`, from its `.service` file) needing to CREATE
+    /// or UNLOCK a collection it has never seen before — which falls back to
+    /// a GTK prompt this headless bus has no display for, failing in
+    /// milliseconds rather than merely doing nothing (confirmed by hand: a
+    /// secret-store call against such a freshly-activated, keyring-less
+    /// service loses to "cannot open display" in ~20ms). Unlocking up front,
+    /// before anything asks, avoids both failure modes entirely.
     pub fn run(&self, program: &Path, arguments: &[&str]) -> Output {
+        // `sh -c SCRIPT ARG0 ARG1...`: ARG0 becomes $0, the rest become the
+        // "$@" the final `exec` forwards — so `program`'s own path never has
+        // to survive being interpolated into the script text.
+        let unlock_and_exec = r#"
+            printf '\n' | gnome-keyring-daemon --daemonize --unlock --components=secrets >/dev/null ||
+                { echo "gnome-keyring-daemon --unlock failed; is gnome-keyring installed? (docs/ROADMAP.md item 18)" >&2; exit 97; }
+            exec "$0" "$@"
+        "#;
         Command::new("dbus-run-session")
             .arg("--")
+            .arg("sh")
+            .arg("-c")
+            .arg(unlock_and_exec)
             .arg(program)
             .args(arguments)
             .env_clear()

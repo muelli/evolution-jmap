@@ -42,6 +42,11 @@ of whoever runs them.
   and Ubuntu that is the `evolution-data-server` package; the `-dev` packages
   do not carry the daemons.
 - `dbus-run-session`, from `dbus-daemon`.
+- `gnome-keyring-daemon`, from `gnome-keyring`: every test's session gets its
+  own login keyring, unlocked before the client runs (`Session::run`), so EDS's
+  credential lookups reach a real `org.freedesktop.secrets` provider instead of
+  timing out or failing on a display-less prompt. See `docs/ROADMAP.md` item
+  18 and `rust/crates/jmap-functional/tests/secret-store.rs`.
 
 Configuring with `-DENABLE_FUNCTIONAL_TESTS=ON` without these is a configure
 error naming the missing one. That is deliberate: see below.
