@@ -1871,18 +1871,22 @@ const MAX_LINE_OCTETS: usize = 75;
 /// Folds any physical line longer than [`MAX_LINE_OCTETS`], cutting at UTF-8
 /// character boundaries.
 ///
-/// Folding is calcard's job, and its writer does it — except that a
-/// structured value's `;` separators are written *after* its fold check, and
-/// that check is skipped when the component coming next is empty text. A
-/// value whose text folds to exactly 75 octets therefore keeps every empty
+/// Folding is calcard's job, and its writer does it. Before calcard 0.3.13,
+/// a structured value's `;` separators were written *after* its fold check,
+/// and that check was skipped when the component coming next was empty
+/// text, so a value whose text folded to exactly 75 octets kept every empty
 /// trailing slot on the same physical line: 81 octets for an `ADR`, one per
 /// empty slot (found by a fuzzer seed; the regression test in
-/// `tests/proptest_fuzz.rs` carries the shrunken card; reported upstream as
-/// <https://github.com/stalwartlabs/calcard/issues/25>). Folding is defined on
-/// the octet layer — unfolding restores the same stream wherever a cut lands
-/// — so any cut is *correct*; cutting at character boundaries, and never
-/// between a `\` and the octet it escapes, additionally keeps every physical
-/// line valid UTF-8 and every escape pair whole for line-oriented readers.
+/// `tests/proptest_fuzz.rs` still carries the shrunken card; was
+/// <https://github.com/stalwartlabs/calcard/issues/25>, fixed upstream in
+/// 0.3.13). This pass is now insurance rather than an active workaround —
+/// kept because it is a single scan and it is the guarantee the tightened
+/// `prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8` property
+/// rests on. Folding is defined on the octet layer — unfolding restores the
+/// same stream wherever a cut lands — so any cut is *correct*; cutting at
+/// character boundaries, and never between a `\` and the octet it escapes,
+/// additionally keeps every physical line valid UTF-8 and every escape pair
+/// whole for line-oriented readers.
 fn fold_overlong_lines(vcard: String) -> String {
     if vcard
         .split("\r\n")

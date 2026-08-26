@@ -60,7 +60,7 @@ proptest = "1"
 # The iCalendar/vCard text layer, from Stalwart's CalDAV/CardDAV stack.
 # default-features = false leaves out the JSCalendar/JSContact halves: the
 # JMAP side of the mapping is ours and is already tested against the mock.
-calcard = { version = "0.3.11", default-features = false }
+calcard = { version = "0.3.13", default-features = false }
 glib-sys = "0.22"
 gobject-sys = "0.22"
 gio-sys = "0.22"
