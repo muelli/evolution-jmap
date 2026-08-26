@@ -116,11 +116,11 @@ use eds_sys::{
     e_oauth2_services_is_oauth2_alias, e_oauth2_services_new, e_source_authentication_get_method,
     e_source_authentication_get_type, e_source_get_oauth2_access_token_sync,
 };
-use gio_sys::GCancellable;
+use gio_sys::{GCancellable, g_dbus_error_quark};
 use glib_sys::{GError, GFALSE, g_error_free, g_free};
 
 use crate::connect::ConnectError;
-use crate::i18n::translate;
+use crate::i18n::{translate, translate_with};
 use crate::marshal::{extension_if_present, read_string};
 
 /// The generic spelling of "this source authenticates with OAuth 2.0", as
@@ -239,15 +239,54 @@ pub unsafe fn source_uses_oauth2(source: *mut ESource) -> bool {
     method_is_oauth2(method.as_deref())
 }
 
+/// Whether `error` is a failure *underneath* EDS's own OAuth 2.0 reasoning —
+/// the secret store itself, or the D-Bus call that reaches it — rather than
+/// one of the outcomes `evolution-data-server`'s own OAuth 2.0 code
+/// deliberately sets. Every deliberate outcome that code sets — nobody has
+/// ever consented, a refresh attempt was rejected, this source has no
+/// registered `EOAuth2Service` at all — is set in the `G_IO_ERROR` domain
+/// (`e-oauth2-service.c`, `e-source.c`, `e-server-side-source.c`), whichever
+/// code; all of them are answered [`ConnectError::OAuth2`]/`REQUIRED`
+/// unchanged, on purpose — even "no registered service", which is what
+/// every `ESource` this crate's own tests build (never backed by a real
+/// registry) hits, and those tests already pin `REQUIRED` for it.
+///
+/// Confirmed by hand, not assumed (`docs/ROADMAP.md` item 17's own ask): with
+/// `org.freedesktop.secrets` unable to start (a broken D-Bus activation, a
+/// real, reproducible shape of a dead secret store), the exact call this
+/// function classifies for answers `g_dbus_error_quark()`/
+/// `G_DBUS_ERROR_SPAWN_EXEC_FAILED` — a different *domain*, which is the one
+/// distinction drawn here rather than guessing at every code EDS's own
+/// machinery might set.
+///
+/// **Does not catch every "the store is locked" case.** A collection that
+/// exists but is locked, whose unlock prompt cannot be shown (no display,
+/// or the user dismisses it), answers libsecret's search as "not found" —
+/// by that API's own documented contract a dismissed or unshowable prompt
+/// is not an error — so it is indistinguishable here from "nobody has ever
+/// consented" and stays `REQUIRED`. No GError reaches this function to
+/// classify in that case; there is nothing this function could do
+/// differently.
+///
+/// # Safety
+///
+/// `error` must be a valid, non-NULL `GError`.
+unsafe fn is_secret_store_failure(error: *const GError) -> bool {
+    // SAFETY: the caller's contract; `g_dbus_error_quark` takes no arguments.
+    unsafe { (*error).domain == g_dbus_error_quark() }
+}
+
 /// The OAuth 2.0 access token to send this account's requests as, from
 /// whichever `EOAuth2Service` claims `source`.
 ///
 /// This is where the refresh happens: EDS looks the account's refresh token up
 /// in libsecret and exchanges it for an access token inside this call, so what
-/// comes back is good now, and a failure is either "nobody has consented to
-/// this account yet" or "the exchange did not work". Both are
-/// [`ConnectError::OAuth2`], which asks Evolution to authenticate — see that
-/// variant on why it never asks it to *discard* what it has.
+/// comes back is good now. A failure is [`ConnectError::OAuth2`] when it is
+/// "nobody has consented to this account yet" or "the refresh was rejected" —
+/// see that variant on why it asks Evolution to authenticate rather than
+/// discard what it has — and [`ConnectError::SecretStore`] when it is
+/// something underneath that decision instead, per
+/// `is_secret_store_failure` below.
 ///
 /// # Safety
 ///
@@ -279,24 +318,39 @@ pub unsafe fn access_token(
 
     if ok == GFALSE || token.is_null() {
         // SAFETY: `error` is NULL or a GError this call owns; reading its
-        // message borrows a string the struct owns, and freeing it afterwards
-        // is what the out-parameter contract asks for.
-        let message = unsafe {
-            let message = if error.is_null() {
-                None
+        // message and classifying its domain/code borrow fields the struct
+        // owns, and freeing it afterwards is what the out-parameter contract
+        // asks for.
+        let (message, store_failure) = unsafe {
+            let outcome = if error.is_null() {
+                (None, false)
             } else {
-                read_string((*error).message)
+                (
+                    read_string((*error).message),
+                    is_secret_store_failure(error),
+                )
             };
             if !error.is_null() {
                 g_error_free(error);
             }
-            message
+            outcome
         };
         tracing::debug!(
             ?account_id,
             ?message,
+            store_failure,
             "failed to obtain OAuth 2.0 access token"
         );
+
+        if store_failure {
+            return Err(ConnectError::SecretStore(translate_with(
+                // TRANSLATORS: %1$s is EDS's own message for why the
+                // account's secret store (keyring) could not be reached.
+                c"the account's secret store (keyring) could not be reached: %1$s",
+                &[&message.unwrap_or_else(|| translate(c"no further detail was given"))],
+            )));
+        }
+
         // A failure with no GError should not happen — EDS sets one on every
         // path — but a NULL message is not worth turning into a panic in a
         // backend, so it becomes a sentence that says exactly what is known.
@@ -333,5 +387,62 @@ pub unsafe fn access_token(
                 c"the OAuth 2.0 service returned an empty access token",
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+
+    use gio_sys::{
+        G_DBUS_ERROR_SPAWN_EXEC_FAILED, G_IO_ERROR_NOT_FOUND, G_IO_ERROR_NOT_SUPPORTED,
+        g_dbus_error_quark, g_io_error_quark,
+    };
+    use glib_sys::g_error_new_literal;
+
+    use super::*;
+
+    /// Builds a real `GError` rather than a fake struct: [`is_secret_store_failure`]
+    /// reads its `domain` field directly, so the test should exercise the same
+    /// GLib allocation the production code does, not a hand-rolled substitute.
+    fn error(domain: glib_sys::GQuark, code: i32) -> *mut GError {
+        let message = CString::new("boom").unwrap();
+        // SAFETY: a valid domain and a NUL-terminated message; the result is
+        // freed by every caller below.
+        unsafe { g_error_new_literal(domain, code, message.as_ptr()) }
+    }
+
+    /// `G_IO_ERROR`, whichever code, is the domain EDS's own OAuth 2.0 code
+    /// deliberately sets every outcome in — including "no registered
+    /// service", not just "no grant yet" — and none of it is a secret-store
+    /// failure. The `jmap-backend-core/tests/oauth2.rs` integration test
+    /// exercises the "no registered service" shape end to end and expects
+    /// `REQUIRED`; this pins the unit underneath it.
+    #[test]
+    fn the_g_io_error_domain_is_never_a_secret_store_failure() {
+        for code in [G_IO_ERROR_NOT_FOUND, G_IO_ERROR_NOT_SUPPORTED] {
+            let error = error(unsafe { g_io_error_quark() }, code);
+            assert!(
+                !unsafe { is_secret_store_failure(error) },
+                "expected code {code} to not be a secret-store failure"
+            );
+            unsafe { g_error_free(error) };
+        }
+    }
+
+    /// The real, reproduced shape of a dead secret store: a broken
+    /// `org.freedesktop.secrets` D-Bus activation answers
+    /// `g_dbus_error_quark()`/`G_DBUS_ERROR_SPAWN_EXEC_FAILED`, confirmed by
+    /// hand against a real `gnome-keyring-daemon` whose `.service` file
+    /// pointed at a missing binary — a different domain from `G_IO_ERROR`,
+    /// and this must not open a fresh consent window.
+    #[test]
+    fn a_broken_secret_service_is_a_secret_store_failure() {
+        let error = error(
+            unsafe { g_dbus_error_quark() },
+            G_DBUS_ERROR_SPAWN_EXEC_FAILED,
+        );
+        assert!(unsafe { is_secret_store_failure(error) });
+        unsafe { g_error_free(error) };
     }
 }
