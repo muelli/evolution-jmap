@@ -24,9 +24,10 @@ mod zone;
 
 pub use error::ICalError;
 pub use event::{
-    MAPPED_PROPERTIES, MAX_DEPTH, OVERRIDE_PROPERTIES, defines_time_zone, event_to_ical,
-    ical_to_event, maps_alerts, maps_keyword, maps_locations, maps_recurrence_override,
-    maps_recurrence_rule, maps_time_zone, maps_virtual_locations, names_time_zone,
-    prune_time_zones, sends_recurrence_override, time_zone_definition, unstateable_until,
+    MAPPED_PROPERTIES, MAX_DEPTH, OVERRIDE_PROPERTIES, WINDOWS_TIME_ZONES, defines_time_zone,
+    event_to_ical, ical_to_event, maps_alerts, maps_keyword, maps_locations,
+    maps_recurrence_override, maps_recurrence_rule, maps_time_zone, maps_virtual_locations,
+    names_time_zone, prune_time_zones, resolve_canonical_time_zone, sends_recurrence_override,
+    time_zone_definition, unique_tzid_to_iana, unstateable_until, windows_time_zone_to_iana,
 };
 pub use freebusy::{busy_periods_to_vfreebusy, free_busy_type};

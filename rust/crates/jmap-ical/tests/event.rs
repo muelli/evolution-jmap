@@ -5822,15 +5822,15 @@ fn a_tzid_nothing_explains_is_left_as_it_came() {
     // named none", which is a floating event and a real thing to save.
     for vtimezone in [
         String::new(),
-        vtimezone("W. Europe Standard Time", "W. Europe Standard Time"),
+        vtimezone("Unknown Custom Zone", "Unknown Custom Zone"),
     ] {
-        let ics = zoned("W. Europe Standard Time", &vtimezone);
+        let ics = zoned("Unknown Custom Zone", &vtimezone);
 
         let event = ical_to_event(&ics).expect("parse");
 
         assert_eq!(
             event.time_zone.as_deref(),
-            Some("W. Europe Standard Time"),
+            Some("Unknown Custom Zone"),
             "{ics}"
         );
     }
@@ -6284,21 +6284,20 @@ fn a_named_zones_definition_is_not_read_back_as_a_definition() {
 }
 
 /// An identifier RFC 8984 §1.4.9 admits in neither form defines nothing, however
-/// complete the `VTIMEZONE` beside it. A Windows zone name is not an IANA name
+/// complete the `VTIMEZONE` beside it. An unresolvable custom zone name is not an IANA name
 /// and does not begin with the solidus a custom identifier must, so there is no
 /// `timeZones` key it could be filed under — inventing one would mean inventing
-/// the identifier the event is in, and this crate has no way to know which zone
-/// `W. Europe Standard Time` is meant to be.
+/// the identifier the event is in.
 #[test]
 fn a_zone_no_identifier_admits_is_read_back_undefined() {
     let ics = zoned(
-        "W. Europe Standard Time",
-        &vtimezone("W. Europe Standard Time", "W. Europe Standard Time"),
+        "Unknown Custom Zone",
+        &vtimezone("Unknown Custom Zone", "Unknown Custom Zone"),
     );
 
     let event = ical_to_event(&ics).expect("parse");
 
-    assert_eq!(event.time_zone.as_deref(), Some("W. Europe Standard Time"));
+    assert_eq!(event.time_zone.as_deref(), Some("Unknown Custom Zone"));
     assert_eq!(event.time_zones, None, "{ics}");
 }
 
@@ -10644,4 +10643,295 @@ fn real_exporter_fixture_evolution_native_detailed_roundtrip() {
 
     assert_eq!(export2, export3);
     assert_eq!(event2, event3);
+}
+
+#[test]
+fn windows_time_zone_names_from_real_exporters_map_to_canonical_iana_zones() {
+    let cases = [
+        ("W. Europe Standard Time", "Europe/Berlin"),
+        ("Romance Standard Time", "Europe/Paris"),
+        ("GMT Standard Time", "Europe/London"),
+        ("Greenwich Standard Time", "Atlantic/Reykjavik"),
+        ("Central European Standard Time", "Europe/Warsaw"),
+        ("Central Europe Standard Time", "Europe/Budapest"),
+        ("E. Europe Standard Time", "Europe/Chisinau"),
+        ("FLE Standard Time", "Europe/Kyiv"),
+        ("GTB Standard Time", "Europe/Bucharest"),
+        ("Russian Standard Time", "Europe/Moscow"),
+        ("Israel Standard Time", "Asia/Jerusalem"),
+        ("Arabic Standard Time", "Asia/Baghdad"),
+        ("Arab Standard Time", "Asia/Riyadh"),
+        ("India Standard Time", "Asia/Kolkata"),
+        ("China Standard Time", "Asia/Shanghai"),
+        ("Singapore Standard Time", "Asia/Singapore"),
+        ("Tokyo Standard Time", "Asia/Tokyo"),
+        ("Korea Standard Time", "Asia/Seoul"),
+        ("AUS Eastern Standard Time", "Australia/Sydney"),
+        ("AUS Central Standard Time", "Australia/Darwin"),
+        ("Cen. Australia Standard Time", "Australia/Adelaide"),
+        ("E. Australia Standard Time", "Australia/Brisbane"),
+        ("W. Australia Standard Time", "Australia/Perth"),
+        ("New Zealand Standard Time", "Pacific/Auckland"),
+        ("Eastern Standard Time", "America/New_York"),
+        ("Central Standard Time", "America/Chicago"),
+        ("Mountain Standard Time", "America/Denver"),
+        ("Pacific Standard Time", "America/Los_Angeles"),
+        ("Alaskan Standard Time", "America/Anchorage"),
+        ("Hawaiian Standard Time", "Pacific/Honolulu"),
+        ("SA Pacific Standard Time", "America/Bogota"),
+        ("E. South America Standard Time", "America/Sao_Paulo"),
+        ("Argentina Standard Time", "America/Buenos_Aires"),
+        ("Atlantic Standard Time", "America/Halifax"),
+        ("Newfoundland Standard Time", "America/St_Johns"),
+        ("US Eastern Standard Time", "America/Indianapolis"),
+        ("US Mountain Standard Time", "America/Phoenix"),
+        ("Canada Central Standard Time", "America/Regina"),
+        ("Mountain Standard Time (Mexico)", "America/Chihuahua"),
+        ("UTC", "Etc/UTC"),
+        ("UTC-11", "Etc/GMT+11"),
+        ("UTC-02", "Etc/GMT+2"),
+        ("UTC+12", "Etc/GMT-12"),
+        ("UTC+13", "Etc/GMT-13"),
+    ];
+
+    for (win_name, expected_iana) in cases {
+        // 1. Windows TZID inside a VTIMEZONE definition (the realistic exporter shape)
+        let ics_vtz = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Microsoft Corporation//Outlook//EN\r\n\
+             BEGIN:VTIMEZONE\r\nTZID:{win_name}\r\n\
+             BEGIN:STANDARD\r\nDTSTART:16010101T020000\r\n\
+             TZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n\
+             RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10\r\n\
+             END:STANDARD\r\n\
+             BEGIN:DAYLIGHT\r\nDTSTART:16010101T030000\r\n\
+             TZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n\
+             RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3\r\n\
+             END:DAYLIGHT\r\n\
+             END:VTIMEZONE\r\n\
+             BEGIN:VEVENT\r\nUID:win-vtz-{win_name}\r\n\
+             DTSTART;TZID={win_name}:20260615T140000\r\n\
+             DURATION:PT1H\r\nSUMMARY:Meeting with VTIMEZONE in {win_name}\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event_vtz = ical_to_event(&ics_vtz).expect("parse vtimezone windows tzid");
+        assert_eq!(
+            event_vtz.time_zone.as_deref(),
+            Some(expected_iana),
+            "VTIMEZONE with TZID={win_name} should resolve to {expected_iana}"
+        );
+        assert!(
+            names_time_zone(event_vtz.time_zone.as_ref().unwrap()),
+            "{expected_iana} is a valid IANA name"
+        );
+        assert!(
+            maps_time_zone(&event_vtz),
+            "event in {expected_iana} must satisfy maps_time_zone"
+        );
+
+        // 2. Outbound emission normalizes to standard IANA TZID / UTC format
+        let out_ics = event_to_ical(&event_vtz);
+        if expected_iana == "Etc/UTC" || expected_iana == "UTC" {
+            assert!(
+                out_ics.contains("DTSTART:20260615T140000Z"),
+                "outbound ics for UTC should emit DTSTART with Z, got: {out_ics}"
+            );
+        } else {
+            assert!(
+                out_ics.contains(&format!("DTSTART;TZID={expected_iana}:20260615T140000")),
+                "outbound ics should emit standard IANA TZID {expected_iana}, got: {out_ics}"
+            );
+        }
+
+        // 3. Multi-pass roundtrip fixpoint stability
+        let event2 = ical_to_event(&out_ics).expect("event2");
+        let export2 = event_to_ical(&event2);
+        let event3 = ical_to_event(&export2).expect("event3");
+        let export3 = event_to_ical(&event3);
+        assert_eq!(export2, export3);
+        assert_eq!(event2, event3);
+    }
+}
+
+#[test]
+fn globally_unique_form_tzids_with_iana_tails_map_to_canonical_iana_zones() {
+    let cases = [
+        ("/mozilla.org/20070129_1/Europe/Berlin", "Europe/Berlin"),
+        ("/citadel.org/20080105_1/Europe/Paris", "Europe/Paris"),
+        (
+            "/freeassociation.sourceforge.net/Tzfile/Europe/Berlin",
+            "Europe/Berlin",
+        ),
+        (
+            "/freeassociation.sourceforge.net/Europe/Berlin",
+            "Europe/Berlin",
+        ),
+        (
+            "/softwarestudio.org/Tzfile/America/New_York",
+            "America/New_York",
+        ),
+        (
+            "/exchange.example.com/Tzfile/America/Chicago",
+            "America/Chicago",
+        ),
+        ("/kde.org/tz/Europe/Rome", "Europe/Rome"),
+        (
+            "/apple.com/timezones/America/Argentina/Buenos_Aires",
+            "America/Argentina/Buenos_Aires",
+        ),
+        ("/google.com/20260101_1/Asia/Tokyo", "Asia/Tokyo"),
+        ("/example.com/Australia/Sydney", "Australia/Sydney"),
+        ("/example.com/Etc/GMT+5", "Etc/GMT+5"),
+        (
+            "/citadel.org/America/Indiana/Indianapolis",
+            "America/Indiana/Indianapolis",
+        ),
+        ("/vendor.org/tz/Africa/Cairo", "Africa/Cairo"),
+        ("/vendor.org/tz/Pacific/Auckland", "Pacific/Auckland"),
+        ("/vendor.org/tz/Atlantic/Reykjavik", "Atlantic/Reykjavik"),
+    ];
+
+    for (unique_tzid, expected_iana) in cases {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Mozilla.org/NONSGML Mozilla Calendar V1.1//EN\r\n\
+             BEGIN:VEVENT\r\nUID:unique-tzid-{expected_iana}\r\n\
+             DTSTART;TZID={unique_tzid}:20260615T140000\r\n\
+             DURATION:PT1H\r\nSUMMARY:Meeting with globally unique TZID\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = ical_to_event(&ics).expect("parse unique tzid");
+        assert_eq!(
+            event.time_zone.as_deref(),
+            Some(expected_iana),
+            "unique TZID={unique_tzid} should resolve to {expected_iana}"
+        );
+        assert!(
+            names_time_zone(event.time_zone.as_ref().unwrap()),
+            "{expected_iana} must satisfy names_time_zone"
+        );
+        assert!(
+            maps_time_zone(&event),
+            "event in {expected_iana} must satisfy maps_time_zone"
+        );
+
+        // Outbound emission normalizes to canonical IANA TZID
+        let out_ics = event_to_ical(&event);
+        assert!(
+            out_ics.contains(&format!("DTSTART;TZID={expected_iana}:20260615T140000")),
+            "outbound ics should emit standard IANA TZID {expected_iana}, got: {out_ics}"
+        );
+
+        // Multi-pass roundtrip fixpoint stability
+        let event2 = ical_to_event(&out_ics).expect("event2");
+        let export2 = event_to_ical(&event2);
+        let event3 = ical_to_event(&export2).expect("event3");
+        let export3 = event_to_ical(&event3);
+        assert_eq!(export2, export3);
+        assert_eq!(event2, event3);
+    }
+}
+
+#[test]
+fn vtimezone_with_explicit_x_lic_location_takes_precedence_over_windows_table() {
+    // A VTIMEZONE with TZID: W. Europe Standard Time but explicit X-LIC-LOCATION: Europe/Amsterdam
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VTIMEZONE\r\nTZID:W. Europe Standard Time\r\n",
+        "X-LIC-LOCATION:Europe/Amsterdam\r\n",
+        "BEGIN:STANDARD\r\nDTSTART:19701025T030000\r\n",
+        "TZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\nUID:test-precedence\r\n",
+        "DTSTART;TZID=W. Europe Standard Time:20260615T140000\r\n",
+        "DURATION:PT1H\r\nSUMMARY:Precedence test\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+
+    let event = ical_to_event(ics).expect("parse");
+    assert_eq!(
+        event.time_zone.as_deref(),
+        Some("Europe/Amsterdam"),
+        "Explicit X-LIC-LOCATION must take precedence over default Windows mapping"
+    );
+}
+
+#[test]
+fn recurrence_until_calculation_in_windows_and_unique_tzids() {
+    // UNTIL instant 20260424T080000Z in W. Europe Standard Time (which enters daylight savings +0200 in March)
+    // Local date-time should be 2026-04-24T10:00:00
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Microsoft Corporation//Outlook//EN\r\n",
+        "BEGIN:VTIMEZONE\r\nTZID:W. Europe Standard Time\r\n",
+        "BEGIN:STANDARD\r\nDTSTART:16010101T020000\r\n",
+        "TZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n",
+        "RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\nDTSTART:16010101T030000\r\n",
+        "TZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n",
+        "RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\nUID:rec-win-until\r\n",
+        "DTSTART;TZID=W. Europe Standard Time:20260320T100000\r\n",
+        "RRULE:FREQ=WEEKLY;UNTIL=20260424T080000Z\r\n",
+        "SUMMARY:Recurrence test with UNTIL in Windows zone\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+
+    let event = ical_to_event(ics).expect("parse");
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
+    let rule = event.recurrence_rule.expect("recurrence_rule");
+    assert_eq!(rule.until.as_deref(), Some("2026-04-24T10:00:00"));
+}
+
+#[test]
+fn custom_defined_solidus_tzids_and_unresolvable_zones_fidelity() {
+    // 1. Custom defined zone beginning with solidus and without IANA tail
+    let custom_tzid = "/example.com/Europe-Berlin";
+    let ics_custom = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+         BEGIN:VTIMEZONE\r\nTZID:{custom_tzid}\r\n\
+         BEGIN:STANDARD\r\nDTSTART:19701025T030000\r\n\
+         TZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n\
+         RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=10\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\nDTSTART:19700329T020000\r\n\
+         TZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n\
+         RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=-1SU;BYMONTH=3\r\n\
+         END:DAYLIGHT\r\n\
+         END:VTIMEZONE\r\n\
+         BEGIN:VEVENT\r\nUID:custom-tz-test\r\n\
+         DTSTART;TZID={custom_tzid}:20260615T140000\r\n\
+         SUMMARY:Custom zone\r\n\
+         END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let event_custom = ical_to_event(&ics_custom).expect("parse custom");
+    assert_eq!(event_custom.time_zone.as_deref(), Some(custom_tzid));
+    assert!(
+        defines_time_zone(&event_custom, custom_tzid),
+        "custom zone must be defined in event.time_zones"
+    );
+    assert!(maps_time_zone(&event_custom));
+
+    let out_custom = event_to_ical(&event_custom);
+    assert!(out_custom.contains(&format!("TZID:{custom_tzid}")));
+    assert!(out_custom.contains("BEGIN:VTIMEZONE"));
+
+    // 2. Ambiguous, unmapped zone without solidus and without definition
+    let unknown_tz = "Fictional Space Station Standard Time";
+    let ics_unknown = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+         BEGIN:VEVENT\r\nUID:unknown-tz-test\r\n\
+         DTSTART;TZID={unknown_tz}:20260615T140000\r\n\
+         SUMMARY:Unknown zone\r\n\
+         END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let event_unknown = ical_to_event(&ics_unknown).expect("parse unknown");
+    assert_eq!(event_unknown.time_zone.as_deref(), Some(unknown_tz));
+    assert!(!names_time_zone(unknown_tz));
+    assert!(!defines_time_zone(&event_unknown, unknown_tz));
+    assert!(
+        !maps_time_zone(&event_unknown),
+        "unresolvable zone without definition must be refused by maps_time_zone"
+    );
 }

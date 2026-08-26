@@ -39,10 +39,14 @@ use jmap_collection_sync::{Child, ChildKind, Doomed, Fanout, Parts, Requested};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
 /// A distinct file name per server-side source, so two of them in one test
 /// process never share an `ESource` uid — EDS derives the uid from the file
 /// name.
 static NEXT: AtomicU32 = AtomicU32::new(0);
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The account this collection belongs to, as a child's settings were written
 /// from.
@@ -208,139 +212,173 @@ impl Drop for ServerSide {
 
 #[test]
 fn an_address_book_child_names_the_address_book_it_stands_for() {
-    let source = Source::child_of(ChildKind::AddressBook, "AB1");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = Source::child_of(ChildKind::AddressBook, "AB1");
 
-    assert_eq!(
-        source.doomed(),
-        Some(Doomed {
-            kind: ChildKind::AddressBook,
-            collection_id: Id::new("AB1"),
-        })
-    );
+        assert_eq!(
+            source.doomed(),
+            Some(Doomed {
+                kind: ChildKind::AddressBook,
+                collection_id: Id::new("AB1"),
+            })
+        );
+    });
 }
 
 #[test]
 fn a_calendar_child_names_the_calendar_it_stands_for() {
-    // The pair, not the id: a server that numbers its objects from one gives an
-    // address book and a calendar the same id (RFC 8620 §1.2), and the kind is
-    // what decides which `/set` call destroys this one.
-    let source = Source::child_of(ChildKind::Calendar, "AB1");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The pair, not the id: a server that numbers its objects from one gives an
+        // address book and a calendar the same id (RFC 8620 §1.2), and the kind is
+        // what decides which `/set` call destroys this one.
+        let source = Source::child_of(ChildKind::Calendar, "AB1");
 
-    assert_eq!(
-        source.doomed(),
-        Some(Doomed {
-            kind: ChildKind::Calendar,
-            collection_id: Id::new("AB1"),
-        })
-    );
+        assert_eq!(
+            source.doomed(),
+            Some(Doomed {
+                kind: ChildKind::Calendar,
+                collection_id: Id::new("AB1"),
+            })
+        );
+    });
 }
 
 #[test]
 fn a_source_that_is_not_a_child_of_this_backend_names_nothing() {
-    // The rule the whole feature rests on. `delete_resource_sync` is handed
-    // whatever source the user clicked "Delete" on, and a source with no
-    // `[Resource] Identity` of ours — a mail source of this account, a child of
-    // another collection backend, a hand-edited file — has no collection to
-    // destroy. Answering anything but `None` here sends a destroy naming an id
-    // read out of somebody else's keyfile.
-    let bare = Source::new("jmap-not-a-child");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The rule the whole feature rests on. `delete_resource_sync` is handed
+        // whatever source the user clicked "Delete" on, and a source with no
+        // `[Resource] Identity` of ours — a mail source of this account, a child of
+        // another collection backend, a hand-edited file — has no collection to
+        // destroy. Answering anything but `None` here sends a destroy naming an id
+        // read out of somebody else's keyfile.
+        let bare = Source::new("jmap-not-a-child");
 
-    assert_eq!(bare.doomed(), None);
+        assert_eq!(bare.doomed(), None);
+    });
 }
 
 #[test]
 fn a_child_that_names_a_kind_and_no_identity_names_nothing() {
-    // Halfway is still not ours: the address book extension alone says which
-    // `/set` call would be used and nothing about which object.
-    let source = Source::new("jmap-half-written");
-    // SAFETY: a live source and a header constant; creating the extension is
-    // exactly what puts the source in the state under test.
-    unsafe {
-        assert!(
-            !e_source_get_extension(source.0, E_SOURCE_EXTENSION_ADDRESS_BOOK.as_ptr()).is_null()
-        );
-    }
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Halfway is still not ours: the address book extension alone says which
+        // `/set` call would be used and nothing about which object.
+        let source = Source::new("jmap-half-written");
+        // SAFETY: a live source and a header constant; creating the extension is
+        // exactly what puts the source in the state under test.
+        unsafe {
+            assert!(
+                !e_source_get_extension(source.0, E_SOURCE_EXTENSION_ADDRESS_BOOK.as_ptr())
+                    .is_null()
+            );
+        }
 
-    assert_eq!(source.doomed(), None);
+        assert_eq!(source.doomed(), None);
+    });
 }
 
 #[test]
 fn reading_the_doomed_collection_does_not_give_the_source_an_extension_it_lacked() {
-    // `e_source_get_extension` *creates* what it cannot find, and this vfunc is
-    // handed sources belonging to other parts of Evolution. A read that reached
-    // for `[Resource]` would write a group into every one of them.
-    let bare = Source::new("jmap-untouched");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `e_source_get_extension` *creates* what it cannot find, and this vfunc is
+        // handed sources belonging to other parts of Evolution. A read that reached
+        // for `[Resource]` would write a group into every one of them.
+        let bare = Source::new("jmap-untouched");
 
-    assert_eq!(bare.doomed(), None);
-    assert!(!bare.has_extension(E_SOURCE_EXTENSION_RESOURCE));
-    assert!(!bare.has_extension(E_SOURCE_EXTENSION_ADDRESS_BOOK));
-    assert!(!bare.has_extension(E_SOURCE_EXTENSION_CALENDAR));
+        assert_eq!(bare.doomed(), None);
+        assert!(!bare.has_extension(E_SOURCE_EXTENSION_RESOURCE));
+        assert!(!bare.has_extension(E_SOURCE_EXTENSION_ADDRESS_BOOK));
+        assert!(!bare.has_extension(E_SOURCE_EXTENSION_CALENDAR));
+    });
 }
 
 #[test]
 fn a_child_of_this_backend_is_offered_for_deletion() {
-    // What makes Evolution show "Delete" on a JMAP address book at all:
-    // `server_side_source_remote_delete_sync()` refuses outright unless the
-    // child's own `remote-deletable` is set, so without this the vfunc below is
-    // unreachable dead code.
-    let child = ServerSide::child_of(ChildKind::AddressBook, "AB1");
-    assert!(
-        !child.offered_for_deletion(),
-        "an EServerSideSource is not deletable until something says so"
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // What makes Evolution show "Delete" on a JMAP address book at all:
+        // `server_side_source_remote_delete_sync()` refuses outright unless the
+        // child's own `remote-deletable` is set, so without this the vfunc below is
+        // unreachable dead code.
+        let child = ServerSide::child_of(ChildKind::AddressBook, "AB1");
+        assert!(
+            !child.offered_for_deletion(),
+            "an EServerSideSource is not deletable until something says so"
+        );
 
-    // SAFETY: a live `EServerSideSource` this test holds a reference to.
-    let offered = unsafe { offer_deletion(child.source) };
+        // SAFETY: a live `EServerSideSource` this test holds a reference to.
+        let offered = unsafe { offer_deletion(child.source) };
 
-    assert!(offered);
-    assert!(child.offered_for_deletion());
+        assert!(offered);
+        assert!(child.offered_for_deletion());
+    });
 }
 
 #[test]
 fn a_source_this_backend_did_not_write_is_not_offered_for_deletion() {
-    // `child_added` fires for every source under this collection, mail sources
-    // included. Offering deletion on one of those would put a "Delete" in front
-    // of the user that this backend cannot honour — and `delete_resource_sync`
-    // would then be asked about a source it can make no sense of.
-    let stranger = ServerSide::new();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `child_added` fires for every source under this collection, mail sources
+        // included. Offering deletion on one of those would put a "Delete" in front
+        // of the user that this backend cannot honour — and `delete_resource_sync`
+        // would then be asked about a source it can make no sense of.
+        let stranger = ServerSide::new();
 
-    // SAFETY: a live `EServerSideSource` this test holds a reference to.
-    let offered = unsafe { offer_deletion(stranger.source) };
+        // SAFETY: a live `EServerSideSource` this test holds a reference to.
+        let offered = unsafe { offer_deletion(stranger.source) };
 
-    assert!(!offered);
-    assert!(!stranger.offered_for_deletion());
+        assert!(!offered);
+        assert!(!stranger.offered_for_deletion());
+    });
 }
 
 #[test]
 fn deleting_a_child_takes_its_collection_off_the_server() {
-    // The whole vfunc minus the instance: a collection created on a real mock,
-    // a child source written for it the way a fan-out writes one, and the
-    // delete driven from what that source says about itself.
-    let server = MockServer::builder().start();
-    let target = ConnectTarget::Origin(server.origin().to_owned());
-    let created = create_on_server(
-        &target,
-        Credentials::none(),
-        &Requested {
-            kind: ChildKind::AddressBook,
-            display_name: "Work".to_owned(),
-        },
-    )
-    .expect("the mock creates address books");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The whole vfunc minus the instance: a collection created on a real mock,
+        // a child source written for it the way a fan-out writes one, and the
+        // delete driven from what that source says about itself.
+        let server = MockServer::builder().start();
+        let target = ConnectTarget::Origin(server.origin().to_owned());
+        let created = create_on_server(
+            &target,
+            Credentials::none(),
+            &Requested {
+                kind: ChildKind::AddressBook,
+                display_name: "Work".to_owned(),
+            },
+        )
+        .expect("the mock creates address books");
 
-    let source = Source::child_of(ChildKind::AddressBook, created.collection_id.as_str());
-    let doomed = source.doomed().expect("a child this backend wrote");
+        let source = Source::child_of(ChildKind::AddressBook, created.collection_id.as_str());
+        let doomed = source.doomed().expect("a child this backend wrote");
 
-    delete_on_server(&target, Credentials::none(), &doomed).expect("the mock destroys them too");
+        delete_on_server(&target, Credentials::none(), &doomed)
+            .expect("the mock destroys them too");
 
-    let client = Client::connect(server.origin(), Credentials::none())
-        .expect("the mock serves a session document");
-    let fanout = Fanout::discover(&client, Parts::ALL).expect("the mock answers");
-    assert!(
-        !fanout
-            .address_books
-            .iter()
-            .any(|book| book.id == created.collection_id),
-        "the address book the child stood for is still on the server"
-    );
+        let client = Client::connect(server.origin(), Credentials::none())
+            .expect("the mock serves a session document");
+        let fanout = Fanout::discover(&client, Parts::ALL).expect("the mock answers");
+        assert!(
+            !fanout
+                .address_books
+                .iter()
+                .any(|book| book.id == created.collection_id),
+            "the address book the child stood for is still on the server"
+        );
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_delete_resource_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }
