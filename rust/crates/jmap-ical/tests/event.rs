@@ -10935,3 +10935,618 @@ fn custom_defined_solidus_tzids_and_unresolvable_zones_fidelity() {
         "unresolvable zone without definition must be refused by maps_time_zone"
     );
 }
+
+#[test]
+fn alerts_audit_real_exporter_fixtures_characterization_and_multi_stage_roundtrip() {
+    // 1. Evolution Calendar Export: 2 VALARMs (-PT15M and -PT1H)
+    let evo_ics = include_str!("fixtures/evolution_calendar_export.ics");
+    let evo_event = ical_to_event(evo_ics).expect("parse evolution export");
+    let evo_alerts = evo_event.alerts.as_ref().expect("evolution alerts");
+    assert_eq!(evo_alerts.len(), 2, "Evolution export has 2 display alarms");
+    assert_eq!(evo_alerts["a1"]["action"], "display");
+    assert_eq!(evo_alerts["a1"]["trigger"]["offset"], "-PT15M");
+    assert_eq!(evo_alerts["a2"]["action"], "display");
+    assert_eq!(evo_alerts["a2"]["trigger"]["offset"], "-PT1H");
+    assert!(maps_alerts(&evo_event));
+    let evo_out = event_to_ical(&evo_event);
+    assert_eq!(evo_out.matches("BEGIN:VALARM\r\n").count(), 2);
+    assert!(evo_out.contains("UID:a1\r\n"));
+    assert!(evo_out.contains("UID:a2\r\n"));
+    let evo_reparsed = ical_to_event(&evo_out).expect("reparse evolution export");
+    assert_eq!(evo_reparsed.alerts, evo_event.alerts);
+    assert_eq!(event_to_ical(&evo_reparsed), evo_out);
+
+    // 2. Apple Calendar Export: 2 VALARMs (-P1D and -PT2H)
+    let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
+    let apple_event = ical_to_event(apple_ics).expect("parse apple export");
+    let apple_alerts = apple_event.alerts.as_ref().expect("apple alerts");
+    assert_eq!(apple_alerts.len(), 2, "Apple export has 2 display alarms");
+    assert_eq!(apple_alerts["a1"]["trigger"]["offset"], "-P1D");
+    assert_eq!(apple_alerts["a2"]["trigger"]["offset"], "-PT2H");
+    assert!(maps_alerts(&apple_event));
+    let apple_out = event_to_ical(&apple_event);
+    let apple_reparsed = ical_to_event(&apple_out).expect("reparse apple export");
+    assert_eq!(apple_reparsed.alerts, apple_event.alerts);
+    assert_eq!(event_to_ical(&apple_reparsed), apple_out);
+
+    // 3. Google Calendar Export: 1 VALARM (-PT15M)
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let google_event = ical_to_event(google_ics).expect("parse google export");
+    let google_alerts = google_event.alerts.as_ref().expect("google alerts");
+    assert_eq!(google_alerts.len(), 1, "Google export has 1 display alarm");
+    assert_eq!(google_alerts["a1"]["trigger"]["offset"], "-PT15M");
+    assert!(maps_alerts(&google_event));
+    let google_out = event_to_ical(&google_event);
+    let google_reparsed = ical_to_event(&google_out).expect("reparse google export");
+    assert_eq!(google_reparsed.alerts, google_event.alerts);
+    assert_eq!(event_to_ical(&google_reparsed), google_out);
+
+    // 4. Nextcloud CalDAV Export: 1 VALARM (-P2D)
+    let nextcloud_ics = include_str!("fixtures/nextcloud_calendar_export.ics");
+    let nextcloud_event = ical_to_event(nextcloud_ics).expect("parse nextcloud export");
+    let nextcloud_alerts = nextcloud_event.alerts.as_ref().expect("nextcloud alerts");
+    assert_eq!(
+        nextcloud_alerts.len(),
+        1,
+        "Nextcloud export has 1 display alarm"
+    );
+    assert_eq!(nextcloud_alerts["a1"]["trigger"]["offset"], "-P2D");
+    assert!(maps_alerts(&nextcloud_event));
+    let nextcloud_out = event_to_ical(&nextcloud_event);
+    let nextcloud_reparsed = ical_to_event(&nextcloud_out).expect("reparse nextcloud export");
+    assert_eq!(nextcloud_reparsed.alerts, nextcloud_event.alerts);
+    assert_eq!(event_to_ical(&nextcloud_reparsed), nextcloud_out);
+
+    // 5. Outlook Modern M365 Export: 1 VALARM (-PT30M)
+    let outlook_ics = include_str!("fixtures/outlook_m365_export.ics");
+    let outlook_event = ical_to_event(outlook_ics).expect("parse outlook export");
+    let outlook_alerts = outlook_event.alerts.as_ref().expect("outlook alerts");
+    assert_eq!(
+        outlook_alerts.len(),
+        1,
+        "Outlook export has 1 display alarm"
+    );
+    assert_eq!(outlook_alerts["a1"]["trigger"]["offset"], "-PT30M");
+    assert!(maps_alerts(&outlook_event));
+    let outlook_out = event_to_ical(&outlook_event);
+    let outlook_reparsed = ical_to_event(&outlook_out).expect("reparse outlook export");
+    assert_eq!(outlook_reparsed.alerts, outlook_event.alerts);
+    assert_eq!(event_to_ical(&outlook_reparsed), outlook_out);
+}
+
+#[test]
+fn alerts_audit_trigger_offset_variations_zero_duration_and_normalization() {
+    let offset_test_cases = [
+        // (input_offset, expected_canonical_offset, relative_to)
+        ("-PT5M", "-PT5M", "start"),
+        ("-PT15M", "-PT15M", "start"),
+        ("-PT1H", "-PT1H", "start"),
+        ("-PT2H30M", "-PT2H30M", "start"),
+        ("-P1D", "-P1D", "start"),
+        ("-P2DT3H4M5S", "-P2DT3H4M5S", "start"),
+        ("-P1W", "-P1W", "start"),
+        ("-P2W", "-P2W", "start"),
+        ("PT5M", "PT5M", "start"),
+        ("+PT5M", "PT5M", "start"),
+        ("PT1H", "PT1H", "start"),
+        ("+PT1H", "PT1H", "start"),
+        ("P1D", "P1D", "start"),
+        ("+P1D", "P1D", "start"),
+        ("P1W", "P1W", "start"),
+        ("+P1W", "P1W", "start"),
+        ("PT0S", "PT0S", "start"),
+        ("-PT0S", "-PT0S", "start"),
+        ("+PT0S", "PT0S", "start"),
+        ("P0D", "PT0S", "start"),
+        ("-P0D", "-PT0S", "start"),
+        ("PT0M", "PT0S", "start"),
+        ("PT0H", "PT0S", "start"),
+        ("PT10M", "PT10M", "end"),
+        ("-PT15M", "-PT15M", "end"),
+    ];
+
+    for (idx, (input_offset, expected_canonical, relative_to)) in
+        offset_test_cases.iter().enumerate()
+    {
+        let related_param = if *relative_to == "end" {
+            ";RELATED=END"
+        } else {
+            ""
+        };
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+             BEGIN:VEVENT\r\nUID:offset-test-{idx}\r\n\
+             DTSTART:20260115T100000Z\r\nDURATION:PT1H\r\n\
+             SUMMARY:Offset Test\r\n\
+             BEGIN:VALARM\r\nUID:k1\r\nACTION:DISPLAY\r\n\
+             TRIGGER{related_param}:{input_offset}\r\n\
+             END:VALARM\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+
+        let event =
+            ical_to_event(&ics).unwrap_or_else(|e| panic!("failed to parse {input_offset}: {e}"));
+        let alerts = event
+            .alerts
+            .as_ref()
+            .unwrap_or_else(|| panic!("expected alerts for {input_offset}"));
+        let alert = &alerts["k1"];
+        assert_eq!(alert["action"], "display", "action for {input_offset}");
+        assert_eq!(
+            alert["trigger"]["offset"], *expected_canonical,
+            "trigger offset for {input_offset}"
+        );
+        if *relative_to == "end" {
+            assert_eq!(alert["trigger"]["relativeTo"], "end");
+        } else {
+            assert!(alert["trigger"].get("relativeTo").is_none());
+        }
+        assert!(maps_alerts(&event), "maps_alerts for {input_offset}");
+
+        // Multi-stage roundtrip
+        let out_ics = event_to_ical(&event);
+        let reparsed = ical_to_event(&out_ics).expect("reparse out_ics");
+        assert_eq!(
+            reparsed.alerts, event.alerts,
+            "roundtrip for {input_offset}"
+        );
+        assert_eq!(
+            event_to_ical(&reparsed),
+            out_ics,
+            "fixed-point for {input_offset}"
+        );
+    }
+
+    // Inbound format variations (parameter ordering, VALUE=DURATION, case insensitivity)
+    let format_variations = [
+        ("trigger:-pt15m", "-PT15M", None),
+        ("trigger:+pt1h", "PT1H", None),
+        ("trigger;value=duration:-pt30m", "-PT30M", None),
+        (
+            "trigger;value=duration;related=end:pt5m",
+            "PT5M",
+            Some("end"),
+        ),
+        (
+            "trigger;related=end;value=duration:pt15m",
+            "PT15M",
+            Some("end"),
+        ),
+        ("trigger;related=start:-pt10m", "-PT10M", None),
+    ];
+
+    for (line, expected_offset, expected_relative) in format_variations {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+             BEGIN:VEVENT\r\nUID:var-test\r\n\
+             DTSTART:20260115T100000Z\r\nDURATION:PT1H\r\n\
+             BEGIN:VALARM\r\nUID:k1\r\naction:display\r\n\
+             {line}\r\n\
+             END:VALARM\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = ical_to_event(&ics).unwrap_or_else(|e| panic!("failed on {line}: {e}"));
+        let alerts = event
+            .alerts
+            .as_ref()
+            .unwrap_or_else(|| panic!("expected alerts for {line}"));
+        assert_eq!(alerts["k1"]["trigger"]["offset"], expected_offset);
+        if let Some(rel) = expected_relative {
+            assert_eq!(alerts["k1"]["trigger"]["relativeTo"], rel);
+        }
+    }
+}
+
+#[test]
+fn alerts_audit_action_types_and_trigger_types_decision_matrix() {
+    // 1. Inbound ACTION matrix
+    let action_matrix = [
+        ("DISPLAY", true),
+        ("display", true),
+        ("Display", true),
+        ("AUDIO", false),
+        ("audio", false),
+        ("EMAIL", false),
+        ("email", false),
+        ("PROCEDURE", false),
+        ("procedure", false),
+        ("X-CUSTOM-NOTIFICATION", false),
+        ("NONE", false),
+    ];
+
+    for (action, should_map) in action_matrix {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+             BEGIN:VEVENT\r\nUID:act-test\r\n\
+             DTSTART:20260115T100000Z\r\n\
+             BEGIN:VALARM\r\nUID:k1\r\nACTION:{action}\r\n\
+             TRIGGER:-PT15M\r\n\
+             SUMMARY:Subject\r\nDESCRIPTION:Body\r\nATTENDEE:mailto:test@example.com\r\n\
+             END:VALARM\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = ical_to_event(&ics).expect("parse action");
+        if should_map {
+            let alerts = event.alerts.as_ref().expect("expected alert");
+            assert_eq!(alerts["k1"]["action"], "display");
+        } else {
+            assert!(
+                event.alerts.is_none(),
+                "ACTION:{action} must be dropped inbound"
+            );
+        }
+    }
+
+    // 2. Inbound TRIGGER type matrix (Offset vs Absolute vs Invalid)
+    let trigger_matrix = [
+        ("TRIGGER:-PT15M", true),
+        ("TRIGGER;VALUE=DURATION:-PT15M", true),
+        ("TRIGGER;VALUE=DATE-TIME:20260115T094500Z", false),
+        ("TRIGGER;VALUE=DATE-TIME:20260115T094500", false),
+        ("TRIGGER:invalid-string", false),
+        ("TRIGGER;RELATED=MIDDLE:-PT15M", false),
+    ];
+
+    for (trigger_line, should_map) in trigger_matrix {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+             BEGIN:VEVENT\r\nUID:trig-test\r\n\
+             DTSTART:20260115T100000Z\r\n\
+             BEGIN:VALARM\r\nUID:k1\r\nACTION:DISPLAY\r\n\
+             {trigger_line}\r\n\
+             END:VALARM\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = ical_to_event(&ics).expect("parse trigger line");
+        if should_map {
+            let alerts = event.alerts.as_ref().expect("expected alert");
+            assert_eq!(alerts["k1"]["trigger"]["offset"], "-PT15M");
+        } else {
+            assert!(
+                event.alerts.is_none(),
+                "{trigger_line} must be dropped inbound"
+            );
+        }
+    }
+
+    // 3. Outbound decision matrix: maps_alerts coverage and refusal
+    let mut valid_event = CalendarEvent {
+        title: Some("Team Standup".to_owned()),
+        start: Some("2026-01-15T10:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        ..CalendarEvent::default()
+    };
+    valid_event.alerts = Some(
+        [(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                "action": "display"
+            }),
+        )]
+        .into(),
+    );
+    assert!(maps_alerts(&valid_event));
+
+    // Unsupported action in JSCalendar
+    let mut email_event = valid_event.clone();
+    email_event.alerts = Some(
+        [(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                "action": "email"
+            }),
+        )]
+        .into(),
+    );
+    assert!(!maps_alerts(&email_event), "email action must be refused");
+
+    // AbsoluteTrigger in JSCalendar
+    let mut abs_event = valid_event.clone();
+    abs_event.alerts = Some(
+        [(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "trigger": {"@type": "AbsoluteTrigger", "when": "2026-01-15T09:45:00Z"},
+                "action": "display"
+            }),
+        )]
+        .into(),
+    );
+    assert!(!maps_alerts(&abs_event), "AbsoluteTrigger must be refused");
+
+    // Acknowledged timestamp on alert
+    let mut ack_event = valid_event.clone();
+    ack_event.alerts = Some(
+        [(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                "action": "display",
+                "acknowledged": "2026-01-15T09:46:00Z"
+            }),
+        )]
+        .into(),
+    );
+    assert!(
+        !maps_alerts(&ack_event),
+        "acknowledged alert must be refused"
+    );
+}
+
+#[test]
+fn alerts_audit_uid_and_invented_key_allocation_and_collision_avoidance() {
+    // 1. Multiple alarms with mixed explicit UIDs and nameless/Evolution UIDs
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\nUID:mix-uid\r\nDTSTART:20260115T100000Z\r\n",
+        // Nameless alarm #1 -> will try a1, but if a1 is claimed by an explicit UID, must allocate a2+
+        "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\n",
+        // Explicit UID:a1 -> claims a1
+        "BEGIN:VALARM\r\nUID:a1\r\nACTION:DISPLAY\r\nTRIGGER:-PT30M\r\nEND:VALARM\r\n",
+        // Explicit UID:custom-uid-99 -> claims custom-uid-99
+        "BEGIN:VALARM\r\nUID:custom-uid-99\r\nACTION:DISPLAY\r\nTRIGGER:-PT1H\r\nEND:VALARM\r\n",
+        // Evolution internal UID -> not a valid RFC 9074 UID property, so treated as nameless
+        "BEGIN:VALARM\r\nX-EVOLUTION-ALARM-UID:evo-alarm-123\r\nACTION:DISPLAY\r\nTRIGGER:-P1D\r\nEND:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+
+    let event = ical_to_event(ics).expect("parse mix uids");
+    let alerts = event.alerts.as_ref().expect("alerts map");
+    assert_eq!(alerts.len(), 4, "4 distinct alarms");
+
+    // Explicit UIDs preserved
+    assert_eq!(alerts["a1"]["trigger"]["offset"], "-PT30M");
+    assert_eq!(alerts["custom-uid-99"]["trigger"]["offset"], "-PT1H");
+
+    // Nameless alarms get allocated invented keys avoiding existing keys
+    assert!(alerts.contains_key("a2"));
+    assert!(alerts.contains_key("a3"));
+    assert_eq!(alerts["a2"]["trigger"]["offset"], "-PT15M");
+    assert_eq!(alerts["a3"]["trigger"]["offset"], "-P1D");
+
+    // Outbound serialization emits UID for all 4 alarms
+    let out = event_to_ical(&event);
+    assert_eq!(out.matches("BEGIN:VALARM\r\n").count(), 4);
+    assert!(out.contains("UID:a1\r\n"));
+    assert!(out.contains("UID:a2\r\n"));
+    assert!(out.contains("UID:a3\r\n"));
+    assert!(out.contains("UID:custom-uid-99\r\n"));
+
+    // 2. Duplicate UIDs in incoming stream (RFC 9074 §6 uniqueness)
+    let dup_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\nUID:dup-uid\r\nDTSTART:20260115T100000Z\r\n",
+        "BEGIN:VALARM\r\nUID:same-key\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nUID:same-key\r\nACTION:DISPLAY\r\nTRIGGER:-PT45M\r\nEND:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let dup_event = ical_to_event(dup_ics).expect("parse dup");
+    let dup_alerts = dup_event.alerts.expect("dup alerts");
+    assert_eq!(
+        dup_alerts.len(),
+        1,
+        "Duplicate UID collapses to single entry"
+    );
+    assert_eq!(dup_alerts["same-key"]["trigger"]["offset"], "-PT45M");
+}
+
+#[test]
+fn alerts_audit_description_acknowledged_and_unmodeled_properties_fidelity() {
+    // 1. VALARM DESCRIPTION population from event title
+    let mut titled_event = CalendarEvent {
+        title: Some("Quarterly All Hands".to_owned()),
+        start: Some("2026-01-15T10:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        ..CalendarEvent::default()
+    };
+    titled_event.alerts = Some(
+        [(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                "action": "display"
+            }),
+        )]
+        .into(),
+    );
+    let titled_ics = event_to_ical(&titled_event);
+    assert!(
+        titled_ics.contains("DESCRIPTION:Quarterly All Hands\r\n"),
+        "titled event populates VALARM DESCRIPTION with event title"
+    );
+
+    // 2. Event with no title / empty title omits DESCRIPTION
+    let mut untitled_event = titled_event.clone();
+    untitled_event.title = None;
+    let untitled_ics = event_to_ical(&untitled_event);
+    assert!(
+        !untitled_ics.contains("DESCRIPTION:"),
+        "untitled event omits VALARM DESCRIPTION"
+    );
+
+    let mut empty_title_event = titled_event.clone();
+    empty_title_event.title = Some("".to_owned());
+    let empty_title_ics = event_to_ical(&empty_title_event);
+    assert!(
+        !empty_title_ics.contains("DESCRIPTION:"),
+        "empty title event omits VALARM DESCRIPTION"
+    );
+
+    // 3. JSCalendar Alert with custom description field is refused by maps_alerts
+    // to protect unmodeled server fields from being overwritten on whole-property replacement
+    let mut custom_desc_event = titled_event.clone();
+    custom_desc_event.alerts = Some(
+        [(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                "action": "display",
+                "description": "Custom custom notification message"
+            }),
+        )]
+        .into(),
+    );
+    assert!(
+        !maps_alerts(&custom_desc_event),
+        "alert with custom description field must be refused by maps_alerts"
+    );
+
+    // 4. Inbound extra properties on VALARM are safely ignored
+    let extra_props_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\nUID:extra-props\r\nDTSTART:20260115T100000Z\r\n",
+        "BEGIN:VALARM\r\nUID:k1\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\n",
+        "DESCRIPTION:Evolution Reminder\r\n",
+        "SUMMARY:Alarm Summary\r\n",
+        "DURATION:PT5M\r\n",
+        "REPEAT:3\r\n",
+        "ATTACH;VALUE=URI:file:///usr/share/sounds/alarm.ogg\r\n",
+        "X-EVOLUTION-ALARM-UID:uuid-12345\r\n",
+        "X-APPLE-DEFAULT-ALARM:TRUE\r\n",
+        "ACKNOWLEDGED:20260115T094600Z\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_extra = ical_to_event(extra_props_ics).expect("parse extra props");
+    let alerts = parsed_extra.alerts.expect("alerts");
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts["k1"]["action"], "display");
+    assert_eq!(alerts["k1"]["trigger"]["offset"], "-PT15M");
+}
+
+#[test]
+fn alerts_audit_usedefaultalerts_and_recurrence_overrides_matrix() {
+    // 1. useDefaultAlerts on Series
+    let mut default_alerts_event = CalendarEvent {
+        title: Some("Project Sync".to_owned()),
+        start: Some("2026-01-15T10:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        ..CalendarEvent::default()
+    };
+    default_alerts_event.alerts = Some(
+        [(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                "action": "display"
+            }),
+        )]
+        .into(),
+    );
+    default_alerts_event
+        .extra
+        .insert("useDefaultAlerts".to_owned(), json!(true));
+
+    assert_eq!(
+        event_to_ical(&default_alerts_event)
+            .matches("BEGIN:VALARM\r\n")
+            .count(),
+        0,
+        "useDefaultAlerts emits no VALARMs"
+    );
+    assert!(
+        !maps_alerts(&default_alerts_event),
+        "useDefaultAlerts returns maps_alerts == false"
+    );
+
+    // 2. Recurrence Overrides with alerts matrix
+    let mut rec_event = CalendarEvent {
+        title: Some("Weekly Design Review".to_owned()),
+        start: Some("2026-01-15T10:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
+        alerts: Some(
+            [(
+                "a1".to_owned(),
+                json!({
+                    "@type": "Alert",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                    "action": "display"
+                }),
+            )]
+            .into(),
+        ),
+        ..CalendarEvent::default()
+    };
+
+    // Override 1: inherits series alerts (doesn't mention alerts)
+    // Override 2: custom alert (-PT1H)
+    // Override 3: drops alerts (alerts: null)
+    let overrides = json!({
+        "2026-01-22T10:00:00": {
+            "title": "Design Review (Deep Dive)"
+        },
+        "2026-01-29T10:00:00": {
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-PT1H"},
+                    "action": "display"
+                }
+            }
+        },
+        "2026-02-05T10:00:00": {
+            "alerts": null
+        }
+    });
+    rec_event.recurrence_overrides = Some(
+        overrides
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    );
+
+    let ics = event_to_ical(&rec_event);
+    assert_eq!(
+        vevents(&ics),
+        4,
+        "Series + 3 instance overrides = 4 VEVENTs"
+    );
+
+    // Master series has 1 VALARM (-PT15M)
+    // Instance 1 (2026-01-22) inherits series VALARM (-PT15M)
+    // Instance 2 (2026-01-29) has custom VALARM (-PT1H)
+    // Instance 3 (2026-02-05) has 0 VALARMs (alerts: null)
+    assert_eq!(
+        ics.matches("BEGIN:VALARM\r\n").count(),
+        3,
+        "Total VALARMs across 4 VEVENTs = 1 (series) + 1 (inst1) + 1 (inst2) + 0 (inst3)"
+    );
+
+    let parsed = ical_to_event(&ics).expect("parse recurring overrides");
+    assert_eq!(
+        parsed.alerts.as_ref().unwrap()["a1"]["trigger"]["offset"],
+        "-PT15M"
+    );
+    let parsed_overrides = parsed.recurrence_overrides.expect("overrides");
+
+    // Instance 1 only differs by title
+    assert_eq!(
+        parsed_overrides["2026-01-22T10:00:00"],
+        json!({"title": "Design Review (Deep Dive)"})
+    );
+
+    // Instance 2 differs by alerts
+    assert_eq!(
+        parsed_overrides["2026-01-29T10:00:00"]["alerts"]["a1"]["trigger"]["offset"],
+        "-PT1H"
+    );
+
+    // Instance 3 differs by alerts: null
+    assert_eq!(
+        parsed_overrides["2026-02-05T10:00:00"]["alerts"],
+        serde_json::Value::Null
+    );
+}
