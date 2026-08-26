@@ -35,6 +35,11 @@ use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Child, ChildKind, Parts};
 use jmap_proto::Id;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// An `ESource` that is not backed by the registry, as in `tests/resource_id.rs`
 /// — `e_source_new_with_uid` with a NULL D-Bus object is what EDS itself uses
 /// for a source read from a keyfile.
@@ -166,305 +171,356 @@ fn account() -> TestSource {
 
 #[test]
 fn an_account_that_says_nothing_about_its_parts_has_all_of_them_and_is_not_given_any() {
-    // Two things, and the second is the trap `resource_id_of` meets too:
-    // `e_source_get_extension` *creates* the extension it is asked for, so a
-    // read that reached straight for `[Collection]` would write three flags
-    // into the account's own keyfile — the file EDS writes back — where the
-    // user had none. The absence has to be tested for, and it means ALL:
-    // `e_collection_backend_get_part_enabled()` answers TRUE for a source with
-    // no such extension.
-    let source = TestSource::new().enabled(true);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Two things, and the second is the trap `resource_id_of` meets too:
+        // `e_source_get_extension` *creates* the extension it is asked for, so a
+        // read that reached straight for `[Collection]` would write three flags
+        // into the account's own keyfile — the file EDS writes back — where the
+        // user had none. The absence has to be tested for, and it means ALL:
+        // `e_collection_backend_get_part_enabled()` answers TRUE for a source with
+        // no such extension.
+        let source = TestSource::new().enabled(true);
 
-    assert_eq!(source.parts_of(), Parts::ALL);
-    assert!(
-        !source.has_extension(E_SOURCE_EXTENSION_COLLECTION),
-        "reading the parts gave the account a [Collection] extension it did not have"
-    );
+        assert_eq!(source.parts_of(), Parts::ALL);
+        assert!(
+            !source.has_extension(E_SOURCE_EXTENSION_COLLECTION),
+            "reading the parts gave the account a [Collection] extension it did not have"
+        );
+    });
 }
 
 #[test]
 fn a_disabled_account_has_no_parts_whatever_its_extension_says() {
-    // The first thing `e_collection_backend_get_part_enabled()` checks is the
-    // source's own `enabled`, before it looks at the extension at all. An
-    // account the user switched off that still populated would put children in
-    // the sidebar for an account that is not there.
-    let source = TestSource::new().enabled(false).parts(Parts::ALL);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The first thing `e_collection_backend_get_part_enabled()` checks is the
+        // source's own `enabled`, before it looks at the extension at all. An
+        // account the user switched off that still populated would put children in
+        // the sidebar for an account that is not there.
+        let source = TestSource::new().enabled(false).parts(Parts::ALL);
 
-    assert_eq!(source.parts_of(), Parts::NONE);
-    assert!(!source.parts_of().any(), "and so has nothing to populate");
+        assert_eq!(source.parts_of(), Parts::NONE);
+        assert!(!source.parts_of().any(), "and so has nothing to populate");
+    });
 }
 
 #[test]
 fn each_tick_is_read_as_the_part_it_is() {
-    // One flag per part, and no cross-wiring: EDS spells the calendar one
-    // singular (`calendar-enabled`) and the contacts one plural, so a swap here
-    // is exactly the kind of thing that reads correctly and behaves backwards.
-    for parts in [
-        Parts::ALL,
-        Parts::NONE,
-        Parts {
-            mail: true,
-            contacts: false,
-            calendars: false,
-        },
-        Parts {
-            mail: false,
-            contacts: true,
-            calendars: false,
-        },
-        Parts {
-            mail: false,
-            contacts: false,
-            calendars: true,
-        },
-    ] {
-        let source = TestSource::new().enabled(true).parts(parts);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // One flag per part, and no cross-wiring: EDS spells the calendar one
+        // singular (`calendar-enabled`) and the contacts one plural, so a swap here
+        // is exactly the kind of thing that reads correctly and behaves backwards.
+        for parts in [
+            Parts::ALL,
+            Parts::NONE,
+            Parts {
+                mail: true,
+                contacts: false,
+                calendars: false,
+            },
+            Parts {
+                mail: false,
+                contacts: true,
+                calendars: false,
+            },
+            Parts {
+                mail: false,
+                contacts: false,
+                calendars: true,
+            },
+        ] {
+            let source = TestSource::new().enabled(true).parts(parts);
 
-        assert_eq!(source.parts_of(), parts, "{parts:?} did not read back");
-    }
+            assert_eq!(source.parts_of(), parts, "{parts:?} did not read back");
+        }
+    });
 }
 
 #[test]
 fn a_switched_off_part_is_read_off_the_account_and_not_off_the_collections() {
-    // The gate `Fanout::discover` puts in front of each listing. `wants` is the
-    // sync crate's, but it is only ever asked about the `Parts` this function
-    // produced, so the two have to agree about which flag is which.
-    let source = TestSource::new().enabled(true).parts(Parts {
-        mail: true,
-        contacts: true,
-        calendars: false,
-    });
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The gate `Fanout::discover` puts in front of each listing. `wants` is the
+        // sync crate's, but it is only ever asked about the `Parts` this function
+        // produced, so the two have to agree about which flag is which.
+        let source = TestSource::new().enabled(true).parts(Parts {
+            mail: true,
+            contacts: true,
+            calendars: false,
+        });
 
-    assert!(source.parts_of().wants(ChildKind::AddressBook));
-    assert!(!source.parts_of().wants(ChildKind::Calendar));
+        assert!(source.parts_of().wants(ChildKind::AddressBook));
+        assert!(!source.parts_of().wants(ChildKind::Calendar));
+    });
 }
 
 #[test]
 fn an_account_names_the_server_its_children_will_repeat() {
-    // A child inherits none of this — EDS binds `oauth2-support` and nothing
-    // else — so every field here is one a child without it cannot connect with.
-    let server = account().server_of().expect("a well-formed account");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // A child inherits none of this — EDS binds `oauth2-support` and nothing
+        // else — so every field here is one a child without it cannot connect with.
+        let server = account().server_of().expect("a well-formed account");
 
-    assert_eq!(
-        server.connection,
-        Connection {
-            host: "jmap.example.com".to_owned(),
-            port: Some(8443),
-            user: Some("vera@example.com".to_owned()),
-            auth_method: Some("plain/password".to_owned()),
-            secure: true,
-        }
-    );
-    assert_eq!(
-        server.target,
-        ConnectTarget::Origin("https://jmap.example.com:8443".into())
-    );
+        assert_eq!(
+            server.connection,
+            Connection {
+                host: "jmap.example.com".to_owned(),
+                port: Some(8443),
+                user: Some("vera@example.com".to_owned()),
+                auth_method: Some("plain/password".to_owned()),
+                secure: true,
+            }
+        );
+        assert_eq!(
+            server.target,
+            ConnectTarget::Origin("https://jmap.example.com:8443".into())
+        );
+    });
 }
 
 #[test]
 fn the_server_this_backend_contacts_is_the_one_its_children_are_given() {
-    // The reason the origin and the connection come out of one read: this
-    // backend fetches `/.well-known/jmap` itself, and each child assembles its
-    // own origin at the far end from the fields copied here. Two reads of one
-    // source are two chances to disagree — and a disagreement is an account
-    // that discovers collections from one server and fetches them from another.
-    let server = account().server_of().expect("a well-formed account");
-    let child = Child {
-        resource_id: ChildKind::AddressBook.resource_id(&Id::new("AB1")),
-        kind: ChildKind::AddressBook,
-        display_name: "Personal".to_owned(),
-        account_id: Id::new("A1"),
-        collection_id: Id::new("AB1"),
-        is_default: false,
-        color: None,
-        read_only: false,
-    };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The reason the origin and the connection come out of one read: this
+        // backend fetches `/.well-known/jmap` itself, and each child assembles its
+        // own origin at the far end from the fields copied here. Two reads of one
+        // source are two chances to disagree — and a disagreement is an account
+        // that discovers collections from one server and fetches them from another.
+        let server = account().server_of().expect("a well-formed account");
+        let child = Child {
+            resource_id: ChildKind::AddressBook.resource_id(&Id::new("AB1")),
+            kind: ChildKind::AddressBook,
+            display_name: "Personal".to_owned(),
+            account_id: Id::new("A1"),
+            collection_id: Id::new("AB1"),
+            is_default: false,
+            color: None,
+            read_only: false,
+        };
 
-    let settings = child.settings(&server.connection);
-    let value = |group, key| {
-        settings
-            .iter()
-            .find(|setting| (setting.group, setting.key) == (group, key))
-            .map(|setting| setting.value.as_str())
-    };
+        let settings = child.settings(&server.connection);
+        let value = |group, key| {
+            settings
+                .iter()
+                .find(|setting| (setting.group, setting.key) == (group, key))
+                .map(|setting| setting.value.as_str())
+        };
 
-    assert_eq!(value("Authentication", "Host"), Some("jmap.example.com"));
-    assert_eq!(value("Authentication", "Port"), Some("8443"));
-    assert_eq!(value("Security", "Method"), Some("tls"));
-    let ConnectTarget::Origin(origin) = &server.target else {
-        panic!(
-            "an explicit port names an endpoint, not a domain: {:?}",
-            server.target
+        assert_eq!(value("Authentication", "Host"), Some("jmap.example.com"));
+        assert_eq!(value("Authentication", "Port"), Some("8443"));
+        assert_eq!(value("Security", "Method"), Some("tls"));
+        let ConnectTarget::Origin(origin) = &server.target else {
+            panic!(
+                "an explicit port names an endpoint, not a domain: {:?}",
+                server.target
+            );
+        };
+        assert!(
+            origin.contains(value("Authentication", "Host").expect("a host")),
+            "the origin {origin} was assembled from some other host than the children got",
         );
-    };
-    assert!(
-        origin.contains(value("Authentication", "Host").expect("a host")),
-        "the origin {origin} was assembled from some other host than the children got",
-    );
+    });
 }
 
 #[test]
 fn a_port_the_account_does_not_name_is_left_unnamed_rather_than_zero() {
-    // The keyfile writes 0 for "not set", which is what an unwritten key reads
-    // back as. Passing it on would give the children `Port=0` and this backend
-    // an origin that asks for port zero, instead of the scheme's default.
-    let source = TestSource::new()
-        .enabled(true)
-        .authentication("jmap.example.com", 0, None, None)
-        .secure(true);
-    let server = source.server_of().expect("a port is not required");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The keyfile writes 0 for "not set", which is what an unwritten key reads
+        // back as. Passing it on would give the children `Port=0` and this backend
+        // an origin that asks for port zero, instead of the scheme's default.
+        let source = TestSource::new()
+            .enabled(true)
+            .authentication("jmap.example.com", 0, None, None)
+            .secure(true);
+        let server = source.server_of().expect("a port is not required");
 
-    assert_eq!(server.connection.port, None);
-    assert_eq!(
-        server.target,
-        ConnectTarget::Domain("jmap.example.com".into())
-    );
+        assert_eq!(server.connection.port, None);
+        assert_eq!(
+            server.target,
+            ConnectTarget::Domain("jmap.example.com".into())
+        );
+    });
 }
 
 #[test]
 fn an_account_with_no_security_extension_is_secure_and_is_not_given_one() {
-    // `ESourceSecurity:secure` defaults to FALSE, so an unconditional read
-    // cannot tell "the keyfile has no [Security] group" from "the user turned
-    // TLS off" — and answering the first with plain HTTP would downgrade every
-    // hand-written account, and every child of it, at once. `SourceConfig`
-    // reads the absence as TLS; this has to read it the same way or the account
-    // and its children would disagree about the scheme.
-    let source = TestSource::new()
-        .enabled(true)
-        .authentication("jmap.example.com", 0, None, None);
-    let server = source.server_of().expect("a well-formed account");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `ESourceSecurity:secure` defaults to FALSE, so an unconditional read
+        // cannot tell "the keyfile has no [Security] group" from "the user turned
+        // TLS off" — and answering the first with plain HTTP would downgrade every
+        // hand-written account, and every child of it, at once. `SourceConfig`
+        // reads the absence as TLS; this has to read it the same way or the account
+        // and its children would disagree about the scheme.
+        let source =
+            TestSource::new()
+                .enabled(true)
+                .authentication("jmap.example.com", 0, None, None);
+        let server = source.server_of().expect("a well-formed account");
 
-    assert!(server.connection.secure);
-    assert_eq!(
-        server.target,
-        ConnectTarget::Domain("jmap.example.com".into())
-    );
-    assert!(
-        !source.has_extension(E_SOURCE_EXTENSION_SECURITY),
-        "reading the security setting gave the account a [Security] extension it did not have"
-    );
+        assert!(server.connection.secure);
+        assert_eq!(
+            server.target,
+            ConnectTarget::Domain("jmap.example.com".into())
+        );
+        assert!(
+            !source.has_extension(E_SOURCE_EXTENSION_SECURITY),
+            "reading the security setting gave the account a [Security] extension it did not have"
+        );
+    });
 }
 
 #[test]
 fn an_account_that_names_no_server_is_refused_without_being_given_an_empty_group() {
-    // `MissingHost` rather than a fan-out against nothing. And the same
-    // create-on-read trap once more: this is the account source, which EDS
-    // writes back to disk, so a read that adds an empty `[Authentication]`
-    // group edits the user's account file.
-    let source = TestSource::new().enabled(true);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `MissingHost` rather than a fan-out against nothing. And the same
+        // create-on-read trap once more: this is the account source, which EDS
+        // writes back to disk, so a read that adds an empty `[Authentication]`
+        // group edits the user's account file.
+        let source = TestSource::new().enabled(true);
 
-    assert_eq!(source.server_of(), Err(SourceError::MissingHost));
-    assert!(
-        !source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
-        "reading the host gave the account an [Authentication] extension it did not have"
-    );
+        assert_eq!(source.server_of(), Err(SourceError::MissingHost));
+        assert!(
+            !source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
+            "reading the host gave the account an [Authentication] extension it did not have"
+        );
+    });
 }
 
 #[test]
 fn a_host_that_is_not_a_bare_host_name_is_refused_before_any_child_gets_it() {
-    // The origin is assembled by concatenation, so the host field is not just
-    // data. Each child re-validates what it was handed, but by then the same
-    // string has been written into three `.source` files — and this backend has
-    // already contacted whatever it named.
-    for host in ["evil.example.com/x", "jmap.example.com:443", "http://jmap"] {
-        let source = TestSource::new()
-            .enabled(true)
-            .authentication(host, 0, None, None)
-            .secure(true);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The origin is assembled by concatenation, so the host field is not just
+        // data. Each child re-validates what it was handed, but by then the same
+        // string has been written into three `.source` files — and this backend has
+        // already contacted whatever it named.
+        for host in ["evil.example.com/x", "jmap.example.com:443", "http://jmap"] {
+            let source = TestSource::new()
+                .enabled(true)
+                .authentication(host, 0, None, None)
+                .secure(true);
 
-        assert_eq!(
-            source.server_of(),
-            Err(SourceError::InvalidHost(host.to_owned())),
-            "{host:?} was accepted as a server"
-        );
-    }
+            assert_eq!(
+                source.server_of(),
+                Err(SourceError::InvalidHost(host.to_owned())),
+                "{host:?} was accepted as a server"
+            );
+        }
+    });
 }
 
 #[test]
 fn a_plain_http_account_is_refused_unless_it_stays_on_the_machine() {
-    // The same rule the book and calendar backends apply, reached through the
-    // same function — this is the one place it could be forgotten, since the
-    // collection backend is the first thing to contact the server and the only
-    // one that writes the setting into the children.
-    let remote = TestSource::new()
-        .enabled(true)
-        .authentication("jmap.example.com", 0, None, None)
-        .secure(false);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The same rule the book and calendar backends apply, reached through the
+        // same function — this is the one place it could be forgotten, since the
+        // collection backend is the first thing to contact the server and the only
+        // one that writes the setting into the children.
+        let remote = TestSource::new()
+            .enabled(true)
+            .authentication("jmap.example.com", 0, None, None)
+            .secure(false);
 
-    assert_eq!(
-        remote.server_of(),
-        Err(SourceError::InsecureTransport(
-            "jmap.example.com".to_owned()
-        ))
-    );
+        assert_eq!(
+            remote.server_of(),
+            Err(SourceError::InsecureTransport(
+                "jmap.example.com".to_owned()
+            ))
+        );
 
-    // And the mock server's shape still works, with the children told so
-    // explicitly: an absent `[Security]` reads as TLS at the far end, so a
-    // child of a plain-HTTP account that did not say `none` would refuse to
-    // talk to the account's own server.
-    let local = TestSource::new()
-        .enabled(true)
-        .authentication("127.0.0.1", 31415, None, None)
-        .secure(false);
-    let server = local.server_of().expect("loopback needs no TLS");
+        // And the mock server's shape still works, with the children told so
+        // explicitly: an absent `[Security]` reads as TLS at the far end, so a
+        // child of a plain-HTTP account that did not say `none` would refuse to
+        // talk to the account's own server.
+        let local = TestSource::new()
+            .enabled(true)
+            .authentication("127.0.0.1", 31415, None, None)
+            .secure(false);
+        let server = local.server_of().expect("loopback needs no TLS");
 
-    assert_eq!(
-        server.target,
-        ConnectTarget::Origin("http://127.0.0.1:31415".into())
-    );
-    assert!(!server.connection.secure);
+        assert_eq!(
+            server.target,
+            ConnectTarget::Origin("http://127.0.0.1:31415".into())
+        );
+        assert!(!server.connection.secure);
+    });
 }
 
 #[test]
 fn the_user_an_account_names_is_read_without_the_host_being_looked_at() {
-    // `populate` needs one field of `[Authentication]` and only one: whether
-    // the account names a user, which is what decides whether it asks EDS for a
-    // password or for a straight anonymous authenticate. It must not need
-    // `server_of` for that — an account with a user and a broken host has to
-    // reach `authenticate_sync`, which is the vfunc that has a `GError` to
-    // report the broken host through, rather than be quietly treated as
-    // anonymous by a populate that could not read it.
-    let source = TestSource::new().enabled(true).authentication(
-        "jmap.example.com/nonsense",
-        0,
-        Some("vera@example.com"),
-        None,
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `populate` needs one field of `[Authentication]` and only one: whether
+        // the account names a user, which is what decides whether it asks EDS for a
+        // password or for a straight anonymous authenticate. It must not need
+        // `server_of` for that — an account with a user and a broken host has to
+        // reach `authenticate_sync`, which is the vfunc that has a `GError` to
+        // report the broken host through, rather than be quietly treated as
+        // anonymous by a populate that could not read it.
+        let source = TestSource::new().enabled(true).authentication(
+            "jmap.example.com/nonsense",
+            0,
+            Some("vera@example.com"),
+            None,
+        );
 
-    assert_eq!(source.user_of().as_deref(), Some("vera@example.com"));
-    assert!(
-        source.server_of().is_err(),
-        "the host in this test is meant to be one server_of refuses"
-    );
+        assert_eq!(source.user_of().as_deref(), Some("vera@example.com"));
+        assert!(
+            source.server_of().is_err(),
+            "the host in this test is meant to be one server_of refuses"
+        );
+    });
 }
 
 #[test]
 fn an_account_that_names_no_user_reads_as_anonymous_and_is_not_given_a_group() {
-    // `None` is what `jmap_backend_core::connect::credentials` reads as
-    // "anonymous on purpose", so it is also what a populate must not ask for a
-    // password for. And the create-on-read trap once more, on the account's own
-    // file.
-    let source = TestSource::new().enabled(true);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `None` is what `jmap_backend_core::connect::credentials` reads as
+        // "anonymous on purpose", so it is also what a populate must not ask for a
+        // password for. And the create-on-read trap once more, on the account's own
+        // file.
+        let source = TestSource::new().enabled(true);
 
-    assert_eq!(source.user_of(), None);
-    assert!(
-        !source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
-        "reading the user gave the account an [Authentication] extension it did not have"
-    );
+        assert_eq!(source.user_of(), None);
+        assert!(
+            !source.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
+            "reading the user gave the account an [Authentication] extension it did not have"
+        );
+    });
 }
 
 #[test]
 fn a_user_key_that_is_present_but_empty_is_no_user_at_all() {
-    // `User=` in a keyfile reads back as "", and EDS's own collection backends
-    // test `user && *user` for exactly this. It matters here because the two
-    // spellings must not decide differently: `credentials()` answers
-    // `CredentialsRequired` for a named user with no password, so an empty user
-    // read as a user is a password prompt for an account that authenticates
-    // anonymously — and whatever was typed into it would then be dropped.
-    let source =
-        TestSource::new()
-            .enabled(true)
-            .authentication("jmap.example.com", 0, Some(""), None);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `User=` in a keyfile reads back as "", and EDS's own collection backends
+        // test `user && *user` for exactly this. It matters here because the two
+        // spellings must not decide differently: `credentials()` answers
+        // `CredentialsRequired` for a named user with no password, so an empty user
+        // read as a user is a password prompt for an account that authenticates
+        // anonymously — and whatever was typed into it would then be dropped.
+        let source =
+            TestSource::new()
+                .enabled(true)
+                .authentication("jmap.example.com", 0, Some(""), None);
 
-    assert_eq!(source.user_of(), None);
+        assert_eq!(source.user_of(), None);
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_collection_source_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }
