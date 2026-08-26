@@ -250,6 +250,30 @@ Reminders and alarms bridge between JSCalendar's `alerts: Id[Alert]` map (RFC 89
 - **`acknowledged` Timestamps (RFC 9074 §6.1)**: Dismissed/snoozed alert timestamps in JSCalendar are refused by `maps_alerts` (`maps_alerts(&event) == false`) to prevent whole-property replacement from un-dismissing snoozed alarms.
 - **`useDefaultAlerts`**: When `useDefaultAlerts: true` (RFC 8984 §4.5.1), `event_to_ical` emits 0 `VALARM`s and `maps_alerts` returns `false`. Recurrence overrides also inherit `useDefaultAlerts` from the master series.
 
+### 5.5 Real-Exporter Alarm Corpus Fidelity & Refused Shapes Isolation
+
+The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_export.ics`, `apple_calendar_export.ics`, `evolution_calendar_export.ics`, `nextcloud_calendar_export.ics`) characterizes how alarms emitted by major platforms behave on the bidirectional round-trip:
+
+1. **Google Calendar (`google_calendar_export.ics`)**:
+   - **Shapes Emitted**: Multiple display alarms at standard offsets (`-P1D`, `-PT15M`), email notification alarms (`ACTION:EMAIL` with `ATTENDEE` and `SUMMARY`), and absolute trigger alarms (`TRIGGER;VALUE=DATE-TIME`).
+   - **Mapping Fidelity**: Display alarms map to JSCalendar `Alert` records (`a1`, `a2`). Email and absolute alarms are safely ignored on import and dropped on export without polluting `event.extra` or corrupting appointment properties.
+
+2. **Microsoft Outlook / M365 (`outlook_m365_export.ics`)**:
+   - **Shapes Emitted**: Display alarms with `ACTION:DISPLAY`, `DESCRIPTION:REMINDER` (all caps), trigger offsets (`-PT15M`, `-PT30M`), RFC 9074 `UID` and `X-WR-ALARMUID` vendor properties, and enterprise email alarms.
+   - **Mapping Fidelity**: Explicit UIDs and positional keys (`a1`) are faithfully preserved. Generic `DESCRIPTION:REMINDER` is replaced on outbound serialization with the event's summary according to RFC 5545 §3.6.6. `X-WR-ALARMUID` and `ACTION:EMAIL` are dropped cleanly on export. Long UIDs (e.g. 94 octets) fold and unfold cleanly at the RFC 5545 75-octet boundary.
+
+3. **Apple Calendar / macOS (`apple_calendar_export.ics`)**:
+   - **Shapes Emitted**: Multi-alarm sequences (`-P1D`, `-PT2H`, `-PT15M`), Apple `ACKNOWLEDGED` snoozed timestamps (RFC 9074 §6.1), `X-WR-ALARMUID` paired with `UID`, `ACTION:AUDIO` with sound attachments (`ATTACH;VALUE=URI:Basso`), and absolute date-time triggers.
+   - **Mapping Fidelity**: Display alarms with explicit UUID keys are preserved. `ACKNOWLEDGED` timestamps and `X-WR-ALARMUID` properties are ignored on parse to avoid setting `event.extra`. Refused audio and absolute triggers are dropped on export without data loss.
+
+4. **GNOME Evolution (`evolution_calendar_export.ics`)**:
+   - **Shapes Emitted**: Native `X-EVOLUTION-ALARM-UID` parameters and explicit `VALUE=DURATION` trigger parameters.
+   - **Mapping Fidelity**: Positional keys (`a1`, `a2`) map cleanly to JSCalendar map IDs and roundtrip with fixed-point stability.
+
+5. **Nextcloud / SabreDAV (`nextcloud_calendar_export.ics`)**:
+   - **Shapes Emitted**: Multi-day display offsets (`-P2D`).
+   - **Mapping Fidelity**: Preserved and roundtripped losslessly.
+
 ---
 
 ## 6. Recurrence Overrides & RECURRENCE-ID Mapping Architecture (RFC 8984 §4.3.4 ↔ RFC 5545 §3.8.4.4 / §3.8.5)
