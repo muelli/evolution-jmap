@@ -405,4 +405,35 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_TRANSPORT_CLIENT=$<TARGET_FILE:functional-transport-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
+
+	# `gnome-keyring-daemon` is what `Session::run` (rust/crates/jmap-functional/
+	# src/lib.rs) unlocks a login keyring on before every other test's client
+	# runs — every account with an `[Authentication]` extension makes EDS ask a
+	# `org.freedesktop.secrets` provider, per docs/ROADMAP.md item 18. Checked
+	# here, loudly, for the same reason the three daemons above are: a missing
+	# secret store fails a functional test with a bare D-Bus activation error
+	# or timeout that says nothing about what is missing.
+	find_program(GNOME_KEYRING_DAEMON_EXECUTABLE gnome-keyring-daemon
+		PATHS /usr/bin /usr/libexec)
+	if(NOT GNOME_KEYRING_DAEMON_EXECUTABLE)
+		message(FATAL_ERROR
+			"ENABLE_FUNCTIONAL_TESTS is ON but gnome-keyring-daemon was not "
+			"found (Debian/Ubuntu: gnome-keyring). Every functional test's "
+			"session needs a secret store to answer EDS's credential lookups; "
+			"see docs/ROADMAP.md item 18.")
+	endif()
+
+	# The harness's own secret-store step, proven with no backend, module, or
+	# `ESource` involved — see rust/crates/jmap-functional/tests/secret-store.rs.
+	add_test(
+		NAME functional-secret-store
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test secret-store
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-secret-store PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT "CARGO_INCREMENTAL=0"
+	)
 endif()
