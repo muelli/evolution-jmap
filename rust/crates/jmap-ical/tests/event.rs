@@ -7,6 +7,8 @@
 //! the instances named one at a time by an EXDATE, an RDATE, or a component of
 //! their own carrying a RECURRENCE-ID.
 
+use std::collections::BTreeMap;
+
 use jmap_ical::{
     ICalError, defines_time_zone, event_to_ical, ical_to_event, maps_alerts, maps_keyword,
     maps_locations, maps_recurrence_override, maps_recurrence_rule, maps_time_zone,
@@ -10007,7 +10009,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_virtual_location_count: 1,
             expected_links_count: 1,
             expected_keywords_count: 3,
-            expected_alerts_count: 1,
+            expected_alerts_count: 2,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 2,
             unmapped_vendor_properties_dropped_on_export: &[
@@ -10032,7 +10034,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_virtual_location_count: 1,
             expected_links_count: 2,
             expected_keywords_count: 3,
-            expected_alerts_count: 1,
+            expected_alerts_count: 2,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 0,
             unmapped_vendor_properties_dropped_on_export: &[
@@ -10041,6 +10043,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
                 "X-MICROSOFT-CDO-IMPORTANCE",
                 "X-MICROSOFT-DISALLOW-COUNTER",
                 "X-MS-OLK-AUTOFILLLOCATION",
+                "X-WR-ALARMUID",
             ],
         },
         RealExporterTestCase {
@@ -10059,12 +10062,14 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_virtual_location_count: 1,
             expected_links_count: 1,
             expected_keywords_count: 3,
-            expected_alerts_count: 2,
+            expected_alerts_count: 3,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 1,
             unmapped_vendor_properties_dropped_on_export: &[
                 "X-APPLE-STRUCTURED-LOCATION",
                 "X-APPLE-TRAVEL-ADVISORY-BEHAVIOR",
+                "X-WR-ALARMUID",
+                "ACKNOWLEDGED",
             ],
         },
         RealExporterTestCase {
@@ -10415,8 +10420,23 @@ fn real_exporter_fixture_google_calendar_detailed_roundtrip() {
     );
     assert_eq!(modified["start"], json!("2026-10-20T10:30:00"));
 
-    // 5. Multi-pass roundtrip fixpoint
+    // 5. Validate Google alarms (display alarms preserved, email/absolute triggers refused safely)
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 2, "Google fixture has 2 display alarms");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-P1D"));
+    assert_eq!(alerts["a2"]["trigger"]["offset"], json!("-PT15M"));
+    assert!(maps_alerts(&event));
+
+    // 6. Multi-pass roundtrip fixpoint
     let export1 = event_to_ical(&event);
+    assert!(
+        !export1.contains("ACTION:EMAIL"),
+        "refused EMAIL alarm must be dropped"
+    );
+    assert!(
+        !export1.contains("VALUE=DATE-TIME"),
+        "refused absolute trigger alarm must be dropped"
+    );
     let event2 = ical_to_event(&export1).expect("event2");
     let export2 = event_to_ical(&event2);
     let event3 = ical_to_event(&export2).expect("event3");
@@ -10477,8 +10497,24 @@ fn real_exporter_fixture_outlook_modern_m365_detailed_roundtrip() {
     assert_eq!(by_day[0].day, "su");
     assert_eq!(by_day[0].nth_of_period, Some(3));
 
-    // 5. Multi-pass roundtrip fixpoint
+    // 5. Validate Outlook alarms (DESCRIPTION:REMINDER, X-WR-ALARMUID / UID preservation, email dropped)
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 2, "Outlook fixture has 2 display alarms");
+    let outlook_uid = "040000008200E00074C5B7101A82E0080000000080E99A2D87D3D901000000000000000010000000D3C9D55A1A2E-alarm-1";
+    assert_eq!(alerts[outlook_uid]["trigger"]["offset"], json!("-PT15M"));
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT30M"));
+    assert!(maps_alerts(&event));
+
+    // 6. Multi-pass roundtrip fixpoint
     let export1 = event_to_ical(&event);
+    assert!(
+        !export1.contains("X-WR-ALARMUID"),
+        "X-WR-ALARMUID must be dropped on export"
+    );
+    assert!(
+        !export1.contains("ACTION:EMAIL"),
+        "refused EMAIL alarm must be dropped"
+    );
     let event2 = ical_to_event(&export1).expect("event2");
     let export2 = event_to_ical(&event2);
     let event3 = ical_to_event(&export2).expect("event3");
@@ -10524,14 +10560,41 @@ fn real_exporter_fixture_apple_calendar_macos_detailed_roundtrip() {
         .expect("recurrence_overrides");
     assert_eq!(overrides["2026-10-23T09:00:00"], json!({"excluded": true}));
 
-    // 5. Validate multiple alarms (1 day, 2 hours)
+    // 5. Validate multiple alarms (1 day with ACKNOWLEDGED, 2 hours, 15 minutes; AUDIO and absolute trigger dropped)
     let alerts = event.alerts.as_ref().expect("alerts");
-    assert_eq!(alerts.len(), 2);
-    assert!(alerts.values().any(|a| a["trigger"]["offset"] == "-P1D"));
-    assert!(alerts.values().any(|a| a["trigger"]["offset"] == "-PT2H"));
+    assert_eq!(alerts.len(), 3, "Apple fixture has 3 display alarms");
+    assert_eq!(
+        alerts["E451D045-FA1B-475D-85B6-06F6F505A321"]["trigger"]["offset"],
+        json!("-P1D")
+    );
+    assert_eq!(
+        alerts["F82C4A10-91DE-4A99-8D77-38C1B79E1A55"]["trigger"]["offset"],
+        json!("-PT2H")
+    );
+    assert_eq!(
+        alerts["apple-alarm-offset-15m"]["trigger"]["offset"],
+        json!("-PT15M")
+    );
+    assert!(maps_alerts(&event));
 
     // 6. Multi-pass roundtrip fixpoint
     let export1 = event_to_ical(&event);
+    assert!(
+        !export1.contains("ACKNOWLEDGED"),
+        "ACKNOWLEDGED must be dropped on export"
+    );
+    assert!(
+        !export1.contains("X-WR-ALARMUID"),
+        "X-WR-ALARMUID must be dropped on export"
+    );
+    assert!(
+        !export1.contains("ACTION:AUDIO"),
+        "refused AUDIO alarm must be dropped"
+    );
+    assert!(
+        !export1.contains("VALUE=DATE-TIME"),
+        "refused absolute trigger alarm must be dropped"
+    );
     let event2 = ical_to_event(&export1).expect("event2");
     let export2 = event_to_ical(&event2);
     let event3 = ical_to_event(&export2).expect("event3");
@@ -10956,27 +11019,51 @@ fn alerts_audit_real_exporter_fixtures_characterization_and_multi_stage_roundtri
     assert_eq!(evo_reparsed.alerts, evo_event.alerts);
     assert_eq!(event_to_ical(&evo_reparsed), evo_out);
 
-    // 2. Apple Calendar Export: 2 VALARMs (-P1D and -PT2H)
+    // 2. Apple Calendar Export: 3 VALARMs (-P1D with ACKNOWLEDGED/X-WR-ALARMUID, -PT2H, -PT15M; AUDIO and absolute trigger dropped)
     let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
     let apple_event = ical_to_event(apple_ics).expect("parse apple export");
     let apple_alerts = apple_event.alerts.as_ref().expect("apple alerts");
-    assert_eq!(apple_alerts.len(), 2, "Apple export has 2 display alarms");
-    assert_eq!(apple_alerts["a1"]["trigger"]["offset"], "-P1D");
-    assert_eq!(apple_alerts["a2"]["trigger"]["offset"], "-PT2H");
+    assert_eq!(apple_alerts.len(), 3, "Apple export has 3 display alarms");
+    assert_eq!(
+        apple_alerts["E451D045-FA1B-475D-85B6-06F6F505A321"]["trigger"]["offset"],
+        "-P1D"
+    );
+    assert_eq!(
+        apple_alerts["F82C4A10-91DE-4A99-8D77-38C1B79E1A55"]["trigger"]["offset"],
+        "-PT2H"
+    );
+    assert_eq!(
+        apple_alerts["apple-alarm-offset-15m"]["trigger"]["offset"],
+        "-PT15M"
+    );
     assert!(maps_alerts(&apple_event));
     let apple_out = event_to_ical(&apple_event);
+    assert_eq!(apple_out.matches("BEGIN:VALARM\r\n").count(), 3);
+    assert!(apple_out.contains("UID:E451D045-FA1B-475D-85B6-06F6F505A321\r\n"));
+    assert!(apple_out.contains("UID:F82C4A10-91DE-4A99-8D77-38C1B79E1A55\r\n"));
+    assert!(apple_out.contains("UID:apple-alarm-offset-15m\r\n"));
+    assert!(!apple_out.contains("ACKNOWLEDGED"));
+    assert!(!apple_out.contains("X-WR-ALARMUID"));
+    assert!(!apple_out.contains("ACTION:AUDIO"));
+    assert!(!apple_out.contains("VALUE=DATE-TIME"));
     let apple_reparsed = ical_to_event(&apple_out).expect("reparse apple export");
     assert_eq!(apple_reparsed.alerts, apple_event.alerts);
     assert_eq!(event_to_ical(&apple_reparsed), apple_out);
 
-    // 3. Google Calendar Export: 1 VALARM (-PT15M)
+    // 3. Google Calendar Export: 2 VALARMs (-P1D and -PT15M; EMAIL and absolute trigger dropped)
     let google_ics = include_str!("fixtures/google_calendar_export.ics");
     let google_event = ical_to_event(google_ics).expect("parse google export");
     let google_alerts = google_event.alerts.as_ref().expect("google alerts");
-    assert_eq!(google_alerts.len(), 1, "Google export has 1 display alarm");
-    assert_eq!(google_alerts["a1"]["trigger"]["offset"], "-PT15M");
+    assert_eq!(google_alerts.len(), 2, "Google export has 2 display alarms");
+    assert_eq!(google_alerts["a1"]["trigger"]["offset"], "-P1D");
+    assert_eq!(google_alerts["a2"]["trigger"]["offset"], "-PT15M");
     assert!(maps_alerts(&google_event));
     let google_out = event_to_ical(&google_event);
+    assert_eq!(google_out.matches("BEGIN:VALARM\r\n").count(), 2);
+    assert!(google_out.contains("UID:a1\r\n"));
+    assert!(google_out.contains("UID:a2\r\n"));
+    assert!(!google_out.contains("ACTION:EMAIL"));
+    assert!(!google_out.contains("VALUE=DATE-TIME"));
     let google_reparsed = ical_to_event(&google_out).expect("reparse google export");
     assert_eq!(google_reparsed.alerts, google_event.alerts);
     assert_eq!(event_to_ical(&google_reparsed), google_out);
@@ -10997,18 +11084,26 @@ fn alerts_audit_real_exporter_fixtures_characterization_and_multi_stage_roundtri
     assert_eq!(nextcloud_reparsed.alerts, nextcloud_event.alerts);
     assert_eq!(event_to_ical(&nextcloud_reparsed), nextcloud_out);
 
-    // 5. Outlook Modern M365 Export: 1 VALARM (-PT30M)
+    // 5. Outlook Modern M365 Export: 2 VALARMs (-PT15M with explicit UID and -PT30M nameless; DESCRIPTION:REMINDER mapped, EMAIL dropped)
     let outlook_ics = include_str!("fixtures/outlook_m365_export.ics");
     let outlook_event = ical_to_event(outlook_ics).expect("parse outlook export");
     let outlook_alerts = outlook_event.alerts.as_ref().expect("outlook alerts");
     assert_eq!(
         outlook_alerts.len(),
-        1,
-        "Outlook export has 1 display alarm"
+        2,
+        "Outlook export has 2 display alarms"
     );
+    let outlook_uid = "040000008200E00074C5B7101A82E0080000000080E99A2D87D3D901000000000000000010000000D3C9D55A1A2E-alarm-1";
+    assert_eq!(outlook_alerts[outlook_uid]["trigger"]["offset"], "-PT15M");
     assert_eq!(outlook_alerts["a1"]["trigger"]["offset"], "-PT30M");
     assert!(maps_alerts(&outlook_event));
     let outlook_out = event_to_ical(&outlook_event);
+    assert_eq!(outlook_out.matches("BEGIN:VALARM\r\n").count(), 2);
+    let unfolded_outlook = outlook_out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded_outlook.contains(&format!("UID:{outlook_uid}\r\n")));
+    assert!(outlook_out.contains("UID:a1\r\n"));
+    assert!(!outlook_out.contains("X-WR-ALARMUID"));
+    assert!(!outlook_out.contains("ACTION:EMAIL"));
     let outlook_reparsed = ical_to_event(&outlook_out).expect("reparse outlook export");
     assert_eq!(outlook_reparsed.alerts, outlook_event.alerts);
     assert_eq!(event_to_ical(&outlook_reparsed), outlook_out);
@@ -12703,4 +12798,405 @@ fn recurrence_overrides_audit_real_exporter_stream_simulation() {
     let outlook_export2 = event_to_ical(&outlook_round2);
     assert_eq!(outlook_export1, outlook_export2);
     assert_eq!(outlook_event, outlook_round2);
+}
+
+#[test]
+fn real_exporter_corpus_alarm_shapes_roundtrip_characterization() {
+    // 1. Google Calendar Export: Multi-alarm stream with display offsets, email, and absolute trigger
+    let gcal_ics = read_fixture("google_calendar_export.ics");
+    let gcal_event = ical_to_event(&gcal_ics).expect("parse google fixture");
+    let gcal_alerts = gcal_event.alerts.as_ref().expect("gcal alerts");
+    assert_eq!(gcal_alerts.len(), 2, "Google fixture has 2 display alarms");
+    assert_eq!(gcal_alerts["a1"]["action"], "display");
+    assert_eq!(gcal_alerts["a1"]["trigger"]["offset"], "-P1D");
+    assert_eq!(gcal_alerts["a2"]["action"], "display");
+    assert_eq!(gcal_alerts["a2"]["trigger"]["offset"], "-PT15M");
+    assert!(maps_alerts(&gcal_event));
+    assert!(
+        gcal_event.extra.is_empty(),
+        "clean extra map on google fixture"
+    );
+
+    let gcal_export1 = event_to_ical(&gcal_event);
+    assert_eq!(gcal_export1.matches("BEGIN:VALARM\r\n").count(), 2);
+    assert!(gcal_export1.contains("UID:a1\r\n"));
+    assert!(gcal_export1.contains("UID:a2\r\n"));
+    assert!(gcal_export1.contains("DESCRIPTION:Q3 Product Architecture Sync\r\n"));
+    assert!(!gcal_export1.contains("ACTION:EMAIL"));
+    assert!(!gcal_export1.contains("VALUE=DATE-TIME"));
+    let gcal_event2 = ical_to_event(&gcal_export1).expect("reparse google export1");
+    assert_eq!(gcal_event2.alerts, gcal_event.alerts);
+    let gcal_export2 = event_to_ical(&gcal_event2);
+    assert_eq!(gcal_export1, gcal_export2);
+
+    // 2. Outlook / M365 Modern Export: DESCRIPTION:REMINDER, X-WR-ALARMUID, explicit UID & nameless
+    let outlook_ics = read_fixture("outlook_m365_export.ics");
+    let outlook_event = ical_to_event(&outlook_ics).expect("parse outlook fixture");
+    let outlook_alerts = outlook_event.alerts.as_ref().expect("outlook alerts");
+    assert_eq!(
+        outlook_alerts.len(),
+        2,
+        "Outlook fixture has 2 display alarms"
+    );
+    let outlook_uid = "040000008200E00074C5B7101A82E0080000000080E99A2D87D3D901000000000000000010000000D3C9D55A1A2E-alarm-1";
+    assert_eq!(outlook_alerts[outlook_uid]["action"], "display");
+    assert_eq!(outlook_alerts[outlook_uid]["trigger"]["offset"], "-PT15M");
+    assert_eq!(outlook_alerts["a1"]["action"], "display");
+    assert_eq!(outlook_alerts["a1"]["trigger"]["offset"], "-PT30M");
+    assert!(maps_alerts(&outlook_event));
+    assert!(
+        outlook_event.extra.is_empty(),
+        "clean extra map on outlook fixture"
+    );
+
+    let outlook_export1 = event_to_ical(&outlook_event);
+    assert_eq!(outlook_export1.matches("BEGIN:VALARM\r\n").count(), 2);
+    let unfolded_outlook = outlook_export1.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded_outlook.contains(&format!("UID:{outlook_uid}\r\n")));
+    assert!(outlook_export1.contains("UID:a1\r\n"));
+    assert!(outlook_export1.contains("DESCRIPTION:Executive Leadership & Financial Review\r\n"));
+    assert!(!outlook_export1.contains("X-WR-ALARMUID"));
+    assert!(!outlook_export1.contains("ACTION:EMAIL"));
+    let outlook_event2 = ical_to_event(&outlook_export1).expect("reparse outlook export1");
+    assert_eq!(outlook_event2.alerts, outlook_event.alerts);
+    let outlook_export2 = event_to_ical(&outlook_event2);
+    assert_eq!(outlook_export1, outlook_export2);
+
+    // 3. Apple Calendar macOS Export: ACKNOWLEDGED, X-WR-ALARMUID, explicit UUID keys, refused audio/absolute
+    let apple_ics = read_fixture("apple_calendar_export.ics");
+    let apple_event = ical_to_event(&apple_ics).expect("parse apple fixture");
+    let apple_alerts = apple_event.alerts.as_ref().expect("apple alerts");
+    assert_eq!(apple_alerts.len(), 3, "Apple fixture has 3 display alarms");
+    assert_eq!(
+        apple_alerts["E451D045-FA1B-475D-85B6-06F6F505A321"]["trigger"]["offset"],
+        "-P1D"
+    );
+    assert_eq!(
+        apple_alerts["F82C4A10-91DE-4A99-8D77-38C1B79E1A55"]["trigger"]["offset"],
+        "-PT2H"
+    );
+    assert_eq!(
+        apple_alerts["apple-alarm-offset-15m"]["trigger"]["offset"],
+        "-PT15M"
+    );
+    assert!(maps_alerts(&apple_event));
+    assert!(
+        apple_event.extra.is_empty(),
+        "clean extra map on apple fixture"
+    );
+
+    let apple_export1 = event_to_ical(&apple_event);
+    assert_eq!(apple_export1.matches("BEGIN:VALARM\r\n").count(), 3);
+    assert!(apple_export1.contains("UID:E451D045-FA1B-475D-85B6-06F6F505A321\r\n"));
+    assert!(apple_export1.contains("UID:F82C4A10-91DE-4A99-8D77-38C1B79E1A55\r\n"));
+    assert!(apple_export1.contains("UID:apple-alarm-offset-15m\r\n"));
+    assert!(apple_export1.contains("DESCRIPTION:Design Systems Workshop\r\n"));
+    assert!(!apple_export1.contains("ACKNOWLEDGED"));
+    assert!(!apple_export1.contains("X-WR-ALARMUID"));
+    assert!(!apple_export1.contains("ACTION:AUDIO"));
+    assert!(!apple_export1.contains("VALUE=DATE-TIME"));
+    let apple_event2 = ical_to_event(&apple_export1).expect("reparse apple export1");
+    assert_eq!(apple_event2.alerts, apple_event.alerts);
+    let apple_export2 = event_to_ical(&apple_event2);
+    assert_eq!(apple_export1, apple_export2);
+
+    // 4. GNOME Evolution Native Export: X-EVOLUTION-ALARM-UID and VALUE=DURATION
+    let evo_ics = read_fixture("evolution_calendar_export.ics");
+    let evo_event = ical_to_event(&evo_ics).expect("parse evolution fixture");
+    let evo_alerts = evo_event.alerts.as_ref().expect("evo alerts");
+    assert_eq!(
+        evo_alerts.len(),
+        2,
+        "Evolution fixture has 2 display alarms"
+    );
+    assert_eq!(evo_alerts["a1"]["trigger"]["offset"], "-PT15M");
+    assert_eq!(evo_alerts["a2"]["trigger"]["offset"], "-PT1H");
+    assert!(maps_alerts(&evo_event));
+    let evo_export1 = event_to_ical(&evo_event);
+    assert_eq!(evo_export1.matches("BEGIN:VALARM\r\n").count(), 2);
+    let evo_event2 = ical_to_event(&evo_export1).expect("reparse evo export1");
+    assert_eq!(evo_event2.alerts, evo_event.alerts);
+    let evo_export2 = event_to_ical(&evo_event2);
+    assert_eq!(evo_export1, evo_export2);
+
+    // 5. Nextcloud / SabreDAV CalDAV Export: multi-day display alarm
+    let nextcloud_ics = read_fixture("nextcloud_calendar_export.ics");
+    let nextcloud_event = ical_to_event(&nextcloud_ics).expect("parse nextcloud fixture");
+    let nextcloud_alerts = nextcloud_event.alerts.as_ref().expect("nextcloud alerts");
+    assert_eq!(
+        nextcloud_alerts.len(),
+        1,
+        "Nextcloud fixture has 1 display alarm"
+    );
+    assert_eq!(nextcloud_alerts["a1"]["trigger"]["offset"], "-P2D");
+    assert!(maps_alerts(&nextcloud_event));
+    let nextcloud_export1 = event_to_ical(&nextcloud_event);
+    assert_eq!(nextcloud_export1.matches("BEGIN:VALARM\r\n").count(), 1);
+    let nextcloud_event2 = ical_to_event(&nextcloud_export1).expect("reparse nextcloud export1");
+    assert_eq!(nextcloud_event2.alerts, nextcloud_event.alerts);
+    let nextcloud_export2 = event_to_ical(&nextcloud_event2);
+    assert_eq!(nextcloud_export1, nextcloud_export2);
+}
+
+#[test]
+fn refused_alarm_shapes_safe_isolation_and_whole_property_replacement() {
+    // 1. Document containing ONLY refused alarms (EMAIL, AUDIO, PROCEDURE, absolute triggers)
+    let ics_only_refused = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:refused-alarms-only-event\r\n\
+DTSTART:20261105T140000Z\r\n\
+SUMMARY:Team Strategy Offsite\r\n\
+BEGIN:VALARM\r\n\
+ACTION:EMAIL\r\n\
+SUMMARY:Strategy Reminder\r\n\
+DESCRIPTION:Do not forget the offsite\r\n\
+ATTENDEE:mailto:lead@example.com\r\n\
+TRIGGER:-P1D\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:AUDIO\r\n\
+ATTACH;VALUE=URI:Chime\r\n\
+TRIGGER:-PT15M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:PROCEDURE\r\n\
+ATTACH;VALUE=URI:file:///bin/beep\r\n\
+TRIGGER:-PT5M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Absolute Trigger Alert\r\n\
+TRIGGER;VALUE=DATE-TIME:20261105T130000Z\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Invalid Related Param\r\n\
+TRIGGER;RELATED=BEFORE:-PT10M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics_only_refused).expect("parse refused-only document");
+    assert!(
+        event.alerts.is_none(),
+        "event.alerts must be None when all alarms are refused"
+    );
+    assert!(
+        event.extra.is_empty(),
+        "event.extra must not be polluted by dropped alarms"
+    );
+    assert!(
+        maps_alerts(&event),
+        "event with no readable alerts must pass maps_alerts"
+    );
+
+    let export1 = event_to_ical(&event);
+    assert_eq!(
+        export1.matches("BEGIN:VALARM").count(),
+        0,
+        "No VALARM emitted when alerts is None"
+    );
+    let event2 = ical_to_event(&export1).expect("reparse export1");
+    assert_eq!(event2.alerts, None);
+    assert_eq!(event2.title, event.title);
+    assert_eq!(event2.start, event.start);
+
+    // 2. Mixed document: 1 valid display alarm + multiple refused alarms
+    let ics_mixed = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:mixed-alarms-event\r\n\
+DTSTART:20261105T140000Z\r\n\
+SUMMARY:Mixed Alarms Event\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+TRIGGER:-PT20M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:EMAIL\r\n\
+ATTENDEE:mailto:user@example.com\r\n\
+TRIGGER:-P2D\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:AUDIO\r\n\
+TRIGGER:-PT10M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let mixed_event = ical_to_event(ics_mixed).expect("parse mixed document");
+    let alerts = mixed_event.alerts.as_ref().expect("mixed alerts");
+    assert_eq!(alerts.len(), 1, "Only the 1 valid display alarm is kept");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], "-PT20M");
+    assert!(maps_alerts(&mixed_event));
+
+    let mixed_export = event_to_ical(&mixed_event);
+    assert_eq!(mixed_export.matches("BEGIN:VALARM\r\n").count(), 1);
+    assert!(mixed_export.contains("TRIGGER:-PT20M\r\n"));
+    assert!(!mixed_export.contains("ACTION:EMAIL"));
+    assert!(!mixed_export.contains("ACTION:AUDIO"));
+}
+
+#[test]
+fn maps_alerts_refusal_boundary_matrix_for_unsupported_shapes() {
+    let base_event = CalendarEvent {
+        id: Some("alarm-boundary-test".into()),
+        event_type: Some("Event".into()),
+        title: Some("Alarm Boundary Test".into()),
+        start: Some("2026-11-10T10:00:00".into()),
+        time_zone: Some("Europe/London".into()),
+        duration: Some("PT1H".into()),
+        ..Default::default()
+    };
+
+    // 1. Valid offset display alert -> accepted
+    let mut valid_event = base_event.clone();
+    valid_event.alerts = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            }
+        }),
+    )]));
+    assert!(maps_alerts(&valid_event));
+
+    // 2. Unmapped action type ("email", "audio", "procedure") -> refused
+    for bad_action in ["email", "audio", "procedure", "sound", "custom"] {
+        let mut bad_event = base_event.clone();
+        bad_event.alerts = Some(BTreeMap::from([(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "action": bad_action,
+                "trigger": {
+                    "@type": "OffsetTrigger",
+                    "offset": "-PT15M"
+                }
+            }),
+        )]));
+        assert!(
+            !maps_alerts(&bad_event),
+            "maps_alerts must refuse action: {bad_action}"
+        );
+    }
+
+    // 3. Absolute trigger -> refused
+    let mut abs_event = base_event.clone();
+    abs_event.alerts = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "AbsoluteTrigger",
+                "when": "2026-11-10T09:45:00Z"
+            }
+        }),
+    )]));
+    assert!(
+        !maps_alerts(&abs_event),
+        "maps_alerts must refuse AbsoluteTrigger"
+    );
+
+    // 4. Acknowledged timestamp (RFC 9074 §6.1 / snoozed alert) -> refused to prevent un-dismissing
+    let mut ack_event = base_event.clone();
+    ack_event.alerts = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "acknowledged": "2026-11-10T09:00:00Z",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            }
+        }),
+    )]));
+    assert!(
+        !maps_alerts(&ack_event),
+        "maps_alerts must refuse acknowledged alert"
+    );
+
+    // 5. Custom description on Alert -> refused to prevent clobbering
+    let mut desc_event = base_event.clone();
+    desc_event.alerts = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "description": "Custom snooze message",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            }
+        }),
+    )]));
+    assert!(
+        !maps_alerts(&desc_event),
+        "maps_alerts must refuse Alert with custom description"
+    );
+
+    // 6. Invalid relativeTo -> refused
+    let mut rel_event = base_event.clone();
+    rel_event.alerts = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M",
+                "relativeTo": "invalid"
+            }
+        }),
+    )]));
+    assert!(
+        !maps_alerts(&rel_event),
+        "maps_alerts must refuse invalid relativeTo"
+    );
+
+    // 7. useDefaultAlerts: true -> refused & draws 0 alarms
+    let mut def_event = valid_event.clone();
+    def_event
+        .extra
+        .insert("useDefaultAlerts".to_owned(), json!(true));
+    assert!(
+        !maps_alerts(&def_event),
+        "maps_alerts must refuse event with useDefaultAlerts: true"
+    );
+    let def_out = event_to_ical(&def_event);
+    assert_eq!(
+        def_out.matches("BEGIN:VALARM").count(),
+        0,
+        "useDefaultAlerts must suppress VALARM emission"
+    );
+
+    // 8. Invalid key (empty string or illegal characters) -> refused
+    for bad_key in ["", "alert/with/slash", "alert with space", "alert@domain"] {
+        let mut key_event = base_event.clone();
+        key_event.alerts = Some(BTreeMap::from([(
+            bad_key.to_owned(),
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {
+                    "@type": "OffsetTrigger",
+                    "offset": "-PT15M"
+                }
+            }),
+        )]));
+        assert!(
+            !maps_alerts(&key_event),
+            "maps_alerts must refuse invalid key: '{bad_key}'"
+        );
+    }
 }
