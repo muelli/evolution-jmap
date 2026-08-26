@@ -40,6 +40,11 @@ use jmap_backend_collection::module::{load, unload};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_config::oauth2::EXTENSION_NAME;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A `GTypeModule` standing in for the `EModule` the registry would load us
 /// as — the same stand-in `tests/factory.rs`, `tests/textdomain.rs` and
 /// `tests/oauth2_service.rs` all use.
@@ -102,38 +107,49 @@ fn fresh_source() -> *mut ESource {
 
 #[test]
 fn the_module_load_registers_the_oauth2_extension_type() {
-    let gtype = register_static::<TestModule>();
-    assert_ne!(gtype, 0, "the stand-in module type did not register");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let gtype = register_static::<TestModule>();
+        assert_ne!(gtype, 0, "the stand-in module type did not register");
 
-    // SAFETY: the type is registered and GTypeModule has no construct
-    // properties of its own.
-    let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
-    assert!(!module.is_null(), "g_object_new returned NULL");
+        // SAFETY: the type is registered and GTypeModule has no construct
+        // properties of its own.
+        let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
+        assert!(!module.is_null(), "g_object_new returned NULL");
 
-    // SAFETY: `module` is a GTypeModule; the reference this takes is never
-    // given back, which is what the registry does for as long as the backend
-    // is wanted.
-    assert_ne!(
-        unsafe { g_type_module_use(module) },
-        GFALSE,
-        "the module would not load at all"
-    );
+        // SAFETY: `module` is a GTypeModule; the reference this takes is never
+        // given back, which is what the registry does for as long as the backend
+        // is wanted.
+        assert_ne!(
+            unsafe { g_type_module_use(module) },
+            GFALSE,
+            "the module would not load at all"
+        );
 
-    let source = fresh_source();
-    // SAFETY: `source` is a live, freshly created source; `EXTENSION_NAME` is
-    // a 'static NUL-terminated string. This is the same call EDS's own
-    // `.source` parser makes to restore a group — no `jmap_config::oauth2`
-    // function is called first, so a NULL here means the module load itself
-    // did not register the type.
-    let extension = unsafe { e_source_get_extension(source, EXTENSION_NAME.as_ptr()) };
-    assert!(
-        !extension.is_null(),
-        "e_module_load did not register the [JMAP OAuth2] extension type — \
-         EDS's own keyfile parser would silently drop that group in any \
-         process that loads this module before anything calls \
-         jmap_config::oauth2::apply/read on the same source"
-    );
+        let source = fresh_source();
+        // SAFETY: `source` is a live, freshly created source; `EXTENSION_NAME` is
+        // a 'static NUL-terminated string. This is the same call EDS's own
+        // `.source` parser makes to restore a group — no `jmap_config::oauth2`
+        // function is called first, so a NULL here means the module load itself
+        // did not register the type.
+        let extension = unsafe { e_source_get_extension(source, EXTENSION_NAME.as_ptr()) };
+        assert!(
+            !extension.is_null(),
+            "e_module_load did not register the [JMAP OAuth2] extension type — \
+             EDS's own keyfile parser would silently drop that group in any \
+             process that loads this module before anything calls \
+             jmap_config::oauth2::apply/read on the same source"
+        );
 
-    // SAFETY: a live source this test created.
-    unsafe { g_object_unref(source.cast()) };
+        // SAFETY: a live source this test created.
+        unsafe { g_object_unref(source.cast()) };
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_oauth2_extension_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }

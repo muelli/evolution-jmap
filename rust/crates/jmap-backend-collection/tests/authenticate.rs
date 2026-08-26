@@ -43,6 +43,11 @@ use jmap_backend_collection::authenticate::{Login, authenticate_with};
 use jmap_client::{Credentials, Error};
 use jmap_collection_sync::Parts;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// An `ESource` that is not backed by the registry, as in
 /// `tests/collection_source.rs` — the account this backend is handed.
 struct TestSource(*mut ESource);
@@ -263,410 +268,474 @@ fn never(_: Login) -> Result<(), Error> {
 
 #[test]
 fn an_account_with_nothing_switched_on_is_accepted_without_being_contacted() {
-    // Not an error: the user switched every part off, so there is nothing to
-    // discover and nothing to complain about. ERROR here would put a dialog in
-    // front of someone for an account they deliberately turned down, and
-    // REJECTED would discard a password that was never tried.
-    let source = account().parts(Parts::NONE);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Not an error: the user switched every part off, so there is nothing to
+        // discover and nothing to complain about. ERROR here would put a dialog in
+        // front of someone for an account they deliberately turned down, and
+        // REJECTED would discard a password that was never tried.
+        let source = account().parts(Parts::NONE);
 
-    let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
-    assert!(error.is_none(), "a switched-off account reported an error");
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        assert!(error.is_none(), "a switched-off account reported an error");
+    });
 }
 
 #[test]
 fn a_switched_off_account_is_not_refused_for_a_server_it_never_needed() {
-    // The order the two reads happen in, and the reason it is fixed: an account
-    // with every part off never needs a host, so a missing one must not turn it
-    // into a broken account. Asking for the server first would report every
-    // half-written account as an error the moment the user unticked the last
-    // part.
-    let source = TestSource::new().parts(Parts::NONE);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The order the two reads happen in, and the reason it is fixed: an account
+        // with every part off never needs a host, so a missing one must not turn it
+        // into a broken account. Asking for the server first would report every
+        // half-written account as an error the moment the user unticked the last
+        // part.
+        let source = TestSource::new().parts(Parts::NONE);
 
-    let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
-    assert!(error.is_none());
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        assert!(error.is_none());
+    });
 }
 
 #[test]
 fn an_account_that_names_no_server_is_an_error_and_never_a_prompt() {
-    // A prompt cannot supply a host, so REQUIRED here is a dialog that comes
-    // back however many times the user answers it.
-    let source = TestSource::new().parts(Parts::ALL);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // A prompt cannot supply a host, so REQUIRED here is a dialog that comes
+        // back however many times the user answers it.
+        let source = TestSource::new().parts(Parts::ALL);
 
-    let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
-    let error = error.expect("a missing host has to say so");
-    // SAFETY: no arguments.
-    assert_eq!(error.domain, unsafe { e_client_error_quark() });
-    assert_eq!(error.code, E_CLIENT_ERROR_INVALID_ARG as i32);
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
+        let error = error.expect("a missing host has to say so");
+        // SAFETY: no arguments.
+        assert_eq!(error.domain, unsafe { e_client_error_quark() });
+        assert_eq!(error.code, E_CLIENT_ERROR_INVALID_ARG as i32);
+    });
 }
 
 #[test]
 fn a_plain_http_account_is_refused_before_a_password_is_sent() {
-    // The rule is `jmap_backend_core::source::origin`'s and it is applied here
-    // because this backend is the first thing to contact the server — and the
-    // credentials would be the first thing it sent.
-    let source = account().secure(false);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The rule is `jmap_backend_core::source::origin`'s and it is applied here
+        // because this backend is the first thing to contact the server — and the
+        // credentials would be the first thing it sent.
+        let source = account().secure(false);
 
-    let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
-    let error = error.expect("a plaintext account has to say why");
-    assert_eq!(error.code, E_CLIENT_ERROR_TLS_NOT_AVAILABLE as i32);
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
+        let error = error.expect("a plaintext account has to say why");
+        assert_eq!(error.code, E_CLIENT_ERROR_TLS_NOT_AVAILABLE as i32);
+    });
 }
 
 #[test]
 fn an_account_with_a_user_and_no_stored_password_asks_for_one() {
-    // What EDS passes before it has asked libsecret for anything is NULL. The
-    // account names a user, so it is not anonymous — REQUIRED is what turns
-    // into the prompt, and anything else is an account that can never be
-    // completed.
-    let source = account();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // What EDS passes before it has asked libsecret for anything is NULL. The
+        // account names a user, so it is not anonymous — REQUIRED is what turns
+        // into the prompt, and anything else is an account that can never be
+        // completed.
+        let source = account();
 
-    let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
-    let error = error.expect("the prompt is worth a reason");
-    assert_eq!(error.code, E_CLIENT_ERROR_AUTHENTICATION_REQUIRED as i32);
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
+        let error = error.expect("the prompt is worth a reason");
+        assert_eq!(error.code, E_CLIENT_ERROR_AUTHENTICATION_REQUIRED as i32);
+    });
 }
 
 #[test]
 fn an_empty_stored_password_is_tried_rather_than_prompted_for() {
-    // `marshal::password`'s rule, reaching this layer: an empty stored password
-    // is present, not absent. Reading it as absent would prompt, and a user who
-    // answers the prompt with nothing would be prompted again forever; sending
-    // it and being told it is wrong terminates.
-    let source = account();
-    let stored = StoredPassword::new("");
-    let seen = RefCell::new(None);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `marshal::password`'s rule, reaching this layer: an empty stored password
+        // is present, not absent. Reading it as absent would prompt, and a user who
+        // answers the prompt with nothing would be prompted again forever; sending
+        // it and being told it is wrong terminates.
+        let source = account();
+        let stored = StoredPassword::new("");
+        let seen = RefCell::new(None);
 
-    let (result, _) = run(source.0, stored.0, ptr::null_mut(), |login| {
-        *seen.borrow_mut() = Some(login.credentials);
-        Ok(())
-    });
+        let (result, _) = run(source.0, stored.0, ptr::null_mut(), |login| {
+            *seen.borrow_mut() = Some(login.credentials);
+            Ok(())
+        });
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
-    match seen.into_inner() {
-        Some(Credentials::Basic { user, password }) => {
-            assert_eq!(user, "vera@example.com");
-            assert_eq!(password, "");
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        match seen.into_inner() {
+            Some(Credentials::Basic { user, password }) => {
+                assert_eq!(user, "vera@example.com");
+                assert_eq!(password, "");
+            }
+            other => panic!("an empty stored password was not sent: {other:?}"),
         }
-        other => panic!("an empty stored password was not sent: {other:?}"),
-    }
+    });
 }
 
 #[test]
 fn an_oauth2_account_is_never_treated_as_anonymous() {
-    // This project's own setup UI can write an OAuth 2.0 account with no
-    // `[Authentication] User` at all — the identity lives in the consent, not
-    // in a typed field. Reading a missing user as "anonymous" the way a plain
-    // password account would be read would silently skip OAuth 2.0 entirely
-    // and fan the account out with no credentials whatsoever.
-    let source = TestSource::new()
-        .parts(Parts::ALL)
-        .authentication("jmap.example.com", 8443, None)
-        .secure(true)
-        .oauth2();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // This project's own setup UI can write an OAuth 2.0 account with no
+        // `[Authentication] User` at all — the identity lives in the consent, not
+        // in a typed field. Reading a missing user as "anonymous" the way a plain
+        // password account would be read would silently skip OAuth 2.0 entirely
+        // and fan the account out with no credentials whatsoever.
+        let source = TestSource::new()
+            .parts(Parts::ALL)
+            .authentication("jmap.example.com", 8443, None)
+            .secure(true)
+            .oauth2();
 
-    let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
-    let error = error.expect("an OAuth 2.0 account with no token has to say so");
-    assert_eq!(error.code, E_CLIENT_ERROR_AUTHENTICATION_REQUIRED as i32);
-    assert_ne!(
-        error.message, "the account has no password yet",
-        "an OAuth 2.0 account was routed through the Basic-auth path"
-    );
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
+        let error = error.expect("an OAuth 2.0 account with no token has to say so");
+        assert_eq!(error.code, E_CLIENT_ERROR_AUTHENTICATION_REQUIRED as i32);
+        assert_ne!(
+            error.message, "the account has no password yet",
+            "an OAuth 2.0 account was routed through the Basic-auth path"
+        );
+    });
 }
 
 #[test]
 fn an_api_token_account_is_sent_as_bearer_not_basic() {
-    // The item-6 "API Token" method: a stored secret that must reach the
-    // fan-out as `Credentials::Bearer`, exactly like `connect_with` already
-    // sends it for the address book, calendar and mail backends — never
-    // as `Credentials::Basic`, which a Bearer-only JMAP endpoint 401s (and a
-    // 401 is what turns into the account's stuck auth-retry loop, since
-    // `ConnectError::auth_result` reads it as a wrong password).
-    let source = account().api_token();
-    let stored = StoredPassword::new("t0k3n");
-    let seen = RefCell::new(None);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The item-6 "API Token" method: a stored secret that must reach the
+        // fan-out as `Credentials::Bearer`, exactly like `connect_with` already
+        // sends it for the address book, calendar and mail backends — never
+        // as `Credentials::Basic`, which a Bearer-only JMAP endpoint 401s (and a
+        // 401 is what turns into the account's stuck auth-retry loop, since
+        // `ConnectError::auth_result` reads it as a wrong password).
+        let source = account().api_token();
+        let stored = StoredPassword::new("t0k3n");
+        let seen = RefCell::new(None);
 
-    let (result, error) = run(source.0, stored.0, ptr::null_mut(), |login| {
-        *seen.borrow_mut() = Some(login.credentials);
-        Ok(())
+        let (result, error) = run(source.0, stored.0, ptr::null_mut(), |login| {
+            *seen.borrow_mut() = Some(login.credentials);
+            Ok(())
+        });
+
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        assert!(error.is_none());
+        match seen.into_inner() {
+            Some(Credentials::Bearer(token)) => assert_eq!(token, "t0k3n"),
+            other => panic!("an API-token account was not sent as Bearer: {other:?}"),
+        }
     });
-
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
-    assert!(error.is_none());
-    match seen.into_inner() {
-        Some(Credentials::Bearer(token)) => assert_eq!(token, "t0k3n"),
-        other => panic!("an API-token account was not sent as Bearer: {other:?}"),
-    }
 }
 
 #[test]
 fn an_api_token_account_with_no_stored_token_asks_for_one() {
-    // Mirrors `an_account_with_a_user_and_no_stored_password_asks_for_one`:
-    // an API-token account with nothing in libsecret yet must prompt, not
-    // silently fan out with an empty Bearer token.
-    let source = account().api_token();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Mirrors `an_account_with_a_user_and_no_stored_password_asks_for_one`:
+        // an API-token account with nothing in libsecret yet must prompt, not
+        // silently fan out with an empty Bearer token.
+        let source = account().api_token();
 
-    let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
+        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), never);
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
-    let error = error.expect("the prompt is worth a reason");
-    assert_eq!(error.code, E_CLIENT_ERROR_AUTHENTICATION_REQUIRED as i32);
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
+        let error = error.expect("the prompt is worth a reason");
+        assert_eq!(error.code, E_CLIENT_ERROR_AUTHENTICATION_REQUIRED as i32);
+    });
 }
 
 #[test]
 fn an_account_with_no_user_is_authenticated_anonymously() {
-    // Which is `jmap-mockd` and a development Stalwart. A real server answers
-    // it with the 401 that becomes a prompt anyway, so refusing here would only
-    // break the case that works.
-    let source = TestSource::new()
-        .parts(Parts::ALL)
-        .authentication("127.0.0.1", 31415, None)
-        .secure(false);
-    let seen = RefCell::new(None);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Which is `jmap-mockd` and a development Stalwart. A real server answers
+        // it with the 401 that becomes a prompt anyway, so refusing here would only
+        // break the case that works.
+        let source = TestSource::new()
+            .parts(Parts::ALL)
+            .authentication("127.0.0.1", 31415, None)
+            .secure(false);
+        let seen = RefCell::new(None);
 
-    let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), |login| {
-        *seen.borrow_mut() = Some(login.credentials);
-        Ok(())
+        let (result, error) = run(source.0, ptr::null(), ptr::null_mut(), |login| {
+            *seen.borrow_mut() = Some(login.credentials);
+            Ok(())
+        });
+
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        assert!(error.is_none());
+        assert!(matches!(seen.into_inner(), Some(Credentials::None)));
     });
-
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
-    assert!(error.is_none());
-    assert!(matches!(seen.into_inner(), Some(Credentials::None)));
 }
 
 #[test]
 fn the_fan_out_is_given_the_server_the_account_names_and_the_parts_it_left_on() {
-    // Everything the fan-out needs comes out of one read of the account, so
-    // that the server this backend discovers from and the server it writes into
-    // the children cannot be two different reads that disagree.
-    let source = account().parts(Parts {
-        mail: false,
-        contacts: true,
-        calendars: false,
-    });
-    let stored = StoredPassword::new("hunter2");
-    let seen = RefCell::new(None);
-
-    let (result, _) = run(source.0, stored.0, ptr::null_mut(), |login| {
-        *seen.borrow_mut() = Some(login);
-        Ok(())
-    });
-
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
-    let login = seen.into_inner().expect("the fan-out was not run");
-    assert_eq!(
-        login.server.target,
-        jmap_backend_core::source::ConnectTarget::Origin("https://jmap.example.com:8443".into())
-    );
-    assert_eq!(login.server.connection.host, "jmap.example.com");
-    assert_eq!(login.server.connection.port, Some(8443));
-    assert_eq!(
-        login.parts,
-        Parts {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Everything the fan-out needs comes out of one read of the account, so
+        // that the server this backend discovers from and the server it writes into
+        // the children cannot be two different reads that disagree.
+        let source = account().parts(Parts {
             mail: false,
             contacts: true,
             calendars: false,
+        });
+        let stored = StoredPassword::new("hunter2");
+        let seen = RefCell::new(None);
+
+        let (result, _) = run(source.0, stored.0, ptr::null_mut(), |login| {
+            *seen.borrow_mut() = Some(login);
+            Ok(())
+        });
+
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        let login = seen.into_inner().expect("the fan-out was not run");
+        assert_eq!(
+            login.server.target,
+            jmap_backend_core::source::ConnectTarget::Origin(
+                "https://jmap.example.com:8443".into()
+            )
+        );
+        assert_eq!(login.server.connection.host, "jmap.example.com");
+        assert_eq!(login.server.connection.port, Some(8443));
+        assert_eq!(
+            login.parts,
+            Parts {
+                mail: false,
+                contacts: true,
+                calendars: false,
+            }
+        );
+        match login.credentials {
+            Credentials::Basic { user, password } => {
+                assert_eq!(user, "vera@example.com");
+                assert_eq!(password, "hunter2");
+            }
+            other => panic!("the account's user did not reach the fan-out: {other:?}"),
         }
-    );
-    match login.credentials {
-        Credentials::Basic { user, password } => {
-            assert_eq!(user, "vera@example.com");
-            assert_eq!(password, "hunter2");
-        }
-        other => panic!("the account's user did not reach the fan-out: {other:?}"),
-    }
+    });
 }
 
 #[test]
 fn only_a_401_makes_evolution_ask_for_the_password_again() {
-    // The rule `jmap_backend_core::connect` states for the book and calendar
-    // backends, reached from the collection backend's own vfunc: REJECTED is
-    // what makes Evolution discard the stored password, so a 403 or a server
-    // that is down must not produce it — the user would be asked to fix
-    // something a password cannot fix, in a loop.
-    let source = account();
-    let stored = StoredPassword::new("hunter2");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The rule `jmap_backend_core::connect` states for the book and calendar
+        // backends, reached from the collection backend's own vfunc: REJECTED is
+        // what makes Evolution discard the stored password, so a 403 or a server
+        // that is down must not produce it — the user would be asked to fix
+        // something a password cannot fix, in a loop.
+        let source = account();
+        let stored = StoredPassword::new("hunter2");
 
-    let rejected = run(source.0, stored.0, ptr::null_mut(), |_| {
-        Err(Error::Http {
-            status: 401,
-            problem: None,
-        })
-    });
-    assert_eq!(rejected.0, E_SOURCE_AUTHENTICATION_REJECTED);
-    assert!(rejected.1.is_some(), "a rejection has to say so");
-
-    for failure in [
-        Error::Http {
-            status: 403,
-            problem: None,
-        },
-        Error::Transport("connection refused".to_owned()),
-    ] {
-        let (result, error) = run(source.0, stored.0, ptr::null_mut(), |_| Err(failure));
-        assert_eq!(
-            result, E_SOURCE_AUTHENTICATION_ERROR,
-            "the password was discarded for a failure it could not have caused"
-        );
-        assert!(error.is_some());
-    }
-}
-
-#[test]
-fn a_fan_out_that_worked_sets_no_error() {
-    // GLib's convention, and EDS reads the out-parameter whatever the result
-    // is: a `GError` left over from a previous attempt is how an account that
-    // is fine ends up reported as broken.
-    let source = account();
-    let stored = StoredPassword::new("hunter2");
-
-    let (result, error) = run(source.0, stored.0, ptr::null_mut(), |_| Ok(()));
-
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
-    assert!(error.is_none(), "a successful authenticate set an error");
-}
-
-#[test]
-fn a_successful_fan_out_pushes_the_same_credentials_to_already_running_children() {
-    // EWS's `e_collection_backend_authenticate_children()`, mirrored here: a
-    // collection that just resolved credentials hands them to its
-    // already-running address-book/calendar children immediately, rather than
-    // leaving each to hit its own credentials-required cycle before it
-    // independently re-fetches the same thing. See `docs/EWS-PARITY.md` Surface
-    // 5 and this function's own doc.
-    let source = account();
-    let stored = StoredPassword::new("hunter2");
-    let pushed = RefCell::new(Vec::new());
-
-    let (result, error) = run_full(
-        source.0,
-        stored.0,
-        ptr::null_mut(),
-        |_| Ok(()),
-        |credentials| pushed.borrow_mut().push(credentials),
-    );
-
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
-    assert!(error.is_none());
-    assert_eq!(
-        pushed.into_inner(),
-        vec![stored.0.cast_const()],
-        "the fan-out's own credentials were not pushed to the children exactly once"
-    );
-}
-
-#[test]
-fn a_fan_out_that_fails_pushes_no_credentials_to_children() {
-    // Nothing was freshly authenticated for this login, so there is nothing
-    // honest to hand a child that never got a look at it either.
-    let source = account();
-    let stored = StoredPassword::new("hunter2");
-    let pushed = RefCell::new(Vec::new());
-
-    let (result, error) = run_full(
-        source.0,
-        stored.0,
-        ptr::null_mut(),
-        |_| {
+        let rejected = run(source.0, stored.0, ptr::null_mut(), |_| {
             Err(Error::Http {
                 status: 401,
                 problem: None,
             })
-        },
-        |credentials| pushed.borrow_mut().push(credentials),
-    );
+        });
+        assert_eq!(rejected.0, E_SOURCE_AUTHENTICATION_REJECTED);
+        assert!(rejected.1.is_some(), "a rejection has to say so");
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_REJECTED);
-    assert!(error.is_some());
-    assert!(
-        pushed.into_inner().is_empty(),
-        "a rejected fan-out still pushed credentials to the children"
-    );
+        for failure in [
+            Error::Http {
+                status: 403,
+                problem: None,
+            },
+            Error::Transport("connection refused".to_owned()),
+        ] {
+            let (result, error) = run(source.0, stored.0, ptr::null_mut(), |_| Err(failure));
+            assert_eq!(
+                result, E_SOURCE_AUTHENTICATION_ERROR,
+                "the password was discarded for a failure it could not have caused"
+            );
+            assert!(error.is_some());
+        }
+    });
+}
+
+#[test]
+fn a_fan_out_that_worked_sets_no_error() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // GLib's convention, and EDS reads the out-parameter whatever the result
+        // is: a `GError` left over from a previous attempt is how an account that
+        // is fine ends up reported as broken.
+        let source = account();
+        let stored = StoredPassword::new("hunter2");
+
+        let (result, error) = run(source.0, stored.0, ptr::null_mut(), |_| Ok(()));
+
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        assert!(error.is_none(), "a successful authenticate set an error");
+    });
+}
+
+#[test]
+fn a_successful_fan_out_pushes_the_same_credentials_to_already_running_children() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // EWS's `e_collection_backend_authenticate_children()`, mirrored here: a
+        // collection that just resolved credentials hands them to its
+        // already-running address-book/calendar children immediately, rather than
+        // leaving each to hit its own credentials-required cycle before it
+        // independently re-fetches the same thing. See `docs/EWS-PARITY.md` Surface
+        // 5 and this function's own doc.
+        let source = account();
+        let stored = StoredPassword::new("hunter2");
+        let pushed = RefCell::new(Vec::new());
+
+        let (result, error) = run_full(
+            source.0,
+            stored.0,
+            ptr::null_mut(),
+            |_| Ok(()),
+            |credentials| pushed.borrow_mut().push(credentials),
+        );
+
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        assert!(error.is_none());
+        assert_eq!(
+            pushed.into_inner(),
+            vec![stored.0.cast_const()],
+            "the fan-out's own credentials were not pushed to the children exactly once"
+        );
+    });
+}
+
+#[test]
+fn a_fan_out_that_fails_pushes_no_credentials_to_children() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Nothing was freshly authenticated for this login, so there is nothing
+        // honest to hand a child that never got a look at it either.
+        let source = account();
+        let stored = StoredPassword::new("hunter2");
+        let pushed = RefCell::new(Vec::new());
+
+        let (result, error) = run_full(
+            source.0,
+            stored.0,
+            ptr::null_mut(),
+            |_| {
+                Err(Error::Http {
+                    status: 401,
+                    problem: None,
+                })
+            },
+            |credentials| pushed.borrow_mut().push(credentials),
+        );
+
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_REJECTED);
+        assert!(error.is_some());
+        assert!(
+            pushed.into_inner().is_empty(),
+            "a rejected fan-out still pushed credentials to the children"
+        );
+    });
 }
 
 #[test]
 fn an_account_with_nothing_switched_on_pushes_no_credentials_to_children() {
-    // The fan-out never runs for this account (see
-    // `an_account_with_nothing_switched_on_is_accepted_without_being_contacted`),
-    // so there is nothing resolved yet to push either.
-    let source = account().parts(Parts::NONE);
-    let pushed = RefCell::new(Vec::new());
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The fan-out never runs for this account (see
+        // `an_account_with_nothing_switched_on_is_accepted_without_being_contacted`),
+        // so there is nothing resolved yet to push either.
+        let source = account().parts(Parts::NONE);
+        let pushed = RefCell::new(Vec::new());
 
-    let (result, error) = run_full(
-        source.0,
-        ptr::null(),
-        ptr::null_mut(),
-        never,
-        |credentials| pushed.borrow_mut().push(credentials),
-    );
+        let (result, error) = run_full(
+            source.0,
+            ptr::null(),
+            ptr::null_mut(),
+            never,
+            |credentials| pushed.borrow_mut().push(credentials),
+        );
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
-    assert!(error.is_none());
-    assert!(pushed.into_inner().is_empty());
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        assert!(error.is_none());
+        assert!(pushed.into_inner().is_empty());
+    });
 }
 
 #[test]
 fn a_backend_with_no_account_is_an_error_rather_than_a_crash() {
-    // It should not happen — EDS constructs the backend *from* a source — but a
-    // NULL dereference in `evolution-source-registry` takes every other account
-    // in the session down with it.
-    let (result, error) = run(ptr::null_mut(), ptr::null(), ptr::null_mut(), never);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // It should not happen — EDS constructs the backend *from* a source — but a
+        // NULL dereference in `evolution-source-registry` takes every other account
+        // in the session down with it.
+        let (result, error) = run(ptr::null_mut(), ptr::null(), ptr::null_mut(), never);
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
-    let error = error.expect("a backend with no account has to say so");
-    // SAFETY: no arguments.
-    assert_eq!(error.domain, unsafe { e_client_error_quark() });
-    assert!(
-        !error.message.is_empty(),
-        "the error carried no message at all"
-    );
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
+        let error = error.expect("a backend with no account has to say so");
+        // SAFETY: no arguments.
+        assert_eq!(error.domain, unsafe { e_client_error_quark() });
+        assert!(
+            !error.message.is_empty(),
+            "the error carried no message at all"
+        );
+    });
 }
 
 #[test]
 fn the_fan_out_is_stopped_by_the_cancellable_and_nothing_after_it_is() {
-    // The Stop button, reaching a discovery several layers down through a
-    // client this function never sees — and, just as important, not staying
-    // installed past the call: the scope belongs to this operation, not to the
-    // account.
-    let source = account();
-    let stored = StoredPassword::new("hunter2");
-    // SAFETY: no arguments; the cancellable is unreffed below.
-    let cancellable = unsafe { g_cancellable_new() };
-    // SAFETY: a live cancellable.
-    unsafe { g_cancellable_cancel(cancellable) };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The Stop button, reaching a discovery several layers down through a
+        // client this function never sees — and, just as important, not staying
+        // installed past the call: the scope belongs to this operation, not to the
+        // account.
+        let source = account();
+        let stored = StoredPassword::new("hunter2");
+        // SAFETY: no arguments; the cancellable is unreffed below.
+        let cancellable = unsafe { g_cancellable_new() };
+        // SAFETY: a live cancellable.
+        unsafe { g_cancellable_cancel(cancellable) };
 
-    let (result, error) = run(source.0, stored.0, cancellable, |_| {
-        let observed =
-            jmap_client::transport::observed().expect("the fan-out observed no cancellation");
+        let (result, error) = run(source.0, stored.0, cancellable, |_| {
+            let observed =
+                jmap_client::transport::observed().expect("the fan-out observed no cancellation");
+            assert!(
+                observed.is_cancelled(),
+                "a cancellable that was already cancelled did not reach the fan-out"
+            );
+            Err(Error::Cancelled)
+        });
+
+        assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
+        let error = error.expect("a cancelled authenticate has to say so");
+        // Reported as GIO's cancellation rather than an EDS client error, so that
+        // Evolution can tell a user who pressed Stop from an account that broke.
+        // SAFETY: no arguments.
+        assert_eq!(error.domain, unsafe { g_io_error_quark() });
+        assert_eq!(error.code, G_IO_ERROR_CANCELLED);
+
         assert!(
-            observed.is_cancelled(),
-            "a cancellable that was already cancelled did not reach the fan-out"
+            jmap_client::transport::observed().is_none(),
+            "the cancellation outlived the operation it belonged to"
         );
-        Err(Error::Cancelled)
+
+        // SAFETY: the reference `g_cancellable_new` returned is given back once.
+        unsafe { g_object_unref(cancellable.cast()) };
     });
+}
 
-    assert_eq!(result, E_SOURCE_AUTHENTICATION_ERROR);
-    let error = error.expect("a cancelled authenticate has to say so");
-    // Reported as GIO's cancellation rather than an EDS client error, so that
-    // Evolution can tell a user who pressed Stop from an account that broke.
-    // SAFETY: no arguments.
-    assert_eq!(error.domain, unsafe { g_io_error_quark() });
-    assert_eq!(error.code, G_IO_ERROR_CANCELLED);
-
-    assert!(
-        jmap_client::transport::observed().is_none(),
-        "the cancellation outlived the operation it belonged to"
-    );
-
-    // SAFETY: the reference `g_cancellable_new` returned is given back once.
-    unsafe { g_object_unref(cancellable.cast()) };
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_authenticate_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }

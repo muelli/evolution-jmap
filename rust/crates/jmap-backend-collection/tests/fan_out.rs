@@ -38,6 +38,11 @@ use jmap_collection_sync::{
 use jmap_mock::{AccountState, DEFAULT_ACCOUNT_ID, MockServer, ServerState};
 use jmap_proto::Id;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A live `ESource` this test holds one reference to, as `e_source_new_with_uid`
 /// hands one back.
 struct Source(*mut ESource);
@@ -308,357 +313,398 @@ fn display_name(source: *mut ESource) -> Option<String> {
 
 #[test]
 fn every_collection_the_login_holds_becomes_a_child_of_the_collection() {
-    // The whole point of M6, end to end: one login, and every address book and
-    // calendar the server lists is a child source with the account's server
-    // written into it.
-    let server = MockServer::builder().start();
-    with_account(&server, |account| {
-        account.seed_address_book("Personal", true);
-        account.seed_address_book("Shared", false);
-        account.seed_calendar("Work", true);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The whole point of M6, end to end: one login, and every address book and
+        // calendar the server lists is a child source with the account's server
+        // written into it.
+        let server = MockServer::builder().start();
+        with_account(&server, |account| {
+            account.seed_address_book("Personal", true);
+            account.seed_address_book("Shared", false);
+            account.seed_calendar("Work", true);
+        });
+
+        let collection = Collection::default();
+        // SAFETY: the collection satisfies the trait's contract.
+        let report = unsafe { fan_out(&collection, &login(server.origin(), Parts::ALL)) }
+            .expect("the mock answers every listing the fan-out sends");
+
+        assert_eq!(report.children.len(), 3, "{report:?}");
+        assert_eq!(collection.created_ids(), report.children);
+        assert_eq!(
+            collection.published_ids(),
+            report.children,
+            "a child that is created and not exported is a child Evolution cannot see"
+        );
+        assert_eq!(
+            report,
+            Populated {
+                children: report.children.clone(),
+                ..Populated::default()
+            },
+            "nothing failed, so nothing is reported as having failed"
+        );
     });
-
-    let collection = Collection::default();
-    // SAFETY: the collection satisfies the trait's contract.
-    let report = unsafe { fan_out(&collection, &login(server.origin(), Parts::ALL)) }
-        .expect("the mock answers every listing the fan-out sends");
-
-    assert_eq!(report.children.len(), 3, "{report:?}");
-    assert_eq!(collection.created_ids(), report.children);
-    assert_eq!(
-        collection.published_ids(),
-        report.children,
-        "a child that is created and not exported is a child Evolution cannot see"
-    );
-    assert_eq!(
-        report,
-        Populated {
-            children: report.children.clone(),
-            ..Populated::default()
-        },
-        "nothing failed, so nothing is reported as having failed"
-    );
 }
 
 #[test]
 fn every_child_reads_back_under_the_resource_id_it_was_created_under() {
-    // The pairing EDS relies on, over ids a real server handed out: the string
-    // the fan-out passed to `e_collection_backend_new_child` is the string
-    // `dup_resource_id` has to answer for the child that came back. A child
-    // whose id does not come back is a child EDS deletes the cache of.
-    let server = MockServer::builder().start();
-    with_account(&server, |account| {
-        account.seed_address_book("Personal", true);
-        account.seed_calendar("Work", true);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The pairing EDS relies on, over ids a real server handed out: the string
+        // the fan-out passed to `e_collection_backend_new_child` is the string
+        // `dup_resource_id` has to answer for the child that came back. A child
+        // whose id does not come back is a child EDS deletes the cache of.
+        let server = MockServer::builder().start();
+        with_account(&server, |account| {
+            account.seed_address_book("Personal", true);
+            account.seed_calendar("Work", true);
+        });
+
+        let collection = Collection::default();
+        // SAFETY: as above.
+        let report = unsafe { fan_out(&collection, &login(server.origin(), Parts::ALL)) }
+            .expect("the mock answers every listing the fan-out sends");
+
+        assert_eq!(report.children.len(), 2, "{report:?}");
+        for resource_id in &report.children {
+            let source = collection.child(resource_id);
+            assert_eq!(
+                // SAFETY: a source this collection still holds a reference to.
+                unsafe { resource_id_of(source) }.as_deref(),
+                Some(resource_id.as_str()),
+            );
+        }
     });
-
-    let collection = Collection::default();
-    // SAFETY: as above.
-    let report = unsafe { fan_out(&collection, &login(server.origin(), Parts::ALL)) }
-        .expect("the mock answers every listing the fan-out sends");
-
-    assert_eq!(report.children.len(), 2, "{report:?}");
-    for resource_id in &report.children {
-        let source = collection.child(resource_id);
-        assert_eq!(
-            // SAFETY: a source this collection still holds a reference to.
-            unsafe { resource_id_of(source) }.as_deref(),
-            Some(resource_id.as_str()),
-        );
-    }
 }
 
 #[test]
 fn each_child_is_written_with_the_server_the_account_names() {
-    // Not the URL discovery used: the children are written from the connection
-    // the collection `ESource` was read into, which is the same read the origin
-    // came out of. A child pointed at anything else is a child that fetches its
-    // contacts from a server the account never named.
-    let server = MockServer::builder().start();
-    with_account(&server, |account| {
-        account.seed_address_book("Personal", true);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Not the URL discovery used: the children are written from the connection
+        // the collection `ESource` was read into, which is the same read the origin
+        // came out of. A child pointed at anything else is a child that fetches its
+        // contacts from a server the account never named.
+        let server = MockServer::builder().start();
+        with_account(&server, |account| {
+            account.seed_address_book("Personal", true);
+        });
+
+        let collection = Collection::default();
+        // SAFETY: as above.
+        let report = unsafe { fan_out(&collection, &login(server.origin(), Parts::ALL)) }
+            .expect("the mock answers every listing the fan-out sends");
+
+        let source = collection.child(&report.children[0]);
+        assert_eq!(
+            host_and_port(source),
+            (Some("jmap.example.com".to_owned()), 8443)
+        );
+        assert_eq!(
+            display_name(source).as_deref(),
+            Some("Personal"),
+            "the sidebar row is named the way the server names the collection"
+        );
     });
-
-    let collection = Collection::default();
-    // SAFETY: as above.
-    let report = unsafe { fan_out(&collection, &login(server.origin(), Parts::ALL)) }
-        .expect("the mock answers every listing the fan-out sends");
-
-    let source = collection.child(&report.children[0]);
-    assert_eq!(
-        host_and_port(source),
-        (Some("jmap.example.com".to_owned()), 8443)
-    );
-    assert_eq!(
-        display_name(source).as_deref(),
-        Some("Personal"),
-        "the sidebar row is named the way the server names the collection"
-    );
 }
 
 #[test]
 fn a_child_created_now_is_exported_and_one_drawn_from_the_cache_is_not() {
-    // `e_collection_backend_new_child` draws from a cache of previous sessions,
-    // and a child that came out of it was already exported by the `populate`
-    // that claimed it. EDS's own collection backend exports only new sources;
-    // this holds that line, because the alternative is a second
-    // `add_source` for a source the registry already has.
-    let cached_id = ChildKind::AddressBook.resource_id(&Id::new("AB1"));
-    let collection = Collection {
-        cached: vec![(cached_id.clone(), Source::new("jmap-cached"))],
-        ..Collection::default()
-    };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `e_collection_backend_new_child` draws from a cache of previous sessions,
+        // and a child that came out of it was already exported by the `populate`
+        // that claimed it. EDS's own collection backend exports only new sources;
+        // this holds that line, because the alternative is a second
+        // `add_source` for a source the registry already has.
+        let cached_id = ChildKind::AddressBook.resource_id(&Id::new("AB1"));
+        let collection = Collection {
+            cached: vec![(cached_id.clone(), Source::new("jmap-cached"))],
+            ..Collection::default()
+        };
 
-    // SAFETY: as above.
-    let report = unsafe {
-        apply_fanout(
-            &collection,
-            &fanout(Parts::ALL, &["AB1", "AB2"], &[]),
-            &connection(),
-        )
-    };
+        // SAFETY: as above.
+        let report = unsafe {
+            apply_fanout(
+                &collection,
+                &fanout(Parts::ALL, &["AB1", "AB2"], &[]),
+                &connection(),
+            )
+        };
 
-    assert_eq!(report.children.len(), 2, "both children were written");
-    assert_eq!(
-        collection.published_ids(),
-        [ChildKind::AddressBook.resource_id(&Id::new("AB2"))],
-        "only the child this fan-out created is exported"
-    );
-    assert_eq!(
-        // SAFETY: the cached source is alive for the length of this test.
-        unsafe { resource_id_of(collection.cached[0].1.0) }.as_deref(),
-        Some(cached_id.as_str()),
-        "a cached child is written again, so a collection renamed on the \
-         server reaches the sidebar"
-    );
+        assert_eq!(report.children.len(), 2, "both children were written");
+        assert_eq!(
+            collection.published_ids(),
+            [ChildKind::AddressBook.resource_id(&Id::new("AB2"))],
+            "only the child this fan-out created is exported"
+        );
+        assert_eq!(
+            // SAFETY: the cached source is alive for the length of this test.
+            unsafe { resource_id_of(collection.cached[0].1.0) }.as_deref(),
+            Some(cached_id.as_str()),
+            "a cached child is written again, so a collection renamed on the \
+             server reaches the sidebar"
+        );
+    });
 }
 
 #[test]
 fn nothing_is_exported_before_all_of_it_is_written() {
-    // The rule `child_source` exists for, followed through: a setting that
-    // cannot be written leaves a child missing whichever property makes it work
-    // — `[Resource] Identity`, whose absence deletes the cache, or
-    // `[Authentication] Host`, whose absence points it at no server. A child
-    // that is never exported has neither problem.
-    let collection = Collection::default();
-    let unwritable = [
-        Setting {
-            group: EXTENSION_AUTHENTICATION,
-            key: "Host",
-            value: "jmap.example.com".to_owned(),
-        },
-        Setting {
-            group: EXTENSION_AUTHENTICATION,
-            key: "Port",
-            value: "not a port".to_owned(),
-        },
-    ];
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The rule `child_source` exists for, followed through: a setting that
+        // cannot be written leaves a child missing whichever property makes it work
+        // — `[Resource] Identity`, whose absence deletes the cache, or
+        // `[Authentication] Host`, whose absence points it at no server. A child
+        // that is never exported has neither problem.
+        let collection = Collection::default();
+        let unwritable = [
+            Setting {
+                group: EXTENSION_AUTHENTICATION,
+                key: "Host",
+                value: "jmap.example.com".to_owned(),
+            },
+            Setting {
+                group: EXTENSION_AUTHENTICATION,
+                key: "Port",
+                value: "not a port".to_owned(),
+            },
+        ];
 
-    // SAFETY: as above.
-    let adopted = unsafe { adopt(&collection, "addressbook:AB1", &unwritable) };
+        // SAFETY: as above.
+        let adopted = unsafe { adopt(&collection, "addressbook:AB1", &unwritable) };
 
-    assert!(
-        matches!(adopted, Adopted::Abandoned(_)),
-        "{adopted:?} is not an abandoned child"
-    );
-    assert!(
-        collection.published.borrow().is_empty(),
-        "a half-written child was exported"
-    );
+        assert!(
+            matches!(adopted, Adopted::Abandoned(_)),
+            "{adopted:?} is not an abandoned child"
+        );
+        assert!(
+            collection.published.borrow().is_empty(),
+            "a half-written child was exported"
+        );
+    });
 }
 
 #[test]
 fn adopt_releases_exactly_the_reference_new_child_handed_over() {
-    // `e_collection_backend_new_child` is `(transfer full)`: a reference
-    // `adopt` keeps past its own return leaks the source for the life of the
-    // account, and one it releases twice frees a source that is still held —
-    // by the registry server, for a newly created and exported child, or by
-    // this collection's own cache, for one drawn from it.
-    //
-    // No settings are written here (`&[]`): writing even one creates the EDS
-    // extension that holds it, and that extension takes a reference of its
-    // own on the source — a real, permanent reference, but EDS's, not one
-    // `adopt`'s own transfer-full contract is answerable for. An empty
-    // settings list isolates the one reference this test is about.
-    let cached_id = ChildKind::AddressBook.resource_id(&Id::new("AB1"));
-    let new_id = ChildKind::AddressBook.resource_id(&Id::new("AB2"));
-    let collection = Collection {
-        cached: vec![(cached_id.clone(), Source::new("jmap-cached"))],
-        ..Collection::default()
-    };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `e_collection_backend_new_child` is `(transfer full)`: a reference
+        // `adopt` keeps past its own return leaks the source for the life of the
+        // account, and one it releases twice frees a source that is still held —
+        // by the registry server, for a newly created and exported child, or by
+        // this collection's own cache, for one drawn from it.
+        //
+        // No settings are written here (`&[]`): writing even one creates the EDS
+        // extension that holds it, and that extension takes a reference of its
+        // own on the source — a real, permanent reference, but EDS's, not one
+        // `adopt`'s own transfer-full contract is answerable for. An empty
+        // settings list isolates the one reference this test is about.
+        let cached_id = ChildKind::AddressBook.resource_id(&Id::new("AB1"));
+        let new_id = ChildKind::AddressBook.resource_id(&Id::new("AB2"));
+        let collection = Collection {
+            cached: vec![(cached_id.clone(), Source::new("jmap-cached"))],
+            ..Collection::default()
+        };
 
-    // SAFETY: the collection satisfies the trait's contract.
-    let cached_adopted = unsafe { adopt(&collection, &cached_id, &[]) };
-    assert_eq!(cached_adopted, Adopted::Written { published: false });
-    let (_, source) = collection
-        .cached
-        .iter()
-        .find(|(id, _)| *id == cached_id)
-        .expect("the cached child is still in the fixture");
-    assert_eq!(
-        source.ref_count(),
-        1,
-        "a child drawn from the cache kept the reference `new_child` handed over, \
-         or lost its own"
-    );
+        // SAFETY: the collection satisfies the trait's contract.
+        let cached_adopted = unsafe { adopt(&collection, &cached_id, &[]) };
+        assert_eq!(cached_adopted, Adopted::Written { published: false });
+        let (_, source) = collection
+            .cached
+            .iter()
+            .find(|(id, _)| *id == cached_id)
+            .expect("the cached child is still in the fixture");
+        assert_eq!(
+            source.ref_count(),
+            1,
+            "a child drawn from the cache kept the reference `new_child` handed over, \
+             or lost its own"
+        );
 
-    // SAFETY: as above.
-    let new_adopted = unsafe { adopt(&collection, &new_id, &[]) };
-    assert_eq!(new_adopted, Adopted::Written { published: true });
-    let created = collection.created.borrow();
-    let (_, source) = created
-        .iter()
-        .find(|(id, _)| *id == new_id)
-        .expect("AB2 was created");
-    assert_eq!(
-        source.ref_count(),
-        1,
-        "a newly created, exported child kept the reference `new_child` handed over, \
-         or lost its own"
-    );
+        // SAFETY: as above.
+        let new_adopted = unsafe { adopt(&collection, &new_id, &[]) };
+        assert_eq!(new_adopted, Adopted::Written { published: true });
+        let created = collection.created.borrow();
+        let (_, source) = created
+            .iter()
+            .find(|(id, _)| *id == new_id)
+            .expect("AB2 was created");
+        assert_eq!(
+            source.ref_count(),
+            1,
+            "a newly created, exported child kept the reference `new_child` handed over, \
+             or lost its own"
+        );
+    });
 }
 
 #[test]
 fn a_resource_id_eds_refuses_costs_that_child_and_no_other() {
-    // `e_collection_backend_new_child` warns and answers NULL when it cannot
-    // claim a resource. One child missing is a row missing from the sidebar; a
-    // fan-out abandoned at the first NULL is an account missing.
-    let refused = ChildKind::AddressBook.resource_id(&Id::new("AB1"));
-    let collection = Collection::refusing(&refused);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `e_collection_backend_new_child` warns and answers NULL when it cannot
+        // claim a resource. One child missing is a row missing from the sidebar; a
+        // fan-out abandoned at the first NULL is an account missing.
+        let refused = ChildKind::AddressBook.resource_id(&Id::new("AB1"));
+        let collection = Collection::refusing(&refused);
 
-    // SAFETY: as above.
-    let report = unsafe {
-        apply_fanout(
-            &collection,
-            &fanout(Parts::ALL, &["AB1", "AB2"], &["Cal1"]),
-            &connection(),
-        )
-    };
+        // SAFETY: as above.
+        let report = unsafe {
+            apply_fanout(
+                &collection,
+                &fanout(Parts::ALL, &["AB1", "AB2"], &["Cal1"]),
+                &connection(),
+            )
+        };
 
-    assert_eq!(report.uncreated, [refused]);
-    assert_eq!(
-        report.children,
-        [
-            ChildKind::AddressBook.resource_id(&Id::new("AB2")),
-            ChildKind::Calendar.resource_id(&Id::new("Cal1")),
-        ]
-    );
+        assert_eq!(report.uncreated, [refused]);
+        assert_eq!(
+            report.children,
+            [
+                ChildKind::AddressBook.resource_id(&Id::new("AB2")),
+                ChildKind::Calendar.resource_id(&Id::new("Cal1")),
+            ]
+        );
+    });
 }
 
 #[test]
 fn the_children_the_login_no_longer_warrants_are_removed() {
-    // The other half of a populate. These sources have no D-Bus object, so EDS
-    // refuses the removal — the one branch this machine can drive — but which
-    // children it was *asked* to remove is the decision, and the report is where
-    // it is visible.
-    let collection = Collection {
-        existing: vec![
-            written_child(ChildKind::AddressBook, "AB2"),
-            written_child(ChildKind::AddressBook, "AB1"),
-        ],
-        ..Collection::default()
-    };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The other half of a populate. These sources have no D-Bus object, so EDS
+        // refuses the removal — the one branch this machine can drive — but which
+        // children it was *asked* to remove is the decision, and the report is where
+        // it is visible.
+        let collection = Collection {
+            existing: vec![
+                written_child(ChildKind::AddressBook, "AB2"),
+                written_child(ChildKind::AddressBook, "AB1"),
+            ],
+            ..Collection::default()
+        };
 
-    // SAFETY: as above.
-    let report = unsafe {
-        apply_fanout(
-            &collection,
-            &fanout(Parts::ALL, &["AB1"], &[]),
-            &connection(),
-        )
-    };
+        // SAFETY: as above.
+        let report = unsafe {
+            apply_fanout(
+                &collection,
+                &fanout(Parts::ALL, &["AB1"], &[]),
+                &connection(),
+            )
+        };
 
-    let attempted: Vec<&str> = report
-        .not_removed
-        .iter()
-        .map(|failure| failure.resource_id.as_str())
-        .collect();
-    assert_eq!(
-        attempted,
-        [ChildKind::AddressBook.resource_id(&Id::new("AB2"))],
-        "the child whose collection the server still lists must stay"
-    );
+        let attempted: Vec<&str> = report
+            .not_removed
+            .iter()
+            .map(|failure| failure.resource_id.as_str())
+            .collect();
+        assert_eq!(
+            attempted,
+            [ChildKind::AddressBook.resource_id(&Id::new("AB2"))],
+            "the child whose collection the server still lists must stay"
+        );
+    });
 }
 
 #[test]
 fn the_children_a_collection_has_are_listed_before_any_new_one_is_created() {
-    // The order the removal's correctness rests on. A list taken after the new
-    // children were added would contain children this same fan-out created, and
-    // what keeps them from being removed would be an accident of what
-    // `Fanout::is_obsolete` happens to answer rather than of what was asked.
-    let collection = Collection::default();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The order the removal's correctness rests on. A list taken after the new
+        // children were added would contain children this same fan-out created, and
+        // what keeps them from being removed would be an accident of what
+        // `Fanout::is_obsolete` happens to answer rather than of what was asked.
+        let collection = Collection::default();
 
-    // SAFETY: as above.
-    unsafe {
-        apply_fanout(
-            &collection,
-            &fanout(Parts::ALL, &["AB1"], &[]),
-            &connection(),
-        )
-    };
+        // SAFETY: as above.
+        unsafe {
+            apply_fanout(
+                &collection,
+                &fanout(Parts::ALL, &["AB1"], &[]),
+                &connection(),
+            )
+        };
 
-    let calls = collection.calls.borrow();
-    assert_eq!(
-        calls.first(),
-        Some(&"existing_children"),
-        "the children were listed after something else happened: {calls:?}"
-    );
+        let calls = collection.calls.borrow();
+        assert_eq!(
+            calls.first(),
+            Some(&"existing_children"),
+            "the children were listed after something else happened: {calls:?}"
+        );
+    });
 }
 
 #[test]
 fn a_part_the_user_switched_off_creates_no_child_and_removes_none() {
-    // The dormant case, at the layer that acts on it: contacts off means the
-    // address books were never listed, so there is nothing to create — and the
-    // children of that part are kept, because the cache and the uid are the
-    // user's and switching contacts back on has to bring the same source back.
-    let collection = Collection {
-        existing: vec![written_child(ChildKind::AddressBook, "AB1")],
-        ..Collection::default()
-    };
-    let contacts_off = Parts {
-        contacts: false,
-        ..Parts::ALL
-    };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The dormant case, at the layer that acts on it: contacts off means the
+        // address books were never listed, so there is nothing to create — and the
+        // children of that part are kept, because the cache and the uid are the
+        // user's and switching contacts back on has to bring the same source back.
+        let collection = Collection {
+            existing: vec![written_child(ChildKind::AddressBook, "AB1")],
+            ..Collection::default()
+        };
+        let contacts_off = Parts {
+            contacts: false,
+            ..Parts::ALL
+        };
 
-    // SAFETY: as above.
-    let report = unsafe {
-        apply_fanout(
-            &collection,
-            &fanout(contacts_off, &["AB1"], &[]),
-            &connection(),
-        )
-    };
+        // SAFETY: as above.
+        let report = unsafe {
+            apply_fanout(
+                &collection,
+                &fanout(contacts_off, &["AB1"], &[]),
+                &connection(),
+            )
+        };
 
-    assert_eq!(report, Populated::default(), "{report:?}");
-    assert!(collection.created_ids().is_empty());
+        assert_eq!(report, Populated::default(), "{report:?}");
+        assert!(collection.created_ids().is_empty());
+    });
 }
 
 #[test]
 fn a_login_that_cannot_be_reached_touches_no_child() {
-    // The fan-out's error is the connection's, and it happens before anything is
-    // listed, created or removed: a populate whose server was down must not be
-    // the populate that empties the sidebar.
-    let collection = Collection {
-        existing: vec![written_child(ChildKind::AddressBook, "AB1")],
-        ..Collection::default()
-    };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The fan-out's error is the connection's, and it happens before anything is
+        // listed, created or removed: a populate whose server was down must not be
+        // the populate that empties the sidebar.
+        let collection = Collection {
+            existing: vec![written_child(ChildKind::AddressBook, "AB1")],
+            ..Collection::default()
+        };
 
-    // Port 1 on loopback: nothing listens, and the refusal is immediate.
-    // SAFETY: as above.
-    let failure = unsafe { fan_out(&collection, &login("http://127.0.0.1:1", Parts::ALL)) };
+        // Port 1 on loopback: nothing listens, and the refusal is immediate.
+        // SAFETY: as above.
+        let failure = unsafe { fan_out(&collection, &login("http://127.0.0.1:1", Parts::ALL)) };
 
-    assert!(
-        failure.is_err(),
-        "a dead server answered a session document"
-    );
-    assert!(
-        collection.calls.borrow().is_empty(),
-        "the collection was touched"
-    );
-    assert_eq!(
-        // SAFETY: the source is alive for the length of this test.
-        unsafe { resource_id_of(collection.existing[0].0) }.as_deref(),
-        Some(ChildKind::AddressBook.resource_id(&Id::new("AB1")).as_str()),
-        "the child that was there is still there"
-    );
+        assert!(
+            failure.is_err(),
+            "a dead server answered a session document"
+        );
+        assert!(
+            collection.calls.borrow().is_empty(),
+            "the collection was touched"
+        );
+        assert_eq!(
+            // SAFETY: the source is alive for the length of this test.
+            unsafe { resource_id_of(collection.existing[0].0) }.as_deref(),
+            Some(ChildKind::AddressBook.resource_id(&Id::new("AB1")).as_str()),
+            "the child that was there is still there"
+        );
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_fan_out_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }
