@@ -16,7 +16,7 @@ base64 0.22.1 -- MIT OR Apache-2.0 -- https://github.com/marshallpierce/rust-bas
 block-buffer 0.10.4 -- MIT OR Apache-2.0 -- https://github.com/RustCrypto/utils
 bumpalo 3.20.3 -- MIT OR Apache-2.0 -- https://github.com/fitzgen/bumpalo
 bytes 1.12.1 -- MIT -- https://github.com/tokio-rs/bytes
-calcard 0.3.11 -- Apache-2.0 OR MIT -- https://github.com/stalwartlabs/calcard
+calcard 0.3.13 -- Apache-2.0 OR MIT -- https://github.com/stalwartlabs/calcard
 cfg-if 1.0.4 -- MIT OR Apache-2.0 -- https://github.com/rust-lang/cfg-if
 chrono 0.4.45 -- MIT OR Apache-2.0 -- https://github.com/chronotope/chrono
 chrono-tz 0.10.4 -- MIT OR Apache-2.0 -- https://github.com/chronotope/chrono-tz
