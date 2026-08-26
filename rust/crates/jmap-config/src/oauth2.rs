@@ -60,8 +60,9 @@ use eds_sys::{
 };
 use glib_sys::{GFALSE, GType};
 use gobject_sys::{
-    G_PARAM_READWRITE, G_PARAM_USER_SHIFT, GObject, GObjectClass, GParamFlags, GParamSpec, GValue,
-    g_object_class_install_property, g_param_spec_string, g_value_get_string, g_value_set_string,
+    G_PARAM_READWRITE, G_PARAM_USER_SHIFT, G_TYPE_STRING, GObject, GObjectClass, GParamFlags,
+    GParamSpec, GValue, g_object_class_install_property, g_object_set_property,
+    g_param_spec_string, g_value_get_string, g_value_init, g_value_set_string, g_value_unset,
 };
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::instance::Slot;
@@ -222,14 +223,28 @@ impl Fields {
 /// The five properties' ids and the names `class_init` installs them under —
 /// dense from 1, since GObject treats 0 as "no property", and local to this
 /// class alone.
+/// The GObject property names `class_init` installs, in declaration order —
+/// the full set a caller binding or copying this extension between sources
+/// must carry. `jmap_backend_collection::child_added` binds exactly these
+/// from an account onto its children.
+pub const PROPERTY_NAMES: [&CStr; 7] = [
+    c"client-id",
+    c"client-secret",
+    c"authorization-endpoint",
+    c"token-endpoint",
+    c"redirect-uri",
+    c"scope",
+    c"resource",
+];
+
 const PROPERTIES: [(u32, &CStr); 7] = [
-    (1, c"client-id"),
-    (2, c"client-secret"),
-    (3, c"authorization-endpoint"),
-    (4, c"token-endpoint"),
-    (5, c"redirect-uri"),
-    (6, c"scope"),
-    (7, c"resource"),
+    (1, PROPERTY_NAMES[0]),
+    (2, PROPERTY_NAMES[1]),
+    (3, PROPERTY_NAMES[2]),
+    (4, PROPERTY_NAMES[3]),
+    (5, PROPERTY_NAMES[4]),
+    (6, PROPERTY_NAMES[5]),
+    (7, PROPERTY_NAMES[6]),
 ];
 
 const PROP_CLIENT_ID: u32 = PROPERTIES[0].0;
@@ -415,7 +430,15 @@ unsafe fn extension_of(source: *mut ESource) -> *mut Extension {
 /// Because of that rule, a field this rewrite does not actually change keeps
 /// the allocation it already had, rather than being re-seated under any
 /// pointer [`borrowed`] has handed out of it — see [`Fields::set`], which is
-/// the one path this and [`set_property`] both write through.
+/// the one path every write lands in.
+///
+/// The writes go through `g_object_set_property` rather than into the fields
+/// directly, so each one raises `notify` — which is what carries a re-run
+/// discovery or re-registration across the `GBinding`s
+/// `jmap_backend_collection::child_added` puts between an account's extension
+/// and its children's. A write that bypassed the property system would update
+/// this source and silently strand every child on the registration it had
+/// before.
 ///
 /// # Safety
 ///
@@ -423,24 +446,30 @@ unsafe fn extension_of(source: *mut ESource) -> *mut Extension {
 pub unsafe fn apply(source: *mut ESource, config: &Config) {
     // SAFETY: `source` is valid by this function's contract.
     let extension = unsafe { extension_of(source) };
-    // SAFETY: `extension_of` only ever returns an instance of this type,
-    // whose `instance_init` has already run.
-    let fields = unsafe { &*extension }
-        .fields
-        .get()
-        .expect("e_source_get_extension returned an instance instance_init did not run on");
-    let mut fields = fields.lock().unwrap_or_else(PoisonError::into_inner);
-    for (id, value) in [
-        (PROP_CLIENT_ID, &config.client_id),
-        (PROP_CLIENT_SECRET, &config.client_secret),
-        (PROP_AUTHORIZATION_ENDPOINT, &config.authorization_endpoint),
-        (PROP_TOKEN_ENDPOINT, &config.token_endpoint),
-        (PROP_REDIRECT_URI, &config.redirect_uri),
-        (PROP_SCOPE, &config.scope),
-        (PROP_RESOURCE, &config.resource),
+    for (name, value) in [
+        (PROPERTY_NAMES[0], &config.client_id),
+        (PROPERTY_NAMES[1], &config.client_secret),
+        (PROPERTY_NAMES[2], &config.authorization_endpoint),
+        (PROPERTY_NAMES[3], &config.token_endpoint),
+        (PROPERTY_NAMES[4], &config.redirect_uri),
+        (PROPERTY_NAMES[5], &config.scope),
+        (PROPERTY_NAMES[6], &config.resource),
     ] {
-        // Every id here is one of `PROPERTIES`' own, so `set` cannot decline.
-        fields.set(id, value.as_deref().map(cstring_lossy));
+        let value_c = value.as_deref().map(cstring_lossy);
+        // SAFETY: a live extension instance of this class, which installs
+        // every property in `PROPERTY_NAMES` as a string; the GValue is
+        // initialised, filled (NULL clearing the field, as `set_property`
+        // documents), and unset before the CString it borrows can drop.
+        unsafe {
+            let mut gvalue: GValue = std::mem::zeroed();
+            g_value_init(&mut gvalue, G_TYPE_STRING);
+            g_value_set_string(
+                &mut gvalue,
+                value_c.as_deref().map_or(ptr::null(), CStr::as_ptr),
+            );
+            g_object_set_property(extension.cast(), name.as_ptr(), &gvalue);
+            g_value_unset(&mut gvalue);
+        }
     }
 }
 

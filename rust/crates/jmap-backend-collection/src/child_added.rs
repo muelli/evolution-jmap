@@ -120,8 +120,15 @@ pub unsafe fn follow_collection(collection: *mut ESource, child: *mut ESource) {
         e_source_security_get_type();
     }
 
+    // Every child — the mail services included, so before the fork below —
+    // carries the account's client registration; see `follow_oauth2` on why
+    // this group alone is created on the child.
+    // SAFETY: valid sources by this function's contract.
+    unsafe { follow_oauth2(collection, child) };
+
     // The two children of this account that are bound by another set of rules,
-    // and the only ones a group is created on — see `crate::mail_child`.
+    // and the only ones any *other* group is created on — see
+    // `crate::mail_child`.
     // SAFETY: a valid source by this function's contract, only read from.
     if unsafe { mail_service_of(child) }.is_some() {
         // SAFETY: valid sources by this function's contract, which is
@@ -147,6 +154,58 @@ pub unsafe fn follow_collection(collection: *mut ESource, child: *mut ESource) {
             // owned by the two objects it joins.
             unsafe { bind(from, to, property) };
         }
+    }
+}
+
+/// Binds the account's `[JMAP OAuth2]` client registration onto a child,
+/// creating the group on the child — the second exception to the
+/// both-sides-or-neither rule, and one for [`crate::mail_child`]'s own reason:
+/// a group created here is created in a source of this account's, for want of
+/// anywhere else it could come from.
+///
+/// It has to be on the child because EDS hands the `EOAuth2Service` whichever
+/// source asked for the token: `e_source_registry_server_get_access_token_sync`
+/// (e-source-registry-server.c, EDS 3.52) passes the asking source straight
+/// into `e_oauth2_service_get_access_token_sync` — the silent-refresh path
+/// never resolves the collection as the credential source (only the
+/// interactive prompter does). EDS's own OAuth2 services never feel this,
+/// their client ids being compile-time constants; ours is per-account state in
+/// `[JMAP OAuth2]`, and a child without it is a child whose token refresh has
+/// no client id, no token endpoint and no scope — so the first expired access
+/// token became a full re-consent (observed live 2026-08-26: the registry
+/// prepared a refresh form for a memory-only calendar child's uid, and mail's
+/// connect escalated to the consent window; roadmap item 15's send-time
+/// consent is the same mechanism through the transport).
+///
+/// The account's side is never invented: an account without the group has no
+/// registration to carry, and its `.source` file is the user's — the same
+/// rule the rest of this module keeps.
+///
+/// # Safety
+///
+/// As [`follow_collection`], whose helper this is.
+unsafe fn follow_oauth2(collection: *mut ESource, child: *mut ESource) {
+    // Registers the extension type, so the name lookups below can answer —
+    // same reasoning as the `get_type` calls in `follow_collection`, spelled
+    // through the one caller this crate is meant to use for it.
+    jmap_config::oauth2::ensure_registered();
+
+    let name = jmap_config::oauth2::EXTENSION_NAME;
+    // SAFETY: a valid source by the caller's contract, and a NUL-terminated
+    // name; only read from.
+    let Some(from) = (unsafe { extension_if_present::<gobject_sys::GObject>(collection, name) })
+    else {
+        return;
+    };
+    // SAFETY: a valid source; `e_source_get_extension` creates the (registered)
+    // extension on demand, and the child is this account's to write.
+    let to: *mut gobject_sys::GObject =
+        unsafe { eds_sys::e_source_get_extension(child, name.as_ptr()) }.cast();
+
+    for property in jmap_config::oauth2::PROPERTY_NAMES {
+        // SAFETY: two live extension objects of the same class, which installs
+        // every property in `PROPERTY_NAMES`; NUL-terminated names.
+        unsafe { bind(from.cast(), to.cast(), property) };
     }
 }
 
