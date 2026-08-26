@@ -26,6 +26,11 @@ use jmap_collection_sync::child_source::{Connection, EXTENSION_ADDRESS_BOOK, EXT
 use jmap_collection_sync::{Child, ChildKind};
 use jmap_proto::Id;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// An `ESource` that is not backed by the registry — `e_source_new_with_uid`
 /// with a NULL D-Bus object is what EDS itself uses for a source read from a
 /// keyfile, so the extension machinery behaves as it does in a backend.
@@ -121,141 +126,176 @@ fn child(kind: ChildKind, collection: &str) -> Child {
 
 #[test]
 fn the_extension_names_are_the_ones_eds_defines() {
-    // `jmap-collection-sync` spells them as string literals, because it must
-    // build on a machine with no EDS headers. They are the argument to
-    // `e_source_get_extension` and the group of a `.source` file, and a typo in
-    // one is not an error — it is a second, empty extension nothing reads. This
-    // crate is the only place both spellings are in scope, so it is the only
-    // place the two can be held against each other.
-    assert_eq!(
-        E_SOURCE_EXTENSION_ADDRESS_BOOK.to_str(),
-        Ok(EXTENSION_ADDRESS_BOOK)
-    );
-    assert_eq!(E_SOURCE_EXTENSION_CALENDAR.to_str(), Ok(EXTENSION_CALENDAR));
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `jmap-collection-sync` spells them as string literals, because it must
+        // build on a machine with no EDS headers. They are the argument to
+        // `e_source_get_extension` and the group of a `.source` file, and a typo in
+        // one is not an error — it is a second, empty extension nothing reads. This
+        // crate is the only place both spellings are in scope, so it is the only
+        // place the two can be held against each other.
+        assert_eq!(
+            E_SOURCE_EXTENSION_ADDRESS_BOOK.to_str(),
+            Ok(EXTENSION_ADDRESS_BOOK)
+        );
+        assert_eq!(E_SOURCE_EXTENSION_CALENDAR.to_str(), Ok(EXTENSION_CALENDAR));
 
-    // And the table this crate dispatches on says the same, pair by pair, so a
-    // kind added later cannot bring a third spelling with it.
-    assert_eq!(
-        KIND_EXTENSIONS
-            .iter()
-            .map(|(defined, ours)| (defined.to_str().expect("ASCII"), *ours))
-            .collect::<Vec<_>>(),
-        [
-            (EXTENSION_ADDRESS_BOOK, EXTENSION_ADDRESS_BOOK),
-            (EXTENSION_CALENDAR, EXTENSION_CALENDAR),
-        ]
-    );
+        // And the table this crate dispatches on says the same, pair by pair, so a
+        // kind added later cannot bring a third spelling with it.
+        assert_eq!(
+            KIND_EXTENSIONS
+                .iter()
+                .map(|(defined, ours)| (defined.to_str().expect("ASCII"), *ours))
+                .collect::<Vec<_>>(),
+            [
+                (EXTENSION_ADDRESS_BOOK, EXTENSION_ADDRESS_BOOK),
+                (EXTENSION_CALENDAR, EXTENSION_CALENDAR),
+            ]
+        );
+    });
 }
 
 #[test]
 fn an_address_book_child_is_read_back_as_the_resource_id_it_was_created_under() {
-    let source = TestSource::new()
-        .with_extension(EXTENSION_ADDRESS_BOOK)
-        .with_identity("AB1");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = TestSource::new()
+            .with_extension(EXTENSION_ADDRESS_BOOK)
+            .with_identity("AB1");
 
-    assert_eq!(source.resource_id().as_deref(), Some("addressbook:AB1"));
+        assert_eq!(source.resource_id().as_deref(), Some("addressbook:AB1"));
+    });
 }
 
 #[test]
 fn a_calendar_child_is_read_back_as_a_calendar() {
-    let source = TestSource::new()
-        .with_extension(EXTENSION_CALENDAR)
-        .with_identity("Cal1");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = TestSource::new()
+            .with_extension(EXTENSION_CALENDAR)
+            .with_identity("Cal1");
 
-    assert_eq!(source.resource_id().as_deref(), Some("calendar:Cal1"));
+        assert_eq!(source.resource_id().as_deref(), Some("calendar:Cal1"));
+    });
 }
 
 #[test]
 fn the_two_kinds_of_child_of_one_jmap_id_do_not_share_a_resource_id() {
-    // The reason this vfunc is overridden at all. EDS's own implementation
-    // returns `[Resource] Identity` verbatim, and a JMAP account may hand out
-    // the same id for an address book and a calendar — RFC 8620 ids are unique
-    // per data type, not per account. Two children with one resource id is one
-    // child: `collection_backend_load_resources()` keeps the first and deletes
-    // the second's cache file as redundant.
-    let book = TestSource::new()
-        .with_extension(EXTENSION_ADDRESS_BOOK)
-        .with_identity("X1");
-    let calendar = TestSource::new()
-        .with_extension(EXTENSION_CALENDAR)
-        .with_identity("X1");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The reason this vfunc is overridden at all. EDS's own implementation
+        // returns `[Resource] Identity` verbatim, and a JMAP account may hand out
+        // the same id for an address book and a calendar — RFC 8620 ids are unique
+        // per data type, not per account. Two children with one resource id is one
+        // child: `collection_backend_load_resources()` keeps the first and deletes
+        // the second's cache file as redundant.
+        let book = TestSource::new()
+            .with_extension(EXTENSION_ADDRESS_BOOK)
+            .with_identity("X1");
+        let calendar = TestSource::new()
+            .with_extension(EXTENSION_CALENDAR)
+            .with_identity("X1");
 
-    assert_ne!(book.resource_id(), calendar.resource_id());
-    assert!(book.resource_id().is_some());
-    assert!(calendar.resource_id().is_some());
+        assert_ne!(book.resource_id(), calendar.resource_id());
+        assert!(book.resource_id().is_some());
+        assert!(calendar.resource_id().is_some());
+    });
 }
 
 #[test]
 fn every_child_this_backend_describes_reads_back_as_itself() {
-    // The round trip that has to hold for every child `populate` will create:
-    // what `Child::settings` writes is what this reads. A child of ours that
-    // did not round-trip would be deleted from the cache on the next start.
-    for (kind, collection) in [
-        (ChildKind::AddressBook, "AB1"),
-        (ChildKind::Calendar, "Cal1"),
-        (ChildKind::AddressBook, "Shared"),
-        (ChildKind::Calendar, "Shared"),
-    ] {
-        let child = child(kind, collection);
-        let settings = child.settings(&connection());
-        let identity = settings
-            .iter()
-            .find(|setting| (setting.group, setting.key) == ("Resource", "Identity"))
-            .expect("every child is written with an identity");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The round trip that has to hold for every child `populate` will create:
+        // what `Child::settings` writes is what this reads. A child of ours that
+        // did not round-trip would be deleted from the cache on the next start.
+        for (kind, collection) in [
+            (ChildKind::AddressBook, "AB1"),
+            (ChildKind::Calendar, "Cal1"),
+            (ChildKind::AddressBook, "Shared"),
+            (ChildKind::Calendar, "Shared"),
+        ] {
+            let child = child(kind, collection);
+            let settings = child.settings(&connection());
+            let identity = settings
+                .iter()
+                .find(|setting| (setting.group, setting.key) == ("Resource", "Identity"))
+                .expect("every child is written with an identity");
 
-        let source = TestSource::new()
-            .with_extension(kind.extension())
-            .with_identity(&identity.value);
+            let source = TestSource::new()
+                .with_extension(kind.extension())
+                .with_identity(&identity.value);
 
-        assert_eq!(source.resource_id().as_deref(), Some(&*child.resource_id));
-    }
+            assert_eq!(source.resource_id().as_deref(), Some(&*child.resource_id));
+        }
+    });
 }
 
 #[test]
 fn a_source_of_no_kind_this_backend_creates_is_not_claimed() {
-    // `dup_resource_id` is asked about every `.source` in the backend's cache
-    // directory. Claiming one that is not ours would put a foreign source in
-    // EDS's unclaimed-resources table under a name a real child may also
-    // answer to — and the loser of that collision is deleted.
-    let source = TestSource::new()
-        .with_extension("Mail Account")
-        .with_identity("A1");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `dup_resource_id` is asked about every `.source` in the backend's cache
+        // directory. Claiming one that is not ours would put a foreign source in
+        // EDS's unclaimed-resources table under a name a real child may also
+        // answer to — and the loser of that collision is deleted.
+        let source = TestSource::new()
+            .with_extension("Mail Account")
+            .with_identity("A1");
 
-    assert_eq!(source.resource_id(), None);
+        assert_eq!(source.resource_id(), None);
+    });
 }
 
 #[test]
 fn a_child_with_no_identity_is_not_claimed_and_is_not_given_one() {
-    // Two things at once, and the second is the subtle one:
-    // `e_source_get_extension` *creates* the extension it is asked for. Reading
-    // the identity that way would give every source that reached this vfunc an
-    // empty `[Resource]` group — including sources belonging to other backends
-    // — so the extension has to be tested for before it is read.
-    let source = TestSource::new().with_extension(EXTENSION_ADDRESS_BOOK);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Two things at once, and the second is the subtle one:
+        // `e_source_get_extension` *creates* the extension it is asked for. Reading
+        // the identity that way would give every source that reached this vfunc an
+        // empty `[Resource]` group — including sources belonging to other backends
+        // — so the extension has to be tested for before it is read.
+        let source = TestSource::new().with_extension(EXTENSION_ADDRESS_BOOK);
 
-    assert_eq!(source.resource_id(), None);
-    assert!(
-        !source.has_extension(E_SOURCE_EXTENSION_RESOURCE),
-        "reading the identity added a [Resource] extension to a source that had none"
-    );
+        assert_eq!(source.resource_id(), None);
+        assert!(
+            !source.has_extension(E_SOURCE_EXTENSION_RESOURCE),
+            "reading the identity added a [Resource] extension to a source that had none"
+        );
+    });
 }
 
 #[test]
 fn an_empty_identity_is_no_identity() {
-    // A `.source` carrying `Identity=` reads back as the empty string, and an
-    // empty JMAP id is not an id. Answering `"addressbook:"` would be a name
-    // every such child shares.
-    let source = TestSource::new()
-        .with_extension(EXTENSION_ADDRESS_BOOK)
-        .with_identity("");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // A `.source` carrying `Identity=` reads back as the empty string, and an
+        // empty JMAP id is not an id. Answering `"addressbook:"` would be a name
+        // every such child shares.
+        let source = TestSource::new()
+            .with_extension(EXTENSION_ADDRESS_BOOK)
+            .with_identity("");
 
-    assert_eq!(source.resource_id(), None);
+        assert_eq!(source.resource_id(), None);
+    });
 }
 
 #[test]
 fn a_null_source_is_not_claimed_rather_than_dereferenced() {
-    // EDS never passes one; the vfunc is a C entry point and this is the
-    // cheapest half of not trusting the caller.
-    // SAFETY: NULL is an explicitly permitted argument.
-    assert_eq!(unsafe { resource_id_of(ptr::null_mut()) }, None);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // EDS never passes one; the vfunc is a C entry point and this is the
+        // cheapest half of not trusting the caller.
+        // SAFETY: NULL is an explicitly permitted argument.
+        assert_eq!(unsafe { resource_id_of(ptr::null_mut()) }, None);
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_resource_id_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }

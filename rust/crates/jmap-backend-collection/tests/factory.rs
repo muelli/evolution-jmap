@@ -43,6 +43,11 @@ use jmap_backend_collection::factory::JmapCollectionFactory;
 use jmap_backend_collection::module::{load, unload};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// What `e_collection_backend_factory_class_init` leaves in the two fields this
 /// subclass exists to fill in — read off EDS 3.52's own source, because they are
 /// the reason the two tests below are worth writing.
@@ -207,14 +212,17 @@ fn parent_class() -> &'static ECollectionBackendFactoryClass {
 
 #[test]
 fn the_entry_point_registers_the_backend_type() {
-    let gtype = backend_type();
-    assert_ne!(gtype, 0, "e_module_load did not register the backend type");
-    assert_ne!(
-        // SAFETY: both are registered types.
-        unsafe { g_type_is_a(gtype, e_collection_backend_get_type()) },
-        0,
-        "the registered backend is not an ECollectionBackend"
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let gtype = backend_type();
+        assert_ne!(gtype, 0, "e_module_load did not register the backend type");
+        assert_ne!(
+            // SAFETY: both are registered types.
+            unsafe { g_type_is_a(gtype, e_collection_backend_get_type()) },
+            0,
+            "the registered backend is not an ECollectionBackend"
+        );
+    });
 }
 
 /// The registry server is an `EDataFactory` whose `backend_factory_type` is
@@ -222,16 +230,19 @@ fn the_entry_point_registers_the_backend_type() {
 /// is never collected out of a loaded module, however correct the rest of it is.
 #[test]
 fn the_entry_point_registers_a_collection_backend_factory() {
-    let gtype = factory_type();
-    assert_ne!(gtype, 0, "e_module_load did not register the factory type");
-    assert_ne!(
-        // SAFETY: both are registered types.
-        unsafe { g_type_is_a(gtype, e_collection_backend_factory_get_type()) },
-        0,
-        "evolution-source-registry collects the collection factories a module \
-         provides as extensions of itself, keyed by ECollectionBackendFactory; \
-         a type that is not one of them is never looked at"
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let gtype = factory_type();
+        assert_ne!(gtype, 0, "e_module_load did not register the factory type");
+        assert_ne!(
+            // SAFETY: both are registered types.
+            unsafe { g_type_is_a(gtype, e_collection_backend_factory_get_type()) },
+            0,
+            "evolution-source-registry collects the collection factories a module \
+             provides as extensions of itself, keyed by ECollectionBackendFactory; \
+             a type that is not one of them is never looked at"
+        );
+    });
 }
 
 /// And it is reached *as an extension* — which is the whole registration story,
@@ -246,14 +257,17 @@ fn the_entry_point_registers_a_collection_backend_factory() {
 /// pass every other test in this file, and never be instantiated.
 #[test]
 fn the_factory_is_an_extension_of_the_registry_server() {
-    let class = FactoryClass::get();
-    assert_eq!(
-        class.get_ref().parent_class.parent_class.extensible_type,
-        // SAFETY: no arguments, and the EDS type system initialises itself.
-        unsafe { e_source_registry_server_get_type() },
-        "the factory does not extend ESourceRegistryServer, so nothing would \
-         ever construct one"
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let class = FactoryClass::get();
+        assert_eq!(
+            class.get_ref().parent_class.parent_class.extensible_type,
+            // SAFETY: no arguments, and the EDS type system initialises itself.
+            unsafe { e_source_registry_server_get_type() },
+            "the factory does not extend ESourceRegistryServer, so nothing would \
+             ever construct one"
+        );
+    });
 }
 
 /// The name is the contract with the account's `.source` file: the registry
@@ -264,13 +278,16 @@ fn the_factory_is_an_extension_of_the_registry_server() {
 /// unfinished.
 #[test]
 fn the_factory_answers_to_the_backend_name_an_account_source_asks_for() {
-    let class = FactoryClass::get();
-    let name = class.get_ref().factory_name;
-    assert!(!name.is_null(), "the factory installed no name");
-    // SAFETY: a NUL-terminated string constant, checked non-NULL above.
-    let name = unsafe { CStr::from_ptr(name) };
-    assert_ne!(name, EDS_DEFAULTS.0, "the factory kept EDS's default name");
-    assert_eq!(name, c"jmap");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let class = FactoryClass::get();
+        let name = class.get_ref().factory_name;
+        assert!(!name.is_null(), "the factory installed no name");
+        // SAFETY: a NUL-terminated string constant, checked non-NULL above.
+        let name = unsafe { CStr::from_ptr(name) };
+        assert_ne!(name, EDS_DEFAULTS.0, "the factory kept EDS's default name");
+        assert_eq!(name, c"jmap");
+    });
 }
 
 /// What the registry actually files the factory under, through the parent's own
@@ -298,23 +315,26 @@ fn the_factory_answers_to_the_backend_name_an_account_source_asks_for() {
 /// allocation pairs with.
 #[test]
 fn the_registry_would_file_the_factory_under_the_account_name() {
-    let gtype = factory_type();
-    assert_ne!(gtype, 0, "the factory type is not registered");
-    // SAFETY: a registered, instantiatable type; GObject's own instance_init
-    // gives the result a reference count of one.
-    let factory = unsafe { g_type_create_instance(gtype) };
-    assert!(!factory.is_null(), "g_type_create_instance returned NULL");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let gtype = factory_type();
+        assert_ne!(gtype, 0, "the factory type is not registered");
+        // SAFETY: a registered, instantiatable type; GObject's own instance_init
+        // gives the result a reference count of one.
+        let factory = unsafe { g_type_create_instance(gtype) };
+        assert!(!factory.is_null(), "g_type_create_instance returned NULL");
 
-    // SAFETY: a live factory of a type derived from EBackendFactory; the key
-    // comes back `(transfer none)`, interned for the life of the process.
-    let key = unsafe { e_backend_factory_get_hash_key(factory.cast()) };
-    assert!(!key.is_null(), "the factory produced no hash key");
-    // SAFETY: an interned NUL-terminated string, checked non-NULL above.
-    assert_eq!(unsafe { CStr::from_ptr(key) }, c"jmap:Collection");
+        // SAFETY: a live factory of a type derived from EBackendFactory; the key
+        // comes back `(transfer none)`, interned for the life of the process.
+        let key = unsafe { e_backend_factory_get_hash_key(factory.cast()) };
+        assert!(!key.is_null(), "the factory produced no hash key");
+        // SAFETY: an interned NUL-terminated string, checked non-NULL above.
+        assert_eq!(unsafe { CStr::from_ptr(key) }, c"jmap:Collection");
 
-    // SAFETY: the reference instance creation left behind, given back once; the
-    // finalize it reaches is what frees the instance.
-    unsafe { g_object_unref(factory.cast()) };
+        // SAFETY: the reference instance creation left behind, given back once; the
+        // finalize it reaches is what frees the instance.
+        unsafe { g_object_unref(factory.cast()) };
+    });
 }
 
 /// The type the factory would `g_object_new`, which is the one thing between a
@@ -327,21 +347,24 @@ fn the_registry_would_file_the_factory_under_the_account_name() {
 /// to assert; it has to be *ours*.
 #[test]
 fn the_factory_builds_the_jmap_collection_backend() {
-    let class = FactoryClass::get();
-    let built = class.get_ref().backend_type;
-    assert_eq!(
-        built,
-        backend_type(),
-        "the factory would instantiate some other type than the backend the \
-         same module registered"
-    );
-    // SAFETY: a registered type.
-    let built_name = unsafe { CStr::from_ptr(gobject_sys::g_type_name(built)) };
-    assert_ne!(
-        built_name.to_str(),
-        Ok(EDS_DEFAULTS.1),
-        "the factory kept EDS's default backend type"
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let class = FactoryClass::get();
+        let built = class.get_ref().backend_type;
+        assert_eq!(
+            built,
+            backend_type(),
+            "the factory would instantiate some other type than the backend the \
+             same module registered"
+        );
+        // SAFETY: a registered type.
+        let built_name = unsafe { CStr::from_ptr(gobject_sys::g_type_name(built)) };
+        assert_ne!(
+            built_name.to_str(),
+            Ok(EDS_DEFAULTS.1),
+            "the factory kept EDS's default backend type"
+        );
+    });
 }
 
 /// The two fields above are written into the *parent's* half of the class
@@ -359,41 +382,44 @@ fn the_factory_builds_the_jmap_collection_backend() {
 /// into the padding EDS keeps for future vfuncs.
 #[test]
 fn writing_the_fields_left_the_parent_vfuncs_alone() {
-    let class = FactoryClass::get();
-    let ours = class.get_ref();
-    let parent = parent_class();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let class = FactoryClass::get();
+        let ours = class.get_ref();
+        let parent = parent_class();
 
-    assert_eq!(
-        ours.parent_class.get_hash_key.map(|f| f as usize),
-        parent.parent_class.get_hash_key.map(|f| f as usize),
-        "get_hash_key was overwritten"
-    );
-    assert_eq!(
-        ours.parent_class.new_backend.map(|f| f as usize),
-        parent.parent_class.new_backend.map(|f| f as usize),
-        "new_backend was overwritten"
-    );
-    assert!(
-        parent.prepare_mail.is_some(),
-        "EDS installs a default prepare_mail; if it stopped doing so, the \
-         comparison below stopped saying anything"
-    );
-    assert_ne!(
-        ours.prepare_mail.map(|f| f as usize),
-        parent.prepare_mail.map(|f| f as usize),
-        "prepare_mail is still the parent's, so the mail sources of a JMAP \
-         account would name no provider"
-    );
-    assert!(
-        ours.reserved.iter().all(|slot| slot.is_null()),
-        "something was written past prepare_mail, into the slots EDS keeps for \
-         vfuncs it has not added yet"
-    );
-    assert!(
-        parent.reserved.iter().all(|slot| slot.is_null()),
-        "EDS itself put something in `reserved`, so the check above no longer \
-         distinguishes our write from its own"
-    );
+        assert_eq!(
+            ours.parent_class.get_hash_key.map(|f| f as usize),
+            parent.parent_class.get_hash_key.map(|f| f as usize),
+            "get_hash_key was overwritten"
+        );
+        assert_eq!(
+            ours.parent_class.new_backend.map(|f| f as usize),
+            parent.parent_class.new_backend.map(|f| f as usize),
+            "new_backend was overwritten"
+        );
+        assert!(
+            parent.prepare_mail.is_some(),
+            "EDS installs a default prepare_mail; if it stopped doing so, the \
+             comparison below stopped saying anything"
+        );
+        assert_ne!(
+            ours.prepare_mail.map(|f| f as usize),
+            parent.prepare_mail.map(|f| f as usize),
+            "prepare_mail is still the parent's, so the mail sources of a JMAP \
+             account would name no provider"
+        );
+        assert!(
+            ours.reserved.iter().all(|slot| slot.is_null()),
+            "something was written past prepare_mail, into the slots EDS keeps for \
+             vfuncs it has not added yet"
+        );
+        assert!(
+            parent.reserved.iter().all(|slot| slot.is_null()),
+            "EDS itself put something in `reserved`, so the check above no longer \
+             distinguishes our write from its own"
+        );
+    });
 }
 
 /// Registered against the module, not statically: a statically registered type
@@ -401,18 +427,21 @@ fn writing_the_fields_left_the_parent_vfuncs_alone() {
 /// registry has unloaded the module underneath it.
 #[test]
 fn the_types_belong_to_the_module_that_registered_them() {
-    let loaded = loaded();
-    for gtype in [backend_type(), factory_type()] {
-        assert_eq!(
-            // SAFETY: a registered type; the plugin of a dynamic type is the
-            // GTypeModule it was registered against.
-            unsafe { g_type_get_plugin(gtype) }.cast::<GTypeModule>(),
-            loaded.module,
-            "{:?} was not registered against the module",
-            // SAFETY: a registered type.
-            unsafe { CStr::from_ptr(gobject_sys::g_type_name(gtype)) }
-        );
-    }
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let loaded = loaded();
+        for gtype in [backend_type(), factory_type()] {
+            assert_eq!(
+                // SAFETY: a registered type; the plugin of a dynamic type is the
+                // GTypeModule it was registered against.
+                unsafe { g_type_get_plugin(gtype) }.cast::<GTypeModule>(),
+                loaded.module,
+                "{:?} was not registered against the module",
+                // SAFETY: a registered type.
+                unsafe { CStr::from_ptr(gobject_sys::g_type_name(gtype)) }
+            );
+        }
+    });
 }
 
 /// The registry unuses a module when the last backend it provided goes away,
@@ -422,10 +451,21 @@ fn the_types_belong_to_the_module_that_registered_them() {
 /// refuses the module and no JMAP account can be constructed again.
 #[test]
 fn a_module_that_is_unloaded_and_loaded_again_hands_its_types_back() {
-    let loaded = loaded();
-    assert_ne!(loaded.first_use, GFALSE, "the module would not load at all");
-    assert_ne!(
-        loaded.use_after_unload, GFALSE,
-        "the second e_module_load did not re-register the module's types"
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let loaded = loaded();
+        assert_ne!(loaded.first_use, GFALSE, "the module would not load at all");
+        assert_ne!(
+            loaded.use_after_unload, GFALSE,
+            "the second e_module_load did not re-register the module's types"
+        );
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_factory_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }

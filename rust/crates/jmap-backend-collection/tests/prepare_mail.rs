@@ -44,6 +44,11 @@ use jmap_backend_collection::resource_id::resource_id_of;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::subclass::register_static;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// One of the three `ESource`s the setup UI would hand `prepare_mail`: a source
 /// with a uid and nothing on it.
 ///
@@ -159,21 +164,24 @@ impl Prepared {
 /// the empty protocol.
 #[test]
 fn the_mail_account_is_served_by_the_jmap_camel_provider() {
-    let prepared = Prepared::new();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prepared = Prepared::new();
 
-    assert!(
-        prepared
-            .account
-            .has_extension(E_SOURCE_EXTENSION_MAIL_ACCOUNT),
-        "the account source is not a mail account"
-    );
-    assert_eq!(
-        prepared
-            .account
-            .backend_name(E_SOURCE_EXTENSION_MAIL_ACCOUNT)
-            .as_deref(),
-        MAIL_BACKEND_NAME.to_str().ok(),
-    );
+        assert!(
+            prepared
+                .account
+                .has_extension(E_SOURCE_EXTENSION_MAIL_ACCOUNT),
+            "the account source is not a mail account"
+        );
+        assert_eq!(
+            prepared
+                .account
+                .backend_name(E_SOURCE_EXTENSION_MAIL_ACCOUNT)
+                .as_deref(),
+            MAIL_BACKEND_NAME.to_str().ok(),
+        );
+    });
 }
 
 /// And so is the transport, under the *same* name, because JMAP submits over
@@ -182,21 +190,24 @@ fn the_mail_account_is_served_by_the_jmap_camel_provider() {
 /// second name here the way IMAP accounts have `smtp` beside them.
 #[test]
 fn the_transport_is_the_same_provider_and_not_a_second_one() {
-    let prepared = Prepared::new();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prepared = Prepared::new();
 
-    assert!(
-        prepared
-            .transport
-            .has_extension(E_SOURCE_EXTENSION_MAIL_TRANSPORT),
-        "the transport source is not a mail transport"
-    );
-    assert_eq!(
-        prepared
-            .transport
-            .backend_name(E_SOURCE_EXTENSION_MAIL_TRANSPORT)
-            .as_deref(),
-        MAIL_BACKEND_NAME.to_str().ok(),
-    );
+        assert!(
+            prepared
+                .transport
+                .has_extension(E_SOURCE_EXTENSION_MAIL_TRANSPORT),
+            "the transport source is not a mail transport"
+        );
+        assert_eq!(
+            prepared
+                .transport
+                .backend_name(E_SOURCE_EXTENSION_MAIL_TRANSPORT)
+                .as_deref(),
+            MAIL_BACKEND_NAME.to_str().ok(),
+        );
+    });
 }
 
 /// The name written above has to be the protocol Camel routes to
@@ -210,15 +221,18 @@ fn the_transport_is_the_same_provider_and_not_a_second_one() {
 /// reaches the directory Camel scans.
 #[test]
 fn the_name_written_is_the_protocol_camel_dlopens_the_provider_for() {
-    let urls = include_str!("../../jmap-mail/libcameljmap.urls");
-    let protocols: Vec<&str> = urls.lines().collect();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let urls = include_str!("../../jmap-mail/libcameljmap.urls");
+        let protocols: Vec<&str> = urls.lines().collect();
 
-    assert_eq!(
-        protocols,
-        [MAIL_BACKEND_NAME.to_str().expect("ASCII")],
-        "the mail sources would name a protocol libcameljmap.urls does not \
-         claim, so Camel would never dlopen the provider for them"
-    );
+        assert_eq!(
+            protocols,
+            [MAIL_BACKEND_NAME.to_str().expect("ASCII")],
+            "the mail sources would name a protocol libcameljmap.urls does not \
+             claim, so Camel would never dlopen the provider for them"
+        );
+    });
 }
 
 /// A subclass that forgets to chain up loses the wiring that makes the three
@@ -230,58 +244,63 @@ fn the_name_written_is_the_protocol_camel_dlopens_the_provider_for() {
 /// this test reads back off the very sources they should name.
 #[test]
 fn chaining_up_left_the_three_sources_pointing_at_each_other() {
-    let prepared = Prepared::new();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prepared = Prepared::new();
 
-    // SAFETY: the extension is present (asserted through `has_extension`
-    // first), so this returns the source's own, and the uid it holds is NULL or
-    // a NUL-terminated string owned by it.
-    let identity_uid = unsafe {
-        assert!(
-            prepared
-                .account
-                .has_extension(E_SOURCE_EXTENSION_MAIL_ACCOUNT),
-            "the account source is not a mail account"
+        // SAFETY: the extension is present (asserted through `has_extension`
+        // first), so this returns the source's own, and the uid it holds is NULL or
+        // a NUL-terminated string owned by it.
+        let identity_uid = unsafe {
+            assert!(
+                prepared
+                    .account
+                    .has_extension(E_SOURCE_EXTENSION_MAIL_ACCOUNT),
+                "the account source is not a mail account"
+            );
+            let account: *mut ESourceMailAccount = e_source_get_extension(
+                prepared.account.0,
+                E_SOURCE_EXTENSION_MAIL_ACCOUNT.as_ptr(),
+            )
+            .cast();
+            read_string(e_source_mail_account_get_identity_uid(account))
+        };
+        assert_eq!(
+            identity_uid,
+            prepared.identity.uid(),
+            "the mail account does not name the identity it was prepared with"
         );
-        let account: *mut ESourceMailAccount =
-            e_source_get_extension(prepared.account.0, E_SOURCE_EXTENSION_MAIL_ACCOUNT.as_ptr())
-                .cast();
-        read_string(e_source_mail_account_get_identity_uid(account))
-    };
-    assert_eq!(
-        identity_uid,
-        prepared.identity.uid(),
-        "the mail account does not name the identity it was prepared with"
-    );
 
-    assert!(
-        prepared
-            .identity
-            .has_extension(E_SOURCE_EXTENSION_MAIL_IDENTITY),
-        "the identity source is not a mail identity, so nothing recognises it \
-         as one"
-    );
-
-    // SAFETY: as above, with `[Mail Submission]` the extension.
-    let transport_uid = unsafe {
         assert!(
             prepared
                 .identity
-                .has_extension(E_SOURCE_EXTENSION_MAIL_SUBMISSION),
-            "the identity source has no submission settings"
+                .has_extension(E_SOURCE_EXTENSION_MAIL_IDENTITY),
+            "the identity source is not a mail identity, so nothing recognises it \
+             as one"
         );
-        let submission: *mut ESourceMailSubmission = e_source_get_extension(
-            prepared.identity.0,
-            E_SOURCE_EXTENSION_MAIL_SUBMISSION.as_ptr(),
-        )
-        .cast();
-        read_string(e_source_mail_submission_get_transport_uid(submission))
-    };
-    assert_eq!(
-        transport_uid,
-        prepared.transport.uid(),
-        "the identity does not name the transport it was prepared with, so \
-         sending would pick some other account's"
-    );
+
+        // SAFETY: as above, with `[Mail Submission]` the extension.
+        let transport_uid = unsafe {
+            assert!(
+                prepared
+                    .identity
+                    .has_extension(E_SOURCE_EXTENSION_MAIL_SUBMISSION),
+                "the identity source has no submission settings"
+            );
+            let submission: *mut ESourceMailSubmission = e_source_get_extension(
+                prepared.identity.0,
+                E_SOURCE_EXTENSION_MAIL_SUBMISSION.as_ptr(),
+            )
+            .cast();
+            read_string(e_source_mail_submission_get_transport_uid(submission))
+        };
+        assert_eq!(
+            transport_uid,
+            prepared.transport.uid(),
+            "the identity does not name the transport it was prepared with, so \
+             sending would pick some other account's"
+        );
+    });
 }
 
 /// The identity is a person, not a service, and giving it a backend name would
@@ -293,18 +312,21 @@ fn chaining_up_left_the_three_sources_pointing_at_each_other() {
 /// visible in Evolution, pointed at nothing.
 #[test]
 fn the_identity_is_not_turned_into_a_service_of_its_own() {
-    let prepared = Prepared::new();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prepared = Prepared::new();
 
-    for extension in [
-        E_SOURCE_EXTENSION_MAIL_ACCOUNT,
-        E_SOURCE_EXTENSION_MAIL_TRANSPORT,
-    ] {
-        assert!(
-            !prepared.identity.has_extension(extension),
-            "the identity was given {extension:?}, which makes it a mail \
-             service in its own right"
-        );
-    }
+        for extension in [
+            E_SOURCE_EXTENSION_MAIL_ACCOUNT,
+            E_SOURCE_EXTENSION_MAIL_TRANSPORT,
+        ] {
+            assert!(
+                !prepared.identity.has_extension(extension),
+                "the identity was given {extension:?}, which makes it a mail \
+                 service in its own right"
+            );
+        }
+    });
 }
 
 /// And none of the three is ever claimed as a child of this collection, which
@@ -319,18 +341,29 @@ fn the_identity_is_not_turned_into_a_service_of_its_own() {
 /// account, and are the setup UI's to manage.
 #[test]
 fn no_prepared_mail_source_is_read_as_a_child_of_this_collection() {
-    let prepared = Prepared::new();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prepared = Prepared::new();
 
-    for (what, source) in [
-        ("the mail account", &prepared.account),
-        ("the identity", &prepared.identity),
-        ("the transport", &prepared.transport),
-    ] {
-        // SAFETY: a live source.
-        assert_eq!(
-            unsafe { resource_id_of(source.0) },
-            None,
-            "{what} was read as a child this backend created"
-        );
-    }
+        for (what, source) in [
+            ("the mail account", &prepared.account),
+            ("the identity", &prepared.identity),
+            ("the transport", &prepared.transport),
+        ] {
+            // SAFETY: a live source.
+            assert_eq!(
+                unsafe { resource_id_of(source.0) },
+                None,
+                "{what} was read as a child this backend created"
+            );
+        }
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_prepare_mail_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }

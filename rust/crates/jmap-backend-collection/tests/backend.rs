@@ -40,6 +40,11 @@ use gobject_sys::{
 use jmap_backend_collection::backend::{JmapCollectionBackend, JmapCollectionBackendClass};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The class EDS would dispatch through, kept referenced for the test's
 /// duration so the vfunc pointers stay valid.
 struct Class(*mut JmapCollectionBackendClass);
@@ -153,276 +158,311 @@ fn query(gtype: glib_sys::GType) -> GTypeQuery {
 
 #[test]
 fn the_backend_registers_as_a_subclass_of_ecollectionbackend() {
-    let gtype = register_static::<JmapCollectionBackend>();
-    assert_ne!(gtype, 0, "the backend type did not register");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let gtype = register_static::<JmapCollectionBackend>();
+        assert_ne!(gtype, 0, "the backend type did not register");
 
-    // SAFETY: a registered type.
-    let parent = unsafe { g_type_parent(gtype) };
-    // SAFETY: no arguments.
-    assert_eq!(parent, unsafe { e_collection_backend_get_type() });
+        // SAFETY: a registered type.
+        let parent = unsafe { g_type_parent(gtype) };
+        // SAFETY: no arguments.
+        assert_eq!(parent, unsafe { e_collection_backend_get_type() });
 
-    // SAFETY: a registered type; the name is owned by the type system.
-    let name = unsafe { std::ffi::CStr::from_ptr(g_type_name(gtype)) };
-    assert_eq!(name, JmapCollectionBackend::NAME);
+        // SAFETY: a registered type; the name is owned by the type system.
+        let name = unsafe { std::ffi::CStr::from_ptr(g_type_name(gtype)) };
+        assert_eq!(name, JmapCollectionBackend::NAME);
+    });
 }
 
 #[test]
 fn the_registered_sizes_are_the_rust_struct_sizes() {
-    // The same bet eds-sys's layout test makes one level down, made again for
-    // the type this crate declares: GObject allocates what registration told it
-    // to, and a mismatch writes vfunc pointers past the end of the class.
-    let _class = Class::get();
-    let q = query(register_static::<JmapCollectionBackend>());
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The same bet eds-sys's layout test makes one level down, made again for
+        // the type this crate declares: GObject allocates what registration told it
+        // to, and a mismatch writes vfunc pointers past the end of the class.
+        let _class = Class::get();
+        let q = query(register_static::<JmapCollectionBackend>());
 
-    assert_eq!(q.instance_size as usize, size_of::<JmapCollectionBackend>());
-    assert_eq!(
-        q.class_size as usize,
-        size_of::<JmapCollectionBackendClass>()
-    );
+        assert_eq!(q.instance_size as usize, size_of::<JmapCollectionBackend>());
+        assert_eq!(
+            q.class_size as usize,
+            size_of::<JmapCollectionBackendClass>()
+        );
+    });
 }
 
 #[test]
 fn class_init_replaces_the_default_dup_resource_id_rather_than_leaving_it() {
-    // `ECollectionBackendClass` comes with a working `dup_resource_id` — it
-    // returns `[Resource] Identity` verbatim — so an uninstalled override is
-    // invisible until two children of one JMAP id collide.
-    let class = Class::get();
-    // SAFETY: the parent type's class is alive for as long as ours is.
-    let parent: *mut ECollectionBackendClass =
-        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
-    assert!(!parent.is_null(), "the parent class was not referenced");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `ECollectionBackendClass` comes with a working `dup_resource_id` — it
+        // returns `[Resource] Identity` verbatim — so an uninstalled override is
+        // invisible until two children of one JMAP id collide.
+        let class = Class::get();
+        // SAFETY: the parent type's class is alive for as long as ours is.
+        let parent: *mut ECollectionBackendClass =
+            unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+        assert!(!parent.is_null(), "the parent class was not referenced");
 
-    let ours = class
-        .vfuncs()
-        .dup_resource_id
-        .expect("class_init installed no dup_resource_id");
-    // SAFETY: a live class struct.
-    let inherited = unsafe { (*parent).dup_resource_id }.expect("EDS installs its own default");
+        let ours = class
+            .vfuncs()
+            .dup_resource_id
+            .expect("class_init installed no dup_resource_id");
+        // SAFETY: a live class struct.
+        let inherited = unsafe { (*parent).dup_resource_id }.expect("EDS installs its own default");
 
-    assert!(
-        ours as usize != inherited as usize,
-        "the slot still holds EDS's default"
-    );
+        assert!(
+            ours as usize != inherited as usize,
+            "the slot still holds EDS's default"
+        );
+    });
 }
 
 #[test]
 fn the_installed_vfunc_answers_with_the_kind_as_well_as_the_identity() {
-    let class = Class::get();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let class = Class::get();
 
-    assert_eq!(
-        class
-            .dup_resource_id(Source::new(E_SOURCE_EXTENSION_ADDRESS_BOOK.to_str().unwrap(), "X1").0)
-            .as_deref(),
-        Some("addressbook:X1")
-    );
-    assert_eq!(
-        class
-            .dup_resource_id(Source::new(E_SOURCE_EXTENSION_CALENDAR.to_str().unwrap(), "X1").0)
-            .as_deref(),
-        Some("calendar:X1"),
-        "an address book and a calendar of one JMAP id must not answer alike"
-    );
+        assert_eq!(
+            class
+                .dup_resource_id(
+                    Source::new(E_SOURCE_EXTENSION_ADDRESS_BOOK.to_str().unwrap(), "X1").0
+                )
+                .as_deref(),
+            Some("addressbook:X1")
+        );
+        assert_eq!(
+            class
+                .dup_resource_id(Source::new(E_SOURCE_EXTENSION_CALENDAR.to_str().unwrap(), "X1").0)
+                .as_deref(),
+            Some("calendar:X1"),
+            "an address book and a calendar of one JMAP id must not answer alike"
+        );
+    });
 }
 
 #[test]
 fn a_source_this_backend_did_not_create_gets_a_null_back() {
-    // NULL is EDS's "not one of yours" — and, for a source in this backend's
-    // own cache directory, its deletion. Answering it for a foreign source is
-    // right; answering it for one of ours would not be.
-    let class = Class::get();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // NULL is EDS's "not one of yours" — and, for a source in this backend's
+        // own cache directory, its deletion. Answering it for a foreign source is
+        // right; answering it for one of ours would not be.
+        let class = Class::get();
 
-    assert_eq!(
-        class.dup_resource_id(Source::new("Mail Account", "A1").0),
-        None
-    );
+        assert_eq!(
+            class.dup_resource_id(Source::new("Mail Account", "A1").0),
+            None
+        );
+    });
 }
 
 #[test]
 fn class_init_replaces_the_default_populate_rather_than_leaving_it() {
-    // `ECollectionBackendClass::populate` is a placeholder — "so subclasses can
-    // safely chain up" — so an override that is written but not installed is a
-    // backend whose sidebar is simply empty: nothing claims the cached children
-    // of previous sessions, nothing exports them, and nothing ever asks EDS for
-    // the account's credentials, so no fan-out happens either. There is no error
-    // and no log line anywhere in that, which is why the slot itself is a test.
-    let class = Class::get();
-    // SAFETY: the parent type's class is alive for as long as ours is.
-    let parent: *mut ECollectionBackendClass =
-        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
-    assert!(!parent.is_null(), "the parent class was not referenced");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `ECollectionBackendClass::populate` is a placeholder — "so subclasses can
+        // safely chain up" — so an override that is written but not installed is a
+        // backend whose sidebar is simply empty: nothing claims the cached children
+        // of previous sessions, nothing exports them, and nothing ever asks EDS for
+        // the account's credentials, so no fan-out happens either. There is no error
+        // and no log line anywhere in that, which is why the slot itself is a test.
+        let class = Class::get();
+        // SAFETY: the parent type's class is alive for as long as ours is.
+        let parent: *mut ECollectionBackendClass =
+            unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+        assert!(!parent.is_null(), "the parent class was not referenced");
 
-    let ours = class
-        .vfuncs()
-        .populate
-        .expect("class_init installed no populate");
-    // SAFETY: a live class struct.
-    let inherited = unsafe { (*parent).populate }.expect("EDS installs a placeholder");
+        let ours = class
+            .vfuncs()
+            .populate
+            .expect("class_init installed no populate");
+        // SAFETY: a live class struct.
+        let inherited = unsafe { (*parent).populate }.expect("EDS installs a placeholder");
 
-    assert!(
-        ours as usize != inherited as usize,
-        "the slot still holds EDS's placeholder"
-    );
+        assert!(
+            ours as usize != inherited as usize,
+            "the slot still holds EDS's placeholder"
+        );
+    });
 }
 
 #[test]
 fn the_installed_populate_is_the_one_the_parent_can_still_be_reached_through() {
-    // The chain-up the vfunc makes, from the other end: it reaches the parent's
-    // populate through `g_type_class_peek` of `ECollectionBackend` rather than
-    // through the instance's own class, which for a further subclass of ours
-    // would point back at our own slot and recurse until the stack ran out. What
-    // is asserted here is only that the pointer that walk finds is the parent's
-    // placeholder and not ours — the call itself needs a live instance, and so a
-    // running `evolution-source-registry`.
-    let class = Class::get();
-    // SAFETY: as above.
-    let parent: *mut ECollectionBackendClass =
-        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
-    // SAFETY: a live class struct.
-    let inherited = unsafe { (*parent).populate }.expect("EDS installs a placeholder");
-    let ours = class.vfuncs().populate.expect("class_init installed one");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The chain-up the vfunc makes, from the other end: it reaches the parent's
+        // populate through `g_type_class_peek` of `ECollectionBackend` rather than
+        // through the instance's own class, which for a further subclass of ours
+        // would point back at our own slot and recurse until the stack ran out. What
+        // is asserted here is only that the pointer that walk finds is the parent's
+        // placeholder and not ours — the call itself needs a live instance, and so a
+        // running `evolution-source-registry`.
+        let class = Class::get();
+        // SAFETY: as above.
+        let parent: *mut ECollectionBackendClass =
+            unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+        // SAFETY: a live class struct.
+        let inherited = unsafe { (*parent).populate }.expect("EDS installs a placeholder");
+        let ours = class.vfuncs().populate.expect("class_init installed one");
 
-    assert!(
-        inherited as usize != ours as usize,
-        "chaining up through the parent type's class would call our own populate"
-    );
+        assert!(
+            inherited as usize != ours as usize,
+            "chaining up through the parent type's class would call our own populate"
+        );
+    });
 }
 
 #[test]
 fn class_init_replaces_the_default_child_added_rather_than_leaving_it() {
-    // `ECollectionBackendClass::child_added` is a signal class closure with a
-    // working body — it inserts the child into the backend's table, binds its
-    // enabled flag and makes it non-removable — so an override that is written
-    // but not installed is not a backend that breaks. It is one whose children
-    // go on naming whatever server the account named when they were written,
-    // which is invisible until the user moves the account.
-    let class = Class::get();
-    // SAFETY: the parent type's class is alive for as long as ours is.
-    let parent: *mut ECollectionBackendClass =
-        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
-    assert!(!parent.is_null(), "the parent class was not referenced");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `ECollectionBackendClass::child_added` is a signal class closure with a
+        // working body — it inserts the child into the backend's table, binds its
+        // enabled flag and makes it non-removable — so an override that is written
+        // but not installed is not a backend that breaks. It is one whose children
+        // go on naming whatever server the account named when they were written,
+        // which is invisible until the user moves the account.
+        let class = Class::get();
+        // SAFETY: the parent type's class is alive for as long as ours is.
+        let parent: *mut ECollectionBackendClass =
+            unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+        assert!(!parent.is_null(), "the parent class was not referenced");
 
-    let ours = class
-        .vfuncs()
-        .child_added
-        .expect("class_init installed no child_added");
-    // SAFETY: a live class struct.
-    let inherited = unsafe { (*parent).child_added }.expect("EDS installs its own");
+        let ours = class
+            .vfuncs()
+            .child_added
+            .expect("class_init installed no child_added");
+        // SAFETY: a live class struct.
+        let inherited = unsafe { (*parent).child_added }.expect("EDS installs its own");
 
-    assert!(
-        ours as usize != inherited as usize,
-        "the slot still holds EDS's default, and the chain-up would recurse"
-    );
+        assert!(
+            ours as usize != inherited as usize,
+            "the slot still holds EDS's default, and the chain-up would recurse"
+        );
+    });
 }
 
 #[test]
 fn class_init_replaces_the_default_create_resource_sync_rather_than_leaving_it() {
-    // The one slot of the five whose EDS default is a *refusal* rather than a
-    // wrong answer: `collection_backend_create_resource()` does nothing but
-    // `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
-    // creating remote resources")`, which the default `create_resource_sync`
-    // drives through a closure. So an override that is written but not installed
-    // is not a silent misbehaviour — it is Evolution answering "New Address
-    // Book" with that message — and it is also why this override must NOT chain
-    // up: the parent is the refusal being replaced.
-    let class = Class::get();
-    // SAFETY: the parent type's class is alive for as long as ours is.
-    let parent: *mut ECollectionBackendClass =
-        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
-    assert!(!parent.is_null(), "the parent class was not referenced");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The one slot of the five whose EDS default is a *refusal* rather than a
+        // wrong answer: `collection_backend_create_resource()` does nothing but
+        // `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
+        // creating remote resources")`, which the default `create_resource_sync`
+        // drives through a closure. So an override that is written but not installed
+        // is not a silent misbehaviour — it is Evolution answering "New Address
+        // Book" with that message — and it is also why this override must NOT chain
+        // up: the parent is the refusal being replaced.
+        let class = Class::get();
+        // SAFETY: the parent type's class is alive for as long as ours is.
+        let parent: *mut ECollectionBackendClass =
+            unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+        assert!(!parent.is_null(), "the parent class was not referenced");
 
-    let ours = class
-        .vfuncs()
-        .create_resource_sync
-        .expect("class_init installed no create_resource_sync");
-    // SAFETY: a live class struct.
-    let inherited = unsafe { (*parent).create_resource_sync }
-        .expect("EDS installs a default that refuses every create");
+        let ours = class
+            .vfuncs()
+            .create_resource_sync
+            .expect("class_init installed no create_resource_sync");
+        // SAFETY: a live class struct.
+        let inherited = unsafe { (*parent).create_resource_sync }
+            .expect("EDS installs a default that refuses every create");
 
-    assert!(
-        ours as usize != inherited as usize,
-        "the slot still holds EDS's default, which refuses every create"
-    );
+        assert!(
+            ours as usize != inherited as usize,
+            "the slot still holds EDS's default, which refuses every create"
+        );
+    });
 }
 
 #[test]
 fn installing_the_middle_slots_left_the_ones_beside_them_inherited() {
-    // `child_added` and `create_resource_sync` are the slots this crate writes
-    // into the middle of `ECollectionBackendClass` — `dup_resource_id` and
-    // `populate` sit at the front of it — and their neighbours are the other
-    // signal closure and the rest of the resource vfuncs, all of which EDS fills
-    // in. A write one slot out does not fail to compile; it replaces a function
-    // of another signature, which is a call through a bad pointer the first time
-    // EDS uses it. `create_resource` and `create_resource_finish` sit
-    // immediately *after* the slot this crate now writes, so they are the two
-    // that pin it from the far side.
-    let class = Class::get();
-    // SAFETY: as above.
-    let parent: *mut ECollectionBackendClass =
-        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
-    assert!(!parent.is_null(), "the parent class was not referenced");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `child_added` and `create_resource_sync` are the slots this crate writes
+        // into the middle of `ECollectionBackendClass` — `dup_resource_id` and
+        // `populate` sit at the front of it — and their neighbours are the other
+        // signal closure and the rest of the resource vfuncs, all of which EDS fills
+        // in. A write one slot out does not fail to compile; it replaces a function
+        // of another signature, which is a call through a bad pointer the first time
+        // EDS uses it. `create_resource` and `create_resource_finish` sit
+        // immediately *after* the slot this crate now writes, so they are the two
+        // that pin it from the far side.
+        let class = Class::get();
+        // SAFETY: as above.
+        let parent: *mut ECollectionBackendClass =
+            unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+        assert!(!parent.is_null(), "the parent class was not referenced");
 
-    let ours = class.vfuncs();
-    // SAFETY: a live class struct.
-    let inherited = unsafe { &*parent };
+        let ours = class.vfuncs();
+        // SAFETY: a live class struct.
+        let inherited = unsafe { &*parent };
 
-    assert_eq!(
-        ours.child_removed.map(|f| f as usize),
-        inherited.child_removed.map(|f| f as usize),
-        "class_init overwrote child_removed"
-    );
-    assert_eq!(
-        ours.create_resource.map(|f| f as usize),
-        inherited.create_resource.map(|f| f as usize),
-        "class_init overwrote create_resource"
-    );
-    assert_eq!(
-        ours.create_resource_finish.map(|f| f as usize),
-        inherited.create_resource_finish.map(|f| f as usize),
-        "class_init overwrote create_resource_finish"
-    );
-    // `delete_resource` and `delete_resource_finish` sit immediately after
-    // `delete_resource_sync`, which this crate now writes too, so they are what
-    // pins *that* slot from the far side — the same job `create_resource` and
-    // `create_resource_finish` do for the create one.
-    assert_eq!(
-        ours.delete_resource.map(|f| f as usize),
-        inherited.delete_resource.map(|f| f as usize),
-        "class_init overwrote delete_resource"
-    );
-    assert_eq!(
-        ours.delete_resource_finish.map(|f| f as usize),
-        inherited.delete_resource_finish.map(|f| f as usize),
-        "class_init overwrote delete_resource_finish"
-    );
+        assert_eq!(
+            ours.child_removed.map(|f| f as usize),
+            inherited.child_removed.map(|f| f as usize),
+            "class_init overwrote child_removed"
+        );
+        assert_eq!(
+            ours.create_resource.map(|f| f as usize),
+            inherited.create_resource.map(|f| f as usize),
+            "class_init overwrote create_resource"
+        );
+        assert_eq!(
+            ours.create_resource_finish.map(|f| f as usize),
+            inherited.create_resource_finish.map(|f| f as usize),
+            "class_init overwrote create_resource_finish"
+        );
+        // `delete_resource` and `delete_resource_finish` sit immediately after
+        // `delete_resource_sync`, which this crate now writes too, so they are what
+        // pins *that* slot from the far side — the same job `create_resource` and
+        // `create_resource_finish` do for the create one.
+        assert_eq!(
+            ours.delete_resource.map(|f| f as usize),
+            inherited.delete_resource.map(|f| f as usize),
+            "class_init overwrote delete_resource"
+        );
+        assert_eq!(
+            ours.delete_resource_finish.map(|f| f as usize),
+            inherited.delete_resource_finish.map(|f| f as usize),
+            "class_init overwrote delete_resource_finish"
+        );
+    });
 }
 
 #[test]
 fn class_init_replaces_the_default_delete_resource_sync_rather_than_leaving_it() {
-    // The create slot's twin, and EDS's default is the same kind of thing:
-    // `collection_backend_delete_resource()` does nothing but
-    // `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
-    // deleting remote resources")`. So this override must not chain up either —
-    // and leaving the slot uninstalled while `remote-deletable` is set on the
-    // children (see `tests/delete_resource.rs`) would be the worst of both: a
-    // "Delete" Evolution offers and answers with that message.
-    let class = Class::get();
-    // SAFETY: the parent type's class is alive for as long as ours is.
-    let parent: *mut ECollectionBackendClass =
-        unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
-    assert!(!parent.is_null(), "the parent class was not referenced");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The create slot's twin, and EDS's default is the same kind of thing:
+        // `collection_backend_delete_resource()` does nothing but
+        // `g_task_return_new_error (G_IO_ERROR_NOT_SUPPORTED, "%s does not support
+        // deleting remote resources")`. So this override must not chain up either —
+        // and leaving the slot uninstalled while `remote-deletable` is set on the
+        // children (see `tests/delete_resource.rs`) would be the worst of both: a
+        // "Delete" Evolution offers and answers with that message.
+        let class = Class::get();
+        // SAFETY: the parent type's class is alive for as long as ours is.
+        let parent: *mut ECollectionBackendClass =
+            unsafe { g_type_class_peek(e_collection_backend_get_type()) }.cast();
+        assert!(!parent.is_null(), "the parent class was not referenced");
 
-    let ours = class
-        .vfuncs()
-        .delete_resource_sync
-        .expect("class_init installed no delete_resource_sync");
-    // SAFETY: a live class struct.
-    let inherited = unsafe { (*parent).delete_resource_sync }
-        .expect("EDS installs a default that refuses every delete");
+        let ours = class
+            .vfuncs()
+            .delete_resource_sync
+            .expect("class_init installed no delete_resource_sync");
+        // SAFETY: a live class struct.
+        let inherited = unsafe { (*parent).delete_resource_sync }
+            .expect("EDS installs a default that refuses every delete");
 
-    assert!(
-        ours as usize != inherited as usize,
-        "the slot still holds EDS's default, which refuses every delete"
-    );
+        assert!(
+            ours as usize != inherited as usize,
+            "the slot still holds EDS's default, which refuses every delete"
+        );
+    });
 }
 
 /// The `EBackendClass` EDS installed its own defaults into, which is what an
@@ -435,96 +475,113 @@ fn e_backend_class() -> *mut EBackendClass {
 
 #[test]
 fn class_init_replaces_the_default_authenticate_sync_rather_than_leaving_it() {
-    // The worst default of the three. `EBackendClass::authenticate_sync` is
-    // installed by `e_backend_class_init` and its body is one line — "the
-    // default implementation just reports success, it's for backends which do
-    // not use (nor define) authentication routines" — so it returns
-    // `E_SOURCE_AUTHENTICATION_ACCEPTED` without contacting anything.
-    //
-    // An override that is written but not installed is therefore not a backend
-    // that fails to log in. It is one that EDS believes logged in: the account
-    // goes CONNECTED, no fan-out ever runs, no credentials are ever asked for,
-    // and there is no error, no prompt and no log line anywhere in it. That is
-    // invisible in a way a NULL slot would not be, which is why the slot is a
-    // test of its own.
-    let class = Class::get();
-    let parent = e_backend_class();
-    assert!(
-        !parent.is_null(),
-        "the grandparent class was not referenced"
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The worst default of the three. `EBackendClass::authenticate_sync` is
+        // installed by `e_backend_class_init` and its body is one line — "the
+        // default implementation just reports success, it's for backends which do
+        // not use (nor define) authentication routines" — so it returns
+        // `E_SOURCE_AUTHENTICATION_ACCEPTED` without contacting anything.
+        //
+        // An override that is written but not installed is therefore not a backend
+        // that fails to log in. It is one that EDS believes logged in: the account
+        // goes CONNECTED, no fan-out ever runs, no credentials are ever asked for,
+        // and there is no error, no prompt and no log line anywhere in it. That is
+        // invisible in a way a NULL slot would not be, which is why the slot is a
+        // test of its own.
+        let class = Class::get();
+        let parent = e_backend_class();
+        assert!(
+            !parent.is_null(),
+            "the grandparent class was not referenced"
+        );
 
-    let ours = class
-        .backend_vfuncs()
-        .authenticate_sync
-        .expect("class_init installed no authenticate_sync");
-    // SAFETY: a live class struct.
-    let inherited = unsafe { (*parent).authenticate_sync }
-        .expect("EDS installs a default that accepts every account");
+        let ours = class
+            .backend_vfuncs()
+            .authenticate_sync
+            .expect("class_init installed no authenticate_sync");
+        // SAFETY: a live class struct.
+        let inherited = unsafe { (*parent).authenticate_sync }
+            .expect("EDS installs a default that accepts every account");
 
-    assert!(
-        ours as usize != inherited as usize,
-        "the slot still holds EDS's default, which accepts without contacting anything"
-    );
+        assert!(
+            ours as usize != inherited as usize,
+            "the slot still holds EDS's default, which accepts without contacting anything"
+        );
+    });
 }
 
 #[test]
 fn installing_authenticate_sync_and_get_destination_address_leaves_prepare_shutdown_inherited() {
-    // `authenticate_sync` and `get_destination_address` are the two slots this
-    // crate writes into a half of the class struct it does not own the layout
-    // of — bindgen's `EBackendClass`, two levels up, sitting between GObject's
-    // class and `ECollectionBackendClass`'s own vfuncs. A wrong offset there
-    // does not fail to compile; it silently overwrites a neighbouring slot with
-    // a function of a different signature, which is a call through a bad
-    // pointer the first time EDS uses it. `prepare_shutdown` is the one
-    // neighbour still left untouched, so it is what pins the offset from the
-    // far side: it must still be exactly what the grandparent installed.
-    let class = Class::get();
-    let parent = e_backend_class();
-    assert!(
-        !parent.is_null(),
-        "the grandparent class was not referenced"
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `authenticate_sync` and `get_destination_address` are the two slots this
+        // crate writes into a half of the class struct it does not own the layout
+        // of — bindgen's `EBackendClass`, two levels up, sitting between GObject's
+        // class and `ECollectionBackendClass`'s own vfuncs. A wrong offset there
+        // does not fail to compile; it silently overwrites a neighbouring slot with
+        // a function of a different signature, which is a call through a bad
+        // pointer the first time EDS uses it. `prepare_shutdown` is the one
+        // neighbour still left untouched, so it is what pins the offset from the
+        // far side: it must still be exactly what the grandparent installed.
+        let class = Class::get();
+        let parent = e_backend_class();
+        assert!(
+            !parent.is_null(),
+            "the grandparent class was not referenced"
+        );
 
-    let ours = class.backend_vfuncs();
-    // SAFETY: a live class struct.
-    let inherited = unsafe { &*parent };
+        let ours = class.backend_vfuncs();
+        // SAFETY: a live class struct.
+        let inherited = unsafe { &*parent };
 
-    assert_eq!(
-        ours.prepare_shutdown.map(|f| f as usize),
-        inherited.prepare_shutdown.map(|f| f as usize),
-        "class_init overwrote prepare_shutdown"
-    );
+        assert_eq!(
+            ours.prepare_shutdown.map(|f| f as usize),
+            inherited.prepare_shutdown.map(|f| f as usize),
+            "class_init overwrote prepare_shutdown"
+        );
+    });
 }
 
 #[test]
 fn class_init_replaces_the_default_get_destination_address_rather_than_leaving_it() {
-    // `EBackendClass`'s own default (`backend_get_destination_address`) reads
-    // the backend's "connectable" property via `e_backend_ref_connectable`,
-    // which nothing in this crate ever sets — so left inherited, it always
-    // answers `FALSE`, and EDS's host-specific reachability monitor sees only
-    // generic network-up/down for a JMAP account, never this account's actual
-    // host. That is invisible in exactly the way `authenticate_sync`'s own
-    // uninstalled-default would be, which is why this slot gets the same kind
-    // of test.
-    let class = Class::get();
-    let parent = e_backend_class();
-    assert!(
-        !parent.is_null(),
-        "the grandparent class was not referenced"
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `EBackendClass`'s own default (`backend_get_destination_address`) reads
+        // the backend's "connectable" property via `e_backend_ref_connectable`,
+        // which nothing in this crate ever sets — so left inherited, it always
+        // answers `FALSE`, and EDS's host-specific reachability monitor sees only
+        // generic network-up/down for a JMAP account, never this account's actual
+        // host. That is invisible in exactly the way `authenticate_sync`'s own
+        // uninstalled-default would be, which is why this slot gets the same kind
+        // of test.
+        let class = Class::get();
+        let parent = e_backend_class();
+        assert!(
+            !parent.is_null(),
+            "the grandparent class was not referenced"
+        );
 
-    let ours = class
-        .backend_vfuncs()
-        .get_destination_address
-        .expect("class_init installed no get_destination_address");
-    // SAFETY: a live class struct.
-    let inherited = unsafe { (*parent).get_destination_address }
-        .expect("EDS installs a default that reads the connectable property");
+        let ours = class
+            .backend_vfuncs()
+            .get_destination_address
+            .expect("class_init installed no get_destination_address");
+        // SAFETY: a live class struct.
+        let inherited = unsafe { (*parent).get_destination_address }
+            .expect("EDS installs a default that reads the connectable property");
 
-    assert!(
-        ours as usize != inherited as usize,
-        "the slot still holds EDS's default, which never sees a host this crate never sets \
-         as the backend's connectable"
-    );
+        assert!(
+            ours as usize != inherited as usize,
+            "the slot still holds EDS's default, which never sees a host this crate never sets \
+             as the backend's connectable"
+        );
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_backend_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }
