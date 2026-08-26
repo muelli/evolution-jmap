@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 evolution-jmap-mock = { workspace = true }
+libc = "0.2.189"
 
 [dev-dependencies]
 evolution-jmap-proto = { workspace = true }
