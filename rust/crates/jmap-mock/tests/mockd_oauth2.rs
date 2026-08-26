@@ -42,15 +42,26 @@ impl Mockd {
             .expect("spawn jmap-mockd");
 
         let stdout = child.stdout.take().expect("piped stdout");
-        let first_line = BufReader::new(stdout)
-            .lines()
-            .next()
-            .expect("a line before EOF")
-            .expect("a readable line");
+        let mut reader = BufReader::new(stdout);
+        let mut first_line = String::new();
+        reader
+            .read_line(&mut first_line)
+            .expect("a readable startup line");
         let origin = first_line
+            .trim_end()
             .strip_prefix("jmap-mockd listening on ")
             .unwrap_or_else(|| panic!("unexpected startup line: {first_line}"))
             .to_owned();
+
+        // The daemon prints two more startup lines (and may print more over
+        // its life); its `println!` panics on EPIPE, so dropping this pipe
+        // here would race those writes and kill the daemon at startup —
+        // observed on CI as "failed printing to stdout: Broken pipe" in the
+        // child followed by a headerless response to the test's request.
+        // Keep the read end open and drained until the child is killed.
+        std::thread::spawn(move || {
+            let _ = std::io::copy(&mut reader, &mut std::io::sink());
+        });
 
         Self { child, origin }
     }
