@@ -463,6 +463,136 @@ fn a_child_that_authenticates_but_names_no_security_keeps_naming_none() {
     });
 }
 
+// ---------------------------------------------------------------------------
+// The `[JMAP OAuth2]` group — bound by its own rule, because EDS hands the
+// OAuth2 service whichever source asked for the token.
+//
+// `e_source_registry_server_get_access_token_sync` (e-source-registry-server.c,
+// EDS 3.52) passes the ASKING source straight into
+// `e_oauth2_service_get_access_token_sync` — no credential-source resolution to
+// the collection happens on the silent-refresh path (only the interactive
+// prompter resolves it). EDS's own services never notice: their client ids are
+// compile-time constants. Ours lives in `[JMAP OAuth2]`, and when only the
+// account carried it, any child-context refresh ran with no client id, no
+// token endpoint and no scope — so the first expired access token turned into
+// a full re-consent instead of a silent refresh. Observed live 2026-08-26:
+// the registry prepared a refresh-token form for a memory-only calendar
+// child's uid, and the shell escalated to the consent window.
+
+fn oauth2_config() -> jmap_config::oauth2::Config {
+    jmap_config::oauth2::Config {
+        client_id: Some("client-abc123".to_owned()),
+        client_secret: None,
+        authorization_endpoint: Some("https://jmap.example.com/authorize".to_owned()),
+        token_endpoint: Some("https://jmap.example.com/token".to_owned()),
+        redirect_uri: Some("org.example.app:/redirect".to_owned()),
+        scope: Some("urn:ietf:params:oauth:scope:mail offline_access".to_owned()),
+        resource: Some("https://jmap.example.com/session".to_owned()),
+    }
+}
+
+#[test]
+fn a_childs_jmap_oauth2_group_follows_the_accounts() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let account = Source::account();
+        // SAFETY: a live source and a config of literals.
+        unsafe { jmap_config::oauth2::apply(account.0, &oauth2_config()) };
+        let child = Source::child_of(&connection());
+
+        // SAFETY: two live sources, the account and its child.
+        unsafe { follow_collection(account.0, child.0) };
+
+        // SAFETY: a live source.
+        let carried = unsafe { jmap_config::oauth2::read(child.0) };
+        assert_eq!(
+            carried,
+            oauth2_config(),
+            "the child must carry the account's whole client registration"
+        );
+
+        // And it is a live binding, not a copy: a re-registration that lands on
+        // the account reaches every child that was already bound.
+        let renewed = jmap_config::oauth2::Config {
+            client_id: Some("client-def456".to_owned()),
+            ..oauth2_config()
+        };
+        // SAFETY: a live source.
+        unsafe { jmap_config::oauth2::apply(account.0, &renewed) };
+        // SAFETY: a live source.
+        let followed = unsafe { jmap_config::oauth2::read(child.0) };
+        assert_eq!(
+            followed.client_id.as_deref(),
+            Some("client-def456"),
+            "a re-registration on the account must reach the bound child"
+        );
+    });
+}
+
+#[test]
+fn a_mail_transport_child_gets_the_jmap_oauth2_group_too() {
+    // The transport is the child whose missing registration the operator
+    // actually saw: Send popped the consent window (roadmap item 15). It takes
+    // the `follow_server` early path in `follow_collection`, so the OAuth2
+    // binding must happen before that fork.
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let account = Source::account();
+        // SAFETY: a live source and a config of literals.
+        unsafe { jmap_config::oauth2::apply(account.0, &oauth2_config()) };
+
+        let transport = Source::new("jmap-account-transport");
+        // SAFETY: a live source and a header constant; the extension is
+        // created on demand and owned by the source, and both mail extension
+        // types derive from ESourceBackend.
+        unsafe {
+            let backend: *mut eds_sys::ESourceBackend = e_source_get_extension(
+                transport.0,
+                eds_sys::E_SOURCE_EXTENSION_MAIL_TRANSPORT.as_ptr(),
+            )
+            .cast();
+            eds_sys::e_source_backend_set_backend_name(backend, c"jmap".as_ptr());
+        }
+
+        // SAFETY: two live sources, the account and its transport child.
+        unsafe { follow_collection(account.0, transport.0) };
+
+        // SAFETY: a live source.
+        let carried = unsafe { jmap_config::oauth2::read(transport.0) };
+        assert_eq!(
+            carried.client_id.as_deref(),
+            Some("client-abc123"),
+            "the transport must be able to refresh silently at send time"
+        );
+        assert_eq!(carried.token_endpoint, oauth2_config().token_endpoint);
+    });
+}
+
+#[test]
+fn an_account_without_the_oauth2_group_leaves_the_child_without_it() {
+    // The rule the rest of this file lives by still holds where it matters:
+    // nothing invents the group on the ACCOUNT, whose `.source` file is the
+    // user's; and a child of an account that has no client registration gains
+    // an empty group nothing will read.
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let account = Source::account();
+        let child = Source::child_of(&connection());
+
+        // SAFETY: two live sources, the account and its child.
+        unsafe { follow_collection(account.0, child.0) };
+
+        assert!(
+            !account.has(jmap_config::oauth2::EXTENSION_NAME),
+            "nothing may invent [JMAP OAuth2] on the user's account file"
+        );
+        assert!(
+            !child.has(jmap_config::oauth2::EXTENSION_NAME),
+            "an account with no registration has nothing to carry to a child"
+        );
+    });
+}
+
 #[test]
 #[should_panic(expected = "test timed out after")]
 fn a_blocked_child_added_test_times_out_and_fails_fast() {
