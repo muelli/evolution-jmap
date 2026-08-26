@@ -7,6 +7,8 @@
 //! the instances named one at a time by an EXDATE, an RDATE, or a component of
 //! their own carrying a RECURRENCE-ID.
 
+use std::collections::BTreeMap;
+
 use jmap_ical::{
     ICalError, defines_time_zone, event_to_ical, ical_to_event, maps_alerts, maps_keyword,
     maps_locations, maps_recurrence_override, maps_recurrence_rule, maps_time_zone,
@@ -10007,7 +10009,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_virtual_location_count: 1,
             expected_links_count: 1,
             expected_keywords_count: 3,
-            expected_alerts_count: 1,
+            expected_alerts_count: 2,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 2,
             unmapped_vendor_properties_dropped_on_export: &[
@@ -10032,7 +10034,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_virtual_location_count: 1,
             expected_links_count: 2,
             expected_keywords_count: 3,
-            expected_alerts_count: 1,
+            expected_alerts_count: 2,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 0,
             unmapped_vendor_properties_dropped_on_export: &[
@@ -10041,6 +10043,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
                 "X-MICROSOFT-CDO-IMPORTANCE",
                 "X-MICROSOFT-DISALLOW-COUNTER",
                 "X-MS-OLK-AUTOFILLLOCATION",
+                "X-WR-ALARMUID",
             ],
         },
         RealExporterTestCase {
@@ -10059,12 +10062,14 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_virtual_location_count: 1,
             expected_links_count: 1,
             expected_keywords_count: 3,
-            expected_alerts_count: 2,
+            expected_alerts_count: 3,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 1,
             unmapped_vendor_properties_dropped_on_export: &[
                 "X-APPLE-STRUCTURED-LOCATION",
                 "X-APPLE-TRAVEL-ADVISORY-BEHAVIOR",
+                "X-WR-ALARMUID",
+                "ACKNOWLEDGED",
             ],
         },
         RealExporterTestCase {
@@ -10415,8 +10420,23 @@ fn real_exporter_fixture_google_calendar_detailed_roundtrip() {
     );
     assert_eq!(modified["start"], json!("2026-10-20T10:30:00"));
 
-    // 5. Multi-pass roundtrip fixpoint
+    // 5. Validate Google alarms (display alarms preserved, email/absolute triggers refused safely)
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 2, "Google fixture has 2 display alarms");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-P1D"));
+    assert_eq!(alerts["a2"]["trigger"]["offset"], json!("-PT15M"));
+    assert!(maps_alerts(&event));
+
+    // 6. Multi-pass roundtrip fixpoint
     let export1 = event_to_ical(&event);
+    assert!(
+        !export1.contains("ACTION:EMAIL"),
+        "refused EMAIL alarm must be dropped"
+    );
+    assert!(
+        !export1.contains("VALUE=DATE-TIME"),
+        "refused absolute trigger alarm must be dropped"
+    );
     let event2 = ical_to_event(&export1).expect("event2");
     let export2 = event_to_ical(&event2);
     let event3 = ical_to_event(&export2).expect("event3");
@@ -10477,8 +10497,24 @@ fn real_exporter_fixture_outlook_modern_m365_detailed_roundtrip() {
     assert_eq!(by_day[0].day, "su");
     assert_eq!(by_day[0].nth_of_period, Some(3));
 
-    // 5. Multi-pass roundtrip fixpoint
+    // 5. Validate Outlook alarms (DESCRIPTION:REMINDER, X-WR-ALARMUID / UID preservation, email dropped)
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 2, "Outlook fixture has 2 display alarms");
+    let outlook_uid = "040000008200E00074C5B7101A82E0080000000080E99A2D87D3D901000000000000000010000000D3C9D55A1A2E-alarm-1";
+    assert_eq!(alerts[outlook_uid]["trigger"]["offset"], json!("-PT15M"));
+    assert_eq!(alerts["a1"]["trigger"]["offset"], json!("-PT30M"));
+    assert!(maps_alerts(&event));
+
+    // 6. Multi-pass roundtrip fixpoint
     let export1 = event_to_ical(&event);
+    assert!(
+        !export1.contains("X-WR-ALARMUID"),
+        "X-WR-ALARMUID must be dropped on export"
+    );
+    assert!(
+        !export1.contains("ACTION:EMAIL"),
+        "refused EMAIL alarm must be dropped"
+    );
     let event2 = ical_to_event(&export1).expect("event2");
     let export2 = event_to_ical(&event2);
     let event3 = ical_to_event(&export2).expect("event3");
@@ -10524,14 +10560,41 @@ fn real_exporter_fixture_apple_calendar_macos_detailed_roundtrip() {
         .expect("recurrence_overrides");
     assert_eq!(overrides["2026-10-23T09:00:00"], json!({"excluded": true}));
 
-    // 5. Validate multiple alarms (1 day, 2 hours)
+    // 5. Validate multiple alarms (1 day with ACKNOWLEDGED, 2 hours, 15 minutes; AUDIO and absolute trigger dropped)
     let alerts = event.alerts.as_ref().expect("alerts");
-    assert_eq!(alerts.len(), 2);
-    assert!(alerts.values().any(|a| a["trigger"]["offset"] == "-P1D"));
-    assert!(alerts.values().any(|a| a["trigger"]["offset"] == "-PT2H"));
+    assert_eq!(alerts.len(), 3, "Apple fixture has 3 display alarms");
+    assert_eq!(
+        alerts["E451D045-FA1B-475D-85B6-06F6F505A321"]["trigger"]["offset"],
+        json!("-P1D")
+    );
+    assert_eq!(
+        alerts["F82C4A10-91DE-4A99-8D77-38C1B79E1A55"]["trigger"]["offset"],
+        json!("-PT2H")
+    );
+    assert_eq!(
+        alerts["apple-alarm-offset-15m"]["trigger"]["offset"],
+        json!("-PT15M")
+    );
+    assert!(maps_alerts(&event));
 
     // 6. Multi-pass roundtrip fixpoint
     let export1 = event_to_ical(&event);
+    assert!(
+        !export1.contains("ACKNOWLEDGED"),
+        "ACKNOWLEDGED must be dropped on export"
+    );
+    assert!(
+        !export1.contains("X-WR-ALARMUID"),
+        "X-WR-ALARMUID must be dropped on export"
+    );
+    assert!(
+        !export1.contains("ACTION:AUDIO"),
+        "refused AUDIO alarm must be dropped"
+    );
+    assert!(
+        !export1.contains("VALUE=DATE-TIME"),
+        "refused absolute trigger alarm must be dropped"
+    );
     let event2 = ical_to_event(&export1).expect("event2");
     let export2 = event_to_ical(&event2);
     let event3 = ical_to_event(&export2).expect("event3");
@@ -10956,27 +11019,51 @@ fn alerts_audit_real_exporter_fixtures_characterization_and_multi_stage_roundtri
     assert_eq!(evo_reparsed.alerts, evo_event.alerts);
     assert_eq!(event_to_ical(&evo_reparsed), evo_out);
 
-    // 2. Apple Calendar Export: 2 VALARMs (-P1D and -PT2H)
+    // 2. Apple Calendar Export: 3 VALARMs (-P1D with ACKNOWLEDGED/X-WR-ALARMUID, -PT2H, -PT15M; AUDIO and absolute trigger dropped)
     let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
     let apple_event = ical_to_event(apple_ics).expect("parse apple export");
     let apple_alerts = apple_event.alerts.as_ref().expect("apple alerts");
-    assert_eq!(apple_alerts.len(), 2, "Apple export has 2 display alarms");
-    assert_eq!(apple_alerts["a1"]["trigger"]["offset"], "-P1D");
-    assert_eq!(apple_alerts["a2"]["trigger"]["offset"], "-PT2H");
+    assert_eq!(apple_alerts.len(), 3, "Apple export has 3 display alarms");
+    assert_eq!(
+        apple_alerts["E451D045-FA1B-475D-85B6-06F6F505A321"]["trigger"]["offset"],
+        "-P1D"
+    );
+    assert_eq!(
+        apple_alerts["F82C4A10-91DE-4A99-8D77-38C1B79E1A55"]["trigger"]["offset"],
+        "-PT2H"
+    );
+    assert_eq!(
+        apple_alerts["apple-alarm-offset-15m"]["trigger"]["offset"],
+        "-PT15M"
+    );
     assert!(maps_alerts(&apple_event));
     let apple_out = event_to_ical(&apple_event);
+    assert_eq!(apple_out.matches("BEGIN:VALARM\r\n").count(), 3);
+    assert!(apple_out.contains("UID:E451D045-FA1B-475D-85B6-06F6F505A321\r\n"));
+    assert!(apple_out.contains("UID:F82C4A10-91DE-4A99-8D77-38C1B79E1A55\r\n"));
+    assert!(apple_out.contains("UID:apple-alarm-offset-15m\r\n"));
+    assert!(!apple_out.contains("ACKNOWLEDGED"));
+    assert!(!apple_out.contains("X-WR-ALARMUID"));
+    assert!(!apple_out.contains("ACTION:AUDIO"));
+    assert!(!apple_out.contains("VALUE=DATE-TIME"));
     let apple_reparsed = ical_to_event(&apple_out).expect("reparse apple export");
     assert_eq!(apple_reparsed.alerts, apple_event.alerts);
     assert_eq!(event_to_ical(&apple_reparsed), apple_out);
 
-    // 3. Google Calendar Export: 1 VALARM (-PT15M)
+    // 3. Google Calendar Export: 2 VALARMs (-P1D and -PT15M; EMAIL and absolute trigger dropped)
     let google_ics = include_str!("fixtures/google_calendar_export.ics");
     let google_event = ical_to_event(google_ics).expect("parse google export");
     let google_alerts = google_event.alerts.as_ref().expect("google alerts");
-    assert_eq!(google_alerts.len(), 1, "Google export has 1 display alarm");
-    assert_eq!(google_alerts["a1"]["trigger"]["offset"], "-PT15M");
+    assert_eq!(google_alerts.len(), 2, "Google export has 2 display alarms");
+    assert_eq!(google_alerts["a1"]["trigger"]["offset"], "-P1D");
+    assert_eq!(google_alerts["a2"]["trigger"]["offset"], "-PT15M");
     assert!(maps_alerts(&google_event));
     let google_out = event_to_ical(&google_event);
+    assert_eq!(google_out.matches("BEGIN:VALARM\r\n").count(), 2);
+    assert!(google_out.contains("UID:a1\r\n"));
+    assert!(google_out.contains("UID:a2\r\n"));
+    assert!(!google_out.contains("ACTION:EMAIL"));
+    assert!(!google_out.contains("VALUE=DATE-TIME"));
     let google_reparsed = ical_to_event(&google_out).expect("reparse google export");
     assert_eq!(google_reparsed.alerts, google_event.alerts);
     assert_eq!(event_to_ical(&google_reparsed), google_out);
@@ -10997,18 +11084,26 @@ fn alerts_audit_real_exporter_fixtures_characterization_and_multi_stage_roundtri
     assert_eq!(nextcloud_reparsed.alerts, nextcloud_event.alerts);
     assert_eq!(event_to_ical(&nextcloud_reparsed), nextcloud_out);
 
-    // 5. Outlook Modern M365 Export: 1 VALARM (-PT30M)
+    // 5. Outlook Modern M365 Export: 2 VALARMs (-PT15M with explicit UID and -PT30M nameless; DESCRIPTION:REMINDER mapped, EMAIL dropped)
     let outlook_ics = include_str!("fixtures/outlook_m365_export.ics");
     let outlook_event = ical_to_event(outlook_ics).expect("parse outlook export");
     let outlook_alerts = outlook_event.alerts.as_ref().expect("outlook alerts");
     assert_eq!(
         outlook_alerts.len(),
-        1,
-        "Outlook export has 1 display alarm"
+        2,
+        "Outlook export has 2 display alarms"
     );
+    let outlook_uid = "040000008200E00074C5B7101A82E0080000000080E99A2D87D3D901000000000000000010000000D3C9D55A1A2E-alarm-1";
+    assert_eq!(outlook_alerts[outlook_uid]["trigger"]["offset"], "-PT15M");
     assert_eq!(outlook_alerts["a1"]["trigger"]["offset"], "-PT30M");
     assert!(maps_alerts(&outlook_event));
     let outlook_out = event_to_ical(&outlook_event);
+    assert_eq!(outlook_out.matches("BEGIN:VALARM\r\n").count(), 2);
+    let unfolded_outlook = outlook_out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded_outlook.contains(&format!("UID:{outlook_uid}\r\n")));
+    assert!(outlook_out.contains("UID:a1\r\n"));
+    assert!(!outlook_out.contains("X-WR-ALARMUID"));
+    assert!(!outlook_out.contains("ACTION:EMAIL"));
     let outlook_reparsed = ical_to_event(&outlook_out).expect("reparse outlook export");
     assert_eq!(outlook_reparsed.alerts, outlook_event.alerts);
     assert_eq!(event_to_ical(&outlook_reparsed), outlook_out);
@@ -11549,4 +11644,1559 @@ fn alerts_audit_usedefaultalerts_and_recurrence_overrides_matrix() {
         parsed_overrides["2026-02-05T10:00:00"]["alerts"],
         serde_json::Value::Null
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Batch 10 Item 1: Recurrence-Overrides Round-Trip Audit & Characterization
+// (RFC 8984 §4.3.4 ↔ RFC 5545 §3.8.4.4 / §3.8.5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn recurrence_overrides_audit_rescheduled_single_occurrences_and_zone_shifts() {
+    // 1. Rescheduled occurrence on same day (shifted start time + custom duration)
+    let event1 = recurring_with(json!({
+        "2026-01-22T10:00:00": {
+            "start": "2026-01-22T14:30:00",
+            "duration": "PT45M"
+        }
+    }));
+    let ics1 = event_to_ical(&event1);
+    assert_eq!(vevents(&ics1), 2, "Series + 1 detached VEVENT");
+    let inst1 = vevent(&ics1, 1);
+    assert_eq!(
+        line(inst1, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260122T100000"
+    );
+    assert_eq!(
+        line(inst1, "DTSTART"),
+        "DTSTART;TZID=Europe/Berlin:20260122T143000"
+    );
+    assert_eq!(line(inst1, "DURATION"), "DURATION:PT45M");
+
+    let parsed1 = ical_to_event(&ics1).expect("parse rescheduled same-day");
+    assert_eq!(parsed1.recurrence_overrides, event1.recurrence_overrides);
+
+    // 2. Rescheduled occurrence across dates (moved 2 days later)
+    let event2 = recurring_with(json!({
+        "2026-01-22T10:00:00": {
+            "start": "2026-01-24T16:00:00",
+            "duration": "PT2H"
+        }
+    }));
+    let ics2 = event_to_ical(&event2);
+    let inst2 = vevent(&ics2, 1);
+    assert_eq!(
+        line(inst2, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260122T100000"
+    );
+    assert_eq!(
+        line(inst2, "DTSTART"),
+        "DTSTART;TZID=Europe/Berlin:20260124T160000"
+    );
+    assert_eq!(line(inst2, "DURATION"), "DURATION:PT2H");
+
+    let parsed2 = ical_to_event(&ics2).expect("parse rescheduled cross-date");
+    assert_eq!(parsed2.recurrence_overrides, event2.recurrence_overrides);
+
+    // 3. Rescheduled into another IANA time zone (America/New_York)
+    let event3 = recurring_with(json!({
+        "2026-01-22T10:00:00": {
+            "start": "2026-01-22T09:00:00",
+            "timeZone": "America/New_York"
+        }
+    }));
+    let ics3 = event_to_ical(&event3);
+    let inst3 = vevent(&ics3, 1);
+    assert_eq!(
+        line(inst3, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260122T100000"
+    );
+    assert_eq!(
+        line(inst3, "DTSTART"),
+        "DTSTART;TZID=America/New_York:20260122T090000"
+    );
+
+    let parsed3 = ical_to_event(&ics3).expect("parse rescheduled timezone");
+    assert_eq!(parsed3.recurrence_overrides, event3.recurrence_overrides);
+
+    // 4. Rescheduled into UTC (Etc/UTC)
+    let event4 = recurring_with(json!({
+        "2026-01-22T10:00:00": {
+            "timeZone": "Etc/UTC"
+        }
+    }));
+    let ics4 = event_to_ical(&event4);
+    let inst4 = vevent(&ics4, 1);
+    assert_eq!(
+        line(inst4, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260122T100000"
+    );
+    assert_eq!(line(inst4, "DTSTART"), "DTSTART:20260122T100000Z");
+
+    let parsed4 = ical_to_event(&ics4).expect("parse rescheduled UTC");
+    assert_eq!(parsed4.recurrence_overrides, event4.recurrence_overrides);
+
+    // 5. Rescheduled into floating time (timeZone: null)
+    let event5 = recurring_with(json!({
+        "2026-01-22T10:00:00": {
+            "timeZone": null
+        }
+    }));
+    let ics5 = event_to_ical(&event5);
+    let inst5 = vevent(&ics5, 1);
+    assert_eq!(
+        line(inst5, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260122T100000"
+    );
+    assert_eq!(line(inst5, "DTSTART"), "DTSTART:20260122T100000");
+
+    let parsed5 = ical_to_event(&ics5).expect("parse rescheduled floating");
+    assert_eq!(parsed5.recurrence_overrides, event5.recurrence_overrides);
+
+    // 6. Inbound Windows time zone on RECURRENCE-ID (W. Europe Standard Time)
+    let windows_ics = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{}\
+         BEGIN:VEVENT\r\nUID:WIN1\r\n\
+         DTSTART;TZID=\"W. Europe Standard Time\":20260115T100000\r\n\
+         DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:Weekly Standup\r\nEND:VEVENT\r\n\
+         BEGIN:VEVENT\r\nUID:WIN1\r\n\
+         RECURRENCE-ID;TZID=\"W. Europe Standard Time\":20260122T100000\r\n\
+         DTSTART;TZID=\"W. Europe Standard Time\":20260122T140000\r\n\
+         DURATION:PT1H30M\r\nSUMMARY:Weekly Standup (Moved)\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        vtimezone("W. Europe Standard Time", "Europe/Berlin")
+    );
+    let parsed_win = ical_to_event(&windows_ics).expect("parse windows RECURRENCE-ID");
+    assert_eq!(parsed_win.time_zone.as_deref(), Some("Europe/Berlin"));
+    let win_overrides = parsed_win
+        .recurrence_overrides
+        .as_ref()
+        .expect("win overrides");
+    assert_eq!(
+        win_overrides["2026-01-22T10:00:00"],
+        json!({
+            "start": "2026-01-22T14:00:00",
+            "duration": "PT1H30M",
+            "title": "Weekly Standup (Moved)"
+        })
+    );
+
+    // 7. Inbound Globally-Unique TZID on RECURRENCE-ID (/mozilla.org/.../Europe/Berlin)
+    let unique_ics = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{}\
+         BEGIN:VEVENT\r\nUID:MOZ1\r\n\
+         DTSTART;TZID=/mozilla.org/20070129_1/Europe/Berlin:20260115T100000\r\n\
+         DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\nSUMMARY:Mozilla Sync\r\nEND:VEVENT\r\n\
+         BEGIN:VEVENT\r\nUID:MOZ1\r\n\
+         RECURRENCE-ID;TZID=/mozilla.org/20070129_1/Europe/Berlin:20260122T100000\r\n\
+         DTSTART;TZID=/mozilla.org/20070129_1/Europe/Berlin:20260122T150000\r\n\
+         DURATION:PT1H\r\n\
+         SUMMARY:Mozilla Sync (Rescheduled)\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        vtimezone("/mozilla.org/20070129_1/Europe/Berlin", "Europe/Berlin")
+    );
+    let parsed_unique = ical_to_event(&unique_ics).expect("parse unique TZID RECURRENCE-ID");
+    assert_eq!(parsed_unique.time_zone.as_deref(), Some("Europe/Berlin"));
+    let unique_overrides = parsed_unique
+        .recurrence_overrides
+        .as_ref()
+        .expect("unique overrides");
+    assert_eq!(
+        unique_overrides["2026-01-22T10:00:00"],
+        json!({
+            "start": "2026-01-22T15:00:00",
+            "title": "Mozilla Sync (Rescheduled)"
+        })
+    );
+
+    // Multi-pass roundtrip fixpoint for unique TZID
+    let export1 = event_to_ical(&parsed_unique);
+    let event_round2 = ical_to_event(&export1).expect("event_round2");
+    let export2 = event_to_ical(&event_round2);
+    assert_eq!(export1, export2);
+    assert_eq!(parsed_unique, event_round2);
+}
+
+#[test]
+fn recurrence_overrides_audit_cancelled_occurrences_exdate_matrix() {
+    // 1. Single excluded occurrence in local timezone
+    let event1 = recurring_with(json!({
+        "2026-01-22T10:00:00": {"excluded": true}
+    }));
+    let ics1 = event_to_ical(&event1);
+    assert_eq!(
+        line(&ics1, "EXDATE"),
+        "EXDATE;TZID=Europe/Berlin:20260122T100000"
+    );
+    assert!(without(&ics1, "RDATE"));
+    let parsed1 = ical_to_event(&ics1).expect("parse single EXDATE");
+    assert_eq!(parsed1.recurrence_overrides, event1.recurrence_overrides);
+
+    // 2. Multiple excluded occurrences on a single comma-delimited line
+    let multi_line_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:EX1\r\n",
+        "DTSTART;TZID=Europe/Berlin:20260115T100000\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "EXDATE;TZID=Europe/Berlin:20260122T100000,20260129T100000,20260205T100000\r\n",
+        "SUMMARY:Team Meeting\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_multi = ical_to_event(multi_line_ics).expect("parse multi-comma EXDATE");
+    let overrides_multi = parsed_multi
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides");
+    assert_eq!(overrides_multi.len(), 3);
+    assert_eq!(
+        overrides_multi["2026-01-22T10:00:00"],
+        json!({"excluded": true})
+    );
+    assert_eq!(
+        overrides_multi["2026-01-29T10:00:00"],
+        json!({"excluded": true})
+    );
+    assert_eq!(
+        overrides_multi["2026-02-05T10:00:00"],
+        json!({"excluded": true})
+    );
+
+    let re_exported = event_to_ical(&parsed_multi);
+    assert_eq!(
+        line(&re_exported, "EXDATE"),
+        "EXDATE;TZID=Europe/Berlin:20260122T100000,20260129T100000,20260205T100000"
+    );
+
+    // 3. Multiple separate EXDATE content lines
+    let sep_lines_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:EX2\r\n",
+        "DTSTART;TZID=Europe/Berlin:20260115T100000\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "EXDATE;TZID=Europe/Berlin:20260122T100000\r\n",
+        "EXDATE;TZID=Europe/Berlin:20260129T100000\r\n",
+        "EXDATE;TZID=Europe/Berlin:20260205T100000\r\n",
+        "SUMMARY:Team Meeting\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_sep = ical_to_event(sep_lines_ics).expect("parse separate EXDATE lines");
+    assert_eq!(
+        parsed_sep.recurrence_overrides,
+        parsed_multi.recurrence_overrides
+    );
+
+    // 4. EXDATE in UTC series
+    let utc_event = CalendarEvent {
+        id: Some("EX_UTC".into()),
+        start: Some("2026-01-15T10:00:00".to_owned()),
+        time_zone: Some("Etc/UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
+        recurrence_overrides: Some(
+            [("2026-01-22T10:00:00".to_owned(), json!({"excluded": true}))].into(),
+        ),
+        ..CalendarEvent::default()
+    };
+    let utc_ics = event_to_ical(&utc_event);
+    assert_eq!(line(&utc_ics, "DTSTART"), "DTSTART:20260115T100000Z");
+    assert_eq!(line(&utc_ics, "EXDATE"), "EXDATE:20260122T100000Z");
+    let parsed_utc = ical_to_event(&utc_ics).expect("parse UTC EXDATE");
+    assert_eq!(
+        parsed_utc.recurrence_overrides,
+        utc_event.recurrence_overrides
+    );
+
+    // 5. EXDATE in All-Day Date-Only Series (VALUE=DATE)
+    let allday_event = CalendarEvent {
+        id: Some("EX_ALLDAY".into()),
+        start: Some("2026-01-15T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
+        recurrence_overrides: Some(
+            [("2026-01-22T00:00:00".to_owned(), json!({"excluded": true}))].into(),
+        ),
+        ..CalendarEvent::default()
+    };
+    let allday_ics = event_to_ical(&allday_event);
+    assert_eq!(line(&allday_ics, "DTSTART"), "DTSTART;VALUE=DATE:20260115");
+    assert_eq!(line(&allday_ics, "EXDATE"), "EXDATE;VALUE=DATE:20260122");
+    let parsed_allday = ical_to_event(&allday_ics).expect("parse all-day EXDATE");
+    assert_eq!(parsed_allday.show_without_time, Some(true));
+    assert_eq!(
+        parsed_allday.recurrence_overrides,
+        allday_event.recurrence_overrides
+    );
+
+    // 6. Mixed cancelled occurrences + detached modified instances in one series
+    let mixed_event = recurring_with(json!({
+        "2026-01-22T10:00:00": {"excluded": true},
+        "2026-01-29T10:00:00": {"title": "Design Deep Dive"},
+        "2026-02-05T10:00:00": {"excluded": true},
+        "2026-02-12T10:00:00": {"start": "2026-02-12T14:00:00"}
+    }));
+    let mixed_ics = event_to_ical(&mixed_event);
+    assert_eq!(vevents(&mixed_ics), 3, "Series + 2 detached VEVENTs");
+    assert_eq!(
+        line(&mixed_ics, "EXDATE"),
+        "EXDATE;TZID=Europe/Berlin:20260122T100000,20260205T100000"
+    );
+    let parsed_mixed = ical_to_event(&mixed_ics).expect("parse mixed overrides");
+    assert_eq!(
+        parsed_mixed.recurrence_overrides,
+        mixed_event.recurrence_overrides
+    );
+}
+
+#[test]
+fn recurrence_overrides_audit_added_occurrences_rdate_and_periods() {
+    // 1. Single added occurrence with empty patch
+    let event1 = recurring_with(json!({
+        "2026-02-05T10:00:00": {}
+    }));
+    let ics1 = event_to_ical(&event1);
+    assert_eq!(
+        line(&ics1, "RDATE"),
+        "RDATE;TZID=Europe/Berlin:20260205T100000"
+    );
+    assert!(without(&ics1, "EXDATE"));
+    let parsed1 = ical_to_event(&ics1).expect("parse single RDATE");
+    assert_eq!(parsed1.recurrence_overrides, event1.recurrence_overrides);
+
+    // 2. Multiple added occurrences on a single line and across separate lines
+    let multi_rdate_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:RD1\r\n",
+        "DTSTART;TZID=Europe/Berlin:20260115T100000\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "RDATE;TZID=Europe/Berlin:20260205T100000,20260212T100000\r\n",
+        "RDATE;TZID=Europe/Berlin:20260219T100000\r\n",
+        "SUMMARY:Biweekly Plus Extra\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_multi_rdate = ical_to_event(multi_rdate_ics).expect("parse multi RDATE");
+    let overrides = parsed_multi_rdate
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides");
+    assert_eq!(overrides.len(), 3);
+    assert_eq!(overrides["2026-02-05T10:00:00"], json!({}));
+    assert_eq!(overrides["2026-02-12T10:00:00"], json!({}));
+    assert_eq!(overrides["2026-02-19T10:00:00"], json!({}));
+
+    let re_exported = event_to_ical(&parsed_multi_rdate);
+    assert_eq!(
+        line(&re_exported, "RDATE"),
+        "RDATE;TZID=Europe/Berlin:20260205T100000,20260212T100000,20260219T100000"
+    );
+
+    // 3. RDATE;VALUE=PERIOD with explicit duration (/PT2H)
+    let rdate_period_dur_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:RD_PER\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "RDATE;VALUE=PERIOD:20260205T100000Z/PT2H\r\n",
+        "SUMMARY:Standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_per_dur = ical_to_event(rdate_period_dur_ics).expect("parse RDATE period dur");
+    assert_eq!(
+        parsed_per_dur.recurrence_overrides,
+        Some(
+            [(
+                "2026-02-05T10:00:00".to_owned(),
+                json!({"duration": "PT2H"})
+            )]
+            .into()
+        )
+    );
+    // Serializing back emits detached VEVENT with RECURRENCE-ID and DURATION:PT2H
+    let re_exported_per = event_to_ical(&parsed_per_dur);
+    assert_eq!(vevents(&re_exported_per), 2);
+    let inst_per = vevent(&re_exported_per, 1);
+    assert_eq!(
+        line(inst_per, "RECURRENCE-ID"),
+        "RECURRENCE-ID:20260205T100000Z"
+    );
+    assert_eq!(line(inst_per, "DURATION"), "DURATION:PT2H");
+
+    // 4. RDATE;VALUE=PERIOD with explicit end date-time (/20260205T123000Z)
+    let rdate_period_end_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:RD_END\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "RDATE;VALUE=PERIOD:20260205T100000Z/20260205T123000Z\r\n",
+        "SUMMARY:Standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_per_end = ical_to_event(rdate_period_end_ics).expect("parse RDATE period end");
+    assert_eq!(
+        parsed_per_end.recurrence_overrides,
+        Some(
+            [(
+                "2026-02-05T10:00:00".to_owned(),
+                json!({"duration": "PT2H30M"})
+            )]
+            .into()
+        )
+    );
+
+    // 5. RDATE;VALUE=PERIOD matching series duration collapses to empty patch
+    let rdate_period_same_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:RD_SAME\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "RDATE;VALUE=PERIOD:20260205T100000Z/PT1H\r\n",
+        "SUMMARY:Standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_same = ical_to_event(rdate_period_same_ics).expect("parse RDATE same dur");
+    assert_eq!(
+        parsed_same.recurrence_overrides,
+        Some([("2026-02-05T10:00:00".to_owned(), json!({}))].into())
+    );
+
+    // 6. RDATE;VALUE=DATE for all-day series
+    let rdate_allday_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:RD_ALLDAY\r\n",
+        "DTSTART;VALUE=DATE:20260115\r\n",
+        "DURATION:P1D\r\nRRULE:FREQ=WEEKLY\r\n",
+        "RDATE;VALUE=DATE:20260205\r\n",
+        "SUMMARY:Weekly Holiday\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_allday_rdate = ical_to_event(rdate_allday_ics).expect("parse all-day RDATE");
+    assert_eq!(
+        parsed_allday_rdate.recurrence_overrides,
+        Some([("2026-02-05T00:00:00".to_owned(), json!({}))].into())
+    );
+    let re_exported_allday = event_to_ical(&parsed_allday_rdate);
+    assert_eq!(
+        line(&re_exported_allday, "RDATE"),
+        "RDATE;VALUE=DATE:20260205"
+    );
+}
+
+#[test]
+fn recurrence_overrides_audit_scalar_and_map_properties_fidelity() {
+    // 1. Override editing title and description
+    let mut event1 = recurring_with(json!({
+        "2026-01-22T10:00:00": {
+            "title": "Architecture Deep Dive",
+            "description": "Deep dive on query optimization"
+        }
+    }));
+    event1.title = Some("Weekly Tech Sync".to_owned());
+    event1.description = Some("General team discussion".to_owned());
+
+    let ics1 = event_to_ical(&event1);
+    let inst1 = vevent(&ics1, 1);
+    assert_eq!(line(inst1, "SUMMARY:"), "SUMMARY:Architecture Deep Dive");
+    assert_eq!(
+        line(inst1, "DESCRIPTION:"),
+        "DESCRIPTION:Deep dive on query optimization"
+    );
+    let parsed1 = ical_to_event(&ics1).expect("parse title/desc override");
+    assert_eq!(parsed1.title.as_deref(), Some("Weekly Tech Sync"));
+    assert_eq!(
+        parsed1.description.as_deref(),
+        Some("General team discussion")
+    );
+    assert_eq!(parsed1.recurrence_overrides, event1.recurrence_overrides);
+
+    // 2. Clearing properties with null
+    let mut event2 = recurring_with(json!({
+        "2026-01-22T10:00:00": {
+            "description": null,
+            "status": null,
+            "freeBusyStatus": null,
+            "priority": null,
+            "privacy": null,
+            "keywords": null
+        }
+    }));
+    event2.description = Some("Confidential notes".to_owned());
+    event2.status = Some("confirmed".to_owned());
+    event2.free_busy_status = Some("busy".to_owned());
+    event2.priority = Some(3);
+    event2.privacy = Some("private".to_owned());
+    event2.keywords = Some([("internal".to_owned(), json!(true))].into());
+
+    let ics2 = event_to_ical(&event2);
+    let inst2 = vevent(&ics2, 1);
+    assert!(without(inst2, "DESCRIPTION"));
+    assert!(without(inst2, "STATUS"));
+    assert!(without(inst2, "TRANSP"));
+    assert!(without(inst2, "PRIORITY"));
+    assert!(without(inst2, "CLASS"));
+    assert!(without(inst2, "CATEGORIES"));
+
+    let parsed2 = ical_to_event(&ics2).expect("parse null removals override");
+    assert_eq!(parsed2.recurrence_overrides, event2.recurrence_overrides);
+
+    // 3. Modifying status, freeBusyStatus, priority, privacy, keywords
+    let event3 = recurring_with(json!({
+        "2026-01-22T10:00:00": {
+            "status": "tentative",
+            "freeBusyStatus": "free",
+            "priority": 7,
+            "privacy": "secret",
+            "keywords": {
+                "planning": true,
+                "offsite": true
+            }
+        }
+    }));
+    let ics3 = event_to_ical(&event3);
+    let inst3 = vevent(&ics3, 1);
+    assert_eq!(line(inst3, "STATUS:"), "STATUS:TENTATIVE");
+    assert_eq!(line(inst3, "TRANSP:"), "TRANSP:TRANSPARENT");
+    assert_eq!(line(inst3, "PRIORITY:"), "PRIORITY:7");
+    assert_eq!(line(inst3, "CLASS:"), "CLASS:CONFIDENTIAL");
+    assert_eq!(
+        content_line(inst3, "CATEGORIES:"),
+        "CATEGORIES:offsite,planning"
+    );
+
+    let parsed3 = ical_to_event(&ics3).expect("parse modified scalar fields");
+    assert_eq!(parsed3.recurrence_overrides, event3.recurrence_overrides);
+
+    // 4. Comprehensive multi-property override modifying 8 properties at once
+    let event4 = recurring_with(json!({
+        "2026-01-22T10:00:00": {
+            "title": "Executive Keynote & Roadmap",
+            "description": "Annual product strategy and partner roadmap",
+            "start": "2026-01-22T11:00:00",
+            "timeZone": "Asia/Tokyo",
+            "duration": "PT3H",
+            "status": "confirmed",
+            "freeBusyStatus": "busy",
+            "priority": 1,
+            "privacy": "public",
+            "keywords": {"keynote": true, "strategy": true},
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-PT1H"},
+                    "action": "display"
+                }
+            }
+        }
+    }));
+    let ics4 = event_to_ical(&event4);
+    let parsed4 = ical_to_event(&ics4).expect("parse multi-property override");
+    assert_eq!(parsed4.recurrence_overrides, event4.recurrence_overrides);
+
+    // Multi-pass roundtrip assertion
+    let export4_1 = event_to_ical(&parsed4);
+    let event4_2 = ical_to_event(&export4_1).expect("event4_2");
+    let export4_2 = event_to_ical(&event4_2);
+    assert_eq!(export4_1, export4_2);
+    assert_eq!(parsed4, event4_2);
+}
+
+#[test]
+fn recurrence_overrides_audit_precedence_conflicts_and_edge_cases() {
+    // 1. Detached VEVENT with RECURRENCE-ID + RDATE for same instant -> VEVENT wins
+    let vevent_and_rdate_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:PREC1\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "RDATE:20260122T100000Z\r\n",
+        "SUMMARY:Master Standup\r\nEND:VEVENT\r\n",
+        "BEGIN:VEVENT\r\nUID:PREC1\r\n",
+        "RECURRENCE-ID:20260122T100000Z\r\n",
+        "DTSTART:20260122T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Specific Standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_prec1 = ical_to_event(vevent_and_rdate_ics).expect("parse VEVENT + RDATE");
+    assert_eq!(
+        parsed_prec1.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-22T10:00:00".to_owned(),
+                json!({"title": "Specific Standup"})
+            )]
+            .into()
+        )
+    );
+
+    // 2. Detached VEVENT with RECURRENCE-ID + EXDATE for same instant -> VEVENT wins
+    let vevent_and_exdate_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:PREC2\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "EXDATE:20260122T100000Z\r\n",
+        "SUMMARY:Master Standup\r\nEND:VEVENT\r\n",
+        "BEGIN:VEVENT\r\nUID:PREC2\r\n",
+        "RECURRENCE-ID:20260122T100000Z\r\n",
+        "DTSTART:20260122T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Resurrected Standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_prec2 = ical_to_event(vevent_and_exdate_ics).expect("parse VEVENT + EXDATE");
+    assert_eq!(
+        parsed_prec2.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-22T10:00:00".to_owned(),
+                json!({"title": "Resurrected Standup"})
+            )]
+            .into()
+        )
+    );
+
+    // 3. EXDATE + RDATE for same instant -> EXDATE wins (excluded: true)
+    let exdate_and_rdate_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:PREC3\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "RDATE:20260122T100000Z\r\n",
+        "EXDATE:20260122T100000Z\r\n",
+        "SUMMARY:Conflict Standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_prec3 = ical_to_event(exdate_and_rdate_ics).expect("parse EXDATE + RDATE");
+    assert_eq!(
+        parsed_prec3.recurrence_overrides,
+        Some([("2026-01-22T10:00:00".to_owned(), json!({"excluded": true}))].into())
+    );
+
+    // 4. RECURRENCE-ID with RANGE=THISANDFUTURE skipped safely
+    let range_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:RANGE1\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "SUMMARY:Series Standup\r\nEND:VEVENT\r\n",
+        "BEGIN:VEVENT\r\nUID:RANGE1\r\n",
+        "RECURRENCE-ID;RANGE=THISANDFUTURE:20260122T100000Z\r\n",
+        "DTSTART:20260122T120000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Future Standups\r\nEND:VEVENT\r\n",
+        "BEGIN:VEVENT\r\nUID:RANGE1\r\n",
+        "RECURRENCE-ID:20260129T100000Z\r\n",
+        "DTSTART:20260129T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Single Standup Override\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_range = ical_to_event(range_ics).expect("parse RANGE=THISANDFUTURE");
+    assert_eq!(
+        parsed_range.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-29T10:00:00".to_owned(),
+                json!({"title": "Single Standup Override"})
+            )]
+            .into()
+        ),
+        "RANGE=THISANDFUTURE is skipped while single-instance override is preserved"
+    );
+
+    // 5. Out-of-order VEVENTs (detached occurrence before master series)
+    let out_of_order_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:ORD1\r\n",
+        "RECURRENCE-ID:20260122T100000Z\r\n",
+        "DTSTART:20260122T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:First in File (Override)\r\nEND:VEVENT\r\n",
+        "BEGIN:VEVENT\r\nUID:ORD1\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "SUMMARY:Second in File (Series)\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_ord = ical_to_event(out_of_order_ics).expect("parse out of order VEVENTs");
+    assert_eq!(parsed_ord.title.as_deref(), Some("Second in File (Series)"));
+    assert_eq!(
+        parsed_ord.recurrence_overrides,
+        Some(
+            [(
+                "2026-01-22T10:00:00".to_owned(),
+                json!({"title": "First in File (Override)"})
+            )]
+            .into()
+        )
+    );
+
+    // 6. Invalid non-existent RECURRENCE-ID date (e.g. month 13) skipped safely
+    let invalid_rec_id_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:INV1\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "DURATION:PT1H\r\nRRULE:FREQ=WEEKLY\r\n",
+        "SUMMARY:Series Standup\r\nEND:VEVENT\r\n",
+        "BEGIN:VEVENT\r\nUID:INV1\r\n",
+        "RECURRENCE-ID:20261322T100000Z\r\n",
+        "DTSTART:20260122T100000Z\r\n",
+        "SUMMARY:Invalid Rec ID\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_inv = ical_to_event(invalid_rec_id_ics).expect("parse invalid RECURRENCE-ID");
+    assert_eq!(parsed_inv.recurrence_overrides, None);
+}
+
+#[test]
+fn recurrence_overrides_audit_predicates_decision_matrix() {
+    let series = CalendarEvent {
+        title: Some("Weekly Review".to_owned()),
+        start: Some("2026-01-15T10:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
+        ..CalendarEvent::default()
+    };
+    let id = "2026-01-22T10:00:00";
+
+    // 1. Valid accepted property patches
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"excluded": true})
+    ));
+    assert!(maps_recurrence_override(&series, id, &json!({})));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"title": "Updated Title"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"title": null})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"description": "Updated Description"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"description": null})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"start": "2026-01-22T11:00:00"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"timeZone": "America/New_York"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"timeZone": null})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"duration": "PT2H"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"duration": null})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"status": "confirmed"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"status": "tentative"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"status": "cancelled"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"status": null})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"freeBusyStatus": "busy"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"freeBusyStatus": "free"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"freeBusyStatus": null})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"priority": 0})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"priority": 5})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"priority": 9})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"priority": null})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"privacy": "public"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"privacy": "private"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"privacy": "secret"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"privacy": null})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"keywords": {"project": true}})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"keywords": null})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"alerts": {
+            "a1": {
+                "@type": "Alert",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                "action": "display"
+            }
+        }})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"alerts": null})
+    ));
+
+    // 2. Rejected invalid property shapes
+    // excluded: true with additional properties
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"excluded": true, "title": "Conflicting"})
+    ));
+    // Empty strings
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"title": ""})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"description": ""})
+    ));
+    // Unmapped properties
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"locations/1/name": "Room 101"})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"participants": {}})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"virtualLocations": {}})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"links": {}})
+    ));
+    // Invalid values
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"status": "postponed"})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"freeBusyStatus": "tentative"})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"priority": 10})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"priority": -1})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"priority": "high"})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"privacy": "confidential"})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"duration": "-PT1H"})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"keywords": {}})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"keywords": {"": true}})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"keywords": {"valid": false}})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        id,
+        &json!({"alerts": {}})
+    ));
+    // Invalid ID
+    assert!(!maps_recurrence_override(
+        &series,
+        "invalid-date",
+        &json!({"title": "Test"})
+    ));
+    assert!(!maps_recurrence_override(
+        &series,
+        "2026-13-22T10:00:00",
+        &json!({"title": "Test"})
+    ));
+
+    // 3. Custom TimeZone definition in sends_recurrence_override vs maps_recurrence_override
+    let custom_tz = "/custom.org/CorporateZone";
+    let custom_tz_ics = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n\
+         BEGIN:VTIMEZONE\r\nTZID:{custom_tz}\r\n\
+         BEGIN:STANDARD\r\n\
+         DTSTART:20260101T000000\r\n\
+         TZOFFSETFROM:+0200\r\n\
+         TZOFFSETTO:+0200\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n\
+         BEGIN:VEVENT\r\nUID:custom-tz\r\n\
+         DTSTART;TZID={custom_tz}:20260115T100000\r\n\
+         DURATION:PT1H\r\nSUMMARY:Custom Zone Event\r\n\
+         END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let custom_series = ical_to_event(&custom_tz_ics).expect("parse custom series");
+    assert!(!maps_recurrence_override(
+        &custom_series,
+        id,
+        &json!({"timeZone": custom_tz})
+    ));
+    assert!(sends_recurrence_override(
+        &custom_series,
+        id,
+        &json!({"timeZone": custom_tz})
+    ));
+
+    // 4. useDefaultAlerts suppresses alerts mapping on overrides
+    let mut default_alerts_series = series.clone();
+    default_alerts_series
+        .extra
+        .insert("useDefaultAlerts".to_owned(), json!(true));
+    assert!(!maps_recurrence_override(
+        &default_alerts_series,
+        id,
+        &json!({"alerts": {
+            "a1": {
+                "@type": "Alert",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                "action": "display"
+            }
+        }})
+    ));
+    assert!(!maps_recurrence_override(
+        &default_alerts_series,
+        id,
+        &json!({"alerts": null})
+    ));
+}
+
+#[test]
+fn recurrence_overrides_audit_real_exporter_stream_simulation() {
+    // 1. Google Calendar Real Exporter Pattern with Overrides
+    // Includes: Master weekly series, 1 cancelled instance (EXDATE), 1 rescheduled instance (RECURRENCE-ID + new DTSTART)
+    let gcal_ics = format!(
+        "BEGIN:VCALENDAR\r\n\
+         PRODID:-//Google Inc//Google Calendar 70.9054//EN\r\n\
+         VERSION:2.0\r\n\
+         CALSCALE:GREGORIAN\r\n{}\
+         BEGIN:VEVENT\r\n\
+         DTSTART;TZID=America/Los_Angeles:20260901T090000\r\n\
+         DTEND;TZID=America/Los_Angeles:20260901T100000\r\n\
+         RRULE:FREQ=WEEKLY;UNTIL=20261027T160000Z;BYDAY=TU\r\n\
+         EXDATE;TZID=America/Los_Angeles:20260915T090000\r\n\
+         UID:google_series_12345@google.com\r\n\
+         SUMMARY:Google Team Weekly\r\n\
+         DESCRIPTION:Weekly team sync\r\n\
+         STATUS:CONFIRMED\r\n\
+         TRANSP:OPAQUE\r\n\
+         END:VEVENT\r\n\
+         BEGIN:VEVENT\r\n\
+         DTSTART;TZID=America/Los_Angeles:20260922T130000\r\n\
+         DTEND;TZID=America/Los_Angeles:20260922T143000\r\n\
+         RECURRENCE-ID;TZID=America/Los_Angeles:20260922T090000\r\n\
+         UID:google_series_12345@google.com\r\n\
+         SUMMARY:Google Team Weekly (Afternoon Deep Dive)\r\n\
+         DESCRIPTION:Extended session on quarterly OKRs\r\n\
+         STATUS:CONFIRMED\r\n\
+         TRANSP:OPAQUE\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+        vtimezone("America/Los_Angeles", "America/Los_Angeles")
+    );
+
+    let gcal_event = ical_to_event(&gcal_ics).expect("parse gcal multi-override");
+    assert_eq!(gcal_event.title.as_deref(), Some("Google Team Weekly"));
+    assert_eq!(gcal_event.time_zone.as_deref(), Some("America/Los_Angeles"));
+    assert_eq!(gcal_event.duration.as_deref(), Some("PT1H"));
+
+    let gcal_overrides = gcal_event
+        .recurrence_overrides
+        .as_ref()
+        .expect("gcal overrides");
+    assert_eq!(gcal_overrides.len(), 2);
+    assert_eq!(
+        gcal_overrides["2026-09-15T09:00:00"],
+        json!({"excluded": true})
+    );
+    assert_eq!(
+        gcal_overrides["2026-09-22T09:00:00"],
+        json!({
+            "start": "2026-09-22T13:00:00",
+            "duration": "PT1H30M",
+            "title": "Google Team Weekly (Afternoon Deep Dive)",
+            "description": "Extended session on quarterly OKRs"
+        })
+    );
+
+    // Multi-pass roundtrip fixpoint for Google Calendar pattern
+    let gcal_export1 = event_to_ical(&gcal_event);
+    let gcal_round2 = ical_to_event(&gcal_export1).expect("gcal_round2");
+    let gcal_export2 = event_to_ical(&gcal_round2);
+    assert_eq!(gcal_export1, gcal_export2);
+    assert_eq!(gcal_event, gcal_round2);
+
+    // 2. Outlook / M365 Real Exporter Pattern with Windows Time Zone & Overrides
+    let outlook_ics = format!(
+        "BEGIN:VCALENDAR\r\n\
+         PRODID:-//Microsoft Corporation//Outlook 16.0 MIMEDIR//EN\r\n\
+         VERSION:2.0\r\n{}\
+         BEGIN:VEVENT\r\n\
+         UID:040000008200E00074C5B7101A82E00800000000\r\n\
+         DTSTART;TZID=\"W. Europe Standard Time\":20261005T090000\r\n\
+         DTEND;TZID=\"W. Europe Standard Time\":20261005T100000\r\n\
+         RRULE:FREQ=WEEKLY;BYDAY=MO\r\n\
+         SUMMARY:Executive Review\r\n\
+         CLASS:PRIVATE\r\n\
+         PRIORITY:1\r\n\
+         STATUS:CONFIRMED\r\n\
+         TRANSP:OPAQUE\r\n\
+         END:VEVENT\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:040000008200E00074C5B7101A82E00800000000\r\n\
+         RECURRENCE-ID;TZID=\"W. Europe Standard Time\":20261012T090000\r\n\
+         DTSTART;TZID=\"W. Europe Standard Time\":20261012T090000\r\n\
+         DTEND;TZID=\"W. Europe Standard Time\":20261012T100000\r\n\
+         SUMMARY:Executive Review (Cancelled for Holiday)\r\n\
+         STATUS:CANCELLED\r\n\
+         CLASS:PRIVATE\r\n\
+         PRIORITY:1\r\n\
+         TRANSP:TRANSPARENT\r\n\
+         END:VEVENT\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:040000008200E00074C5B7101A82E00800000000\r\n\
+         RECURRENCE-ID;TZID=\"W. Europe Standard Time\":20261019T090000\r\n\
+         DTSTART;TZID=\"W. Europe Standard Time\":20261019T140000\r\n\
+         DTEND;TZID=\"W. Europe Standard Time\":20261019T160000\r\n\
+         SUMMARY:Executive Review (Q3 Budget Wrapup)\r\n\
+         CLASS:PRIVATE\r\n\
+         PRIORITY:1\r\n\
+         STATUS:CONFIRMED\r\n\
+         TRANSP:OPAQUE\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n",
+        vtimezone("W. Europe Standard Time", "Europe/Berlin")
+    );
+
+    let outlook_event = ical_to_event(&outlook_ics).expect("parse outlook multi-override");
+    assert_eq!(outlook_event.title.as_deref(), Some("Executive Review"));
+    assert_eq!(outlook_event.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(outlook_event.privacy.as_deref(), Some("private"));
+    assert_eq!(outlook_event.priority, Some(1));
+
+    let outlook_overrides = outlook_event
+        .recurrence_overrides
+        .as_ref()
+        .expect("outlook overrides");
+    assert_eq!(outlook_overrides.len(), 2);
+    assert_eq!(
+        outlook_overrides["2026-10-12T09:00:00"],
+        json!({
+            "title": "Executive Review (Cancelled for Holiday)",
+            "status": "cancelled",
+            "freeBusyStatus": "free"
+        })
+    );
+    assert_eq!(
+        outlook_overrides["2026-10-19T09:00:00"],
+        json!({
+            "start": "2026-10-19T14:00:00",
+            "duration": "PT2H",
+            "title": "Executive Review (Q3 Budget Wrapup)"
+        })
+    );
+
+    // Multi-pass roundtrip fixpoint for Outlook pattern
+    let outlook_export1 = event_to_ical(&outlook_event);
+    let outlook_round2 = ical_to_event(&outlook_export1).expect("outlook_round2");
+    let outlook_export2 = event_to_ical(&outlook_round2);
+    assert_eq!(outlook_export1, outlook_export2);
+    assert_eq!(outlook_event, outlook_round2);
+}
+
+#[test]
+fn real_exporter_corpus_alarm_shapes_roundtrip_characterization() {
+    // 1. Google Calendar Export: Multi-alarm stream with display offsets, email, and absolute trigger
+    let gcal_ics = read_fixture("google_calendar_export.ics");
+    let gcal_event = ical_to_event(&gcal_ics).expect("parse google fixture");
+    let gcal_alerts = gcal_event.alerts.as_ref().expect("gcal alerts");
+    assert_eq!(gcal_alerts.len(), 2, "Google fixture has 2 display alarms");
+    assert_eq!(gcal_alerts["a1"]["action"], "display");
+    assert_eq!(gcal_alerts["a1"]["trigger"]["offset"], "-P1D");
+    assert_eq!(gcal_alerts["a2"]["action"], "display");
+    assert_eq!(gcal_alerts["a2"]["trigger"]["offset"], "-PT15M");
+    assert!(maps_alerts(&gcal_event));
+    assert!(
+        gcal_event.extra.is_empty(),
+        "clean extra map on google fixture"
+    );
+
+    let gcal_export1 = event_to_ical(&gcal_event);
+    assert_eq!(gcal_export1.matches("BEGIN:VALARM\r\n").count(), 2);
+    assert!(gcal_export1.contains("UID:a1\r\n"));
+    assert!(gcal_export1.contains("UID:a2\r\n"));
+    assert!(gcal_export1.contains("DESCRIPTION:Q3 Product Architecture Sync\r\n"));
+    assert!(!gcal_export1.contains("ACTION:EMAIL"));
+    assert!(!gcal_export1.contains("VALUE=DATE-TIME"));
+    let gcal_event2 = ical_to_event(&gcal_export1).expect("reparse google export1");
+    assert_eq!(gcal_event2.alerts, gcal_event.alerts);
+    let gcal_export2 = event_to_ical(&gcal_event2);
+    assert_eq!(gcal_export1, gcal_export2);
+
+    // 2. Outlook / M365 Modern Export: DESCRIPTION:REMINDER, X-WR-ALARMUID, explicit UID & nameless
+    let outlook_ics = read_fixture("outlook_m365_export.ics");
+    let outlook_event = ical_to_event(&outlook_ics).expect("parse outlook fixture");
+    let outlook_alerts = outlook_event.alerts.as_ref().expect("outlook alerts");
+    assert_eq!(
+        outlook_alerts.len(),
+        2,
+        "Outlook fixture has 2 display alarms"
+    );
+    let outlook_uid = "040000008200E00074C5B7101A82E0080000000080E99A2D87D3D901000000000000000010000000D3C9D55A1A2E-alarm-1";
+    assert_eq!(outlook_alerts[outlook_uid]["action"], "display");
+    assert_eq!(outlook_alerts[outlook_uid]["trigger"]["offset"], "-PT15M");
+    assert_eq!(outlook_alerts["a1"]["action"], "display");
+    assert_eq!(outlook_alerts["a1"]["trigger"]["offset"], "-PT30M");
+    assert!(maps_alerts(&outlook_event));
+    assert!(
+        outlook_event.extra.is_empty(),
+        "clean extra map on outlook fixture"
+    );
+
+    let outlook_export1 = event_to_ical(&outlook_event);
+    assert_eq!(outlook_export1.matches("BEGIN:VALARM\r\n").count(), 2);
+    let unfolded_outlook = outlook_export1.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded_outlook.contains(&format!("UID:{outlook_uid}\r\n")));
+    assert!(outlook_export1.contains("UID:a1\r\n"));
+    assert!(outlook_export1.contains("DESCRIPTION:Executive Leadership & Financial Review\r\n"));
+    assert!(!outlook_export1.contains("X-WR-ALARMUID"));
+    assert!(!outlook_export1.contains("ACTION:EMAIL"));
+    let outlook_event2 = ical_to_event(&outlook_export1).expect("reparse outlook export1");
+    assert_eq!(outlook_event2.alerts, outlook_event.alerts);
+    let outlook_export2 = event_to_ical(&outlook_event2);
+    assert_eq!(outlook_export1, outlook_export2);
+
+    // 3. Apple Calendar macOS Export: ACKNOWLEDGED, X-WR-ALARMUID, explicit UUID keys, refused audio/absolute
+    let apple_ics = read_fixture("apple_calendar_export.ics");
+    let apple_event = ical_to_event(&apple_ics).expect("parse apple fixture");
+    let apple_alerts = apple_event.alerts.as_ref().expect("apple alerts");
+    assert_eq!(apple_alerts.len(), 3, "Apple fixture has 3 display alarms");
+    assert_eq!(
+        apple_alerts["E451D045-FA1B-475D-85B6-06F6F505A321"]["trigger"]["offset"],
+        "-P1D"
+    );
+    assert_eq!(
+        apple_alerts["F82C4A10-91DE-4A99-8D77-38C1B79E1A55"]["trigger"]["offset"],
+        "-PT2H"
+    );
+    assert_eq!(
+        apple_alerts["apple-alarm-offset-15m"]["trigger"]["offset"],
+        "-PT15M"
+    );
+    assert!(maps_alerts(&apple_event));
+    assert!(
+        apple_event.extra.is_empty(),
+        "clean extra map on apple fixture"
+    );
+
+    let apple_export1 = event_to_ical(&apple_event);
+    assert_eq!(apple_export1.matches("BEGIN:VALARM\r\n").count(), 3);
+    assert!(apple_export1.contains("UID:E451D045-FA1B-475D-85B6-06F6F505A321\r\n"));
+    assert!(apple_export1.contains("UID:F82C4A10-91DE-4A99-8D77-38C1B79E1A55\r\n"));
+    assert!(apple_export1.contains("UID:apple-alarm-offset-15m\r\n"));
+    assert!(apple_export1.contains("DESCRIPTION:Design Systems Workshop\r\n"));
+    assert!(!apple_export1.contains("ACKNOWLEDGED"));
+    assert!(!apple_export1.contains("X-WR-ALARMUID"));
+    assert!(!apple_export1.contains("ACTION:AUDIO"));
+    assert!(!apple_export1.contains("VALUE=DATE-TIME"));
+    let apple_event2 = ical_to_event(&apple_export1).expect("reparse apple export1");
+    assert_eq!(apple_event2.alerts, apple_event.alerts);
+    let apple_export2 = event_to_ical(&apple_event2);
+    assert_eq!(apple_export1, apple_export2);
+
+    // 4. GNOME Evolution Native Export: X-EVOLUTION-ALARM-UID and VALUE=DURATION
+    let evo_ics = read_fixture("evolution_calendar_export.ics");
+    let evo_event = ical_to_event(&evo_ics).expect("parse evolution fixture");
+    let evo_alerts = evo_event.alerts.as_ref().expect("evo alerts");
+    assert_eq!(
+        evo_alerts.len(),
+        2,
+        "Evolution fixture has 2 display alarms"
+    );
+    assert_eq!(evo_alerts["a1"]["trigger"]["offset"], "-PT15M");
+    assert_eq!(evo_alerts["a2"]["trigger"]["offset"], "-PT1H");
+    assert!(maps_alerts(&evo_event));
+    let evo_export1 = event_to_ical(&evo_event);
+    assert_eq!(evo_export1.matches("BEGIN:VALARM\r\n").count(), 2);
+    let evo_event2 = ical_to_event(&evo_export1).expect("reparse evo export1");
+    assert_eq!(evo_event2.alerts, evo_event.alerts);
+    let evo_export2 = event_to_ical(&evo_event2);
+    assert_eq!(evo_export1, evo_export2);
+
+    // 5. Nextcloud / SabreDAV CalDAV Export: multi-day display alarm
+    let nextcloud_ics = read_fixture("nextcloud_calendar_export.ics");
+    let nextcloud_event = ical_to_event(&nextcloud_ics).expect("parse nextcloud fixture");
+    let nextcloud_alerts = nextcloud_event.alerts.as_ref().expect("nextcloud alerts");
+    assert_eq!(
+        nextcloud_alerts.len(),
+        1,
+        "Nextcloud fixture has 1 display alarm"
+    );
+    assert_eq!(nextcloud_alerts["a1"]["trigger"]["offset"], "-P2D");
+    assert!(maps_alerts(&nextcloud_event));
+    let nextcloud_export1 = event_to_ical(&nextcloud_event);
+    assert_eq!(nextcloud_export1.matches("BEGIN:VALARM\r\n").count(), 1);
+    let nextcloud_event2 = ical_to_event(&nextcloud_export1).expect("reparse nextcloud export1");
+    assert_eq!(nextcloud_event2.alerts, nextcloud_event.alerts);
+    let nextcloud_export2 = event_to_ical(&nextcloud_event2);
+    assert_eq!(nextcloud_export1, nextcloud_export2);
+}
+
+#[test]
+fn refused_alarm_shapes_safe_isolation_and_whole_property_replacement() {
+    // 1. Document containing ONLY refused alarms (EMAIL, AUDIO, PROCEDURE, absolute triggers)
+    let ics_only_refused = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:refused-alarms-only-event\r\n\
+DTSTART:20261105T140000Z\r\n\
+SUMMARY:Team Strategy Offsite\r\n\
+BEGIN:VALARM\r\n\
+ACTION:EMAIL\r\n\
+SUMMARY:Strategy Reminder\r\n\
+DESCRIPTION:Do not forget the offsite\r\n\
+ATTENDEE:mailto:lead@example.com\r\n\
+TRIGGER:-P1D\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:AUDIO\r\n\
+ATTACH;VALUE=URI:Chime\r\n\
+TRIGGER:-PT15M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:PROCEDURE\r\n\
+ATTACH;VALUE=URI:file:///bin/beep\r\n\
+TRIGGER:-PT5M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Absolute Trigger Alert\r\n\
+TRIGGER;VALUE=DATE-TIME:20261105T130000Z\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Invalid Related Param\r\n\
+TRIGGER;RELATED=BEFORE:-PT10M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics_only_refused).expect("parse refused-only document");
+    assert!(
+        event.alerts.is_none(),
+        "event.alerts must be None when all alarms are refused"
+    );
+    assert!(
+        event.extra.is_empty(),
+        "event.extra must not be polluted by dropped alarms"
+    );
+    assert!(
+        maps_alerts(&event),
+        "event with no readable alerts must pass maps_alerts"
+    );
+
+    let export1 = event_to_ical(&event);
+    assert_eq!(
+        export1.matches("BEGIN:VALARM").count(),
+        0,
+        "No VALARM emitted when alerts is None"
+    );
+    let event2 = ical_to_event(&export1).expect("reparse export1");
+    assert_eq!(event2.alerts, None);
+    assert_eq!(event2.title, event.title);
+    assert_eq!(event2.start, event.start);
+
+    // 2. Mixed document: 1 valid display alarm + multiple refused alarms
+    let ics_mixed = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:mixed-alarms-event\r\n\
+DTSTART:20261105T140000Z\r\n\
+SUMMARY:Mixed Alarms Event\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+TRIGGER:-PT20M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:EMAIL\r\n\
+ATTENDEE:mailto:user@example.com\r\n\
+TRIGGER:-P2D\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:AUDIO\r\n\
+TRIGGER:-PT10M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let mixed_event = ical_to_event(ics_mixed).expect("parse mixed document");
+    let alerts = mixed_event.alerts.as_ref().expect("mixed alerts");
+    assert_eq!(alerts.len(), 1, "Only the 1 valid display alarm is kept");
+    assert_eq!(alerts["a1"]["trigger"]["offset"], "-PT20M");
+    assert!(maps_alerts(&mixed_event));
+
+    let mixed_export = event_to_ical(&mixed_event);
+    assert_eq!(mixed_export.matches("BEGIN:VALARM\r\n").count(), 1);
+    assert!(mixed_export.contains("TRIGGER:-PT20M\r\n"));
+    assert!(!mixed_export.contains("ACTION:EMAIL"));
+    assert!(!mixed_export.contains("ACTION:AUDIO"));
+}
+
+#[test]
+fn maps_alerts_refusal_boundary_matrix_for_unsupported_shapes() {
+    let base_event = CalendarEvent {
+        id: Some("alarm-boundary-test".into()),
+        event_type: Some("Event".into()),
+        title: Some("Alarm Boundary Test".into()),
+        start: Some("2026-11-10T10:00:00".into()),
+        time_zone: Some("Europe/London".into()),
+        duration: Some("PT1H".into()),
+        ..Default::default()
+    };
+
+    // 1. Valid offset display alert -> accepted
+    let mut valid_event = base_event.clone();
+    valid_event.alerts = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            }
+        }),
+    )]));
+    assert!(maps_alerts(&valid_event));
+
+    // 2. Unmapped action type ("email", "audio", "procedure") -> refused
+    for bad_action in ["email", "audio", "procedure", "sound", "custom"] {
+        let mut bad_event = base_event.clone();
+        bad_event.alerts = Some(BTreeMap::from([(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "action": bad_action,
+                "trigger": {
+                    "@type": "OffsetTrigger",
+                    "offset": "-PT15M"
+                }
+            }),
+        )]));
+        assert!(
+            !maps_alerts(&bad_event),
+            "maps_alerts must refuse action: {bad_action}"
+        );
+    }
+
+    // 3. Absolute trigger -> refused
+    let mut abs_event = base_event.clone();
+    abs_event.alerts = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "AbsoluteTrigger",
+                "when": "2026-11-10T09:45:00Z"
+            }
+        }),
+    )]));
+    assert!(
+        !maps_alerts(&abs_event),
+        "maps_alerts must refuse AbsoluteTrigger"
+    );
+
+    // 4. Acknowledged timestamp (RFC 9074 §6.1 / snoozed alert) -> refused to prevent un-dismissing
+    let mut ack_event = base_event.clone();
+    ack_event.alerts = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "acknowledged": "2026-11-10T09:00:00Z",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            }
+        }),
+    )]));
+    assert!(
+        !maps_alerts(&ack_event),
+        "maps_alerts must refuse acknowledged alert"
+    );
+
+    // 5. Custom description on Alert -> refused to prevent clobbering
+    let mut desc_event = base_event.clone();
+    desc_event.alerts = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "description": "Custom snooze message",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            }
+        }),
+    )]));
+    assert!(
+        !maps_alerts(&desc_event),
+        "maps_alerts must refuse Alert with custom description"
+    );
+
+    // 6. Invalid relativeTo -> refused
+    let mut rel_event = base_event.clone();
+    rel_event.alerts = Some(BTreeMap::from([(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M",
+                "relativeTo": "invalid"
+            }
+        }),
+    )]));
+    assert!(
+        !maps_alerts(&rel_event),
+        "maps_alerts must refuse invalid relativeTo"
+    );
+
+    // 7. useDefaultAlerts: true -> refused & draws 0 alarms
+    let mut def_event = valid_event.clone();
+    def_event
+        .extra
+        .insert("useDefaultAlerts".to_owned(), json!(true));
+    assert!(
+        !maps_alerts(&def_event),
+        "maps_alerts must refuse event with useDefaultAlerts: true"
+    );
+    let def_out = event_to_ical(&def_event);
+    assert_eq!(
+        def_out.matches("BEGIN:VALARM").count(),
+        0,
+        "useDefaultAlerts must suppress VALARM emission"
+    );
+
+    // 8. Invalid key (empty string or illegal characters) -> refused
+    for bad_key in ["", "alert/with/slash", "alert with space", "alert@domain"] {
+        let mut key_event = base_event.clone();
+        key_event.alerts = Some(BTreeMap::from([(
+            bad_key.to_owned(),
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {
+                    "@type": "OffsetTrigger",
+                    "offset": "-PT15M"
+                }
+            }),
+        )]));
+        assert!(
+            !maps_alerts(&key_event),
+            "maps_alerts must refuse invalid key: '{bad_key}'"
+        );
+    }
 }
