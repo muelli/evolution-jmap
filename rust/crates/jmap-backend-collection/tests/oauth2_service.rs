@@ -54,6 +54,11 @@ use jmap_backend_collection::module::{load, unload};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_config::oauth2_service::NAME;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A `GTypeModule` standing in for the `EModule` the registry would load us
 /// as — the same stand-in `tests/factory.rs` and `tests/textdomain.rs` use.
 #[repr(C)]
@@ -127,40 +132,51 @@ fn source_naming_this_service() -> *mut ESource {
 /// registered, which a service nothing ever instantiates would also pass.
 #[test]
 fn the_registry_finds_the_jmap_service_once_the_module_has_loaded() {
-    let gtype = register_static::<TestModule>();
-    assert_ne!(gtype, 0, "the stand-in module type did not register");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let gtype = register_static::<TestModule>();
+        assert_ne!(gtype, 0, "the stand-in module type did not register");
 
-    // SAFETY: the type is registered and GTypeModule has no construct
-    // properties of its own.
-    let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
-    assert!(!module.is_null(), "g_object_new returned NULL");
+        // SAFETY: the type is registered and GTypeModule has no construct
+        // properties of its own.
+        let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
+        assert!(!module.is_null(), "g_object_new returned NULL");
 
-    // SAFETY: `module` is a GTypeModule; the reference this takes is never
-    // given back, which is what the registry does for as long as the backend
-    // is wanted.
-    assert_ne!(
-        unsafe { g_type_module_use(module) },
-        GFALSE,
-        "the module would not load at all"
-    );
-
-    // SAFETY: no arguments; `EOAuth2Services` is a process-wide singleton
-    // (`e-oauth2-services.c`), so this is the same registry any other OAuth2
-    // code in this process would get.
-    let registry = unsafe { e_oauth2_services_new() };
-    let source = source_naming_this_service();
-
-    // SAFETY: a live registry and a live source; a non-NULL result is a new
-    // ref this test drops.
-    unsafe {
-        let found = e_oauth2_services_find(registry, source);
-        assert!(
-            !found.is_null(),
-            "the module load did not register a service that answers to \
-             this service's own authentication method — the JMAP OAuth2 \
-             flow would silently never run"
+        // SAFETY: `module` is a GTypeModule; the reference this takes is never
+        // given back, which is what the registry does for as long as the backend
+        // is wanted.
+        assert_ne!(
+            unsafe { g_type_module_use(module) },
+            GFALSE,
+            "the module would not load at all"
         );
-        g_object_unref(found.cast());
-        g_object_unref(source.cast());
-    }
+
+        // SAFETY: no arguments; `EOAuth2Services` is a process-wide singleton
+        // (`e-oauth2-services.c`), so this is the same registry any other OAuth2
+        // code in this process would get.
+        let registry = unsafe { e_oauth2_services_new() };
+        let source = source_naming_this_service();
+
+        // SAFETY: a live registry and a live source; a non-NULL result is a new
+        // ref this test drops.
+        unsafe {
+            let found = e_oauth2_services_find(registry, source);
+            assert!(
+                !found.is_null(),
+                "the module load did not register a service that answers to \
+                 this service's own authentication method — the JMAP OAuth2 \
+                 flow would silently never run"
+            );
+            g_object_unref(found.cast());
+            g_object_unref(source.cast());
+        }
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_oauth2_service_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }

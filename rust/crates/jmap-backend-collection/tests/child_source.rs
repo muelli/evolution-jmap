@@ -35,6 +35,11 @@ use jmap_collection_sync::child_source::{
 use jmap_collection_sync::{Child, ChildKind, Setting};
 use jmap_proto::Id;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// An `ESource` in the state `e_collection_backend_new_child` hands one back
 /// in: a uid, a parent, and nothing else. `e_source_new_with_uid` with a NULL
 /// D-Bus object is what EDS itself uses for a source read from a keyfile, so
@@ -148,285 +153,326 @@ fn child(kind: ChildKind, collection: &str, name: &str) -> Child {
 
 #[test]
 fn the_extension_names_are_the_ones_eds_defines() {
-    // `jmap-collection-sync` builds without the EDS headers, so it spells the
-    // keyfile groups itself; this crate is the only one that sees both
-    // spellings. A pair that drifts apart compiles — `e_source_get_extension`
-    // takes a string — and produces a setting that is never written.
-    for (defined, group) in EXTENSIONS {
-        assert_eq!(
-            defined.to_str().expect("EDS names its groups in ASCII"),
-            group
-        );
-    }
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `jmap-collection-sync` builds without the EDS headers, so it spells the
+        // keyfile groups itself; this crate is the only one that sees both
+        // spellings. A pair that drifts apart compiles — `e_source_get_extension`
+        // takes a string — and produces a setting that is never written.
+        for (defined, group) in EXTENSIONS {
+            assert_eq!(
+                defined.to_str().expect("EDS names its groups in ASCII"),
+                group
+            );
+        }
+    });
 }
 
 #[test]
 fn a_written_child_is_read_back_as_the_child_it_was_written_from() {
-    // The round trip EDS performs on every start after the one that created
-    // the child: `collection_backend_load_resources()` reads the cached
-    // `.source` file and asks `dup_resource_id` what it is. An answer that is
-    // not the string the child was created under is a second source for a
-    // collection that already has one; no answer at all deletes the file.
-    for (kind, collection) in [
-        (ChildKind::AddressBook, "AB1"),
-        (ChildKind::Calendar, "Cal1"),
-        // The same JMAP id under both kinds: ids are unique per data type, not
-        // per account (RFC 8620 §1.2), so this pair is what a server may
-        // actually present.
-        (ChildKind::AddressBook, "X1"),
-        (ChildKind::Calendar, "X1"),
-    ] {
-        let child = child(kind, collection, "Personal");
-        let source = TestSource::new().written(&child, &connection());
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The round trip EDS performs on every start after the one that created
+        // the child: `collection_backend_load_resources()` reads the cached
+        // `.source` file and asks `dup_resource_id` what it is. An answer that is
+        // not the string the child was created under is a second source for a
+        // collection that already has one; no answer at all deletes the file.
+        for (kind, collection) in [
+            (ChildKind::AddressBook, "AB1"),
+            (ChildKind::Calendar, "Cal1"),
+            // The same JMAP id under both kinds: ids are unique per data type, not
+            // per account (RFC 8620 §1.2), so this pair is what a server may
+            // actually present.
+            (ChildKind::AddressBook, "X1"),
+            (ChildKind::Calendar, "X1"),
+        ] {
+            let child = child(kind, collection, "Personal");
+            let source = TestSource::new().written(&child, &connection());
 
-        assert_eq!(
-            source.resource_id(),
-            Some(child.resource_id.clone()),
-            "a {kind:?} of {collection} did not read back as itself"
-        );
-    }
+            assert_eq!(
+                source.resource_id(),
+                Some(child.resource_id.clone()),
+                "a {kind:?} of {collection} did not read back as itself"
+            );
+        }
+    });
 }
 
 #[test]
 fn a_written_child_reaches_the_server_its_account_named() {
-    // A child inherits none of the account's connection from EDS, which binds
-    // `oauth2-support` and nothing else — and it is the *child* the address
-    // book and calendar backends are handed. So the settings copied here are
-    // the whole of what those backends have to work from, and this is them
-    // reading it. What follows the account *afterwards* is this backend's own
-    // doing and is `tests/child_added.rs`'s subject; the copy below is what a
-    // child starts life with.
-    let child = child(ChildKind::AddressBook, "AB1", "Personal");
-    let source = TestSource::new().written(&child, &connection());
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // A child inherits none of the account's connection from EDS, which binds
+        // `oauth2-support` and nothing else — and it is the *child* the address
+        // book and calendar backends are handed. So the settings copied here are
+        // the whole of what those backends have to work from, and this is them
+        // reading it. What follows the account *afterwards* is this backend's own
+        // doing and is `tests/child_added.rs`'s subject; the copy below is what a
+        // child starts life with.
+        let child = child(ChildKind::AddressBook, "AB1", "Personal");
+        let source = TestSource::new().written(&child, &connection());
 
-    assert_eq!(
-        source.config(),
-        SourceConfig {
-            target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
-            user: Some("vera@example.com".to_owned()),
-            resource_id: Some("AB1".to_owned()),
-        }
-    );
-    assert_eq!(
-        source.display_name(),
-        Some("Personal".to_owned()),
-        "and Evolution shows the collection's name rather than a blank row"
-    );
+        assert_eq!(
+            source.config(),
+            SourceConfig {
+                target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
+                user: Some("vera@example.com".to_owned()),
+                resource_id: Some("AB1".to_owned()),
+            }
+        );
+        assert_eq!(
+            source.display_name(),
+            Some("Personal".to_owned()),
+            "and Evolution shows the collection's name rather than a blank row"
+        );
+    });
 }
 
 #[test]
 fn every_setting_a_child_can_be_described_by_is_one_this_writes() {
-    // `Child::settings` is the other crate's, and it can grow a setting. One
-    // it grows that this does not write would not fail loudly — `apply` would
-    // return the error nobody reads yet — so the exhaustiveness is asserted
-    // here, over every shape a child and an account come in.
-    for kind in [ChildKind::AddressBook, ChildKind::Calendar] {
-        for connection in [
-            connection(),
-            // Everything optional left out, which is what a bare account with
-            // no port and no credentials configured produces.
-            Connection {
-                host: "127.0.0.1".to_owned(),
-                port: None,
-                user: None,
-                auth_method: None,
-                secure: false,
-            },
-        ] {
-            let child = child(kind, "X1", "Personal");
-            let source = TestSource::new();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `Child::settings` is the other crate's, and it can grow a setting. One
+        // it grows that this does not write would not fail loudly — `apply` would
+        // return the error nobody reads yet — so the exhaustiveness is asserted
+        // here, over every shape a child and an account come in.
+        for kind in [ChildKind::AddressBook, ChildKind::Calendar] {
+            for connection in [
+                connection(),
+                // Everything optional left out, which is what a bare account with
+                // no port and no credentials configured produces.
+                Connection {
+                    host: "127.0.0.1".to_owned(),
+                    port: None,
+                    user: None,
+                    auth_method: None,
+                    secure: false,
+                },
+            ] {
+                let child = child(kind, "X1", "Personal");
+                let source = TestSource::new();
 
-            // SAFETY: a live source.
-            let written = unsafe { apply(source.0, &child.settings(&connection)) };
+                // SAFETY: a live source.
+                let written = unsafe { apply(source.0, &child.settings(&connection)) };
 
-            assert_eq!(
-                written,
-                Ok(()),
-                "a {kind:?} child of {} names a setting this backend cannot write",
-                connection.host
-            );
+                assert_eq!(
+                    written,
+                    Ok(()),
+                    "a {kind:?} child of {} names a setting this backend cannot write",
+                    connection.host
+                );
+            }
         }
-    }
+    });
 }
 
 #[test]
 fn a_setting_this_backend_cannot_write_is_refused_rather_than_dropped() {
-    // Silently skipping an unknown setting is the failure mode this guards
-    // against: the child would be created, look right, and be missing the one
-    // property that makes it work. Which of the two is missing is in the
-    // error, because a caller that logs it is the only way it is ever seen.
-    let source = TestSource::new();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Silently skipping an unknown setting is the failure mode this guards
+        // against: the child would be created, look right, and be missing the one
+        // property that makes it work. Which of the two is missing is in the
+        // error, because a caller that logs it is the only way it is ever seen.
+        let source = TestSource::new();
 
-    for (setting, expected) in [
-        (
-            Setting {
-                group: "Mail Account",
-                key: "BackendName",
-                value: "jmap".to_owned(),
-            },
-            UnwritableSetting::UnknownProperty {
-                group: "Mail Account",
-                key: "BackendName",
-            },
-        ),
-        (
-            Setting {
-                group: EXTENSION_DATA_SOURCE,
-                key: "Parent",
-                value: "an-account-uid".to_owned(),
-            },
-            UnwritableSetting::UnknownProperty {
-                group: EXTENSION_DATA_SOURCE,
-                key: "Parent",
-            },
-        ),
-        (
-            // A port is a number to `ESourceAuthentication` and a string in
-            // the keyfile; the conversion is this module's, so its failure is
-            // too.
-            Setting {
-                group: EXTENSION_AUTHENTICATION,
-                key: "Port",
-                value: "https".to_owned(),
-            },
-            UnwritableSetting::WrongType {
-                group: EXTENSION_AUTHENTICATION,
-                key: "Port",
-                value: "https".to_owned(),
-            },
-        ),
-    ] {
-        // SAFETY: a live source.
-        assert_eq!(unsafe { apply(source.0, &[setting]) }, Err(expected));
-    }
+        for (setting, expected) in [
+            (
+                Setting {
+                    group: "Mail Account",
+                    key: "BackendName",
+                    value: "jmap".to_owned(),
+                },
+                UnwritableSetting::UnknownProperty {
+                    group: "Mail Account",
+                    key: "BackendName",
+                },
+            ),
+            (
+                Setting {
+                    group: EXTENSION_DATA_SOURCE,
+                    key: "Parent",
+                    value: "an-account-uid".to_owned(),
+                },
+                UnwritableSetting::UnknownProperty {
+                    group: EXTENSION_DATA_SOURCE,
+                    key: "Parent",
+                },
+            ),
+            (
+                // A port is a number to `ESourceAuthentication` and a string in
+                // the keyfile; the conversion is this module's, so its failure is
+                // too.
+                Setting {
+                    group: EXTENSION_AUTHENTICATION,
+                    key: "Port",
+                    value: "https".to_owned(),
+                },
+                UnwritableSetting::WrongType {
+                    group: EXTENSION_AUTHENTICATION,
+                    key: "Port",
+                    value: "https".to_owned(),
+                },
+            ),
+        ] {
+            // SAFETY: a live source.
+            assert_eq!(unsafe { apply(source.0, &[setting]) }, Err(expected));
+        }
+    });
 }
 
 #[test]
 fn a_child_carries_the_extension_of_its_own_kind_and_not_the_other() {
-    // The extension *is* the kind: `collection_backend_child_is_contacts()`
-    // and `…_is_calendar()` are `e_source_has_extension` calls, and so is the
-    // kind half of the resource id. A child carrying both would be handed to
-    // whichever factory tested first — and `e_source_get_extension` creates
-    // the extension it is asked for, so writing one by mistake is a real way
-    // to get there.
-    for (kind, own, other) in [
-        (
-            ChildKind::AddressBook,
-            E_SOURCE_EXTENSION_ADDRESS_BOOK,
-            E_SOURCE_EXTENSION_CALENDAR,
-        ),
-        (
-            ChildKind::Calendar,
-            E_SOURCE_EXTENSION_CALENDAR,
-            E_SOURCE_EXTENSION_ADDRESS_BOOK,
-        ),
-    ] {
-        let source = TestSource::new().written(&child(kind, "X1", "Personal"), &connection());
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The extension *is* the kind: `collection_backend_child_is_contacts()`
+        // and `…_is_calendar()` are `e_source_has_extension` calls, and so is the
+        // kind half of the resource id. A child carrying both would be handed to
+        // whichever factory tested first — and `e_source_get_extension` creates
+        // the extension it is asked for, so writing one by mistake is a real way
+        // to get there.
+        for (kind, own, other) in [
+            (
+                ChildKind::AddressBook,
+                E_SOURCE_EXTENSION_ADDRESS_BOOK,
+                E_SOURCE_EXTENSION_CALENDAR,
+            ),
+            (
+                ChildKind::Calendar,
+                E_SOURCE_EXTENSION_CALENDAR,
+                E_SOURCE_EXTENSION_ADDRESS_BOOK,
+            ),
+        ] {
+            let source = TestSource::new().written(&child(kind, "X1", "Personal"), &connection());
 
-        assert!(
-            source.has_extension(own),
-            "a {kind:?} child was not written as one"
-        );
-        assert!(
-            !source.has_extension(other),
-            "a {kind:?} child also claims to be the other kind"
-        );
-    }
+            assert!(
+                source.has_extension(own),
+                "a {kind:?} child was not written as one"
+            );
+            assert!(
+                !source.has_extension(other),
+                "a {kind:?} child also claims to be the other kind"
+            );
+        }
+    });
 }
 
 #[test]
 fn a_plain_http_account_writes_children_that_do_not_insist_on_tls() {
-    // `Child::settings` writes `[Security] Method` as the keyfile string
-    // "tls" or "none"; the backends read `ESourceSecurity:secure`, a boolean.
-    // Those are only the same question if EDS's secure method is spelled the
-    // way this writes it — untested, that is a child of a plain-HTTP account
-    // that reports a TLS error its account's settings do not explain, or,
-    // worse, a TLS account whose children quietly talk plain HTTP.
-    let child = child(ChildKind::AddressBook, "AB1", "Personal");
-    let mut plain = connection();
-    plain.host = "127.0.0.1".to_owned();
-    plain.secure = false;
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `Child::settings` writes `[Security] Method` as the keyfile string
+        // "tls" or "none"; the backends read `ESourceSecurity:secure`, a boolean.
+        // Those are only the same question if EDS's secure method is spelled the
+        // way this writes it — untested, that is a child of a plain-HTTP account
+        // that reports a TLS error its account's settings do not explain, or,
+        // worse, a TLS account whose children quietly talk plain HTTP.
+        let child = child(ChildKind::AddressBook, "AB1", "Personal");
+        let mut plain = connection();
+        plain.host = "127.0.0.1".to_owned();
+        plain.secure = false;
 
-    let source = TestSource::new().written(&child, &plain);
-    assert!(!source.secure());
-    assert_eq!(
-        source.config().target,
-        ConnectTarget::Origin("http://127.0.0.1:8443".into())
-    );
+        let source = TestSource::new().written(&child, &plain);
+        assert!(!source.secure());
+        assert_eq!(
+            source.config().target,
+            ConnectTarget::Origin("http://127.0.0.1:8443".into())
+        );
 
-    let secure = TestSource::new().written(&child, &connection());
-    assert!(secure.secure(), "and a TLS account's children still say so");
+        let secure = TestSource::new().written(&child, &connection());
+        assert!(secure.secure(), "and a TLS account's children still say so");
+    });
 }
 
 #[test]
 fn a_port_the_account_did_not_name_leaves_the_child_at_the_scheme_default() {
-    // `Child::settings` omits the setting rather than writing 0, and an
-    // omitted setting has to leave the property at the value that means "not
-    // set" — a child asking for port 0 connects to nothing at all.
-    let mut unported = connection();
-    unported.port = None;
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `Child::settings` omits the setting rather than writing 0, and an
+        // omitted setting has to leave the property at the value that means "not
+        // set" — a child asking for port 0 connects to nothing at all.
+        let mut unported = connection();
+        unported.port = None;
 
-    let source =
-        TestSource::new().written(&child(ChildKind::AddressBook, "AB1", "Personal"), &unported);
+        let source =
+            TestSource::new().written(&child(ChildKind::AddressBook, "AB1", "Personal"), &unported);
 
-    assert_eq!(
-        source.config().target,
-        ConnectTarget::Domain("jmap.example.com".into())
-    );
+        assert_eq!(
+            source.config().target,
+            ConnectTarget::Domain("jmap.example.com".into())
+        );
+    });
 }
 
 #[test]
 fn a_collection_name_with_an_interior_nul_still_produces_a_usable_child() {
-    // The display name is the one setting whose value is server data: a JSON
-    // string may carry an escaped NUL, and a C string may not. Refusing the
-    // write would be refusing the child — so it is truncated at the NUL,
-    // which is what the name would have meant to every C caller downstream
-    // anyway, and the properties that make the child work are unaffected.
-    let named = child(ChildKind::AddressBook, "AB1", "Person\0al");
-    let source = TestSource::new().written(&named, &connection());
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The display name is the one setting whose value is server data: a JSON
+        // string may carry an escaped NUL, and a C string may not. Refusing the
+        // write would be refusing the child — so it is truncated at the NUL,
+        // which is what the name would have meant to every C caller downstream
+        // anyway, and the properties that make the child work are unaffected.
+        let named = child(ChildKind::AddressBook, "AB1", "Person\0al");
+        let source = TestSource::new().written(&named, &connection());
 
-    assert_eq!(source.display_name(), Some("Person".to_owned()));
-    assert_eq!(source.resource_id(), Some("addressbook:AB1".to_owned()));
+        assert_eq!(source.display_name(), Some("Person".to_owned()));
+        assert_eq!(source.resource_id(), Some("addressbook:AB1".to_owned()));
+    });
 }
 
 #[test]
 fn a_calendars_color_reaches_the_child_and_reads_back_as_the_one_written() {
-    // The round trip a real backend depends on: `Child::settings` describes
-    // the color as a `("Calendar", "Color", …)` triple, and this is that
-    // triple landing on an actual `ESourceSelectable:color` rather than on
-    // some other property `e_source_selectable_get_color` does not read.
-    let mut colored = child(ChildKind::Calendar, "Cal1", "Work");
-    colored.color = Some("#ff8800".to_owned());
-    let source = TestSource::new().written(&colored, &connection());
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The round trip a real backend depends on: `Child::settings` describes
+        // the color as a `("Calendar", "Color", …)` triple, and this is that
+        // triple landing on an actual `ESourceSelectable:color` rather than on
+        // some other property `e_source_selectable_get_color` does not read.
+        let mut colored = child(ChildKind::Calendar, "Cal1", "Work");
+        colored.color = Some("#ff8800".to_owned());
+        let source = TestSource::new().written(&colored, &connection());
 
-    assert_eq!(source.color(), Some("#ff8800".to_owned()));
+        assert_eq!(source.color(), Some("#ff8800".to_owned()));
+    });
 }
 
 #[test]
 fn a_calendar_the_server_named_no_color_for_gets_no_color_setting() {
-    // `ESourceSelectable:color` is not NULL-by-default the way a freshly
-    // created extension's other properties are: EDS's own GParamSpec gives it
-    // a built-in default ("#62a0ea", GNOME's accent blue), so a calendar the
-    // server named no color for is not left with *no* color, it is left with
-    // whatever every other selectable source starts at. That is the point —
-    // `Child::settings` leaving the setting out (see the module comment on
-    // omitted-vs-empty) means this backend never overrides that default with
-    // an empty string, which is what `e_source_selectable_set_color(sel, "")`
-    // would have done.
-    let uncolored = child(ChildKind::Calendar, "Cal1", "Work");
-    let source = TestSource::new().written(&uncolored, &connection());
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `ESourceSelectable:color` is not NULL-by-default the way a freshly
+        // created extension's other properties are: EDS's own GParamSpec gives it
+        // a built-in default ("#62a0ea", GNOME's accent blue), so a calendar the
+        // server named no color for is not left with *no* color, it is left with
+        // whatever every other selectable source starts at. That is the point —
+        // `Child::settings` leaving the setting out (see the module comment on
+        // omitted-vs-empty) means this backend never overrides that default with
+        // an empty string, which is what `e_source_selectable_set_color(sel, "")`
+        // would have done.
+        let uncolored = child(ChildKind::Calendar, "Cal1", "Work");
+        let source = TestSource::new().written(&uncolored, &connection());
 
-    assert!(
-        !uncolored
-            .settings(&connection())
-            .iter()
-            .any(|setting| setting.key == "Color"),
-        "an unset color must not be a Setting at all"
-    );
-    assert_eq!(
-        source.color(),
-        Some("#62a0ea".to_owned()),
-        "EDS's own compiled-in default for a selectable source with no color \
-         ever written to it"
-    );
+        assert!(
+            !uncolored
+                .settings(&connection())
+                .iter()
+                .any(|setting| setting.key == "Color"),
+            "an unset color must not be a Setting at all"
+        );
+        assert_eq!(
+            source.color(),
+            Some("#62a0ea".to_owned()),
+            "EDS's own compiled-in default for a selectable source with no color \
+             ever written to it"
+        );
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_child_source_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }

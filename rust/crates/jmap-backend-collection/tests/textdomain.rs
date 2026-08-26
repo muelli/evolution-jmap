@@ -40,6 +40,11 @@ use jmap_backend_collection::module::{load, unload};
 use jmap_backend_core::i18n::{LOCALE_DIR, bind_to, binding};
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// A `GTypeModule` standing in for the `EModule` the registry would load us as.
 #[repr(C)]
 struct TestModule {
@@ -99,35 +104,46 @@ unsafe extern "C" fn module_unload(module: *mut GTypeModule) {
 /// exactly as it would be from `EModule`.
 #[test]
 fn the_entry_point_binds_the_domain() {
-    let decoy = c"/nonexistent/jmap-collection-decoy-locale";
-    assert_eq!(
-        bind_to(decoy).as_c_str(),
-        decoy,
-        "the decoy binding did not take, so the assertion below cannot fail"
-    );
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let decoy = c"/nonexistent/jmap-collection-decoy-locale";
+        assert_eq!(
+            bind_to(decoy).as_c_str(),
+            decoy,
+            "the decoy binding did not take, so the assertion below cannot fail"
+        );
 
-    let gtype = register_static::<TestModule>();
-    assert_ne!(gtype, 0, "the stand-in module type did not register");
+        let gtype = register_static::<TestModule>();
+        assert_ne!(gtype, 0, "the stand-in module type did not register");
 
-    // SAFETY: the type is registered and GTypeModule has no construct
-    // properties of its own.
-    let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
-    assert!(!module.is_null(), "g_object_new returned NULL");
+        // SAFETY: the type is registered and GTypeModule has no construct
+        // properties of its own.
+        let module = unsafe { g_object_new(gtype, ptr::null()) }.cast::<GTypeModule>();
+        assert!(!module.is_null(), "g_object_new returned NULL");
 
-    // SAFETY: `module` is a GTypeModule; the reference this takes is never
-    // given back, which is what the registry does for as long as the backend is
-    // wanted.
-    assert_ne!(
-        unsafe { g_type_module_use(module) },
-        GFALSE,
-        "the module would not load at all"
-    );
+        // SAFETY: `module` is a GTypeModule; the reference this takes is never
+        // given back, which is what the registry does for as long as the backend is
+        // wanted.
+        assert_ne!(
+            unsafe { g_type_module_use(module) },
+            GFALSE,
+            "the module would not load at all"
+        );
 
-    assert_eq!(
-        binding().as_c_str(),
-        LOCALE_DIR,
-        "the entry point did not bind the domain, so the child sources this \
-         backend names would be looked up wherever the source registry happened \
-         to point"
-    );
+        assert_eq!(
+            binding().as_c_str(),
+            LOCALE_DIR,
+            "the entry point did not bind the domain, so the child sources this \
+             backend names would be looked up wherever the source registry happened \
+             to point"
+        );
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_textdomain_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }
