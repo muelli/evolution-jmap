@@ -120,10 +120,12 @@ impl Subscriber for CapturingSubscriber {
     fn exit(&self, _span: &SpanId) {}
 }
 
-static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
+static TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn capture(run: impl FnOnce()) -> Vec<(Level, String, String)> {
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let captured = Arc::new(Mutex::new(Vec::new()));
     let subscriber = CapturingSubscriber {
         captured: captured.clone(),
@@ -136,7 +138,6 @@ fn capture(run: impl FnOnce()) -> Vec<(Level, String, String)> {
 }
 
 fn untraced<T>(run: impl FnOnce() -> T) -> T {
-    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let subscriber = CapturingSubscriber {
         captured: Arc::new(Mutex::new(Vec::new())),
     };
@@ -368,291 +369,330 @@ unsafe impl Populating for MockPopulating {
 
 #[test]
 fn authenticate_with_traces_structured_fields() {
-    let source = TestSource::new("acc-test-auth")
-        .parts(Parts {
-            mail: false,
-            contacts: true,
-            calendars: false,
-        })
-        .authentication("127.0.0.1", 8080, Some("vera@example.com"))
-        .secure(false);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = TestSource::new("acc-test-auth")
+            .parts(Parts {
+                mail: false,
+                contacts: true,
+                calendars: false,
+            })
+            .authentication("127.0.0.1", 8080, Some("vera@example.com"))
+            .secure(false);
 
-    let mut error = ptr::null_mut();
-    let captured = capture(|| {
-        let result = unsafe {
-            authenticate_with(
-                source.0,
-                ptr::null(),
-                ptr::null_mut(),
-                &mut error,
-                |_login| Ok(()),
-                |_creds| {},
-            )
-        };
-        assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
+        let mut error = ptr::null_mut();
+        let captured = capture(|| {
+            let result = unsafe {
+                authenticate_with(
+                    source.0,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    &mut error,
+                    |_login| Ok(()),
+                    |_creds| {},
+                )
+            };
+            assert_eq!(result, E_SOURCE_AUTHENTICATION_REQUIRED);
+        });
+
+        assert!(
+            has(&captured, Level::DEBUG, "account_id", "acc-test-auth"),
+            "expected account_id in authenticate_with, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "uses_oauth2", "false"),
+            "expected uses_oauth2 in authenticate_with, got {captured:?}"
+        );
     });
-
-    assert!(
-        has(&captured, Level::DEBUG, "account_id", "acc-test-auth"),
-        "expected account_id in authenticate_with, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "uses_oauth2", "false"),
-        "expected uses_oauth2 in authenticate_with, got {captured:?}"
-    );
 }
 
 #[test]
 fn authenticate_with_no_parts_traces_fast_path() {
-    let source = TestSource::new("acc-empty-parts").parts(Parts::NONE);
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = TestSource::new("acc-empty-parts").parts(Parts::NONE);
 
-    let mut error = ptr::null_mut();
-    let captured = capture(|| {
-        let result = unsafe {
-            authenticate_with(
-                source.0,
-                ptr::null(),
-                ptr::null_mut(),
-                &mut error,
-                |_login| Ok(()),
-                |_creds| {},
-            )
-        };
-        assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        let mut error = ptr::null_mut();
+        let captured = capture(|| {
+            let result = unsafe {
+                authenticate_with(
+                    source.0,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    &mut error,
+                    |_login| Ok(()),
+                    |_creds| {},
+                )
+            };
+            assert_eq!(result, E_SOURCE_AUTHENTICATION_ACCEPTED);
+        });
+
+        assert!(
+            has(&captured, Level::DEBUG, "account_id", "acc-empty-parts"),
+            "expected account_id in authenticate_with fast path, got {captured:?}"
+        );
     });
-
-    assert!(
-        has(&captured, Level::DEBUG, "account_id", "acc-empty-parts"),
-        "expected account_id in authenticate_with fast path, got {captured:?}"
-    );
 }
 
 #[test]
 fn create_on_server_traces_structured_fields() {
-    let server = MockServer::builder().start();
-    let account_id = server.account_id().to_string();
-    let target = ConnectTarget::Origin(server.origin().to_owned());
-    let requested = Requested {
-        kind: ChildKind::AddressBook,
-        display_name: "Personal Contacts".to_owned(),
-    };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::builder().start();
+        let account_id = server.account_id().to_string();
+        let target = ConnectTarget::Origin(server.origin().to_owned());
+        let requested = Requested {
+            kind: ChildKind::AddressBook,
+            display_name: "Personal Contacts".to_owned(),
+        };
 
-    let captured = capture(|| {
-        let _ = create_on_server(&target, Credentials::none(), &requested).expect("created");
+        let captured = capture(|| {
+            let _ = create_on_server(&target, Credentials::none(), &requested).expect("created");
+        });
+
+        assert!(
+            has(&captured, Level::DEBUG, "account_id", &account_id),
+            "expected account_id in create_on_server, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "kind", "AddressBook"),
+            "expected kind in create_on_server, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "display_name", "Personal Contacts"),
+            "expected display_name in create_on_server, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "resource_id", "addressbook:AB1"),
+            "expected resource_id in create_on_server, got {captured:?}"
+        );
     });
-
-    assert!(
-        has(&captured, Level::DEBUG, "account_id", &account_id),
-        "expected account_id in create_on_server, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "kind", "AddressBook"),
-        "expected kind in create_on_server, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "display_name", "Personal Contacts"),
-        "expected display_name in create_on_server, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "resource_id", "addressbook:AB1"),
-        "expected resource_id in create_on_server, got {captured:?}"
-    );
 }
 
 #[test]
 fn delete_on_server_traces_structured_fields() {
-    let server = MockServer::builder().start();
-    let account_id = server.account_id().to_string();
-    let target = ConnectTarget::Origin(server.origin().to_owned());
-    let requested = Requested {
-        kind: ChildKind::AddressBook,
-        display_name: "To Delete".to_owned(),
-    };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::builder().start();
+        let account_id = server.account_id().to_string();
+        let target = ConnectTarget::Origin(server.origin().to_owned());
+        let requested = Requested {
+            kind: ChildKind::AddressBook,
+            display_name: "To Delete".to_owned(),
+        };
 
-    let created =
-        untraced(|| create_on_server(&target, Credentials::none(), &requested).expect("created"));
+        let created = untraced(|| {
+            create_on_server(&target, Credentials::none(), &requested).expect("created")
+        });
 
-    let doomed = Doomed {
-        kind: ChildKind::AddressBook,
-        collection_id: created.collection_id.clone(),
-    };
+        let doomed = Doomed {
+            kind: ChildKind::AddressBook,
+            collection_id: created.collection_id.clone(),
+        };
 
-    let captured = capture(|| {
-        delete_on_server(&target, Credentials::none(), &doomed).expect("deleted");
+        let captured = capture(|| {
+            delete_on_server(&target, Credentials::none(), &doomed).expect("deleted");
+        });
+
+        assert!(
+            has(&captured, Level::DEBUG, "account_id", &account_id),
+            "expected account_id in delete_on_server, got {captured:?}"
+        );
+        assert!(
+            has(
+                &captured,
+                Level::DEBUG,
+                "collection_id",
+                created.collection_id.as_str()
+            ),
+            "expected collection_id in delete_on_server, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "kind", "AddressBook"),
+            "expected kind in delete_on_server, got {captured:?}"
+        );
     });
-
-    assert!(
-        has(&captured, Level::DEBUG, "account_id", &account_id),
-        "expected account_id in delete_on_server, got {captured:?}"
-    );
-    assert!(
-        has(
-            &captured,
-            Level::DEBUG,
-            "collection_id",
-            created.collection_id.as_str()
-        ),
-        "expected collection_id in delete_on_server, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "kind", "AddressBook"),
-        "expected kind in delete_on_server, got {captured:?}"
-    );
 }
 
 #[test]
 fn fan_out_traces_structured_fields() {
-    let server = MockServer::builder().start();
-    let login = Login {
-        server: Server {
-            target: ConnectTarget::Origin(server.origin().to_owned()),
-            connection: connection(),
-        },
-        parts: Parts::ALL,
-        credentials: Credentials::none(),
-    };
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::builder().start();
+        let login = Login {
+            server: Server {
+                target: ConnectTarget::Origin(server.origin().to_owned()),
+                connection: connection(),
+            },
+            parts: Parts::ALL,
+            credentials: Credentials::none(),
+        };
 
-    let collection = MockCollection::default();
+        let collection = MockCollection::default();
 
-    let captured = capture(|| {
-        let _ = unsafe { fan_out(&collection, &login) }.expect("fanned out");
+        let captured = capture(|| {
+            let _ = unsafe { fan_out(&collection, &login) }.expect("fanned out");
+        });
+
+        assert!(
+            has(&captured, Level::DEBUG, "address_books_count", "0"),
+            "expected address_books_count in fan_out, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "calendars_count", "0"),
+            "expected calendars_count in fan_out, got {captured:?}"
+        );
     });
-
-    assert!(
-        has(&captured, Level::DEBUG, "address_books_count", "0"),
-        "expected address_books_count in fan_out, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "calendars_count", "0"),
-        "expected calendars_count in fan_out, got {captured:?}"
-    );
 }
 
 #[test]
 fn adopt_created_traces_structured_fields() {
-    let scratch = Scratch::new();
-    let child = Child {
-        resource_id: "addressbook-1".to_owned(),
-        kind: ChildKind::AddressBook,
-        display_name: "Work".to_owned(),
-        account_id: Id::new("A1"),
-        collection_id: Id::new("1"),
-        is_default: false,
-        color: None,
-        read_only: false,
-    };
-    let conn = connection();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scratch = Scratch::new();
+        let child = Child {
+            resource_id: "addressbook-1".to_owned(),
+            kind: ChildKind::AddressBook,
+            display_name: "Work".to_owned(),
+            account_id: Id::new("A1"),
+            collection_id: Id::new("1"),
+            is_default: false,
+            color: None,
+            read_only: false,
+        };
+        let conn = connection();
 
-    let captured = capture(|| unsafe {
-        adopt_created(scratch.source, &child, &conn, "account-123", None).expect("adopted");
+        let captured = capture(|| unsafe {
+            adopt_created(scratch.source, &child, &conn, "account-123", None).expect("adopted");
+        });
+
+        assert!(
+            has(&captured, Level::DEBUG, "account_uid", "account-123"),
+            "expected account_uid in adopt_created, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "resource_id", "addressbook-1"),
+            "expected resource_id in adopt_created, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "kind", "AddressBook"),
+            "expected kind in adopt_created, got {captured:?}"
+        );
     });
-
-    assert!(
-        has(&captured, Level::DEBUG, "account_uid", "account-123"),
-        "expected account_uid in adopt_created, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "resource_id", "addressbook-1"),
-        "expected resource_id in adopt_created, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "kind", "AddressBook"),
-        "expected kind in adopt_created, got {captured:?}"
-    );
 }
 
 #[test]
 fn offer_deletion_traces_remote_deletable() {
-    let source = Source::new("regular-source");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = Source::new("regular-source");
 
-    let captured = capture(|| {
-        let offered = unsafe { offer_deletion(source.0) };
-        assert!(!offered);
+        let captured = capture(|| {
+            let offered = unsafe { offer_deletion(source.0) };
+            assert!(!offered);
+        });
+
+        assert!(
+            has(&captured, Level::DEBUG, "remote_deletable", "false"),
+            "expected remote_deletable in offer_deletion, got {captured:?}"
+        );
     });
-
-    assert!(
-        has(&captured, Level::DEBUG, "remote_deletable", "false"),
-        "expected remote_deletable in offer_deletion, got {captured:?}"
-    );
 }
 
 #[test]
 fn stored_password_of_traces_structured_fields() {
-    let source = Source::new("account-uid-xyz");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = Source::new("account-uid-xyz");
 
-    let captured = capture(|| {
-        let password = unsafe {
-            stored_password_of(ptr::null_mut(), source.0, ptr::null_mut(), "test_context")
-        };
-        assert!(password.is_none());
+        let captured = capture(|| {
+            let password = unsafe {
+                stored_password_of(ptr::null_mut(), source.0, ptr::null_mut(), "test_context")
+            };
+            assert!(password.is_none());
+        });
+
+        assert!(
+            has(&captured, Level::DEBUG, "account_id", "account-uid-xyz"),
+            "expected account_id in stored_password_of, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "has_server", "false"),
+            "expected has_server in stored_password_of, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "context", "test_context"),
+            "expected context in stored_password_of, got {captured:?}"
+        );
     });
-
-    assert!(
-        has(&captured, Level::DEBUG, "account_id", "account-uid-xyz"),
-        "expected account_id in stored_password_of, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "has_server", "false"),
-        "expected has_server in stored_password_of, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "context", "test_context"),
-        "expected context in stored_password_of, got {captured:?}"
-    );
 }
 
 #[test]
 fn populate_traces_structured_fields() {
-    let populating = MockPopulating::default();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let populating = MockPopulating::default();
 
-    let captured = capture(|| {
-        let restored = unsafe { populate(&populating, Parts::ALL, Some("vera@example.com")) };
-        assert!(restored.is_some());
+        let captured = capture(|| {
+            let restored = unsafe { populate(&populating, Parts::ALL, Some("vera@example.com")) };
+            assert!(restored.is_some());
+        });
+
+        assert!(
+            has(&captured, Level::DEBUG, "contacts_wanted", "true"),
+            "expected contacts_wanted in populate, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "calendars_wanted", "true"),
+            "expected calendars_wanted in populate, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "cached_count", "0"),
+            "expected cached_count in populate, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "unidentified_count", "0"),
+            "expected unidentified_count in populate, got {captured:?}"
+        );
+        assert!(
+            has(&captured, Level::DEBUG, "asked_auth", "Credentials"),
+            "expected asked_auth in populate, got {captured:?}"
+        );
     });
-
-    assert!(
-        has(&captured, Level::DEBUG, "contacts_wanted", "true"),
-        "expected contacts_wanted in populate, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "calendars_wanted", "true"),
-        "expected calendars_wanted in populate, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "cached_count", "0"),
-        "expected cached_count in populate, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "unidentified_count", "0"),
-        "expected unidentified_count in populate, got {captured:?}"
-    );
-    assert!(
-        has(&captured, Level::DEBUG, "asked_auth", "Credentials"),
-        "expected asked_auth in populate, got {captured:?}"
-    );
 }
 
 #[test]
 fn remove_obsolete_traces_obsolete_count() {
-    let fanout = Fanout {
-        parts: Parts::ALL,
-        layout: CollectionLayout {
-            mail: None,
-            contacts: None,
-            calendars: None,
-        },
-        address_books: Vec::new(),
-        calendars: Vec::new(),
-    };
-    let sources: Vec<*mut ESource> = Vec::new();
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let fanout = Fanout {
+            parts: Parts::ALL,
+            layout: CollectionLayout {
+                mail: None,
+                contacts: None,
+                calendars: None,
+            },
+            address_books: Vec::new(),
+            calendars: Vec::new(),
+        };
+        let sources: Vec<*mut ESource> = Vec::new();
 
-    let captured = capture(|| {
-        let not_removed = unsafe { remove_obsolete(&fanout, &sources) };
-        assert!(not_removed.is_empty());
+        let captured = capture(|| {
+            let not_removed = unsafe { remove_obsolete(&fanout, &sources) };
+            assert!(not_removed.is_empty());
+        });
+
+        assert!(
+            has(&captured, Level::DEBUG, "obsolete_count", "0"),
+            "expected obsolete_count in remove_obsolete, got {captured:?}"
+        );
     });
+}
 
-    assert!(
-        has(&captured, Level::DEBUG, "obsolete_count", "0"),
-        "expected obsolete_count in remove_obsolete, got {captured:?}"
-    );
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_tracing_writes_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }

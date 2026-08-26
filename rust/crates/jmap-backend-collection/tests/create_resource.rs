@@ -46,9 +46,13 @@ use jmap_collection_sync::child_source::Connection;
 use jmap_collection_sync::{Child, ChildKind, Requested};
 use jmap_mock::MockServer;
 
+mod common;
+use common::{with_timeout, with_timeout_duration};
+
 /// A distinct file name per source, so two sources in one test process never
 /// share an `ESource` uid — EDS derives the uid from the file name.
 static NEXT: AtomicU32 = AtomicU32::new(0);
+static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The account this collection belongs to, as `create_resource_sync` reads it
 /// off the account `ESource`. Deliberately not the mock's address: the child has
@@ -203,159 +207,187 @@ fn create(server: &MockServer, scratch: &Scratch) -> Child {
 
 #[test]
 fn a_scratch_address_book_asks_for_an_address_book_under_its_display_name() {
-    let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
 
-    assert_eq!(
-        requested_kind(&scratch),
-        Some(Requested {
-            kind: ChildKind::AddressBook,
-            display_name: "Work".to_owned(),
-        })
-    );
+        assert_eq!(
+            requested_kind(&scratch),
+            Some(Requested {
+                kind: ChildKind::AddressBook,
+                display_name: "Work".to_owned(),
+            })
+        );
+    });
 }
 
 #[test]
 fn a_scratch_calendar_asks_for_a_calendar_under_its_display_name() {
-    let scratch = Scratch::new(Some(ChildKind::Calendar), "Trips");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let scratch = Scratch::new(Some(ChildKind::Calendar), "Trips");
 
-    assert_eq!(
-        requested_kind(&scratch),
-        Some(Requested {
-            kind: ChildKind::Calendar,
-            display_name: "Trips".to_owned(),
-        })
-    );
+        assert_eq!(
+            requested_kind(&scratch),
+            Some(Requested {
+                kind: ChildKind::Calendar,
+                display_name: "Trips".to_owned(),
+            })
+        );
+    });
 }
 
 #[test]
 fn a_scratch_source_that_names_no_kind_asks_for_nothing() {
-    // EDS's own documentation of the vfunc: "If this cannot be determined
-    // without ambiguity, the function must return an error." Guessing a kind
-    // would create the wrong sort of collection under a name the user chose for
-    // the other.
-    let scratch = Scratch::new(None, "Work");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // EDS's own documentation of the vfunc: "If this cannot be determined
+        // without ambiguity, the function must return an error." Guessing a kind
+        // would create the wrong sort of collection under a name the user chose for
+        // the other.
+        let scratch = Scratch::new(None, "Work");
 
-    assert_eq!(requested_kind(&scratch), None);
+        assert_eq!(requested_kind(&scratch), None);
+    });
 }
 
 #[test]
 fn reading_the_kind_does_not_give_the_scratch_source_an_extension_it_lacked() {
-    // `e_source_get_extension` *creates* what it cannot find, and a scratch
-    // source is a real source that gets written to disk — so a read that reached
-    // for `[Calendar]` would turn every new address book into a source both
-    // factories claim.
-    let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `e_source_get_extension` *creates* what it cannot find, and a scratch
+        // source is a real source that gets written to disk — so a read that reached
+        // for `[Calendar]` would turn every new address book into a source both
+        // factories claim.
+        let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
 
-    // SAFETY: a live source this test holds a reference to.
-    assert_eq!(
-        unsafe { kind_of(scratch.source) },
-        Some(ChildKind::AddressBook)
-    );
-    assert!(!scratch.has_extension(E_SOURCE_EXTENSION_CALENDAR));
-    assert!(!scratch.has_extension(E_SOURCE_EXTENSION_RESOURCE));
+        // SAFETY: a live source this test holds a reference to.
+        assert_eq!(
+            unsafe { kind_of(scratch.source) },
+            Some(ChildKind::AddressBook)
+        );
+        assert!(!scratch.has_extension(E_SOURCE_EXTENSION_CALENDAR));
+        assert!(!scratch.has_extension(E_SOURCE_EXTENSION_RESOURCE));
+    });
 }
 
 #[test]
 fn a_created_address_book_leaves_a_source_this_backend_reads_back_as_its_child() {
-    // The join, and the property that keeps a create from doubling: EDS pairs a
-    // published child with a resource id by asking `dup_resource_id` about it
-    // (`collection_backend_ref_child_source`), so a created source whose
-    // resource id does not come back is one the next populate creates a *second*
-    // source for — one server-side address book, two rows in the sidebar.
-    let server = MockServer::builder().start();
-    let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The join, and the property that keeps a create from doubling: EDS pairs a
+        // published child with a resource id by asking `dup_resource_id` about it
+        // (`collection_backend_ref_child_source`), so a created source whose
+        // resource id does not come back is one the next populate creates a *second*
+        // source for — one server-side address book, two rows in the sidebar.
+        let server = MockServer::builder().start();
+        let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
 
-    let child = create(&server, &scratch);
+        let child = create(&server, &scratch);
 
-    // SAFETY: a live source this test holds a reference to.
-    assert_eq!(
-        unsafe { resource_id_of(scratch.source) },
-        Some(child.resource_id.clone())
-    );
-    assert_eq!(child.kind, ChildKind::AddressBook);
+        // SAFETY: a live source this test holds a reference to.
+        assert_eq!(
+            unsafe { resource_id_of(scratch.source) },
+            Some(child.resource_id.clone())
+        );
+        assert_eq!(child.kind, ChildKind::AddressBook);
+    });
 }
 
 #[test]
 fn a_created_calendar_leaves_a_source_this_backend_reads_back_as_its_child() {
-    let server = MockServer::builder().start();
-    let scratch = Scratch::new(Some(ChildKind::Calendar), "Trips");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let server = MockServer::builder().start();
+        let scratch = Scratch::new(Some(ChildKind::Calendar), "Trips");
 
-    let child = create(&server, &scratch);
+        let child = create(&server, &scratch);
 
-    // SAFETY: a live source this test holds a reference to.
-    assert_eq!(
-        unsafe { resource_id_of(scratch.source) },
-        Some(child.resource_id.clone())
-    );
-    assert_eq!(child.kind, ChildKind::Calendar);
+        // SAFETY: a live source this test holds a reference to.
+        assert_eq!(
+            unsafe { resource_id_of(scratch.source) },
+            Some(child.resource_id.clone())
+        );
+        assert_eq!(child.kind, ChildKind::Calendar);
+    });
 }
 
 #[test]
 fn a_created_child_reaches_the_server_the_account_names() {
-    // Written from the *account's* connection, not from wherever the create
-    // happened to connect. A child that named the discovery URL would work for
-    // exactly as long as the two agreed.
-    let server = MockServer::builder().start();
-    let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Written from the *account's* connection, not from wherever the create
+        // happened to connect. A child that named the discovery URL would work for
+        // exactly as long as the two agreed.
+        let server = MockServer::builder().start();
+        let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
 
-    let child = create(&server, &scratch);
+        let child = create(&server, &scratch);
 
-    // Read back the way the address book backend reads it: through
-    // `SourceConfig`, not through the setters this test could have called.
-    // SAFETY: a live source this test holds a reference to.
-    let config = unsafe { jmap_backend_core::source::SourceConfig::from_source(scratch.source) }
-        .expect("a child this backend wrote is one the book backend can read");
-    assert_eq!(
-        config.target,
-        ConnectTarget::Origin("https://jmap.example.com:8443".to_owned())
-    );
-    assert_eq!(
-        config.resource_id.as_deref(),
-        Some(child.collection_id.as_str())
-    );
+        // Read back the way the address book backend reads it: through
+        // `SourceConfig`, not through the setters this test could have called.
+        // SAFETY: a live source this test holds a reference to.
+        let config =
+            unsafe { jmap_backend_core::source::SourceConfig::from_source(scratch.source) }
+                .expect("a child this backend wrote is one the book backend can read");
+        assert_eq!(
+            config.target,
+            ConnectTarget::Origin("https://jmap.example.com:8443".to_owned())
+        );
+        assert_eq!(
+            config.resource_id.as_deref(),
+            Some(child.collection_id.as_str())
+        );
+    });
 }
 
 #[test]
 fn a_created_child_is_parented_writable_and_written_back_to_the_collections_cache() {
-    // The three things `collection_backend_new_source()` sets on a child EDS
-    // mints and that a scratch source therefore lacks. Without the parent the
-    // source is not a child of this account at all — `child_added` never fires
-    // for it; without the write directory its `.source` file stays in the
-    // registry's user directory, where removing the account leaves it behind;
-    // without `writable` the user cannot rename the address book they just made.
-    let server = MockServer::builder().start();
-    let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The three things `collection_backend_new_source()` sets on a child EDS
+        // mints and that a scratch source therefore lacks. Without the parent the
+        // source is not a child of this account at all — `child_added` never fires
+        // for it; without the write directory its `.source` file stays in the
+        // registry's user directory, where removing the account leaves it behind;
+        // without `writable` the user cannot rename the address book they just made.
+        let server = MockServer::builder().start();
+        let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
 
-    create(&server, &scratch);
+        create(&server, &scratch);
 
-    assert_eq!(scratch.parent().as_deref(), Some("jmap-test-account"));
-    assert!(scratch.writable());
-    assert_eq!(
-        scratch.write_directory().as_deref(),
-        Some("/var/lib/jmap-test-cache")
-    );
+        assert_eq!(scratch.parent().as_deref(), Some("jmap-test-account"));
+        assert!(scratch.writable());
+        assert_eq!(
+            scratch.write_directory().as_deref(),
+            Some("/var/lib/jmap-test-cache")
+        );
+    });
 }
 
 #[test]
 fn adopting_a_created_child_is_not_what_offers_it_for_deletion() {
-    // Deliberate, and where it would be noticed if it changed: evolution-ews
-    // sets `remote-deletable` at each of the three sites that mint a child, this
-    // one included, while this backend sets it in one place —
-    // `delete_resource::offer_deletion`, from the `child_added` that fires when
-    // this source is published a moment later. So a created child *is* offered
-    // for deletion in Evolution; what this pins is that adopting one is not the
-    // place that decides it, because a second site here could drift from the
-    // funnel and offer "Delete" on something the funnel would have refused.
-    let server = MockServer::builder().start();
-    let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Deliberate, and where it would be noticed if it changed: evolution-ews
+        // sets `remote-deletable` at each of the three sites that mint a child, this
+        // one included, while this backend sets it in one place —
+        // `delete_resource::offer_deletion`, from the `child_added` that fires when
+        // this source is published a moment later. So a created child *is* offered
+        // for deletion in Evolution; what this pins is that adopting one is not the
+        // place that decides it, because a second site here could drift from the
+        // funnel and offer "Delete" on something the funnel would have refused.
+        let server = MockServer::builder().start();
+        let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
 
-    create(&server, &scratch);
+        create(&server, &scratch);
 
-    // SAFETY: a live source this test holds a reference to.
-    assert!(
-        unsafe { eds_sys::e_source_get_remote_deletable(scratch.source) } == GFALSE,
-        "adopt_created set remote-deletable; the flag has two homes now"
-    );
+        // SAFETY: a live source this test holds a reference to.
+        assert!(
+            unsafe { eds_sys::e_source_get_remote_deletable(scratch.source) } == GFALSE,
+            "adopt_created set remote-deletable; the flag has two homes now"
+        );
+    });
 }
 
 /// Records every field of every event it sees, as `(name, value)` pairs —
@@ -408,41 +440,52 @@ impl tracing::Subscriber for CapturingSubscriber {
 
 #[test]
 fn stored_password_of_a_gone_registry_server_names_the_account_in_a_structured_field() {
-    // `server.is_null()` is the "registry server is gone" branch — reachable
-    // with no `ESourceRegistryServer` at all, which keeps this test to the one
-    // thing under test (the `account_id` field) rather than also standing up a
-    // credentials provider that then has to fail a lookup.
-    let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
-    // SAFETY: a live source this test holds a reference to; the uid comes back
-    // `(transfer none)`.
-    let account_id =
-        unsafe { read_string(e_source_get_uid(scratch.source)) }.expect("every source has a uid");
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // `server.is_null()` is the "registry server is gone" branch — reachable
+        // with no `ESourceRegistryServer` at all, which keeps this test to the one
+        // thing under test (the `account_id` field) rather than also standing up a
+        // credentials provider that then has to fail a lookup.
+        let scratch = Scratch::new(Some(ChildKind::AddressBook), "Work");
+        // SAFETY: a live source this test holds a reference to; the uid comes back
+        // `(transfer none)`.
+        let account_id = unsafe { read_string(e_source_get_uid(scratch.source)) }
+            .expect("every source has a uid");
 
-    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let subscriber = CapturingSubscriber {
-        captured: captured.clone(),
-    };
-
-    tracing::subscriber::with_default(subscriber, || {
-        // SAFETY: a NULL server (the branch under test), a live source, and no
-        // cancellable — all valid per `stored_password_of`'s own contract.
-        let password = unsafe {
-            stored_password_of(
-                ptr::null_mut(),
-                scratch.source,
-                ptr::null_mut(),
-                "create_resource_sync",
-            )
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
         };
-        assert_eq!(password, None);
-    });
 
-    assert!(
-        captured
-            .lock()
-            .unwrap()
-            .contains(&("account_id".to_owned(), account_id)),
-        "expected an account_id field naming the source's own uid, got {:?}",
-        captured.lock().unwrap()
-    );
+        tracing::subscriber::with_default(subscriber, || {
+            // SAFETY: a NULL server (the branch under test), a live source, and no
+            // cancellable — all valid per `stored_password_of`'s own contract.
+            let password = unsafe {
+                stored_password_of(
+                    ptr::null_mut(),
+                    scratch.source,
+                    ptr::null_mut(),
+                    "create_resource_sync",
+                )
+            };
+            assert_eq!(password, None);
+        });
+
+        assert!(
+            captured
+                .lock()
+                .unwrap()
+                .contains(&("account_id".to_owned(), account_id)),
+            "expected an account_id field naming the source's own uid, got {:?}",
+            captured.lock().unwrap()
+        );
+    });
+}
+
+#[test]
+#[should_panic(expected = "test timed out after")]
+fn a_blocked_create_resource_test_times_out_and_fails_fast() {
+    with_timeout_duration(std::time::Duration::from_millis(50), || {
+        std::thread::park();
+    });
 }
