@@ -73,6 +73,7 @@
 //! round trip per folder.
 
 use std::borrow::Cow;
+use std::ptr;
 use std::sync::Arc;
 
 use eds_sys::{
@@ -80,10 +81,11 @@ use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH,
     CAMEL_STORE_FOLDER_INFO_SUBSCRIBED, CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST, CamelFolder,
     CamelFolderInfo, CamelFolderInfoFlags, CamelStore, CamelStoreClass, CamelStoreGetFolderFlags,
-    CamelStoreGetFolderInfoFlags, camel_store_get_folder_sync,
+    CamelStoreGetFolderInfoFlags, camel_folder_get_folder_summary, camel_store_get_folder_sync,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
+use gobject_sys::g_object_unref;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::fail;
 use jmap_backend_core::marshal::read_string;
@@ -93,7 +95,9 @@ use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree};
 use crate::connect::StoreError;
 use crate::folder::new_folder;
 use crate::folder_info::{FolderInfoChain, c_string};
+use crate::refresh::refresh_info_sync;
 use crate::store::JmapStore;
+use crate::summary::summary_state;
 
 /// The part of a store's folder tree one `get_folder_info_sync` call asks for.
 pub struct Request<'a> {
@@ -462,7 +466,24 @@ unsafe extern "C" fn get_folder_sync(
 
             // SAFETY: `store` is the live `CamelStore` borrowed above, which is
             // what `new_folder` asks for.
-            new_folder(store, mailbox)
+            let folder = new_folder(store, mailbox);
+            if folder.is_null() {
+                return folder;
+            }
+
+            // A folder whose summary holds no state (a freshly added account or a
+            // folder never opened before) has nothing in its summary yet. Refresh
+            // it on first open so the first view answers a non-empty summary.
+            let summary = camel_folder_get_folder_summary(folder);
+            if summary_state(summary).is_none() {
+                let ok = refresh_info_sync(folder, cancellable, error);
+                if ok == GFALSE {
+                    g_object_unref(folder.cast());
+                    return ptr::null_mut();
+                }
+            }
+
+            folder
         })
     }
 }
