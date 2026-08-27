@@ -116,7 +116,7 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
 /// could not — which is Camel's convention and, in particular, is what
 /// `camel_folder_refresh_info_sync`'s callers test before they believe the
 /// folder.
-unsafe extern "C" fn refresh_info_sync(
+pub(crate) unsafe extern "C" fn refresh_info_sync(
     folder: *mut CamelFolder,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
