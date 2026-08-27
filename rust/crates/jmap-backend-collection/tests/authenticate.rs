@@ -19,7 +19,7 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use eds_sys::{
-    E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_INVALID_ARG,
+    E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_DBUS_ERROR, E_CLIENT_ERROR_INVALID_ARG,
     E_CLIENT_ERROR_TLS_NOT_AVAILABLE, E_SOURCE_AUTHENTICATION_ACCEPTED,
     E_SOURCE_AUTHENTICATION_ERROR, E_SOURCE_AUTHENTICATION_REJECTED,
     E_SOURCE_AUTHENTICATION_REQUIRED, E_SOURCE_CREDENTIAL_PASSWORD,
@@ -39,7 +39,8 @@ use gio_sys::{
 };
 use glib_sys::{GError, GFALSE, GQuark, GTRUE, g_error_free};
 use gobject_sys::g_object_unref;
-use jmap_backend_collection::authenticate::{Login, authenticate_with};
+use jmap_backend_collection::authenticate::{Login, LoginError, authenticate_with};
+use jmap_backend_core::connect::ConnectError;
 use jmap_client::{Credentials, Error};
 use jmap_collection_sync::Parts;
 
@@ -406,6 +407,28 @@ fn an_oauth2_account_is_never_treated_as_anonymous() {
             error.message, "the account has no password yet",
             "an OAuth 2.0 account was routed through the Basic-auth path"
         );
+    });
+}
+
+#[test]
+fn a_secret_store_failure_reports_error_and_dbus_error_code() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let failure = LoginError::Credentials(ConnectError::SecretStore(
+            "the login keyring is locked".to_owned(),
+        ));
+        assert_eq!(failure.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
+        assert_ne!(failure.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
+
+        let gerror = failure.to_gerror();
+        assert!(!gerror.is_null());
+        unsafe {
+            assert_eq!((*gerror).domain, e_client_error_quark());
+            assert_eq!((*gerror).code, E_CLIENT_ERROR_DBUS_ERROR as i32);
+            let message = CStr::from_ptr((*gerror).message).to_string_lossy();
+            assert!(message.contains("the login keyring is locked"), "{message}");
+            glib_sys::g_error_free(gerror);
+        }
     });
 }
 

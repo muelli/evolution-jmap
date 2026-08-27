@@ -133,6 +133,37 @@ fn a_source_with_no_token_is_a_required_not_a_rejected() {
 
     assert!(matches!(error, ConnectError::OAuth2(_)));
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
+
+    let gerror = error.to_gerror();
+    assert!(!gerror.is_null());
+    unsafe {
+        assert_eq!((*gerror).domain, eds_sys::e_client_error_quark());
+        assert_eq!(
+            (*gerror).code,
+            eds_sys::E_CLIENT_ERROR_AUTHENTICATION_REQUIRED as i32
+        );
+        glib_sys::g_error_free(gerror);
+    }
+}
+
+/// Contrasting with `a_source_with_no_token_is_a_required_not_a_rejected`:
+/// when a secret store failure occurs, the error must map to ERROR (never REQUIRED)
+/// and carry the DBUS_ERROR client code.
+#[test]
+fn an_oauth2_secret_store_failure_surfaces_error_and_dbus_client_error() {
+    let error = ConnectError::SecretStore("the login keyring is locked".to_owned());
+    assert_ne!(error.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
+    assert_eq!(error.auth_result(), eds_sys::E_SOURCE_AUTHENTICATION_ERROR);
+
+    let gerror = error.to_gerror();
+    assert!(!gerror.is_null());
+    unsafe {
+        assert_eq!((*gerror).domain, eds_sys::e_client_error_quark());
+        assert_eq!((*gerror).code, eds_sys::E_CLIENT_ERROR_DBUS_ERROR as i32);
+        let message = jmap_backend_core::marshal::read_string((*gerror).message).unwrap();
+        assert!(message.contains("the login keyring is locked"), "{message}");
+        glib_sys::g_error_free(gerror);
+    }
 }
 
 struct CapturingSubscriber {

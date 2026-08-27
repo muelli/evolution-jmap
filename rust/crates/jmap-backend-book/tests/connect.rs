@@ -8,7 +8,7 @@ use std::ffi::CString;
 use std::ptr;
 
 use eds_sys::{
-    E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_INVALID_ARG,
+    E_CLIENT_ERROR_AUTHENTICATION_REQUIRED, E_CLIENT_ERROR_DBUS_ERROR, E_CLIENT_ERROR_INVALID_ARG,
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, E_SOURCE_AUTHENTICATION_ACCEPTED,
     E_SOURCE_AUTHENTICATION_ERROR, E_SOURCE_AUTHENTICATION_REJECTED,
     E_SOURCE_AUTHENTICATION_REQUIRED, E_SOURCE_CREDENTIAL_PASSWORD,
@@ -284,6 +284,14 @@ fn each_failure_carries_the_client_error_code_evolution_routes_on() {
             E_CLIENT_ERROR_AUTHENTICATION_REQUIRED,
         ),
         (
+            ConnectError::OAuth2("consent required".to_owned()),
+            E_CLIENT_ERROR_AUTHENTICATION_REQUIRED,
+        ),
+        (
+            ConnectError::SecretStore("the keyring is locked".to_owned()),
+            E_CLIENT_ERROR_DBUS_ERROR,
+        ),
+        (
             ConnectError::NoDefaultCollection(Collection::AddressBook),
             E_CLIENT_ERROR_INVALID_ARG,
         ),
@@ -526,6 +534,30 @@ fn an_api_token_source_with_no_stored_secret_asks_for_one_before_connecting() {
     let mut outs = ConnectOuts::default();
 
     // SAFETY: as `a_source_with_a_user_and_no_password_asks_for_one_before_connecting`.
+    let sync = unsafe {
+        connect::connect(
+            source.0,
+            ptr::null(),
+            ptr::null_mut(),
+            &mut outs.auth_result,
+            &mut outs.error,
+        )
+    };
+
+    assert!(sync.is_none());
+    assert_eq!(outs.auth_result, E_SOURCE_AUTHENTICATION_REQUIRED);
+    // SAFETY: the call failed, so it owns an error it handed over.
+    unsafe { outs.take_error(E_CLIENT_ERROR_AUTHENTICATION_REQUIRED) };
+}
+
+/// An OAuth 2.0 source with no token (e.g. fresh account or no registered service)
+/// must fail with REQUIRED to trigger the consent window.
+#[test]
+fn an_oauth2_source_with_no_token_asks_for_consent_before_connecting() {
+    let source = TestSource::new().at("http://127.0.0.1:1").method("OAuth2");
+    let mut outs = ConnectOuts::default();
+
+    // SAFETY: as above.
     let sync = unsafe {
         connect::connect(
             source.0,
