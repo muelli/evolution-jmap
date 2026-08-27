@@ -587,6 +587,10 @@ mod tests {
             ConnectError::CredentialsRequired.auth_result(),
             E_SOURCE_AUTHENTICATION_REQUIRED
         );
+        assert_eq!(
+            ConnectError::OAuth2("consent required".to_owned()).auth_result(),
+            E_SOURCE_AUTHENTICATION_REQUIRED
+        );
     }
 
     /// Item 17's own concern, pinned directly: a secret-store failure must
@@ -599,6 +603,87 @@ mod tests {
         assert_ne!(error.auth_result(), E_SOURCE_AUTHENTICATION_REQUIRED);
         assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
         assert_eq!(error.to_string(), "the login keyring is locked");
+
+        let gerror = error.to_gerror();
+        assert!(!gerror.is_null());
+        unsafe {
+            assert_eq!((*gerror).domain, eds_sys::e_client_error_quark());
+            assert_eq!((*gerror).code, E_CLIENT_ERROR_DBUS_ERROR as i32);
+            let message = crate::marshal::read_string((*gerror).message).unwrap();
+            assert!(message.contains("the login keyring is locked"), "{message}");
+            glib_sys::g_error_free(gerror);
+        }
+    }
+
+    /// Every ConnectError variant must map to the corresponding EClientError code
+    /// that Evolution's UI and retry loops route on.
+    #[test]
+    fn each_connect_error_variant_maps_to_the_expected_client_error_code() {
+        for (error, expected) in [
+            (
+                ConnectError::CredentialsRequired,
+                E_CLIENT_ERROR_AUTHENTICATION_REQUIRED,
+            ),
+            (
+                ConnectError::OAuth2("need consent".into()),
+                E_CLIENT_ERROR_AUTHENTICATION_REQUIRED,
+            ),
+            (
+                ConnectError::SecretStore("keyring dead".into()),
+                E_CLIENT_ERROR_DBUS_ERROR,
+            ),
+            (
+                ConnectError::NoSuchCollection(Collection::AddressBook, "x".into()),
+                E_CLIENT_ERROR_INVALID_ARG,
+            ),
+            (
+                ConnectError::NoDefaultCollection(Collection::Calendar),
+                E_CLIENT_ERROR_INVALID_ARG,
+            ),
+            (
+                ConnectError::Client(Error::Transport("offline".into())),
+                eds_sys::E_CLIENT_ERROR_REPOSITORY_OFFLINE,
+            ),
+            (
+                ConnectError::Client(Error::Http {
+                    status: 401,
+                    problem: None,
+                }),
+                eds_sys::E_CLIENT_ERROR_AUTHENTICATION_FAILED,
+            ),
+            (
+                ConnectError::Client(Error::Http {
+                    status: 403,
+                    problem: None,
+                }),
+                eds_sys::E_CLIENT_ERROR_PERMISSION_DENIED,
+            ),
+        ] {
+            let gerror = error.to_gerror();
+            assert!(!gerror.is_null(), "no GError for {error:?}");
+            unsafe {
+                assert_eq!(
+                    (*gerror).domain,
+                    eds_sys::e_client_error_quark(),
+                    "domain for {error:?}"
+                );
+                assert_eq!((*gerror).code, expected as i32, "code for {error:?}");
+                glib_sys::g_error_free(gerror);
+            }
+        }
+    }
+
+    /// A secret-store failure during connect is preserved as SecretStore and not
+    /// reclassified to OAuth2, ensuring it stays ERROR and never REQUIRED.
+    #[test]
+    fn finish_connect_leaves_secret_store_error_unmodified_for_oauth2_account() {
+        let store_error = || Err::<(), _>(ConnectError::SecretStore("keyring locked".to_owned()));
+        let result = finish_connect(Collection::AddressBook, Some("acc-1"), true, store_error());
+        assert!(
+            matches!(result, Err(ConnectError::SecretStore(ref msg)) if msg == "keyring locked")
+        );
+        let err = result.unwrap_err();
+        assert_eq!(err.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
     }
 
     /// The collection is named in the message because the message is what the

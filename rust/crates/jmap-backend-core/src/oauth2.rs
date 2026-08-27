@@ -538,4 +538,20 @@ mod tests {
         assert!(!unsafe { is_secret_not_found(error) });
         unsafe { g_error_free(error) };
     }
+
+    /// D-Bus timeouts, missing services, or communication failures underneath
+    /// libsecret are in the `g_dbus_error_quark()` domain and are classified
+    /// as secret-store failures regardless of code.
+    #[test]
+    fn dbus_timeout_and_transport_errors_are_secret_store_failures() {
+        // Various D-Bus codes (e.g. TIMEOUT=24, NO_REPLY=4, SERVICE_UNKNOWN=2)
+        for code in [2, 4, 24, G_DBUS_ERROR_SPAWN_EXEC_FAILED] {
+            let error = error(unsafe { g_dbus_error_quark() }, code);
+            assert!(
+                unsafe { is_secret_store_failure(error) },
+                "expected D-Bus error code {code} to be classified as secret-store failure"
+            );
+            unsafe { g_error_free(error) };
+        }
+    }
 }
