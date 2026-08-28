@@ -239,6 +239,124 @@ pub unsafe fn source_uses_oauth2(source: *mut ESource) -> bool {
     method_is_oauth2(method.as_deref())
 }
 
+/// Why an OAuth 2.0 access token could not be obtained silently through EDS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SilentRefreshFailureReason {
+    /// No OAuth 2.0 secret (refresh token) has been stored for this account
+    /// yet (the account has not been consented to, or was removed).
+    NoStoredSecret,
+    /// The login keyring holding the stored secret is locked and cannot be
+    /// unlocked headlessly.
+    KeyringLocked,
+    /// A secret store (D-Bus / daemon) transport or spawn failure occurred.
+    SecretStoreFailure,
+    /// The authorization server rejected the refresh token exchange (e.g.
+    /// `invalid_grant`, expired refresh token, or rotation mismatch).
+    ServerRejectedRefresh,
+    /// The source is not supported or has no registered `EOAuth2Service`.
+    UnregisteredService,
+    /// The refresh operation was cancelled.
+    Cancelled,
+    /// The service returned an empty access token string.
+    EmptyToken,
+    /// An unrecognized or generic I/O error occurred in the `G_IO_ERROR` domain.
+    OtherIoError,
+    /// An unrecognized error domain occurred.
+    OtherError,
+    /// EDS failed without setting a GError.
+    NullError,
+}
+
+impl SilentRefreshFailureReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoStoredSecret => "no_stored_secret",
+            Self::KeyringLocked => "keyring_locked",
+            Self::SecretStoreFailure => "secret_store_failure",
+            Self::ServerRejectedRefresh => "server_rejected_refresh",
+            Self::UnregisteredService => "unregistered_service",
+            Self::Cancelled => "cancelled",
+            Self::EmptyToken => "empty_token",
+            Self::OtherIoError => "other_io_error",
+            Self::OtherError => "other_error",
+            Self::NullError => "null_error",
+        }
+    }
+
+    pub const fn escalates_to_consent(self) -> bool {
+        match self {
+            Self::NoStoredSecret
+            | Self::ServerRejectedRefresh
+            | Self::UnregisteredService
+            | Self::EmptyToken
+            | Self::OtherIoError
+            | Self::OtherError
+            | Self::NullError => true,
+            Self::KeyringLocked | Self::SecretStoreFailure | Self::Cancelled => false,
+        }
+    }
+}
+
+impl std::fmt::Display for SilentRefreshFailureReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Classifies a failed `e_source_get_oauth2_access_token_sync` call by inspecting
+/// the returned `GError` domain, code, and keyring status.
+///
+/// # Safety
+///
+/// If `error` is non-NULL, it must point to a valid `GError`.
+pub unsafe fn classify_failure(
+    error: *const GError,
+) -> (
+    SilentRefreshFailureReason,
+    Option<String>,
+    Option<String>,
+    i32,
+    Option<String>,
+) {
+    if error.is_null() {
+        return (SilentRefreshFailureReason::NullError, None, None, 0, None);
+    }
+
+    let domain = unsafe { (*error).domain };
+    let code = unsafe { (*error).code };
+    let message = unsafe { read_string((*error).message) };
+
+    let domain_name = unsafe {
+        let ptr = glib_sys::g_quark_to_string(domain);
+        read_string(ptr)
+    };
+
+    let reason = if unsafe { is_secret_store_failure(error) } {
+        SilentRefreshFailureReason::SecretStoreFailure
+    } else if unsafe { is_secret_not_found(error) } {
+        if crate::secret_store::default_collection_is_locked() == Some(true) {
+            SilentRefreshFailureReason::KeyringLocked
+        } else {
+            SilentRefreshFailureReason::NoStoredSecret
+        }
+    } else if domain == unsafe { gio_sys::g_io_error_quark() } {
+        match code {
+            gio_sys::G_IO_ERROR_CONNECTION_REFUSED => {
+                SilentRefreshFailureReason::ServerRejectedRefresh
+            }
+            gio_sys::G_IO_ERROR_NOT_SUPPORTED | gio_sys::G_IO_ERROR_FAILED => {
+                SilentRefreshFailureReason::UnregisteredService
+            }
+            gio_sys::G_IO_ERROR_CANCELLED => SilentRefreshFailureReason::Cancelled,
+            _ => SilentRefreshFailureReason::OtherIoError,
+        }
+    } else {
+        SilentRefreshFailureReason::OtherError
+    };
+
+    (reason, Some(domain.to_string()), domain_name, code, message)
+}
+
 /// Whether `error` is a failure *underneath* EDS's own OAuth 2.0 reasoning —
 /// the secret store itself, or the D-Bus call that reaches it — rather than
 /// one of the outcomes `evolution-data-server`'s own OAuth 2.0 code
@@ -349,24 +467,43 @@ pub unsafe fn access_token(
         // message and classifying its domain/code borrow fields the struct
         // owns, and freeing it afterwards is what the out-parameter contract
         // asks for.
-        let (message, store_failure, secret_not_found) = unsafe {
-            let outcome = if error.is_null() {
-                (None, false, false)
+        let (
+            reason,
+            error_domain,
+            error_domain_name,
+            error_code,
+            message,
+            store_failure,
+            secret_not_found,
+        ) = unsafe {
+            let (r, dq, dn, c, msg) = classify_failure(error);
+            let sf = if error.is_null() {
+                false
             } else {
-                (
-                    read_string((*error).message),
-                    is_secret_store_failure(error),
-                    is_secret_not_found(error),
-                )
+                is_secret_store_failure(error)
+            };
+            let snf = if error.is_null() {
+                false
+            } else {
+                is_secret_not_found(error)
             };
             if !error.is_null() {
                 g_error_free(error);
             }
-            outcome
+            (r, dq, dn, c, msg, sf, snf)
         };
+
+        let escalates_to_consent = reason.escalates_to_consent();
+        let reason_str = reason.as_str();
+
         tracing::debug!(
             ?account_id,
-            ?message,
+            reason = reason_str,
+            escalates_to_consent,
+            error_domain = error_domain.as_deref(),
+            error_domain_name = error_domain_name.as_deref(),
+            error_code,
+            error_message = message.as_deref(),
             store_failure,
             secret_not_found,
             "failed to obtain OAuth 2.0 access token"
@@ -399,6 +536,8 @@ pub unsafe fn access_token(
         if secret_not_found && crate::secret_store::default_collection_is_locked() == Some(true) {
             tracing::debug!(
                 ?account_id,
+                reason = "keyring_locked",
+                escalates_to_consent = false,
                 "the secret store is locked; not asking for consent"
             );
             return Err(ConnectError::SecretStore(translate(
@@ -439,7 +578,12 @@ pub unsafe fn access_token(
             Ok(value)
         }
         _ => {
-            tracing::debug!(?account_id, "empty OAuth 2.0 access token received");
+            tracing::debug!(
+                ?account_id,
+                reason = "empty_token",
+                escalates_to_consent = true,
+                "empty OAuth 2.0 access token received"
+            );
             Err(ConnectError::OAuth2(translate(
                 // TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
                 // token that was empty rather than absent.
@@ -553,5 +697,92 @@ mod tests {
             );
             unsafe { g_error_free(error) };
         }
+    }
+
+    /// Classifies each category of silent-refresh failure into its attributable
+    /// reason, domain name, code, and whether it escalates to an interactive consent prompt.
+    #[test]
+    fn classify_failure_covers_all_silent_refresh_failure_reasons() {
+        use gio_sys::{G_IO_ERROR_CANCELLED, G_IO_ERROR_CONNECTION_REFUSED, G_IO_ERROR_FAILED};
+
+        // D-Bus / Secret store failure -> SecretStoreFailure, no consent escalation
+        let dbus_err = error(
+            unsafe { g_dbus_error_quark() },
+            G_DBUS_ERROR_SPAWN_EXEC_FAILED,
+        );
+        let (reason, _quark, domain_name, code, msg) = unsafe { classify_failure(dbus_err) };
+        assert_eq!(reason, SilentRefreshFailureReason::SecretStoreFailure);
+        assert_eq!(reason.as_str(), "secret_store_failure");
+        assert!(!reason.escalates_to_consent());
+        assert_eq!(code, G_DBUS_ERROR_SPAWN_EXEC_FAILED);
+        assert_eq!(msg.as_deref(), Some("boom"));
+        assert!(domain_name.is_some());
+        unsafe { g_error_free(dbus_err) };
+
+        // Missing secret -> NoStoredSecret (assuming unlocked keyring in test), escalates to consent
+        let not_found = error(unsafe { g_io_error_quark() }, G_IO_ERROR_NOT_FOUND);
+        let (reason, _quark, _domain_name, code, _msg) = unsafe { classify_failure(not_found) };
+        assert!(
+            reason == SilentRefreshFailureReason::NoStoredSecret
+                || reason == SilentRefreshFailureReason::KeyringLocked
+        );
+        assert_eq!(code, G_IO_ERROR_NOT_FOUND);
+        unsafe { g_error_free(not_found) };
+
+        // Server refresh rejection (HTTP 400 Bad Request / invalid_grant / rotation mismatch) -> ServerRejectedRefresh
+        let refused = error(unsafe { g_io_error_quark() }, G_IO_ERROR_CONNECTION_REFUSED);
+        let (reason, _quark, domain_name, code, _msg) = unsafe { classify_failure(refused) };
+        assert_eq!(reason, SilentRefreshFailureReason::ServerRejectedRefresh);
+        assert_eq!(reason.as_str(), "server_rejected_refresh");
+        assert!(reason.escalates_to_consent());
+        assert_eq!(code, G_IO_ERROR_CONNECTION_REFUSED);
+        assert_eq!(domain_name.as_deref(), Some("g-io-error-quark"));
+        unsafe { g_error_free(refused) };
+
+        // Unregistered service / not supported -> UnregisteredService
+        for code in [G_IO_ERROR_NOT_SUPPORTED, G_IO_ERROR_FAILED] {
+            let err = error(unsafe { g_io_error_quark() }, code);
+            let (reason, _quark, _domain_name, c, _msg) = unsafe { classify_failure(err) };
+            assert_eq!(reason, SilentRefreshFailureReason::UnregisteredService);
+            assert_eq!(reason.as_str(), "unregistered_service");
+            assert!(reason.escalates_to_consent());
+            assert_eq!(c, code);
+            unsafe { g_error_free(err) };
+        }
+
+        // Cancelled -> Cancelled, no consent escalation
+        let cancelled = error(unsafe { g_io_error_quark() }, G_IO_ERROR_CANCELLED);
+        let (reason, _quark, _domain_name, code, _msg) = unsafe { classify_failure(cancelled) };
+        assert_eq!(reason, SilentRefreshFailureReason::Cancelled);
+        assert_eq!(reason.as_str(), "cancelled");
+        assert!(!reason.escalates_to_consent());
+        assert_eq!(code, G_IO_ERROR_CANCELLED);
+        unsafe { g_error_free(cancelled) };
+
+        // Other generic IO error
+        let other_io = error(unsafe { g_io_error_quark() }, 999);
+        let (reason, _quark, _domain_name, code, _msg) = unsafe { classify_failure(other_io) };
+        assert_eq!(reason, SilentRefreshFailureReason::OtherIoError);
+        assert_eq!(reason.as_str(), "other_io_error");
+        assert!(reason.escalates_to_consent());
+        assert_eq!(code, 999);
+        unsafe { g_error_free(other_io) };
+
+        // Null error pointer -> NullError
+        let (reason, quark, domain_name, code, msg) = unsafe { classify_failure(ptr::null()) };
+        assert_eq!(reason, SilentRefreshFailureReason::NullError);
+        assert_eq!(reason.as_str(), "null_error");
+        assert!(reason.escalates_to_consent());
+        assert_eq!(quark, None);
+        assert_eq!(domain_name, None);
+        assert_eq!(code, 0);
+        assert_eq!(msg, None);
+
+        // Empty token
+        assert_eq!(
+            SilentRefreshFailureReason::EmptyToken.as_str(),
+            "empty_token"
+        );
+        assert!(SilentRefreshFailureReason::EmptyToken.escalates_to_consent());
     }
 }

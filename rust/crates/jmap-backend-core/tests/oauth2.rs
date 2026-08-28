@@ -186,6 +186,27 @@ impl tracing::field::Visit for Recorder<'_> {
             .unwrap()
             .push((field.name().to_owned(), value.to_owned()));
     }
+
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((field.name().to_owned(), value.to_string()));
+    }
+
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((field.name().to_owned(), value.to_string()));
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((field.name().to_owned(), value.to_string()));
+    }
 }
 
 impl tracing::Subscriber for CapturingSubscriber {
@@ -231,5 +252,50 @@ fn access_token_traces_account_id_on_attempt() {
             "Some(\"jmap-oauth2-trace-uid\")".to_owned()
         )),
         "expected account_id field, got {entries:?}"
+    );
+}
+
+#[test]
+fn access_token_failure_traces_structured_fields_and_consent_escalation() {
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let subscriber = CapturingSubscriber {
+        captured: captured.clone(),
+    };
+
+    let source = TestSource::new("jmap-oauth2-trace-failure").with_method("OAuth2");
+
+    let result = tracing::subscriber::with_default(subscriber, || {
+        // SAFETY: a live source and NULL cancellable.
+        unsafe { access_token(source.0, ptr::null_mut()) }
+    });
+    assert!(result.is_err());
+
+    let entries = captured.lock().unwrap();
+    assert!(
+        entries.contains(&(
+            "account_id".to_owned(),
+            "Some(\"jmap-oauth2-trace-failure\")".to_owned()
+        )),
+        "expected account_id field, got {entries:?}"
+    );
+    assert!(
+        entries.iter().any(|(k, _)| k == "reason"),
+        "expected reason field, got {entries:?}"
+    );
+    assert!(
+        entries.iter().any(|(k, _)| k == "escalates_to_consent"),
+        "expected escalates_to_consent field, got {entries:?}"
+    );
+    assert!(
+        entries.iter().any(|(k, _)| k == "error_code"),
+        "expected error_code field, got {entries:?}"
+    );
+    assert!(
+        entries.iter().any(|(k, _)| k == "store_failure"),
+        "expected store_failure field, got {entries:?}"
+    );
+    assert!(
+        entries.iter().any(|(k, _)| k == "secret_not_found"),
+        "expected secret_not_found field, got {entries:?}"
     );
 }
