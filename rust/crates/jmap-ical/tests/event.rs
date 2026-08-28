@@ -10114,6 +10114,55 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_recurrence_overrides_count: 0,
             unmapped_vendor_properties_dropped_on_export: &[],
         },
+        RealExporterTestCase {
+            name: "Mozilla Thunderbird Export (vCalendar 2.0 with Bi-Weekly RRULE, EXDATE & Alerts)",
+            fixture_file: "thunderbird_calendar_export.ics",
+            exporter_name: "Mozilla Thunderbird / Lightning",
+            expected_title: "Thunderbird Release & Quality Sync",
+            expected_start: "2026-10-12T09:30:00",
+            expected_time_zone: Some("Europe/London"),
+            expected_duration: Some("PT1H30M"),
+            expected_privacy: Some("public"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("busy"),
+            expected_priority: Some(1),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 1,
+            expected_keywords_count: 3,
+            expected_alerts_count: 1,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 1,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-MOZ-GENERATION",
+                "X-MOZ-LASTACK",
+                "X-MOZ-SNOOZE-TIME",
+            ],
+        },
+        RealExporterTestCase {
+            name: "SOGo & Radicale CalDAV Export (vCalendar 2.0 with Monthly Recurrence, Badge & Double Alarms)",
+            fixture_file: "sogo_calendar_export.ics",
+            exporter_name: "SOGo / Radicale CalDAV",
+            expected_title: "Sorbonne Distributed Systems Colloquium",
+            expected_start: "2026-11-05T14:00:00",
+            expected_time_zone: Some("Europe/Paris"),
+            expected_duration: Some("PT3H30M"),
+            expected_privacy: Some("secret"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("busy"),
+            expected_priority: Some(2),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 2,
+            expected_keywords_count: 3,
+            expected_alerts_count: 2,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 0,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-SOGO-COMPONENT-CREATED",
+                "X-RADICALE-MODIFIED",
+            ],
+        },
     ];
 
     for case in &corpus {
@@ -10706,6 +10755,350 @@ fn real_exporter_fixture_evolution_native_detailed_roundtrip() {
 
     assert_eq!(export2, export3);
     assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_thunderbird_calendar_detailed_roundtrip() {
+    let ics_text = read_fixture("thunderbird_calendar_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse Thunderbird calendar fixture");
+
+    // 1. Verify clean extra map
+    assert!(
+        event.extra.is_empty(),
+        "event.extra must be empty, found: {:?}",
+        event.extra
+    );
+
+    // 2. Validate mapped details
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Thunderbird Release & Quality Sync")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-10-12T09:30:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/London"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H30M"));
+    assert_eq!(event.privacy.as_deref(), Some("public"));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(event.priority, Some(1));
+
+    // 3. Validate conference & attachment link
+    let vlocs = event.virtual_locations.as_ref().expect("virtual_locations");
+    assert_eq!(vlocs.len(), 1);
+    let conf = vlocs.values().next().expect("conference");
+    assert_eq!(
+        conf["uri"],
+        json!("https://meet.mozilla.org/thunderbird-sync")
+    );
+    assert_eq!(conf["features"]["audio"], json!(true));
+    assert_eq!(conf["features"]["video"], json!(true));
+
+    let links = event.links.as_ref().expect("links");
+    assert_eq!(links.len(), 1);
+    let doc = links.values().next().expect("doc");
+    assert_eq!(
+        doc["href"],
+        json!("https://www.thunderbird.net/docs/release-plan.pdf")
+    );
+    assert_eq!(doc["contentType"], json!("application/pdf"));
+    assert_eq!(doc["size"], json!(204_800));
+
+    // 4. Validate bi-weekly RRULE and EXDATE override
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
+    assert_eq!(rules[0].frequency, "weekly");
+    assert_eq!(rules[0].interval, Some(2));
+    assert_eq!(rules[0].until.as_deref(), Some("2026-12-21T09:30:00"));
+    let by_day = rules[0].by_day.as_ref().expect("by_day");
+    assert_eq!(by_day.len(), 1);
+    assert_eq!(by_day[0].day, "mo");
+
+    let overrides = event.recurrence_overrides.as_ref().expect("overrides");
+    assert_eq!(overrides["2026-11-09T09:30:00"], json!({"excluded": true}));
+
+    // 5. Validate display alarm
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(
+        alerts.values().next().unwrap()["trigger"]["offset"],
+        json!("-PT15M")
+    );
+
+    // 6. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    assert!(!export1.contains("X-MOZ-GENERATION"));
+    assert!(!export1.contains("X-MOZ-LASTACK"));
+    assert!(!export1.contains("X-MOZ-SNOOZE-TIME"));
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_sogo_caldav_detailed_roundtrip() {
+    let ics_text = read_fixture("sogo_calendar_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse SOGo calendar fixture");
+
+    // 1. Verify clean extra map
+    assert!(
+        event.extra.is_empty(),
+        "event.extra must be empty, found: {:?}",
+        event.extra
+    );
+
+    // 2. Validate mapped details
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Sorbonne Distributed Systems Colloquium")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-11-05T14:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Paris"));
+    assert_eq!(event.duration.as_deref(), Some("PT3H30M"));
+    assert_eq!(event.privacy.as_deref(), Some("secret"));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(event.priority, Some(2));
+
+    // 3. Validate French accented location
+    let locs = event.locations.as_ref().expect("locations");
+    let loc = locs.values().next().expect("loc");
+    assert_eq!(
+        loc["name"],
+        json!("Amphithéâtre 25, 4 Place Jussieu, 75005 Paris")
+    );
+
+    // 4. Validate conference with chat feature and dual links (PDF + PNG badge)
+    let vlocs = event.virtual_locations.as_ref().expect("virtual_locations");
+    let conf = vlocs.values().next().expect("conf");
+    assert_eq!(conf["features"]["chat"], json!(true));
+
+    let links = event.links.as_ref().expect("links");
+    assert_eq!(links.len(), 2);
+    assert!(
+        links
+            .values()
+            .any(|l| l["contentType"] == "application/pdf")
+    );
+    assert!(
+        links
+            .values()
+            .any(|l| l["display"] == "badge" && l["contentType"] == "image/png")
+    );
+
+    // 5. Validate monthly 1st Thursday recurrence
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
+    assert_eq!(rules[0].frequency, "monthly");
+    assert_eq!(rules[0].count, Some(6));
+    let by_day = rules[0].by_day.as_ref().expect("by_day");
+    assert_eq!(by_day[0].day, "th");
+    assert_eq!(by_day[0].nth_of_period, Some(1));
+
+    // 6. Validate dual display alarms (-P1D and -PT1H)
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 2);
+    assert!(
+        alerts
+            .values()
+            .any(|a| a["trigger"]["offset"] == json!("-P1D"))
+    );
+    assert!(
+        alerts
+            .values()
+            .any(|a| a["trigger"]["offset"] == json!("-PT1H"))
+    );
+
+    // 7. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    assert!(!export1.contains("X-SOGO-COMPONENT-CREATED"));
+    assert!(!export1.contains("X-RADICALE-MODIFIED"));
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
+    let event = CalendarEvent {
+        id: Some("E-SELF-CONSISTENCY-1".into()),
+        uid: Some("urn:uuid:12345678-1234-5678-1234-567812345678".into()),
+        event_type: Some("Event".into()),
+        version: Some("2.0".into()),
+        title: Some("Self-Consistency Architecture Workshop".into()),
+        description: Some(
+            "Comprehensive round-trip self-consistency test for Evolution iCalendar mapping."
+                .into(),
+        ),
+        start: Some("2026-10-15T09:00:00".into()),
+        time_zone: Some("Europe/Berlin".into()),
+        duration: Some("PT2H30M".into()),
+        privacy: Some("private".into()),
+        status: Some("confirmed".into()),
+        free_busy_status: Some("busy".into()),
+        priority: Some(1),
+        locations: Some(
+            [(
+                "loc1".to_string(),
+                json!({
+                    "@type": "Location",
+                    "name": "Hauptgebäude, Raum 101, Berlin"
+                }),
+            )]
+            .into(),
+        ),
+        virtual_locations: Some(
+            [(
+                "v1".to_string(),
+                json!({
+                    "@type": "VirtualLocation",
+                    "name": "GNOME Video Bridge",
+                    "uri": "https://meet.gnome.org/arch-workshop",
+                    "features": {"audio": true, "video": true, "screen": true, "chat": true}
+                }),
+            )]
+            .into(),
+        ),
+        links: Some(
+            [
+                (
+                    "l1".to_string(),
+                    json!({
+                        "@type": "Link",
+                        "href": "https://foundation.gnome.org/agenda.pdf",
+                        "contentType": "application/pdf",
+                        "size": 1048576
+                    }),
+                ),
+                (
+                    "l2".to_string(),
+                    json!({
+                        "@type": "Link",
+                        "href": "https://foundation.gnome.org/badge.png",
+                        "display": "badge",
+                        "rel": "icon"
+                    }),
+                ),
+            ]
+            .into(),
+        ),
+        keywords: Some(
+            [
+                ("GNOME".into(), json!(true)),
+                ("Architecture".into(), json!(true)),
+                ("Evolution".into(), json!(true)),
+            ]
+            .into(),
+        ),
+        recurrence_rule: Some(RecurrenceRule {
+            rule_type: Some("RecurrenceRule".into()),
+            frequency: "weekly".into(),
+            interval: Some(2),
+            by_day: Some(vec![NDay::new("th")]),
+            count: Some(10),
+            ..RecurrenceRule::default()
+        }),
+        recurrence_overrides: Some(
+            [
+                ("2026-11-12T09:00:00".to_string(), json!({"excluded": true})),
+                (
+                    "2026-11-26T09:00:00".to_string(),
+                    json!({
+                        "title": "Self-Consistency Architecture Workshop (Deep Dive)",
+                        "start": "2026-11-26T10:00:00"
+                    }),
+                ),
+            ]
+            .into(),
+        ),
+        alerts: Some(
+            [
+                (
+                    "a1".to_string(),
+                    json!({
+                        "@type": "Alert",
+                        "action": "display",
+                        "trigger": {
+                            "@type": "OffsetTrigger",
+                            "offset": "-PT15M"
+                        }
+                    }),
+                ),
+                (
+                    "a2".to_string(),
+                    json!({
+                        "@type": "Alert",
+                        "action": "display",
+                        "trigger": {
+                            "@type": "OffsetTrigger",
+                            "offset": "-PT1H"
+                        }
+                    }),
+                ),
+            ]
+            .into(),
+        ),
+        ..CalendarEvent::default()
+    };
+
+    // 1. Export to iCalendar 2.0
+    let ics1 = event_to_ical(&event);
+
+    // 2. Re-import from emitted iCalendar
+    let event2 = ical_to_event(&ics1).expect("re-import emitted ics");
+
+    // 3. Export second pass
+    let ics2 = event_to_ical(&event2);
+
+    // 4. Assert exact round-trip self-consistency (Pass 1 == Pass 2)
+    assert_eq!(
+        ics1, ics2,
+        "Self-consistency: emitted iCalendar must match across passes"
+    );
+
+    // 5. Re-import second pass
+    let event3 = ical_to_event(&ics2).expect("re-import second pass");
+    assert_eq!(
+        event2, event3,
+        "Self-consistency: re-imported Event must match across passes"
+    );
+
+    // 6. Verify all mapped domains are preserved losslessly
+    assert_eq!(event2.title, event.title);
+    assert_eq!(event2.description, event.description);
+    assert_eq!(event2.start, event.start);
+    assert_eq!(event2.time_zone, event.time_zone);
+    assert_eq!(event2.duration, event.duration);
+    assert_eq!(event2.privacy, event.privacy);
+    assert_eq!(event2.status, event.status);
+    assert_eq!(event2.free_busy_status, event.free_busy_status);
+    assert_eq!(event2.priority, event.priority);
+    assert_eq!(
+        event2.keywords.as_ref().unwrap().len(),
+        event.keywords.as_ref().unwrap().len()
+    );
+    assert_eq!(event2.recurrence_rule, event.recurrence_rule);
+    assert_eq!(
+        event2.recurrence_overrides.as_ref().unwrap().len(),
+        event.recurrence_overrides.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        event2.alerts.as_ref().unwrap().len(),
+        event.alerts.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        event2.links.as_ref().unwrap().len(),
+        event.links.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        event2.virtual_locations.as_ref().unwrap().len(),
+        event.virtual_locations.as_ref().unwrap().len()
+    );
 }
 
 #[test]

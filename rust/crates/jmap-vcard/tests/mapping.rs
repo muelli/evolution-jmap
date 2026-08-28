@@ -16928,6 +16928,49 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_categories_count: 3,
             unmapped_vendor_properties_dropped_on_export: &[],
         },
+        RealExporterTestCase {
+            name: "Mozilla Thunderbird Export (vCard 4.0 with PREF, URI Tel & Multiline Labels)",
+            fixture_file: "thunderbird_vcard40_export.vcf",
+            exporter_name: "Mozilla Thunderbird",
+            expected_full_name: "Dr. Arthur Philip Dent",
+            expected_surname: "Dent",
+            expected_given_name: "Arthur",
+            expected_email_count: 2,
+            expected_phone_count: 4, // Cell, Work, Home, WorkFAX
+            expected_address_count: 2,
+            expected_org_name: Some("British Broadcasting Corporation"),
+            expected_org_units_count: 2,
+            expected_title_count: 2,
+            expected_anniversaries_count: 2, // BDAY + Anniversary
+            expected_relations_count: 0,
+            expected_has_photo: true,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-MOZILLA-HTML",
+                "X-MOZILLA-PROPERTY",
+                "PRODID",
+                "REV",
+            ],
+        },
+        RealExporterTestCase {
+            name: "SOGo & Radicale CardDAV Export (vCard 3.0 with EDS Relations & Slotted Services)",
+            fixture_file: "sogo_carddav_export.vcf",
+            exporter_name: "SOGo / Radicale CardDAV",
+            expected_full_name: "Prof. Hélène Renée Dubois-Martin",
+            expected_surname: "Dubois-Martin",
+            expected_given_name: "Hélène",
+            expected_email_count: 2,
+            expected_phone_count: 4, // Work, Cell, Home, Fax
+            expected_address_count: 2,
+            expected_org_name: Some("Sorbonne Université"),
+            expected_org_units_count: 2,
+            expected_title_count: 2,
+            expected_anniversaries_count: 2, // BDAY + Anniversary
+            expected_relations_count: 3,     // Spouse, Manager, Assistant
+            expected_has_photo: true,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &["X-RADICALE-NAME", "PRODID", "REV"],
+        },
     ];
 
     for case in &corpus {
@@ -17645,6 +17688,424 @@ fn real_exporter_fixture_evolution_native_vcard30_detailed_roundtrip() {
 
     assert_eq!(export2, export3, "Export₂ == Export₃");
     assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_thunderbird_vcard40_detailed_roundtrip() {
+    let vcard_text = read_fixture("thunderbird_vcard40_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Thunderbird vCard 4.0 fixture");
+
+    // 1. Verify clean extra map
+    assert!(
+        card.extra.is_empty(),
+        "card.extra must be empty, got: {:?}",
+        card.extra
+    );
+
+    // 2. Validate parsed name & nickname
+    let name = card.name.as_ref().unwrap();
+    assert_eq!(name.full.as_deref(), Some("Dr. Arthur Philip Dent"));
+    let nicknames = card.nicknames.as_ref().unwrap();
+    assert!(nicknames.values().any(|n| n.name == "Dentarthurdent"));
+
+    // 3. Validate email preferences and contexts
+    let emails = card.emails.as_ref().unwrap();
+    let home_email = emails
+        .values()
+        .find(|e| e.address == "arthur.dent@earth.example")
+        .expect("home email");
+    assert_eq!(home_email.pref, Some(1));
+    assert_eq!(
+        home_email.contexts.as_ref().and_then(|c| c.get("private")),
+        Some(&serde_json::json!(true))
+    );
+
+    let work_email = emails
+        .values()
+        .find(|e| e.address == "a.dent@radio4.bbc.example")
+        .expect("work email");
+    assert_eq!(
+        work_email.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 4. Validate URI tel formatting and telephony features
+    let phones = card.phones.as_ref().unwrap();
+    let cell_phone = phones
+        .values()
+        .find(|p| p.number == "+44-20-7946-0123" || p.number.contains("7946-0123"))
+        .expect("cell phone");
+    assert_eq!(
+        cell_phone.features.as_ref().and_then(|f| f.get("mobile")),
+        Some(&serde_json::json!(true))
+    );
+
+    let fax_phone = phones
+        .values()
+        .find(|p| p.number == "+44 20 7946 0988" || p.number.contains("7946 0988"))
+        .expect("fax phone");
+    assert_eq!(
+        fax_phone.features.as_ref().and_then(|f| f.get("fax")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 5. Validate multiline address label extraction
+    let addresses = card.addresses.as_ref().unwrap();
+    let work_adr = addresses
+        .values()
+        .find(|a| a.contexts.as_ref().and_then(|c| c.get("work")) == Some(&serde_json::json!(true)))
+        .expect("work adr");
+    assert!(work_adr.full.as_ref().unwrap().contains("Portland Place"));
+
+    // 6. Validate organization units hierarchy
+    let orgs = card.organizations.as_ref().unwrap();
+    let org = orgs.values().next().unwrap();
+    assert_eq!(
+        org.name.as_deref(),
+        Some("British Broadcasting Corporation")
+    );
+    let units = org.units.as_ref().unwrap();
+    assert_eq!(units.len(), 2);
+    assert_eq!(units[0].name, "Radio Drama");
+    assert_eq!(units[1].name, "Light Entertainment");
+
+    // 7. Validate anniversaries (BDAY and ANNIVERSARY)
+    let anniversaries = card.anniversaries.as_ref().unwrap();
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(serde_json::json!({"@type": "PartialDate", "year": 1978, "month": 3, "day": 8}))
+    );
+    let wedding = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("wedding");
+    assert_eq!(
+        wedding.date,
+        Some(serde_json::json!({"@type": "PartialDate", "year": 2005, "month": 4, "day": 28}))
+    );
+
+    // 8. Validate inline photo data URI
+    let media = card.media.as_ref().unwrap();
+    let photo = media
+        .values()
+        .find(|m| m.kind.as_deref() == Some("photo"))
+        .expect("photo");
+    assert!(photo.uri.starts_with("data:image/png;base64,"));
+
+    // 9. Export to canonical vCard 3.0 and verify vendor property isolation
+    let export1 = card_to_vcard(&card);
+    assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(!export1.contains("X-MOZILLA-HTML"));
+    assert!(!export1.contains("X-MOZILLA-PROPERTY"));
+    assert!(!export1.contains("PRODID"));
+    assert!(!export1.contains("REV"));
+
+    // 10. Multi-pass round-trip fixpoint
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_sogo_carddav_detailed_roundtrip() {
+    let vcard_text = read_fixture("sogo_carddav_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse SOGo CardDAV fixture");
+
+    // 1. Verify clean extra map
+    assert!(
+        card.extra.is_empty(),
+        "card.extra must be empty, got: {:?}",
+        card.extra
+    );
+
+    // 2. Validate French Unicode names and components
+    let name = card.name.as_ref().unwrap();
+    assert_eq!(
+        name.full.as_deref(),
+        Some("Prof. Hélène Renée Dubois-Martin")
+    );
+    let surname = name
+        .components
+        .as_ref()
+        .and_then(|c| c.iter().find(|comp| comp.kind == "surname"))
+        .unwrap();
+    assert_eq!(surname.value, "Dubois-Martin");
+
+    // 3. Validate EDS relations preserved losslessly
+    let relations = card.related_to.as_ref().unwrap();
+    assert!(states_spouse(
+        "Jean-Pierre Martin",
+        &relations["Jean-Pierre Martin"]
+    ));
+    assert!(states_manager(
+        "Prof. Marcel Perrin",
+        &relations["Prof. Marcel Perrin"]
+    ));
+    assert!(states_assistant(
+        "Chantal Petit",
+        &relations["Chantal Petit"]
+    ));
+
+    // 4. Validate online services (Jabber and Matrix)
+    let services = card.online_services.as_ref().unwrap();
+    assert!(
+        services
+            .values()
+            .any(|s| s.service.as_deref() == Some("Jabber")
+                && s.user.as_deref() == Some("hdubois@jabber.sorbonne-universite.example"))
+    );
+    assert!(
+        services
+            .values()
+            .any(|s| s.service.as_deref() == Some("Matrix")
+                && s.user.as_deref() == Some("hdubois:matrix.org"))
+    );
+
+    // 5. Validate multiline notes
+    let notes = card.notes.as_ref().unwrap();
+    let note_text = &notes.values().next().unwrap().note;
+    assert!(note_text.contains("synchronisation JMAP/CalDAV"));
+
+    // 6. Export and verify clean vendor dropping
+    let export1 = card_to_vcard(&card);
+    assert!(!export1.contains("X-RADICALE-NAME"));
+    assert!(!export1.contains("PRODID"));
+    assert!(!export1.contains("REV"));
+    assert!(export1.contains("X-EVOLUTION-SPOUSE:Jean-Pierre Martin"));
+    assert!(export1.contains("X-EVOLUTION-MANAGER:Prof. Marcel Perrin"));
+    assert!(export1.contains("X-EVOLUTION-ASSISTANT:Chantal Petit"));
+
+    // 7. Multi-pass round-trip fixpoint
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
+    let mut name_extra = BTreeMap::new();
+    name_extra.insert("fileAs".to_string(), json!("SelfConsistency, Test"));
+
+    let card = ContactCard {
+        id: Some("C-SELF-CONSISTENCY-1".into()),
+        name: Some(Name {
+            full: Some("Dr. Test SelfConsistency".into()),
+            components: Some(vec![
+                NameComponent::new("prefix", "Dr."),
+                NameComponent::new("given", "Test"),
+                NameComponent::new("surname", "SelfConsistency"),
+            ]),
+            extra: name_extra,
+        }),
+        nicknames: Some([("n1".to_string(), Nickname { name: "SelfTest".into(), extra: BTreeMap::new() })].into()),
+        emails: Some([
+            ("e1".to_string(), ContactEmail {
+                address: "selftest.work@example.com".into(),
+                contexts: Some(json!({"work": true})),
+                pref: Some(1),
+                extra: BTreeMap::new(),
+            }),
+            ("e2".to_string(), ContactEmail {
+                address: "selftest.home@example.org".into(),
+                contexts: Some(json!({"private": true})),
+                pref: None,
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        phones: Some([
+            ("p1".to_string(), ContactPhone {
+                number: "+1 555 0100".into(),
+                features: Some(json!({"voice": true, "mobile": true})),
+                contexts: Some(json!({"work": true})),
+                pref: Some(1),
+                extra: BTreeMap::new(),
+            }),
+            ("p2".to_string(), ContactPhone {
+                number: "+1 555 0199".into(),
+                features: Some(json!({"fax": true})),
+                contexts: Some(json!({"work": true})),
+                pref: None,
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        addresses: Some([
+            ("a1".to_string(), Address {
+                components: Some(vec![
+                    AddressComponent::new("name", "100 Innovation Way"),
+                    AddressComponent::new("locality", "Cambridge"),
+                    AddressComponent::new("region", "MA"),
+                    AddressComponent::new("postcode", "02139"),
+                    AddressComponent::new("country", "USA"),
+                ]),
+                contexts: Some(json!({"work": true})),
+                full: Some("100 Innovation Way, Cambridge, MA 02139, USA".into()),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        organizations: Some([
+            ("o1".to_string(), Organization {
+                name: Some("SelfConsistency Labs Inc.".into()),
+                units: Some(vec![OrgUnit::new("Core Engine"), OrgUnit::new("Protocols")]),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        titles: Some([
+            ("t1".to_string(), Title {
+                name: "Chief Architect".into(),
+                kind: Some("title".into()),
+                extra: BTreeMap::new(),
+            }),
+            ("t2".to_string(), Title {
+                name: "Principal Investigator".into(),
+                kind: Some("role".into()),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        anniversaries: Some([
+            ("bday".to_string(), Anniversary {
+                kind: "birth".into(),
+                date: Some(json!({"@type": "PartialDate", "year": 1980, "month": 5, "day": 20})),
+                extra: BTreeMap::new(),
+            }),
+            ("anniv".to_string(), Anniversary {
+                kind: "wedding".into(),
+                date: Some(json!({"@type": "PartialDate", "year": 2008, "month": 10, "day": 12})),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        related_to: Some([
+            ("Spouse Partner".to_string(), Relation {
+                relation: Some([("spouse".to_string(), json!(true))].into()),
+                extra: BTreeMap::new(),
+            }),
+            ("Manager Leader".to_string(), Relation {
+                relation: Some([("manager".to_string(), json!(true))].into()),
+                extra: BTreeMap::new(),
+            }),
+            ("Assistant Helper".to_string(), Relation {
+                relation: Some([("assistant".to_string(), json!(true))].into()),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        online_services: Some([
+            ("s1".to_string(), OnlineService {
+                service: Some("Jabber".into()),
+                user: Some("selftest@jabber.org".into()),
+                uri: None,
+                extra: BTreeMap::new(),
+            }),
+            ("s2".to_string(), OnlineService {
+                service: Some("Matrix".into()),
+                user: Some("selftest:matrix.org".into()),
+                uri: None,
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        links: Some([
+            ("l1".to_string(), Link {
+                uri: "https://blog.selftest.example".into(),
+                kind: Some("blog".into()),
+                extra: BTreeMap::new(),
+            }),
+            ("l2".to_string(), Link {
+                uri: "https://video.selftest.example/watch".into(),
+                kind: Some("video".into()),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        notes: Some([
+            ("n1".to_string(), Note {
+                note: "Self-consistency verification note.\nLine 2 of multi-line note.".into(),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        keywords: Some([
+            ("Testing".into(), json!(true)),
+            ("SelfConsistency".into(), json!(true)),
+            ("Evolution".into(), json!(true)),
+        ].into()),
+        media: Some([
+            ("m1".to_string(), Media {
+                kind: Some("photo".into()),
+                uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into(),
+                media_type: Some("image/png".into()),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        ..ContactCard::default()
+    };
+
+    // 1. Export to vCard 3.0
+    let vcard1 = card_to_vcard(&card);
+
+    // 2. Re-import from generated vCard
+    let card2 = vcard_to_card(&vcard1).expect("re-import generated vCard");
+
+    // 3. Export second pass
+    let vcard2 = card_to_vcard(&card2);
+
+    // 4. Assert exact round-trip self-consistency (Pass 1 == Pass 2)
+    assert_eq!(
+        vcard1, vcard2,
+        "Self-consistency: emitted vCard must match across passes"
+    );
+
+    // 5. Re-import second pass
+    let card3 = vcard_to_card(&vcard2).expect("re-import second pass");
+    assert_eq!(
+        card2, card3,
+        "Self-consistency: re-imported Card must match across passes"
+    );
+
+    // 6. Verify all mapped domains are preserved losslessly
+    assert_eq!(
+        card2.name.as_ref().unwrap().full,
+        card.name.as_ref().unwrap().full
+    );
+    assert_eq!(
+        card2.emails.as_ref().unwrap().len(),
+        card.emails.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.phones.as_ref().unwrap().len(),
+        card.phones.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.addresses.as_ref().unwrap().len(),
+        card.addresses.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.organizations.as_ref().unwrap().len(),
+        card.organizations.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.anniversaries.as_ref().unwrap().len(),
+        card.anniversaries.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.related_to.as_ref().unwrap().len(),
+        card.related_to.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.online_services.as_ref().unwrap().len(),
+        card.online_services.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.keywords.as_ref().unwrap().len(),
+        card.keywords.as_ref().unwrap().len()
+    );
 }
 
 #[test]
