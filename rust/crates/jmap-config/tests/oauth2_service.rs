@@ -27,22 +27,22 @@ use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use eds_sys::{
-    E_SOURCE_EXTENSION_AUTHENTICATION, EOAuth2Service, EOAuth2Services, ESource,
-    e_oauth2_service_can_process, e_oauth2_service_get_authentication_uri,
+    E_SOURCE_EXTENSION_AUTHENTICATION, EOAuth2Service, EOAuth2ServiceInterface, EOAuth2Services,
+    ESource, e_oauth2_service_can_process, e_oauth2_service_get_authentication_uri,
     e_oauth2_service_get_client_id, e_oauth2_service_get_client_secret,
     e_oauth2_service_get_display_name, e_oauth2_service_get_name,
-    e_oauth2_service_get_redirect_uri, e_oauth2_service_get_refresh_uri,
+    e_oauth2_service_get_redirect_uri, e_oauth2_service_get_refresh_uri, e_oauth2_service_get_type,
     e_oauth2_service_prepare_authentication_uri_query, e_oauth2_service_prepare_get_token_form,
     e_oauth2_services_find, e_oauth2_services_new, e_source_authentication_set_method,
     e_source_get_extension, e_source_new_with_uid,
 };
 use glib_sys::{
-    GFALSE, g_free, g_hash_table_destroy, g_hash_table_lookup, g_hash_table_new_full, g_str_equal,
-    g_str_hash,
+    GFALSE, GHashTable, g_free, g_hash_table_destroy, g_hash_table_lookup, g_hash_table_new_full,
+    g_str_equal, g_str_hash,
 };
 use gobject_sys::{
-    G_TYPE_OBJECT, GValue, g_object_new_with_properties, g_object_unref, g_value_init,
-    g_value_set_object, g_value_unset,
+    G_TYPE_OBJECT, GValue, g_object_new_with_properties, g_object_unref, g_type_class_ref,
+    g_type_interface_peek, g_value_init, g_value_set_object, g_value_unset,
 };
 use jmap_backend_core::subclass::register_static;
 use jmap_config::oauth2::{self, Config};
@@ -240,11 +240,15 @@ fn prepare_authentication_uri_query_names_the_registered_scope() {
             CStr::from_ptr(scope.cast()).to_str().unwrap(),
             "urn:ietf:params:oauth:scope:mail offline_access"
         );
-        // The default ran first: the standard query is still built.
+        // The wrapper ran EDS's default itself before dispatching to our slot,
+        // so the standard query is here alongside our additions. This is the
+        // wrapper's guarantee, not our slot's — see
+        // `the_authentication_query_slot_adds_only_this_services_own_keys`,
+        // which is the test that would actually catch our slot doing it too.
         let response_type = g_hash_table_lookup(query, c"response_type".as_ptr().cast());
         assert!(
             !response_type.is_null(),
-            "chaining to EDS's default was lost — the standard query is gone"
+            "the standard RFC 6749 query is gone"
         );
         // RFC 8707: the stored resource rides along.
         let resource = g_hash_table_lookup(query, c"resource".as_ptr().cast());
@@ -448,5 +452,159 @@ fn the_registry_finds_this_service_for_a_matching_source_and_nothing_for_another
             e_oauth2_services_find(registry, other.0).is_null(),
             "a source authenticating by a different method should not be found"
         );
+    }
+}
+
+/// One `EOAuth2ServiceInterface` slot, reached the way EDS's own wrapper
+/// reaches it: `E_OAUTH2_SERVICE_GET_INTERFACE`, i.e. the interface vtable of
+/// [`Service`]'s class — not the interface's *default* vtable, which still
+/// holds `eos_default_*` for every slot this crate never filled.
+fn vtable() -> &'static EOAuth2ServiceInterface {
+    let gtype = register_static::<Service>();
+    // SAFETY: a registered class type and the interface it implements; the
+    // class ref taken here is deliberately never dropped — the type is
+    // process-global and every other test holds an instance of it anyway.
+    unsafe {
+        let class = g_type_class_ref(gtype);
+        let vtable = g_type_interface_peek(class, e_oauth2_service_get_type())
+            .cast::<EOAuth2ServiceInterface>();
+        assert!(
+            !vtable.is_null(),
+            "Service does not implement EOAuth2Service"
+        );
+        &*vtable
+    }
+}
+
+fn empty_table() -> *mut GHashTable {
+    // SAFETY: standard GLib hash-table construction, the shape EDS's
+    // `prepare_*` callers build and the shape `g_hash_table_replace` needs to
+    // own both halves.
+    unsafe {
+        g_hash_table_new_full(
+            Some(g_str_hash),
+            Some(g_str_equal),
+            Some(g_free),
+            Some(g_free),
+        )
+    }
+}
+
+fn has_key(table: *mut GHashTable, key: &CStr) -> bool {
+    // SAFETY: a live table with string keys.
+    !unsafe { g_hash_table_lookup(table, key.as_ptr().cast()) }.is_null()
+}
+
+/// The interface slot is an **additive** hook, not a chain link.
+///
+/// `e_oauth2_service_prepare_authentication_uri_query` (3.52.3,
+/// `e-oauth2-service.c:648`) calls `eos_default_prepare_authentication_uri_query`
+/// itself, unconditionally, *before* dispatching to the vtable — the slot is
+/// only skipped when it still literally holds that default. So a filled slot
+/// that also calls the default runs it twice. EDS's own services are the
+/// convention: `eos_google_prepare_authentication_uri_query` and
+/// `eos_outlook_prepare_authentication_uri_query` each set only their own keys
+/// and neither saves nor invokes the default.
+///
+/// Dispatching the slot directly is what makes the difference visible at all:
+/// through the wrapper both shapes produce the same table, because
+/// `e_oauth2_service_util_set_to_form` is insert-or-remove and running it
+/// twice is idempotent.
+#[test]
+fn the_authentication_query_slot_adds_only_this_services_own_keys() {
+    let service = service_in(registry());
+    let source = TestSource::new().written(&config());
+    let query = empty_table();
+
+    let slot = vtable()
+        .prepare_authentication_uri_query
+        .expect("this crate fills the slot");
+    // SAFETY: the slot's own signature, a live implementer, a live source and
+    // a live table owning both halves of every entry.
+    unsafe { slot(service, source.0, query) };
+
+    assert!(has_key(query, c"scope"), "the slot must add the scope");
+    assert!(
+        has_key(query, c"resource"),
+        "the slot must add the resource"
+    );
+    assert!(
+        has_key(query, c"code_challenge"),
+        "the slot must add the PKCE challenge"
+    );
+    for base in [c"response_type", c"client_id", c"redirect_uri"] {
+        assert!(
+            !has_key(query, base),
+            "the slot re-ran EDS's default: `{}` is the wrapper's to set, and it \
+             already set it before dispatching here",
+            base.to_string_lossy()
+        );
+    }
+
+    // SAFETY: a live table this test owns.
+    unsafe { g_hash_table_destroy(query) };
+}
+
+/// As above for the code grant —
+/// `e_oauth2_service_prepare_get_token_form` (`e-oauth2-service.c:822`) has the
+/// same shape, and so does `prepare_refresh_token_form` (`:895`).
+#[test]
+fn the_token_form_slots_add_only_this_services_own_keys() {
+    let service = service_in(registry());
+    let source = TestSource::new().written(&config());
+
+    // Authorize first, so there is a stashed verifier for the code grant to
+    // redeem — the order the credentials prompter drives these two in.
+    let query = empty_table();
+    let authorize = vtable()
+        .prepare_authentication_uri_query
+        .expect("this crate fills the slot");
+    // SAFETY: as in the test above.
+    unsafe { authorize(service, source.0, query) };
+
+    let form = empty_table();
+    let slot = vtable()
+        .prepare_get_token_form
+        .expect("this crate fills the slot");
+    // SAFETY: as above; `authorization_code` is a NUL-terminated literal.
+    unsafe { slot(service, source.0, c"an-auth-code".as_ptr(), form) };
+
+    assert!(has_key(form, c"resource"), "the slot must add the resource");
+    assert!(
+        has_key(form, c"code_verifier"),
+        "the slot must redeem the PKCE verifier"
+    );
+    for base in [c"code", c"client_id", c"client_secret", c"grant_type"] {
+        assert!(
+            !has_key(form, base),
+            "the get-token slot re-ran EDS's default: `{}` is the wrapper's",
+            base.to_string_lossy()
+        );
+    }
+
+    let refresh = empty_table();
+    let slot = vtable()
+        .prepare_refresh_token_form
+        .expect("this crate fills the slot");
+    // SAFETY: as above.
+    unsafe { slot(service, source.0, c"a-refresh-token".as_ptr(), refresh) };
+
+    assert!(
+        has_key(refresh, c"resource"),
+        "the slot must add the resource"
+    );
+    for base in [c"refresh_token", c"client_id", c"grant_type"] {
+        assert!(
+            !has_key(refresh, base),
+            "the refresh slot re-ran EDS's default: `{}` is the wrapper's",
+            base.to_string_lossy()
+        );
+    }
+
+    // SAFETY: live tables this test owns.
+    unsafe {
+        g_hash_table_destroy(query);
+        g_hash_table_destroy(form);
+        g_hash_table_destroy(refresh);
     }
 }
