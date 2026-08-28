@@ -19032,3 +19032,311 @@ fn multi_component_org_sparse_and_empty_slots_positioning() {
         "JSContact fixpoint stability for sparse ORG"
     );
 }
+
+#[test]
+fn tel_type_work_voice_fax_evolution_contact_editor_dual_field_aliasing_and_slot_narrowing() {
+    // Characterize RFC 2426 §3.3.1 `TEL;TYPE=WORK,VOICE,FAX` vs Evolution's Contact Editor UI:
+    // 1. Inbound parsing: A vCard carrying `TEL;TYPE=WORK,VOICE,FAX` extracts both `voice`
+    //    and `fax` into JSContact `features` and `work` into `contexts` without loss.
+    let inbound_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Office\r\n",
+        "TEL;TYPE=WORK,VOICE,FAX;X-JMAP-KEY=p1:+1 555 0100\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(inbound_vcard).expect("parse inbound vcard");
+    let phone = &card.phones.as_ref().unwrap()["p1"];
+    assert_eq!(phone.number, "+1 555 0100");
+    assert_eq!(phone.contexts, Some(json!({"work": true})));
+    assert_eq!(phone.features, Some(json!({"voice": true, "fax": true})));
+
+    // 2. Outbound emission & EDS contact editor protection:
+    // In EDS (libebook-contacts 3.52), `TEL;TYPE=WORK,VOICE,FAX` satisfies both
+    // `E_CONTACT_PHONE_BUSINESS` (`WORK`+`VOICE`) and `E_CONTACT_PHONE_BUSINESS_FAX` (`WORK`+`FAX`).
+    // When the user edits the business phone in Evolution, EDS rewrites the single shared TEL line,
+    // mutating the business fax too (verified in `eds-sys`' `editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other`).
+    // To prevent dual-field aliasing and cross-mutation, `jmap-vcard` narrows the emitted feature
+    // to `FAX` (`PHONE_FEATURES`: CELL > PAGER > FAX > VOICE > VIDEO).
+    let emitted_vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&emitted_vcard, "TEL"),
+        "TEL;X-JMAP-KEY=p1;TYPE=WORK,FAX:+1 555 0100"
+    );
+
+    // 3. Predicate fidelity & server sync safety:
+    // `states_phone_feature` returns true for the winning slot ("fax") and false for the suppressed
+    // slot ("voice"). This guarantees that sync diffing does not treat the absence of "voice" on
+    // the emitted vCard as a user deletion, preserving the server's multi-feature record intact.
+    assert!(states_phone_feature(phone.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(phone.features.as_ref(), "voice"));
+    assert!(!states_phone_feature(phone.features.as_ref(), "mobile"));
+    assert!(!states_phone_feature(phone.features.as_ref(), "pager"));
+    assert!(!states_phone_feature(phone.features.as_ref(), "video"));
+
+    // 4. vCard 2.1 bare parameter style and vCard 4.0 quoted parameter style inbound tolerance:
+    let vcard21 = concat!(
+        "BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Alice QP\r\n",
+        "TEL;WORK;VOICE;FAX;X-JMAP-KEY=p1:+1 555 0100\r\n",
+        "END:VCARD\r\n"
+    );
+    let card21 = vcard_to_card(vcard21).expect("parse vcard 2.1");
+    let p21 = &card21.phones.as_ref().unwrap()["p1"];
+    assert_eq!(p21.contexts, Some(json!({"work": true})));
+    assert_eq!(p21.features, Some(json!({"voice": true, "fax": true})));
+
+    let vcard40 = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alice v4\r\n",
+        "TEL;TYPE=\"work,voice,fax\";X-JMAP-KEY=p1:+1 555 0100\r\n",
+        "END:VCARD\r\n"
+    );
+    let card40 = vcard_to_card(vcard40).expect("parse vcard 4.0");
+    let p40 = &card40.phones.as_ref().unwrap()["p1"];
+    assert_eq!(p40.contexts, Some(json!({"work": true})));
+    assert_eq!(p40.features, Some(json!({"voice": true, "fax": true})));
+}
+
+#[test]
+fn tel_type_home_voice_fax_and_unqualified_voice_fax_slot_narrowing_and_editor_visibility() {
+    // 1. Home / Private context with voice + fax:
+    // `TEL;TYPE=HOME,VOICE,FAX` narrows outbound to `HOME,FAX` to avoid aliasing `E_CONTACT_PHONE_HOME`
+    // and `E_CONTACT_PHONE_HOME_FAX` in Evolution's editor.
+    let mut phones = BTreeMap::new();
+    phones.insert(
+        "p1".to_owned(),
+        ContactPhone {
+            number: "+1 555 0200".to_owned(),
+            contexts: Some(json!({"private": true})),
+            features: Some(json!({"voice": true, "fax": true})),
+            ..ContactPhone::default()
+        },
+    );
+    let home_card = ContactCard {
+        phones: Some(phones),
+        ..ContactCard::default()
+    };
+    let home_vcard = card_to_vcard(&home_card);
+    assert_eq!(
+        line(&home_vcard, "TEL"),
+        "TEL;X-JMAP-KEY=p1;TYPE=HOME,FAX:+1 555 0200"
+    );
+    let home_p = &home_card.phones.as_ref().unwrap()["p1"];
+    assert!(states_phone_feature(home_p.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(home_p.features.as_ref(), "voice"));
+
+    // 2. Unqualified (no context) voice + fax:
+    // In EDS, bare `TEL;TYPE=VOICE,FAX` matches neither `E_CONTACT_PHONE_OTHER` (`VOICE`) nor
+    // `E_CONTACT_PHONE_OTHER_FAX` (`FAX`) because they are mutually exclusive in libebook (0 fields reached).
+    // `jmap-vcard` narrows to `FAX`, ensuring the number reaches Evolution's "Other Fax" field rather than being lost.
+    let mut bare_phones = BTreeMap::new();
+    bare_phones.insert(
+        "p2".to_owned(),
+        ContactPhone {
+            number: "+1 555 0300".to_owned(),
+            contexts: None,
+            features: Some(json!({"voice": true, "fax": true})),
+            ..ContactPhone::default()
+        },
+    );
+    let bare_card = ContactCard {
+        phones: Some(bare_phones),
+        ..ContactCard::default()
+    };
+    let bare_vcard = card_to_vcard(&bare_card);
+    assert_eq!(
+        line(&bare_vcard, "TEL"),
+        "TEL;X-JMAP-KEY=p2;TYPE=FAX:+1 555 0300"
+    );
+    let bare_p = &bare_card.phones.as_ref().unwrap()["p2"];
+    assert!(states_phone_feature(bare_p.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(bare_p.features.as_ref(), "voice"));
+}
+
+#[test]
+fn tel_multi_feature_hierarchy_complete_pairwise_and_composite_matrix() {
+    // Tests all pairwise combinations and composite feature sets according to the
+    // precedence hierarchy: `CELL`/`MOBILE` (1) > `PAGER` (2) > `FAX` (3) > `VOICE` (4) > `VIDEO` (5).
+    let cases = [
+        // (features, expected_emitted_type, winning_feature, suppressed_features)
+        (
+            json!({"mobile": true, "voice": true}),
+            "CELL",
+            "mobile",
+            &["voice", "fax", "pager", "video"][..],
+        ),
+        (
+            json!({"mobile": true, "fax": true}),
+            "CELL",
+            "mobile",
+            &["voice", "fax", "pager", "video"][..],
+        ),
+        (
+            json!({"mobile": true, "pager": true}),
+            "CELL",
+            "mobile",
+            &["voice", "fax", "pager", "video"][..],
+        ),
+        (
+            json!({"mobile": true, "video": true}),
+            "CELL",
+            "mobile",
+            &["voice", "fax", "pager", "video"][..],
+        ),
+        (
+            json!({"pager": true, "voice": true}),
+            "PAGER",
+            "pager",
+            &["voice", "fax", "mobile", "video"][..],
+        ),
+        (
+            json!({"pager": true, "fax": true}),
+            "PAGER",
+            "pager",
+            &["voice", "fax", "mobile", "video"][..],
+        ),
+        (
+            json!({"pager": true, "video": true}),
+            "PAGER",
+            "pager",
+            &["voice", "fax", "mobile", "video"][..],
+        ),
+        (
+            json!({"fax": true, "voice": true}),
+            "FAX",
+            "fax",
+            &["voice", "pager", "mobile", "video"][..],
+        ),
+        (
+            json!({"fax": true, "video": true}),
+            "FAX",
+            "fax",
+            &["voice", "pager", "mobile", "video"][..],
+        ),
+        (
+            json!({"voice": true, "video": true}),
+            "VOICE",
+            "voice",
+            &["fax", "pager", "mobile", "video"][..],
+        ),
+        (
+            json!({"mobile": true, "pager": true, "fax": true, "voice": true, "video": true}),
+            "CELL",
+            "mobile",
+            &["pager", "fax", "voice", "video"][..],
+        ),
+        (
+            json!({"pager": true, "fax": true, "voice": true, "video": true}),
+            "PAGER",
+            "pager",
+            &["fax", "voice", "video"][..],
+        ),
+        (
+            json!({"fax": true, "voice": true, "video": true}),
+            "FAX",
+            "fax",
+            &["voice", "video"][..],
+        ),
+    ];
+
+    for (features_json, expected_type, winning_feature, suppressed) in cases {
+        let mut phones = BTreeMap::new();
+        phones.insert(
+            "p1".to_owned(),
+            ContactPhone {
+                number: "+1 555 0999".to_owned(),
+                contexts: None,
+                features: Some(features_json.clone()),
+                ..ContactPhone::default()
+            },
+        );
+        let card = ContactCard {
+            phones: Some(phones),
+            ..ContactCard::default()
+        };
+        let vcard = card_to_vcard(&card);
+        let expected_line = format!("TEL;X-JMAP-KEY=p1;TYPE={expected_type}:+1 555 0999");
+        assert_eq!(
+            line(&vcard, "TEL"),
+            expected_line,
+            "failed slot narrowing for features {features_json:?}"
+        );
+
+        let p = &card.phones.as_ref().unwrap()["p1"];
+        assert!(
+            states_phone_feature(p.features.as_ref(), winning_feature),
+            "winning feature {winning_feature} must be stated"
+        );
+        for &suppressed_feature in suppressed {
+            if features_json.get(suppressed_feature) == Some(&Value::Bool(true)) {
+                assert!(
+                    !states_phone_feature(p.features.as_ref(), suppressed_feature),
+                    "suppressed feature {suppressed_feature} must not be stated"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn tel_multi_feature_and_multi_context_roundtrip_fixpoint_stability() {
+    let mut phones = BTreeMap::new();
+    phones.insert(
+        "p1".to_owned(),
+        ContactPhone {
+            number: "+1 555 1001".to_owned(),
+            contexts: Some(json!({"work": true})),
+            features: Some(json!({"voice": true, "fax": true})),
+            pref: Some(1),
+            ..ContactPhone::default()
+        },
+    );
+    phones.insert(
+        "p2".to_owned(),
+        ContactPhone {
+            number: "+1 555 1002".to_owned(),
+            contexts: Some(json!({"private": true})),
+            features: Some(json!({"voice": true, "fax": true})),
+            pref: Some(2),
+            ..ContactPhone::default()
+        },
+    );
+    phones.insert(
+        "p3".to_owned(),
+        ContactPhone {
+            number: "+1 555 1003".to_owned(),
+            contexts: Some(json!({"work": true})),
+            features: Some(json!({"mobile": true, "pager": true})),
+            ..ContactPhone::default()
+        },
+    );
+    phones.insert(
+        "p4".to_owned(),
+        ContactPhone {
+            number: "+1 555 1004".to_owned(),
+            contexts: None,
+            features: Some(json!({"voice": true, "fax": true})),
+            ..ContactPhone::default()
+        },
+    );
+    let card1 = ContactCard {
+        phones: Some(phones),
+        ..ContactCard::default()
+    };
+
+    // Pass 1: JSContact -> vCard
+    let vcard1 = card_to_vcard(&card1);
+    // Pass 2: vCard -> JSContact -> vCard
+    let card2 = vcard_to_card(&vcard1).expect("parse pass 1");
+    let vcard2 = card_to_vcard(&card2);
+    // Pass 3: vCard -> JSContact -> vCard
+    let card3 = vcard_to_card(&vcard2).expect("parse pass 2");
+    let vcard3 = card_to_vcard(&card3);
+
+    // Multi-pass fixed-point stability
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint stability for multi-feature phones"
+    );
+    assert_eq!(
+        card2, card3,
+        "JSContact fixpoint stability for multi-feature phones"
+    );
+}
