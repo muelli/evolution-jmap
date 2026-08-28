@@ -361,8 +361,10 @@ unsafe extern "C" fn prepare_refresh_token_form(
                 default(service, source, refresh_token, form);
             }
             add_resource(source, form);
+            let has_refresh_token = !refresh_token.is_null() && *refresh_token != 0;
             tracing::debug!(
                 account_uid = ?uid,
+                has_refresh_token,
                 "prepared OAuth 2.0 refresh token form"
             );
         },

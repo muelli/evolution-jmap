@@ -254,6 +254,120 @@ fn e_contact_date_parsing_and_formatting() {
 }
 
 #[test]
+fn e_contact_date_bare_year_and_partial_date_clamping() {
+    unsafe {
+        // Bare 4-digit year: e_contact_date_from_string fails to parse short strings (< 8 chars or non-ISO),
+        // returning an empty EContactDate struct with year=0, month=0, day=0!
+        let date = e_contact_date_from_string(c"1984".as_ptr());
+        assert!(!date.is_null());
+        assert_eq!(
+            (*date).year,
+            0,
+            "EDS fails to parse bare 4-digit year and yields year=0"
+        );
+        assert_eq!((*date).month, 0);
+        assert_eq!((*date).day, 0);
+
+        let formatted = e_contact_date_to_string_vcard_30(date);
+        assert!(!formatted.is_null());
+        // CLAMP forces year 0 -> 1000, month 0 -> 1, day 0 -> 1, corrupting 1984 into 1000-01-01!
+        assert_eq!(
+            CStr::from_ptr(formatted).to_str().unwrap(),
+            "1000-01-01",
+            "CLAMP forces year 0 to 1000, month to 1, day to 1"
+        );
+        g_free(formatted.cast());
+        e_contact_date_free(date);
+
+        // Year-month: "1984-05"
+        let ym = e_contact_date_from_string(c"1984-05".as_ptr());
+        assert!(!ym.is_null());
+        assert_eq!((*ym).year, 0);
+        let formatted_ym = e_contact_date_to_string_vcard_30(ym);
+        assert_eq!(CStr::from_ptr(formatted_ym).to_str().unwrap(), "1000-01-01");
+        g_free(formatted_ym.cast());
+        e_contact_date_free(ym);
+
+        // Year-less: "--05-20"
+        let yless = e_contact_date_from_string(c"--05-20".as_ptr());
+        assert!(!yless.is_null());
+        assert_eq!((*yless).year, 0);
+        let formatted_yless = e_contact_date_to_string_vcard_30(yless);
+        assert_eq!(
+            CStr::from_ptr(formatted_yless).to_str().unwrap(),
+            "1000-01-01"
+        );
+        g_free(formatted_yless.cast());
+        e_contact_date_free(yless);
+    }
+}
+
+#[test]
+fn contact_editor_bday_and_anniversary_bare_year_in_place_clamping_corruption() {
+    // Characterizes Evolution Contact Editor lifecycle on bare-year dates:
+    // When a vCard arrives with BDAY:1984 and X-EVOLUTION-ANNIVERSARY:1996,
+    // EVCard keeps the raw attribute string. But the moment Evolution's contact
+    // editor loads the fields via e_contact_get() and saves them back via
+    // e_contact_set(), EDS clamps year=0 to 1000, month=0 to 1, and day=0 to 1,
+    // corrupting BDAY:1984 into BDAY:1000-01-01 and Anniversary to 1000-01-01!
+    unsafe {
+        let vcard_raw = c"BEGIN:VCARD\r\nVERSION:3.0\r\nUID:c1\r\nFN:Alice\r\nBDAY:1984\r\nX-EVOLUTION-ANNIVERSARY:1996\r\nEND:VCARD\r\n";
+        let contact = e_contact_new_from_vcard(vcard_raw.as_ptr());
+        assert!(!contact.is_null());
+
+        // Untouched vCard string contains raw lines
+        let untouched = e_vcard_to_string_vcard_30(contact.cast());
+        assert!(
+            CStr::from_ptr(untouched)
+                .to_str()
+                .unwrap()
+                .contains("BDAY:1984")
+        );
+        assert!(
+            CStr::from_ptr(untouched)
+                .to_str()
+                .unwrap()
+                .contains("X-EVOLUTION-ANNIVERSARY:1996")
+        );
+        g_free(untouched.cast());
+
+        // Contact editor reading: e_contact_get yields year=0, month=0, day=0
+        let bday = e_contact_get(contact, E_CONTACT_BIRTH_DATE).cast::<EContactDate>();
+        assert!(!bday.is_null());
+        assert_eq!((*bday).year, 0);
+        assert_eq!((*bday).month, 0);
+        assert_eq!((*bday).day, 0);
+
+        let anniv = e_contact_get(contact, E_CONTACT_ANNIVERSARY).cast::<EContactDate>();
+        assert!(!anniv.is_null());
+        assert_eq!((*anniv).year, 0);
+        assert_eq!((*anniv).month, 0);
+        assert_eq!((*anniv).day, 0);
+
+        // Contact editor saving: e_contact_set invokes e_contact_date_to_string,
+        // which clamps the 0 values to 1000-01-01
+        e_contact_set(contact, E_CONTACT_BIRTH_DATE, bday.cast());
+        e_contact_set(contact, E_CONTACT_ANNIVERSARY, anniv.cast());
+
+        let rewritten = e_vcard_to_string_vcard_30(contact.cast());
+        let rewritten_str = CStr::from_ptr(rewritten).to_str().unwrap();
+        assert!(
+            rewritten_str.contains("BDAY:1000-01-01"),
+            "bare year BDAY was corrupted into 1000-01-01: {rewritten_str}"
+        );
+        assert!(
+            rewritten_str.contains("X-EVOLUTION-ANNIVERSARY:1000-01-01"),
+            "bare year anniversary was corrupted into 1000-01-01: {rewritten_str}"
+        );
+        g_free(rewritten.cast());
+
+        e_contact_date_free(bday);
+        e_contact_date_free(anniv);
+        g_object_unref(contact.cast());
+    }
+}
+
+#[test]
 fn a_date_before_the_year_1000_is_written_back_as_the_year_1000() {
     // `e_contact_date_to_string()` CLAMPs each part into the range it can
     // print: the year to 1000..=9999, the month to 1..=12, the day to 1..=31.
@@ -2269,6 +2383,282 @@ fn editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other()
         );
 
         gobject_sys::g_object_unref(after.cast());
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
+
+#[test]
+fn test_unslotted_twitter_and_sip_attr_lists_vs_slotted_im_fields_in_eds() {
+    let vcard_str = "BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Vera User\r\n\
+N:User;Vera;;;\r\n\
+X-JABBER;TYPE=HOME:vera@jabber.example\r\n\
+X-AIM;TYPE=HOME:vera_aim\r\n\
+X-ICQ;TYPE=HOME:12345678\r\n\
+X-MSN;TYPE=HOME:vera@msn.com\r\n\
+X-YAHOO;TYPE=HOME:vera_yahoo\r\n\
+X-GADUGADU;TYPE=HOME:87654321\r\n\
+X-GROUPWISE;TYPE=HOME:vera_gw\r\n\
+X-GOOGLE-TALK;TYPE=HOME:vera@gmail.com\r\n\
+X-MATRIX;TYPE=HOME:@vera:matrix.example\r\n\
+X-SKYPE;TYPE=HOME:vera_skype\r\n\
+X-TWITTER:@vera_tw\r\n\
+X-SIP:sip:vera@example.com\r\n\
+END:VCARD\r\n";
+
+    unsafe {
+        let vcard_c = CString::new(vcard_str).unwrap();
+        let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
+        assert!(!contact.is_null());
+
+        // 1. Verify all 10 slotted IM fields are strings and hold the expected handles
+        let slotted_expected: &[(EContactField, &str)] = &[
+            (E_CONTACT_IM_JABBER_HOME_1, "vera@jabber.example"),
+            (E_CONTACT_IM_AIM_HOME_1, "vera_aim"),
+            (E_CONTACT_IM_ICQ_HOME_1, "12345678"),
+            (E_CONTACT_IM_MSN_HOME_1, "vera@msn.com"),
+            (E_CONTACT_IM_YAHOO_HOME_1, "vera_yahoo"),
+            (E_CONTACT_IM_GADUGADU_HOME_1, "87654321"),
+            (E_CONTACT_IM_GROUPWISE_HOME_1, "vera_gw"),
+            (E_CONTACT_IM_GOOGLE_TALK_HOME_1, "vera@gmail.com"),
+            (E_CONTACT_IM_MATRIX_HOME_1, "@vera:matrix.example"),
+            (E_CONTACT_IM_SKYPE_HOME_1, "vera_skype"),
+        ];
+
+        for &(field, expected_handle) in slotted_expected {
+            assert_eq!(
+                e_contact_field_is_string(field),
+                1,
+                "field {field} must be a string"
+            );
+            let val_ptr = e_contact_get_const(contact, field);
+            assert!(!val_ptr.is_null(), "field {field} must not be null");
+            assert_eq!(
+                CStr::from_ptr(val_ptr.cast()).to_str().unwrap(),
+                expected_handle
+            );
+        }
+
+        // 2. Verify X-TWITTER and X-SIP are EContactAttrList (not strings, no slots)
+        let attr_list_type = e_contact_attr_list_get_type();
+        assert_eq!(e_contact_field_is_string(E_CONTACT_IM_TWITTER), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_IM_TWITTER), attr_list_type);
+        assert_eq!(e_contact_field_is_string(E_CONTACT_SIP), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_SIP), attr_list_type);
+
+        unsafe extern "C" fn free_string_item(p: *mut std::ffi::c_void) {
+            unsafe {
+                glib_sys::g_free(p);
+            }
+        }
+
+        // Read Twitter attribute list
+        let twitter_list = e_contact_get(contact, E_CONTACT_IM_TWITTER) as *mut glib_sys::GList;
+        assert!(!twitter_list.is_null());
+        let twitter_val = CStr::from_ptr((*twitter_list).data as *const gchar)
+            .to_str()
+            .unwrap();
+        assert_eq!(twitter_val, "@vera_tw");
+        glib_sys::g_list_free_full(twitter_list, Some(free_string_item));
+
+        // Read SIP attribute list
+        let sip_list = e_contact_get(contact, E_CONTACT_SIP) as *mut glib_sys::GList;
+        assert!(!sip_list.is_null());
+        let sip_val = CStr::from_ptr((*sip_list).data as *const gchar)
+            .to_str()
+            .unwrap();
+        assert_eq!(sip_val, "sip:vera@example.com");
+        glib_sys::g_list_free_full(sip_list, Some(free_string_item));
+
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
+
+#[test]
+fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
+    unsafe {
+        // 1. Initial contact with no photo
+        let contact = e_contact_new();
+        assert!(!contact.is_null());
+        e_contact_set(
+            contact,
+            E_CONTACT_FULL_NAME,
+            c"Vera Oldenburg".as_ptr().cast(),
+        );
+
+        let photo_none = e_contact_get(contact, E_CONTACT_PHOTO) as *mut EContactPhoto;
+        assert!(photo_none.is_null());
+
+        // 2. Set URI photo (HTTPS)
+        let uri_photo = e_contact_photo_new();
+        (*uri_photo).type_ = E_CONTACT_PHOTO_TYPE_URI;
+        e_contact_photo_set_uri(uri_photo, c"https://example.com/avatar.jpg".as_ptr());
+        e_contact_set(contact, E_CONTACT_PHOTO, uri_photo.cast());
+        e_contact_photo_free(uri_photo);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;VALUE=uri:https://example.com/avatar.jpg"),
+            "URI photo must emit VALUE=uri without TYPE: {vcard_str}"
+        );
+        assert!(
+            !vcard_str.contains("PHOTO;TYPE="),
+            "URI photo must not state TYPE: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 3. Set URI photo (file:// local URI)
+        let file_uri_photo = e_contact_photo_new();
+        (*file_uri_photo).type_ = E_CONTACT_PHOTO_TYPE_URI;
+        e_contact_photo_set_uri(
+            file_uri_photo,
+            c"file:///home/runner/.photos/vera.png".as_ptr(),
+        );
+        e_contact_set(contact, E_CONTACT_PHOTO, file_uri_photo.cast());
+        e_contact_photo_free(file_uri_photo);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;VALUE=uri:file:///home/runner/.photos/vera.png"),
+            "file URI photo must emit VALUE=uri: {vcard_str}"
+        );
+        assert!(
+            !vcard_str.contains("https://example.com/avatar.jpg"),
+            "previous URI should be replaced"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 4. Replace URI photo with inlined binary photo (JPEG)
+        let inlined_photo = e_contact_photo_new();
+        assert_eq!((*inlined_photo).type_, E_CONTACT_PHOTO_TYPE_INLINED);
+        let sample_jpeg = b"\xFF\xD8\xFF\xE0sample_jpeg_binary_payload";
+        e_contact_photo_set_inlined(
+            inlined_photo,
+            sample_jpeg.as_ptr(),
+            sample_jpeg.len() as gsize,
+        );
+        e_contact_photo_set_mime_type(inlined_photo, c"image/jpeg".as_ptr());
+        e_contact_set(contact, E_CONTACT_PHOTO, inlined_photo.cast());
+        e_contact_photo_free(inlined_photo);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;TYPE=jpeg;ENCODING=b:")
+                || vcard_str.contains("PHOTO;ENCODING=b;TYPE=jpeg:"),
+            "inlined photo should replace URI and emit TYPE=jpeg;ENCODING=b: {vcard_str}"
+        );
+        assert!(
+            !vcard_str.contains("VALUE=uri"),
+            "inlined photo must not state VALUE=uri: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 5. Replace inlined JPEG with inlined PNG photo
+        let png_photo = e_contact_photo_new();
+        let sample_png = b"\x89PNG\r\n\x1a\nsample_png_binary_payload";
+        e_contact_photo_set_inlined(png_photo, sample_png.as_ptr(), sample_png.len() as gsize);
+        e_contact_photo_set_mime_type(png_photo, c"image/png".as_ptr());
+        e_contact_set(contact, E_CONTACT_PHOTO, png_photo.cast());
+        e_contact_photo_free(png_photo);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;TYPE=png;ENCODING=b:")
+                || vcard_str.contains("PHOTO;ENCODING=b;TYPE=png:")
+                || vcard_str.contains("PHOTO;ENCODING=b;TYPE=PNG:"),
+            "PNG photo should replace JPEG and emit TYPE=png: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 6. Inlined photo with NULL mime type in EDS -> writes TYPE="X-EVOLUTION-UNKNOWN" or no subtype
+        let unknown_photo = e_contact_photo_new();
+        let sample_raw = b"raw_unknown_image_bytes";
+        e_contact_photo_set_inlined(
+            unknown_photo,
+            sample_raw.as_ptr(),
+            sample_raw.len() as gsize,
+        );
+        // mime_type left as NULL
+        e_contact_set(contact, E_CONTACT_PHOTO, unknown_photo.cast());
+        e_contact_photo_free(unknown_photo);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;TYPE=\"X-EVOLUTION-UNKNOWN\";ENCODING=b:")
+                || vcard_str.contains("PHOTO;TYPE=X-EVOLUTION-UNKNOWN;ENCODING=b:")
+                || vcard_str.contains("PHOTO;ENCODING=b:"),
+            "NULL mime_type in EDS should emit X-EVOLUTION-UNKNOWN or bare ENCODING=b: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 7. Clear E_CONTACT_PHOTO (user removed picture in editor)
+        e_contact_set(contact, E_CONTACT_PHOTO, std::ptr::null());
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            !vcard_str.contains("PHOTO"),
+            "clearing photo must remove PHOTO line from vCard: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 8. Inbound vCard with PHOTO;VALUE=uri vs bare PHOTO:https://
+        let test_vcard = c"BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Test Multi Photo\r\n\
+PHOTO;VALUE=uri:https://example.com/explicit_uri.png\r\n\
+PHOTO;X-JMAP-KEY=m2;TYPE=jpeg;ENCODING=b:c2FtcGxl\r\n\
+LOGO;VALUE=uri:https://example.com/logo.png\r\n\
+END:VCARD\r\n";
+        let multi_contact = e_contact_new_from_vcard(test_vcard.as_ptr());
+        assert!(!multi_contact.is_null());
+
+        let read_photo = e_contact_get(multi_contact, E_CONTACT_PHOTO) as *mut EContactPhoto;
+        assert!(!read_photo.is_null());
+        assert_eq!((*read_photo).type_, E_CONTACT_PHOTO_TYPE_URI);
+        let read_uri = e_contact_photo_get_uri(read_photo);
+        assert_eq!(
+            CStr::from_ptr(read_uri).to_str().unwrap(),
+            "https://example.com/explicit_uri.png"
+        );
+        // Note: EDS e_contact_photo_get_mime_type asserts photo->type == E_CONTACT_PHOTO_TYPE_INLINED.
+        // URI photos in EDS do not have a mime_type field.
+        e_contact_photo_free(read_photo);
+
+        // Replacing first photo with URI on multi-photo contact leaves second photo and logo intact
+        let new_uri_obj = e_contact_photo_new();
+        (*new_uri_obj).type_ = E_CONTACT_PHOTO_TYPE_URI;
+        e_contact_photo_set_uri(
+            new_uri_obj,
+            c"https://example.com/replaced_avatar.jpg".as_ptr(),
+        );
+        e_contact_set(multi_contact, E_CONTACT_PHOTO, new_uri_obj.cast());
+        e_contact_photo_free(new_uri_obj);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(multi_contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;VALUE=uri:https://example.com/replaced_avatar.jpg"),
+            "first photo replaced with new URI: {vcard_str}"
+        );
+        assert!(
+            vcard_str.contains("PHOTO;X-JMAP-KEY=m2;TYPE=jpeg;ENCODING=b:c2FtcGxl")
+                || vcard_str.contains("PHOTO;ENCODING=b;TYPE=jpeg;X-JMAP-KEY=m2:c2FtcGxl"),
+            "second photo preserved: {vcard_str}"
+        );
+        assert!(
+            vcard_str.contains("LOGO;VALUE=uri:https://example.com/logo.png"),
+            "logo preserved: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        gobject_sys::g_object_unref(multi_contact.cast());
         gobject_sys::g_object_unref(contact.cast());
     }
 }

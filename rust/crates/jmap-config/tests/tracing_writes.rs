@@ -371,6 +371,10 @@ fn prepare_authentication_uri_query_and_token_form_trace_structured_fields() {
         });
 
         assert!(
+            has(&captured_refresh, Level::DEBUG, "has_refresh_token", "true"),
+            "expected has_refresh_token=true in refresh token form preparation, got {captured_refresh:?}"
+        );
+        assert!(
             captured_refresh
                 .iter()
                 .any(|(lvl, name, _)| *lvl == Level::DEBUG && name == "account_uid"),

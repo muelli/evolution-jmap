@@ -16928,6 +16928,49 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_categories_count: 3,
             unmapped_vendor_properties_dropped_on_export: &[],
         },
+        RealExporterTestCase {
+            name: "Mozilla Thunderbird Export (vCard 4.0 with PREF, URI Tel & Multiline Labels)",
+            fixture_file: "thunderbird_vcard40_export.vcf",
+            exporter_name: "Mozilla Thunderbird",
+            expected_full_name: "Dr. Arthur Philip Dent",
+            expected_surname: "Dent",
+            expected_given_name: "Arthur",
+            expected_email_count: 2,
+            expected_phone_count: 4, // Cell, Work, Home, WorkFAX
+            expected_address_count: 2,
+            expected_org_name: Some("British Broadcasting Corporation"),
+            expected_org_units_count: 2,
+            expected_title_count: 2,
+            expected_anniversaries_count: 2, // BDAY + Anniversary
+            expected_relations_count: 0,
+            expected_has_photo: true,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-MOZILLA-HTML",
+                "X-MOZILLA-PROPERTY",
+                "PRODID",
+                "REV",
+            ],
+        },
+        RealExporterTestCase {
+            name: "SOGo & Radicale CardDAV Export (vCard 3.0 with EDS Relations & Slotted Services)",
+            fixture_file: "sogo_carddav_export.vcf",
+            exporter_name: "SOGo / Radicale CardDAV",
+            expected_full_name: "Prof. Hélène Renée Dubois-Martin",
+            expected_surname: "Dubois-Martin",
+            expected_given_name: "Hélène",
+            expected_email_count: 2,
+            expected_phone_count: 4, // Work, Cell, Home, Fax
+            expected_address_count: 2,
+            expected_org_name: Some("Sorbonne Université"),
+            expected_org_units_count: 2,
+            expected_title_count: 2,
+            expected_anniversaries_count: 2, // BDAY + Anniversary
+            expected_relations_count: 3,     // Spouse, Manager, Assistant
+            expected_has_photo: true,
+            expected_categories_count: 3,
+            unmapped_vendor_properties_dropped_on_export: &["X-RADICALE-NAME", "PRODID", "REV"],
+        },
     ];
 
     for case in &corpus {
@@ -17648,6 +17691,424 @@ fn real_exporter_fixture_evolution_native_vcard30_detailed_roundtrip() {
 }
 
 #[test]
+fn real_exporter_fixture_thunderbird_vcard40_detailed_roundtrip() {
+    let vcard_text = read_fixture("thunderbird_vcard40_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse Thunderbird vCard 4.0 fixture");
+
+    // 1. Verify clean extra map
+    assert!(
+        card.extra.is_empty(),
+        "card.extra must be empty, got: {:?}",
+        card.extra
+    );
+
+    // 2. Validate parsed name & nickname
+    let name = card.name.as_ref().unwrap();
+    assert_eq!(name.full.as_deref(), Some("Dr. Arthur Philip Dent"));
+    let nicknames = card.nicknames.as_ref().unwrap();
+    assert!(nicknames.values().any(|n| n.name == "Dentarthurdent"));
+
+    // 3. Validate email preferences and contexts
+    let emails = card.emails.as_ref().unwrap();
+    let home_email = emails
+        .values()
+        .find(|e| e.address == "arthur.dent@earth.example")
+        .expect("home email");
+    assert_eq!(home_email.pref, Some(1));
+    assert_eq!(
+        home_email.contexts.as_ref().and_then(|c| c.get("private")),
+        Some(&serde_json::json!(true))
+    );
+
+    let work_email = emails
+        .values()
+        .find(|e| e.address == "a.dent@radio4.bbc.example")
+        .expect("work email");
+    assert_eq!(
+        work_email.contexts.as_ref().and_then(|c| c.get("work")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 4. Validate URI tel formatting and telephony features
+    let phones = card.phones.as_ref().unwrap();
+    let cell_phone = phones
+        .values()
+        .find(|p| p.number == "+44-20-7946-0123" || p.number.contains("7946-0123"))
+        .expect("cell phone");
+    assert_eq!(
+        cell_phone.features.as_ref().and_then(|f| f.get("mobile")),
+        Some(&serde_json::json!(true))
+    );
+
+    let fax_phone = phones
+        .values()
+        .find(|p| p.number == "+44 20 7946 0988" || p.number.contains("7946 0988"))
+        .expect("fax phone");
+    assert_eq!(
+        fax_phone.features.as_ref().and_then(|f| f.get("fax")),
+        Some(&serde_json::json!(true))
+    );
+
+    // 5. Validate multiline address label extraction
+    let addresses = card.addresses.as_ref().unwrap();
+    let work_adr = addresses
+        .values()
+        .find(|a| a.contexts.as_ref().and_then(|c| c.get("work")) == Some(&serde_json::json!(true)))
+        .expect("work adr");
+    assert!(work_adr.full.as_ref().unwrap().contains("Portland Place"));
+
+    // 6. Validate organization units hierarchy
+    let orgs = card.organizations.as_ref().unwrap();
+    let org = orgs.values().next().unwrap();
+    assert_eq!(
+        org.name.as_deref(),
+        Some("British Broadcasting Corporation")
+    );
+    let units = org.units.as_ref().unwrap();
+    assert_eq!(units.len(), 2);
+    assert_eq!(units[0].name, "Radio Drama");
+    assert_eq!(units[1].name, "Light Entertainment");
+
+    // 7. Validate anniversaries (BDAY and ANNIVERSARY)
+    let anniversaries = card.anniversaries.as_ref().unwrap();
+    let bday = anniversaries
+        .values()
+        .find(|a| a.kind == "birth")
+        .expect("bday");
+    assert_eq!(
+        bday.date,
+        Some(serde_json::json!({"@type": "PartialDate", "year": 1978, "month": 3, "day": 8}))
+    );
+    let wedding = anniversaries
+        .values()
+        .find(|a| a.kind == "wedding")
+        .expect("wedding");
+    assert_eq!(
+        wedding.date,
+        Some(serde_json::json!({"@type": "PartialDate", "year": 2005, "month": 4, "day": 28}))
+    );
+
+    // 8. Validate inline photo data URI
+    let media = card.media.as_ref().unwrap();
+    let photo = media
+        .values()
+        .find(|m| m.kind.as_deref() == Some("photo"))
+        .expect("photo");
+    assert!(photo.uri.starts_with("data:image/png;base64,"));
+
+    // 9. Export to canonical vCard 3.0 and verify vendor property isolation
+    let export1 = card_to_vcard(&card);
+    assert!(export1.starts_with("BEGIN:VCARD\r\nVERSION:3.0\r\n"));
+    assert!(!export1.contains("X-MOZILLA-HTML"));
+    assert!(!export1.contains("X-MOZILLA-PROPERTY"));
+    assert!(!export1.contains("PRODID"));
+    assert!(!export1.contains("REV"));
+
+    // 10. Multi-pass round-trip fixpoint
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_sogo_carddav_detailed_roundtrip() {
+    let vcard_text = read_fixture("sogo_carddav_export.vcf");
+    let card = vcard_to_card(&vcard_text).expect("parse SOGo CardDAV fixture");
+
+    // 1. Verify clean extra map
+    assert!(
+        card.extra.is_empty(),
+        "card.extra must be empty, got: {:?}",
+        card.extra
+    );
+
+    // 2. Validate French Unicode names and components
+    let name = card.name.as_ref().unwrap();
+    assert_eq!(
+        name.full.as_deref(),
+        Some("Prof. Hélène Renée Dubois-Martin")
+    );
+    let surname = name
+        .components
+        .as_ref()
+        .and_then(|c| c.iter().find(|comp| comp.kind == "surname"))
+        .unwrap();
+    assert_eq!(surname.value, "Dubois-Martin");
+
+    // 3. Validate EDS relations preserved losslessly
+    let relations = card.related_to.as_ref().unwrap();
+    assert!(states_spouse(
+        "Jean-Pierre Martin",
+        &relations["Jean-Pierre Martin"]
+    ));
+    assert!(states_manager(
+        "Prof. Marcel Perrin",
+        &relations["Prof. Marcel Perrin"]
+    ));
+    assert!(states_assistant(
+        "Chantal Petit",
+        &relations["Chantal Petit"]
+    ));
+
+    // 4. Validate online services (Jabber and Matrix)
+    let services = card.online_services.as_ref().unwrap();
+    assert!(
+        services
+            .values()
+            .any(|s| s.service.as_deref() == Some("Jabber")
+                && s.user.as_deref() == Some("hdubois@jabber.sorbonne-universite.example"))
+    );
+    assert!(
+        services
+            .values()
+            .any(|s| s.service.as_deref() == Some("Matrix")
+                && s.user.as_deref() == Some("hdubois:matrix.org"))
+    );
+
+    // 5. Validate multiline notes
+    let notes = card.notes.as_ref().unwrap();
+    let note_text = &notes.values().next().unwrap().note;
+    assert!(note_text.contains("synchronisation JMAP/CalDAV"));
+
+    // 6. Export and verify clean vendor dropping
+    let export1 = card_to_vcard(&card);
+    assert!(!export1.contains("X-RADICALE-NAME"));
+    assert!(!export1.contains("PRODID"));
+    assert!(!export1.contains("REV"));
+    assert!(export1.contains("X-EVOLUTION-SPOUSE:Jean-Pierre Martin"));
+    assert!(export1.contains("X-EVOLUTION-MANAGER:Prof. Marcel Perrin"));
+    assert!(export1.contains("X-EVOLUTION-ASSISTANT:Chantal Petit"));
+
+    // 7. Multi-pass round-trip fixpoint
+    let card2 = vcard_to_card(&export1).expect("parse export1");
+    let export2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&export2).expect("parse export2");
+    let export3 = card_to_vcard(&card3);
+
+    assert_eq!(export2, export3, "Export₂ == Export₃");
+    assert_eq!(card2, card3, "Card₂ == Card₃");
+}
+
+#[test]
+fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
+    let mut name_extra = BTreeMap::new();
+    name_extra.insert("fileAs".to_string(), json!("SelfConsistency, Test"));
+
+    let card = ContactCard {
+        id: Some("C-SELF-CONSISTENCY-1".into()),
+        name: Some(Name {
+            full: Some("Dr. Test SelfConsistency".into()),
+            components: Some(vec![
+                NameComponent::new("prefix", "Dr."),
+                NameComponent::new("given", "Test"),
+                NameComponent::new("surname", "SelfConsistency"),
+            ]),
+            extra: name_extra,
+        }),
+        nicknames: Some([("n1".to_string(), Nickname { name: "SelfTest".into(), extra: BTreeMap::new() })].into()),
+        emails: Some([
+            ("e1".to_string(), ContactEmail {
+                address: "selftest.work@example.com".into(),
+                contexts: Some(json!({"work": true})),
+                pref: Some(1),
+                extra: BTreeMap::new(),
+            }),
+            ("e2".to_string(), ContactEmail {
+                address: "selftest.home@example.org".into(),
+                contexts: Some(json!({"private": true})),
+                pref: None,
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        phones: Some([
+            ("p1".to_string(), ContactPhone {
+                number: "+1 555 0100".into(),
+                features: Some(json!({"voice": true, "mobile": true})),
+                contexts: Some(json!({"work": true})),
+                pref: Some(1),
+                extra: BTreeMap::new(),
+            }),
+            ("p2".to_string(), ContactPhone {
+                number: "+1 555 0199".into(),
+                features: Some(json!({"fax": true})),
+                contexts: Some(json!({"work": true})),
+                pref: None,
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        addresses: Some([
+            ("a1".to_string(), Address {
+                components: Some(vec![
+                    AddressComponent::new("name", "100 Innovation Way"),
+                    AddressComponent::new("locality", "Cambridge"),
+                    AddressComponent::new("region", "MA"),
+                    AddressComponent::new("postcode", "02139"),
+                    AddressComponent::new("country", "USA"),
+                ]),
+                contexts: Some(json!({"work": true})),
+                full: Some("100 Innovation Way, Cambridge, MA 02139, USA".into()),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        organizations: Some([
+            ("o1".to_string(), Organization {
+                name: Some("SelfConsistency Labs Inc.".into()),
+                units: Some(vec![OrgUnit::new("Core Engine"), OrgUnit::new("Protocols")]),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        titles: Some([
+            ("t1".to_string(), Title {
+                name: "Chief Architect".into(),
+                kind: Some("title".into()),
+                extra: BTreeMap::new(),
+            }),
+            ("t2".to_string(), Title {
+                name: "Principal Investigator".into(),
+                kind: Some("role".into()),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        anniversaries: Some([
+            ("bday".to_string(), Anniversary {
+                kind: "birth".into(),
+                date: Some(json!({"@type": "PartialDate", "year": 1980, "month": 5, "day": 20})),
+                extra: BTreeMap::new(),
+            }),
+            ("anniv".to_string(), Anniversary {
+                kind: "wedding".into(),
+                date: Some(json!({"@type": "PartialDate", "year": 2008, "month": 10, "day": 12})),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        related_to: Some([
+            ("Spouse Partner".to_string(), Relation {
+                relation: Some([("spouse".to_string(), json!(true))].into()),
+                extra: BTreeMap::new(),
+            }),
+            ("Manager Leader".to_string(), Relation {
+                relation: Some([("manager".to_string(), json!(true))].into()),
+                extra: BTreeMap::new(),
+            }),
+            ("Assistant Helper".to_string(), Relation {
+                relation: Some([("assistant".to_string(), json!(true))].into()),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        online_services: Some([
+            ("s1".to_string(), OnlineService {
+                service: Some("Jabber".into()),
+                user: Some("selftest@jabber.org".into()),
+                uri: None,
+                extra: BTreeMap::new(),
+            }),
+            ("s2".to_string(), OnlineService {
+                service: Some("Matrix".into()),
+                user: Some("selftest:matrix.org".into()),
+                uri: None,
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        links: Some([
+            ("l1".to_string(), Link {
+                uri: "https://blog.selftest.example".into(),
+                kind: Some("blog".into()),
+                extra: BTreeMap::new(),
+            }),
+            ("l2".to_string(), Link {
+                uri: "https://video.selftest.example/watch".into(),
+                kind: Some("video".into()),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        notes: Some([
+            ("n1".to_string(), Note {
+                note: "Self-consistency verification note.\nLine 2 of multi-line note.".into(),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        keywords: Some([
+            ("Testing".into(), json!(true)),
+            ("SelfConsistency".into(), json!(true)),
+            ("Evolution".into(), json!(true)),
+        ].into()),
+        media: Some([
+            ("m1".to_string(), Media {
+                kind: Some("photo".into()),
+                uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into(),
+                media_type: Some("image/png".into()),
+                extra: BTreeMap::new(),
+            }),
+        ].into()),
+        ..ContactCard::default()
+    };
+
+    // 1. Export to vCard 3.0
+    let vcard1 = card_to_vcard(&card);
+
+    // 2. Re-import from generated vCard
+    let card2 = vcard_to_card(&vcard1).expect("re-import generated vCard");
+
+    // 3. Export second pass
+    let vcard2 = card_to_vcard(&card2);
+
+    // 4. Assert exact round-trip self-consistency (Pass 1 == Pass 2)
+    assert_eq!(
+        vcard1, vcard2,
+        "Self-consistency: emitted vCard must match across passes"
+    );
+
+    // 5. Re-import second pass
+    let card3 = vcard_to_card(&vcard2).expect("re-import second pass");
+    assert_eq!(
+        card2, card3,
+        "Self-consistency: re-imported Card must match across passes"
+    );
+
+    // 6. Verify all mapped domains are preserved losslessly
+    assert_eq!(
+        card2.name.as_ref().unwrap().full,
+        card.name.as_ref().unwrap().full
+    );
+    assert_eq!(
+        card2.emails.as_ref().unwrap().len(),
+        card.emails.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.phones.as_ref().unwrap().len(),
+        card.phones.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.addresses.as_ref().unwrap().len(),
+        card.addresses.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.organizations.as_ref().unwrap().len(),
+        card.organizations.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.anniversaries.as_ref().unwrap().len(),
+        card.anniversaries.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.related_to.as_ref().unwrap().len(),
+        card.related_to.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.online_services.as_ref().unwrap().len(),
+        card.online_services.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        card2.keywords.as_ref().unwrap().len(),
+        card.keywords.as_ref().unwrap().len()
+    );
+}
+
+#[test]
 fn hyphenated_dates_bday_and_anniversary_variations_fidelity() {
     // 1. Standard BDAY extended format (RFC 2426 §3.1.5)
     let vcard_bday_extended = concat!(
@@ -18152,4 +18613,2326 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
         "Export₂ == Export₃ (v4 normalization)"
     );
     assert_eq!(card2_v4, card3_v4, "Card₂ == Card₃ (v4 normalization)");
+}
+
+#[test]
+fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip() {
+    // Characterizes multi-ORG, multi-TITLE, and multi-ROLE configurations:
+    // 1. Multiple organizations (o1, o2, o3) with distinct unit hierarchies.
+    // 2. Multiple titles and roles associated with organizations via organizationId.
+    // 3. Lossless roundtrip through standard vCard 3.0 lines with X-JMAP-KEY parameter tracking.
+    let card = ContactCard {
+        organizations: Some(
+            [
+                (
+                    "o1".to_owned(),
+                    Organization {
+                        name: Some("Acme Corporation".to_owned()),
+                        units: Some(vec![
+                            OrgUnit::new("Engineering"),
+                            OrgUnit::new("Hardware Division"),
+                            OrgUnit::new("Optics Lab"),
+                            OrgUnit::new("Lenses Team"),
+                        ]),
+                        ..Organization::default()
+                    },
+                ),
+                (
+                    "o2".to_owned(),
+                    Organization {
+                        name: Some("Starlight Research Foundation".to_owned()),
+                        units: Some(vec![
+                            OrgUnit::new("Astrophysics"),
+                            OrgUnit::new("Observatories Network"),
+                        ]),
+                        ..Organization::default()
+                    },
+                ),
+                (
+                    "o3".to_owned(),
+                    Organization {
+                        name: Some("Quantum Innovations GmbH".to_owned()),
+                        units: Some(vec![OrgUnit::new("Theoretical Physics")]),
+                        ..Organization::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        titles: Some(
+            [
+                (
+                    "t1".to_owned(),
+                    Title {
+                        name: "Principal Optical Engineer".to_owned(),
+                        kind: None, // default kind is "title"
+                        extra: [("organizationId".to_string(), json!("o1"))].into(),
+                    },
+                ),
+                (
+                    "t2".to_owned(),
+                    Title {
+                        name: "Senior Research Fellow".to_owned(),
+                        kind: Some("title".to_owned()),
+                        extra: [("organizationId".to_string(), json!("o2"))].into(),
+                    },
+                ),
+                (
+                    "r1".to_owned(),
+                    Title {
+                        name: "Chief Architect & Science Lead".to_owned(),
+                        kind: Some("role".to_owned()),
+                        extra: [("organizationId".to_string(), json!("o1"))].into(),
+                    },
+                ),
+                (
+                    "r2".to_owned(),
+                    Title {
+                        name: "Advisory Council Member".to_owned(),
+                        kind: Some("role".to_owned()),
+                        extra: [("organizationId".to_string(), json!("o2"))].into(),
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    let unfolded_vcard = unfolded(&vcard);
+
+    // Verify all 3 ORG lines are emitted with X-JMAP-KEY parameters
+    assert!(
+        unfolded_vcard.contains("ORG;X-JMAP-KEY=o1:Acme Corporation;Engineering;Hardware Division;Optics Lab;Lenses Team\r\n"),
+        "Missing o1 ORG line in:\n{unfolded_vcard}"
+    );
+    assert!(
+        unfolded_vcard.contains(
+            "ORG;X-JMAP-KEY=o2:Starlight Research Foundation;Astrophysics;Observatories Network\r\n"
+        ),
+        "Missing o2 ORG line in:\n{unfolded_vcard}"
+    );
+    assert!(
+        unfolded_vcard
+            .contains("ORG;X-JMAP-KEY=o3:Quantum Innovations GmbH;Theoretical Physics\r\n"),
+        "Missing o3 ORG line in:\n{unfolded_vcard}"
+    );
+
+    // Verify all 2 TITLE and 2 ROLE lines are emitted with X-JMAP-KEY parameters
+    assert!(
+        unfolded_vcard.contains("TITLE;X-JMAP-KEY=t1:Principal Optical Engineer\r\n"),
+        "Missing t1 TITLE line in:\n{unfolded_vcard}"
+    );
+    assert!(
+        unfolded_vcard.contains("TITLE;X-JMAP-KEY=t2:Senior Research Fellow\r\n"),
+        "Missing t2 TITLE line in:\n{unfolded_vcard}"
+    );
+    assert!(
+        unfolded_vcard.contains("ROLE;X-JMAP-KEY=r1:Chief Architect & Science Lead\r\n"),
+        "Missing r1 ROLE line in:\n{unfolded_vcard}"
+    );
+    assert!(
+        unfolded_vcard.contains("ROLE;X-JMAP-KEY=r2:Advisory Council Member\r\n"),
+        "Missing r2 ROLE line in:\n{unfolded_vcard}"
+    );
+
+    // Verify lossless roundtrip of organizations
+    let back = vcard_to_card(&vcard).expect("parse emitted multi-org vcard");
+    assert_eq!(back.organizations, card.organizations);
+
+    // Verify mapped titles and roles roundtrip cleanly (unmodeled organizationId in extra is omitted on wire)
+    let back_titles = back.titles.as_ref().expect("titles");
+    assert_eq!(back_titles.len(), 4);
+    assert_eq!(back_titles["t1"].name, "Principal Optical Engineer");
+    assert_eq!(back_titles["t1"].kind, None);
+    assert_eq!(back_titles["t2"].name, "Senior Research Fellow");
+    assert_eq!(back_titles["t2"].kind, None); // TITLE line maps to default kind None
+    assert_eq!(back_titles["r1"].name, "Chief Architect & Science Lead");
+    assert_eq!(back_titles["r1"].kind, Some("role".to_owned()));
+    assert_eq!(back_titles["r2"].name, "Advisory Council Member");
+    assert_eq!(back_titles["r2"].kind, Some("role".to_owned()));
+
+    // Multi-pass roundtrip fixpoint check
+    let vcard2 = card_to_vcard(&back);
+    let card3 = vcard_to_card(&vcard2).expect("parse pass 2");
+    let vcard3 = card_to_vcard(&card3);
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint stability on multi-org/title"
+    );
+    assert_eq!(
+        back, card3,
+        "JSContact fixpoint stability on multi-org/title"
+    );
+}
+
+#[test]
+fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity() {
+    // Characterizes Evolution's contact editor UI fields vs RFC 2426 §3.5.5 ORG line:
+    // - Evolution Contact Editor UI presents 3 discrete text entries in the "Job" section:
+    //   1. "Company" -> maps to E_CONTACT_ORG (Component 1 of ORG) -> JSContact Organization.name
+    //   2. "Department" -> maps to E_CONTACT_ORG_UNIT (Component 2 of ORG) -> JSContact Organization.units[0]
+    //   3. "Office" -> maps to E_CONTACT_OFFICE (Component 3 of ORG) -> JSContact Organization.units[1]
+    // - 4th and subsequent components in ORG lines (e.g. Component 4 = "Lenses", Component 5 = "Pod 7")
+    //   are unrepresented in Evolution's 3-field UI, but are preserved in full by jmap-vcard
+    //   in Organization.units[2..] without truncation or data loss.
+
+    // 1. Single component (Company only)
+    let c1 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Megacorp Inc".to_owned()),
+                    units: None,
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let v1 = card_to_vcard(&c1);
+    assert_eq!(line(&v1, "ORG"), "ORG;X-JMAP-KEY=o1:Megacorp Inc");
+    assert_eq!(
+        vcard_to_card(&v1).expect("p1").organizations,
+        c1.organizations
+    );
+
+    // 2. Two components (Company + Department / E_CONTACT_ORG_UNIT)
+    let c2 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Megacorp Inc".to_owned()),
+                    units: Some(vec![OrgUnit::new("Aerospace")]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let v2 = card_to_vcard(&c2);
+    assert_eq!(line(&v2, "ORG"), "ORG;X-JMAP-KEY=o1:Megacorp Inc;Aerospace");
+    assert_eq!(
+        vcard_to_card(&v2).expect("p2").organizations,
+        c2.organizations
+    );
+
+    // 3. Three components (Company + Department + Office / E_CONTACT_OFFICE)
+    let c3 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Megacorp Inc".to_owned()),
+                    units: Some(vec![OrgUnit::new("Aerospace"), OrgUnit::new("Building 4B")]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let v3 = card_to_vcard(&c3);
+    assert_eq!(
+        line(&v3, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Megacorp Inc;Aerospace;Building 4B"
+    );
+    assert_eq!(
+        vcard_to_card(&v3).expect("p3").organizations,
+        c3.organizations
+    );
+
+    // 4. Four components (Company + Department + Office + 4th Unit / unmapped in EDS UI)
+    let c4 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Megacorp Inc".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("Aerospace"),
+                        OrgUnit::new("Building 4B"),
+                        OrgUnit::new("Propulsion Lab"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let v4 = card_to_vcard(&c4);
+    assert_eq!(
+        line(&v4, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Megacorp Inc;Aerospace;Building 4B;Propulsion Lab"
+    );
+    assert_eq!(
+        vcard_to_card(&v4).expect("p4").organizations,
+        c4.organizations
+    );
+
+    // 5. Six components (Company + 5 units extending deep into organizational hierarchy)
+    let c6 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Megacorp Inc".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("Aerospace"),
+                        OrgUnit::new("Building 4B"),
+                        OrgUnit::new("Propulsion Lab"),
+                        OrgUnit::new("Ion Thruster Project"),
+                        OrgUnit::new("Sub-team Alpha"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let v6 = card_to_vcard(&c6);
+    assert_eq!(
+        line(&unfolded(&v6), "ORG"),
+        "ORG;X-JMAP-KEY=o1:Megacorp Inc;Aerospace;Building 4B;Propulsion Lab;Ion Thruster Project;Sub-team Alpha"
+    );
+    assert_eq!(
+        vcard_to_card(&v6).expect("p6").organizations,
+        c6.organizations
+    );
+
+    // 6. Inbound unkeyed vCard with 4 components preserves all 4 parts
+    let raw_unkeyed = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Tester\r\nORG:Globex Corp;Robotics;Bay 12;Actuators\r\nEND:VCARD\r\n";
+    let from_raw = vcard_to_card(raw_unkeyed).expect("parse raw 4-component org");
+    let orgs = from_raw.organizations.expect("orgs");
+    assert_eq!(orgs["o1"].name.as_deref(), Some("Globex Corp"));
+    assert_eq!(
+        orgs["o1"].units.as_deref(),
+        Some(
+            [
+                OrgUnit::new("Robotics"),
+                OrgUnit::new("Bay 12"),
+                OrgUnit::new("Actuators"),
+            ]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
+fn multi_component_org_special_characters_escaping_and_fixpoint() {
+    // Tests special characters escaping (semicolons, commas, backslashes, Unicode) inside ORG components
+    let card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Müller & Söhne; GmbH, Berlin \\ [HQ]".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("R&D; Advanced Division, Sector 7"),
+                        OrgUnit::new("Office 42; Building B \\ Room 101"),
+                        OrgUnit::new("Deep Tech / Quantum \\ Sub-unit, Team 4"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    let card2 = vcard_to_card(&vcard1).expect("parse pass 1");
+    let vcard2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&vcard2).expect("parse pass 2");
+    let vcard3 = card_to_vcard(&card3);
+
+    // Verify all special characters survived verbatim without double-escaping
+    let org2 = &card2.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(
+        org2.name.as_deref(),
+        Some("Müller & Söhne; GmbH, Berlin \\ [HQ]")
+    );
+    let units2 = org2.units.as_ref().unwrap();
+    assert_eq!(units2[0].name, "R&D; Advanced Division, Sector 7");
+    assert_eq!(units2[1].name, "Office 42; Building B \\ Room 101");
+    assert_eq!(units2[2].name, "Deep Tech / Quantum \\ Sub-unit, Team 4");
+
+    // Multi-pass fixpoint stability
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint stability for escaped ORG components"
+    );
+    assert_eq!(
+        card2, card3,
+        "JSContact fixpoint stability for escaped ORG components"
+    );
+}
+
+#[test]
+fn multi_component_org_sparse_and_empty_slots_positioning() {
+    // Tests sparse component configurations:
+    // 1. Nameless organisation with 3 units: leading semicolon prevents units from sliding into name.
+    let nameless = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Nameless Org Test\r\n",
+        "ORG;X-JMAP-KEY=o1:;Engineering;Security;Office 9\r\n",
+        "END:VCARD\r\n"
+    );
+    let c_nameless = vcard_to_card(nameless).expect("parse nameless");
+    let o_nameless = &c_nameless.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(o_nameless.name, None);
+    assert_eq!(
+        o_nameless.units.as_deref(),
+        Some(
+            [
+                OrgUnit::new("Engineering"),
+                OrgUnit::new("Security"),
+                OrgUnit::new("Office 9")
+            ]
+            .as_slice()
+        )
+    );
+    let emitted_nameless = card_to_vcard(&c_nameless);
+    assert_eq!(
+        line(&emitted_nameless, "ORG"),
+        "ORG;X-JMAP-KEY=o1:;Engineering;Security;Office 9"
+    );
+
+    // 2. Empty intermediate unit (e.g. EDS clearing Department in place):
+    // Empty units are filtered on read, non-empty units remain ordered.
+    let empty_dept = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Empty Dept Test\r\n",
+        "ORG;X-JMAP-KEY=o1:Acme Corp;;Office 4B;Lenses\r\n",
+        "END:VCARD\r\n"
+    );
+    let c_empty_dept = vcard_to_card(empty_dept).expect("parse empty dept");
+    let o_empty_dept = &c_empty_dept.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(o_empty_dept.name.as_deref(), Some("Acme Corp"));
+    assert_eq!(
+        o_empty_dept.units.as_deref(),
+        Some([OrgUnit::new("Office 4B"), OrgUnit::new("Lenses")].as_slice())
+    );
+
+    // 3. Multi-pass fixpoint verification across sparse inputs
+    let v_pass1 = card_to_vcard(&c_empty_dept);
+    let c_pass2 = vcard_to_card(&v_pass1).expect("parse pass 1");
+    let v_pass2 = card_to_vcard(&c_pass2);
+    let c_pass3 = vcard_to_card(&v_pass2).expect("parse pass 2");
+    let v_pass3 = card_to_vcard(&c_pass3);
+
+    assert_eq!(v_pass2, v_pass3, "vCard fixpoint stability for sparse ORG");
+    assert_eq!(
+        c_pass2, c_pass3,
+        "JSContact fixpoint stability for sparse ORG"
+    );
+}
+
+#[test]
+fn tel_type_work_voice_fax_evolution_contact_editor_dual_field_aliasing_and_slot_narrowing() {
+    // Characterize RFC 2426 §3.3.1 `TEL;TYPE=WORK,VOICE,FAX` vs Evolution's Contact Editor UI:
+    // 1. Inbound parsing: A vCard carrying `TEL;TYPE=WORK,VOICE,FAX` extracts both `voice`
+    //    and `fax` into JSContact `features` and `work` into `contexts` without loss.
+    let inbound_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Office\r\n",
+        "TEL;TYPE=WORK,VOICE,FAX;X-JMAP-KEY=p1:+1 555 0100\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(inbound_vcard).expect("parse inbound vcard");
+    let phone = &card.phones.as_ref().unwrap()["p1"];
+    assert_eq!(phone.number, "+1 555 0100");
+    assert_eq!(phone.contexts, Some(json!({"work": true})));
+    assert_eq!(phone.features, Some(json!({"voice": true, "fax": true})));
+
+    // 2. Outbound emission & EDS contact editor protection:
+    // In EDS (libebook-contacts 3.52), `TEL;TYPE=WORK,VOICE,FAX` satisfies both
+    // `E_CONTACT_PHONE_BUSINESS` (`WORK`+`VOICE`) and `E_CONTACT_PHONE_BUSINESS_FAX` (`WORK`+`FAX`).
+    // When the user edits the business phone in Evolution, EDS rewrites the single shared TEL line,
+    // mutating the business fax too (verified in `eds-sys`' `editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other`).
+    // To prevent dual-field aliasing and cross-mutation, `jmap-vcard` narrows the emitted feature
+    // to `FAX` (`PHONE_FEATURES`: CELL > PAGER > FAX > VOICE > VIDEO).
+    let emitted_vcard = card_to_vcard(&card);
+    assert_eq!(
+        line(&emitted_vcard, "TEL"),
+        "TEL;X-JMAP-KEY=p1;TYPE=WORK,FAX:+1 555 0100"
+    );
+
+    // 3. Predicate fidelity & server sync safety:
+    // `states_phone_feature` returns true for the winning slot ("fax") and false for the suppressed
+    // slot ("voice"). This guarantees that sync diffing does not treat the absence of "voice" on
+    // the emitted vCard as a user deletion, preserving the server's multi-feature record intact.
+    assert!(states_phone_feature(phone.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(phone.features.as_ref(), "voice"));
+    assert!(!states_phone_feature(phone.features.as_ref(), "mobile"));
+    assert!(!states_phone_feature(phone.features.as_ref(), "pager"));
+    assert!(!states_phone_feature(phone.features.as_ref(), "video"));
+
+    // 4. vCard 2.1 bare parameter style and vCard 4.0 quoted parameter style inbound tolerance:
+    let vcard21 = concat!(
+        "BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Alice QP\r\n",
+        "TEL;WORK;VOICE;FAX;X-JMAP-KEY=p1:+1 555 0100\r\n",
+        "END:VCARD\r\n"
+    );
+    let card21 = vcard_to_card(vcard21).expect("parse vcard 2.1");
+    let p21 = &card21.phones.as_ref().unwrap()["p1"];
+    assert_eq!(p21.contexts, Some(json!({"work": true})));
+    assert_eq!(p21.features, Some(json!({"voice": true, "fax": true})));
+
+    let vcard40 = concat!(
+        "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Alice v4\r\n",
+        "TEL;TYPE=\"work,voice,fax\";X-JMAP-KEY=p1:+1 555 0100\r\n",
+        "END:VCARD\r\n"
+    );
+    let card40 = vcard_to_card(vcard40).expect("parse vcard 4.0");
+    let p40 = &card40.phones.as_ref().unwrap()["p1"];
+    assert_eq!(p40.contexts, Some(json!({"work": true})));
+    assert_eq!(p40.features, Some(json!({"voice": true, "fax": true})));
+}
+
+#[test]
+fn tel_type_home_voice_fax_and_unqualified_voice_fax_slot_narrowing_and_editor_visibility() {
+    // 1. Home / Private context with voice + fax:
+    // `TEL;TYPE=HOME,VOICE,FAX` narrows outbound to `HOME,FAX` to avoid aliasing `E_CONTACT_PHONE_HOME`
+    // and `E_CONTACT_PHONE_HOME_FAX` in Evolution's editor.
+    let mut phones = BTreeMap::new();
+    phones.insert(
+        "p1".to_owned(),
+        ContactPhone {
+            number: "+1 555 0200".to_owned(),
+            contexts: Some(json!({"private": true})),
+            features: Some(json!({"voice": true, "fax": true})),
+            ..ContactPhone::default()
+        },
+    );
+    let home_card = ContactCard {
+        phones: Some(phones),
+        ..ContactCard::default()
+    };
+    let home_vcard = card_to_vcard(&home_card);
+    assert_eq!(
+        line(&home_vcard, "TEL"),
+        "TEL;X-JMAP-KEY=p1;TYPE=HOME,FAX:+1 555 0200"
+    );
+    let home_p = &home_card.phones.as_ref().unwrap()["p1"];
+    assert!(states_phone_feature(home_p.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(home_p.features.as_ref(), "voice"));
+
+    // 2. Unqualified (no context) voice + fax:
+    // In EDS, bare `TEL;TYPE=VOICE,FAX` matches neither `E_CONTACT_PHONE_OTHER` (`VOICE`) nor
+    // `E_CONTACT_PHONE_OTHER_FAX` (`FAX`) because they are mutually exclusive in libebook (0 fields reached).
+    // `jmap-vcard` narrows to `FAX`, ensuring the number reaches Evolution's "Other Fax" field rather than being lost.
+    let mut bare_phones = BTreeMap::new();
+    bare_phones.insert(
+        "p2".to_owned(),
+        ContactPhone {
+            number: "+1 555 0300".to_owned(),
+            contexts: None,
+            features: Some(json!({"voice": true, "fax": true})),
+            ..ContactPhone::default()
+        },
+    );
+    let bare_card = ContactCard {
+        phones: Some(bare_phones),
+        ..ContactCard::default()
+    };
+    let bare_vcard = card_to_vcard(&bare_card);
+    assert_eq!(
+        line(&bare_vcard, "TEL"),
+        "TEL;X-JMAP-KEY=p2;TYPE=FAX:+1 555 0300"
+    );
+    let bare_p = &bare_card.phones.as_ref().unwrap()["p2"];
+    assert!(states_phone_feature(bare_p.features.as_ref(), "fax"));
+    assert!(!states_phone_feature(bare_p.features.as_ref(), "voice"));
+}
+
+#[test]
+fn tel_multi_feature_hierarchy_complete_pairwise_and_composite_matrix() {
+    // Tests all pairwise combinations and composite feature sets according to the
+    // precedence hierarchy: `CELL`/`MOBILE` (1) > `PAGER` (2) > `FAX` (3) > `VOICE` (4) > `VIDEO` (5).
+    let cases = [
+        // (features, expected_emitted_type, winning_feature, suppressed_features)
+        (
+            json!({"mobile": true, "voice": true}),
+            "CELL",
+            "mobile",
+            &["voice", "fax", "pager", "video"][..],
+        ),
+        (
+            json!({"mobile": true, "fax": true}),
+            "CELL",
+            "mobile",
+            &["voice", "fax", "pager", "video"][..],
+        ),
+        (
+            json!({"mobile": true, "pager": true}),
+            "CELL",
+            "mobile",
+            &["voice", "fax", "pager", "video"][..],
+        ),
+        (
+            json!({"mobile": true, "video": true}),
+            "CELL",
+            "mobile",
+            &["voice", "fax", "pager", "video"][..],
+        ),
+        (
+            json!({"pager": true, "voice": true}),
+            "PAGER",
+            "pager",
+            &["voice", "fax", "mobile", "video"][..],
+        ),
+        (
+            json!({"pager": true, "fax": true}),
+            "PAGER",
+            "pager",
+            &["voice", "fax", "mobile", "video"][..],
+        ),
+        (
+            json!({"pager": true, "video": true}),
+            "PAGER",
+            "pager",
+            &["voice", "fax", "mobile", "video"][..],
+        ),
+        (
+            json!({"fax": true, "voice": true}),
+            "FAX",
+            "fax",
+            &["voice", "pager", "mobile", "video"][..],
+        ),
+        (
+            json!({"fax": true, "video": true}),
+            "FAX",
+            "fax",
+            &["voice", "pager", "mobile", "video"][..],
+        ),
+        (
+            json!({"voice": true, "video": true}),
+            "VOICE",
+            "voice",
+            &["fax", "pager", "mobile", "video"][..],
+        ),
+        (
+            json!({"mobile": true, "pager": true, "fax": true, "voice": true, "video": true}),
+            "CELL",
+            "mobile",
+            &["pager", "fax", "voice", "video"][..],
+        ),
+        (
+            json!({"pager": true, "fax": true, "voice": true, "video": true}),
+            "PAGER",
+            "pager",
+            &["fax", "voice", "video"][..],
+        ),
+        (
+            json!({"fax": true, "voice": true, "video": true}),
+            "FAX",
+            "fax",
+            &["voice", "video"][..],
+        ),
+    ];
+
+    for (features_json, expected_type, winning_feature, suppressed) in cases {
+        let mut phones = BTreeMap::new();
+        phones.insert(
+            "p1".to_owned(),
+            ContactPhone {
+                number: "+1 555 0999".to_owned(),
+                contexts: None,
+                features: Some(features_json.clone()),
+                ..ContactPhone::default()
+            },
+        );
+        let card = ContactCard {
+            phones: Some(phones),
+            ..ContactCard::default()
+        };
+        let vcard = card_to_vcard(&card);
+        let expected_line = format!("TEL;X-JMAP-KEY=p1;TYPE={expected_type}:+1 555 0999");
+        assert_eq!(
+            line(&vcard, "TEL"),
+            expected_line,
+            "failed slot narrowing for features {features_json:?}"
+        );
+
+        let p = &card.phones.as_ref().unwrap()["p1"];
+        assert!(
+            states_phone_feature(p.features.as_ref(), winning_feature),
+            "winning feature {winning_feature} must be stated"
+        );
+        for &suppressed_feature in suppressed {
+            if features_json.get(suppressed_feature) == Some(&Value::Bool(true)) {
+                assert!(
+                    !states_phone_feature(p.features.as_ref(), suppressed_feature),
+                    "suppressed feature {suppressed_feature} must not be stated"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn tel_multi_feature_and_multi_context_roundtrip_fixpoint_stability() {
+    let mut phones = BTreeMap::new();
+    phones.insert(
+        "p1".to_owned(),
+        ContactPhone {
+            number: "+1 555 1001".to_owned(),
+            contexts: Some(json!({"work": true})),
+            features: Some(json!({"voice": true, "fax": true})),
+            pref: Some(1),
+            ..ContactPhone::default()
+        },
+    );
+    phones.insert(
+        "p2".to_owned(),
+        ContactPhone {
+            number: "+1 555 1002".to_owned(),
+            contexts: Some(json!({"private": true})),
+            features: Some(json!({"voice": true, "fax": true})),
+            pref: Some(2),
+            ..ContactPhone::default()
+        },
+    );
+    phones.insert(
+        "p3".to_owned(),
+        ContactPhone {
+            number: "+1 555 1003".to_owned(),
+            contexts: Some(json!({"work": true})),
+            features: Some(json!({"mobile": true, "pager": true})),
+            ..ContactPhone::default()
+        },
+    );
+    phones.insert(
+        "p4".to_owned(),
+        ContactPhone {
+            number: "+1 555 1004".to_owned(),
+            contexts: None,
+            features: Some(json!({"voice": true, "fax": true})),
+            ..ContactPhone::default()
+        },
+    );
+    let card1 = ContactCard {
+        phones: Some(phones),
+        ..ContactCard::default()
+    };
+
+    // Pass 1: JSContact -> vCard
+    let vcard1 = card_to_vcard(&card1);
+    // Pass 2: vCard -> JSContact -> vCard
+    let card2 = vcard_to_card(&vcard1).expect("parse pass 1");
+    let vcard2 = card_to_vcard(&card2);
+    // Pass 3: vCard -> JSContact -> vCard
+    let card3 = vcard_to_card(&vcard2).expect("parse pass 2");
+    let vcard3 = card_to_vcard(&card3);
+
+    // Multi-pass fixed-point stability
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint stability for multi-feature phones"
+    );
+    assert_eq!(
+        card2, card3,
+        "JSContact fixpoint stability for multi-feature phones"
+    );
+}
+
+#[test]
+fn im_uri_schemes_all_10_services_and_18_aliases_roundtrip_matrix() {
+    // Audit & characterization of all 10 slotted services and 18 accepted URI scheme aliases
+    // across both outbound emission (JSContact -> vCard 3.0) and inbound parsing (vCard 3.0 X- lines and vCard 4.0 IMPP):
+    let test_matrix: &[(&str, &str, &str, &str, &str)] = &[
+        // (canonical service, scheme alias, handle, expected wire X-property, vCard 4.0 expected service)
+        ("AIM", "aim", "alice_aim", "X-AIM", "AIM"),
+        ("AIM", "aol", "alice_aol", "X-AIM", "AIM"),
+        ("Gadu-Gadu", "gg", "87654321", "X-GADUGADU", "Gadu-Gadu"),
+        (
+            "Gadu-Gadu",
+            "gadugadu",
+            "87654321",
+            "X-GADUGADU",
+            "Gadu-Gadu",
+        ),
+        ("Gadu-Gadu", "gadu", "87654321", "X-GADUGADU", "Gadu-Gadu"),
+        (
+            "Google Talk",
+            "xmpp",
+            "alice.gtalk@gmail.com",
+            "X-GOOGLE-TALK",
+            "Jabber",
+        ), // Note: xmpp in IMPP defaults to Jabber
+        (
+            "Google Talk",
+            "gtalk",
+            "alice.gtalk@gmail.com",
+            "X-GOOGLE-TALK",
+            "Google Talk",
+        ),
+        (
+            "GroupWise",
+            "groupwise",
+            "alice_gw",
+            "X-GROUPWISE",
+            "GroupWise",
+        ),
+        (
+            "GroupWise",
+            "novell",
+            "alice_gw",
+            "X-GROUPWISE",
+            "GroupWise",
+        ),
+        ("ICQ", "icq", "12345678", "X-ICQ", "ICQ"),
+        ("Jabber", "xmpp", "alice@jabber.org", "X-JABBER", "Jabber"),
+        ("Jabber", "jabber", "alice@jabber.org", "X-JABBER", "Jabber"),
+        ("MSN", "msn", "alice@msn.com", "X-MSN", "MSN"),
+        ("MSN", "msnim", "alice@msn.com", "X-MSN", "MSN"),
+        (
+            "Matrix",
+            "matrix",
+            "@alice:matrix.org",
+            "X-MATRIX",
+            "Matrix",
+        ),
+        ("Skype", "skype", "alice_skype", "X-SKYPE", "Skype"),
+        ("Yahoo", "yahoo", "alice_yahoo", "X-YAHOO", "Yahoo"),
+        ("Yahoo", "ymsgr", "alice_yahoo", "X-YAHOO", "Yahoo"),
+    ];
+
+    for &(service, scheme, handle, expected_x_prop, v4_service) in test_matrix {
+        let uri_str = format!("{scheme}:{handle}");
+
+        // 1. Test outbound emission from JSContact with `uri`
+        let mut services = BTreeMap::new();
+        services.insert(
+            "s1".to_owned(),
+            OnlineService {
+                service: Some(service.to_owned()),
+                uri: Some(uri_str.clone()),
+                ..OnlineService::default()
+            },
+        );
+        let card_with_uri = ContactCard {
+            online_services: Some(services.clone()),
+            ..ContactCard::default()
+        };
+
+        assert!(
+            states_online_service(&services["s1"]),
+            "service {service} with uri {uri_str} must be stated"
+        );
+        assert_eq!(
+            online_service_handle(&services["s1"]),
+            Some(handle),
+            "handle extracted from uri {uri_str}"
+        );
+
+        let vcard_from_uri = card_to_vcard(&card_with_uri);
+        let expected_line = format!("{expected_x_prop};X-JMAP-KEY=s1;TYPE=HOME:{handle}");
+        assert_eq!(
+            line(&vcard_from_uri, expected_x_prop),
+            expected_line,
+            "failed outbound vCard 3.0 emission for {service} from uri {uri_str}"
+        );
+
+        // 2. Test outbound emission from JSContact with explicit `user`
+        let mut services_user = BTreeMap::new();
+        services_user.insert(
+            "s1".to_owned(),
+            OnlineService {
+                service: Some(service.to_owned()),
+                user: Some(handle.to_owned()),
+                ..OnlineService::default()
+            },
+        );
+        let card_with_user = ContactCard {
+            online_services: Some(services_user),
+            ..ContactCard::default()
+        };
+        let vcard_from_user = card_to_vcard(&card_with_user);
+        assert_eq!(
+            line(&vcard_from_user, expected_x_prop),
+            expected_line,
+            "failed outbound vCard 3.0 emission for {service} from user"
+        );
+
+        // 3. Test inbound parsing of vCard 3.0 wire format
+        let parsed_v3 = vcard_to_card(&vcard_from_uri).expect("parse vCard 3.0");
+        let parsed_v3_services = parsed_v3
+            .online_services
+            .as_ref()
+            .expect("online_services present");
+        assert_eq!(
+            parsed_v3_services["s1"].user.as_deref(),
+            Some(handle),
+            "parsed vCard 3.0 user handle mismatch for {service}"
+        );
+        assert_eq!(
+            parsed_v3_services["s1"].service.as_deref(),
+            Some(service),
+            "parsed vCard 3.0 service name mismatch for {service}"
+        );
+
+        // 4. Test inbound parsing of vCard 4.0 IMPP property
+        let vcard_v4 = format!(
+            "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Test User\r\nIMPP:{scheme}:{handle}\r\nEND:VCARD\r\n"
+        );
+        let parsed_v4 = vcard_to_card(&vcard_v4).expect("parse vCard 4.0 IMPP");
+        let parsed_v4_services = parsed_v4.online_services.expect("v4 online_services");
+        assert_eq!(
+            parsed_v4_services["s1"].user.as_deref(),
+            Some(handle),
+            "vCard 4.0 IMPP handle mismatch for scheme {scheme}"
+        );
+        assert_eq!(
+            parsed_v4_services["s1"].service.as_deref(),
+            Some(v4_service),
+            "vCard 4.0 IMPP service mismatch for scheme {scheme}"
+        );
+
+        // 5. Verify roundtrip fixpoint stability
+        let export2 = card_to_vcard(&parsed_v3);
+        let card3 = vcard_to_card(&export2).expect("re-parse");
+        let export3 = card_to_vcard(&card3);
+        assert_eq!(
+            export2, export3,
+            "vCard fixpoint stability for service {service} (scheme {scheme})"
+        );
+        assert_eq!(
+            parsed_v3, card3,
+            "JSContact fixpoint stability for service {service} (scheme {scheme})"
+        );
+    }
+}
+
+#[test]
+fn evolution_contact_editor_im_slotted_fields_vs_unslotted_twitter_and_sip_characterization() {
+    // Comprehensive characterization of Evolution's Contact Editor UI and EDS libebook-contacts
+    // instant-messaging fields: 60 slotted string fields vs unslotted EContactAttrList fields:
+
+    // 1. Card containing both slotted services (Jabber, Skype, Matrix) and unslotted/unmodeled ones (Twitter, SIP, Discord, Signal, Telegram)
+    let mut services = BTreeMap::new();
+    services.insert(
+        "s_jabber".to_owned(),
+        OnlineService {
+            service: Some("Jabber".to_owned()),
+            user: Some("vera@jabber.example".to_owned()),
+            extra: [("contexts".to_owned(), json!({"home": true}))].into(),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_skype".to_owned(),
+        OnlineService {
+            service: Some("Skype".to_owned()),
+            user: Some("vera_skype".to_owned()),
+            extra: [("contexts".to_owned(), json!({"work": true}))].into(),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_matrix".to_owned(),
+        OnlineService {
+            service: Some("Matrix".to_owned()),
+            user: Some("@vera:matrix.org".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_twitter".to_owned(),
+        OnlineService {
+            service: Some("Twitter".to_owned()),
+            user: Some("@vera_tw".to_owned()),
+            uri: Some("https://twitter.com/vera_tw".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_sip".to_owned(),
+        OnlineService {
+            service: Some("SIP".to_owned()),
+            uri: Some("sip:vera@example.com".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_discord".to_owned(),
+        OnlineService {
+            service: Some("Discord".to_owned()),
+            user: Some("vera#1234".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    services.insert(
+        "s_signal".to_owned(),
+        OnlineService {
+            service: Some("Signal".to_owned()),
+            user: Some("+1555123456".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+
+    let card = ContactCard {
+        online_services: Some(services),
+        ..ContactCard::default()
+    };
+
+    // 2. Outbound serialization emits ONLY the 10 slotted services with Evolution UI field representation
+    let vcard = card_to_vcard(&card);
+    assert!(
+        vcard.contains("X-JABBER;X-JMAP-KEY=s_jabber;TYPE=HOME:vera@jabber.example\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("X-SKYPE;X-JMAP-KEY=s_skype;TYPE=WORK:vera_skype\r\n"),
+        "{vcard}"
+    );
+    assert!(
+        vcard.contains("X-MATRIX;X-JMAP-KEY=s_matrix;TYPE=HOME:@vera:matrix.org\r\n"),
+        "{vcard}"
+    );
+
+    // Verify unslotted and unmodeled services are NEVER emitted on the wire
+    assert!(!vcard.contains("X-TWITTER"), "{vcard}");
+    assert!(!vcard.contains("X-SIP"), "{vcard}");
+    assert!(!vcard.contains("X-DISCORD"), "{vcard}");
+    assert!(!vcard.contains("X-SIGNAL"), "{vcard}");
+    assert!(!vcard.contains("twitter"), "{vcard}");
+    assert!(!vcard.contains("sip:"), "{vcard}");
+
+    // 3. Sync Engine Safety Predicate: states_online_service returns false for unslotted/unmodeled services
+    let s_map = card.online_services.as_ref().unwrap();
+    assert!(states_online_service(&s_map["s_jabber"]));
+    assert!(states_online_service(&s_map["s_skype"]));
+    assert!(states_online_service(&s_map["s_matrix"]));
+    assert!(
+        !states_online_service(&s_map["s_twitter"]),
+        "Twitter is unslotted and must not be stated"
+    );
+    assert!(
+        !states_online_service(&s_map["s_sip"]),
+        "SIP is unslotted and must not be stated"
+    );
+    assert!(
+        !states_online_service(&s_map["s_discord"]),
+        "Discord is unmodeled and must not be stated"
+    );
+    assert!(
+        !states_online_service(&s_map["s_signal"]),
+        "Signal is unmodeled and must not be stated"
+    );
+
+    // 4. Inbound foreign vCard with X-TWITTER, X-SIP, and IMPP:sip lines:
+    // Safely parsed without inventing unslotted synthetic entries
+    let foreign_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Foreign Contact\r\n",
+        "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:vera@jabber.example\r\n",
+        "X-TWITTER:@foreign_tw\r\n",
+        "X-SIP:sip:foreign@sip.example.com\r\n",
+        "X-DISCORD:foreign#9999\r\n",
+        "IMPP:sip:foreign@sip.example.com\r\n",
+        "IMPP:twitter:foreign_tw\r\n",
+        "END:VCARD\r\n"
+    );
+    let parsed_foreign = vcard_to_card(foreign_vcard).expect("parse foreign vcard");
+    let foreign_services = parsed_foreign
+        .online_services
+        .expect("online services present");
+    assert_eq!(
+        foreign_services.len(),
+        1,
+        "only mapped slotted services must be parsed into JSContact"
+    );
+    assert_eq!(
+        foreign_services["s1"].user.as_deref(),
+        Some("vera@jabber.example")
+    );
+    assert_eq!(foreign_services["s1"].service.as_deref(), Some("Jabber"));
+}
+
+#[test]
+fn im_uri_schemes_action_query_fragment_and_percent_encoding_rejection_matrix() {
+    // Audit & characterization of URI rejection boundaries in plain_handle and handle_in_uri:
+    // Any URI that carries actions, queries, sub-paths, fragments, percent-encodings, or whitespace
+    // is strictly rejected to prevent injecting commands or corrupting EDS contact fields.
+
+    let rejected_uris: &[(&str, &str, &str)] = &[
+        // (service, invalid URI, reason)
+        ("Skype", "skype:echo123?call", "query action call"),
+        ("Skype", "skype:echo123?chat", "query action chat"),
+        ("Skype", "skype:echo123?add", "query action add"),
+        ("Skype", "skype:user#profile", "fragment"),
+        ("Skype", "skype:user/full", "path separator"),
+        ("Skype", "skype:user name", "whitespace"),
+        ("Skype", "skype:", "empty handle"),
+        ("AIM", "aim:goim?screenname=alice", "query action goim"),
+        ("AIM", "aim:alice?message=hi", "query parameter"),
+        ("AIM", "aol:alice#room", "fragment"),
+        ("AIM", "aim:alice%20name", "percent-encoding"),
+        ("MSN", "msnim:chat?contact=alice", "query action chat"),
+        ("MSN", "msn:alice@msn.com?voice", "query parameter"),
+        ("MSN", "msn:alice/sub", "path separator"),
+        ("Yahoo", "ymsgr:sendim?alice", "query action sendim"),
+        ("Yahoo", "yahoo:alice?call", "query action call"),
+        ("Yahoo", "yahoo:alice#status", "fragment"),
+        ("ICQ", "icq:message?uin=12345", "query action message"),
+        ("ICQ", "icq:12345?action", "query action"),
+        ("ICQ", "icq:12345/home", "path separator"),
+        (
+            "Jabber",
+            "xmpp:alice@chat.org?message;subject=Hi",
+            "XMPP query action",
+        ),
+        (
+            "Jabber",
+            "xmpp:room@muc.example.com/nick",
+            "XMPP resource/occupant path",
+        ),
+        ("Jabber", "xmpp:alice@chat.org#room", "fragment"),
+        ("Jabber", "xmpp:vera%40jabber.org", "percent-encoding"),
+        ("Jabber", "xmpp: vera@jabber.org", "leading whitespace"),
+        ("Jabber", "xmpp:vera@jabber.org\t", "trailing tab"),
+        (
+            "Matrix",
+            "matrix:u/alice:matrix.org",
+            "Matrix path prefix u/",
+        ),
+        ("Matrix", "matrix:@alice:matrix.org#room", "Matrix fragment"),
+        ("Matrix", "matrix:%40alice%3Amatrix.org", "percent-encoding"),
+        ("Google Talk", "gtalk:alice@gmail.com?call", "query action"),
+        ("GroupWise", "groupwise:alice/office", "path separator"),
+        ("Gadu-Gadu", "gg:12345?status", "query parameter"),
+    ];
+
+    for &(service, invalid_uri, reason) in rejected_uris {
+        let mut services = BTreeMap::new();
+        services.insert(
+            "s1".to_owned(),
+            OnlineService {
+                service: Some(service.to_owned()),
+                uri: Some(invalid_uri.to_owned()),
+                ..OnlineService::default()
+            },
+        );
+        let card = ContactCard {
+            online_services: Some(services),
+            ..ContactCard::default()
+        };
+
+        // states_online_service must return false
+        assert!(
+            !states_online_service(&card.online_services.as_ref().unwrap()["s1"]),
+            "URI '{invalid_uri}' for service '{service}' ({reason}) must NOT be stated"
+        );
+        assert_eq!(
+            online_service_handle(&card.online_services.as_ref().unwrap()["s1"]),
+            None,
+            "URI '{invalid_uri}' must not produce a plain handle ({reason})"
+        );
+
+        // card_to_vcard must omit the property
+        let vcard = card_to_vcard(&card);
+        assert!(
+            !vcard.contains(invalid_uri),
+            "invalid URI '{invalid_uri}' must not appear in vCard: {vcard}"
+        );
+
+        // Inbound vCard 4.0 IMPP with this invalid URI must be safely ignored
+        let v4_impp = format!(
+            "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Reject Contact\r\nIMPP:{invalid_uri}\r\nEND:VCARD\r\n"
+        );
+        let parsed = vcard_to_card(&v4_impp).expect("parse IMPP");
+        assert_eq!(
+            parsed.online_services, None,
+            "invalid IMPP URI '{invalid_uri}' must not create online_services entry"
+        );
+    }
+}
+
+#[test]
+fn online_services_case_punctuation_normalization_and_user_vs_uri_precedence() {
+    // 1. Service name normalization variations (case, spacing, hyphens, punctuation)
+    let service_variations: &[(&str, &str)] = &[
+        ("AIM", "X-AIM"),
+        ("aim", "X-AIM"),
+        ("Aim", "X-AIM"),
+        ("A-I-M", "X-AIM"),
+        ("Gadu-Gadu", "X-GADUGADU"),
+        ("Gadu Gadu", "X-GADUGADU"),
+        ("gadugadu", "X-GADUGADU"),
+        ("gadu-gadu", "X-GADUGADU"),
+        ("Google Talk", "X-GOOGLE-TALK"),
+        ("Google-Talk", "X-GOOGLE-TALK"),
+        ("GoogleTalk", "X-GOOGLE-TALK"),
+        ("google talk", "X-GOOGLE-TALK"),
+        ("GroupWise", "X-GROUPWISE"),
+        ("Group-Wise", "X-GROUPWISE"),
+        ("groupwise", "X-GROUPWISE"),
+        ("Group Wise", "X-GROUPWISE"),
+        ("ICQ", "X-ICQ"),
+        ("icq", "X-ICQ"),
+        ("I-C-Q", "X-ICQ"),
+        ("Jabber", "X-JABBER"),
+        ("jabber", "X-JABBER"),
+        ("JABBER", "X-JABBER"),
+        ("Matrix", "X-MATRIX"),
+        ("matrix", "X-MATRIX"),
+        ("MSN", "X-MSN"),
+        ("msn", "X-MSN"),
+        ("M-S-N", "X-MSN"),
+        ("Skype", "X-SKYPE"),
+        ("skype", "X-SKYPE"),
+        ("Yahoo", "X-YAHOO"),
+        ("Yahoo!", "X-YAHOO"),
+        ("yahoo", "X-YAHOO"),
+    ];
+
+    for &(service_input, expected_x_prop) in service_variations {
+        let mut services = BTreeMap::new();
+        services.insert(
+            "s1".to_owned(),
+            OnlineService {
+                service: Some(service_input.to_owned()),
+                user: Some("test_user".to_owned()),
+                ..OnlineService::default()
+            },
+        );
+        let card = ContactCard {
+            online_services: Some(services),
+            ..ContactCard::default()
+        };
+
+        assert!(
+            states_online_service(&card.online_services.as_ref().unwrap()["s1"]),
+            "service variation '{service_input}' must be recognized"
+        );
+        let vcard = card_to_vcard(&card);
+        let expected_line = format!("{expected_x_prop};X-JMAP-KEY=s1;TYPE=HOME:test_user");
+        assert_eq!(
+            line(&vcard, expected_x_prop),
+            expected_line,
+            "failed property mapping for service input '{service_input}'"
+        );
+    }
+
+    // Unmapped/extended names (such as 'AOL Instant Messenger', 'MSN Messenger', 'Yahoo Messenger')
+    // do not match the 10 canonical EDS services and must not be stated
+    for &unmapped in &[
+        "AOL Instant Messenger",
+        "MSN Messenger",
+        "Yahoo Messenger",
+        "Telegram",
+        "Discord",
+    ] {
+        let mut services = BTreeMap::new();
+        services.insert(
+            "s1".to_owned(),
+            OnlineService {
+                service: Some(unmapped.to_owned()),
+                user: Some("test_user".to_owned()),
+                ..OnlineService::default()
+            },
+        );
+        let card = ContactCard {
+            online_services: Some(services),
+            ..ContactCard::default()
+        };
+        assert!(
+            !states_online_service(&card.online_services.as_ref().unwrap()["s1"]),
+            "unmapped service '{unmapped}' must not be stated"
+        );
+        let vcard = card_to_vcard(&card);
+        assert!(
+            !vcard.contains("test_user"),
+            "unmapped service '{unmapped}' must not be emitted in vCard"
+        );
+    }
+
+    // 2. User vs URI precedence: explicit user takes precedence over secondary URI
+    let mut prec_services = BTreeMap::new();
+    prec_services.insert(
+        "s1".to_owned(),
+        OnlineService {
+            service: Some("Jabber".to_owned()),
+            user: Some("explicit_handle@jabber.org".to_owned()),
+            uri: Some("xmpp:different_uri_handle@jabber.org".to_owned()),
+            ..OnlineService::default()
+        },
+    );
+    let prec_card = ContactCard {
+        online_services: Some(prec_services),
+        ..ContactCard::default()
+    };
+    let s_obj = &prec_card.online_services.as_ref().unwrap()["s1"];
+    assert_eq!(
+        online_service_handle(s_obj),
+        Some("explicit_handle@jabber.org"),
+        "explicit user must take precedence over URI"
+    );
+    let vcard_prec = card_to_vcard(&prec_card);
+    assert_eq!(
+        line(&vcard_prec, "X-JABBER"),
+        "X-JABBER;X-JMAP-KEY=s1;TYPE=HOME:explicit_handle@jabber.org"
+    );
+
+    // 3. online_service_uri canonical generation
+    let uri_matrix: &[(&str, &str, Option<&str>)] = &[
+        ("AIM", "alice_aim", Some("aim:alice_aim")),
+        ("Gadu-Gadu", "87654321", Some("gg:87654321")),
+        (
+            "Google Talk",
+            "alice@gmail.com",
+            Some("xmpp:alice@gmail.com"),
+        ),
+        ("GroupWise", "alice_gw", Some("groupwise:alice_gw")),
+        ("ICQ", "12345678", Some("icq:12345678")),
+        ("Jabber", "alice@jabber.org", Some("xmpp:alice@jabber.org")),
+        ("MSN", "alice@msn.com", Some("msn:alice@msn.com")),
+        (
+            "Matrix",
+            "@alice:matrix.org",
+            Some("matrix:@alice:matrix.org"),
+        ),
+        ("Skype", "alice_skype", Some("skype:alice_skype")),
+        ("Yahoo", "alice_yahoo", Some("yahoo:alice_yahoo")),
+        // Invalid handles
+        ("Skype", "alice?call", None),
+        ("Jabber", "alice/muc", None),
+        ("AIM", "alice%20name", None),
+        ("Twitter", "alice", None), // Unmapped service
+        ("SIP", "alice", None),     // Unmapped service
+    ];
+
+    for &(service, handle, expected_uri) in uri_matrix {
+        let generated = online_service_uri(service, handle);
+        assert_eq!(
+            generated.as_deref(),
+            expected_uri,
+            "online_service_uri for service {service} and handle {handle}"
+        );
+    }
+}
+
+#[test]
+fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
+    // 1. Setting and emitting URI photos across various schemes
+    let uri_schemes = [
+        "https://example.com/photos/avatar.jpg",
+        "http://photos.internal.net/user.png",
+        "file:///home/runner/.photos/contact_profile.webp",
+        "ftp://files.example.org/images/id_badge.jpg",
+    ];
+
+    for uri in uri_schemes {
+        let card = one_photo(uri, None);
+        assert!(states_media(&card.media.as_ref().unwrap()["m1"]));
+        let vcard = card_to_vcard(&card);
+        let unfolded_vcard = unfolded(&vcard);
+        assert_eq!(
+            line(&unfolded_vcard, "PHOTO"),
+            format!("PHOTO;X-JMAP-KEY=m1;VALUE=uri:{uri}"),
+            "URI photo must emit VALUE=uri without TYPE parameter: {vcard}"
+        );
+        assert!(
+            !vcard.contains("TYPE="),
+            "URI photo must not state TYPE: {vcard}"
+        );
+
+        // Inbound roundtrip
+        let parsed = vcard_to_card(&vcard).expect("parse emitted URI photo");
+        let media = parsed.media.expect("media");
+        assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+        assert_eq!(media["m1"].uri, uri);
+        assert_eq!(media["m1"].media_type, None);
+    }
+
+    // 2. Setting and emitting inlined binary photos across multiple MIME types
+    let inlined_formats = [
+        ("image/jpeg", "jpeg", PAYLOAD),
+        (
+            "image/png",
+            "png",
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        ),
+        (
+            "image/gif",
+            "gif",
+            "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+        ),
+        (
+            "image/webp",
+            "webp",
+            "UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==",
+        ),
+        (
+            "image/svg+xml",
+            "svg+xml",
+            "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==",
+        ),
+    ];
+
+    for (media_type, subtype, base64_payload) in inlined_formats {
+        let data_uri = format!("data:{media_type};base64,{base64_payload}");
+        let card = one_photo(&data_uri, Some(media_type));
+        assert!(states_media(&card.media.as_ref().unwrap()["m1"]));
+        let vcard = card_to_vcard(&card);
+
+        assert!(
+            vcard.contains(&format!("PHOTO;X-JMAP-KEY=m1;TYPE={subtype};ENCODING=b:"))
+                || vcard.contains(&format!(
+                    "PHOTO;X-JMAP-KEY=m1;TYPE={};ENCODING=b:",
+                    subtype.to_ascii_uppercase()
+                )),
+            "inlined photo must emit subtype {subtype} and ENCODING=b: {vcard}"
+        );
+        assert!(
+            !vcard.contains("VALUE=uri"),
+            "inlined photo must not state VALUE=uri: {vcard}"
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse emitted inlined photo");
+        let media = parsed.media.expect("media");
+        assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+        assert_eq!(media["m1"].media_type.as_deref(), Some(media_type));
+        assert!(same_photo(&card.media.unwrap()["m1"], &media["m1"]));
+    }
+
+    // 3. Non-image data URIs emitted without TYPE parameter
+    let non_image_data_uris = [
+        format!("data:application/pdf;base64,{PAYLOAD}"),
+        format!("data:;base64,{PAYLOAD}"),
+    ];
+    for data_uri in non_image_data_uris {
+        let card = one_photo(&data_uri, None);
+        assert!(states_media(&card.media.as_ref().unwrap()["m1"]));
+        let vcard = card_to_vcard(&card);
+        assert_eq!(
+            line(&vcard, "PHOTO"),
+            format!("PHOTO;X-JMAP-KEY=m1;ENCODING=b:{PAYLOAD}")
+        );
+        assert!(
+            !vcard.contains("TYPE="),
+            "non-image data URI must not state TYPE: {vcard}"
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse");
+        let media = parsed.media.expect("media");
+        assert_eq!(media["m1"].media_type, None);
+    }
+
+    // 4. Malformed/non-base64 data URIs and non-photo kinds get no line and states_media is false
+    let unmapped_or_corrupt_media = [
+        photo_of_kind(Some("logo"), "https://example.com/logo.png", None),
+        photo_of_kind(Some("sound"), "https://example.com/sound.ogg", None),
+        photo_of_kind(Some("document"), "https://example.com/doc.pdf", None),
+        photo_of_kind(None, "https://example.com/unknown.jpg", None),
+        one_photo("data:image/jpeg;base64,not!valid!base64!", None),
+        one_photo("data:image/jpeg,%89PNG%0D%0A", None),
+        one_photo("data:image/jpeg", None),
+        one_photo("data:", None),
+        one_photo("", None),
+    ];
+    for card in unmapped_or_corrupt_media {
+        let media_entry = &card.media.as_ref().unwrap()["m1"];
+        assert!(
+            !states_media(media_entry),
+            "media entry {:?} must not state a line",
+            media_entry
+        );
+        let vcard = card_to_vcard(&card);
+        assert!(!vcard.contains("PHOTO"), "must emit no PHOTO line: {vcard}");
+    }
+
+    // 5. Replaced photo lifecycle in Evolution editor (URI -> inlined, inlined -> URI, inlined -> inlined)
+    // Starting with inlined JPEG
+    let orig_card = one_photo(
+        &format!("data:image/jpeg;base64,{PAYLOAD}"),
+        Some("image/jpeg"),
+    );
+    let orig_vcard = card_to_vcard(&orig_card);
+
+    // Editor replaces inlined JPEG with URI photo (dropping X-JMAP-KEY on re-render)
+    let edited_uri_vcard = orig_vcard.replace(
+        &format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PAYLOAD}"),
+        "PHOTO;VALUE=uri:https://example.com/new_avatar.png",
+    );
+    let edited_card = vcard_to_card(&edited_uri_vcard).expect("parse edited URI vcard");
+    let media = edited_card.media.expect("media");
+    assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(media["m1"].uri, "https://example.com/new_avatar.png");
+    assert_eq!(media["m1"].media_type, None);
+    assert!(!same_photo(
+        &orig_card.media.as_ref().unwrap()["m1"],
+        &media["m1"]
+    ));
+
+    // Editor replaces URI with new inlined PNG
+    let edited_png_vcard = edited_uri_vcard.replace(
+        "PHOTO;VALUE=uri:https://example.com/new_avatar.png",
+        "PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgr//g==",
+    );
+    let edited_png_card = vcard_to_card(&edited_png_vcard).expect("parse edited PNG vcard");
+    let media_png = edited_png_card.media.expect("media");
+    assert_eq!(media_png["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(
+        media_png["m1"].uri,
+        "data:image/png;base64,iVBORw0KGgr//g=="
+    );
+    assert_eq!(media_png["m1"].media_type.as_deref(), Some("image/png"));
+
+    // 6. Cleared photo (user removes photo in editor)
+    let cleared_vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera Oldenburg\r\nN:Oldenburg;Vera;;;\r\nLOGO;VALUE=uri:https://example.com/logo.png\r\nEND:VCARD\r\n";
+    let cleared_card = vcard_to_card(cleared_vcard).expect("parse cleared vcard");
+    // Only photo lines are parsed into media; LOGO is ignored inbound so media is None
+    assert_eq!(cleared_card.media, None);
+}
+
+#[test]
+fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
+    // 1. Direct HTTP/HTTPS/file URIs without VALUE=uri parameter
+    let bare_uri_lines = [
+        (
+            "PHOTO:https://example.com/avatar.jpg",
+            "https://example.com/avatar.jpg",
+        ),
+        (
+            "PHOTO:http://example.org/pic.png",
+            "http://example.org/pic.png",
+        ),
+        (
+            "PHOTO:file:///local/path/photo.webp",
+            "file:///local/path/photo.webp",
+        ),
+        (
+            "PHOTO:ftp://server.org/user.jpg",
+            "ftp://server.org/user.jpg",
+        ),
+        (
+            "PHOTO;VALUE=URI:https://example.com/avatar.jpg",
+            "https://example.com/avatar.jpg",
+        ),
+        (
+            "PHOTO;VALUE=uri:file:///local/photo.png",
+            "file:///local/photo.png",
+        ),
+    ];
+
+    for (line_str, expected_uri) in bare_uri_lines {
+        let media = photo_line(line_str);
+        assert_eq!(media.kind.as_deref(), Some("photo"));
+        assert_eq!(media.uri, expected_uri);
+        assert_eq!(media.media_type, None);
+    }
+
+    // 2. Direct RFC 2397 data URIs (vCard 4.0 / modern CardDAV) without double base64 encoding
+    let direct_data_uris = [
+        (
+            "PHOTO:data:image/jpeg;base64,aGVsbG8tcGhvdG8=",
+            "data:image/jpeg;base64,aGVsbG8tcGhvdG8=",
+            Some("image/jpeg"),
+        ),
+        (
+            "PHOTO:data:image/png;base64,iVBORw0KGgo=",
+            "data:image/png;base64,iVBORw0KGgo=",
+            Some("image/png"),
+        ),
+        ("PHOTO:data:;base64,aGVsbG8=", "data:;base64,aGVsbG8=", None),
+    ];
+
+    for (line_str, expected_uri, expected_media_type) in direct_data_uris {
+        let media = photo_line(line_str);
+        assert_eq!(media.kind.as_deref(), Some("photo"));
+        assert_eq!(media.uri, expected_uri);
+        assert_eq!(media.media_type.as_deref(), expected_media_type);
+    }
+
+    // 3. RFC 6350 MEDIATYPE parameter extraction on URI photos
+    let mediatype_photos = [
+        (
+            "PHOTO;MEDIATYPE=image/jpeg;VALUE=uri:https://example.com/photo.jpg",
+            "https://example.com/photo.jpg",
+            Some("image/jpeg"),
+        ),
+        (
+            "PHOTO;MEDIATYPE=image/png;VALUE=uri:https://example.com/photo.png",
+            "https://example.com/photo.png",
+            Some("image/png"),
+        ),
+        (
+            "PHOTO;MEDIATYPE=image/webp:https://example.com/photo.webp",
+            "https://example.com/photo.webp",
+            Some("image/webp"),
+        ),
+    ];
+
+    for (line_str, expected_uri, expected_media_type) in mediatype_photos {
+        let media = photo_line(line_str);
+        assert_eq!(media.kind.as_deref(), Some("photo"));
+        assert_eq!(media.uri, expected_uri);
+        assert_eq!(media.media_type.as_deref(), expected_media_type);
+    }
+
+    // 4. Legacy and exporter parameter variations: bare type name, ENCODING=BASE64
+    let legacy_lines = [
+        ("PHOTO;JPEG;ENCODING=BASE64:aGVsbG8tcGhvdG8=", "image/JPEG"),
+        ("PHOTO;PNG;BASE64:aGVsbG8tcGhvdG8=", "image/PNG"),
+        ("PHOTO;GIF;ENCODING=b:aGVsbG8tcGhvdG8=", "image/GIF"),
+        (
+            "PHOTO;TYPE=WEBP;ENCODING=BASE64:aGVsbG8tcGhvdG8=",
+            "image/WEBP",
+        ),
+    ];
+
+    for (line_str, expected_media_type) in legacy_lines {
+        let media = photo_line(line_str);
+        assert_eq!(media.kind.as_deref(), Some("photo"));
+        assert_eq!(media.media_type.as_deref(), Some(expected_media_type));
+        assert!(media.uri.starts_with("data:image/"));
+    }
+}
+
+#[test]
+fn same_photo_and_states_media_comprehensive_decision_matrix() {
+    let p_uri1 = Media {
+        kind: Some("photo".to_owned()),
+        uri: "https://example.com/avatar.jpg".to_owned(),
+        media_type: None,
+        ..Media::default()
+    };
+    let p_uri1_same = Media {
+        kind: Some("photo".to_owned()),
+        uri: "https://example.com/avatar.jpg".to_owned(),
+        media_type: Some("image/jpeg".to_owned()), // media_type ignored for URI photos
+        ..Media::default()
+    };
+    let p_uri2 = Media {
+        kind: Some("photo".to_owned()),
+        uri: "https://example.com/other.png".to_owned(),
+        media_type: None,
+        ..Media::default()
+    };
+
+    // Inline photos with identical decoded bytes but different padding / case
+    let p_inline_padded = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
+        media_type: Some("image/jpeg".to_owned()),
+        ..Media::default()
+    };
+    let p_inline_unpadded = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/JPEG;base64,{}", PAYLOAD.trim_end_matches('=')),
+        media_type: Some("image/JPEG".to_owned()),
+        ..Media::default()
+    };
+    let p_inline_different_bytes = Media {
+        kind: Some("photo".to_owned()),
+        uri: "data:image/jpeg;base64,ZGlmZmVyZW50".to_owned(),
+        media_type: Some("image/jpeg".to_owned()),
+        ..Media::default()
+    };
+    let p_inline_different_type = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/png;base64,{PAYLOAD}"),
+        media_type: Some("image/png".to_owned()),
+        ..Media::default()
+    };
+
+    // Non-photo media
+    let logo_media = Media {
+        kind: Some("logo".to_owned()),
+        uri: "https://example.com/logo.png".to_owned(),
+        media_type: None,
+        ..Media::default()
+    };
+    let sound_media = Media {
+        kind: Some("sound".to_owned()),
+        uri: "https://example.com/audio.ogg".to_owned(),
+        media_type: None,
+        ..Media::default()
+    };
+    let empty_uri_media = Media {
+        kind: Some("photo".to_owned()),
+        uri: String::new(),
+        media_type: None,
+        ..Media::default()
+    };
+
+    // 1. states_media checks
+    assert!(states_media(&p_uri1));
+    assert!(states_media(&p_uri2));
+    assert!(states_media(&p_inline_padded));
+    assert!(states_media(&p_inline_unpadded));
+    assert!(states_media(&p_inline_different_bytes));
+    assert!(states_media(&p_inline_different_type));
+    assert!(!states_media(&logo_media));
+    assert!(!states_media(&sound_media));
+    assert!(!states_media(&empty_uri_media));
+
+    // 2. same_photo equality checks
+    assert!(same_photo(&p_uri1, &p_uri1));
+    assert!(same_photo(&p_uri1, &p_uri1_same));
+    assert!(same_photo(&p_uri1_same, &p_uri1));
+    assert!(!same_photo(&p_uri1, &p_uri2));
+
+    assert!(same_photo(&p_inline_padded, &p_inline_padded));
+    assert!(same_photo(&p_inline_padded, &p_inline_unpadded));
+    assert!(same_photo(&p_inline_unpadded, &p_inline_padded));
+    assert!(!same_photo(&p_inline_padded, &p_inline_different_bytes));
+    assert!(!same_photo(&p_inline_padded, &p_inline_different_type));
+
+    assert!(!same_photo(&p_uri1, &p_inline_padded));
+    assert!(!same_photo(&p_inline_padded, &p_uri1));
+
+    // Non-photo media (photo() returns None for both, so same_photo is true)
+    assert!(same_photo(&logo_media, &sound_media));
+    assert!(!same_photo(&p_uri1, &logo_media));
+    assert!(!same_photo(&p_inline_padded, &logo_media));
+}
+
+#[test]
+fn photo_roundtrip_fixpoint_multi_pass_convergence() {
+    let test_cards = vec![
+        one_photo("https://example.com/photo.jpg", None),
+        one_photo("file:///home/runner/.photos/me.png", None),
+        one_photo(
+            &format!("data:image/jpeg;base64,{PAYLOAD}"),
+            Some("image/jpeg"),
+        ),
+        one_photo(
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+            Some("image/png"),
+        ),
+        one_photo(
+            &format!("data:image/jpeg;base64,{}", PAYLOAD.trim_end_matches('=')),
+            None,
+        ),
+        one_photo(&format!("data:application/pdf;base64,{PAYLOAD}"), None),
+    ];
+
+    for original_card in test_cards {
+        // Pass 1: Card -> vCard1 -> Card1
+        let vcard1 = card_to_vcard(&original_card);
+        let card1 = vcard_to_card(&vcard1).expect("parse vcard1");
+
+        // Pass 2: Card1 -> vCard2 -> Card2
+        let vcard2 = card_to_vcard(&card1);
+        let card2 = vcard_to_card(&vcard2).expect("parse vcard2");
+
+        // Pass 3: Card2 -> vCard3 -> Card3
+        let vcard3 = card_to_vcard(&card2);
+        let card3 = vcard_to_card(&vcard3).expect("parse vcard3");
+
+        // Fixed point convergence: pass 2 and pass 3 must be strictly identical
+        assert_eq!(
+            vcard2, vcard3,
+            "vCard output must reach fixed point at pass 2"
+        );
+        assert_eq!(
+            card2, card3,
+            "ContactCard model must reach fixed point at pass 2"
+        );
+
+        let m1 = card1.media.as_ref().and_then(|m| m.get("m1"));
+        let m2 = card2.media.as_ref().and_then(|m| m.get("m1"));
+        assert_eq!(m1.map(|m| &m.uri), m2.map(|m| &m.uri));
+    }
+}
+
+#[test]
+fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
+    // Comprehensive test matrix for JSContact PartialDate variations across
+    // birth, wedding, and death anniversaries:
+    // 1. Bare year: {"year": 1984} -> anniversary_date is None, states_anniversary is false, no wire line emitted
+    // 2. Year-month: {"year": 1984, "month": 5} -> None, false, no wire line emitted
+    // 3. Month-day (year-less): {"month": 5, "day": 20} -> None, false, no wire line emitted
+    // 4. Day only: {"day": 20} -> None, false, no wire line emitted
+    // 5. Bare year < 1000: {"year": 800} -> None, false, no wire line emitted
+    // 6. Full date < 1000: {"year": 800, "month": 6, "day": 21} -> None, false, no wire line emitted (protects against EDS clamp to 1000)
+    // 7. Full date >= 1000: {"year": 1984, "month": 5, "day": 20} -> Some("1984-05-20"), true, emits BDAY / X-EVOLUTION-ANNIVERSARY
+    // 8. Deathday: kind "death" with any date -> states_anniversary is false, no wire line emitted
+
+    // Birth variations
+    let bday_bare_year = one_anniversary("birth", json!({"year": 1984}));
+    let bday_year_month = one_anniversary("birth", json!({"year": 1984, "month": 5}));
+    let bday_month_day = one_anniversary("birth", json!({"month": 5, "day": 20}));
+    let bday_day_only = one_anniversary("birth", json!({"day": 20}));
+    let bday_year_ancient = one_anniversary("birth", json!({"year": 800}));
+    let bday_date_ancient = one_anniversary("birth", json!({"year": 800, "month": 6, "day": 21}));
+    let bday_full = one_anniversary("birth", json!({"year": 1984, "month": 5, "day": 20}));
+
+    // Wedding variations
+    let wedding_bare_year = one_anniversary("wedding", json!({"year": 2005}));
+    let wedding_year_month = one_anniversary("wedding", json!({"year": 2005, "month": 11}));
+    let wedding_month_day = one_anniversary("wedding", json!({"month": 11, "day": 15}));
+    let wedding_full = one_anniversary("wedding", json!({"year": 2005, "month": 11, "day": 15}));
+
+    // Death variations
+    let death_bare_year = one_anniversary("death", json!({"year": 2020}));
+    let death_full = one_anniversary("death", json!({"year": 2020, "month": 1, "day": 15}));
+
+    // Predicate checks
+    assert!(!states_anniversary(
+        &bday_bare_year.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &bday_year_month.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &bday_month_day.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &bday_day_only.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &bday_year_ancient.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &bday_date_ancient.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(states_anniversary(
+        &bday_full.anniversaries.as_ref().unwrap()["y1"]
+    ));
+
+    assert!(!states_anniversary(
+        &wedding_bare_year.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &wedding_year_month.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &wedding_month_day.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(states_anniversary(
+        &wedding_full.anniversaries.as_ref().unwrap()["y1"]
+    ));
+
+    assert!(!states_anniversary(
+        &death_bare_year.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &death_full.anniversaries.as_ref().unwrap()["y1"]
+    ));
+
+    // Date formatting checks
+    assert_eq!(
+        anniversary_date(&bday_bare_year.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_year_month.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_month_day.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_day_only.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_year_ancient.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_date_ancient.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_full.anniversaries.as_ref().unwrap()["y1"]),
+        Some("1984-05-20".into())
+    );
+
+    assert_eq!(
+        anniversary_date(&wedding_bare_year.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&wedding_full.anniversaries.as_ref().unwrap()["y1"]),
+        Some("2005-11-15".into())
+    );
+
+    // vCard wire emission checks
+    let vcard_bday_bare = card_to_vcard(&bday_bare_year);
+    assert!(!vcard_bday_bare.contains("BDAY"), "{vcard_bday_bare}");
+
+    let vcard_bday_ym = card_to_vcard(&bday_year_month);
+    assert!(!vcard_bday_ym.contains("BDAY"), "{vcard_bday_ym}");
+
+    let vcard_bday_md = card_to_vcard(&bday_month_day);
+    assert!(!vcard_bday_md.contains("BDAY"), "{vcard_bday_md}");
+
+    let vcard_bday_ancient = card_to_vcard(&bday_date_ancient);
+    assert!(!vcard_bday_ancient.contains("BDAY"), "{vcard_bday_ancient}");
+
+    let vcard_bday_full = card_to_vcard(&bday_full);
+    assert!(
+        vcard_bday_full.contains("BDAY;X-JMAP-KEY=y1:1984-05-20"),
+        "{vcard_bday_full}"
+    );
+
+    let vcard_wedding_bare = card_to_vcard(&wedding_bare_year);
+    assert!(
+        !vcard_wedding_bare.contains("X-EVOLUTION-ANNIVERSARY"),
+        "{vcard_wedding_bare}"
+    );
+    assert!(
+        !vcard_wedding_bare.contains("ANNIVERSARY"),
+        "{vcard_wedding_bare}"
+    );
+
+    let vcard_wedding_full = card_to_vcard(&wedding_full);
+    assert!(
+        vcard_wedding_full.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y1:2005-11-15"),
+        "{vcard_wedding_full}"
+    );
+
+    let vcard_death_bare = card_to_vcard(&death_bare_year);
+    assert!(!vcard_death_bare.contains("DEATH"), "{vcard_death_bare}");
+    assert!(!vcard_death_bare.contains("BDAY"), "{vcard_death_bare}");
+
+    let vcard_death_full = card_to_vcard(&death_full);
+    assert!(!vcard_death_full.contains("DEATH"), "{vcard_death_full}");
+    assert!(!vcard_death_full.contains("BDAY"), "{vcard_death_full}");
+    assert!(
+        !vcard_death_full.contains("ANNIVERSARY"),
+        "{vcard_death_full}"
+    );
+}
+
+#[test]
+fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
+    // Inbound parsing tolerance across extended ISO, basic compact ISO,
+    // parameter-bearing lines, timestamps, Apple grouped ABDATE properties,
+    // and safe omission of unmodeled/bare/partial date lines:
+
+    // 1. Extended ISO format (YYYY-MM-DD)
+    let vcard1 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nBDAY:1984-05-20\r\nEND:VCARD\r\n";
+    let card1 = vcard_to_card(vcard1).expect("parse vcard1");
+    let anniv1 = &card1.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv1.kind, "birth");
+    assert_eq!(
+        anniv1.date,
+        Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
+    );
+
+    // 2. Compact basic ISO format (YYYYMMDD)
+    let vcard2 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Bob\r\nBDAY:19840520\r\nEND:VCARD\r\n";
+    let card2 = vcard_to_card(vcard2).expect("parse vcard2");
+    let anniv2 = &card2.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv2.kind, "birth");
+    assert_eq!(
+        anniv2.date,
+        Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
+    );
+
+    // 3. VALUE=date parameter
+    let vcard3 =
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Charlie\r\nBDAY;VALUE=date:1984-05-20\r\nEND:VCARD\r\n";
+    let card3 = vcard_to_card(vcard3).expect("parse vcard3");
+    let anniv3 = &card3.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv3.kind, "birth");
+    assert_eq!(
+        anniv3.date,
+        Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
+    );
+
+    // 4. VALUE=date-time with timestamp
+    let vcard4 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:David\r\nBDAY;VALUE=date-time:1984-05-20T14:30:00Z\r\nEND:VCARD\r\n";
+    let card4 = vcard_to_card(vcard4).expect("parse vcard4");
+    let anniv4 = &card4.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv4.kind, "birth");
+    assert_eq!(
+        anniv4.date,
+        Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
+    );
+
+    // 5. Standard vCard 4.0 ANNIVERSARY property
+    let vcard5 = "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Eve\r\nANNIVERSARY:1996-08-03\r\nEND:VCARD\r\n";
+    let card5 = vcard_to_card(vcard5).expect("parse vcard5");
+    let anniv5 = &card5.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv5.kind, "wedding");
+    assert_eq!(
+        anniv5.date,
+        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
+    );
+
+    // 6. EDS X-EVOLUTION-ANNIVERSARY property
+    let vcard6 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Frank\r\nX-EVOLUTION-ANNIVERSARY:1996-08-03\r\nEND:VCARD\r\n";
+    let card6 = vcard_to_card(vcard6).expect("parse vcard6");
+    let anniv6 = &card6.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv6.kind, "wedding");
+    assert_eq!(
+        anniv6.date,
+        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
+    );
+
+    // 7. Apple grouped X-ABDATE with _$!<Anniversary>!$_
+    let vcard7 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Grace\r\nitem1.X-ABDATE:1996-08-03\r\nitem1.X-ABLabel:_$!<Anniversary>!$_\r\nEND:VCARD\r\n";
+    let card7 = vcard_to_card(vcard7).expect("parse vcard7");
+    let anniv7 = &card7.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv7.kind, "wedding");
+    assert_eq!(
+        anniv7.date,
+        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
+    );
+
+    // 8. Inbound bare year BDAY:1984 is safely ignored (read_day returns None)
+    let vcard8 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Heidi\r\nBDAY:1984\r\nEND:VCARD\r\n";
+    let card8 = vcard_to_card(vcard8).expect("parse vcard8");
+    assert_eq!(card8.anniversaries, None);
+
+    // 9. Inbound year-month BDAY:1984-05 is safely ignored
+    let vcard9 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Ivan\r\nBDAY:1984-05\r\nEND:VCARD\r\n";
+    let card9 = vcard_to_card(vcard9).expect("parse vcard9");
+    assert_eq!(card9.anniversaries, None);
+
+    // 10. Inbound year-less BDAY:--05-20 is safely ignored
+    let vcard10 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Judy\r\nBDAY:--05-20\r\nEND:VCARD\r\n";
+    let card10 = vcard_to_card(vcard10).expect("parse vcard10");
+    assert_eq!(card10.anniversaries, None);
+
+    // 11. Foreign DEATHDATE, X-DEATHDATE, X-EVOLUTION-DEATH-DATE are unmodeled on vCard 3.0
+    let vcard11 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Karl\r\nDEATHDATE:2020-01-15\r\nX-DEATHDATE:2020-01-15\r\nX-EVOLUTION-DEATH-DATE:2020-01-15\r\nEND:VCARD\r\n";
+    let card11 = vcard_to_card(vcard11).expect("parse vcard11");
+    assert_eq!(card11.anniversaries, None);
+}
+
+#[test]
+fn evolution_contact_editor_clamping_and_sync_diff_safety() {
+    // Tests that when a contact containing bare-year, partial-date, and deathday
+    // anniversaries is synchronized, the sync diff engine preserves unstated
+    // anniversary records without writing spurious deletions or modifications.
+    let mut anniversaries = BTreeMap::new();
+    anniversaries.insert(
+        "y1".to_owned(),
+        Anniversary {
+            kind: "birth".into(),
+            date: Some(json!({"@type": "PartialDate", "year": 1984})), // bare year
+            ..Anniversary::default()
+        },
+    );
+    anniversaries.insert(
+        "y2".to_owned(),
+        Anniversary {
+            kind: "wedding".into(),
+            date: Some(json!({"@type": "PartialDate", "year": 2005, "month": 11, "day": 15})), // full date
+            ..Anniversary::default()
+        },
+    );
+    anniversaries.insert(
+        "y3".to_owned(),
+        Anniversary {
+            kind: "death".into(),
+            date: Some(json!({"@type": "PartialDate", "year": 2020, "month": 1, "day": 15})), // death date
+            ..Anniversary::default()
+        },
+    );
+    anniversaries.insert(
+        "y4".to_owned(),
+        Anniversary {
+            kind: "birth".into(),
+            date: Some(json!({"@type": "Timestamp", "utc": "1990-05-12T10:30:00Z"})), // timestamp point-in-time
+            ..Anniversary::default()
+        },
+    );
+
+    let card = ContactCard {
+        uid: Some("contact-100".into()),
+        anniversaries: Some(anniversaries.clone()),
+        ..ContactCard::default()
+    };
+
+    // Emission only states y2 (wedding full date) and y4 (timestamp converted to UTC date)
+    let vcard = card_to_vcard(&card);
+    assert!(!vcard.contains("y1"), "{vcard}");
+    assert!(
+        vcard.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y2:2005-11-15"),
+        "{vcard}"
+    );
+    assert!(!vcard.contains("y3"), "{vcard}");
+    assert!(vcard.contains("BDAY;X-JMAP-KEY=y4:1990-05-12"), "{vcard}");
+
+    // Sync visibility predicates
+    assert!(!states_anniversary(&anniversaries["y1"]));
+    assert!(states_anniversary(&anniversaries["y2"]));
+    assert!(!states_anniversary(&anniversaries["y3"]));
+    assert!(states_anniversary(&anniversaries["y4"]));
+
+    // Point in time predicate
+    assert!(!states_a_point_in_time(&anniversaries["y1"]));
+    assert!(!states_a_point_in_time(&anniversaries["y2"]));
+    assert!(!states_a_point_in_time(&anniversaries["y3"]));
+    assert!(states_a_point_in_time(&anniversaries["y4"]));
+}
+
+#[test]
+fn anniversary_multi_pass_roundtrip_fixpoint_stability() {
+    let test_cards = vec![
+        one_anniversary("birth", json!({"year": 1984, "month": 5, "day": 20})),
+        one_anniversary("wedding", json!({"year": 2005, "month": 11, "day": 15})),
+        one_anniversary("birth", json!({"utc": "1990-05-12T10:30:00Z"})),
+        one_anniversary("birth", json!({"year": 1984})), // bare year -> empty line, immediate fixpoint
+        one_anniversary("death", json!({"year": 2020, "month": 1, "day": 15})), // death -> empty line, immediate fixpoint
+    ];
+
+    for original_card in test_cards {
+        // Pass 1: Card -> vCard1 -> Card1
+        let vcard1 = card_to_vcard(&original_card);
+        let card1 = vcard_to_card(&vcard1).expect("parse vcard1");
+
+        // Pass 2: Card1 -> vCard2 -> Card2
+        let vcard2 = card_to_vcard(&card1);
+        let card2 = vcard_to_card(&vcard2).expect("parse vcard2");
+
+        // Pass 3: Card2 -> vCard3 -> Card3
+        let vcard3 = card_to_vcard(&card2);
+        let card3 = vcard_to_card(&vcard3).expect("parse vcard3");
+
+        // Fixed point convergence: pass 2 and pass 3 must be strictly identical
+        assert_eq!(
+            vcard2, vcard3,
+            "vCard output must reach fixed point at pass 2"
+        );
+        assert_eq!(
+            card2, card3,
+            "ContactCard model must reach fixed point at pass 2"
+        );
+    }
+}
+
+#[test]
+fn vcard_trailing_whitespace_and_nickname_encoding_fixpoint_characterization() {
+    // Backlog finding (docs/BACKLOG.md "jmap-vcard round trip is not a fixed point for a value with trailing whitespace",
+    // first manifestation): A raw vCard with unescaped trailing whitespace in NICKNAME (e.g. from an ENCODING=b
+    // envelope or raw imported stream) keeps the trailing space on first emit (NICKNAME;X-JMAP-KEY=k1:! ),
+    // but on the second pass calcard's parser trims unescaped trailing whitespace, normalizing it to '!'.
+    // Multi-stage fixpoint asserts that pass 2 (vcard2, card2) and pass 3 (vcard3, card3) reach an exact byte-identical fixed point.
+    let raw_vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n";
+    let parsed1 = vcard_to_card(raw_vcard).expect("first parse of raw vcard");
+    assert_eq!(
+        parsed1.nicknames.as_ref().unwrap()["k1"].name,
+        "! ",
+        "pass 1 preserves the raw parsed value"
+    );
+
+    let vcard1 = card_to_vcard(&parsed1);
+    assert!(
+        vcard1.contains("NICKNAME;X-JMAP-KEY=k1:! "),
+        "vcard1 emits the preserved nickname with trailing whitespace: {vcard1}"
+    );
+
+    let parsed2 = vcard_to_card(&vcard1).expect("second parse of emitted vcard");
+    assert_eq!(
+        parsed2.nicknames.as_ref().unwrap()["k1"].name,
+        "!",
+        "pass 2 normalizes unescaped trailing whitespace"
+    );
+
+    let vcard2 = card_to_vcard(&parsed2);
+    assert!(
+        vcard2.contains("NICKNAME;X-JMAP-KEY=k1:!\r\n")
+            || vcard2.contains("NICKNAME;X-JMAP-KEY=k1:!\n"),
+        "vcard2 emits the normalized nickname: {vcard2}"
+    );
+
+    let parsed3 = vcard_to_card(&vcard2).expect("third parse of stabilized vcard");
+    let vcard3 = card_to_vcard(&parsed3);
+
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard serialization reaches exact byte-identical fixed point at pass 2"
+    );
+    assert_eq!(
+        parsed2, parsed3,
+        "ContactCard domain model reaches exact fixed point at pass 2"
+    );
+}
+
+#[test]
+fn vcard_trailing_whitespace_across_all_property_types_matrix() {
+    // Tests unescaped trailing whitespace, escaped spaces ('\ '), and tabs across
+    // FN, NOTE, ORG, TITLE, ROLE, CATEGORIES, TEL, EMAIL, and URL lines.
+    let cases = vec![
+        (
+            "FN",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe  \r\nN:Doe;John;;;\r\nEND:VCARD\r\n",
+        ),
+        (
+            "NOTE",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nNOTE;X-JMAP-KEY=n1:Important note with space  \r\nEND:VCARD\r\n",
+        ),
+        (
+            "ORG",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nORG;X-JMAP-KEY=o1:Acme Corp ;Engineering \r\nEND:VCARD\r\n",
+        ),
+        (
+            "TITLE",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nTITLE;X-JMAP-KEY=t1:Senior Architect \r\nEND:VCARD\r\n",
+        ),
+        (
+            "ROLE",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nROLE;X-JMAP-KEY=r1:Lead Developer \r\nEND:VCARD\r\n",
+        ),
+        (
+            "CATEGORIES",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nCATEGORIES:Work ,VIP \r\nEND:VCARD\r\n",
+        ),
+        (
+            "TEL",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nTEL;TYPE=WORK,VOICE;X-JMAP-KEY=p1:+1-555-0100 \r\nEND:VCARD\r\n",
+        ),
+        (
+            "EMAIL",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nEMAIL;TYPE=WORK;X-JMAP-KEY=e1:john@example.com \r\nEND:VCARD\r\n",
+        ),
+        (
+            "URL",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nURL;X-JMAP-KEY=l1:https://example.com/john \r\nEND:VCARD\r\n",
+        ),
+    ];
+
+    for (prop_name, raw_vcard) in cases {
+        let parsed1 = vcard_to_card(raw_vcard)
+            .unwrap_or_else(|e| panic!("parse 1 failed for {prop_name}: {e}"));
+        let vcard1 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard1)
+            .unwrap_or_else(|e| panic!("parse 2 failed for {prop_name}: {e}"));
+        let vcard2 = card_to_vcard(&parsed2);
+        let parsed3 = vcard_to_card(&vcard2)
+            .unwrap_or_else(|e| panic!("parse 3 failed for {prop_name}: {e}"));
+        let vcard3 = card_to_vcard(&parsed3);
+
+        assert_eq!(
+            vcard2, vcard3,
+            "property {prop_name} must reach vCard fixed point at pass 2"
+        );
+        assert_eq!(
+            parsed2, parsed3,
+            "property {prop_name} must reach ContactCard fixed point at pass 2"
+        );
+    }
+}
+
+#[test]
+fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
+    // Backlog finding (docs/BACKLOG.md, second and third manifestations):
+    // A ContactCard with a stated-but-empty full name (`full: Some("")`) and single/multiple
+    // name components (`given: "0"`, `given: "𞋀"`, Unicode multi-byte characters) previously
+    // took an extra round trip because `card_to_vcard` emitted an empty `FN:` while `read_name`
+    // treated empty `FN:` as absent, causing `derive_full` to synthesize on the next pass.
+    // The empty-is-absent filter in `card_to_vcard` derives `full` immediately, ensuring
+    // immediate fixed-point stability ($vcard_1 \equiv vcard_2$, $card_1 \equiv card_2$).
+    let test_names = vec![
+        Name {
+            components: Some(vec![NameComponent::new("given", "0")]),
+            full: Some(String::new()),
+            extra: BTreeMap::new(),
+        },
+        Name {
+            components: Some(vec![NameComponent::new("given", "𞋀")]),
+            full: Some(String::new()),
+            extra: BTreeMap::new(),
+        },
+        Name {
+            components: Some(vec![
+                NameComponent::new("given", "Alice"),
+                NameComponent::new("surname", "Smith"),
+            ]),
+            full: Some(String::new()),
+            extra: BTreeMap::new(),
+        },
+        Name {
+            components: Some(vec![
+                NameComponent::new("prefix", "Dr."),
+                NameComponent::new("given", "René"),
+                NameComponent::new("middle", "Jean"),
+                NameComponent::new("surname", "Müller"),
+                NameComponent::new("suffix", "III"),
+            ]),
+            full: Some(String::new()),
+            extra: BTreeMap::new(),
+        },
+    ];
+
+    for name in test_names {
+        let card = ContactCard {
+            id: Some("C-NAME-FIXPOINT".into()),
+            name: Some(name),
+            ..ContactCard::default()
+        };
+
+        // Pass 1: Card -> vCard1 -> Card1
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("parse vcard1");
+
+        // Pass 2: Card1 -> vCard2 -> Card2
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("parse vcard2");
+
+        // Pass 3: Card2 -> vCard3 -> Card3
+        let vcard3 = card_to_vcard(&parsed2);
+        let parsed3 = vcard_to_card(&vcard3).expect("parse vcard3");
+
+        // Immediate fixed point at pass 1
+        assert_eq!(
+            vcard1, vcard2,
+            "vCard output must reach fixed point immediately at pass 1"
+        );
+        assert_eq!(
+            parsed1, parsed2,
+            "ContactCard model must reach fixed point immediately at pass 1"
+        );
+
+        // Fixed point at pass 2/3
+        assert_eq!(vcard2, vcard3);
+        assert_eq!(parsed2, parsed3);
+    }
+}
+
+#[test]
+fn vcard_trailing_whitespace_roundtrip_multi_pass_convergence() {
+    // Composite card with mixed trailing whitespace, escaped spaces, and multi-component fields
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Dr. Jane Doe \r\n",
+        "N:Doe ;Jane ;A. ;Dr. ;Jr. \r\n",
+        "NICKNAME;X-JMAP-KEY=k1:Janey \r\n",
+        "EMAIL;TYPE=WORK;X-JMAP-KEY=e1:jane.doe@work.example.com \r\n",
+        "TEL;TYPE=WORK,VOICE;X-JMAP-KEY=p1:+1 555 0199 \r\n",
+        "ADR;TYPE=WORK;X-JMAP-KEY=a1:;;100 Enterprise Way ;Metropolis ;CA ;94000 ;USA \r\n",
+        "ORG;X-JMAP-KEY=o1:Enterprise Inc. ;Engineering ;Platform \r\n",
+        "TITLE;X-JMAP-KEY=t1:Chief Architect \r\n",
+        "ROLE;X-JMAP-KEY=r1:Technical Fellow \r\n",
+        "NOTE;X-JMAP-KEY=n1:Multi-line note with trailing spaces \r\n and continuation \r\n",
+        "CATEGORIES:Engineering ,Architecture ,VIP \r\n",
+        "URL;X-JMAP-KEY=l1:https://jane.example.com \r\n",
+        "BDAY:1988-03-24\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card1 = vcard_to_card(raw_vcard).expect("pass 1 parse");
+    let vcard1 = card_to_vcard(&card1);
+
+    let card2 = vcard_to_card(&vcard1).expect("pass 2 parse");
+    let vcard2 = card_to_vcard(&card2);
+
+    let card3 = vcard_to_card(&vcard2).expect("pass 3 parse");
+    let vcard3 = card_to_vcard(&card3);
+
+    let card4 = vcard_to_card(&vcard3).expect("pass 4 parse");
+    let vcard4 = card_to_vcard(&card4);
+
+    // Multi-pass convergence verification
+    assert_eq!(vcard2, vcard3, "vCard pass 2 == pass 3");
+    assert_eq!(vcard3, vcard4, "vCard pass 3 == pass 4");
+    assert_eq!(card2, card3, "ContactCard pass 2 == pass 3");
+    assert_eq!(card3, card4, "ContactCard pass 3 == pass 4");
 }

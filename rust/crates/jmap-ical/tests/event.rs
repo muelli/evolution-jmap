@@ -10,12 +10,15 @@
 use std::collections::BTreeMap;
 
 use jmap_ical::{
-    ICalError, defines_time_zone, event_to_ical, ical_to_event, maps_alerts, maps_keyword,
-    maps_locations, maps_recurrence_override, maps_recurrence_rule, maps_time_zone,
-    maps_virtual_locations, names_time_zone, prune_time_zones, sends_recurrence_override,
-    time_zone_definition, unstateable_until,
+    ICalError, busy_periods_to_vfreebusy, defines_time_zone, event_to_ical, free_busy_type,
+    ical_to_event, maps_alerts, maps_keyword, maps_locations, maps_recurrence_override,
+    maps_recurrence_rule, maps_time_zone, maps_virtual_locations, names_time_zone,
+    prune_time_zones, sends_recurrence_override, time_zone_definition, unstateable_until,
+    windows_time_zone_to_iana,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
+use jmap_proto::principals::BusyPeriod;
+use jmap_proto::state::UtcDate;
 use serde_json::{Value, json};
 
 fn fixture_event() -> CalendarEvent {
@@ -10114,6 +10117,55 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_recurrence_overrides_count: 0,
             unmapped_vendor_properties_dropped_on_export: &[],
         },
+        RealExporterTestCase {
+            name: "Mozilla Thunderbird Export (vCalendar 2.0 with Bi-Weekly RRULE, EXDATE & Alerts)",
+            fixture_file: "thunderbird_calendar_export.ics",
+            exporter_name: "Mozilla Thunderbird / Lightning",
+            expected_title: "Thunderbird Release & Quality Sync",
+            expected_start: "2026-10-12T09:30:00",
+            expected_time_zone: Some("Europe/London"),
+            expected_duration: Some("PT1H30M"),
+            expected_privacy: Some("public"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("busy"),
+            expected_priority: Some(1),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 1,
+            expected_keywords_count: 3,
+            expected_alerts_count: 1,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 1,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-MOZ-GENERATION",
+                "X-MOZ-LASTACK",
+                "X-MOZ-SNOOZE-TIME",
+            ],
+        },
+        RealExporterTestCase {
+            name: "SOGo & Radicale CalDAV Export (vCalendar 2.0 with Monthly Recurrence, Badge & Double Alarms)",
+            fixture_file: "sogo_calendar_export.ics",
+            exporter_name: "SOGo / Radicale CalDAV",
+            expected_title: "Sorbonne Distributed Systems Colloquium",
+            expected_start: "2026-11-05T14:00:00",
+            expected_time_zone: Some("Europe/Paris"),
+            expected_duration: Some("PT3H30M"),
+            expected_privacy: Some("secret"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("busy"),
+            expected_priority: Some(2),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 2,
+            expected_keywords_count: 3,
+            expected_alerts_count: 2,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 0,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-SOGO-COMPONENT-CREATED",
+                "X-RADICALE-MODIFIED",
+            ],
+        },
     ];
 
     for case in &corpus {
@@ -10706,6 +10758,350 @@ fn real_exporter_fixture_evolution_native_detailed_roundtrip() {
 
     assert_eq!(export2, export3);
     assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_thunderbird_calendar_detailed_roundtrip() {
+    let ics_text = read_fixture("thunderbird_calendar_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse Thunderbird calendar fixture");
+
+    // 1. Verify clean extra map
+    assert!(
+        event.extra.is_empty(),
+        "event.extra must be empty, found: {:?}",
+        event.extra
+    );
+
+    // 2. Validate mapped details
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Thunderbird Release & Quality Sync")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-10-12T09:30:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/London"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H30M"));
+    assert_eq!(event.privacy.as_deref(), Some("public"));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(event.priority, Some(1));
+
+    // 3. Validate conference & attachment link
+    let vlocs = event.virtual_locations.as_ref().expect("virtual_locations");
+    assert_eq!(vlocs.len(), 1);
+    let conf = vlocs.values().next().expect("conference");
+    assert_eq!(
+        conf["uri"],
+        json!("https://meet.mozilla.org/thunderbird-sync")
+    );
+    assert_eq!(conf["features"]["audio"], json!(true));
+    assert_eq!(conf["features"]["video"], json!(true));
+
+    let links = event.links.as_ref().expect("links");
+    assert_eq!(links.len(), 1);
+    let doc = links.values().next().expect("doc");
+    assert_eq!(
+        doc["href"],
+        json!("https://www.thunderbird.net/docs/release-plan.pdf")
+    );
+    assert_eq!(doc["contentType"], json!("application/pdf"));
+    assert_eq!(doc["size"], json!(204_800));
+
+    // 4. Validate bi-weekly RRULE and EXDATE override
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
+    assert_eq!(rules[0].frequency, "weekly");
+    assert_eq!(rules[0].interval, Some(2));
+    assert_eq!(rules[0].until.as_deref(), Some("2026-12-21T09:30:00"));
+    let by_day = rules[0].by_day.as_ref().expect("by_day");
+    assert_eq!(by_day.len(), 1);
+    assert_eq!(by_day[0].day, "mo");
+
+    let overrides = event.recurrence_overrides.as_ref().expect("overrides");
+    assert_eq!(overrides["2026-11-09T09:30:00"], json!({"excluded": true}));
+
+    // 5. Validate display alarm
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(
+        alerts.values().next().unwrap()["trigger"]["offset"],
+        json!("-PT15M")
+    );
+
+    // 6. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    assert!(!export1.contains("X-MOZ-GENERATION"));
+    assert!(!export1.contains("X-MOZ-LASTACK"));
+    assert!(!export1.contains("X-MOZ-SNOOZE-TIME"));
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_sogo_caldav_detailed_roundtrip() {
+    let ics_text = read_fixture("sogo_calendar_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse SOGo calendar fixture");
+
+    // 1. Verify clean extra map
+    assert!(
+        event.extra.is_empty(),
+        "event.extra must be empty, found: {:?}",
+        event.extra
+    );
+
+    // 2. Validate mapped details
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Sorbonne Distributed Systems Colloquium")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-11-05T14:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Paris"));
+    assert_eq!(event.duration.as_deref(), Some("PT3H30M"));
+    assert_eq!(event.privacy.as_deref(), Some("secret"));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(event.priority, Some(2));
+
+    // 3. Validate French accented location
+    let locs = event.locations.as_ref().expect("locations");
+    let loc = locs.values().next().expect("loc");
+    assert_eq!(
+        loc["name"],
+        json!("Amphithéâtre 25, 4 Place Jussieu, 75005 Paris")
+    );
+
+    // 4. Validate conference with chat feature and dual links (PDF + PNG badge)
+    let vlocs = event.virtual_locations.as_ref().expect("virtual_locations");
+    let conf = vlocs.values().next().expect("conf");
+    assert_eq!(conf["features"]["chat"], json!(true));
+
+    let links = event.links.as_ref().expect("links");
+    assert_eq!(links.len(), 2);
+    assert!(
+        links
+            .values()
+            .any(|l| l["contentType"] == "application/pdf")
+    );
+    assert!(
+        links
+            .values()
+            .any(|l| l["display"] == "badge" && l["contentType"] == "image/png")
+    );
+
+    // 5. Validate monthly 1st Thursday recurrence
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
+    assert_eq!(rules[0].frequency, "monthly");
+    assert_eq!(rules[0].count, Some(6));
+    let by_day = rules[0].by_day.as_ref().expect("by_day");
+    assert_eq!(by_day[0].day, "th");
+    assert_eq!(by_day[0].nth_of_period, Some(1));
+
+    // 6. Validate dual display alarms (-P1D and -PT1H)
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 2);
+    assert!(
+        alerts
+            .values()
+            .any(|a| a["trigger"]["offset"] == json!("-P1D"))
+    );
+    assert!(
+        alerts
+            .values()
+            .any(|a| a["trigger"]["offset"] == json!("-PT1H"))
+    );
+
+    // 7. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    assert!(!export1.contains("X-SOGO-COMPONENT-CREATED"));
+    assert!(!export1.contains("X-RADICALE-MODIFIED"));
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
+    let event = CalendarEvent {
+        id: Some("E-SELF-CONSISTENCY-1".into()),
+        uid: Some("urn:uuid:12345678-1234-5678-1234-567812345678".into()),
+        event_type: Some("Event".into()),
+        version: Some("2.0".into()),
+        title: Some("Self-Consistency Architecture Workshop".into()),
+        description: Some(
+            "Comprehensive round-trip self-consistency test for Evolution iCalendar mapping."
+                .into(),
+        ),
+        start: Some("2026-10-15T09:00:00".into()),
+        time_zone: Some("Europe/Berlin".into()),
+        duration: Some("PT2H30M".into()),
+        privacy: Some("private".into()),
+        status: Some("confirmed".into()),
+        free_busy_status: Some("busy".into()),
+        priority: Some(1),
+        locations: Some(
+            [(
+                "loc1".to_string(),
+                json!({
+                    "@type": "Location",
+                    "name": "Hauptgebäude, Raum 101, Berlin"
+                }),
+            )]
+            .into(),
+        ),
+        virtual_locations: Some(
+            [(
+                "v1".to_string(),
+                json!({
+                    "@type": "VirtualLocation",
+                    "name": "GNOME Video Bridge",
+                    "uri": "https://meet.gnome.org/arch-workshop",
+                    "features": {"audio": true, "video": true, "screen": true, "chat": true}
+                }),
+            )]
+            .into(),
+        ),
+        links: Some(
+            [
+                (
+                    "l1".to_string(),
+                    json!({
+                        "@type": "Link",
+                        "href": "https://foundation.gnome.org/agenda.pdf",
+                        "contentType": "application/pdf",
+                        "size": 1048576
+                    }),
+                ),
+                (
+                    "l2".to_string(),
+                    json!({
+                        "@type": "Link",
+                        "href": "https://foundation.gnome.org/badge.png",
+                        "display": "badge",
+                        "rel": "icon"
+                    }),
+                ),
+            ]
+            .into(),
+        ),
+        keywords: Some(
+            [
+                ("GNOME".into(), json!(true)),
+                ("Architecture".into(), json!(true)),
+                ("Evolution".into(), json!(true)),
+            ]
+            .into(),
+        ),
+        recurrence_rule: Some(RecurrenceRule {
+            rule_type: Some("RecurrenceRule".into()),
+            frequency: "weekly".into(),
+            interval: Some(2),
+            by_day: Some(vec![NDay::new("th")]),
+            count: Some(10),
+            ..RecurrenceRule::default()
+        }),
+        recurrence_overrides: Some(
+            [
+                ("2026-11-12T09:00:00".to_string(), json!({"excluded": true})),
+                (
+                    "2026-11-26T09:00:00".to_string(),
+                    json!({
+                        "title": "Self-Consistency Architecture Workshop (Deep Dive)",
+                        "start": "2026-11-26T10:00:00"
+                    }),
+                ),
+            ]
+            .into(),
+        ),
+        alerts: Some(
+            [
+                (
+                    "a1".to_string(),
+                    json!({
+                        "@type": "Alert",
+                        "action": "display",
+                        "trigger": {
+                            "@type": "OffsetTrigger",
+                            "offset": "-PT15M"
+                        }
+                    }),
+                ),
+                (
+                    "a2".to_string(),
+                    json!({
+                        "@type": "Alert",
+                        "action": "display",
+                        "trigger": {
+                            "@type": "OffsetTrigger",
+                            "offset": "-PT1H"
+                        }
+                    }),
+                ),
+            ]
+            .into(),
+        ),
+        ..CalendarEvent::default()
+    };
+
+    // 1. Export to iCalendar 2.0
+    let ics1 = event_to_ical(&event);
+
+    // 2. Re-import from emitted iCalendar
+    let event2 = ical_to_event(&ics1).expect("re-import emitted ics");
+
+    // 3. Export second pass
+    let ics2 = event_to_ical(&event2);
+
+    // 4. Assert exact round-trip self-consistency (Pass 1 == Pass 2)
+    assert_eq!(
+        ics1, ics2,
+        "Self-consistency: emitted iCalendar must match across passes"
+    );
+
+    // 5. Re-import second pass
+    let event3 = ical_to_event(&ics2).expect("re-import second pass");
+    assert_eq!(
+        event2, event3,
+        "Self-consistency: re-imported Event must match across passes"
+    );
+
+    // 6. Verify all mapped domains are preserved losslessly
+    assert_eq!(event2.title, event.title);
+    assert_eq!(event2.description, event.description);
+    assert_eq!(event2.start, event.start);
+    assert_eq!(event2.time_zone, event.time_zone);
+    assert_eq!(event2.duration, event.duration);
+    assert_eq!(event2.privacy, event.privacy);
+    assert_eq!(event2.status, event.status);
+    assert_eq!(event2.free_busy_status, event.free_busy_status);
+    assert_eq!(event2.priority, event.priority);
+    assert_eq!(
+        event2.keywords.as_ref().unwrap().len(),
+        event.keywords.as_ref().unwrap().len()
+    );
+    assert_eq!(event2.recurrence_rule, event.recurrence_rule);
+    assert_eq!(
+        event2.recurrence_overrides.as_ref().unwrap().len(),
+        event.recurrence_overrides.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        event2.alerts.as_ref().unwrap().len(),
+        event.alerts.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        event2.links.as_ref().unwrap().len(),
+        event.links.as_ref().unwrap().len()
+    );
+    assert_eq!(
+        event2.virtual_locations.as_ref().unwrap().len(),
+        event.virtual_locations.as_ref().unwrap().len()
+    );
 }
 
 #[test]
@@ -13197,6 +13593,736 @@ fn maps_alerts_refusal_boundary_matrix_for_unsupported_shapes() {
         assert!(
             !maps_alerts(&key_event),
             "maps_alerts must refuse invalid key: '{bad_key}'"
+        );
+    }
+}
+
+#[test]
+fn mapping_docs_completeness_audit_master_property_table_fidelity() {
+    // Audit of every property in ICAL-MAPPING.md Master Property Mapping Table:
+    // UID, SUMMARY, DESCRIPTION, DTSTART, DURATION, STATUS, TRANSP, PRIORITY,
+    // CLASS, LOCATION, GEO, CONFERENCE, ATTACH/LINKS, CATEGORIES, ORGANIZER,
+    // ATTENDEE, VALARM, VTIMEZONE.
+
+    let rich_event = CalendarEvent {
+        id: Some("jmap-evt-001".into()),
+        uid: Some("rfc-uuid-evt-001".to_owned()),
+        title: Some("Master Architecture Summit".to_owned()),
+        description: Some("Comprehensive review of the iCalendar mapping contract.".to_owned()),
+        start: Some("2026-09-15T09:30:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        duration: Some("PT2H30M".to_owned()),
+        status: Some("confirmed".to_owned()),
+        free_busy_status: Some("busy".to_owned()),
+        priority: Some(1),
+        privacy: Some("public".to_owned()),
+        locations: Some(BTreeMap::from([(
+            "loc1".to_owned(),
+            json!({
+                "@type": "Location",
+                "name": "Main Auditorium, Room 101",
+                "description": "Ground floor west wing",
+                "coordinates": "geo:52.520008,13.404954",
+            }),
+        )])),
+        virtual_locations: Some(BTreeMap::from([(
+            "v1".to_owned(),
+            json!({
+                "@type": "VirtualLocation",
+                "uri": "https://meet.example.com/summit-2026",
+                "name": "Live Video Stream",
+                "features": {
+                    "audio": true,
+                    "video": true,
+                    "screen": true,
+                    "chat": true
+                }
+            }),
+        )])),
+        links: Some(BTreeMap::from([(
+            "l1".to_owned(),
+            json!({
+                "@type": "Link",
+                "href": "https://example.com/agenda.pdf",
+                "contentType": "application/pdf",
+                "title": "Summit Agenda PDF",
+                "size": 1048576,
+                "display": "badge"
+            }),
+        )])),
+        keywords: Some(BTreeMap::from([
+            ("architecture".to_owned(), json!(true)),
+            ("jmap".to_owned(), json!(true)),
+            ("summit".to_owned(), json!(true)),
+        ])),
+        participants: Some(BTreeMap::from([
+            (
+                "p_org".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "name": "Alice Organizer",
+                    "email": "alice@example.com",
+                    "sendTo": { "imip": "mailto:alice@example.com" },
+                    "roles": { "owner": true }
+                }),
+            ),
+            (
+                "p_att".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "name": "Bob Attendee",
+                    "email": "bob@example.com",
+                    "sendTo": { "imip": "mailto:bob@example.com" },
+                    "roles": { "attendee": true },
+                    "participationStatus": "accepted",
+                    "expectReply": true
+                }),
+            ),
+        ])),
+        alerts: Some(BTreeMap::from([(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {
+                    "@type": "OffsetTrigger",
+                    "offset": "-PT15M"
+                }
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+
+    // 1. Serialization (Pass 1)
+    let ics1 = event_to_ical(&rich_event);
+    assert!(ics1.contains("BEGIN:VCALENDAR\r\n"));
+    assert!(ics1.contains("VERSION:2.0\r\n"));
+    assert!(ics1.contains("UID:jmap-evt-001\r\n"));
+    assert!(ics1.contains("X-JMAP-UID:rfc-uuid-evt-001\r\n"));
+    assert!(ics1.contains("SUMMARY:Master Architecture Summit\r\n"));
+    assert!(ics1.contains("STATUS:CONFIRMED\r\n"));
+    assert!(ics1.contains("TRANSP:OPAQUE\r\n"));
+    assert!(ics1.contains("PRIORITY:1\r\n"));
+    assert!(ics1.contains("CLASS:PUBLIC\r\n"));
+    assert!(ics1.contains("DTSTART;TZID=Europe/Berlin:20260915T093000\r\n"));
+    assert!(ics1.contains("DURATION:PT2H30M\r\n"));
+    assert!(ics1.contains("LOCATION;X-JMAP-KEY=loc1:Main Auditorium\\, Room 101\r\n"));
+    assert!(ics1.contains("CONFERENCE;VALUE=URI;"));
+    assert!(ics1.contains("ATTACH;FMTTYPE=application/pdf;"));
+    assert!(ics1.contains("CATEGORIES:architecture,jmap,summit\r\n"));
+    assert_eq!(
+        content_line(&ics1, "ORGANIZER"),
+        "ORGANIZER;CN=\"Alice Organizer\":mailto:alice@example.com"
+    );
+    assert_eq!(
+        content_line(&ics1, "ATTENDEE"),
+        "ATTENDEE;CN=\"Bob Attendee\";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE:mailto:bob@example.com"
+    );
+    assert!(ics1.contains("BEGIN:VALARM\r\n"));
+    assert!(ics1.contains("TRIGGER:-PT15M\r\n"));
+    assert!(ics1.contains("ACTION:DISPLAY\r\n"));
+
+    // 2. Deserialization (Pass 1)
+    let parsed1 = ical_to_event(&ics1).expect("parse rich ics");
+    assert_eq!(
+        parsed1.id.as_ref().map(|id| id.as_str()),
+        Some("jmap-evt-001")
+    );
+    assert_eq!(parsed1.uid.as_deref(), Some("rfc-uuid-evt-001"));
+    assert_eq!(parsed1.title.as_deref(), Some("Master Architecture Summit"));
+    assert_eq!(parsed1.status.as_deref(), Some("confirmed"));
+    assert_eq!(parsed1.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(parsed1.priority, Some(1));
+    assert_eq!(parsed1.privacy.as_deref(), Some("public"));
+    assert_eq!(parsed1.duration.as_deref(), Some("PT2H30M"));
+    assert!(parsed1.locations.is_some());
+    assert!(parsed1.virtual_locations.is_some());
+    assert!(parsed1.links.is_some());
+    assert!(parsed1.keywords.is_some());
+    assert_eq!(
+        parsed1.participants, None,
+        "guest list is written and never read back (server-managed)"
+    );
+    assert!(parsed1.alerts.is_some());
+
+    // 3. Multi-Pass Fixed-Point Convergence (Pass 2 & 3)
+    let ics2 = event_to_ical(&parsed1);
+    let parsed2 = ical_to_event(&ics2).expect("parse pass 2");
+    let ics3 = event_to_ical(&parsed2);
+
+    assert_eq!(
+        ics2, ics3,
+        "iCalendar stream must achieve byte-identical fixpoint on pass 2"
+    );
+    assert_eq!(
+        parsed1, parsed2,
+        "CalendarEvent model must achieve exact structural fixpoint on pass 2"
+    );
+}
+
+#[test]
+fn mapping_docs_completeness_audit_locations_decision_matrix() {
+    // 1. Valid location with name
+    let mut ev1 = fixture_event();
+    ev1.locations = Some(BTreeMap::from([(
+        "loc1".to_owned(),
+        json!({
+            "@type": "Location",
+            "name": "Convention Center",
+            "coordinates": "geo:37.7749,-122.4194"
+        }),
+    )]));
+    assert!(maps_locations(ev1.locations.as_ref().unwrap()));
+    let ics1 = event_to_ical(&ev1);
+    assert!(ics1.contains("LOCATION;X-JMAP-KEY=loc1:Convention Center\r\n"));
+
+    // 2. Location with only name (no coordinates) -> valid and mapped
+    let mut ev_name_only = fixture_event();
+    ev_name_only.locations = Some(BTreeMap::from([(
+        "loc1".to_owned(),
+        json!({
+            "@type": "Location",
+            "name": "Auditorium B"
+        }),
+    )]));
+    assert!(maps_locations(ev_name_only.locations.as_ref().unwrap()));
+
+    // 3. Location with only coordinates (no name) -> valid, not drawn on LOCATION line
+    let mut ev_coord_only = fixture_event();
+    ev_coord_only.locations = Some(BTreeMap::from([(
+        "loc1".to_owned(),
+        json!({
+            "@type": "Location",
+            "coordinates": "geo:48.8566,2.3522"
+        }),
+    )]));
+    assert!(maps_locations(ev_coord_only.locations.as_ref().unwrap()));
+    let ics_coord = event_to_ical(&ev_coord_only);
+    assert!(without(&ics_coord, "LOCATION"));
+
+    // 4. Multiple locations -> refused by maps_locations (first drawn, subsequent flagged)
+    let mut ev_multi = fixture_event();
+    ev_multi.locations = Some(BTreeMap::from([
+        (
+            "l1".to_owned(),
+            json!({"@type": "Location", "name": "Room 1"}),
+        ),
+        (
+            "l2".to_owned(),
+            json!({"@type": "Location", "name": "Room 2"}),
+        ),
+    ]));
+    assert!(!maps_locations(ev_multi.locations.as_ref().unwrap()));
+    let ics_multi = event_to_ical(&ev_multi);
+    assert!(ics_multi.contains("LOCATION;X-JMAP-KEY=l1:Room 1\r\n"));
+    assert!(!ics_multi.contains("Room 2"));
+
+    // 5. Invalid JSON types for Location -> refused
+    for bad_loc in [json!("string"), json!(123), json!(null), json!(true)] {
+        let mut ev_bad = fixture_event();
+        ev_bad.locations = Some(BTreeMap::from([("l1".to_owned(), bad_loc)]));
+        assert!(!maps_locations(ev_bad.locations.as_ref().unwrap()));
+    }
+}
+
+#[test]
+fn mapping_docs_completeness_audit_virtual_locations_decision_matrix() {
+    // 1. Valid virtual location with https scheme and standard features
+    let mut ev1 = fixture_event();
+    ev1.virtual_locations = Some(BTreeMap::from([(
+        "v1".to_owned(),
+        json!({
+            "@type": "VirtualLocation",
+            "uri": "https://meet.jit.si/my-meeting",
+            "name": "Jitsi Meeting",
+            "features": {
+                "audio": true,
+                "video": true,
+                "chat": true,
+                "screen": true,
+                "moderator": true
+            }
+        }),
+    )]));
+    assert!(maps_virtual_locations(
+        ev1.virtual_locations.as_ref().unwrap()
+    ));
+    let ics1 = event_to_ical(&ev1);
+    assert!(ics1.contains("CONFERENCE;VALUE=URI;"));
+    assert!(ics1.contains("https://meet.jit.si/my-meeting"));
+
+    // 2. Other valid URI schemes: zoommtg, tel, sip
+    for scheme_uri in [
+        "zoommtg://zoom.us/join?confno=12345",
+        "tel:+15551234567",
+        "sip:meeting@example.com",
+    ] {
+        let mut ev = fixture_event();
+        ev.virtual_locations = Some(BTreeMap::from([(
+            "v1".to_owned(),
+            json!({
+                "@type": "VirtualLocation",
+                "uri": scheme_uri,
+                "name": "Endpoint"
+            }),
+        )]));
+        assert!(maps_virtual_locations(
+            ev.virtual_locations.as_ref().unwrap()
+        ));
+    }
+
+    // 3. Invalid non-boolean feature values -> refused by maps_virtual_locations
+    for bad_feat in [json!("yes"), json!(1), json!(null)] {
+        let mut ev_bad_feat = fixture_event();
+        ev_bad_feat.virtual_locations = Some(BTreeMap::from([(
+            "v1".to_owned(),
+            json!({
+                "@type": "VirtualLocation",
+                "uri": "https://meet.example.com",
+                "features": { "video": bad_feat }
+            }),
+        )]));
+        assert!(!maps_virtual_locations(
+            ev_bad_feat.virtual_locations.as_ref().unwrap()
+        ));
+    }
+
+    // 4. Multiple virtual locations -> supported by RFC 7986 and maps_virtual_locations
+    let mut ev_multi_virt = fixture_event();
+    ev_multi_virt.virtual_locations = Some(BTreeMap::from([
+        (
+            "v1".to_owned(),
+            json!({"@type": "VirtualLocation", "uri": "https://meet.example.com/1"}),
+        ),
+        (
+            "v2".to_owned(),
+            json!({"@type": "VirtualLocation", "uri": "https://meet.example.com/2"}),
+        ),
+    ]));
+    assert!(maps_virtual_locations(
+        ev_multi_virt.virtual_locations.as_ref().unwrap()
+    ));
+    let ics_multi = event_to_ical(&ev_multi_virt);
+    assert!(ics_multi.contains("https://meet.example.com/1"));
+    assert!(ics_multi.contains("https://meet.example.com/2"));
+
+    // 5. Virtual location with missing URI -> refused by maps_virtual_locations
+    let mut ev_no_uri = fixture_event();
+    ev_no_uri.virtual_locations = Some(BTreeMap::from([(
+        "v1".to_owned(),
+        json!({
+            "@type": "VirtualLocation",
+            "name": "Nameless room with no URI"
+        }),
+    )]));
+    assert!(!maps_virtual_locations(
+        ev_no_uri.virtual_locations.as_ref().unwrap()
+    ));
+}
+
+#[test]
+fn mapping_docs_completeness_audit_unmodeled_and_dropped_properties_matrix() {
+    // Asserts that standard unmodeled properties and vendor X-properties in incoming
+    // iCalendar documents are safely ignored on parse, do not pollute event.extra,
+    // and are cleanly excluded on outbound serialization.
+
+    let raw_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Foreign Exporter//EN\r\n\
+CALSCALE:GREGORIAN\r\n\
+METHOD:REQUEST\r\n\
+BEGIN:VEVENT\r\n\
+UID:evt-dropped-001\r\n\
+DTSTAMP:20260915T080000Z\r\n\
+CREATED:20260101T120000Z\r\n\
+LAST-MODIFIED:20260820T153000Z\r\n\
+SEQUENCE:5\r\n\
+URL:https://example.com/event/details\r\n\
+X-MICROSOFT-CDO-BUSYSTATUS:BUSY\r\n\
+X-MICROSOFT-CDO-IMPORTANCE:1\r\n\
+X-APPLE-TRAVEL-DURATION:PT30M\r\n\
+X-EVOLUTION-MOVE-CALENDAR:TRUE\r\n\
+DTSTART;TZID=Europe/Berlin:20260915T100000\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Dropped Properties Test Event\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(raw_ics).expect("parse raw ics with unmodeled properties");
+
+    // 1. Mapped fields are accurate
+    assert_eq!(
+        event.id.as_ref().map(|id| id.as_str()),
+        Some("evt-dropped-001")
+    );
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Dropped Properties Test Event")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-09-15T10:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H"));
+
+    // 2. Extra is empty (not polluted with vendor or unmodeled metadata)
+    assert!(
+        event.extra.is_empty(),
+        "event.extra should not contain unmapped fields: {:?}",
+        event.extra
+    );
+
+    // 3. Outbound emission omits foreign envelope properties
+    let emitted = event_to_ical(&event);
+    assert!(!emitted.contains("PRODID:-//Foreign Exporter//EN"));
+    assert!(!emitted.contains("CALSCALE:GREGORIAN"));
+    assert!(!emitted.contains("METHOD:REQUEST"));
+    assert!(!emitted.contains("SEQUENCE:5"));
+    assert!(!emitted.contains("X-MICROSOFT-CDO-BUSYSTATUS"));
+    assert!(!emitted.contains("X-APPLE-TRAVEL-DURATION"));
+    assert!(!emitted.contains("X-EVOLUTION-MOVE-CALENDAR"));
+}
+
+#[test]
+fn mapping_docs_completeness_audit_freebusy_decision_matrix() {
+    // Asserts free_busy_type mappings and busy_periods_to_vfreebusy formatting
+
+    // 1. Draft busy statuses mapping
+    assert_eq!(free_busy_type("busy"), "BUSY");
+    assert_eq!(free_busy_type("tentative"), "BUSY-TENTATIVE");
+    assert_eq!(free_busy_type("unavailable"), "BUSY-UNAVAILABLE");
+    assert_eq!(free_busy_type("unknown"), "BUSY");
+    assert_eq!(free_busy_type("custom-draft-status"), "BUSY");
+
+    // 2. busy_periods_to_vfreebusy formatting and search window bounding
+    let periods = [
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-15T10:00:00Z"),
+            utc_end: UtcDate::new("2026-09-15T11:30:00Z"),
+            busy_status: "busy".to_owned(),
+            event: None,
+        },
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-15T14:00:00Z"),
+            utc_end: UtcDate::new("2026-09-15T15:00:00Z"),
+            busy_status: "tentative".to_owned(),
+            event: None,
+        },
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-15T16:00:00Z"),
+            utc_end: UtcDate::new("2026-09-15T17:00:00Z"),
+            busy_status: "unavailable".to_owned(),
+            event: None,
+        },
+    ];
+
+    let vfb = busy_periods_to_vfreebusy(
+        "alice@example.com",
+        &UtcDate::new("2026-09-15T00:00:00Z"),
+        &UtcDate::new("2026-09-15T23:59:59Z"),
+        &periods,
+    )
+    .expect("renders bare VFREEBUSY component");
+
+    assert!(vfb.starts_with("BEGIN:VFREEBUSY\r\n"));
+    assert!(vfb.contains("ATTENDEE:mailto:alice@example.com\r\n"));
+    assert!(vfb.contains("DTSTART:20260915T000000Z\r\n"));
+    assert!(vfb.contains("DTEND:20260915T235959Z\r\n"));
+    assert!(vfb.contains("FREEBUSY;FBTYPE=BUSY:20260915T100000Z/20260915T113000Z\r\n"));
+    assert!(vfb.contains("FREEBUSY;FBTYPE=BUSY-TENTATIVE:20260915T140000Z/20260915T150000Z\r\n"));
+    assert!(vfb.contains("FREEBUSY;FBTYPE=BUSY-UNAVAILABLE:20260915T160000Z/20260915T170000Z\r\n"));
+    assert!(vfb.ends_with("END:VFREEBUSY\r\n"));
+}
+
+#[test]
+fn timezone_rule_recurrence_rules_plural_and_singular_variants_matrix() {
+    // Characterizes TimeZoneRule recurrence rules representation:
+    // 1. Standard RFC 8984 §4.7.2 plural "recurrenceRules" array
+    // 2. Singular "recurrenceRule" object variant
+    // 3. Singular "recurrenceRule" array variant
+
+    let plural_zone = json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["10"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CET": true},
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["3"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CEST": true},
+        }],
+    });
+
+    let singular_object_zone = json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRule": {
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["10"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            },
+            "names": {"CET": true},
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "recurrenceRule": {
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["3"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            },
+            "names": {"CEST": true},
+        }],
+    });
+
+    let singular_array_zone = json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRule": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["10"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CET": true},
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "recurrenceRule": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["3"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CEST": true},
+        }],
+    });
+
+    let event_plural = defining(CUSTOM_TZID, json!({CUSTOM_TZID: plural_zone}));
+    let event_singular_obj = defining(CUSTOM_TZID, json!({CUSTOM_TZID: singular_object_zone}));
+    let event_singular_arr = defining(CUSTOM_TZID, json!({CUSTOM_TZID: singular_array_zone}));
+
+    let ics_plural = event_to_ical(&event_plural);
+    let ics_singular_obj = event_to_ical(&event_singular_obj);
+    let ics_singular_arr = event_to_ical(&event_singular_arr);
+
+    // All three forms must emit identical VTIMEZONE structures with RRULE entries
+    assert_eq!(ics_plural, ics_singular_obj);
+    assert_eq!(ics_plural, ics_singular_arr);
+
+    assert!(ics_plural.contains("BEGIN:VTIMEZONE\r\n"));
+    assert!(ics_plural.contains("TZID:/example.com/Europe-Berlin\r\n"));
+    assert!(ics_plural.contains("RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n"));
+    assert!(ics_plural.contains("RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n"));
+    assert!(ics_plural.contains("TZNAME:CET\r\n"));
+    assert!(ics_plural.contains("TZNAME:CEST\r\n"));
+
+    // Inbound parse of emitted VTIMEZONE always yields canonical RFC 8984 "recurrenceRules"
+    let parsed = ical_to_event(&ics_plural).expect("parse custom vtimezone");
+    let defs = parsed.time_zones.expect("time_zones present");
+    let zone_obj = defs.get(CUSTOM_TZID).expect("custom zone in map");
+    let std_rules = zone_obj
+        .get("standard")
+        .and_then(Value::as_array)
+        .expect("standard observances");
+    assert_eq!(std_rules.len(), 1);
+    assert!(
+        std_rules[0].get("recurrenceRules").is_some(),
+        "read_observance must emit canonical RFC 8984 plural 'recurrenceRules'"
+    );
+}
+
+#[test]
+fn timezone_rule_observance_until_and_transition_offset_arithmetic() {
+    // Tests observance RRULE with UNTIL: dates itself in the zone it defines,
+    // converted through Ends::At(&offset_from) arithmetic without a full tzdb.
+    let zone_with_until = json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "until": "2030-10-25T03:00:00",
+                "byMonth": ["10"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CET": true},
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "until": "2030-03-29T02:00:00",
+                "byMonth": ["3"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CEST": true},
+        }],
+    });
+
+    let event = defining(CUSTOM_TZID, json!({CUSTOM_TZID: zone_with_until}));
+    let ics1 = event_to_ical(&event);
+
+    assert!(ics1.contains("RRULE:FREQ=YEARLY;UNTIL=20301025T010000Z;BYDAY=-1SU;BYMONTH=10\r\n"));
+    assert!(ics1.contains("RRULE:FREQ=YEARLY;UNTIL=20300329T010000Z;BYDAY=-1SU;BYMONTH=3\r\n"));
+
+    let event2 = ical_to_event(&ics1).expect("parse ics1");
+    let ics2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ics2).expect("parse ics2");
+    let ics3 = event_to_ical(&event3);
+
+    // Multi-pass roundtrip fixpoint stability
+    assert_eq!(
+        ics2, ics3,
+        "VTIMEZONE observance with UNTIL reaches fixed point (ics2 == ics3)"
+    );
+    assert_eq!(
+        event2.time_zones, event3.time_zones,
+        "JSCalendar time_zones reach fixed point (event2 == event3)"
+    );
+}
+
+#[test]
+fn recurrence_until_parser_refusal_and_unstateable_canary_matrix() {
+    // Tests parser refusal boundaries and unstateable UNTIL handling:
+    // 1. Non-digit unparseable UNTIL (e.g. UNTIL=whenever) drops the token
+    let ics_hostile = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E-CANARY\r\n",
+        "DTSTART:20260810T090000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=whenever;BYMONTH=4\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let parsed = ical_to_event(ics_hostile).expect("parse hostile rrule");
+    let rule = parsed.recurrence_rule.expect("recurrence rule present");
+    assert_eq!(
+        rule.until, None,
+        "unparseable UNTIL token dropped by parser/rrule_to_rule"
+    );
+
+    // 2. Unstateable local date-times on export (e.g. month 13, day 30 of Feb)
+    for invalid_until in ["2026-13-31T09:00:00", "whenever", "2026-02-30T09:00:00"] {
+        let bad_rule = RecurrenceRule {
+            frequency: "weekly".to_owned(),
+            until: Some(invalid_until.to_owned()),
+            ..RecurrenceRule::default()
+        };
+        assert!(
+            !maps_recurrence_rule(&bad_rule),
+            "unstateable until must be refused by maps_recurrence_rule: {invalid_until}"
+        );
+        assert_eq!(
+            unstateable_until(&bad_rule),
+            Some(invalid_until),
+            "unstateable_until reports non-convertible until: {invalid_until}"
+        );
+
+        let event = CalendarEvent {
+            id: Some("E-BAD-UNTIL".into()),
+            start: Some("2026-01-15T09:00:00".to_owned()),
+            recurrence_rule: Some(bad_rule),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert!(
+            !ics.contains("RRULE"),
+            "unstateable UNTIL causes whole RRULE to be omitted to prevent unbounded recurrence"
+        );
+    }
+
+    // 3. Valid UNTIL converts and passes maps_recurrence_rule
+    let valid_rule = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        until: Some("2026-12-31T09:00:00".to_owned()),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&valid_rule));
+    assert_eq!(unstateable_until(&valid_rule), None);
+}
+
+#[test]
+fn windows_time_zone_names_unsendable_by_design_refusal_and_cldr_resolution_matrix() {
+    // Tests refusal path (outbound unsendable) vs CLDR resolution (inbound mapped)
+    let windows_names = [
+        ("W. Europe Standard Time", "Europe/Berlin"),
+        ("Pacific Standard Time", "America/Los_Angeles"),
+        ("Eastern Standard Time", "America/New_York"),
+        ("GMT Standard Time", "Europe/London"),
+        ("Tokyo Standard Time", "Asia/Tokyo"),
+        ("Romance Standard Time", "Europe/Paris"),
+        ("Central European Standard Time", "Europe/Warsaw"),
+    ];
+
+    for (win_name, expected_iana) in windows_names {
+        // Outbound refusal path
+        assert!(
+            !names_time_zone(win_name),
+            "Windows TZ '{win_name}' is not recognized as IANA name"
+        );
+
+        let event_bare = CalendarEvent {
+            time_zone: Some(win_name.to_owned()),
+            ..CalendarEvent::default()
+        };
+        assert!(
+            !defines_time_zone(&event_bare, win_name),
+            "defines_time_zone rejects Windows TZ '{win_name}'"
+        );
+        assert!(
+            !maps_time_zone(&event_bare),
+            "maps_time_zone rejects Windows TZ '{win_name}' (unsendable by design)"
+        );
+
+        // Inbound CLDR resolution
+        assert_eq!(
+            windows_time_zone_to_iana(win_name),
+            Some(expected_iana),
+            "CLDR table maps '{win_name}' -> '{expected_iana}'"
         );
     }
 }
