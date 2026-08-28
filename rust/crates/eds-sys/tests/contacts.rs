@@ -254,6 +254,120 @@ fn e_contact_date_parsing_and_formatting() {
 }
 
 #[test]
+fn e_contact_date_bare_year_and_partial_date_clamping() {
+    unsafe {
+        // Bare 4-digit year: e_contact_date_from_string fails to parse short strings (< 8 chars or non-ISO),
+        // returning an empty EContactDate struct with year=0, month=0, day=0!
+        let date = e_contact_date_from_string(c"1984".as_ptr());
+        assert!(!date.is_null());
+        assert_eq!(
+            (*date).year,
+            0,
+            "EDS fails to parse bare 4-digit year and yields year=0"
+        );
+        assert_eq!((*date).month, 0);
+        assert_eq!((*date).day, 0);
+
+        let formatted = e_contact_date_to_string_vcard_30(date);
+        assert!(!formatted.is_null());
+        // CLAMP forces year 0 -> 1000, month 0 -> 1, day 0 -> 1, corrupting 1984 into 1000-01-01!
+        assert_eq!(
+            CStr::from_ptr(formatted).to_str().unwrap(),
+            "1000-01-01",
+            "CLAMP forces year 0 to 1000, month to 1, day to 1"
+        );
+        g_free(formatted.cast());
+        e_contact_date_free(date);
+
+        // Year-month: "1984-05"
+        let ym = e_contact_date_from_string(c"1984-05".as_ptr());
+        assert!(!ym.is_null());
+        assert_eq!((*ym).year, 0);
+        let formatted_ym = e_contact_date_to_string_vcard_30(ym);
+        assert_eq!(CStr::from_ptr(formatted_ym).to_str().unwrap(), "1000-01-01");
+        g_free(formatted_ym.cast());
+        e_contact_date_free(ym);
+
+        // Year-less: "--05-20"
+        let yless = e_contact_date_from_string(c"--05-20".as_ptr());
+        assert!(!yless.is_null());
+        assert_eq!((*yless).year, 0);
+        let formatted_yless = e_contact_date_to_string_vcard_30(yless);
+        assert_eq!(
+            CStr::from_ptr(formatted_yless).to_str().unwrap(),
+            "1000-01-01"
+        );
+        g_free(formatted_yless.cast());
+        e_contact_date_free(yless);
+    }
+}
+
+#[test]
+fn contact_editor_bday_and_anniversary_bare_year_in_place_clamping_corruption() {
+    // Characterizes Evolution Contact Editor lifecycle on bare-year dates:
+    // When a vCard arrives with BDAY:1984 and X-EVOLUTION-ANNIVERSARY:1996,
+    // EVCard keeps the raw attribute string. But the moment Evolution's contact
+    // editor loads the fields via e_contact_get() and saves them back via
+    // e_contact_set(), EDS clamps year=0 to 1000, month=0 to 1, and day=0 to 1,
+    // corrupting BDAY:1984 into BDAY:1000-01-01 and Anniversary to 1000-01-01!
+    unsafe {
+        let vcard_raw = c"BEGIN:VCARD\r\nVERSION:3.0\r\nUID:c1\r\nFN:Alice\r\nBDAY:1984\r\nX-EVOLUTION-ANNIVERSARY:1996\r\nEND:VCARD\r\n";
+        let contact = e_contact_new_from_vcard(vcard_raw.as_ptr());
+        assert!(!contact.is_null());
+
+        // Untouched vCard string contains raw lines
+        let untouched = e_vcard_to_string_vcard_30(contact.cast());
+        assert!(
+            CStr::from_ptr(untouched)
+                .to_str()
+                .unwrap()
+                .contains("BDAY:1984")
+        );
+        assert!(
+            CStr::from_ptr(untouched)
+                .to_str()
+                .unwrap()
+                .contains("X-EVOLUTION-ANNIVERSARY:1996")
+        );
+        g_free(untouched.cast());
+
+        // Contact editor reading: e_contact_get yields year=0, month=0, day=0
+        let bday = e_contact_get(contact, E_CONTACT_BIRTH_DATE).cast::<EContactDate>();
+        assert!(!bday.is_null());
+        assert_eq!((*bday).year, 0);
+        assert_eq!((*bday).month, 0);
+        assert_eq!((*bday).day, 0);
+
+        let anniv = e_contact_get(contact, E_CONTACT_ANNIVERSARY).cast::<EContactDate>();
+        assert!(!anniv.is_null());
+        assert_eq!((*anniv).year, 0);
+        assert_eq!((*anniv).month, 0);
+        assert_eq!((*anniv).day, 0);
+
+        // Contact editor saving: e_contact_set invokes e_contact_date_to_string,
+        // which clamps the 0 values to 1000-01-01
+        e_contact_set(contact, E_CONTACT_BIRTH_DATE, bday.cast());
+        e_contact_set(contact, E_CONTACT_ANNIVERSARY, anniv.cast());
+
+        let rewritten = e_vcard_to_string_vcard_30(contact.cast());
+        let rewritten_str = CStr::from_ptr(rewritten).to_str().unwrap();
+        assert!(
+            rewritten_str.contains("BDAY:1000-01-01"),
+            "bare year BDAY was corrupted into 1000-01-01: {rewritten_str}"
+        );
+        assert!(
+            rewritten_str.contains("X-EVOLUTION-ANNIVERSARY:1000-01-01"),
+            "bare year anniversary was corrupted into 1000-01-01: {rewritten_str}"
+        );
+        g_free(rewritten.cast());
+
+        e_contact_date_free(bday);
+        e_contact_date_free(anniv);
+        g_object_unref(contact.cast());
+    }
+}
+
+#[test]
 fn a_date_before_the_year_1000_is_written_back_as_the_year_1000() {
     // `e_contact_date_to_string()` CLAMPs each part into the range it can
     // print: the year to 1000..=9999, the month to 1..=12, the day to 1..=31.
