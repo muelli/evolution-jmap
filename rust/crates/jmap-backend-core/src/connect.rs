@@ -445,9 +445,20 @@ where
     let resolved = match resolved {
         Ok(resolved) => resolved,
         Err(failure) => {
+            let escalates_to_consent = failure.auth_result() == E_SOURCE_AUTHENTICATION_REQUIRED;
+            let reason = match &failure {
+                ConnectError::OAuth2(_) => "oauth2_token_unavailable",
+                ConnectError::SecretStore(_) => "secret_store_failure",
+                ConnectError::CredentialsRequired => "password_required",
+                _ => "credentials_error",
+            };
             tracing::debug!(
                 collection = %kind,
                 ?account_id,
+                uses_oauth2,
+                uses_api_token,
+                escalates_to_consent,
+                reason,
                 ?failure,
                 "credentials resolution failed"
             );
@@ -509,10 +520,23 @@ fn finish_connect<T>(
             "backend connected"
         ),
         Err(error) => {
+            let escalates_to_consent =
+                error.auth_result() == eds_sys::E_SOURCE_AUTHENTICATION_REQUIRED;
+            let reason = if uses_oauth2 && matches!(error, ConnectError::OAuth2(_)) {
+                "oauth2_consent_required"
+            } else if matches!(error, ConnectError::SecretStore(_)) {
+                "secret_store_failure"
+            } else if matches!(error, ConnectError::CredentialsRequired) {
+                "credentials_required"
+            } else {
+                "connect_error"
+            };
             tracing::debug!(
                 collection = %collection,
                 ?account_id,
                 uses_oauth2,
+                escalates_to_consent,
+                reason,
                 ?error,
                 "backend connect failed"
             );
@@ -959,8 +983,63 @@ mod tests {
             "expected uses_oauth2=false, got {entries:?}"
         );
         assert!(
+            entries.contains(&("escalates_to_consent".to_owned(), "true".to_owned())),
+            "expected escalates_to_consent=true, got {entries:?}"
+        );
+        assert!(
+            entries.contains(&("reason".to_owned(), "credentials_required".to_owned())),
+            "expected reason='credentials_required', got {entries:?}"
+        );
+        assert!(
             entries.iter().any(|(k, _)| k == "error"),
             "expected error field, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn finish_connect_traces_oauth2_reclassification_and_consent_escalation() {
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        let unauthorized = || {
+            Err::<(), _>(ConnectError::Client(Error::Http {
+                status: 401,
+                problem: None,
+            }))
+        };
+
+        let result = tracing::subscriber::with_default(subscriber, || {
+            finish_connect(
+                Collection::AddressBook,
+                Some("oauth-acc"),
+                true,
+                unauthorized(),
+            )
+        });
+        assert!(result.is_err());
+
+        let entries = captured.lock().unwrap();
+        assert!(
+            entries.contains(&("collection".to_owned(), "address book".to_owned())),
+            "expected collection='address book', got {entries:?}"
+        );
+        assert!(
+            entries.contains(&("account_id".to_owned(), "Some(\"oauth-acc\")".to_owned())),
+            "expected account_id=Some(\"oauth-acc\"), got {entries:?}"
+        );
+        assert!(
+            entries.contains(&("uses_oauth2".to_owned(), "true".to_owned())),
+            "expected uses_oauth2=true, got {entries:?}"
+        );
+        assert!(
+            entries.contains(&("escalates_to_consent".to_owned(), "true".to_owned())),
+            "expected escalates_to_consent=true, got {entries:?}"
+        );
+        assert!(
+            entries.contains(&("reason".to_owned(), "oauth2_consent_required".to_owned())),
+            "expected reason='oauth2_consent_required', got {entries:?}"
         );
     }
 }
