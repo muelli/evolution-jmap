@@ -20706,3 +20706,233 @@ fn anniversary_multi_pass_roundtrip_fixpoint_stability() {
         );
     }
 }
+
+#[test]
+fn vcard_trailing_whitespace_and_nickname_encoding_fixpoint_characterization() {
+    // Backlog finding (docs/BACKLOG.md "jmap-vcard round trip is not a fixed point for a value with trailing whitespace",
+    // first manifestation): A raw vCard with unescaped trailing whitespace in NICKNAME (e.g. from an ENCODING=b
+    // envelope or raw imported stream) keeps the trailing space on first emit (NICKNAME;X-JMAP-KEY=k1:! ),
+    // but on the second pass calcard's parser trims unescaped trailing whitespace, normalizing it to '!'.
+    // Multi-stage fixpoint asserts that pass 2 (vcard2, card2) and pass 3 (vcard3, card3) reach an exact byte-identical fixed point.
+    let raw_vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n";
+    let parsed1 = vcard_to_card(raw_vcard).expect("first parse of raw vcard");
+    assert_eq!(
+        parsed1.nicknames.as_ref().unwrap()["k1"].name,
+        "! ",
+        "pass 1 preserves the raw parsed value"
+    );
+
+    let vcard1 = card_to_vcard(&parsed1);
+    assert!(
+        vcard1.contains("NICKNAME;X-JMAP-KEY=k1:! "),
+        "vcard1 emits the preserved nickname with trailing whitespace: {vcard1}"
+    );
+
+    let parsed2 = vcard_to_card(&vcard1).expect("second parse of emitted vcard");
+    assert_eq!(
+        parsed2.nicknames.as_ref().unwrap()["k1"].name,
+        "!",
+        "pass 2 normalizes unescaped trailing whitespace"
+    );
+
+    let vcard2 = card_to_vcard(&parsed2);
+    assert!(
+        vcard2.contains("NICKNAME;X-JMAP-KEY=k1:!\r\n")
+            || vcard2.contains("NICKNAME;X-JMAP-KEY=k1:!\n"),
+        "vcard2 emits the normalized nickname: {vcard2}"
+    );
+
+    let parsed3 = vcard_to_card(&vcard2).expect("third parse of stabilized vcard");
+    let vcard3 = card_to_vcard(&parsed3);
+
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard serialization reaches exact byte-identical fixed point at pass 2"
+    );
+    assert_eq!(
+        parsed2, parsed3,
+        "ContactCard domain model reaches exact fixed point at pass 2"
+    );
+}
+
+#[test]
+fn vcard_trailing_whitespace_across_all_property_types_matrix() {
+    // Tests unescaped trailing whitespace, escaped spaces ('\ '), and tabs across
+    // FN, NOTE, ORG, TITLE, ROLE, CATEGORIES, TEL, EMAIL, and URL lines.
+    let cases = vec![
+        (
+            "FN",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe  \r\nN:Doe;John;;;\r\nEND:VCARD\r\n",
+        ),
+        (
+            "NOTE",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nNOTE;X-JMAP-KEY=n1:Important note with space  \r\nEND:VCARD\r\n",
+        ),
+        (
+            "ORG",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nORG;X-JMAP-KEY=o1:Acme Corp ;Engineering \r\nEND:VCARD\r\n",
+        ),
+        (
+            "TITLE",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nTITLE;X-JMAP-KEY=t1:Senior Architect \r\nEND:VCARD\r\n",
+        ),
+        (
+            "ROLE",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nROLE;X-JMAP-KEY=r1:Lead Developer \r\nEND:VCARD\r\n",
+        ),
+        (
+            "CATEGORIES",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nCATEGORIES:Work ,VIP \r\nEND:VCARD\r\n",
+        ),
+        (
+            "TEL",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nTEL;TYPE=WORK,VOICE;X-JMAP-KEY=p1:+1-555-0100 \r\nEND:VCARD\r\n",
+        ),
+        (
+            "EMAIL",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nEMAIL;TYPE=WORK;X-JMAP-KEY=e1:john@example.com \r\nEND:VCARD\r\n",
+        ),
+        (
+            "URL",
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:John Doe\r\nURL;X-JMAP-KEY=l1:https://example.com/john \r\nEND:VCARD\r\n",
+        ),
+    ];
+
+    for (prop_name, raw_vcard) in cases {
+        let parsed1 = vcard_to_card(raw_vcard)
+            .unwrap_or_else(|e| panic!("parse 1 failed for {prop_name}: {e}"));
+        let vcard1 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard1)
+            .unwrap_or_else(|e| panic!("parse 2 failed for {prop_name}: {e}"));
+        let vcard2 = card_to_vcard(&parsed2);
+        let parsed3 = vcard_to_card(&vcard2)
+            .unwrap_or_else(|e| panic!("parse 3 failed for {prop_name}: {e}"));
+        let vcard3 = card_to_vcard(&parsed3);
+
+        assert_eq!(
+            vcard2, vcard3,
+            "property {prop_name} must reach vCard fixed point at pass 2"
+        );
+        assert_eq!(
+            parsed2, parsed3,
+            "property {prop_name} must reach ContactCard fixed point at pass 2"
+        );
+    }
+}
+
+#[test]
+fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
+    // Backlog finding (docs/BACKLOG.md, second and third manifestations):
+    // A ContactCard with a stated-but-empty full name (`full: Some("")`) and single/multiple
+    // name components (`given: "0"`, `given: "𞋀"`, Unicode multi-byte characters) previously
+    // took an extra round trip because `card_to_vcard` emitted an empty `FN:` while `read_name`
+    // treated empty `FN:` as absent, causing `derive_full` to synthesize on the next pass.
+    // The empty-is-absent filter in `card_to_vcard` derives `full` immediately, ensuring
+    // immediate fixed-point stability ($vcard_1 \equiv vcard_2$, $card_1 \equiv card_2$).
+    let test_names = vec![
+        Name {
+            components: Some(vec![NameComponent::new("given", "0")]),
+            full: Some(String::new()),
+            extra: BTreeMap::new(),
+        },
+        Name {
+            components: Some(vec![NameComponent::new("given", "𞋀")]),
+            full: Some(String::new()),
+            extra: BTreeMap::new(),
+        },
+        Name {
+            components: Some(vec![
+                NameComponent::new("given", "Alice"),
+                NameComponent::new("surname", "Smith"),
+            ]),
+            full: Some(String::new()),
+            extra: BTreeMap::new(),
+        },
+        Name {
+            components: Some(vec![
+                NameComponent::new("prefix", "Dr."),
+                NameComponent::new("given", "René"),
+                NameComponent::new("middle", "Jean"),
+                NameComponent::new("surname", "Müller"),
+                NameComponent::new("suffix", "III"),
+            ]),
+            full: Some(String::new()),
+            extra: BTreeMap::new(),
+        },
+    ];
+
+    for name in test_names {
+        let card = ContactCard {
+            id: Some("C-NAME-FIXPOINT".into()),
+            name: Some(name),
+            ..ContactCard::default()
+        };
+
+        // Pass 1: Card -> vCard1 -> Card1
+        let vcard1 = card_to_vcard(&card);
+        let parsed1 = vcard_to_card(&vcard1).expect("parse vcard1");
+
+        // Pass 2: Card1 -> vCard2 -> Card2
+        let vcard2 = card_to_vcard(&parsed1);
+        let parsed2 = vcard_to_card(&vcard2).expect("parse vcard2");
+
+        // Pass 3: Card2 -> vCard3 -> Card3
+        let vcard3 = card_to_vcard(&parsed2);
+        let parsed3 = vcard_to_card(&vcard3).expect("parse vcard3");
+
+        // Immediate fixed point at pass 1
+        assert_eq!(
+            vcard1, vcard2,
+            "vCard output must reach fixed point immediately at pass 1"
+        );
+        assert_eq!(
+            parsed1, parsed2,
+            "ContactCard model must reach fixed point immediately at pass 1"
+        );
+
+        // Fixed point at pass 2/3
+        assert_eq!(vcard2, vcard3);
+        assert_eq!(parsed2, parsed3);
+    }
+}
+
+#[test]
+fn vcard_trailing_whitespace_roundtrip_multi_pass_convergence() {
+    // Composite card with mixed trailing whitespace, escaped spaces, and multi-component fields
+    let raw_vcard = concat!(
+        "BEGIN:VCARD\r\n",
+        "VERSION:3.0\r\n",
+        "FN:Dr. Jane Doe \r\n",
+        "N:Doe ;Jane ;A. ;Dr. ;Jr. \r\n",
+        "NICKNAME;X-JMAP-KEY=k1:Janey \r\n",
+        "EMAIL;TYPE=WORK;X-JMAP-KEY=e1:jane.doe@work.example.com \r\n",
+        "TEL;TYPE=WORK,VOICE;X-JMAP-KEY=p1:+1 555 0199 \r\n",
+        "ADR;TYPE=WORK;X-JMAP-KEY=a1:;;100 Enterprise Way ;Metropolis ;CA ;94000 ;USA \r\n",
+        "ORG;X-JMAP-KEY=o1:Enterprise Inc. ;Engineering ;Platform \r\n",
+        "TITLE;X-JMAP-KEY=t1:Chief Architect \r\n",
+        "ROLE;X-JMAP-KEY=r1:Technical Fellow \r\n",
+        "NOTE;X-JMAP-KEY=n1:Multi-line note with trailing spaces \r\n and continuation \r\n",
+        "CATEGORIES:Engineering ,Architecture ,VIP \r\n",
+        "URL;X-JMAP-KEY=l1:https://jane.example.com \r\n",
+        "BDAY:1988-03-24\r\n",
+        "END:VCARD\r\n",
+    );
+
+    let card1 = vcard_to_card(raw_vcard).expect("pass 1 parse");
+    let vcard1 = card_to_vcard(&card1);
+
+    let card2 = vcard_to_card(&vcard1).expect("pass 2 parse");
+    let vcard2 = card_to_vcard(&card2);
+
+    let card3 = vcard_to_card(&vcard2).expect("pass 3 parse");
+    let vcard3 = card_to_vcard(&card3);
+
+    let card4 = vcard_to_card(&vcard3).expect("pass 4 parse");
+    let vcard4 = card_to_vcard(&card4);
+
+    // Multi-pass convergence verification
+    assert_eq!(vcard2, vcard3, "vCard pass 2 == pass 3");
+    assert_eq!(vcard3, vcard4, "vCard pass 3 == pass 4");
+    assert_eq!(card2, card3, "ContactCard pass 2 == pass 3");
+    assert_eq!(card3, card4, "ContactCard pass 3 == pass 4");
+}
