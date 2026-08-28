@@ -14,6 +14,7 @@ use jmap_ical::{
     ical_to_event, maps_alerts, maps_keyword, maps_locations, maps_recurrence_override,
     maps_recurrence_rule, maps_time_zone, maps_virtual_locations, names_time_zone,
     prune_time_zones, sends_recurrence_override, time_zone_definition, unstateable_until,
+    windows_time_zone_to_iana,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use jmap_proto::principals::BusyPeriod;
@@ -14029,4 +14030,299 @@ fn mapping_docs_completeness_audit_freebusy_decision_matrix() {
     assert!(vfb.contains("FREEBUSY;FBTYPE=BUSY-TENTATIVE:20260915T140000Z/20260915T150000Z\r\n"));
     assert!(vfb.contains("FREEBUSY;FBTYPE=BUSY-UNAVAILABLE:20260915T160000Z/20260915T170000Z\r\n"));
     assert!(vfb.ends_with("END:VFREEBUSY\r\n"));
+}
+
+#[test]
+fn timezone_rule_recurrence_rules_plural_and_singular_variants_matrix() {
+    // Characterizes TimeZoneRule recurrence rules representation:
+    // 1. Standard RFC 8984 §4.7.2 plural "recurrenceRules" array
+    // 2. Singular "recurrenceRule" object variant
+    // 3. Singular "recurrenceRule" array variant
+
+    let plural_zone = json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["10"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CET": true},
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["3"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CEST": true},
+        }],
+    });
+
+    let singular_object_zone = json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRule": {
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["10"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            },
+            "names": {"CET": true},
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "recurrenceRule": {
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["3"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            },
+            "names": {"CEST": true},
+        }],
+    });
+
+    let singular_array_zone = json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRule": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["10"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CET": true},
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "recurrenceRule": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "byMonth": ["3"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CEST": true},
+        }],
+    });
+
+    let event_plural = defining(CUSTOM_TZID, json!({CUSTOM_TZID: plural_zone}));
+    let event_singular_obj = defining(CUSTOM_TZID, json!({CUSTOM_TZID: singular_object_zone}));
+    let event_singular_arr = defining(CUSTOM_TZID, json!({CUSTOM_TZID: singular_array_zone}));
+
+    let ics_plural = event_to_ical(&event_plural);
+    let ics_singular_obj = event_to_ical(&event_singular_obj);
+    let ics_singular_arr = event_to_ical(&event_singular_arr);
+
+    // All three forms must emit identical VTIMEZONE structures with RRULE entries
+    assert_eq!(ics_plural, ics_singular_obj);
+    assert_eq!(ics_plural, ics_singular_arr);
+
+    assert!(ics_plural.contains("BEGIN:VTIMEZONE\r\n"));
+    assert!(ics_plural.contains("TZID:/example.com/Europe-Berlin\r\n"));
+    assert!(ics_plural.contains("RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n"));
+    assert!(ics_plural.contains("RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n"));
+    assert!(ics_plural.contains("TZNAME:CET\r\n"));
+    assert!(ics_plural.contains("TZNAME:CEST\r\n"));
+
+    // Inbound parse of emitted VTIMEZONE always yields canonical RFC 8984 "recurrenceRules"
+    let parsed = ical_to_event(&ics_plural).expect("parse custom vtimezone");
+    let defs = parsed.time_zones.expect("time_zones present");
+    let zone_obj = defs.get(CUSTOM_TZID).expect("custom zone in map");
+    let std_rules = zone_obj
+        .get("standard")
+        .and_then(Value::as_array)
+        .expect("standard observances");
+    assert_eq!(std_rules.len(), 1);
+    assert!(
+        std_rules[0].get("recurrenceRules").is_some(),
+        "read_observance must emit canonical RFC 8984 plural 'recurrenceRules'"
+    );
+}
+
+#[test]
+fn timezone_rule_observance_until_and_transition_offset_arithmetic() {
+    // Tests observance RRULE with UNTIL: dates itself in the zone it defines,
+    // converted through Ends::At(&offset_from) arithmetic without a full tzdb.
+    let zone_with_until = json!({
+        "@type": "TimeZone",
+        "tzId": CUSTOM_TZID,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "until": "2030-10-25T03:00:00",
+                "byMonth": ["10"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CET": true},
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "recurrenceRules": [{
+                "@type": "RecurrenceRule",
+                "frequency": "yearly",
+                "until": "2030-03-29T02:00:00",
+                "byMonth": ["3"],
+                "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+            }],
+            "names": {"CEST": true},
+        }],
+    });
+
+    let event = defining(CUSTOM_TZID, json!({CUSTOM_TZID: zone_with_until}));
+    let ics1 = event_to_ical(&event);
+
+    assert!(ics1.contains("RRULE:FREQ=YEARLY;UNTIL=20301025T010000Z;BYDAY=-1SU;BYMONTH=10\r\n"));
+    assert!(ics1.contains("RRULE:FREQ=YEARLY;UNTIL=20300329T010000Z;BYDAY=-1SU;BYMONTH=3\r\n"));
+
+    let event2 = ical_to_event(&ics1).expect("parse ics1");
+    let ics2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ics2).expect("parse ics2");
+    let ics3 = event_to_ical(&event3);
+
+    // Multi-pass roundtrip fixpoint stability
+    assert_eq!(
+        ics2, ics3,
+        "VTIMEZONE observance with UNTIL reaches fixed point (ics2 == ics3)"
+    );
+    assert_eq!(
+        event2.time_zones, event3.time_zones,
+        "JSCalendar time_zones reach fixed point (event2 == event3)"
+    );
+}
+
+#[test]
+fn recurrence_until_parser_refusal_and_unstateable_canary_matrix() {
+    // Tests parser refusal boundaries and unstateable UNTIL handling:
+    // 1. Non-digit unparseable UNTIL (e.g. UNTIL=whenever) drops the token
+    let ics_hostile = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:E-CANARY\r\n",
+        "DTSTART:20260810T090000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=whenever;BYMONTH=4\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let parsed = ical_to_event(ics_hostile).expect("parse hostile rrule");
+    let rule = parsed.recurrence_rule.expect("recurrence rule present");
+    assert_eq!(
+        rule.until, None,
+        "unparseable UNTIL token dropped by parser/rrule_to_rule"
+    );
+
+    // 2. Unstateable local date-times on export (e.g. month 13, day 30 of Feb)
+    for invalid_until in ["2026-13-31T09:00:00", "whenever", "2026-02-30T09:00:00"] {
+        let bad_rule = RecurrenceRule {
+            frequency: "weekly".to_owned(),
+            until: Some(invalid_until.to_owned()),
+            ..RecurrenceRule::default()
+        };
+        assert!(
+            !maps_recurrence_rule(&bad_rule),
+            "unstateable until must be refused by maps_recurrence_rule: {invalid_until}"
+        );
+        assert_eq!(
+            unstateable_until(&bad_rule),
+            Some(invalid_until),
+            "unstateable_until reports non-convertible until: {invalid_until}"
+        );
+
+        let event = CalendarEvent {
+            id: Some("E-BAD-UNTIL".into()),
+            start: Some("2026-01-15T09:00:00".to_owned()),
+            recurrence_rule: Some(bad_rule),
+            ..CalendarEvent::default()
+        };
+        let ics = event_to_ical(&event);
+        assert!(
+            !ics.contains("RRULE"),
+            "unstateable UNTIL causes whole RRULE to be omitted to prevent unbounded recurrence"
+        );
+    }
+
+    // 3. Valid UNTIL converts and passes maps_recurrence_rule
+    let valid_rule = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        until: Some("2026-12-31T09:00:00".to_owned()),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&valid_rule));
+    assert_eq!(unstateable_until(&valid_rule), None);
+}
+
+#[test]
+fn windows_time_zone_names_unsendable_by_design_refusal_and_cldr_resolution_matrix() {
+    // Tests refusal path (outbound unsendable) vs CLDR resolution (inbound mapped)
+    let windows_names = [
+        ("W. Europe Standard Time", "Europe/Berlin"),
+        ("Pacific Standard Time", "America/Los_Angeles"),
+        ("Eastern Standard Time", "America/New_York"),
+        ("GMT Standard Time", "Europe/London"),
+        ("Tokyo Standard Time", "Asia/Tokyo"),
+        ("Romance Standard Time", "Europe/Paris"),
+        ("Central European Standard Time", "Europe/Warsaw"),
+    ];
+
+    for (win_name, expected_iana) in windows_names {
+        // Outbound refusal path
+        assert!(
+            !names_time_zone(win_name),
+            "Windows TZ '{win_name}' is not recognized as IANA name"
+        );
+
+        let event_bare = CalendarEvent {
+            time_zone: Some(win_name.to_owned()),
+            ..CalendarEvent::default()
+        };
+        assert!(
+            !defines_time_zone(&event_bare, win_name),
+            "defines_time_zone rejects Windows TZ '{win_name}'"
+        );
+        assert!(
+            !maps_time_zone(&event_bare),
+            "maps_time_zone rejects Windows TZ '{win_name}' (unsendable by design)"
+        );
+
+        // Inbound CLDR resolution
+        assert_eq!(
+            windows_time_zone_to_iana(win_name),
+            Some(expected_iana),
+            "CLDR table maps '{win_name}' -> '{expected_iana}'"
+        );
+    }
 }
