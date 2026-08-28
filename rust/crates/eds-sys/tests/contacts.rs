@@ -2360,3 +2360,191 @@ END:VCARD\r\n";
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+#[test]
+fn test_photo_handling_uri_rendering_replacement_and_clearing_in_eds() {
+    unsafe {
+        // 1. Initial contact with no photo
+        let contact = e_contact_new();
+        assert!(!contact.is_null());
+        e_contact_set(
+            contact,
+            E_CONTACT_FULL_NAME,
+            c"Vera Oldenburg".as_ptr().cast(),
+        );
+
+        let photo_none = e_contact_get(contact, E_CONTACT_PHOTO) as *mut EContactPhoto;
+        assert!(photo_none.is_null());
+
+        // 2. Set URI photo (HTTPS)
+        let uri_photo = e_contact_photo_new();
+        (*uri_photo).type_ = E_CONTACT_PHOTO_TYPE_URI;
+        e_contact_photo_set_uri(uri_photo, c"https://example.com/avatar.jpg".as_ptr());
+        e_contact_set(contact, E_CONTACT_PHOTO, uri_photo.cast());
+        e_contact_photo_free(uri_photo);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;VALUE=uri:https://example.com/avatar.jpg"),
+            "URI photo must emit VALUE=uri without TYPE: {vcard_str}"
+        );
+        assert!(
+            !vcard_str.contains("PHOTO;TYPE="),
+            "URI photo must not state TYPE: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 3. Set URI photo (file:// local URI)
+        let file_uri_photo = e_contact_photo_new();
+        (*file_uri_photo).type_ = E_CONTACT_PHOTO_TYPE_URI;
+        e_contact_photo_set_uri(
+            file_uri_photo,
+            c"file:///home/runner/.photos/vera.png".as_ptr(),
+        );
+        e_contact_set(contact, E_CONTACT_PHOTO, file_uri_photo.cast());
+        e_contact_photo_free(file_uri_photo);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;VALUE=uri:file:///home/runner/.photos/vera.png"),
+            "file URI photo must emit VALUE=uri: {vcard_str}"
+        );
+        assert!(
+            !vcard_str.contains("https://example.com/avatar.jpg"),
+            "previous URI should be replaced"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 4. Replace URI photo with inlined binary photo (JPEG)
+        let inlined_photo = e_contact_photo_new();
+        assert_eq!((*inlined_photo).type_, E_CONTACT_PHOTO_TYPE_INLINED);
+        let sample_jpeg = b"\xFF\xD8\xFF\xE0sample_jpeg_binary_payload";
+        e_contact_photo_set_inlined(
+            inlined_photo,
+            sample_jpeg.as_ptr(),
+            sample_jpeg.len() as gsize,
+        );
+        e_contact_photo_set_mime_type(inlined_photo, c"image/jpeg".as_ptr());
+        e_contact_set(contact, E_CONTACT_PHOTO, inlined_photo.cast());
+        e_contact_photo_free(inlined_photo);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;TYPE=jpeg;ENCODING=b:")
+                || vcard_str.contains("PHOTO;ENCODING=b;TYPE=jpeg:"),
+            "inlined photo should replace URI and emit TYPE=jpeg;ENCODING=b: {vcard_str}"
+        );
+        assert!(
+            !vcard_str.contains("VALUE=uri"),
+            "inlined photo must not state VALUE=uri: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 5. Replace inlined JPEG with inlined PNG photo
+        let png_photo = e_contact_photo_new();
+        let sample_png = b"\x89PNG\r\n\x1a\nsample_png_binary_payload";
+        e_contact_photo_set_inlined(png_photo, sample_png.as_ptr(), sample_png.len() as gsize);
+        e_contact_photo_set_mime_type(png_photo, c"image/png".as_ptr());
+        e_contact_set(contact, E_CONTACT_PHOTO, png_photo.cast());
+        e_contact_photo_free(png_photo);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;TYPE=png;ENCODING=b:")
+                || vcard_str.contains("PHOTO;ENCODING=b;TYPE=png:")
+                || vcard_str.contains("PHOTO;ENCODING=b;TYPE=PNG:"),
+            "PNG photo should replace JPEG and emit TYPE=png: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 6. Inlined photo with NULL mime type in EDS -> writes TYPE="X-EVOLUTION-UNKNOWN" or no subtype
+        let unknown_photo = e_contact_photo_new();
+        let sample_raw = b"raw_unknown_image_bytes";
+        e_contact_photo_set_inlined(
+            unknown_photo,
+            sample_raw.as_ptr(),
+            sample_raw.len() as gsize,
+        );
+        // mime_type left as NULL
+        e_contact_set(contact, E_CONTACT_PHOTO, unknown_photo.cast());
+        e_contact_photo_free(unknown_photo);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;TYPE=\"X-EVOLUTION-UNKNOWN\";ENCODING=b:")
+                || vcard_str.contains("PHOTO;TYPE=X-EVOLUTION-UNKNOWN;ENCODING=b:")
+                || vcard_str.contains("PHOTO;ENCODING=b:"),
+            "NULL mime_type in EDS should emit X-EVOLUTION-UNKNOWN or bare ENCODING=b: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 7. Clear E_CONTACT_PHOTO (user removed picture in editor)
+        e_contact_set(contact, E_CONTACT_PHOTO, std::ptr::null());
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            !vcard_str.contains("PHOTO"),
+            "clearing photo must remove PHOTO line from vCard: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        // 8. Inbound vCard with PHOTO;VALUE=uri vs bare PHOTO:https://
+        let test_vcard = c"BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Test Multi Photo\r\n\
+PHOTO;VALUE=uri:https://example.com/explicit_uri.png\r\n\
+PHOTO;X-JMAP-KEY=m2;TYPE=jpeg;ENCODING=b:c2FtcGxl\r\n\
+LOGO;VALUE=uri:https://example.com/logo.png\r\n\
+END:VCARD\r\n";
+        let multi_contact = e_contact_new_from_vcard(test_vcard.as_ptr());
+        assert!(!multi_contact.is_null());
+
+        let read_photo = e_contact_get(multi_contact, E_CONTACT_PHOTO) as *mut EContactPhoto;
+        assert!(!read_photo.is_null());
+        assert_eq!((*read_photo).type_, E_CONTACT_PHOTO_TYPE_URI);
+        let read_uri = e_contact_photo_get_uri(read_photo);
+        assert_eq!(
+            CStr::from_ptr(read_uri).to_str().unwrap(),
+            "https://example.com/explicit_uri.png"
+        );
+        // Note: EDS e_contact_photo_get_mime_type asserts photo->type == E_CONTACT_PHOTO_TYPE_INLINED.
+        // URI photos in EDS do not have a mime_type field.
+        e_contact_photo_free(read_photo);
+
+        // Replacing first photo with URI on multi-photo contact leaves second photo and logo intact
+        let new_uri_obj = e_contact_photo_new();
+        (*new_uri_obj).type_ = E_CONTACT_PHOTO_TYPE_URI;
+        e_contact_photo_set_uri(
+            new_uri_obj,
+            c"https://example.com/replaced_avatar.jpg".as_ptr(),
+        );
+        e_contact_set(multi_contact, E_CONTACT_PHOTO, new_uri_obj.cast());
+        e_contact_photo_free(new_uri_obj);
+
+        let vcard_ptr = e_vcard_to_string_vcard_30(multi_contact.cast());
+        let vcard_str = CStr::from_ptr(vcard_ptr).to_str().unwrap();
+        assert!(
+            vcard_str.contains("PHOTO;VALUE=uri:https://example.com/replaced_avatar.jpg"),
+            "first photo replaced with new URI: {vcard_str}"
+        );
+        assert!(
+            vcard_str.contains("PHOTO;X-JMAP-KEY=m2;TYPE=jpeg;ENCODING=b:c2FtcGxl")
+                || vcard_str.contains("PHOTO;ENCODING=b;TYPE=jpeg;X-JMAP-KEY=m2:c2FtcGxl"),
+            "second photo preserved: {vcard_str}"
+        );
+        assert!(
+            vcard_str.contains("LOGO;VALUE=uri:https://example.com/logo.png"),
+            "logo preserved: {vcard_str}"
+        );
+        g_free(vcard_ptr.cast());
+
+        gobject_sys::g_object_unref(multi_contact.cast());
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}

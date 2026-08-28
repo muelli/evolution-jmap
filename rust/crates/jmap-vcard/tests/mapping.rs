@@ -19917,3 +19917,429 @@ fn online_services_case_punctuation_normalization_and_user_vs_uri_precedence() {
         );
     }
 }
+
+#[test]
+fn evolution_contact_editor_photo_lifecycle_uri_inline_and_clearing_matrix() {
+    // 1. Setting and emitting URI photos across various schemes
+    let uri_schemes = [
+        "https://example.com/photos/avatar.jpg",
+        "http://photos.internal.net/user.png",
+        "file:///home/runner/.photos/contact_profile.webp",
+        "ftp://files.example.org/images/id_badge.jpg",
+    ];
+
+    for uri in uri_schemes {
+        let card = one_photo(uri, None);
+        assert!(states_media(&card.media.as_ref().unwrap()["m1"]));
+        let vcard = card_to_vcard(&card);
+        let unfolded_vcard = unfolded(&vcard);
+        assert_eq!(
+            line(&unfolded_vcard, "PHOTO"),
+            format!("PHOTO;X-JMAP-KEY=m1;VALUE=uri:{uri}"),
+            "URI photo must emit VALUE=uri without TYPE parameter: {vcard}"
+        );
+        assert!(
+            !vcard.contains("TYPE="),
+            "URI photo must not state TYPE: {vcard}"
+        );
+
+        // Inbound roundtrip
+        let parsed = vcard_to_card(&vcard).expect("parse emitted URI photo");
+        let media = parsed.media.expect("media");
+        assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+        assert_eq!(media["m1"].uri, uri);
+        assert_eq!(media["m1"].media_type, None);
+    }
+
+    // 2. Setting and emitting inlined binary photos across multiple MIME types
+    let inlined_formats = [
+        ("image/jpeg", "jpeg", PAYLOAD),
+        (
+            "image/png",
+            "png",
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        ),
+        (
+            "image/gif",
+            "gif",
+            "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
+        ),
+        (
+            "image/webp",
+            "webp",
+            "UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==",
+        ),
+        (
+            "image/svg+xml",
+            "svg+xml",
+            "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxIiBoZWlnaHQ9IjEiPjwvc3ZnPg==",
+        ),
+    ];
+
+    for (media_type, subtype, base64_payload) in inlined_formats {
+        let data_uri = format!("data:{media_type};base64,{base64_payload}");
+        let card = one_photo(&data_uri, Some(media_type));
+        assert!(states_media(&card.media.as_ref().unwrap()["m1"]));
+        let vcard = card_to_vcard(&card);
+
+        assert!(
+            vcard.contains(&format!("PHOTO;X-JMAP-KEY=m1;TYPE={subtype};ENCODING=b:"))
+                || vcard.contains(&format!(
+                    "PHOTO;X-JMAP-KEY=m1;TYPE={};ENCODING=b:",
+                    subtype.to_ascii_uppercase()
+                )),
+            "inlined photo must emit subtype {subtype} and ENCODING=b: {vcard}"
+        );
+        assert!(
+            !vcard.contains("VALUE=uri"),
+            "inlined photo must not state VALUE=uri: {vcard}"
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse emitted inlined photo");
+        let media = parsed.media.expect("media");
+        assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+        assert_eq!(media["m1"].media_type.as_deref(), Some(media_type));
+        assert!(same_photo(&card.media.unwrap()["m1"], &media["m1"]));
+    }
+
+    // 3. Non-image data URIs emitted without TYPE parameter
+    let non_image_data_uris = [
+        format!("data:application/pdf;base64,{PAYLOAD}"),
+        format!("data:;base64,{PAYLOAD}"),
+    ];
+    for data_uri in non_image_data_uris {
+        let card = one_photo(&data_uri, None);
+        assert!(states_media(&card.media.as_ref().unwrap()["m1"]));
+        let vcard = card_to_vcard(&card);
+        assert_eq!(
+            line(&vcard, "PHOTO"),
+            format!("PHOTO;X-JMAP-KEY=m1;ENCODING=b:{PAYLOAD}")
+        );
+        assert!(
+            !vcard.contains("TYPE="),
+            "non-image data URI must not state TYPE: {vcard}"
+        );
+
+        let parsed = vcard_to_card(&vcard).expect("parse");
+        let media = parsed.media.expect("media");
+        assert_eq!(media["m1"].media_type, None);
+    }
+
+    // 4. Malformed/non-base64 data URIs and non-photo kinds get no line and states_media is false
+    let unmapped_or_corrupt_media = [
+        photo_of_kind(Some("logo"), "https://example.com/logo.png", None),
+        photo_of_kind(Some("sound"), "https://example.com/sound.ogg", None),
+        photo_of_kind(Some("document"), "https://example.com/doc.pdf", None),
+        photo_of_kind(None, "https://example.com/unknown.jpg", None),
+        one_photo("data:image/jpeg;base64,not!valid!base64!", None),
+        one_photo("data:image/jpeg,%89PNG%0D%0A", None),
+        one_photo("data:image/jpeg", None),
+        one_photo("data:", None),
+        one_photo("", None),
+    ];
+    for card in unmapped_or_corrupt_media {
+        let media_entry = &card.media.as_ref().unwrap()["m1"];
+        assert!(
+            !states_media(media_entry),
+            "media entry {:?} must not state a line",
+            media_entry
+        );
+        let vcard = card_to_vcard(&card);
+        assert!(!vcard.contains("PHOTO"), "must emit no PHOTO line: {vcard}");
+    }
+
+    // 5. Replaced photo lifecycle in Evolution editor (URI -> inlined, inlined -> URI, inlined -> inlined)
+    // Starting with inlined JPEG
+    let orig_card = one_photo(
+        &format!("data:image/jpeg;base64,{PAYLOAD}"),
+        Some("image/jpeg"),
+    );
+    let orig_vcard = card_to_vcard(&orig_card);
+
+    // Editor replaces inlined JPEG with URI photo (dropping X-JMAP-KEY on re-render)
+    let edited_uri_vcard = orig_vcard.replace(
+        &format!("PHOTO;X-JMAP-KEY=m1;TYPE=jpeg;ENCODING=b:{PAYLOAD}"),
+        "PHOTO;VALUE=uri:https://example.com/new_avatar.png",
+    );
+    let edited_card = vcard_to_card(&edited_uri_vcard).expect("parse edited URI vcard");
+    let media = edited_card.media.expect("media");
+    assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(media["m1"].uri, "https://example.com/new_avatar.png");
+    assert_eq!(media["m1"].media_type, None);
+    assert!(!same_photo(
+        &orig_card.media.as_ref().unwrap()["m1"],
+        &media["m1"]
+    ));
+
+    // Editor replaces URI with new inlined PNG
+    let edited_png_vcard = edited_uri_vcard.replace(
+        "PHOTO;VALUE=uri:https://example.com/new_avatar.png",
+        "PHOTO;TYPE=png;ENCODING=b:iVBORw0KGgr//g==",
+    );
+    let edited_png_card = vcard_to_card(&edited_png_vcard).expect("parse edited PNG vcard");
+    let media_png = edited_png_card.media.expect("media");
+    assert_eq!(media_png["m1"].kind.as_deref(), Some("photo"));
+    assert_eq!(
+        media_png["m1"].uri,
+        "data:image/png;base64,iVBORw0KGgr//g=="
+    );
+    assert_eq!(media_png["m1"].media_type.as_deref(), Some("image/png"));
+
+    // 6. Cleared photo (user removes photo in editor)
+    let cleared_vcard = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Vera Oldenburg\r\nN:Oldenburg;Vera;;;\r\nLOGO;VALUE=uri:https://example.com/logo.png\r\nEND:VCARD\r\n";
+    let cleared_card = vcard_to_card(cleared_vcard).expect("parse cleared vcard");
+    // Only photo lines are parsed into media; LOGO is ignored inbound so media is None
+    assert_eq!(cleared_card.media, None);
+}
+
+#[test]
+fn photo_uri_schemes_and_vcard_variations_inbound_tolerance() {
+    // 1. Direct HTTP/HTTPS/file URIs without VALUE=uri parameter
+    let bare_uri_lines = [
+        (
+            "PHOTO:https://example.com/avatar.jpg",
+            "https://example.com/avatar.jpg",
+        ),
+        (
+            "PHOTO:http://example.org/pic.png",
+            "http://example.org/pic.png",
+        ),
+        (
+            "PHOTO:file:///local/path/photo.webp",
+            "file:///local/path/photo.webp",
+        ),
+        (
+            "PHOTO:ftp://server.org/user.jpg",
+            "ftp://server.org/user.jpg",
+        ),
+        (
+            "PHOTO;VALUE=URI:https://example.com/avatar.jpg",
+            "https://example.com/avatar.jpg",
+        ),
+        (
+            "PHOTO;VALUE=uri:file:///local/photo.png",
+            "file:///local/photo.png",
+        ),
+    ];
+
+    for (line_str, expected_uri) in bare_uri_lines {
+        let media = photo_line(line_str);
+        assert_eq!(media.kind.as_deref(), Some("photo"));
+        assert_eq!(media.uri, expected_uri);
+        assert_eq!(media.media_type, None);
+    }
+
+    // 2. Direct RFC 2397 data URIs (vCard 4.0 / modern CardDAV) without double base64 encoding
+    let direct_data_uris = [
+        (
+            "PHOTO:data:image/jpeg;base64,aGVsbG8tcGhvdG8=",
+            "data:image/jpeg;base64,aGVsbG8tcGhvdG8=",
+            Some("image/jpeg"),
+        ),
+        (
+            "PHOTO:data:image/png;base64,iVBORw0KGgo=",
+            "data:image/png;base64,iVBORw0KGgo=",
+            Some("image/png"),
+        ),
+        ("PHOTO:data:;base64,aGVsbG8=", "data:;base64,aGVsbG8=", None),
+    ];
+
+    for (line_str, expected_uri, expected_media_type) in direct_data_uris {
+        let media = photo_line(line_str);
+        assert_eq!(media.kind.as_deref(), Some("photo"));
+        assert_eq!(media.uri, expected_uri);
+        assert_eq!(media.media_type.as_deref(), expected_media_type);
+    }
+
+    // 3. RFC 6350 MEDIATYPE parameter extraction on URI photos
+    let mediatype_photos = [
+        (
+            "PHOTO;MEDIATYPE=image/jpeg;VALUE=uri:https://example.com/photo.jpg",
+            "https://example.com/photo.jpg",
+            Some("image/jpeg"),
+        ),
+        (
+            "PHOTO;MEDIATYPE=image/png;VALUE=uri:https://example.com/photo.png",
+            "https://example.com/photo.png",
+            Some("image/png"),
+        ),
+        (
+            "PHOTO;MEDIATYPE=image/webp:https://example.com/photo.webp",
+            "https://example.com/photo.webp",
+            Some("image/webp"),
+        ),
+    ];
+
+    for (line_str, expected_uri, expected_media_type) in mediatype_photos {
+        let media = photo_line(line_str);
+        assert_eq!(media.kind.as_deref(), Some("photo"));
+        assert_eq!(media.uri, expected_uri);
+        assert_eq!(media.media_type.as_deref(), expected_media_type);
+    }
+
+    // 4. Legacy and exporter parameter variations: bare type name, ENCODING=BASE64
+    let legacy_lines = [
+        ("PHOTO;JPEG;ENCODING=BASE64:aGVsbG8tcGhvdG8=", "image/JPEG"),
+        ("PHOTO;PNG;BASE64:aGVsbG8tcGhvdG8=", "image/PNG"),
+        ("PHOTO;GIF;ENCODING=b:aGVsbG8tcGhvdG8=", "image/GIF"),
+        (
+            "PHOTO;TYPE=WEBP;ENCODING=BASE64:aGVsbG8tcGhvdG8=",
+            "image/WEBP",
+        ),
+    ];
+
+    for (line_str, expected_media_type) in legacy_lines {
+        let media = photo_line(line_str);
+        assert_eq!(media.kind.as_deref(), Some("photo"));
+        assert_eq!(media.media_type.as_deref(), Some(expected_media_type));
+        assert!(media.uri.starts_with("data:image/"));
+    }
+}
+
+#[test]
+fn same_photo_and_states_media_comprehensive_decision_matrix() {
+    let p_uri1 = Media {
+        kind: Some("photo".to_owned()),
+        uri: "https://example.com/avatar.jpg".to_owned(),
+        media_type: None,
+        ..Media::default()
+    };
+    let p_uri1_same = Media {
+        kind: Some("photo".to_owned()),
+        uri: "https://example.com/avatar.jpg".to_owned(),
+        media_type: Some("image/jpeg".to_owned()), // media_type ignored for URI photos
+        ..Media::default()
+    };
+    let p_uri2 = Media {
+        kind: Some("photo".to_owned()),
+        uri: "https://example.com/other.png".to_owned(),
+        media_type: None,
+        ..Media::default()
+    };
+
+    // Inline photos with identical decoded bytes but different padding / case
+    let p_inline_padded = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
+        media_type: Some("image/jpeg".to_owned()),
+        ..Media::default()
+    };
+    let p_inline_unpadded = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/JPEG;base64,{}", PAYLOAD.trim_end_matches('=')),
+        media_type: Some("image/JPEG".to_owned()),
+        ..Media::default()
+    };
+    let p_inline_different_bytes = Media {
+        kind: Some("photo".to_owned()),
+        uri: "data:image/jpeg;base64,ZGlmZmVyZW50".to_owned(),
+        media_type: Some("image/jpeg".to_owned()),
+        ..Media::default()
+    };
+    let p_inline_different_type = Media {
+        kind: Some("photo".to_owned()),
+        uri: format!("data:image/png;base64,{PAYLOAD}"),
+        media_type: Some("image/png".to_owned()),
+        ..Media::default()
+    };
+
+    // Non-photo media
+    let logo_media = Media {
+        kind: Some("logo".to_owned()),
+        uri: "https://example.com/logo.png".to_owned(),
+        media_type: None,
+        ..Media::default()
+    };
+    let sound_media = Media {
+        kind: Some("sound".to_owned()),
+        uri: "https://example.com/audio.ogg".to_owned(),
+        media_type: None,
+        ..Media::default()
+    };
+    let empty_uri_media = Media {
+        kind: Some("photo".to_owned()),
+        uri: String::new(),
+        media_type: None,
+        ..Media::default()
+    };
+
+    // 1. states_media checks
+    assert!(states_media(&p_uri1));
+    assert!(states_media(&p_uri2));
+    assert!(states_media(&p_inline_padded));
+    assert!(states_media(&p_inline_unpadded));
+    assert!(states_media(&p_inline_different_bytes));
+    assert!(states_media(&p_inline_different_type));
+    assert!(!states_media(&logo_media));
+    assert!(!states_media(&sound_media));
+    assert!(!states_media(&empty_uri_media));
+
+    // 2. same_photo equality checks
+    assert!(same_photo(&p_uri1, &p_uri1));
+    assert!(same_photo(&p_uri1, &p_uri1_same));
+    assert!(same_photo(&p_uri1_same, &p_uri1));
+    assert!(!same_photo(&p_uri1, &p_uri2));
+
+    assert!(same_photo(&p_inline_padded, &p_inline_padded));
+    assert!(same_photo(&p_inline_padded, &p_inline_unpadded));
+    assert!(same_photo(&p_inline_unpadded, &p_inline_padded));
+    assert!(!same_photo(&p_inline_padded, &p_inline_different_bytes));
+    assert!(!same_photo(&p_inline_padded, &p_inline_different_type));
+
+    assert!(!same_photo(&p_uri1, &p_inline_padded));
+    assert!(!same_photo(&p_inline_padded, &p_uri1));
+
+    // Non-photo media (photo() returns None for both, so same_photo is true)
+    assert!(same_photo(&logo_media, &sound_media));
+    assert!(!same_photo(&p_uri1, &logo_media));
+    assert!(!same_photo(&p_inline_padded, &logo_media));
+}
+
+#[test]
+fn photo_roundtrip_fixpoint_multi_pass_convergence() {
+    let test_cards = vec![
+        one_photo("https://example.com/photo.jpg", None),
+        one_photo("file:///home/runner/.photos/me.png", None),
+        one_photo(
+            &format!("data:image/jpeg;base64,{PAYLOAD}"),
+            Some("image/jpeg"),
+        ),
+        one_photo(
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+            Some("image/png"),
+        ),
+        one_photo(
+            &format!("data:image/jpeg;base64,{}", PAYLOAD.trim_end_matches('=')),
+            None,
+        ),
+        one_photo(&format!("data:application/pdf;base64,{PAYLOAD}"), None),
+    ];
+
+    for original_card in test_cards {
+        // Pass 1: Card -> vCard1 -> Card1
+        let vcard1 = card_to_vcard(&original_card);
+        let card1 = vcard_to_card(&vcard1).expect("parse vcard1");
+
+        // Pass 2: Card1 -> vCard2 -> Card2
+        let vcard2 = card_to_vcard(&card1);
+        let card2 = vcard_to_card(&vcard2).expect("parse vcard2");
+
+        // Pass 3: Card2 -> vCard3 -> Card3
+        let vcard3 = card_to_vcard(&card2);
+        let card3 = vcard_to_card(&vcard3).expect("parse vcard3");
+
+        // Fixed point convergence: pass 2 and pass 3 must be strictly identical
+        assert_eq!(
+            vcard2, vcard3,
+            "vCard output must reach fixed point at pass 2"
+        );
+        assert_eq!(
+            card2, card3,
+            "ContactCard model must reach fixed point at pass 2"
+        );
+
+        let m1 = card1.media.as_ref().and_then(|m| m.get("m1"));
+        let m2 = card2.media.as_ref().and_then(|m| m.get("m1"));
+        assert_eq!(m1.map(|m| &m.uri), m2.map(|m| &m.uri));
+    }
+}
