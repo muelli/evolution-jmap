@@ -275,34 +275,47 @@ fn e_contact_date_bare_year_and_partial_date_clamping() {
 
         let formatted = e_contact_date_to_string_vcard_30(date);
         assert!(!formatted.is_null());
-        // CLAMP forces year 0 -> 1000, month 0 -> 1, day 0 -> 1, corrupting 1984 into 1000-01-01!
-        assert_eq!(
-            CStr::from_ptr(formatted).to_str().unwrap(),
-            "1000-01-01",
-            "CLAMP forces year 0 to 1000, month to 1, day to 1"
+        // CLAMP forces every 0 part into printable range (year -> 1000,
+        // month -> 1, day -> 1): the unparsed arm corrupts 1984 into
+        // 1000-01-01, the parsed arm keeps the year and invents the rest.
+        let formatted_str = CStr::from_ptr(formatted).to_str().unwrap();
+        assert!(
+            formatted_str == "1000-01-01" || formatted_str == "1984-01-01",
+            "clamped bare year must print 1000-01-01 (EDS 3.52) or 1984-01-01 (newer): {formatted_str}"
         );
         g_free(formatted.cast());
         e_contact_date_free(date);
 
-        // Year-month: "1984-05"
+        // Year-month: "1984-05" — same version split; a parsing EDS may keep
+        // the month too, so the parsed arm only pins that the year survived.
         let ym = e_contact_date_from_string(c"1984-05".as_ptr());
         assert!(!ym.is_null());
-        assert_eq!((*ym).year, 0);
-        let formatted_ym = e_contact_date_to_string_vcard_30(ym);
-        assert_eq!(CStr::from_ptr(formatted_ym).to_str().unwrap(), "1000-01-01");
-        g_free(formatted_ym.cast());
+        assert!(
+            (*ym).year == 0 || (*ym).year == 1984,
+            "year-month parse must yield year 0 (EDS 3.52) or 1984 (newer), got {}",
+            (*ym).year
+        );
+        let formatted_ym_raw = e_contact_date_to_string_vcard_30(ym);
+        let formatted_ym = CStr::from_ptr(formatted_ym_raw).to_str().unwrap();
+        assert!(
+            formatted_ym == "1000-01-01" || formatted_ym.starts_with("1984-"),
+            "clamped year-month must print 1000-01-01 (EDS 3.52) or keep 1984 (newer): {formatted_ym}"
+        );
+        g_free(formatted_ym_raw.cast());
         e_contact_date_free(ym);
 
-        // Year-less: "--05-20"
+        // Year-less: "--05-20" — same split: an EDS that parses it keeps the
+        // month and day and clamps only the year.
         let yless = e_contact_date_from_string(c"--05-20".as_ptr());
         assert!(!yless.is_null());
-        assert_eq!((*yless).year, 0);
-        let formatted_yless = e_contact_date_to_string_vcard_30(yless);
-        assert_eq!(
-            CStr::from_ptr(formatted_yless).to_str().unwrap(),
-            "1000-01-01"
+        assert_eq!((*yless).year, 0, "no EDS invents a year for --05-20");
+        let formatted_yless_raw = e_contact_date_to_string_vcard_30(yless);
+        let formatted_yless = CStr::from_ptr(formatted_yless_raw).to_str().unwrap();
+        assert!(
+            formatted_yless == "1000-01-01" || formatted_yless == "1000-05-20",
+            "clamped year-less date must print 1000-01-01 (EDS 3.52) or 1000-05-20 (newer): {formatted_yless}"
         );
-        g_free(formatted_yless.cast());
+        g_free(formatted_yless_raw.cast());
         e_contact_date_free(yless);
     }
 }
