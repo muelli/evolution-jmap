@@ -329,13 +329,8 @@ fn prepare_authentication_uri_query_and_token_form_trace_structured_fields() {
             "expected has_scope=true in query preparation, got {captured_query:?}"
         );
         assert!(
-            has(
-                &captured_query,
-                Level::DEBUG,
-                "pkce_challenge_method",
-                "S256"
-            ),
-            "expected pkce_challenge_method=S256, got {captured_query:?}"
+            has(&captured_query, Level::DEBUG, "has_pkce", "true"),
+            "expected has_pkce=true in query preparation, got {captured_query:?}"
         );
 
         let form = g_hash_table_new_full(
