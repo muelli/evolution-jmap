@@ -1881,12 +1881,18 @@ fn observance(name: &str, rule: &Value) -> Option<Component> {
     // rule said the last Sunday of October. On an event that is a recurrence the
     // user can see and correct; on a zone it is the same silent hour every other
     // part of this refuses to draw.
-    for value in rule
-        .get("recurrenceRules")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
+    let rules_iter: Box<dyn Iterator<Item = &Value>> =
+        if let Some(arr) = rule.get("recurrenceRules").and_then(Value::as_array) {
+            Box::new(arr.iter())
+        } else if let Some(arr) = rule.get("recurrenceRule").and_then(Value::as_array) {
+            Box::new(arr.iter())
+        } else if let Some(single) = rule.get("recurrenceRule").filter(|v| v.is_object()) {
+            Box::new(std::iter::once(single))
+        } else {
+            Box::new(std::iter::empty())
+        };
+
+    for value in rules_iter {
         let recurrence: RecurrenceRule = serde_json::from_value(value.clone()).ok()?;
         if !maps_recurrence_rule(&recurrence) {
             return None;

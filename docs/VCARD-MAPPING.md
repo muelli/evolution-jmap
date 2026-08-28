@@ -222,8 +222,17 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 ### 3.6 Anniversaries & Birthdays (`BDAY`, `X-EVOLUTION-ANNIVERSARY`)
 - **`BDAY`**: `kind: "birth"` -> `E_CONTACT_BIRTH_DATE`.
 - **`X-EVOLUTION-ANNIVERSARY`**: `kind: "wedding"` -> `E_CONTACT_ANNIVERSARY`.
-- **Clamping Protection**: EDS's `e_contact_date_to_string` clamps years to `1000..=9999`. Incomplete dates (bare years `1984` or partial months) and years < 1000 are omitted from vCard emission by `Day::survives_the_field_it_lands_in` to prevent EDS from corrupting them into January 1, 1000.
-- **`kind: "death"`**: Dropped from vCard 3.0 because EDS has no corresponding field.
+- **Clamping Protection & Evolution Contact Editor Lifecycle**:
+  - `e_contact_date_to_string` in `libebook-contacts` enforces `CLAMP` on all 3 date components: `year` to `1000..=9999`, `month` to `1..=12`, and `day` to `1..=31`.
+  - When `e_contact_date_from_string` encounters an incomplete date string (bare 4-digit year `1984`, year-month `1984-05`, or year-less `--05-20`), it fails to parse and returns an empty `EContactDate` with `year: 0, month: 0, day: 0`.
+  - If bare-year date lines were emitted on the wire (e.g. `BDAY:1984`), `EVCard` stores the raw string, but Evolution's Contact Editor UI reading `E_CONTACT_BIRTH_DATE` and writing it back on save triggers `e_contact_date_to_string`, clamping `year: 0 -> 1000, month: 0 -> 1, day: 0 -> 1` and silently corrupting `BDAY:1984` into `BDAY:1000-01-01` (January 1st, 1000).
+  - Similarly, dates before the year 1000 (e.g. `BDAY:0800-06-21`) parse with `year: 800`, but on editor save `year: 800` is clamped to `1000`, corrupting the line into `BDAY:1000-06-21`.
+  - **Omission Guard**: `Day::survives_the_field_it_lands_in` and `anniversary_date` require a complete calendar day (`year >= 1000`, `1 <= month <= 12`, `1 <= day <= 31`). Bare years, partial months, and years < 1000 produce `None` and are omitted from outbound vCard emission, keeping the server's record pristine.
+- **Sync Safety via `PatchObject`**:
+  - `states_anniversary` returns `false` for bare years, partial dates, and unmodeled anniversary kinds (`kind: "death"`, `kind: "custom"`).
+  - The `jmap-book-sync` diff engine checks `states_anniversary`: because it returns `false`, server-side bare-year entries and death dates are recognized as unstated and safely preserved from deletion or modification during round-trip saves.
+- **`kind: "death"`**: Dropped from vCard 3.0 emission because EDS 3.52 has no corresponding field (`DEATHDATE` is unmodeled). Server-side death records are preserved via `PatchObject`.
+- **Timestamp Points in Time**: RFC 9553 §2.8.1 `Timestamp` values (e.g. `{"utc": "1990-05-12T10:30:00Z"}`) are converted to UTC `Day` for vCard 3.0 wire format (`BDAY:1990-05-12`). `states_a_point_in_time` returns `true` to signal to the patch engine that the server holds a `Timestamp` rather than `PartialDate`, ensuring whole-object replacement if edited.
 
 ### 3.7 Instant Messaging (`ONLINE_SERVICES` ↔ `E_CONTACT_IM_*`)
 - **10 Supported Slotted Services**: AIM, Gadu-Gadu, Google Talk, GroupWise, ICQ, Jabber, MSN, Matrix, Skype, Yahoo.
@@ -742,6 +751,8 @@ To ensure long-term stability and guard against edge-case regressions from third
 | **Microsoft Outlook Classic** | `outlook_vcard21_export.vcf` | vCard 2.1 | • Legacy `VERSION:2.1`<br>• Quoted-Printable encoded text & newlines<br>• ISO-8859-1 German umlauts (`ä`, `ö`, `ü`, `ß`)<br>• Bare type parameter words (`TEL;WORK;VOICE`)<br>• `ADR` & `LABEL` in QP format | • Asymmetric tolerance: imports 2.1 QP<br>• Outbound normalizes to strict vCard 3.0 UTF-8<br>• Legacy `CHARSET` / `ENCODING` never emitted<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
 | **Nextcloud / CardDAV** | `nextcloud_carddav_export.vcf` | vCard 4.0 | • Modern `VERSION:4.0`<br>• Inline `PHOTO:data:image/jpeg;base64,...`<br>• RFC 4770 `IMPP` (Matrix, Jabber)<br>• RFC 6350 `RELATED;TYPE=spouse` & `assistant`<br>• RFC 6350 `ANNIVERSARY`<br>• `ADR;LABEL=...` property parameters | • Asymmetric tolerance: imports vCard 4.0<br>• `IMPP` maps to native slotted IM properties<br>• Outbound normalizes to canonical vCard 3.0<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
 | **GNOME Evolution Native** | `evolution_native_export.vcf` | vCard 3.0 | • Full native Evolution vCard 3.0<br>• `X-EVOLUTION-FILE-AS`<br>• `X-EVOLUTION-SPOUSE`, `_MANAGER`, `_ASSISTANT`<br>• `X-EVOLUTION-BLOG-URL`, `_VIDEO-URL`<br>• Slotted IMs (`X-JABBER`, `X-MATRIX`)<br>• 19-field telephony matrix & 3-slot addresses | • 100% lossless retention of all Evolution fields<br>• Deterministic `X-JMAP-KEY` preservation<br>• Multi-pass fixpoint: `Export₁ == Export₂ == Export₃` |
+| **Mozilla Thunderbird (vCard 4.0)** | `thunderbird_vcard40_export.vcf` | vCard 4.0 | • Modern `VERSION:4.0`<br>• PREF parameter ordering<br>• `tel:` URI format phone numbers (`tel:+33-1-23-45-67-89`)<br>• Multi-line structured address labels<br>• Organization departments & office<br>• BDAY & ANNIVERSARY<br>• Base64 JPEG `PHOTO` | • Asymmetric tolerance: imports vCard 4.0<br>• `PRODID` dropped on export<br>• Phone URIs normalized to plain numbers<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
+| **SOGo Connector / Radicale** | `sogo_carddav_export.vcf` | vCard 3.0 | • vCard 3.0 CardDAV stream<br>• French Unicode names & accents<br>• EDS relations (`X-EVOLUTION-SPOUSE`, `_MANAGER`, `_ASSISTANT`)<br>• Instant messaging handles (`X-JABBER`, `X-MATRIX`)<br>• Multi-line notes with escaped newlines | • 100% lossless retention of relations & IM handles<br>• Deterministic `X-JMAP-KEY` preservation<br>• Multi-pass fixpoint: `Export₂ == Export₃` |
 
 ### 7.2 Table-Driven Whole-File Regression Net
 

@@ -1,0 +1,29 @@
+BEGIN:VCARD
+VERSION:4.0
+PRODID:-//Mozilla.org/NONSGML Thunderbird vCard 4.0//EN
+UID:urn:uuid:7c9e6679-7425-40de-944b-e07fc1f90ae7
+FN:Dr. Arthur Philip Dent
+N:Dent;Arthur;Philip;Dr.;
+NICKNAME:Dentarthurdent
+EMAIL;TYPE="home,pref";PREF=1:arthur.dent@earth.example
+EMAIL;TYPE=work:a.dent@radio4.bbc.example
+TEL;TYPE="cell,voice";VALUE=uri:tel:+44-20-7946-0123
+TEL;TYPE="work,voice";VALUE=uri:tel:+44-20-7946-0987
+TEL;TYPE="home,voice":+44 1632 960123
+TEL;TYPE="work,fax":+44 20 7946 0988
+ADR;TYPE=work;LABEL="BBC Broadcasting House\nPortland Place\nLondon\nW1A 1AA\nUnited Kingdom":;;Portland Place;London;Greater London;W1A 1AA;United Kingdom
+ADR;TYPE=home;LABEL="Cottington Cottage\nCottington\nIslington\nLondon\nN1 2XX\nUnited Kingdom":;;Cottington;Islington;Greater London;N1 2XX;United Kingdom
+ORG:British Broadcasting Corporation;Radio Drama;Light Entertainment
+TITLE:Senior Broadcast Journalist
+ROLE:Script Writer & Radio Broadcaster
+BDAY:19780308
+ANNIVERSARY:20050428
+URL;TYPE=work:https://www.bbc.co.uk/programmes/b006q2x0
+URL;TYPE=home:https://arthurdent.example.org
+CATEGORIES:BBC,Radio,Cast
+NOTE:Don't Panic.\nAlways know where your towel is.\nPrefers tea over synthetic beverages.
+PHOTO:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+X-MOZILLA-HTML:TRUE
+X-MOZILLA-PROPERTY:custom1
+REV:20260824T143000Z
+END:VCARD

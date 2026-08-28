@@ -6,7 +6,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 # iCalendar ↔ JSCalendar ↔ EDS Calendar Mapping Reference
 
 This document is the authoritative reference specification for calendar data translation across:
-1. **iCalendar 2.0** (RFC 5545, RFC 7986) as parsed and emitted via `calcard`.
+1. **iCalendar 2.0** (RFC 5545, RFC 7986, RFC 9074) as parsed and emitted via `calcard`.
 2. **JSCalendar** (RFC 8984 / draft-ietf-calext-jscalendarbis) and **JMAP for Calendars** (draft-ietf-jmap-calendars) as modeled in `jmap-proto`'s [`CalendarEvent`].
 3. **Evolution Data Server (EDS)** (`libecal` / `libical` 3.52) as defined in `eds-sys` / `ECalMetaBackend`.
 
@@ -41,9 +41,193 @@ All implementation logic resides in `rust/crates/jmap-ical/src/event.rs`, `rust/
 └────────────────────────────────────────┘
 ```
 
+### 1.2 Core Invariants
+
+1. **Selective Mapping & Sync Safety**:
+   `jmap-ical` deliberately maps only the property set that Evolution's calendar backend needs to present in UI and edit (`SUMMARY`, `DESCRIPTION`, `DTSTART`, `DURATION`/`DTEND`, `STATUS`, `TRANSP`, `PRIORITY`, `CLASS`, `LOCATION`, `CONFERENCE`, `ATTACH`/`IMAGE`, `CATEGORIES`, `ORGANIZER`, `ATTENDEE`, `RRULE`, `EXDATE`, `RDATE`, `RECURRENCE-ID`, `VALARM`). Everything else on a calendar event (e.g. unmodeled vendor properties, unmapped custom properties, server-side participant scheduling states) is dropped on iCalendar emission. This is safe because `jmap-cal-sync` saves changes back to the JMAP server using `PatchObject` specifying only mapped and edited paths. Unmapped server properties are never overwritten or deleted.
+2. **Predicates Safeguard Server State**:
+   Absence of a field from an edited iCalendar document is only interpreted as user deletion if the field was originally eligible for display. Emitter predicates (e.g. [`maps_locations`], [`maps_virtual_locations`], [`maps_keyword`], [`maps_alerts`], [`maps_recurrence_rule`], [`maps_recurrence_override`], [`sends_recurrence_override`], [`maps_time_zone`], [`unstateable_until`]) explicitly answer whether a property was visible to the user.
+3. **Keying & Identity Preservation**:
+   Every multi-valued JSCalendar entry (`locations`, `virtualLocations`, `links`, `alerts`) carries an `X-JMAP-KEY` parameter in RFC 5545 format. On round-tripping, key recovery preserves the server key or allocates a deterministic key (`l1`, `v1`, `a1`, etc.) for newly added entries.
+4. **Deterministic Fixed-Point Stability**:
+   Property transformations reach fixed-point convergence under repeated serialization/deserialization:
+   $$\text{Export}_2 (\text{ics}_3) \equiv \text{Export}_3 (\text{ics}_4) \quad \text{and} \quad \text{Event}_2 \equiv \text{Event}_3$$
+
 ---
 
-## 2. VTIMEZONE and TZID Resolution Architecture
+## 2. Master Property Mapping Table
+
+| iCalendar Property | iCalendar Parameters | JSCalendar Field (RFC 8984) | EDS Field / Model | Primary Helpers & Predicates | Lossy / Product Decision Notes |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`UID`** | — | `event.id` (or `event.uid`) | `ECalComponent` UID | `event_to_ical`, `ical_to_event` | `UID` carries server JMAP ID for EDS cache indexing; `X-JMAP-UID` carries client-side UUID. |
+| **`X-JMAP-UID`** | — | `event.uid` | — | `event_to_ical`, `ical_to_event` | Retains client-side JSCalendar UUID across iCalendar round-trips. |
+| **`SUMMARY`** | `ALTID`, `LANGUAGE` | `event.title` | `SUMMARY` / Title | `title_and_description` | Text value backslash-escaped (`\,`, `\;`, `\n`, `\\`). First summary in document order selected. |
+| **`DESCRIPTION`** | `ALTID`, `LANGUAGE` | `event.description` | `DESCRIPTION` / Notes | `title_and_description` | Free-text notes with newline escaping (`\n` and `\N`). Multi-line descriptions preserved losslessly. |
+| **`DTSTART`** | `VALUE=DATE`, `TZID` | `event.start`, `event.time_zone`, `event.show_without_time` | `DTSTART` / Start Time | `read_start`, `dated`, [`maps_time_zone`] | `VALUE=DATE` maps to `show_without_time: true` (all-day event) with no time zone. Timestamps map to local date-time with `timeZone` (or UTC `Z` / floating time). Windows and unique TZIDs resolve via CLDR/IANA pipeline. |
+| **`DURATION`** | — | `event.duration` | `DURATION` / Length | `read_duration`, `drawn_duration` | ISO 8601 duration (e.g. `PT1H30M`, `P1D`). Wins over contradicting `DTEND`. Zero durations (`PT0S`, `P0D`) normalized. |
+| **`DTEND`** | `VALUE=DATE`, `TZID` | `event.duration` | `DTEND` / End Time | `read_duration` | Converted to `duration` on import (`DTEND - DTSTART`) and emitted as canonical `DURATION` on export. |
+| **`STATUS`** | — | `event.status` | `STATUS` (`CONFIRMED`, `TENTATIVE`, `CANCELLED`) | `read_status`, `drawn_status` | Maps `"confirmed"` ↔ `CONFIRMED`, `"tentative"` ↔ `TENTATIVE`, `"cancelled"` ↔ `CANCELLED`. Case-insensitive on import. Unmapped statuses dropped. |
+| **`TRANSP`** | — | `event.free_busy_status` | `TRANSP` (`OPAQUE`, `TRANSPARENT`) | `read_transparency`, `drawn_transparency` | Maps `"busy"` ↔ `OPAQUE`, `"free"` ↔ `TRANSPARENT`. |
+| **`PRIORITY`** | — | `event.priority` | `PRIORITY` (`0..=9`) | `read_priority`, `drawn_priority` | Integer `0..=9` mapping directly to `PRIORITY:0..9`. RFC 5545 `0` (undefined) maps to `0`. |
+| **`CLASS`** | — | `event.privacy` | `CLASS` (`PUBLIC`, `PRIVATE`, `CONFIDENTIAL`) | `read_privacy`, `drawn_privacy` | Maps `"public"` ↔ `CLASS:PUBLIC`, `"private"` ↔ `CLASS:PRIVATE`, `"secret"` ↔ `CLASS:CONFIDENTIAL`. |
+| **`LOCATION`** | `X-JMAP-KEY`, `ALTID`, `LANGUAGE` | `event.locations` (`Location.name`) | `LOCATION` / Location | `read_locations`, `drawn_place`, [`maps_locations`] | Single location line emitted for first place with `name`. Keyed via `X-JMAP-KEY`. Subordinate fields (`description`, `coordinates`, `timeZone`) preserved in `Location` and server state via `PatchObject`. |
+| **`CONFERENCE`** | `VALUE=URI`, `FEATURE`, `LABEL`, `X-JMAP-KEY` | `event.virtual_locations` (`VirtualLocation.uri`, `name`, `features`) | `CONFERENCE` / Video Link | `read_virtual_locations`, `drawn_conference`, [`maps_virtual_locations`] | RFC 7986 §5.11 video meeting endpoints. Inbound accepts `CONFERENCE`, `X-CONFERENCE`, `X-MICROSOFT-SKYPETEAMSMEETINGURL`. Features: `AUDIO`, `VIDEO`, `SCREEN`, `CHAT`, `MODERATOR`. Multiple lines allowed. |
+| **`ATTACH`** | `FMTTYPE`, `SIZE`, `FILENAME`, `X-APPLE-FILENAME`, `X-JMAP-KEY` | `event.links` (`Link.href`, `contentType`, `size`, `title`) | `ATTACH` / Attachment | `read_links`, `drawn_link` | URI attachments (`ATTACH:https://...` or `ATTACH;VALUE=URI:...`) and inline base64 (`ATTACH;ENCODING=BASE64:...` ↔ `data:` URIs). Filenames extracted from `FILENAME` / `X-APPLE-FILENAME`. |
+| **`IMAGE`** | `VALUE=URI`, `DISPLAY`, `FMTTYPE`, `X-JMAP-KEY` | `event.links` (`rel: "icon"`, `display: "badge"\|"thumbnail"\|"graphic"\|"fullsize"`) | `IMAGE` / Event Icon | `read_links`, `drawn_link` | RFC 7986 §5.6 / §6.1 event badge/graphic images. Emitted when `rel == "icon"`. |
+| **`CATEGORIES`** | — | `event.keywords` (`Set<String>`) | `CATEGORIES` / Categories | `read_keywords`, `drawn_tags`, [`maps_keyword`] | Single sorted line emitted. Comma-separated on wire. Commas, semicolons, and newlines escaped. Tags with leading/trailing whitespace refused by [`maps_keyword`]. |
+| **`ORGANIZER`** | `CN`, `DIR`, `SENT-BY` | `event.participants` (`roles: {"owner": true}`, `name`, `sendTo: {"imip": "mailto:..."}`) | `ORGANIZER` / Organizer | `drawn_participants`, `calendar_address` | Owner participant emitted as `ORGANIZER`. Quoted `CN` for names with spaces/delimiters. Written for EDS display; server manages authoritative participant state. |
+| **`ATTENDEE`** | `CN`, `ROLE`, `PARTSTAT`, `CUTYPE`, `RSVP`, `SENT-BY`, `DELEGATED-TO`, `DELEGATED-FROM` | `event.participants` (`participationStatus`, `roles`, `kind`, `expectReply`, `name`, `sendTo`) | `ATTENDEE` / Attendees | `drawn_participants`, `calendar_address` | Guest list entries emitted as `ATTENDEE` lines. `PARTSTAT` (`ACCEPTED`, `DECLINED`, `TENTATIVE`, `NEEDS-ACTION`), `ROLE` (`CHAIR`, `REQ-PARTICIPANT`, `OPT-PARTICIPANT`, `NON-PARTICIPANT`), `CUTYPE` (`INDIVIDUAL`, `GROUP`, `RESOURCE`, `ROOM`), `RSVP=TRUE`. Written for EDS display. |
+| **`RRULE`** | Recurrence parameters | `event.recurrence_rules` (`RecurrenceRule`) | `RRULE` / Recurrence | `read_rrule`, `drawn_rrule`, [`maps_recurrence_rule`], [`unstateable_until`] | Full RFC 5545 recurrence grammar: `FREQ`, `INTERVAL`, `COUNT`, `UNTIL` (local in series timezone), `BYSECOND`, `BYMINUTE`, `BYHOUR`, `BYDAY` / `NDay`, `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYMONTH`, `BYSETPOS`, `WKST`. |
+| **`EXDATE`** | `TZID`, `VALUE=DATE` | `event.recurrence_overrides` (`{"excluded": true}`) | `EXDATE` / Cancelled Occurrence | `read_overrides`, `drawn_exdates`, [`maps_recurrence_override`] | Cancelled occurrences in recurrence series. Single or multi-value comma-separated dates matching master series zone/clock. |
+| **`RDATE`** | `TZID`, `VALUE=DATE` / `VALUE=PERIOD` | `event.recurrence_overrides` (`{}` empty patch or `{"duration": ...}`) | `RDATE` / Added Occurrence | `read_overrides`, `drawn_rdates`, [`maps_recurrence_override`] | Added extra occurrences in recurrence series. Bare dates map to `{}`; period overrides with duration map to `{"duration": ...}`. |
+| **`RECURRENCE-ID`** | `TZID`, `VALUE=DATE` | `event.recurrence_overrides` (Detached `VEVENT` `PatchObject`) | Detached `VEVENT` / Modified Occurrence | `read_overrides`, `instance_patch`, [`maps_recurrence_override`], [`sends_recurrence_override`] | Modified occurrences in recurrence series. `RECURRENCE-ID` evaluated on series master clock; instance `DTSTART` on instance clock. Diffed across 11 [`OVERRIDE_PROPERTIES`]. |
+| **`VALARM`** | `ACTION=DISPLAY`, `TRIGGER`, `UID`, `RELATED` | `event.alerts` (`Alert.trigger: OffsetTrigger`, `relative_to`, `action: "display"`) | `VALARM` / Reminders | `read_alerts`, `drawn_alarms`, [`maps_alerts`] | Display alarms relative to start or end (`RELATED=END`). RFC 9074 `UID` preserved; nameless alarms assigned positional keys (`a1`, `a2`). Refuses `ACTION:EMAIL`, `ACTION:AUDIO`, absolute triggers, snoozed timestamps. |
+| **`VTIMEZONE`** | `TZID`, `STANDARD`, `DAYLIGHT` | `event.time_zones` (`TimeZone`: `standard`, `daylight`, `tz_url`) | `VTIMEZONE` / Timezone Definition | `stated_zones`, `read_time_zones`, [`defines_time_zone`], [`prune_time_zones`] | Timezone definitions with observance rules (`TZOFFSETFROM`, `TZOFFSETTO`, `RRULE`, `RDATE`). Preserves custom solidus definitions; standard IANA zones resolve against host database. |
+| **`VFREEBUSY`** | `FBTYPE`, `DTSTART`, `DTEND` | Busy periods (`BusyPeriod`: `utc_start`, `utc_end`, `busy_status`) | `VFREEBUSY` / Availability | `busy_periods_to_vfreebusy`, `free_busy_type` | Renders attendee busy periods within requested search window. Maps `"busy"` → `BUSY`, `"tentative"` → `BUSY-TENTATIVE`, `"unavailable"` → `BUSY-UNAVAILABLE`. |
+| **`PRODID`** | — | — | — | — | Dropped by design on import/export. Generator metadata belongs to serialization envelope; foreign `PRODID` not preserved across saves. |
+| **`VERSION`** | — | — | — | — | iCalendar version envelope (`VERSION:2.0`). Enforced on import; emitted canonically on export. |
+| **`CALSCALE`** | — | — | — | — | Calendar scale (`CALSCALE:GREGORIAN`). Defaults to Gregorian; dropped on import/export. |
+| **`METHOD`** | — | — | — | — | iCalendar MIME message method (`REQUEST`, `PUBLISH`, `CANCEL`). Transport envelope metadata; dropped on import/export. |
+| **`SEQUENCE`** | — | — | `SEQUENCE` / Revision | — | Revision sequence number. Strictly managed and owned by JMAP server upon commit. |
+| **`DTSTAMP`** | — | — | `DTSTAMP` / Timestamp | — | Envelope generation timestamp. Strictly managed by server/exporter. |
+| **`CREATED`** | — | `event.created` (RFC 8984 §4.1.3) | `CREATED` / Created | `read_vevent` | Creation timestamp in UTC. Read on import; server owns authoritative creation timestamp. |
+| **`LAST-MODIFIED`** | — | `event.updated` (RFC 8984 §4.1.4) | `LAST-MODIFIED` / Updated | `read_vevent` | Modification timestamp in UTC. Read on import; server owns authoritative update timestamp. |
+| **`URL`** | — | `event.links` | `URL` / Web Link | — | Top-level appointment URL. Handled via `links` subsystem or dropped without polluting `event.extra`. |
+
+---
+
+## 3. Detailed Field & Subsystem Specifications
+
+### 3.1 Identifiers & UIDs
+- **`UID`**: RFC 5545 §3.8.4.7 standard identifier. Maps to `event.id` (JMAP event ID) or fallback to `event.uid` (JSCalendar UUID). EDS indexes its internal SQLite calendar cache by `UID`.
+- **`X-JMAP-UID`**: Parameter preserving `event.uid` (JSCalendar UUID) when distinct from the JMAP server ID.
+- **`X-JMAP-KEY`**: Parameter attached to multi-valued child components and properties (`LOCATION`, `CONFERENCE`, `ATTACH`, `IMAGE`, `VALARM`). Allows lossless synchronization back to JSCalendar map keys.
+- **Local Invention Stripping**: When Evolution creates an event, it assigns a local temporary UID. `jmap-cal-sync` strips this local UID before issuing a JMAP `CalendarEvent/set create` call.
+
+### 3.2 Dates, Times, All-Day & Duration
+- **All-Day Events (`show_without_time: true`)**:
+  - Emitted as `DTSTART;VALUE=DATE:YYYYMMDD` with no time component and no `TZID` parameter (RFC 5545 §3.8.2.4).
+  - Outbound serialization never attaches a `TZID` or UTC `Z` marker to date-only values.
+  - Multi-day all-day events emit `DURATION:P<N>D` or date-only `DTEND;VALUE=DATE:YYYYMMDD`.
+- **Timed Events with Timezones**:
+  - Emitted as `DTSTART;TZID=<zone>:YYYYMMDDTHHMMSS` (RFC 5545 §3.8.2.4).
+  - UTC events emit `DTSTART:YYYYMMDDTHHMMSSZ` with a trailing `Z` and no `TZID`.
+  - Floating time events emit `DTSTART:YYYYMMDDTHHMMSS` with no `TZID` and no `Z`.
+- **Duration vs `DTEND` Precedence**:
+  - `read_duration` calculates duration from `DURATION` or `DTEND - DTSTART`.
+  - If both `DURATION` and `DTEND` appear in a document, `DURATION` takes precedence.
+  - Outbound serialization canonically emits `DURATION` (e.g. `DURATION:PT1H30M`), establishing immediate fixed-point stability across import/export cycles.
+  - Zero durations (`PT0S`, `-PT0S`, `P0D`, `-P0D`, `PT0M`, `PT0H`) are canonically parsed and stringified as `"PT0S"` / `"-PT0S"`.
+
+### 3.3 Event Metadata & Classification
+- **`SUMMARY` & `DESCRIPTION`**:
+  - Plain text fields with RFC 5545 backslash escaping (`\,`, `\;`, `\n`, `\\`).
+  - `\N` (uppercase) in incoming streams unescapes to newlines losslessly.
+  - Multiline descriptions fold cleanly at the 75-octet boundary without splitting UTF-8 code points.
+- **`STATUS`**:
+  - RFC 8984 lowercase strings (`"confirmed"`, `"tentative"`, `"cancelled"`) map to RFC 5545 uppercase tokens (`CONFIRMED`, `TENTATIVE`, `CANCELLED`).
+  - Case-insensitive on inbound parsing (`read_status`); normalized on outbound emission (`drawn_status`).
+- **`TRANSP` (Free/Busy Transparency)**:
+  - `"busy"` ↔ `OPAQUE` (blocks time on calendar).
+  - `"free"` ↔ `TRANSPARENT` (does not block time).
+- **`PRIORITY`**:
+  - Integer `0..=9` mapping directly to `PRIORITY:0..9` (RFC 5545 §3.8.1.9).
+  - `0` represents undefined priority; `1` is highest; `9` is lowest.
+- **`CLASS` (Access Privacy)**:
+  - `"public"` ↔ `CLASS:PUBLIC`.
+  - `"private"` ↔ `CLASS:PRIVATE`.
+  - `"secret"` ↔ `CLASS:CONFIDENTIAL`.
+
+### 3.4 Physical & Geographic Locations (`LOCATION`, `GEO` ↔ `locations`)
+- **Single Location Display**:
+  - RFC 5545 §3.6.1 permits at most one `LOCATION` line in a `VEVENT`.
+  - `drawn_place` selects the first entry in `locations` order that has a `name` string.
+  - The location name is emitted on `LOCATION;X-JMAP-KEY=<key>:<name>` with text escaping (`\,`, `\;`).
+- **Subordinate Location Properties**:
+  - Coordinates, descriptions, relative-to settings, and timezones in `Location` (RFC 8984 §4.2.5) are not emitted on the wire `LOCATION` line.
+  - `jmap-cal-sync` updates locations using `PatchObject` targeting `locations/<key>/name`, leaving coordinates and descriptions untouched in server state.
+- **`maps_locations` Predicate**:
+  - Evaluates whether an event's locations can be safely edited in Evolution without data loss:
+    1. At most one location entry exists in the map (`entries.len() <= 1`).
+    2. Key is non-empty and valid (`!key.is_empty()`).
+    3. Entry is a valid JSON object.
+    4. `name` field is either absent or a valid string (`matches!(name, None | Some(Value::String(_)))`).
+  - Events with multiple locations are drawn in part (first place visible) and flagged by `maps_locations == false` so `jmap-cal-sync` refuses whole-property replacement.
+
+### 3.5 Virtual Locations & Conferences (`CONFERENCE` ↔ `virtualLocations`)
+- **RFC 7986 §5.11 `CONFERENCE` Mapping**:
+  - Multi-valued property: multiple virtual locations emit multiple `CONFERENCE;VALUE=URI;...` lines.
+  - `LABEL` parameter carries `VirtualLocation.name`.
+  - `FEATURE` parameter carries comma-separated feature tokens: `AUDIO`, `VIDEO`, `SCREEN`, `CHAT`, `MODERATOR`.
+  - `X-JMAP-KEY` parameter preserves the JSCalendar map key.
+- **Inbound Vendor Tolerance**:
+  - Accepts standard `CONFERENCE`, vendor `X-CONFERENCE`, and Microsoft Teams `X-MICROSOFT-SKYPETEAMSMEETINGURL`.
+  - Supported URI schemes: `https:`, `zoommtg:`, `tel:`, `sip:`, `webcal:`.
+- **`maps_virtual_locations` Predicate**:
+  - Validates that every virtual location entry has a non-empty key, valid URI, valid name, and boolean `true` feature flags from RFC 7986 §6.3 vocabulary.
+
+### 3.6 Attachments & Links (`ATTACH`, `IMAGE` ↔ `links`)
+- **`ATTACH` Lines**:
+  - Remote URI attachments emit `ATTACH;FMTTYPE=<mime>;SIZE=<bytes>;X-JMAP-KEY=<key>:<uri>`. RFC 5545 default value type is `URI`, so `VALUE=URI` is omitted.
+  - Inline binary attachments emit `ATTACH;ENCODING=BASE64;VALUE=BINARY;FMTTYPE=<mime>;X-JMAP-KEY=<key>:<payload>`.
+  - `FILENAME` (RFC 7986 §5.4) and `X-APPLE-FILENAME` parameters map to `Link.title`.
+- **`IMAGE` Lines (Event Badges & Icons)**:
+  - When `rel: "icon"`, `event_to_ical` emits `IMAGE;VALUE=URI;DISPLAY=<badge|thumbnail|graphic|fullsize>;FMTTYPE=<mime>;X-JMAP-KEY=<key>:<uri>` per RFC 7986 §5.6.
+- **Lossless Synchronization**:
+  - Unmapped link properties ride safely on the server and are preserved across syncs via `PatchObject`.
+
+### 3.7 Categories & Keywords (`CATEGORIES` ↔ `keywords`)
+- **Set vs List Model**:
+  - JSCalendar `keywords` is a mathematical Set (map with `true` values).
+  - iCalendar `CATEGORIES` is a comma-separated text list.
+  - `drawn_tags` sorts keyword tags lexicographically before emitting, ensuring byte-identical output across sync passes.
+- **Delimiter & Character Escaping**:
+  - Commas (`\,`), semicolons (`\;`), and newlines (`\n`) are escaped and unescaped with 100% roundtrip fidelity.
+- **Whitespace Defense ([`maps_keyword`])**:
+  - Tags with leading or trailing whitespace (`tag.trim() != tag`), carriage returns (`\r`), empty strings (`""`), or non-boolean values are refused by `maps_keyword`, preventing EDS trimming bugs from modifying server tags.
+
+### 3.8 Participants, Organizer & Attendees (`ORGANIZER`, `ATTENDEE` ↔ `participants`)
+- **`ORGANIZER` Emission**:
+  - Owner participant (`roles: {"owner": true}`) emits `ORGANIZER;CN="<name>":<sendTo.imip>` (RFC 5545 §3.8.4.3).
+  - Quoted `CN` parameter for names containing whitespace or delimiters.
+- **`ATTENDEE` Emission**:
+  - Guest participants emit `ATTENDEE;CN="<name>";ROLE=<role>;PARTSTAT=<status>;CUTYPE=<cutype>;RSVP=<TRUE|FALSE>:<sendTo.imip>`.
+  - Role mapping: `chair` → `CHAIR`, `optional` → `OPT-PARTICIPANT`, `informational` → `NON-PARTICIPANT`, `attendee` → `REQ-PARTICIPANT`.
+  - Status mapping: `accepted` → `ACCEPTED`, `declined` → `DECLINED`, `tentative` → `TENTATIVE`, `needs-action` → `NEEDS-ACTION`, `delegated` → `DELEGATED`.
+  - Kind mapping: `individual` → `INDIVIDUAL`, `group` → `GROUP`, `resource` → `RESOURCE`, `location` → `ROOM`.
+  - RSVP mapping: `expectReply: true` → `RSVP=TRUE`.
+- **One-Way Emission & Server Scheduling Authority**:
+  - `ORGANIZER` and `ATTENDEE` lines are written onto the iCalendar stream for Evolution's UI to display the meeting owner and guest list.
+  - Inbound `ical_to_event` leaves `participants: None` because participant scheduling state, RSVPs, and invitation dispatch are strictly owned and managed by the authoritative JMAP calendar server.
+
+### 3.9 Recurrence Rules (`RRULE` ↔ `recurrenceRules`)
+- **13 Recurrence Rule Elements**:
+  - `FREQ`: `secondly`, `minutely`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`.
+  - `INTERVAL`: positive integer step count.
+  - `COUNT`: positive integer occurrence limit.
+  - `UNTIL`: end date-time evaluated in the event's own timezone clock.
+  - By-rules: `by_second`, `by_minute`, `by_hour`, `by_day` (`NDay`), `by_month_day`, `by_year_day`, `by_week_no`, `by_month`, `by_set_position`.
+  - `WKST`: `first_day_of_week` (`MO`, `TU`, `WE`, `TH`, `FR`, `SA`, `SU`).
+- **`maps_recurrence_rule` Predicate**:
+  - Validates recurrence rule structure and refuses invalid combinations (e.g. `by_week_no` on non-yearly frequencies).
+- **`unstateable_until` Predicate**:
+  - Validates that `UNTIL` timestamps can be stated in the series timezone without ambiguity.
+
+### 3.10 Free/Busy Availability Mapping (`VFREEBUSY` ↔ `freebusy.rs`)
+- **`free_busy_type`**:
+  - Maps draft busy statuses to RFC 5545 `FBTYPE` tokens:
+    - `"busy"` → `"BUSY"`
+    - `"tentative"` → `"BUSY-TENTATIVE"`
+    - `"unavailable"` → `"BUSY-UNAVAILABLE"`
+    - Unknown / unmapped statuses fallback safely to `"BUSY"`.
+- **`busy_periods_to_vfreebusy`**:
+  - Formats bare `VFREEBUSY` components (as expected by `ECalMetaBackend` / `get_free_busy_sync`).
+  - Filters and bounds busy periods strictly within the requested `[start, end]` search window.
+  - Sanitizes attendee calendar addresses and prevents header/property injection.
+
+---
+
+## 4. VTIMEZONE and TZID Resolution Architecture
 
 RFC 5545 §3.8.3.1 defines the `TZID` parameter and RFC 8984 §1.4.9 / §4.7.2 defines JSCalendar's `timeZone` and `timeZones` model. Real-world calendar streams emitted by major providers (Microsoft Outlook, Exchange, M365, Google Calendar, Apple Calendar macOS/iOS, Nextcloud, Mozilla Thunderbird, and Evolution) carry diverse time zone identifier formats:
 
@@ -84,9 +268,9 @@ RFC 5545 §3.8.3.1 defines the `TZID` parameter and RFC 8984 §1.4.9 / §4.7.2 d
 └─────────────────────────────┘                       └─────────────────────────────┘
 ```
 
-### 2.1 Accepted Time Zone Identifier Forms
+### 4.1 Accepted Time Zone Identifier Forms
 
-`jmap-ical` accepts and classifies time zone identifiers into four distinct tiers:
+`jmap-ical` accepts and classifies time zone identifiers into five distinct tiers:
 
 1. **Standard IANA Time Zone Database Names**:
    - **Grammar**: Non-empty alphanumeric / `_` / `-` / `+` segments separated by `/` (`names_time_zone(value) == true`).
@@ -167,9 +351,24 @@ RFC 5545 §3.8.3.1 defines the `TZID` parameter and RFC 8984 §1.4.9 / §4.7.2 d
    - **Examples**: `"Unknown Fictional Time Zone"`, `"Custom Enterprise Time"`.
    - **Handling**: Unresolvable strings with no leading solidus and no valid mapping are passed unchanged into `event.time_zone` but refused by [`maps_time_zone`]. The sync layer files the appointment as floating rather than sending an invalid identifier to the server.
 
+### 4.2 Custom `TimeZone` & `TimeZoneRule` Observance Architecture (RFC 8984 §4.7.2)
+
+Custom time zones defined under `event.time_zones` bridge between RFC 8984 `TimeZone` / `TimeZoneRule` objects and RFC 5545 `VTIMEZONE` / `STANDARD` / `DAYLIGHT` subcomponents:
+
+- **Observance Rules & Recurrence**:
+  - RFC 8984 §4.7.2 defines `recurrenceRules` as a plural array on `TimeZoneRule` objects (whereas standalone events use `recurrenceRule` singular in JSCalendar 2.0 / jscalendarbis).
+  - On import, `read_observance` deserializes `RRULE` lines within `STANDARD` / `DAYLIGHT` subcomponents into canonical RFC 8984 `"recurrenceRules": [RecurrenceRule, ...]`.
+  - On outbound serialization, `observance()` accepts both `"recurrenceRules"` (RFC 8984 plural array) and `"recurrenceRule"` (singular object or array) variants, ensuring complete interoperability across all payload forms.
+- **Local Time & Offset Arithmetic**:
+  - `DTSTART` inside `STANDARD` and `DAYLIGHT` is a local date-time resolved against `TZOFFSETFROM` rather than a zone lookup.
+  - `UNTIL` inside an observance `RRULE` is converted using `Ends::At(&offset_from)` arithmetic directly from the observance's local offset, avoiding the need for an external zone database.
+- **JSCalendar 2.0 Interoperability**:
+  - In JSCalendar 2.0 (`draft-ietf-calext-jscalendarbis`), custom `timeZones` definitions were rendered obsolete in favor of canonical IANA time zone identifiers.
+  - `jmap-ical` safely omits `time_zones` when standard IANA zones are resolved, and preserves custom solidus definitions when required by private server environments.
+
 ---
 
-## 3. Recurrence & UNTIL Instant Calculation with Timezones
+## 5. Recurrence & UNTIL Instant Calculation with Timezones
 
 RFC 5545 §3.3.10 states recurrence rule `UNTIL` as a UTC instant (`YYYYMMDDTHHMMSSZ`) whenever `DTSTART` specifies a timezone. Conversely, RFC 8984 §4.3.3 / jscalendarbis states `until` as a local date-time string (`YYYY-MM-DDTHH:MM:SS`) in the event's own timezone.
 
@@ -179,7 +378,7 @@ RFC 5545 §3.3.10 states recurrence rule `UNTIL` as a UTC instant (`YYYYMMDDTHHM
 
 ---
 
-## 4. Multi-Stage Fixed-Point Stability
+## 6. Multi-Stage Fixed-Point Stability
 
 Every calendar transformation in `jmap-ical` adheres to strict fixed-point stability:
 1. **Pass 1 (Import & Normalization)**: Raw iCalendar input with non-standard TZIDs (e.g. `DTSTART;TZID=W. Europe Standard Time:...` or `DTSTART;TZID=/mozilla.org/...`) is normalized to canonical JSCalendar (`timeZone: "Europe/Berlin"`).
@@ -189,7 +388,7 @@ Every calendar transformation in `jmap-ical` adheres to strict fixed-point stabi
 
 ---
 
-## 5. Alerts & VALARM Mapping Architecture (RFC 8984 §4.5 ↔ RFC 5545 §3.6.6 / RFC 9074)
+## 7. Alerts & VALARM Mapping Architecture (RFC 8984 §4.5 ↔ RFC 5545 §3.6.6 / RFC 9074)
 
 Reminders and alarms bridge between JSCalendar's `alerts: Id[Alert]` map (RFC 8984 §4.5) and iCalendar's `VALARM` child components (RFC 5545 §3.6.6 / RFC 9074 §6):
 
@@ -212,7 +411,7 @@ Reminders and alarms bridge between JSCalendar's `alerts: Id[Alert]` map (RFC 89
 └──────────────────────────────────────────────┘
 ```
 
-### 5.1 Trigger Formats, Signs & Normalization
+### 7.1 Trigger Formats, Signs & Normalization
 
 1. **Relative Offsets**:
    - RFC 5545 §3.8.6.3 durations and RFC 8984 §1.4.7 `SignedDuration` represent offsets relative to event start or end.
@@ -227,7 +426,7 @@ Reminders and alarms bridge between JSCalendar's `alerts: Id[Alert]` map (RFC 89
    - Inbound: Safely dropped (returns `None`), avoiding inaccurate conversion to floating offsets.
    - Outbound: Refused by `maps_alerts` (`maps_alerts(&event) == false`), preventing silent offset approximation or moving alarms when events are rescheduled.
 
-### 5.2 Action Types Decision Matrix
+### 7.2 Action Types Decision Matrix
 
 | iCalendar Action | JSCalendar Action | Inbound Handling | Outbound `maps_alerts` | Design Rationale |
 | :--- | :--- | :--- | :--- | :--- |
@@ -236,23 +435,23 @@ Reminders and alarms bridge between JSCalendar's `alerts: Id[Alert]` map (RFC 89
 | `ACTION:EMAIL` | `"email"` | Dropped (`None`) | `false` (Refused) | RFC 5545 requires `ATTENDEE` and `SUMMARY` which JSCalendar Alert does not model. |
 | `ACTION:PROCEDURE` | `"procedure"` | Dropped (`None`) | `false` (Refused) | Unsupported program execution alarm type. |
 
-### 5.3 UID Allocation & Key Collision Avoidance
+### 7.3 UID Allocation & Key Collision Avoidance
 
 - **RFC 9074 `UID`**: Named `VALARM` components with valid IDs preserve their server-assigned key (`UID:k1` → `"k1"`).
 - **Nameless & Evolution Alarms**: Exporters omitting RFC 9074 `UID` (such as Evolution's internal `X-EVOLUTION-ALARM-UID` or Apple Calendar) are assigned deterministic positional keys (`"a1"`, `"a2"`, …).
 - **Collision Avoidance**: Invented positional keys automatically skip keys already claimed by explicit `UID` lines, guaranteeing 100% uniqueness without entry collapsing.
 - **Duplicate UIDs**: If an incoming stream contains duplicate UIDs, RFC 9074 §6 uniqueness rules apply and duplicate entries collapse into a single map entry.
 
-### 5.4 Safety and Whole-Property Replacement
+### 7.4 Safety and Whole-Property Replacement
 
 - **Event Title in `DESCRIPTION`**: RFC 5545 §3.6.6 mandates `DESCRIPTION` on `ACTION:DISPLAY`. `event_to_ical` populates `DESCRIPTION` with `event.title` (omitted if title is empty or `None`).
 - **Custom `description` on `Alert`**: If a server-side `Alert` contains a custom `description` field, `maps_alerts` returns `false` because `VALARM` description is derived from event title, preventing silent deletion of custom alert descriptions.
 - **`acknowledged` Timestamps (RFC 9074 §6.1)**: Dismissed/snoozed alert timestamps in JSCalendar are refused by `maps_alerts` (`maps_alerts(&event) == false`) to prevent whole-property replacement from un-dismissing snoozed alarms.
 - **`useDefaultAlerts`**: When `useDefaultAlerts: true` (RFC 8984 §4.5.1), `event_to_ical` emits 0 `VALARM`s and `maps_alerts` returns `false`. Recurrence overrides also inherit `useDefaultAlerts` from the master series.
 
-### 5.5 Real-Exporter Alarm Corpus Fidelity & Refused Shapes Isolation
+### 7.5 Real-Exporter Alarm Corpus Fidelity & Refused Shapes Isolation
 
-The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_export.ics`, `apple_calendar_export.ics`, `evolution_calendar_export.ics`, `nextcloud_calendar_export.ics`) characterizes how alarms emitted by major platforms behave on the bidirectional round-trip:
+The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_export.ics`, `apple_calendar_export.ics`, `thunderbird_calendar_export.ics`, `sogo_calendar_export.ics`, `evolution_calendar_export.ics`, `nextcloud_calendar_export.ics`) characterizes how alarms emitted by major platforms behave on the bidirectional round-trip:
 
 1. **Google Calendar (`google_calendar_export.ics`)**:
    - **Shapes Emitted**: Multiple display alarms at standard offsets (`-P1D`, `-PT15M`), email notification alarms (`ACTION:EMAIL` with `ATTENDEE` and `SUMMARY`), and absolute trigger alarms (`TRIGGER;VALUE=DATE-TIME`).
@@ -266,17 +465,25 @@ The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_expo
    - **Shapes Emitted**: Multi-alarm sequences (`-P1D`, `-PT2H`, `-PT15M`), Apple `ACKNOWLEDGED` snoozed timestamps (RFC 9074 §6.1), `X-WR-ALARMUID` paired with `UID`, `ACTION:AUDIO` with sound attachments (`ATTACH;VALUE=URI:Basso`), and absolute date-time triggers.
    - **Mapping Fidelity**: Display alarms with explicit UUID keys are preserved. `ACKNOWLEDGED` timestamps and `X-WR-ALARMUID` properties are ignored on parse to avoid setting `event.extra`. Refused audio and absolute triggers are dropped on export without data loss.
 
-4. **GNOME Evolution (`evolution_calendar_export.ics`)**:
+4. **Mozilla Thunderbird (`thunderbird_calendar_export.ics`)**:
+   - **Shapes Emitted**: Display alarms with `ACTION:DISPLAY`, bi-weekly recurrence, timezone-aware `EXDATE`s, conference URIs, and PDF attachments.
+   - **Mapping Fidelity**: Display alarms map cleanly to JSCalendar `Alert` records and roundtrip with fixed-point stability.
+
+5. **SOGo Connector / Radicale (`sogo_calendar_export.ics`)**:
+   - **Shapes Emitted**: Multiple display alarms at `-PT15M` and `-P1D`, French location strings, conference chat endpoints, and monthly ordinal recurrence.
+   - **Mapping Fidelity**: Preserved and roundtripped losslessly.
+
+6. **GNOME Evolution (`evolution_calendar_export.ics`)**:
    - **Shapes Emitted**: Native `X-EVOLUTION-ALARM-UID` parameters and explicit `VALUE=DURATION` trigger parameters.
    - **Mapping Fidelity**: Positional keys (`a1`, `a2`) map cleanly to JSCalendar map IDs and roundtrip with fixed-point stability.
 
-5. **Nextcloud / SabreDAV (`nextcloud_calendar_export.ics`)**:
+7. **Nextcloud / SabreDAV (`nextcloud_calendar_export.ics`)**:
    - **Shapes Emitted**: Multi-day display offsets (`-P2D`).
    - **Mapping Fidelity**: Preserved and roundtripped losslessly.
 
 ---
 
-## 6. Recurrence Overrides & RECURRENCE-ID Mapping Architecture (RFC 8984 §4.3.4 ↔ RFC 5545 §3.8.4.4 / §3.8.5)
+## 8. Recurrence Overrides & RECURRENCE-ID Mapping Architecture (RFC 8984 §4.3.4 ↔ RFC 5545 §3.8.4.4 / §3.8.5)
 
 JSCalendar models recurrence overrides using a unified map `recurrenceOverrides: Id[PatchObject]` (RFC 8984 §4.3.4), where each key is a `LocalDateTime` identifying the occurrence being altered. iCalendar (RFC 5545) represents single instances of a recurring series through three distinct mechanisms:
 
@@ -301,7 +508,7 @@ JSCalendar models recurrence overrides using a unified map `recurrenceOverrides:
 └───────────────────┘     └───────────────────┘     └───────────────────┘
 ```
 
-### 6.1 Three Representation Categories
+### 8.1 Three Representation Categories
 
 1. **Cancelled Occurrences (`EXDATE` ↔ `{"excluded": true}`)**:
    - Inbound: `EXDATE` lines (single or comma-delimited multiple dates) map to `"excluded": true` entries in `recurrenceOverrides`.
@@ -316,7 +523,7 @@ JSCalendar models recurrence overrides using a unified map `recurrenceOverrides:
    - Inbound: Each secondary `VEVENT` carrying a `RECURRENCE-ID` is diffed against the master series across the 11 [`OVERRIDE_PROPERTIES`]. Differing fields form the `PatchObject`.
    - Outbound: An entry modifying any of the 11 restatable properties emits a detached `VEVENT` containing `UID` (matching series), `RECURRENCE-ID` (matching series zone/clock), and overridden properties. Unstated properties inherit from the master series.
 
-### 6.2 Precedence & Conflict Resolution Matrix
+### 8.2 Precedence & Conflict Resolution Matrix
 
 When an iCalendar stream contains multiple statements about the same occurrence instant:
 1. **Detached `VEVENT` vs `RDATE`**: The detached `VEVENT` takes precedence. It provides specific property overrides while the `RDATE` only states that the occurrence happens.
@@ -325,7 +532,7 @@ When an iCalendar stream contains multiple statements about the same occurrence 
 4. **`RANGE=THISANDFUTURE` (RFC 5545 §3.2.13)**: Detached components with `RANGE=THISANDFUTURE` are safely skipped by `read_overrides` to prevent silently corrupting subsequent occurrences in the series.
 5. **Out-of-Order Components**: Documents where detached `VEVENT` occurrences precede the master series in physical line order are correctly associated by `UID`.
 
-### 6.3 Restatable Properties Decision Matrix (`OVERRIDE_PROPERTIES`)
+### 8.3 Restatable Properties Decision Matrix (`OVERRIDE_PROPERTIES`)
 
 Only 11 properties are restatable on individual occurrences (RFC 8984 §4.3.4):
 
@@ -345,11 +552,86 @@ Only 11 properties are restatable on individual occurrences (RFC 8984 §4.3.4):
 
 *Note*: Unmapped properties (e.g. `locations`, `participants`, `virtualLocations`, `links`) cannot be restated per-occurrence and are refused by `maps_recurrence_override`.
 
-### 6.4 Clocks and Time Zone Separation
+### 8.4 Clocks and Time Zone Separation
 
 When an occurrence moves to a different time zone:
 - **`RECURRENCE-ID`**: Evaluated on the **master series clock** (`series_zone`), identifying the original generated occurrence instant (RFC 5545 §3.8.4.4).
 - **`DTSTART`**: Evaluated on the **instance's own clock** (`instance.time_zone`), placing the rescheduled occurrence at its actual local start time.
-- **Windows & Globally-Unique TZIDs**: TZIDs on `RECURRENCE-ID` and instance `DTSTART` resolve through the canonical resolution pipeline (Section 2), tolerating real-world exporter formats across providers.
+- **Windows & Globally-Unique TZIDs**: TZIDs on `RECURRENCE-ID` and instance `DTSTART` resolve through the canonical resolution pipeline (Section 4), tolerating real-world exporter formats across providers.
 
+---
+
+## 9. Special Semantics & Product Decision Catalog
+
+### 9.1 Dropped-by-Design Rationale for Unknown / Unmodeled Properties
+`jmap-ical` deliberately ignores standard iCalendar envelope properties and vendor `X-` extensions for which Evolution/EDS lacks active UI editing support or for which client-side preservation is architecturally incorrect:
+1. **`PRODID`, `VERSION`, `CALSCALE`, `METHOD`**:
+   - Serialization envelope metadata. Foreign generator identifiers are not preserved across saves to prevent misattributing the generator of Evolution/JMAP exports.
+2. **`SEQUENCE` & `DTSTAMP`**:
+   - Modification sequence counters and envelope timestamps. Strictly owned and managed by the authoritative store (the JMAP server) upon commit.
+3. **Vendor `X-` Properties (`X-MICROSOFT-*`, `X-APPLE-*`, `X-EVOLUTION-*`)**:
+   - Safely ignored on parse without polluting `event.extra`. Server-side unmodeled attributes remain safe and untouched via `PatchObject`.
+
+### 9.2 Safe Isolation of Refused Alarm Shapes
+- `ACTION:EMAIL`, `ACTION:AUDIO`, `ACTION:PROCEDURE`, and `AbsoluteTrigger` (`TRIGGER;VALUE=DATE-TIME`) in incoming iCalendar documents are safely dropped during inbound mapping without corrupting other event properties or polluting `event.extra`.
+- `maps_alerts` strictly refuses any outbound JSCalendar event containing unmappable alert properties (such as custom `description` or `acknowledged` timestamps), ensuring whole-property replacement never silently clobbers user data.
+
+### 9.3 `RANGE=THISANDFUTURE` (RFC 5545 §3.2.13) Safe Skipping Rationale
+- Detached components carrying `RANGE=THISANDFUTURE` are safely skipped by `read_overrides` because JSCalendar `recurrenceOverrides` does not support multi-instance range modification in a single key; skipping prevents silently dropping edits to future instances.
+
+### 9.4 Line Folding (75-octet limit), Unfolding, Escaping & UTF-8 Multi-byte Code Point Protection
+- Outbound serialization via `calcard` automatically folds physical lines longer than 75 octets using CRLF followed by a space (`\r\n `). Multi-byte UTF-8 code points are never split across line folds.
+- Inbound unfolding reconstructs folded lines losslessly.
+
+---
+
+## 10. Function & Predicate Index
+
+| Function Name | Visibility | Primary Role / Responsibility |
+| :--- | :--- | :--- |
+| [`event_to_ical`] | `pub` | Serializes JSCalendar [`CalendarEvent`] into RFC 5545 iCalendar string for EDS consumption. |
+| [`ical_to_event`] | `pub` | Parses RFC 5545 iCalendar string into JSCalendar [`CalendarEvent`]. |
+| [`parse_ical`] | `pub` | Parses raw iCalendar text into structured `ICalendar` component AST via `calcard`. |
+| [`maps_locations`] | `pub` | Evaluates if locations map has <= 1 entry with valid name and non-empty key for safe patching. |
+| [`maps_virtual_locations`] | `pub` | Validates virtual locations map for valid URIs, names, and RFC 7986 boolean features. |
+| [`maps_keyword`] | `pub` | Validates keyword tag for boolean `true`, non-emptiness, and whitespace safety. |
+| [`maps_alerts`] | `pub` | Validates alerts map for display actions, offset triggers, and absence of custom descriptions/snooze timestamps. |
+| [`maps_recurrence_rule`] | `pub` | Validates recurrence rule syntax and frequency/by-rule combinations. |
+| [`unstateable_until`] | `pub` | Checks if recurrence UNTIL timestamp cannot be stated in series timezone. |
+| [`maps_recurrence_override`] | `pub` | Validates individual recurrence override patch for valid 11 restatable properties and absence of conflicts. |
+| [`sends_recurrence_override`] | `pub` | Checks if recurrence override can be emitted, tolerating defined custom timezones. |
+| [`names_time_zone`] | `pub` | Validates whether a string has syntactic IANA time zone structure. |
+| [`windows_time_zone_to_iana`] | `pub` | Resolves Windows time zone display names to canonical IANA zone identifiers via CLDR table. |
+| [`unique_tzid_to_iana`] | `pub` | Extracts canonical IANA zone suffix from globally-unique form TZIDs (`/mozilla.org/...`). |
+| [`resolve_canonical_time_zone`] | `pub` | Coordinates resolution order (Windows table, syntactic IANA, globally-unique suffix). |
+| [`time_zone_definition`] | `pub` | Looks up inline `VTIMEZONE` definition matching a given TZID. |
+| [`maps_time_zone`] | `pub` | Checks whether an event's timezone can be mapped without falling back to floating. |
+| [`defines_time_zone`] | `pub` | Checks whether an event explicitly defines an inline `VTIMEZONE` for a TZID. |
+| [`prune_time_zones`] | `pub` | Removes unreferenced `VTIMEZONE` definitions from `event.time_zones`. |
+| [`free_busy_type`] | `pub` | Maps draft busy status string to RFC 5545 `FBTYPE` token (`BUSY`, `BUSY-TENTATIVE`, `BUSY-UNAVAILABLE`). |
+| [`busy_periods_to_vfreebusy`] | `pub` | Formats attendee busy periods into bare `VFREEBUSY` component bounded by search window. |
+
+---
+
+## 11. Real-Exporter Fixture Corpus & Whole-File Regression Net
+
+### 11.1 Exporter Fixture Corpus
+
+| Exporter / Platform | Fixture File | Protocol / Format | Key Characteristics & Mapped Surface | Preservation & Drop Invariants |
+| :--- | :--- | :--- | :--- | :--- |
+| **Google Calendar** | `google_calendar_export.ics` | iCalendar 2.0 | • Multiple display alarms (`-P1D`, `-PT15M`)<br>• `ACTION:EMAIL` alarms & absolute triggers<br>• Google Meet conference links<br>• Organizer & Attendees with `PARTSTAT`<br>• Recurring series with `EXDATE` | • `ACTION:EMAIL` & absolute triggers dropped cleanly<br>• Display alarms mapped to `Alert`s (`a1`, `a2`)<br>• Fixed-point convergence: `Export₂ == Export₃` |
+| **Microsoft Outlook / M365** | `outlook_m365_export.ics` | iCalendar 2.0 | • Windows time zones (`W. Europe Standard Time`)<br>• 94-char folded UIDs<br>• `DESCRIPTION:REMINDER` display alarms<br>• `X-WR-ALARMUID` & `X-MICROSOFT-*` extensions<br>• MS Teams conference URLs | • Windows TZIDs normalize to IANA (`Europe/Berlin`)<br>• Vendor `X-` properties dropped cleanly<br>• Fixed-point convergence: `Export₂ == Export₃` |
+| **Apple Calendar / macOS** | `apple_calendar_export.ics` | iCalendar 2.0 | • Globally-unique TZIDs (`/apple.com/...`)<br>• Apple `ACKNOWLEDGED` snoozed alarm timestamps<br>• `ACTION:AUDIO` with Basso sound attachment<br>• Multi-alarm sequences (`-P1D`, `-PT2H`, `-PT15M`)<br>• `X-APPLE-FILENAME` attachments | • `ACKNOWLEDGED` & audio alarms dropped cleanly<br>• Attachments map to `links`<br>• Fixed-point convergence: `Export₂ == Export₃` |
+| **Mozilla Thunderbird** | `thunderbird_calendar_export.ics` | iCalendar 2.0 | • Globally-unique TZIDs (`/mozilla.org/...`)<br>• Bi-weekly recurrence (`FREQ=WEEKLY;INTERVAL=2;BYDAY=MO`)<br>• Timezone-aware exception dates (`EXDATE`)<br>• Conference URIs & PDF attachments<br>• Display alarms | • TZIDs normalize to canonical IANA<br>• Attachments & conferences mapped to `links`/`virtualLocations`<br>• Fixed-point convergence: `Export₂ == Export₃` |
+| **SOGo / Radicale CalDAV** | `sogo_calendar_export.ics` | iCalendar 2.0 | • Monthly ordinal recurrence (`FREQ=MONTHLY;BYDAY=1TH;COUNT=6`)<br>• French Unicode location strings with accents<br>• Badge image attachments (`rel: icon`)<br>• Conference chat endpoints<br>• Dual reminder alarms | • 100% lossless retention of recurrence & alarms<br>• Fixed-point convergence: `Export₂ == Export₃` |
+| **Nextcloud / SabreDAV** | `nextcloud_calendar_export.ics` | iCalendar 2.0 | • Standard IANA time zones (`Europe/Berlin`)<br>• Multi-day display reminder alarms (`-P2D`)<br>• Nextcloud Talk virtual locations<br>• Recurrence overrides with detached components | • Lossless roundtrip of recurrence & overrides<br>• Fixed-point convergence: `Export₂ == Export₃` |
+| **GNOME Evolution Native** | `evolution_calendar_export.ics` | iCalendar 2.0 | • Full native Evolution iCalendar 2.0<br>• `X-EVOLUTION-ALARM-UID`<br>• Explicit `VALUE=DURATION` alarm triggers<br>• Full recurrence rules & overrides<br>• Physical & virtual locations | • 100% lossless retention of all Evolution fields<br>• Deterministic `X-JMAP-KEY` preservation<br>• Multi-pass fixpoint: `Export₁ == Export₂ == Export₃` |
+
+### 11.2 Table-Driven Whole-File Regression Net
+
+The table-driven test suite (`real_exporter_fixture_corpus_table_driven_roundtrip` in `tests/event.rs`) executes the complete multi-stage lifecycle across the entire fixture corpus:
+1. **Inbound Import (`ical_to_event`)**: Parses raw iCalendar streams into structured `CalendarEvent` models.
+2. **Outbound Normalization (`event_to_ical`)**: Emits canonical RFC 5545 iCalendar documents.
+3. **Multi-Stage Fixpoint Convergence**: Validates standing invariants:
+   $$\text{Export}_2 \equiv \text{Export}_3 \quad \text{and} \quad \text{Event}_2 \equiv \text{Event}_3$$
 
