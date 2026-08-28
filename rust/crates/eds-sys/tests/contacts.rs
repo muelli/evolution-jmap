@@ -2272,3 +2272,91 @@ fn editing_one_of_the_two_fields_a_multi_feature_line_fills_rewrites_the_other()
         gobject_sys::g_object_unref(contact.cast());
     }
 }
+
+#[test]
+fn test_unslotted_twitter_and_sip_attr_lists_vs_slotted_im_fields_in_eds() {
+    let vcard_str = "BEGIN:VCARD\r\n\
+VERSION:3.0\r\n\
+FN:Vera User\r\n\
+N:User;Vera;;;\r\n\
+X-JABBER;TYPE=HOME:vera@jabber.example\r\n\
+X-AIM;TYPE=HOME:vera_aim\r\n\
+X-ICQ;TYPE=HOME:12345678\r\n\
+X-MSN;TYPE=HOME:vera@msn.com\r\n\
+X-YAHOO;TYPE=HOME:vera_yahoo\r\n\
+X-GADUGADU;TYPE=HOME:87654321\r\n\
+X-GROUPWISE;TYPE=HOME:vera_gw\r\n\
+X-GOOGLE-TALK;TYPE=HOME:vera@gmail.com\r\n\
+X-MATRIX;TYPE=HOME:@vera:matrix.example\r\n\
+X-SKYPE;TYPE=HOME:vera_skype\r\n\
+X-TWITTER:@vera_tw\r\n\
+X-SIP:sip:vera@example.com\r\n\
+END:VCARD\r\n";
+
+    unsafe {
+        let vcard_c = CString::new(vcard_str).unwrap();
+        let contact = e_contact_new_from_vcard(vcard_c.as_ptr().cast());
+        assert!(!contact.is_null());
+
+        // 1. Verify all 10 slotted IM fields are strings and hold the expected handles
+        let slotted_expected: &[(EContactField, &str)] = &[
+            (E_CONTACT_IM_JABBER_HOME_1, "vera@jabber.example"),
+            (E_CONTACT_IM_AIM_HOME_1, "vera_aim"),
+            (E_CONTACT_IM_ICQ_HOME_1, "12345678"),
+            (E_CONTACT_IM_MSN_HOME_1, "vera@msn.com"),
+            (E_CONTACT_IM_YAHOO_HOME_1, "vera_yahoo"),
+            (E_CONTACT_IM_GADUGADU_HOME_1, "87654321"),
+            (E_CONTACT_IM_GROUPWISE_HOME_1, "vera_gw"),
+            (E_CONTACT_IM_GOOGLE_TALK_HOME_1, "vera@gmail.com"),
+            (E_CONTACT_IM_MATRIX_HOME_1, "@vera:matrix.example"),
+            (E_CONTACT_IM_SKYPE_HOME_1, "vera_skype"),
+        ];
+
+        for &(field, expected_handle) in slotted_expected {
+            assert_eq!(
+                e_contact_field_is_string(field),
+                1,
+                "field {field} must be a string"
+            );
+            let val_ptr = e_contact_get_const(contact, field);
+            assert!(!val_ptr.is_null(), "field {field} must not be null");
+            assert_eq!(
+                CStr::from_ptr(val_ptr.cast()).to_str().unwrap(),
+                expected_handle
+            );
+        }
+
+        // 2. Verify X-TWITTER and X-SIP are EContactAttrList (not strings, no slots)
+        let attr_list_type = e_contact_attr_list_get_type();
+        assert_eq!(e_contact_field_is_string(E_CONTACT_IM_TWITTER), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_IM_TWITTER), attr_list_type);
+        assert_eq!(e_contact_field_is_string(E_CONTACT_SIP), 0);
+        assert_eq!(e_contact_field_type(E_CONTACT_SIP), attr_list_type);
+
+        unsafe extern "C" fn free_string_item(p: *mut std::ffi::c_void) {
+            unsafe {
+                glib_sys::g_free(p);
+            }
+        }
+
+        // Read Twitter attribute list
+        let twitter_list = e_contact_get(contact, E_CONTACT_IM_TWITTER) as *mut glib_sys::GList;
+        assert!(!twitter_list.is_null());
+        let twitter_val = CStr::from_ptr((*twitter_list).data as *const gchar)
+            .to_str()
+            .unwrap();
+        assert_eq!(twitter_val, "@vera_tw");
+        glib_sys::g_list_free_full(twitter_list, Some(free_string_item));
+
+        // Read SIP attribute list
+        let sip_list = e_contact_get(contact, E_CONTACT_SIP) as *mut glib_sys::GList;
+        assert!(!sip_list.is_null());
+        let sip_val = CStr::from_ptr((*sip_list).data as *const gchar)
+            .to_str()
+            .unwrap();
+        assert_eq!(sip_val, "sip:vera@example.com");
+        glib_sys::g_list_free_full(sip_list, Some(free_string_item));
+
+        gobject_sys::g_object_unref(contact.cast());
+    }
+}
