@@ -244,27 +244,50 @@ unsafe extern "C" fn prepare_authentication_uri_query(
             // were already right). The verifier is stashed per source UID
             // for `prepare_get_token_form` to redeem; a repeated
             // authorization attempt simply replaces it.
-            let verifier = PkceVerifier::generate();
-            g_hash_table_replace(
-                uri_query,
-                g_strdup(c"code_challenge".as_ptr()).cast(),
-                g_strdup(cstring_lossy(&verifier.challenge()).as_ptr()).cast(),
-            );
-            g_hash_table_replace(
-                uri_query,
-                g_strdup(c"code_challenge_method".as_ptr()).cast(),
-                g_strdup(c"S256".as_ptr()).cast(),
-            );
-            if let Some(ref uid) = uid {
+            //
+            // All-or-nothing (F16 audit follow-up, `docs/AUDIT-FFI-20260828.md`
+            // "F17"): a challenge is only ever added once its verifier is
+            // stashed. A uid-less source could not be stashed against, and
+            // sending a challenge with nobody able to redeem it is worse than
+            // sending none — RFC 7636 §4.6 obliges the server to reject the
+            // code exchange that follows, so this would previously turn into
+            // a silent, unattributable authentication failure rather than the
+            // well-defined "no PKCE" request this deployment already tolerates
+            // (it is EDS's own default query without our addition).
+            let verifier = if let Some(ref uid) = uid {
+                let verifier = PkceVerifier::generate();
                 pkce_verifiers()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(uid.clone(), verifier.secret().to_owned());
-            }
+                g_hash_table_replace(
+                    uri_query,
+                    g_strdup(c"code_challenge".as_ptr()).cast(),
+                    g_strdup(cstring_lossy(&verifier.challenge()).as_ptr()).cast(),
+                );
+                g_hash_table_replace(
+                    uri_query,
+                    g_strdup(c"code_challenge_method".as_ptr()).cast(),
+                    g_strdup(c"S256".as_ptr()).cast(),
+                );
+                true
+            } else {
+                // Not reached through any path EDS's public API can build
+                // today — `e_source_new*` always assigns a uid — but the
+                // fallback is cheap insurance against a source that somehow
+                // has none, and is exactly the case a plain `debug!` would
+                // have hidden per the audit's own finding below.
+                tracing::warn!(
+                    "source has no uid; omitting the PKCE challenge rather than \
+                     sending one whose verifier cannot be stashed and so can \
+                     never be redeemed"
+                );
+                false
+            };
             tracing::debug!(
                 account_uid = ?uid,
                 has_scope,
-                pkce_challenge_method = "S256",
+                has_pkce = verifier,
                 "prepared OAuth 2.0 authentication uri query"
             );
         },
@@ -333,6 +356,23 @@ unsafe extern "C" fn prepare_get_token_form(
         } else {
             false
         };
+        if !has_pkce {
+            // This is the failure mode that turns into the operator's
+            // repeating consent window (`docs/AUDIT-FFI-20260828.md` "F17"):
+            // every code exchange this service prepares follows a
+            // `prepare_authentication_uri_query` call that stashed a
+            // verifier, so its absence here means either that request never
+            // ran in this process, or the challenge it sent (before the
+            // all-or-nothing fix above) could never be redeemed — either way
+            // the exchange that follows is expected to fail, and `warn!`
+            // (not `debug!`) is what makes that attributable from the
+            // journal alone, per items 20(3)/22(3).
+            tracing::warn!(
+                account_uid = ?uid,
+                "no stashed PKCE verifier for this authorization code exchange; \
+                 if a challenge was sent, the server is expected to reject it"
+            );
+        }
         tracing::debug!(
             account_uid = ?uid,
             has_pkce,

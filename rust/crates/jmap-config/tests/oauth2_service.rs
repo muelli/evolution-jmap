@@ -25,6 +25,7 @@
 use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, EOAuth2Service, EOAuth2ServiceInterface, EOAuth2Services,
@@ -47,6 +48,53 @@ use gobject_sys::{
 use jmap_backend_core::subclass::register_static;
 use jmap_config::oauth2::{self, Config};
 use jmap_config::oauth2_service::{NAME, Service};
+use tracing::span::{Attributes, Id as SpanId, Record};
+use tracing::{Event, Level, Metadata, Subscriber};
+
+/// A minimal `tracing::Subscriber` that records only each event's level —
+/// enough to pin F17's "missing PKCE verifier escalates to `warn!`, not
+/// `debug!`" fix without needing this crate's full field-visiting machinery
+/// (`jmap-backend-collection/tests/tracing_writes.rs` has that shape, for
+/// tests that need the field values too).
+struct LevelCapturingSubscriber {
+    levels: Arc<Mutex<Vec<Level>>>,
+}
+
+impl Subscriber for LevelCapturingSubscriber {
+    fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &Attributes<'_>) -> SpanId {
+        SpanId::from_u64(1)
+    }
+
+    fn record(&self, _span: &SpanId, _values: &Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &SpanId, _follows: &SpanId) {}
+
+    fn event(&self, event: &Event<'_>) {
+        self.levels.lock().unwrap().push(*event.metadata().level());
+    }
+
+    fn enter(&self, _span: &SpanId) {}
+
+    fn exit(&self, _span: &SpanId) {}
+}
+
+/// Runs `body` under a subscriber that captures every emitted event's level,
+/// and returns them in emission order.
+fn capture_levels(body: impl FnOnce()) -> Vec<Level> {
+    let levels = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = LevelCapturingSubscriber {
+        levels: levels.clone(),
+    };
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        body();
+    });
+    std::mem::take(&mut *levels.lock().unwrap())
+}
 
 struct TestSource(*mut ESource);
 
@@ -606,5 +654,57 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
         g_hash_table_destroy(query);
         g_hash_table_destroy(form);
         g_hash_table_destroy(refresh);
+    }
+}
+
+/// F17 (`docs/AUDIT-FFI-20260828.md`): a code exchange prepared with no
+/// stashed PKCE verifier is exactly the failure mode that turns into a
+/// repeating, unattributable consent window (ROADMAP items 15/17/20/22), so
+/// it must be logged loudly enough to find in the journal — `warn!`, not
+/// `debug!`. A verifier goes missing here only on a second redemption
+/// attempt (single-use) or a never-stashed one (no uid, untestable through
+/// EDS's public `ESource` API — see the report), so the reachable half this
+/// pins is the former: redeeming the same code twice.
+#[test]
+fn a_missing_pkce_verifier_at_redemption_is_logged_at_warn_level() {
+    let service = service_in(registry());
+    let source = TestSource::new().written(&config());
+
+    let query = empty_table();
+    let authorize = vtable()
+        .prepare_authentication_uri_query
+        .expect("this crate fills the slot");
+    let form = empty_table();
+    let form2 = empty_table();
+    let slot = vtable()
+        .prepare_get_token_form
+        .expect("this crate fills the slot");
+
+    let first_levels = capture_levels(|| {
+        // SAFETY: live objects and tables throughout.
+        unsafe {
+            authorize(service, source.0, query);
+            slot(service, source.0, c"an-auth-code".as_ptr(), form);
+        }
+    });
+    assert!(
+        !first_levels.contains(&Level::WARN),
+        "a redemption with a stashed verifier must not warn: {first_levels:?}"
+    );
+
+    let second_levels = capture_levels(|| {
+        // SAFETY: as above; the verifier was already redeemed once.
+        unsafe { slot(service, source.0, c"an-auth-code".as_ptr(), form2) };
+    });
+    assert!(
+        second_levels.contains(&Level::WARN),
+        "a redemption with no stashed verifier must warn, not just debug!: {second_levels:?}"
+    );
+
+    // SAFETY: live tables this test owns.
+    unsafe {
+        g_hash_table_destroy(query);
+        g_hash_table_destroy(form);
+        g_hash_table_destroy(form2);
     }
 }
