@@ -256,14 +256,19 @@ fn e_contact_date_parsing_and_formatting() {
 #[test]
 fn e_contact_date_bare_year_and_partial_date_clamping() {
     unsafe {
-        // Bare 4-digit year: e_contact_date_from_string fails to parse short strings (< 8 chars or non-ISO),
-        // returning an empty EContactDate struct with year=0, month=0, day=0!
+        // Bare 4-digit year: VERSION-DEPENDENT. EDS 3.52's
+        // e_contact_date_from_string fails to parse short strings (< 8 chars
+        // or non-ISO) and returns an empty EContactDate (year=0, month=0,
+        // day=0); newer EDS (observed on the CI matrix's Fedora leg,
+        // 2026-08-28) parses the bare year. Both are characterized; what the
+        // invariant pins is that it is one of exactly these two, never a
+        // garbage year, and month/day stay 0 either way.
         let date = e_contact_date_from_string(c"1984".as_ptr());
         assert!(!date.is_null());
-        assert_eq!(
-            (*date).year,
-            0,
-            "EDS fails to parse bare 4-digit year and yields year=0"
+        assert!(
+            (*date).year == 0 || (*date).year == 1984,
+            "bare-year parse must yield 0 (EDS 3.52) or 1984 (newer), got {}",
+            (*date).year
         );
         assert_eq!((*date).month, 0);
         assert_eq!((*date).day, 0);
@@ -331,16 +336,28 @@ fn contact_editor_bday_and_anniversary_bare_year_in_place_clamping_corruption() 
         );
         g_free(untouched.cast());
 
-        // Contact editor reading: e_contact_get yields year=0, month=0, day=0
+        // Contact editor reading: VERSION-DEPENDENT, same split as
+        // `e_contact_date_bare_year_and_partial_date_clamping` above — EDS
+        // 3.52 yields the empty date (year=0), newer EDS parses the bare
+        // year. The corruption this test exists to pin is unchanged either
+        // way: month/day never invent values.
         let bday = e_contact_get(contact, E_CONTACT_BIRTH_DATE).cast::<EContactDate>();
         assert!(!bday.is_null());
-        assert_eq!((*bday).year, 0);
+        assert!(
+            (*bday).year == 0 || (*bday).year == 1984,
+            "bare-year BDAY must read 0 (EDS 3.52) or 1984 (newer), got {}",
+            (*bday).year
+        );
         assert_eq!((*bday).month, 0);
         assert_eq!((*bday).day, 0);
 
         let anniv = e_contact_get(contact, E_CONTACT_ANNIVERSARY).cast::<EContactDate>();
         assert!(!anniv.is_null());
-        assert_eq!((*anniv).year, 0);
+        assert!(
+            (*anniv).year == 0 || (*anniv).year == 1996,
+            "bare-year anniversary must read 0 (EDS 3.52) or 1996 (newer), got {}",
+            (*anniv).year
+        );
         assert_eq!((*anniv).month, 0);
         assert_eq!((*anniv).day, 0);
 
@@ -351,13 +368,17 @@ fn contact_editor_bday_and_anniversary_bare_year_in_place_clamping_corruption() 
 
         let rewritten = e_vcard_to_string_vcard_30(contact.cast());
         let rewritten_str = CStr::from_ptr(rewritten).to_str().unwrap();
+        // Either way the round trip invents a month and a day; the year is
+        // the version-dependent half — 3.52's unparsed 0 clamps to 1000,
+        // newer EDS keeps the parsed year.
         assert!(
-            rewritten_str.contains("BDAY:1000-01-01"),
-            "bare year BDAY was corrupted into 1000-01-01: {rewritten_str}"
+            rewritten_str.contains("BDAY:1000-01-01") || rewritten_str.contains("BDAY:1984-01-01"),
+            "bare year BDAY must clamp to 1000-01-01 (EDS 3.52) or 1984-01-01 (newer): {rewritten_str}"
         );
         assert!(
-            rewritten_str.contains("X-EVOLUTION-ANNIVERSARY:1000-01-01"),
-            "bare year anniversary was corrupted into 1000-01-01: {rewritten_str}"
+            rewritten_str.contains("X-EVOLUTION-ANNIVERSARY:1000-01-01")
+                || rewritten_str.contains("X-EVOLUTION-ANNIVERSARY:1996-01-01"),
+            "bare year anniversary must clamp to 1000-01-01 (EDS 3.52) or 1996-01-01 (newer): {rewritten_str}"
         );
         g_free(rewritten.cast());
 
