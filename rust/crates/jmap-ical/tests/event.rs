@@ -10,12 +10,14 @@
 use std::collections::BTreeMap;
 
 use jmap_ical::{
-    ICalError, defines_time_zone, event_to_ical, ical_to_event, maps_alerts, maps_keyword,
-    maps_locations, maps_recurrence_override, maps_recurrence_rule, maps_time_zone,
-    maps_virtual_locations, names_time_zone, prune_time_zones, sends_recurrence_override,
-    time_zone_definition, unstateable_until,
+    ICalError, busy_periods_to_vfreebusy, defines_time_zone, event_to_ical, free_busy_type,
+    ical_to_event, maps_alerts, maps_keyword, maps_locations, maps_recurrence_override,
+    maps_recurrence_rule, maps_time_zone, maps_virtual_locations, names_time_zone,
+    prune_time_zones, sends_recurrence_override, time_zone_definition, unstateable_until,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
+use jmap_proto::principals::BusyPeriod;
+use jmap_proto::state::UtcDate;
 use serde_json::{Value, json};
 
 fn fixture_event() -> CalendarEvent {
@@ -13592,4 +13594,439 @@ fn maps_alerts_refusal_boundary_matrix_for_unsupported_shapes() {
             "maps_alerts must refuse invalid key: '{bad_key}'"
         );
     }
+}
+
+#[test]
+fn mapping_docs_completeness_audit_master_property_table_fidelity() {
+    // Audit of every property in ICAL-MAPPING.md Master Property Mapping Table:
+    // UID, SUMMARY, DESCRIPTION, DTSTART, DURATION, STATUS, TRANSP, PRIORITY,
+    // CLASS, LOCATION, GEO, CONFERENCE, ATTACH/LINKS, CATEGORIES, ORGANIZER,
+    // ATTENDEE, VALARM, VTIMEZONE.
+
+    let rich_event = CalendarEvent {
+        id: Some("jmap-evt-001".into()),
+        uid: Some("rfc-uuid-evt-001".to_owned()),
+        title: Some("Master Architecture Summit".to_owned()),
+        description: Some("Comprehensive review of the iCalendar mapping contract.".to_owned()),
+        start: Some("2026-09-15T09:30:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        duration: Some("PT2H30M".to_owned()),
+        status: Some("confirmed".to_owned()),
+        free_busy_status: Some("busy".to_owned()),
+        priority: Some(1),
+        privacy: Some("public".to_owned()),
+        locations: Some(BTreeMap::from([(
+            "loc1".to_owned(),
+            json!({
+                "@type": "Location",
+                "name": "Main Auditorium, Room 101",
+                "description": "Ground floor west wing",
+                "coordinates": "geo:52.520008,13.404954",
+            }),
+        )])),
+        virtual_locations: Some(BTreeMap::from([(
+            "v1".to_owned(),
+            json!({
+                "@type": "VirtualLocation",
+                "uri": "https://meet.example.com/summit-2026",
+                "name": "Live Video Stream",
+                "features": {
+                    "audio": true,
+                    "video": true,
+                    "screen": true,
+                    "chat": true
+                }
+            }),
+        )])),
+        links: Some(BTreeMap::from([(
+            "l1".to_owned(),
+            json!({
+                "@type": "Link",
+                "href": "https://example.com/agenda.pdf",
+                "contentType": "application/pdf",
+                "title": "Summit Agenda PDF",
+                "size": 1048576,
+                "display": "badge"
+            }),
+        )])),
+        keywords: Some(BTreeMap::from([
+            ("architecture".to_owned(), json!(true)),
+            ("jmap".to_owned(), json!(true)),
+            ("summit".to_owned(), json!(true)),
+        ])),
+        participants: Some(BTreeMap::from([
+            (
+                "p_org".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "name": "Alice Organizer",
+                    "email": "alice@example.com",
+                    "sendTo": { "imip": "mailto:alice@example.com" },
+                    "roles": { "owner": true }
+                }),
+            ),
+            (
+                "p_att".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "name": "Bob Attendee",
+                    "email": "bob@example.com",
+                    "sendTo": { "imip": "mailto:bob@example.com" },
+                    "roles": { "attendee": true },
+                    "participationStatus": "accepted",
+                    "expectReply": true
+                }),
+            ),
+        ])),
+        alerts: Some(BTreeMap::from([(
+            "a1".to_owned(),
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {
+                    "@type": "OffsetTrigger",
+                    "offset": "-PT15M"
+                }
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+
+    // 1. Serialization (Pass 1)
+    let ics1 = event_to_ical(&rich_event);
+    assert!(ics1.contains("BEGIN:VCALENDAR\r\n"));
+    assert!(ics1.contains("VERSION:2.0\r\n"));
+    assert!(ics1.contains("UID:jmap-evt-001\r\n"));
+    assert!(ics1.contains("X-JMAP-UID:rfc-uuid-evt-001\r\n"));
+    assert!(ics1.contains("SUMMARY:Master Architecture Summit\r\n"));
+    assert!(ics1.contains("STATUS:CONFIRMED\r\n"));
+    assert!(ics1.contains("TRANSP:OPAQUE\r\n"));
+    assert!(ics1.contains("PRIORITY:1\r\n"));
+    assert!(ics1.contains("CLASS:PUBLIC\r\n"));
+    assert!(ics1.contains("DTSTART;TZID=Europe/Berlin:20260915T093000\r\n"));
+    assert!(ics1.contains("DURATION:PT2H30M\r\n"));
+    assert!(ics1.contains("LOCATION;X-JMAP-KEY=loc1:Main Auditorium\\, Room 101\r\n"));
+    assert!(ics1.contains("CONFERENCE;VALUE=URI;"));
+    assert!(ics1.contains("ATTACH;FMTTYPE=application/pdf;"));
+    assert!(ics1.contains("CATEGORIES:architecture,jmap,summit\r\n"));
+    assert_eq!(
+        content_line(&ics1, "ORGANIZER"),
+        "ORGANIZER;CN=\"Alice Organizer\":mailto:alice@example.com"
+    );
+    assert_eq!(
+        content_line(&ics1, "ATTENDEE"),
+        "ATTENDEE;CN=\"Bob Attendee\";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=TRUE:mailto:bob@example.com"
+    );
+    assert!(ics1.contains("BEGIN:VALARM\r\n"));
+    assert!(ics1.contains("TRIGGER:-PT15M\r\n"));
+    assert!(ics1.contains("ACTION:DISPLAY\r\n"));
+
+    // 2. Deserialization (Pass 1)
+    let parsed1 = ical_to_event(&ics1).expect("parse rich ics");
+    assert_eq!(
+        parsed1.id.as_ref().map(|id| id.as_str()),
+        Some("jmap-evt-001")
+    );
+    assert_eq!(parsed1.uid.as_deref(), Some("rfc-uuid-evt-001"));
+    assert_eq!(parsed1.title.as_deref(), Some("Master Architecture Summit"));
+    assert_eq!(parsed1.status.as_deref(), Some("confirmed"));
+    assert_eq!(parsed1.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(parsed1.priority, Some(1));
+    assert_eq!(parsed1.privacy.as_deref(), Some("public"));
+    assert_eq!(parsed1.duration.as_deref(), Some("PT2H30M"));
+    assert!(parsed1.locations.is_some());
+    assert!(parsed1.virtual_locations.is_some());
+    assert!(parsed1.links.is_some());
+    assert!(parsed1.keywords.is_some());
+    assert_eq!(
+        parsed1.participants, None,
+        "guest list is written and never read back (server-managed)"
+    );
+    assert!(parsed1.alerts.is_some());
+
+    // 3. Multi-Pass Fixed-Point Convergence (Pass 2 & 3)
+    let ics2 = event_to_ical(&parsed1);
+    let parsed2 = ical_to_event(&ics2).expect("parse pass 2");
+    let ics3 = event_to_ical(&parsed2);
+
+    assert_eq!(
+        ics2, ics3,
+        "iCalendar stream must achieve byte-identical fixpoint on pass 2"
+    );
+    assert_eq!(
+        parsed1, parsed2,
+        "CalendarEvent model must achieve exact structural fixpoint on pass 2"
+    );
+}
+
+#[test]
+fn mapping_docs_completeness_audit_locations_decision_matrix() {
+    // 1. Valid location with name
+    let mut ev1 = fixture_event();
+    ev1.locations = Some(BTreeMap::from([(
+        "loc1".to_owned(),
+        json!({
+            "@type": "Location",
+            "name": "Convention Center",
+            "coordinates": "geo:37.7749,-122.4194"
+        }),
+    )]));
+    assert!(maps_locations(ev1.locations.as_ref().unwrap()));
+    let ics1 = event_to_ical(&ev1);
+    assert!(ics1.contains("LOCATION;X-JMAP-KEY=loc1:Convention Center\r\n"));
+
+    // 2. Location with only name (no coordinates) -> valid and mapped
+    let mut ev_name_only = fixture_event();
+    ev_name_only.locations = Some(BTreeMap::from([(
+        "loc1".to_owned(),
+        json!({
+            "@type": "Location",
+            "name": "Auditorium B"
+        }),
+    )]));
+    assert!(maps_locations(ev_name_only.locations.as_ref().unwrap()));
+
+    // 3. Location with only coordinates (no name) -> valid, not drawn on LOCATION line
+    let mut ev_coord_only = fixture_event();
+    ev_coord_only.locations = Some(BTreeMap::from([(
+        "loc1".to_owned(),
+        json!({
+            "@type": "Location",
+            "coordinates": "geo:48.8566,2.3522"
+        }),
+    )]));
+    assert!(maps_locations(ev_coord_only.locations.as_ref().unwrap()));
+    let ics_coord = event_to_ical(&ev_coord_only);
+    assert!(without(&ics_coord, "LOCATION"));
+
+    // 4. Multiple locations -> refused by maps_locations (first drawn, subsequent flagged)
+    let mut ev_multi = fixture_event();
+    ev_multi.locations = Some(BTreeMap::from([
+        (
+            "l1".to_owned(),
+            json!({"@type": "Location", "name": "Room 1"}),
+        ),
+        (
+            "l2".to_owned(),
+            json!({"@type": "Location", "name": "Room 2"}),
+        ),
+    ]));
+    assert!(!maps_locations(ev_multi.locations.as_ref().unwrap()));
+    let ics_multi = event_to_ical(&ev_multi);
+    assert!(ics_multi.contains("LOCATION;X-JMAP-KEY=l1:Room 1\r\n"));
+    assert!(!ics_multi.contains("Room 2"));
+
+    // 5. Invalid JSON types for Location -> refused
+    for bad_loc in [json!("string"), json!(123), json!(null), json!(true)] {
+        let mut ev_bad = fixture_event();
+        ev_bad.locations = Some(BTreeMap::from([("l1".to_owned(), bad_loc)]));
+        assert!(!maps_locations(ev_bad.locations.as_ref().unwrap()));
+    }
+}
+
+#[test]
+fn mapping_docs_completeness_audit_virtual_locations_decision_matrix() {
+    // 1. Valid virtual location with https scheme and standard features
+    let mut ev1 = fixture_event();
+    ev1.virtual_locations = Some(BTreeMap::from([(
+        "v1".to_owned(),
+        json!({
+            "@type": "VirtualLocation",
+            "uri": "https://meet.jit.si/my-meeting",
+            "name": "Jitsi Meeting",
+            "features": {
+                "audio": true,
+                "video": true,
+                "chat": true,
+                "screen": true,
+                "moderator": true
+            }
+        }),
+    )]));
+    assert!(maps_virtual_locations(
+        ev1.virtual_locations.as_ref().unwrap()
+    ));
+    let ics1 = event_to_ical(&ev1);
+    assert!(ics1.contains("CONFERENCE;VALUE=URI;"));
+    assert!(ics1.contains("https://meet.jit.si/my-meeting"));
+
+    // 2. Other valid URI schemes: zoommtg, tel, sip
+    for scheme_uri in [
+        "zoommtg://zoom.us/join?confno=12345",
+        "tel:+15551234567",
+        "sip:meeting@example.com",
+    ] {
+        let mut ev = fixture_event();
+        ev.virtual_locations = Some(BTreeMap::from([(
+            "v1".to_owned(),
+            json!({
+                "@type": "VirtualLocation",
+                "uri": scheme_uri,
+                "name": "Endpoint"
+            }),
+        )]));
+        assert!(maps_virtual_locations(
+            ev.virtual_locations.as_ref().unwrap()
+        ));
+    }
+
+    // 3. Invalid non-boolean feature values -> refused by maps_virtual_locations
+    for bad_feat in [json!("yes"), json!(1), json!(null)] {
+        let mut ev_bad_feat = fixture_event();
+        ev_bad_feat.virtual_locations = Some(BTreeMap::from([(
+            "v1".to_owned(),
+            json!({
+                "@type": "VirtualLocation",
+                "uri": "https://meet.example.com",
+                "features": { "video": bad_feat }
+            }),
+        )]));
+        assert!(!maps_virtual_locations(
+            ev_bad_feat.virtual_locations.as_ref().unwrap()
+        ));
+    }
+
+    // 4. Multiple virtual locations -> supported by RFC 7986 and maps_virtual_locations
+    let mut ev_multi_virt = fixture_event();
+    ev_multi_virt.virtual_locations = Some(BTreeMap::from([
+        (
+            "v1".to_owned(),
+            json!({"@type": "VirtualLocation", "uri": "https://meet.example.com/1"}),
+        ),
+        (
+            "v2".to_owned(),
+            json!({"@type": "VirtualLocation", "uri": "https://meet.example.com/2"}),
+        ),
+    ]));
+    assert!(maps_virtual_locations(
+        ev_multi_virt.virtual_locations.as_ref().unwrap()
+    ));
+    let ics_multi = event_to_ical(&ev_multi_virt);
+    assert!(ics_multi.contains("https://meet.example.com/1"));
+    assert!(ics_multi.contains("https://meet.example.com/2"));
+
+    // 5. Virtual location with missing URI -> refused by maps_virtual_locations
+    let mut ev_no_uri = fixture_event();
+    ev_no_uri.virtual_locations = Some(BTreeMap::from([(
+        "v1".to_owned(),
+        json!({
+            "@type": "VirtualLocation",
+            "name": "Nameless room with no URI"
+        }),
+    )]));
+    assert!(!maps_virtual_locations(
+        ev_no_uri.virtual_locations.as_ref().unwrap()
+    ));
+}
+
+#[test]
+fn mapping_docs_completeness_audit_unmodeled_and_dropped_properties_matrix() {
+    // Asserts that standard unmodeled properties and vendor X-properties in incoming
+    // iCalendar documents are safely ignored on parse, do not pollute event.extra,
+    // and are cleanly excluded on outbound serialization.
+
+    let raw_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Foreign Exporter//EN\r\n\
+CALSCALE:GREGORIAN\r\n\
+METHOD:REQUEST\r\n\
+BEGIN:VEVENT\r\n\
+UID:evt-dropped-001\r\n\
+DTSTAMP:20260915T080000Z\r\n\
+CREATED:20260101T120000Z\r\n\
+LAST-MODIFIED:20260820T153000Z\r\n\
+SEQUENCE:5\r\n\
+URL:https://example.com/event/details\r\n\
+X-MICROSOFT-CDO-BUSYSTATUS:BUSY\r\n\
+X-MICROSOFT-CDO-IMPORTANCE:1\r\n\
+X-APPLE-TRAVEL-DURATION:PT30M\r\n\
+X-EVOLUTION-MOVE-CALENDAR:TRUE\r\n\
+DTSTART;TZID=Europe/Berlin:20260915T100000\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Dropped Properties Test Event\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(raw_ics).expect("parse raw ics with unmodeled properties");
+
+    // 1. Mapped fields are accurate
+    assert_eq!(
+        event.id.as_ref().map(|id| id.as_str()),
+        Some("evt-dropped-001")
+    );
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Dropped Properties Test Event")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-09-15T10:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H"));
+
+    // 2. Extra is empty (not polluted with vendor or unmodeled metadata)
+    assert!(
+        event.extra.is_empty(),
+        "event.extra should not contain unmapped fields: {:?}",
+        event.extra
+    );
+
+    // 3. Outbound emission omits foreign envelope properties
+    let emitted = event_to_ical(&event);
+    assert!(!emitted.contains("PRODID:-//Foreign Exporter//EN"));
+    assert!(!emitted.contains("CALSCALE:GREGORIAN"));
+    assert!(!emitted.contains("METHOD:REQUEST"));
+    assert!(!emitted.contains("SEQUENCE:5"));
+    assert!(!emitted.contains("X-MICROSOFT-CDO-BUSYSTATUS"));
+    assert!(!emitted.contains("X-APPLE-TRAVEL-DURATION"));
+    assert!(!emitted.contains("X-EVOLUTION-MOVE-CALENDAR"));
+}
+
+#[test]
+fn mapping_docs_completeness_audit_freebusy_decision_matrix() {
+    // Asserts free_busy_type mappings and busy_periods_to_vfreebusy formatting
+
+    // 1. Draft busy statuses mapping
+    assert_eq!(free_busy_type("busy"), "BUSY");
+    assert_eq!(free_busy_type("tentative"), "BUSY-TENTATIVE");
+    assert_eq!(free_busy_type("unavailable"), "BUSY-UNAVAILABLE");
+    assert_eq!(free_busy_type("unknown"), "BUSY");
+    assert_eq!(free_busy_type("custom-draft-status"), "BUSY");
+
+    // 2. busy_periods_to_vfreebusy formatting and search window bounding
+    let periods = [
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-15T10:00:00Z"),
+            utc_end: UtcDate::new("2026-09-15T11:30:00Z"),
+            busy_status: "busy".to_owned(),
+            event: None,
+        },
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-15T14:00:00Z"),
+            utc_end: UtcDate::new("2026-09-15T15:00:00Z"),
+            busy_status: "tentative".to_owned(),
+            event: None,
+        },
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-15T16:00:00Z"),
+            utc_end: UtcDate::new("2026-09-15T17:00:00Z"),
+            busy_status: "unavailable".to_owned(),
+            event: None,
+        },
+    ];
+
+    let vfb = busy_periods_to_vfreebusy(
+        "alice@example.com",
+        &UtcDate::new("2026-09-15T00:00:00Z"),
+        &UtcDate::new("2026-09-15T23:59:59Z"),
+        &periods,
+    )
+    .expect("renders bare VFREEBUSY component");
+
+    assert!(vfb.starts_with("BEGIN:VFREEBUSY\r\n"));
+    assert!(vfb.contains("ATTENDEE:mailto:alice@example.com\r\n"));
+    assert!(vfb.contains("DTSTART:20260915T000000Z\r\n"));
+    assert!(vfb.contains("DTEND:20260915T235959Z\r\n"));
+    assert!(vfb.contains("FREEBUSY;FBTYPE=BUSY:20260915T100000Z/20260915T113000Z\r\n"));
+    assert!(vfb.contains("FREEBUSY;FBTYPE=BUSY-TENTATIVE:20260915T140000Z/20260915T150000Z\r\n"));
+    assert!(vfb.contains("FREEBUSY;FBTYPE=BUSY-UNAVAILABLE:20260915T160000Z/20260915T170000Z\r\n"));
+    assert!(vfb.ends_with("END:VFREEBUSY\r\n"));
 }
