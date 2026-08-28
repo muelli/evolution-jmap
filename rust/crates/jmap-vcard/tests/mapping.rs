@@ -20343,3 +20343,366 @@ fn photo_roundtrip_fixpoint_multi_pass_convergence() {
         assert_eq!(m1.map(|m| &m.uri), m2.map(|m| &m.uri));
     }
 }
+
+#[test]
+fn birthday_deathday_anniversary_bare_year_and_partial_date_matrix() {
+    // Comprehensive test matrix for JSContact PartialDate variations across
+    // birth, wedding, and death anniversaries:
+    // 1. Bare year: {"year": 1984} -> anniversary_date is None, states_anniversary is false, no wire line emitted
+    // 2. Year-month: {"year": 1984, "month": 5} -> None, false, no wire line emitted
+    // 3. Month-day (year-less): {"month": 5, "day": 20} -> None, false, no wire line emitted
+    // 4. Day only: {"day": 20} -> None, false, no wire line emitted
+    // 5. Bare year < 1000: {"year": 800} -> None, false, no wire line emitted
+    // 6. Full date < 1000: {"year": 800, "month": 6, "day": 21} -> None, false, no wire line emitted (protects against EDS clamp to 1000)
+    // 7. Full date >= 1000: {"year": 1984, "month": 5, "day": 20} -> Some("1984-05-20"), true, emits BDAY / X-EVOLUTION-ANNIVERSARY
+    // 8. Deathday: kind "death" with any date -> states_anniversary is false, no wire line emitted
+
+    // Birth variations
+    let bday_bare_year = one_anniversary("birth", json!({"year": 1984}));
+    let bday_year_month = one_anniversary("birth", json!({"year": 1984, "month": 5}));
+    let bday_month_day = one_anniversary("birth", json!({"month": 5, "day": 20}));
+    let bday_day_only = one_anniversary("birth", json!({"day": 20}));
+    let bday_year_ancient = one_anniversary("birth", json!({"year": 800}));
+    let bday_date_ancient = one_anniversary("birth", json!({"year": 800, "month": 6, "day": 21}));
+    let bday_full = one_anniversary("birth", json!({"year": 1984, "month": 5, "day": 20}));
+
+    // Wedding variations
+    let wedding_bare_year = one_anniversary("wedding", json!({"year": 2005}));
+    let wedding_year_month = one_anniversary("wedding", json!({"year": 2005, "month": 11}));
+    let wedding_month_day = one_anniversary("wedding", json!({"month": 11, "day": 15}));
+    let wedding_full = one_anniversary("wedding", json!({"year": 2005, "month": 11, "day": 15}));
+
+    // Death variations
+    let death_bare_year = one_anniversary("death", json!({"year": 2020}));
+    let death_full = one_anniversary("death", json!({"year": 2020, "month": 1, "day": 15}));
+
+    // Predicate checks
+    assert!(!states_anniversary(
+        &bday_bare_year.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &bday_year_month.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &bday_month_day.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &bday_day_only.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &bday_year_ancient.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &bday_date_ancient.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(states_anniversary(
+        &bday_full.anniversaries.as_ref().unwrap()["y1"]
+    ));
+
+    assert!(!states_anniversary(
+        &wedding_bare_year.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &wedding_year_month.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &wedding_month_day.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(states_anniversary(
+        &wedding_full.anniversaries.as_ref().unwrap()["y1"]
+    ));
+
+    assert!(!states_anniversary(
+        &death_bare_year.anniversaries.as_ref().unwrap()["y1"]
+    ));
+    assert!(!states_anniversary(
+        &death_full.anniversaries.as_ref().unwrap()["y1"]
+    ));
+
+    // Date formatting checks
+    assert_eq!(
+        anniversary_date(&bday_bare_year.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_year_month.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_month_day.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_day_only.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_year_ancient.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_date_ancient.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&bday_full.anniversaries.as_ref().unwrap()["y1"]),
+        Some("1984-05-20".into())
+    );
+
+    assert_eq!(
+        anniversary_date(&wedding_bare_year.anniversaries.as_ref().unwrap()["y1"]),
+        None
+    );
+    assert_eq!(
+        anniversary_date(&wedding_full.anniversaries.as_ref().unwrap()["y1"]),
+        Some("2005-11-15".into())
+    );
+
+    // vCard wire emission checks
+    let vcard_bday_bare = card_to_vcard(&bday_bare_year);
+    assert!(!vcard_bday_bare.contains("BDAY"), "{vcard_bday_bare}");
+
+    let vcard_bday_ym = card_to_vcard(&bday_year_month);
+    assert!(!vcard_bday_ym.contains("BDAY"), "{vcard_bday_ym}");
+
+    let vcard_bday_md = card_to_vcard(&bday_month_day);
+    assert!(!vcard_bday_md.contains("BDAY"), "{vcard_bday_md}");
+
+    let vcard_bday_ancient = card_to_vcard(&bday_date_ancient);
+    assert!(!vcard_bday_ancient.contains("BDAY"), "{vcard_bday_ancient}");
+
+    let vcard_bday_full = card_to_vcard(&bday_full);
+    assert!(
+        vcard_bday_full.contains("BDAY;X-JMAP-KEY=y1:1984-05-20"),
+        "{vcard_bday_full}"
+    );
+
+    let vcard_wedding_bare = card_to_vcard(&wedding_bare_year);
+    assert!(
+        !vcard_wedding_bare.contains("X-EVOLUTION-ANNIVERSARY"),
+        "{vcard_wedding_bare}"
+    );
+    assert!(
+        !vcard_wedding_bare.contains("ANNIVERSARY"),
+        "{vcard_wedding_bare}"
+    );
+
+    let vcard_wedding_full = card_to_vcard(&wedding_full);
+    assert!(
+        vcard_wedding_full.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y1:2005-11-15"),
+        "{vcard_wedding_full}"
+    );
+
+    let vcard_death_bare = card_to_vcard(&death_bare_year);
+    assert!(!vcard_death_bare.contains("DEATH"), "{vcard_death_bare}");
+    assert!(!vcard_death_bare.contains("BDAY"), "{vcard_death_bare}");
+
+    let vcard_death_full = card_to_vcard(&death_full);
+    assert!(!vcard_death_full.contains("DEATH"), "{vcard_death_full}");
+    assert!(!vcard_death_full.contains("BDAY"), "{vcard_death_full}");
+    assert!(
+        !vcard_death_full.contains("ANNIVERSARY"),
+        "{vcard_death_full}"
+    );
+}
+
+#[test]
+fn birthday_anniversary_deathday_inbound_tolerance_and_isolation() {
+    // Inbound parsing tolerance across extended ISO, basic compact ISO,
+    // parameter-bearing lines, timestamps, Apple grouped ABDATE properties,
+    // and safe omission of unmodeled/bare/partial date lines:
+
+    // 1. Extended ISO format (YYYY-MM-DD)
+    let vcard1 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nBDAY:1984-05-20\r\nEND:VCARD\r\n";
+    let card1 = vcard_to_card(vcard1).expect("parse vcard1");
+    let anniv1 = &card1.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv1.kind, "birth");
+    assert_eq!(
+        anniv1.date,
+        Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
+    );
+
+    // 2. Compact basic ISO format (YYYYMMDD)
+    let vcard2 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Bob\r\nBDAY:19840520\r\nEND:VCARD\r\n";
+    let card2 = vcard_to_card(vcard2).expect("parse vcard2");
+    let anniv2 = &card2.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv2.kind, "birth");
+    assert_eq!(
+        anniv2.date,
+        Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
+    );
+
+    // 3. VALUE=date parameter
+    let vcard3 =
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Charlie\r\nBDAY;VALUE=date:1984-05-20\r\nEND:VCARD\r\n";
+    let card3 = vcard_to_card(vcard3).expect("parse vcard3");
+    let anniv3 = &card3.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv3.kind, "birth");
+    assert_eq!(
+        anniv3.date,
+        Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
+    );
+
+    // 4. VALUE=date-time with timestamp
+    let vcard4 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:David\r\nBDAY;VALUE=date-time:1984-05-20T14:30:00Z\r\nEND:VCARD\r\n";
+    let card4 = vcard_to_card(vcard4).expect("parse vcard4");
+    let anniv4 = &card4.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv4.kind, "birth");
+    assert_eq!(
+        anniv4.date,
+        Some(json!({"@type": "PartialDate", "year": 1984, "month": 5, "day": 20}))
+    );
+
+    // 5. Standard vCard 4.0 ANNIVERSARY property
+    let vcard5 = "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Eve\r\nANNIVERSARY:1996-08-03\r\nEND:VCARD\r\n";
+    let card5 = vcard_to_card(vcard5).expect("parse vcard5");
+    let anniv5 = &card5.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv5.kind, "wedding");
+    assert_eq!(
+        anniv5.date,
+        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
+    );
+
+    // 6. EDS X-EVOLUTION-ANNIVERSARY property
+    let vcard6 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Frank\r\nX-EVOLUTION-ANNIVERSARY:1996-08-03\r\nEND:VCARD\r\n";
+    let card6 = vcard_to_card(vcard6).expect("parse vcard6");
+    let anniv6 = &card6.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv6.kind, "wedding");
+    assert_eq!(
+        anniv6.date,
+        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
+    );
+
+    // 7. Apple grouped X-ABDATE with _$!<Anniversary>!$_
+    let vcard7 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Grace\r\nitem1.X-ABDATE:1996-08-03\r\nitem1.X-ABLabel:_$!<Anniversary>!$_\r\nEND:VCARD\r\n";
+    let card7 = vcard_to_card(vcard7).expect("parse vcard7");
+    let anniv7 = &card7.anniversaries.expect("anniversaries")["y1"];
+    assert_eq!(anniv7.kind, "wedding");
+    assert_eq!(
+        anniv7.date,
+        Some(json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}))
+    );
+
+    // 8. Inbound bare year BDAY:1984 is safely ignored (read_day returns None)
+    let vcard8 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Heidi\r\nBDAY:1984\r\nEND:VCARD\r\n";
+    let card8 = vcard_to_card(vcard8).expect("parse vcard8");
+    assert_eq!(card8.anniversaries, None);
+
+    // 9. Inbound year-month BDAY:1984-05 is safely ignored
+    let vcard9 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Ivan\r\nBDAY:1984-05\r\nEND:VCARD\r\n";
+    let card9 = vcard_to_card(vcard9).expect("parse vcard9");
+    assert_eq!(card9.anniversaries, None);
+
+    // 10. Inbound year-less BDAY:--05-20 is safely ignored
+    let vcard10 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Judy\r\nBDAY:--05-20\r\nEND:VCARD\r\n";
+    let card10 = vcard_to_card(vcard10).expect("parse vcard10");
+    assert_eq!(card10.anniversaries, None);
+
+    // 11. Foreign DEATHDATE, X-DEATHDATE, X-EVOLUTION-DEATH-DATE are unmodeled on vCard 3.0
+    let vcard11 = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Karl\r\nDEATHDATE:2020-01-15\r\nX-DEATHDATE:2020-01-15\r\nX-EVOLUTION-DEATH-DATE:2020-01-15\r\nEND:VCARD\r\n";
+    let card11 = vcard_to_card(vcard11).expect("parse vcard11");
+    assert_eq!(card11.anniversaries, None);
+}
+
+#[test]
+fn evolution_contact_editor_clamping_and_sync_diff_safety() {
+    // Tests that when a contact containing bare-year, partial-date, and deathday
+    // anniversaries is synchronized, the sync diff engine preserves unstated
+    // anniversary records without writing spurious deletions or modifications.
+    let mut anniversaries = BTreeMap::new();
+    anniversaries.insert(
+        "y1".to_owned(),
+        Anniversary {
+            kind: "birth".into(),
+            date: Some(json!({"@type": "PartialDate", "year": 1984})), // bare year
+            ..Anniversary::default()
+        },
+    );
+    anniversaries.insert(
+        "y2".to_owned(),
+        Anniversary {
+            kind: "wedding".into(),
+            date: Some(json!({"@type": "PartialDate", "year": 2005, "month": 11, "day": 15})), // full date
+            ..Anniversary::default()
+        },
+    );
+    anniversaries.insert(
+        "y3".to_owned(),
+        Anniversary {
+            kind: "death".into(),
+            date: Some(json!({"@type": "PartialDate", "year": 2020, "month": 1, "day": 15})), // death date
+            ..Anniversary::default()
+        },
+    );
+    anniversaries.insert(
+        "y4".to_owned(),
+        Anniversary {
+            kind: "birth".into(),
+            date: Some(json!({"@type": "Timestamp", "utc": "1990-05-12T10:30:00Z"})), // timestamp point-in-time
+            ..Anniversary::default()
+        },
+    );
+
+    let card = ContactCard {
+        uid: Some("contact-100".into()),
+        anniversaries: Some(anniversaries.clone()),
+        ..ContactCard::default()
+    };
+
+    // Emission only states y2 (wedding full date) and y4 (timestamp converted to UTC date)
+    let vcard = card_to_vcard(&card);
+    assert!(!vcard.contains("y1"), "{vcard}");
+    assert!(
+        vcard.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y2:2005-11-15"),
+        "{vcard}"
+    );
+    assert!(!vcard.contains("y3"), "{vcard}");
+    assert!(vcard.contains("BDAY;X-JMAP-KEY=y4:1990-05-12"), "{vcard}");
+
+    // Sync visibility predicates
+    assert!(!states_anniversary(&anniversaries["y1"]));
+    assert!(states_anniversary(&anniversaries["y2"]));
+    assert!(!states_anniversary(&anniversaries["y3"]));
+    assert!(states_anniversary(&anniversaries["y4"]));
+
+    // Point in time predicate
+    assert!(!states_a_point_in_time(&anniversaries["y1"]));
+    assert!(!states_a_point_in_time(&anniversaries["y2"]));
+    assert!(!states_a_point_in_time(&anniversaries["y3"]));
+    assert!(states_a_point_in_time(&anniversaries["y4"]));
+}
+
+#[test]
+fn anniversary_multi_pass_roundtrip_fixpoint_stability() {
+    let test_cards = vec![
+        one_anniversary("birth", json!({"year": 1984, "month": 5, "day": 20})),
+        one_anniversary("wedding", json!({"year": 2005, "month": 11, "day": 15})),
+        one_anniversary("birth", json!({"utc": "1990-05-12T10:30:00Z"})),
+        one_anniversary("birth", json!({"year": 1984})), // bare year -> empty line, immediate fixpoint
+        one_anniversary("death", json!({"year": 2020, "month": 1, "day": 15})), // death -> empty line, immediate fixpoint
+    ];
+
+    for original_card in test_cards {
+        // Pass 1: Card -> vCard1 -> Card1
+        let vcard1 = card_to_vcard(&original_card);
+        let card1 = vcard_to_card(&vcard1).expect("parse vcard1");
+
+        // Pass 2: Card1 -> vCard2 -> Card2
+        let vcard2 = card_to_vcard(&card1);
+        let card2 = vcard_to_card(&vcard2).expect("parse vcard2");
+
+        // Pass 3: Card2 -> vCard3 -> Card3
+        let vcard3 = card_to_vcard(&card2);
+        let card3 = vcard_to_card(&vcard3).expect("parse vcard3");
+
+        // Fixed point convergence: pass 2 and pass 3 must be strictly identical
+        assert_eq!(
+            vcard2, vcard3,
+            "vCard output must reach fixed point at pass 2"
+        );
+        assert_eq!(
+            card2, card3,
+            "ContactCard model must reach fixed point at pass 2"
+        );
+    }
+}
