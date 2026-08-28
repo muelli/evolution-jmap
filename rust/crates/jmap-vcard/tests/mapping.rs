@@ -18614,3 +18614,421 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
     );
     assert_eq!(card2_v4, card3_v4, "Card₂ == Card₃ (v4 normalization)");
 }
+
+#[test]
+fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip() {
+    // Characterizes multi-ORG, multi-TITLE, and multi-ROLE configurations:
+    // 1. Multiple organizations (o1, o2, o3) with distinct unit hierarchies.
+    // 2. Multiple titles and roles associated with organizations via organizationId.
+    // 3. Lossless roundtrip through standard vCard 3.0 lines with X-JMAP-KEY parameter tracking.
+    let card = ContactCard {
+        organizations: Some(
+            [
+                (
+                    "o1".to_owned(),
+                    Organization {
+                        name: Some("Acme Corporation".to_owned()),
+                        units: Some(vec![
+                            OrgUnit::new("Engineering"),
+                            OrgUnit::new("Hardware Division"),
+                            OrgUnit::new("Optics Lab"),
+                            OrgUnit::new("Lenses Team"),
+                        ]),
+                        ..Organization::default()
+                    },
+                ),
+                (
+                    "o2".to_owned(),
+                    Organization {
+                        name: Some("Starlight Research Foundation".to_owned()),
+                        units: Some(vec![
+                            OrgUnit::new("Astrophysics"),
+                            OrgUnit::new("Observatories Network"),
+                        ]),
+                        ..Organization::default()
+                    },
+                ),
+                (
+                    "o3".to_owned(),
+                    Organization {
+                        name: Some("Quantum Innovations GmbH".to_owned()),
+                        units: Some(vec![OrgUnit::new("Theoretical Physics")]),
+                        ..Organization::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        titles: Some(
+            [
+                (
+                    "t1".to_owned(),
+                    Title {
+                        name: "Principal Optical Engineer".to_owned(),
+                        kind: None, // default kind is "title"
+                        extra: [("organizationId".to_string(), json!("o1"))].into(),
+                    },
+                ),
+                (
+                    "t2".to_owned(),
+                    Title {
+                        name: "Senior Research Fellow".to_owned(),
+                        kind: Some("title".to_owned()),
+                        extra: [("organizationId".to_string(), json!("o2"))].into(),
+                    },
+                ),
+                (
+                    "r1".to_owned(),
+                    Title {
+                        name: "Chief Architect & Science Lead".to_owned(),
+                        kind: Some("role".to_owned()),
+                        extra: [("organizationId".to_string(), json!("o1"))].into(),
+                    },
+                ),
+                (
+                    "r2".to_owned(),
+                    Title {
+                        name: "Advisory Council Member".to_owned(),
+                        kind: Some("role".to_owned()),
+                        extra: [("organizationId".to_string(), json!("o2"))].into(),
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    let unfolded_vcard = unfolded(&vcard);
+
+    // Verify all 3 ORG lines are emitted with X-JMAP-KEY parameters
+    assert!(
+        unfolded_vcard.contains("ORG;X-JMAP-KEY=o1:Acme Corporation;Engineering;Hardware Division;Optics Lab;Lenses Team\r\n"),
+        "Missing o1 ORG line in:\n{unfolded_vcard}"
+    );
+    assert!(
+        unfolded_vcard.contains(
+            "ORG;X-JMAP-KEY=o2:Starlight Research Foundation;Astrophysics;Observatories Network\r\n"
+        ),
+        "Missing o2 ORG line in:\n{unfolded_vcard}"
+    );
+    assert!(
+        unfolded_vcard
+            .contains("ORG;X-JMAP-KEY=o3:Quantum Innovations GmbH;Theoretical Physics\r\n"),
+        "Missing o3 ORG line in:\n{unfolded_vcard}"
+    );
+
+    // Verify all 2 TITLE and 2 ROLE lines are emitted with X-JMAP-KEY parameters
+    assert!(
+        unfolded_vcard.contains("TITLE;X-JMAP-KEY=t1:Principal Optical Engineer\r\n"),
+        "Missing t1 TITLE line in:\n{unfolded_vcard}"
+    );
+    assert!(
+        unfolded_vcard.contains("TITLE;X-JMAP-KEY=t2:Senior Research Fellow\r\n"),
+        "Missing t2 TITLE line in:\n{unfolded_vcard}"
+    );
+    assert!(
+        unfolded_vcard.contains("ROLE;X-JMAP-KEY=r1:Chief Architect & Science Lead\r\n"),
+        "Missing r1 ROLE line in:\n{unfolded_vcard}"
+    );
+    assert!(
+        unfolded_vcard.contains("ROLE;X-JMAP-KEY=r2:Advisory Council Member\r\n"),
+        "Missing r2 ROLE line in:\n{unfolded_vcard}"
+    );
+
+    // Verify lossless roundtrip of organizations
+    let back = vcard_to_card(&vcard).expect("parse emitted multi-org vcard");
+    assert_eq!(back.organizations, card.organizations);
+
+    // Verify mapped titles and roles roundtrip cleanly (unmodeled organizationId in extra is omitted on wire)
+    let back_titles = back.titles.as_ref().expect("titles");
+    assert_eq!(back_titles.len(), 4);
+    assert_eq!(back_titles["t1"].name, "Principal Optical Engineer");
+    assert_eq!(back_titles["t1"].kind, None);
+    assert_eq!(back_titles["t2"].name, "Senior Research Fellow");
+    assert_eq!(back_titles["t2"].kind, None); // TITLE line maps to default kind None
+    assert_eq!(back_titles["r1"].name, "Chief Architect & Science Lead");
+    assert_eq!(back_titles["r1"].kind, Some("role".to_owned()));
+    assert_eq!(back_titles["r2"].name, "Advisory Council Member");
+    assert_eq!(back_titles["r2"].kind, Some("role".to_owned()));
+
+    // Multi-pass roundtrip fixpoint check
+    let vcard2 = card_to_vcard(&back);
+    let card3 = vcard_to_card(&vcard2).expect("parse pass 2");
+    let vcard3 = card_to_vcard(&card3);
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint stability on multi-org/title"
+    );
+    assert_eq!(
+        back, card3,
+        "JSContact fixpoint stability on multi-org/title"
+    );
+}
+
+#[test]
+fn evolution_contact_editor_three_component_org_office_and_fourth_unit_fidelity() {
+    // Characterizes Evolution's contact editor UI fields vs RFC 2426 §3.5.5 ORG line:
+    // - Evolution Contact Editor UI presents 3 discrete text entries in the "Job" section:
+    //   1. "Company" -> maps to E_CONTACT_ORG (Component 1 of ORG) -> JSContact Organization.name
+    //   2. "Department" -> maps to E_CONTACT_ORG_UNIT (Component 2 of ORG) -> JSContact Organization.units[0]
+    //   3. "Office" -> maps to E_CONTACT_OFFICE (Component 3 of ORG) -> JSContact Organization.units[1]
+    // - 4th and subsequent components in ORG lines (e.g. Component 4 = "Lenses", Component 5 = "Pod 7")
+    //   are unrepresented in Evolution's 3-field UI, but are preserved in full by jmap-vcard
+    //   in Organization.units[2..] without truncation or data loss.
+
+    // 1. Single component (Company only)
+    let c1 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Megacorp Inc".to_owned()),
+                    units: None,
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let v1 = card_to_vcard(&c1);
+    assert_eq!(line(&v1, "ORG"), "ORG;X-JMAP-KEY=o1:Megacorp Inc");
+    assert_eq!(
+        vcard_to_card(&v1).expect("p1").organizations,
+        c1.organizations
+    );
+
+    // 2. Two components (Company + Department / E_CONTACT_ORG_UNIT)
+    let c2 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Megacorp Inc".to_owned()),
+                    units: Some(vec![OrgUnit::new("Aerospace")]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let v2 = card_to_vcard(&c2);
+    assert_eq!(line(&v2, "ORG"), "ORG;X-JMAP-KEY=o1:Megacorp Inc;Aerospace");
+    assert_eq!(
+        vcard_to_card(&v2).expect("p2").organizations,
+        c2.organizations
+    );
+
+    // 3. Three components (Company + Department + Office / E_CONTACT_OFFICE)
+    let c3 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Megacorp Inc".to_owned()),
+                    units: Some(vec![OrgUnit::new("Aerospace"), OrgUnit::new("Building 4B")]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let v3 = card_to_vcard(&c3);
+    assert_eq!(
+        line(&v3, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Megacorp Inc;Aerospace;Building 4B"
+    );
+    assert_eq!(
+        vcard_to_card(&v3).expect("p3").organizations,
+        c3.organizations
+    );
+
+    // 4. Four components (Company + Department + Office + 4th Unit / unmapped in EDS UI)
+    let c4 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Megacorp Inc".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("Aerospace"),
+                        OrgUnit::new("Building 4B"),
+                        OrgUnit::new("Propulsion Lab"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let v4 = card_to_vcard(&c4);
+    assert_eq!(
+        line(&v4, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Megacorp Inc;Aerospace;Building 4B;Propulsion Lab"
+    );
+    assert_eq!(
+        vcard_to_card(&v4).expect("p4").organizations,
+        c4.organizations
+    );
+
+    // 5. Six components (Company + 5 units extending deep into organizational hierarchy)
+    let c6 = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Megacorp Inc".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("Aerospace"),
+                        OrgUnit::new("Building 4B"),
+                        OrgUnit::new("Propulsion Lab"),
+                        OrgUnit::new("Ion Thruster Project"),
+                        OrgUnit::new("Sub-team Alpha"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+    let v6 = card_to_vcard(&c6);
+    assert_eq!(
+        line(&unfolded(&v6), "ORG"),
+        "ORG;X-JMAP-KEY=o1:Megacorp Inc;Aerospace;Building 4B;Propulsion Lab;Ion Thruster Project;Sub-team Alpha"
+    );
+    assert_eq!(
+        vcard_to_card(&v6).expect("p6").organizations,
+        c6.organizations
+    );
+
+    // 6. Inbound unkeyed vCard with 4 components preserves all 4 parts
+    let raw_unkeyed = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Tester\r\nORG:Globex Corp;Robotics;Bay 12;Actuators\r\nEND:VCARD\r\n";
+    let from_raw = vcard_to_card(raw_unkeyed).expect("parse raw 4-component org");
+    let orgs = from_raw.organizations.expect("orgs");
+    assert_eq!(orgs["o1"].name.as_deref(), Some("Globex Corp"));
+    assert_eq!(
+        orgs["o1"].units.as_deref(),
+        Some(
+            [
+                OrgUnit::new("Robotics"),
+                OrgUnit::new("Bay 12"),
+                OrgUnit::new("Actuators"),
+            ]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
+fn multi_component_org_special_characters_escaping_and_fixpoint() {
+    // Tests special characters escaping (semicolons, commas, backslashes, Unicode) inside ORG components
+    let card = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Müller & Söhne; GmbH, Berlin \\ [HQ]".to_owned()),
+                    units: Some(vec![
+                        OrgUnit::new("R&D; Advanced Division, Sector 7"),
+                        OrgUnit::new("Office 42; Building B \\ Room 101"),
+                        OrgUnit::new("Deep Tech / Quantum \\ Sub-unit, Team 4"),
+                    ]),
+                    ..Organization::default()
+                },
+            )]
+            .into(),
+        ),
+        ..ContactCard::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    let card2 = vcard_to_card(&vcard1).expect("parse pass 1");
+    let vcard2 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&vcard2).expect("parse pass 2");
+    let vcard3 = card_to_vcard(&card3);
+
+    // Verify all special characters survived verbatim without double-escaping
+    let org2 = &card2.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(
+        org2.name.as_deref(),
+        Some("Müller & Söhne; GmbH, Berlin \\ [HQ]")
+    );
+    let units2 = org2.units.as_ref().unwrap();
+    assert_eq!(units2[0].name, "R&D; Advanced Division, Sector 7");
+    assert_eq!(units2[1].name, "Office 42; Building B \\ Room 101");
+    assert_eq!(units2[2].name, "Deep Tech / Quantum \\ Sub-unit, Team 4");
+
+    // Multi-pass fixpoint stability
+    assert_eq!(
+        vcard2, vcard3,
+        "vCard fixpoint stability for escaped ORG components"
+    );
+    assert_eq!(
+        card2, card3,
+        "JSContact fixpoint stability for escaped ORG components"
+    );
+}
+
+#[test]
+fn multi_component_org_sparse_and_empty_slots_positioning() {
+    // Tests sparse component configurations:
+    // 1. Nameless organisation with 3 units: leading semicolon prevents units from sliding into name.
+    let nameless = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Nameless Org Test\r\n",
+        "ORG;X-JMAP-KEY=o1:;Engineering;Security;Office 9\r\n",
+        "END:VCARD\r\n"
+    );
+    let c_nameless = vcard_to_card(nameless).expect("parse nameless");
+    let o_nameless = &c_nameless.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(o_nameless.name, None);
+    assert_eq!(
+        o_nameless.units.as_deref(),
+        Some(
+            [
+                OrgUnit::new("Engineering"),
+                OrgUnit::new("Security"),
+                OrgUnit::new("Office 9")
+            ]
+            .as_slice()
+        )
+    );
+    let emitted_nameless = card_to_vcard(&c_nameless);
+    assert_eq!(
+        line(&emitted_nameless, "ORG"),
+        "ORG;X-JMAP-KEY=o1:;Engineering;Security;Office 9"
+    );
+
+    // 2. Empty intermediate unit (e.g. EDS clearing Department in place):
+    // Empty units are filtered on read, non-empty units remain ordered.
+    let empty_dept = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Empty Dept Test\r\n",
+        "ORG;X-JMAP-KEY=o1:Acme Corp;;Office 4B;Lenses\r\n",
+        "END:VCARD\r\n"
+    );
+    let c_empty_dept = vcard_to_card(empty_dept).expect("parse empty dept");
+    let o_empty_dept = &c_empty_dept.organizations.as_ref().unwrap()["o1"];
+    assert_eq!(o_empty_dept.name.as_deref(), Some("Acme Corp"));
+    assert_eq!(
+        o_empty_dept.units.as_deref(),
+        Some([OrgUnit::new("Office 4B"), OrgUnit::new("Lenses")].as_slice())
+    );
+
+    // 3. Multi-pass fixpoint verification across sparse inputs
+    let v_pass1 = card_to_vcard(&c_empty_dept);
+    let c_pass2 = vcard_to_card(&v_pass1).expect("parse pass 1");
+    let v_pass2 = card_to_vcard(&c_pass2);
+    let c_pass3 = vcard_to_card(&v_pass2).expect("parse pass 2");
+    let v_pass3 = card_to_vcard(&c_pass3);
+
+    assert_eq!(v_pass2, v_pass3, "vCard fixpoint stability for sparse ORG");
+    assert_eq!(
+        c_pass2, c_pass3,
+        "JSContact fixpoint stability for sparse ORG"
+    );
+}
