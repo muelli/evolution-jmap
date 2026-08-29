@@ -9,17 +9,17 @@ Everything below the horizontal rule is the issue body.
 
 When a Secret Service prompt is dismissed,
 [`secret_prompt_perform_finish()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-prompt.c#L508)
-returns `NULL` **without setting a `GError`** — which its own documented
-contract allows.
+returns `NULL` **without setting a `GError`**. Its own documented contract
+allows exactly that.
 [`on_real_prompt_completed()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-service.c#L320-L339)
 passes that `NULL` straight to
 [`g_task_return_error()`](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L2039-L2050),
 which GLib rejects, so the `GTask` is never completed at all.
 
-The callback of the async prompt operation therefore never runs, and any
-synchronous caller above it — including
+The callback of the async prompt operation therefore never runs. Any
+synchronous caller above it blocks until something further up times out,
 [`secret_service_prompt_sync()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-service.c#L1855)
-— blocks until something further up times out.
+included.
 
 ## Affected versions
 
@@ -105,9 +105,9 @@ Any of these reach the same place:
 
 - the user cancels an unlock prompt;
 - no prompter can be shown, so the prompt is refused;
-- the prompting peer disappears while the prompt is in flight — for example
-  `gnome-keyring-daemon --replace` replacing a daemon that has prompts
-  outstanding.
+- the prompting peer disappears while the prompt is in flight. One way to
+  arrange this is `gnome-keyring-daemon --replace`, replacing a daemon that
+  has prompts outstanding.
 
 ## Reproduction
 
@@ -146,8 +146,9 @@ prompt failure, not a hang.
   `secret_service_async_initable_init_async`, hanging gnome-control-center
   inside `secret_password_store_sync()`. Its root cause was elsewhere (a
   keyring not exported on D-Bus, fixed in gnome-keyring), but the failure
-  shape — libsecret task never returned, caller hangs indefinitely — is the
-  same: https://bugs.launchpad.net/ubuntu/+source/gnome-control-center/+bug/2125590
+  shape is the same: a libsecret task never returned, and a caller hanging
+  indefinitely.
+  https://bugs.launchpad.net/ubuntu/+source/gnome-control-center/+bug/2125590
 
 ## Suggested fix
 
@@ -158,10 +159,10 @@ distinguish dismissal from failure:
 - otherwise `g_task_return_pointer (task, NULL, NULL)`.
 
 [`secret_service_real_prompt_finish()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-service.c#L362-L379)
-already handles a `NULL` pointer correctly — it propagates the pointer and
-returns `NULL` when there is none — so this preserves the documented "`NULL`
-means dismissed" semantics through the async path without changing any public
-contract.
+already handles a `NULL` pointer correctly, propagating the pointer and
+returning `NULL` when there is none. This therefore preserves the documented
+"`NULL` means dismissed" semantics through the async path, without changing any
+public contract.
 
 If instead a dismissed prompt ought to be an error at this layer, then
 `secret_prompt_perform_finish()` should set one, and its documented return
@@ -172,7 +173,7 @@ treats it as unreachable.
 ## Related issues
 
 #75 and #113 are the same exactly-once `GTask` discipline failing in the
-opposite direction — `g_task_return_error: assertion '!task->ever_returned'
+opposite direction: `g_task_return_error: assertion '!task->ever_returned'
 failed`, a task returned *twice*, in
 [`on_search_loaded()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-methods.c#L121)
 from

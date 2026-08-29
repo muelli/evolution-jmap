@@ -626,7 +626,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	)
 
 	# The other half of the secret-store story: not the harness's own unlock
-	# step but the PRODUCT reading a real secret service — both what it asks
+	# step but the PRODUCT reading a real secret service, both what it asks
 	# of one. Its lock state (`docs/ROADMAP.md` item 17(a)), and whether there
 	# is a service to be had at all (item 31), which is a different question
 	# with a different consequence: a locked store still holds the token, so

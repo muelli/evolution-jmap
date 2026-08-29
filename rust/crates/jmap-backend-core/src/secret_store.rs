@@ -299,15 +299,15 @@ unsafe fn collection_is_locked(
     }
 }
 
-/// Whether this machine has a secret service *at all* — running now, or
-/// startable on demand — or [`None`] where that could not be determined.
+/// Whether this machine has a secret service *at all*, meaning running now or
+/// startable on demand, or [`None`] where that could not be determined.
 ///
 /// This is a different question from [`default_collection_is_locked`], and it
 /// exists for a different caller. A *locked* store is one that holds the
 /// account's token and will hand it over once unlocked, so the right answer
 /// is to say so and wait. A store that is not there is one that could not
 /// hold a token even if the user signed in again, which makes offering them
-/// a sign-in window an invitation to do work that cannot be saved — the
+/// a sign-in window an invitation to do work that cannot be saved: the
 /// consent completes, the token has nowhere to go, and the next fetch asks
 /// again. Erroring out is the honest outcome; see [`crate::oauth2`] for where
 /// that decision is taken.
@@ -321,12 +321,12 @@ unsafe fn collection_is_locked(
 /// - `ListActivatableNames` answers whether the bus *could* start one. A
 ///   session where the keyring simply has not been needed yet must keep
 ///   behaving exactly as it did before this function existed, and this is
-///   what keeps it doing so — the alternative, treating "not running" as
+///   what keeps it doing so. The alternative, treating "not running" as
 ///   "not there", would refuse sign-in on a perfectly ordinary desktop.
 ///
-/// Only `Some(false)` — both questions answered, and both negative — means
-/// no store. Anything unclear is [`None`], which callers must treat as
-/// "carry on as before".
+/// Only `Some(false)`, both questions answered and both negative, means no
+/// store. Anything unclear is [`None`], which callers must treat as "carry on
+/// as before".
 pub fn service_is_available() -> Option<bool> {
     // SAFETY: the connection is a reference this scope owns and releases, and
     // every helper it is passed to only makes calls on it.

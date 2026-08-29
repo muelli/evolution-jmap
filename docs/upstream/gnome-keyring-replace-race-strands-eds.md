@@ -1,4 +1,4 @@
-# INTERNAL NOTES — the keyring-replacement investigation
+# INTERNAL NOTES: the keyring-replacement investigation
 
 **Not for filing.** This is the working record of how the problem was found,
 including two attributions that were made and then retracted. The filable
@@ -77,7 +77,7 @@ against the same stranded daemons:
 | Time | Event |
 |---|---|
 | 21:10:06 | user starts `evolution` (PID 2727) |
-| 21:10:08 | `prepared OAuth 2.0 authentication uri query` — consent window shown |
+| 21:10:08 | `prepared OAuth 2.0 authentication uri query`, i.e. consent window shown |
 | 21:10:55 | user completes consent; `prepared OAuth 2.0 get token form` |
 | 21:10:56 | `gnome-keyring-daemon: asked to register item .../login/21, but it's already registered` |
 | 21:10:56 | calendar factory: `fetching OAuth 2.0 access token via EDS` |
@@ -90,7 +90,7 @@ that needed the secret could no longer reach any keyring.
 ## Proof by restart
 
 Killing only `evolution-source-registry` and letting D-Bus reactivate it, with
-no other change — keyring untouched, no new consent, same stored token:
+no other change. Keyring untouched, no new consent, same stored token:
 
 ```
 21:15:55  evolution-source-registry[3741]: fetching OAuth 2.0 access token via EDS
@@ -108,7 +108,7 @@ Same second, no prompt, no stall, account live. The only variable changed was
 Three distinct defects sit on top of each other. Any one of them being fixed
 would make the symptom much less severe.
 
-1. **libsecret — and the faulty call can be named, not just the symptom.**
+1. **libsecret, and the faulty call can be named, not just the symptom.**
    The two lines come out together, in this order:
 
    ```
@@ -119,7 +119,7 @@ would make the symptom much less severe.
    `secret_service_real_prompt_async` calls `g_task_return_error()` with a
    **NULL** `GError`. GLib refuses it, so the task is never completed at all,
    so the caller's async operation never finishes, so a sync wrapper blocks
-   until something upstream times out — the 25 s above.
+   until something upstream times out, which is the 25 s above.
 
    The NULL is not mysterious, and it is arguably the API's own doing.
    libsecret documents `secret_service_prompt_sync` as returning "%NULL if
@@ -132,10 +132,10 @@ would make the symptom much less severe.
    setting up GNOME Remote Desktop, reported the identical pair of lines
    (https://gist.github.com/greyltc/7085bff8f2e728b60077b81329019828?permalink_comment_id=4819806).
    Nothing about this is specific to Evolution, to this VM, or to a daemon
-   replacement — the replacement is just one reliable way to reach it.
+   replacement. The replacement is just one reliable way to reach it.
 
    **Prior art for the class, though not duplicates.** libsecret #75 and #113
-   are the same exactly-once discipline failing in the *other* direction —
+   are the same exactly-once discipline failing in the *other* direction:
    `g_task_return_error: assertion '!task->ever_returned' failed`, a task
    returned twice, in `on_search_loaded()` where `search_load_item_async()`
    starts N operations any of which may return an error. Those crash; this
@@ -149,11 +149,11 @@ would make the symptom much less severe.
    by restarting the keyring daemon. Same signature, same hang, same
    autologin context, same restart-fixes-it. Its root cause turned out to be
    gnome-keyring creating the login keyring without exporting it on D-Bus,
-   and it was **fixed in gnome-keyring rather than in libsecret** — which is
-   both a precedent that this class gets fixed and a hint about where a
+   and it was **fixed in gnome-keyring rather than in libsecret**. That is
+   both a precedent that this class gets fixed, and a hint about where a
    maintainer may want this one to land.
 
-2. **gnome-keyring** — `--replace` tears down a daemon that has prompts in
+2. **gnome-keyring.** `--replace` tears down a daemon that has prompts in
    flight and clients connected, with no mechanism for those clients to
    rebind. A daemon replacement that expects clients to survive it needs
    either a well-known-name handoff clients can follow, or a signal that tells
@@ -170,14 +170,14 @@ lifetime.
 ## Is this worth filing at all?
 
 Yes, and more confidently than when this document was first drafted. The
-libsecret half now names a specific faulty call — `g_task_return_error()`
-with a NULL error in `secret_service_real_prompt_async` — rather than
-describing a symptom, it has an independent sighting from an unrelated
+libsecret half now names a specific faulty call, `g_task_return_error()`
+with a NULL error in `secret_service_real_prompt_async`, rather than
+describing a symptom. It has an independent sighting from an unrelated
 workflow, and the closely-related Ubuntu #2125590 shows this hang class being
 taken seriously and fixed. The `--replace` framing should be demoted to "one
 reliable way to reach it" rather than presented as the bug.
 
-The gnome-keyring half is weaker — "don't use `--replace` while clients are
+The gnome-keyring half is weaker. "Don't use `--replace` while clients are
 connected" is a defensible answer, though the option's documentation says
 nothing about it.
 
