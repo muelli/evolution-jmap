@@ -88,6 +88,37 @@ fn auth_bearer_ok() {
     }
 }
 
+/// `docs/ROADMAP.md` item 23 Do(3): a long-lived backend connection whose
+/// cached bearer token has expired must be able to install a freshly
+/// refreshed one and retry, without tearing the connection down and
+/// re-fetching the session — that full reconnect is what
+/// [`Client::connect`] does, and repeating it hourly for every open
+/// calendar/address-book/mail connection is the cost this API exists to
+/// avoid.
+#[test]
+fn set_credentials_lets_a_stale_bearer_be_replaced_without_reconnecting() {
+    let server = MockServer::builder().bearer_token("fresh-token").start();
+
+    // The mock only accepts "fresh-token", so connecting requires it up
+    // front — standing in for a connection that was opened with a token
+    // that has since expired, without needing the mock to accept two
+    // tokens at once.
+    let client = Client::connect(server.origin(), Credentials::bearer("fresh-token")).unwrap();
+
+    // Simulates the token having gone stale on a live connection: the same
+    // `Client`, no reconnect, now carrying a token the server no longer
+    // accepts.
+    client.set_credentials(Credentials::bearer("stale-token"));
+    match client.echo(json!({"n": 1})) {
+        Err(Error::Http { status: 401, .. }) => {}
+        other => panic!("expected 401 on the stale token, got {other:?}"),
+    }
+
+    // The refresh: install the new token on the same `Client` and retry.
+    client.set_credentials(Credentials::bearer("fresh-token"));
+    assert_eq!(client.echo(json!({"n": 1})).unwrap(), json!({"n": 1}));
+}
+
 #[test]
 fn client_debug_names_the_session_url_and_auth_state() {
     let server = MockServer::builder().basic_auth("alice", "sekret").start();
