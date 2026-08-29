@@ -162,6 +162,14 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-collection-create-calendar-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
 	target_link_directories(functional-collection-create-calendar-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# Roadmap item 22 client: reproduces the stale OAuth2Support proxy failure
+	# when a shell process is killed with SIGTERM.
+	add_executable(functional-oauth2-stale-proxy-client tests/functional/oauth2-stale-proxy-client.c)
+	target_include_directories(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	add_executable(functional-config-lookup-client tests/functional/config-lookup-client.c)
 	target_include_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_INCLUDE_DIRS})
 	target_compile_options(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_CFLAGS_OTHER})
@@ -354,6 +362,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CREATE_CALENDAR_CLIENT=$<TARGET_FILE:functional-collection-create-calendar-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
+	)
+
+	# Roadmap item 22 part (1): deterministic headless reproduction of the
+	# stale OAuth2Support proxy failure (G_DBUS_ERROR_SERVICE_UNKNOWN /
+	# "The name :1.N was not provided by any .service files").
+	add_test(
+		NAME functional-oauth2-stale-proxy
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test oauth2-stale-proxy
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-oauth2-stale-proxy PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_OAUTH2_CLIENT=$<TARGET_FILE:functional-oauth2-stale-proxy-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
 	# module-jmap-configuration.so, not one of the four EDS/Camel backends:
