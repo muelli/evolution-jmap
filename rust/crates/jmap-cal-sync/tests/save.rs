@@ -5663,3 +5663,135 @@ fn diff_normalizes_empty_timezone_and_start_against_absent_baseline() {
         "clearing timeZone via empty string must patch timeZone to null"
     );
 }
+
+#[test]
+fn no_op_save_mints_no_patch_across_all_calendar_surfaces_matrix() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sprint Retrospective", "2026-06-15T10:00:00");
+    let sync = fixture.sync();
+
+    // Populate every mapped and unmapped surface across the JSCalendar schema
+    fixture.patch(
+        &id,
+        json!({
+            "title": "Sprint Retrospective & Roadmap Planning",
+            "description": "Bi-weekly review of engineering progress and milestones.",
+            "start": "2026-06-15T10:00:00",
+            "timeZone": "Europe/Berlin",
+            "duration": "PT1H30M",
+            "status": "confirmed",
+            "freeBusyStatus": "busy",
+            "privacy": "private",
+            "priority": 2,
+            "showWithoutTime": false,
+            "locations": {
+                "l1": {
+                    "@type": "Location",
+                    "name": "Main Auditorium, Building B",
+                    "description": "Floor 2, Room 201",
+                    "timeZone": "Europe/Berlin"
+                }
+            },
+            "virtualLocations": {
+                "v1": {
+                    "@type": "VirtualLocation",
+                    "uri": "https://meet.example.com/retro",
+                    "name": "Main Video Room",
+                    "features": {"video": true, "audio": true},
+                    "description": "PIN: 1234"
+                }
+            },
+            "links": {
+                "link1": {
+                    "@type": "Link",
+                    "href": "https://files.example.com/retro_agenda.pdf",
+                    "contentType": "application/pdf",
+                    "size": 102400,
+                    "title": "Retro Agenda"
+                }
+            },
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "action": "display",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M",
+                        "relativeTo": "start"
+                    }
+                }
+            },
+            "keywords": {
+                "Engineering": true,
+                "Sprint": true,
+                "Roadmap": true
+            },
+            "recurrenceRule": {
+                "@type": "RecurrenceRule",
+                "frequency": "weekly",
+                "interval": 2,
+                "byDay": [{"day": "mo"}]
+            },
+            "recurrenceOverrides": {
+                "2026-06-29T10:00:00": {
+                    "excluded": true
+                }
+            },
+            "participants": {
+                "p1": {
+                    "@type": "Participant",
+                    "name": "Vera Oldenburg",
+                    "email": "vera@example.com",
+                    "roles": {"owner": true, "attendee": true}
+                }
+            },
+            "sequence": 4,
+            "color": "#336699",
+            "locale": "en-US",
+            "customEventBag": "custom-event-data"
+        }),
+    );
+
+    // First load -> save cycle (simulating opening & saving untouched in Evolution)
+    let loaded1 = sync.load_component(id.as_str()).expect("load 1");
+    let saved1 = sync
+        .save_component(&loaded1.icalendar, Some(id.as_str()))
+        .expect("save 1");
+
+    // Second load -> save cycle
+    let loaded2 = sync.load_component(id.as_str()).expect("load 2");
+    let parsed_event2 = jmap_ical::ical_to_event(&loaded2.icalendar).expect("parse 2");
+    let current_event = fixture.event(&id);
+
+    let second_patch = jmap_cal_sync::patch::diff(&current_event, &parsed_event2);
+    assert!(
+        second_patch.is_empty(),
+        "second diff on event after round-trip must mint no patch, found: {second_patch:?}"
+    );
+
+    let saved2 = sync
+        .save_component(&loaded2.icalendar, Some(id.as_str()))
+        .expect("save 2");
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must not change server revision for untouched event"
+    );
+
+    // Verify all unmapped and mapped fields remain preserved server-side
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Sprint Retrospective & Roadmap Planning")
+    );
+    assert_eq!(stored.duration.as_deref(), Some("PT1H30M"));
+    assert_eq!(stored.privacy.as_deref(), Some("private"));
+    assert_eq!(stored.priority, Some(2));
+    assert!(stored.participants.is_some() || stored.extra.contains_key("participants"));
+    assert_eq!(stored.color.as_deref(), Some("#336699"));
+    assert_eq!(stored.locale.as_deref(), Some("en-US"));
+    assert_eq!(stored.extra.get("sequence"), Some(&json!(4)));
+    assert_eq!(
+        stored.extra.get("customEventBag"),
+        Some(&json!("custom-event-data"))
+    );
+}

@@ -5441,3 +5441,175 @@ fn editing_preserves_extra_pref_ranking_on_emails_and_phones() {
     assert_eq!(stored.emails.as_ref().unwrap()["e0"].pref, Some(42));
     assert_eq!(stored.phones.as_ref().unwrap()["p1"].pref, Some(55));
 }
+
+#[test]
+fn no_op_save_mints_no_patch_across_all_contact_surfaces_matrix() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    // Populate every mapped and unmapped surface across the JSContact schema
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "full": "Dr. Vera Maria Oldenburg Jr.",
+                "components": [
+                    {"kind": "title", "value": "Dr."},
+                    {"kind": "given", "value": "Vera"},
+                    {"kind": "given2", "value": "Maria"},
+                    {"kind": "surname", "value": "Oldenburg"},
+                    {"kind": "credential", "value": "Jr."}
+                ],
+                "isOrdered": true,
+                "sortAs": {"de": "Oldenburg, Vera"},
+                "phonetic": "veːʁa"
+            },
+            "nicknames": {
+                "n1": {"name": "Vee", "contexts": {"private": true}, "pref": 10}
+            },
+            "emails": {
+                "e0": {
+                    "address": "vera@example.com",
+                    "contexts": {"work": true, "school": true},
+                    "pref": 25,
+                    "label": "Direct"
+                }
+            },
+            "phones": {
+                "p1": {
+                    "number": "+49 30 123456",
+                    "contexts": {"work": true, "private": true},
+                    "features": {"voice": true, "fax": true},
+                    "pref": 15
+                }
+            },
+            "organizations": {
+                "o1": {
+                    "name": "Acme Corp",
+                    "units": [
+                        {"name": "Research & Development", "sortAs": "R&D"},
+                        {"name": "Applied Cryptography"}
+                    ],
+                    "sortAs": "Acme",
+                    "contexts": {"work": true}
+                }
+            },
+            "titles": {
+                "t1": {"name": "Chief Scientist", "kind": "title", "organizationId": "o1"},
+                "t2": {"name": "Project Lead", "kind": "role"}
+            },
+            "addresses": {
+                "a1": {
+                    "components": [
+                        {"kind": "name", "value": "Hauptstraße 42"},
+                        {"kind": "locality", "value": "Berlin"},
+                        {"kind": "postcode", "value": "10115"},
+                        {"kind": "country", "value": "Germany"}
+                    ],
+                    "full": "Hauptstraße 42\n10115 Berlin\nGermany",
+                    "contexts": {"work": true, "private": true},
+                    "pref": 30
+                }
+            },
+            "notes": {
+                "n1": {"note": "Key collaborator on JMAP standards", "created": "2026-01-01T00:00:00Z"}
+            },
+            "anniversaries": {
+                "y1": {"kind": "birth", "date": {"year": 1985, "month": 6, "day": 15}},
+                "y2": {"kind": "wedding", "date": {"year": 2015, "month": 9, "day": 20}}
+            },
+            "links": {
+                "l1": {"uri": "https://example.com/vera", "kind": null, "pref": 5},
+                "l2": {"uri": "https://blog.example.com/vera", "kind": "blog"},
+                "l3": {"uri": "https://video.example.com/vera", "kind": "video"}
+            },
+            "calendars": {
+                "c1": {"uri": "https://cal.example.com/vera", "kind": "calendar"},
+                "c2": {"uri": "https://cal.example.com/vera/freebusy", "kind": "freeBusy"}
+            },
+            "media": {
+                "m1": {
+                    "kind": "photo",
+                    "uri": "https://example.com/vera.jpg",
+                    "mediaType": "image/jpeg"
+                }
+            },
+            "onlineServices": {
+                "s1": {"service": "Jabber", "user": "vera@jabber.org"},
+                "s2": {"service": "Matrix", "user": "@vera:matrix.org"}
+            },
+            "relatedTo": {
+                "Bob Example": {"relation": {"spouse": true}},
+                "Alice Manager": {"relation": {"manager": true}},
+                "Charlie Assistant": {"relation": {"assistant": true}},
+                "Dave Colleague": {"relation": {"colleague": true}}
+            },
+            "keywords": {
+                "VIP": true,
+                "WG-Member": true,
+                "Unstatable Category \r\n": true
+            },
+            "cryptoKeys": {
+                "k1": {"kind": "key", "uri": "https://keys.example.com/vera.asc"}
+            },
+            "directories": {
+                "d1": {"kind": "directory", "uri": "ldap://ldap.example.com"}
+            },
+            "personalInfo": {
+                "pi1": {"kind": "expertise", "value": "Protocols"}
+            },
+            "speakToAs": {
+                "grammaticalGender": "feminine",
+                "pronouns": "she/her"
+            },
+            "preferredLanguages": {
+                "de": {"language": "de-DE", "pref": 1}
+            },
+            "localizations": {
+                "en": {"name/full": "Vera Oldenburg"}
+            },
+            "customPreservedField": "preserved-value"
+        }),
+    );
+
+    // First load -> save cycle (simulating opening & saving untouched in Evolution)
+    let loaded1 = sync.load_contact(id.as_str()).expect("load 1");
+    let saved1 = sync
+        .save_contact(&loaded1.vcard, Some(id.as_str()))
+        .expect("save 1");
+
+    // Second load -> save cycle
+    let loaded2 = sync.load_contact(id.as_str()).expect("load 2");
+    let parsed_card2 = jmap_vcard::vcard_to_card(&loaded2.vcard).expect("parse 2");
+    let current_card = fixture.card(&id);
+
+    let second_patch = jmap_book_sync::patch::diff(&current_card, &parsed_card2);
+    assert!(
+        second_patch.is_empty(),
+        "second diff on contact after round-trip must mint no patch, found: {second_patch:?}"
+    );
+
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .expect("save 2");
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must not change server revision for untouched contact"
+    );
+
+    // Verify all unmapped and mapped fields remain preserved server-side
+    let stored = fixture.card(&id);
+    assert!(stored.crypto_keys.is_some() || stored.extra.contains_key("cryptoKeys"));
+    assert!(stored.directories.is_some() || stored.extra.contains_key("directories"));
+    assert!(stored.personal_info.is_some() || stored.extra.contains_key("personalInfo"));
+    assert!(stored.speak_to_as.is_some() || stored.extra.contains_key("speakToAs"));
+    assert!(
+        stored.preferred_languages.is_some() || stored.extra.contains_key("preferredLanguages")
+    );
+    assert!(stored.localizations.is_some() || stored.extra.contains_key("localizations"));
+    assert_eq!(
+        stored.extra.get("customPreservedField"),
+        Some(&json!("preserved-value"))
+    );
+}
