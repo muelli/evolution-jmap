@@ -421,12 +421,15 @@ const SERVICE_SCHEMES: [(&str, &str); 18] = [
 /// libebook-contacts 3.52).
 const DEFAULT_SLOT: &str = "HOME";
 
-/// The line EDS keeps `E_CONTACT_ANNIVERSARY` on — the field Evolution's
+/// The line EDS 3.52 keeps `E_CONTACT_ANNIVERSARY` on — the field Evolution's
 /// contact editor labels "Anniversary".
 ///
-/// vCard 3.0 has no property for a wedding day: RFC 6474's `ANNIVERSARY` is
-/// vCard 4.0, which `e_contact_new_from_vcard()` is not given. Writing the
-/// date on any other line would keep it out of the only field that shows it.
+/// vCard 3.0 has no standard property for a wedding day: RFC 6474's `ANNIVERSARY`
+/// is vCard 4.0. In EDS 3.52, `e_contact_new_from_vcard()` reads
+/// `X-EVOLUTION-ANNIVERSARY` (ignoring `ANNIVERSARY`), while in EDS 3.60+ it
+/// reads standard `ANNIVERSARY`. We emit both lines so that EDS 3.52 reads its
+/// vendor line and EDS 3.60+ reads standard ANNIVERSARY, and each preserves
+/// the other as an unrecognised extension without requiring build-time version detection.
 const X_EVOLUTION_ANNIVERSARY: &str = "X-EVOLUTION-ANNIVERSARY";
 
 /// JSContact anniversary `kind` values and the vCard property stating each.
@@ -1789,25 +1792,38 @@ pub fn card_to_vcard(card: &ContactCard) -> String {
     }
 
     for (key, anniversary) in card.anniversaries.iter().flatten() {
-        let (Some(name), Some(date)) = (
-            anniversary_property(&anniversary.kind),
-            anniversary_date(anniversary),
-        ) else {
+        let Some(date) = anniversary_date(anniversary) else {
             continue;
         };
-        let prop = if name == "BDAY" {
-            VCardProperty::Bday
-        } else {
-            VCardProperty::Other(name.to_owned())
-        };
-        entries.push(
-            VCardEntry::new(prop)
-                .with_param(VCardParameter::new(
-                    VCardParameterName::Other(X_JMAP_KEY.to_owned()),
-                    VCardParameterValue::Text(key.clone()),
-                ))
-                .with_value(date),
-        );
+        if anniversary.kind == "birth" {
+            entries.push(
+                VCardEntry::new(VCardProperty::Bday)
+                    .with_param(VCardParameter::new(
+                        VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                        VCardParameterValue::Text(key.clone()),
+                    ))
+                    .with_value(date),
+            );
+        } else if anniversary.kind == "wedding" {
+            // Emit both X-EVOLUTION-ANNIVERSARY (for EDS 3.52 compatibility)
+            // and standard ANNIVERSARY (for EDS 3.60+ compatibility).
+            entries.push(
+                VCardEntry::new(VCardProperty::Other(X_EVOLUTION_ANNIVERSARY.to_owned()))
+                    .with_param(VCardParameter::new(
+                        VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                        VCardParameterValue::Text(key.clone()),
+                    ))
+                    .with_value(date.clone()),
+            );
+            entries.push(
+                VCardEntry::new(VCardProperty::Other("ANNIVERSARY".to_owned()))
+                    .with_param(VCardParameter::new(
+                        VCardParameterName::Other(X_JMAP_KEY.to_owned()),
+                        VCardParameterValue::Text(key.clone()),
+                    ))
+                    .with_value(date),
+            );
+        }
     }
 
     // The relations EDS keeps fields on: spouse (E_CONTACT_SPOUSE),
@@ -2089,7 +2105,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
     let mut organizations = BTreeMap::new();
     let mut titles = BTreeMap::new();
     let mut notes = BTreeMap::new();
-    let mut anniversaries = BTreeMap::new();
+    let mut anniversaries: BTreeMap<String, Anniversary> = BTreeMap::new();
     let mut links = BTreeMap::new();
     let mut calendars = BTreeMap::new();
     let mut media = BTreeMap::new();
@@ -2447,9 +2463,40 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                             date: Some(day.json()),
                             extra: BTreeMap::new(),
                         };
+                        let key = entry_param(entry, X_JMAP_KEY).filter(|k| !k.is_empty());
+                        if let Some(k) = key.as_deref()
+                            && let Some(existing) = anniversaries.get(k)
+                            && existing.kind == anniversary.kind
+                            && existing.date == anniversary.date
+                        {
+                            continue;
+                        }
+                        if key.is_none()
+                            && anniversaries.values().any(|existing| {
+                                existing.kind == anniversary.kind
+                                    && existing.date == anniversary.date
+                            })
+                        {
+                            continue;
+                        }
                         anniversaries.insert(entry_key(entry, "y", &anniversaries), anniversary);
                     }
                 } else if let Some(anniversary) = read_anniversary(entry) {
+                    let key = entry_param(entry, X_JMAP_KEY).filter(|k| !k.is_empty());
+                    if let Some(k) = key.as_deref()
+                        && let Some(existing) = anniversaries.get(k)
+                        && existing.kind == anniversary.kind
+                        && existing.date == anniversary.date
+                    {
+                        continue;
+                    }
+                    if key.is_none()
+                        && anniversaries.values().any(|existing| {
+                            existing.kind == anniversary.kind && existing.date == anniversary.date
+                        })
+                    {
+                        continue;
+                    }
                     anniversaries.insert(entry_key(entry, "y", &anniversaries), anniversary);
                 }
             }
