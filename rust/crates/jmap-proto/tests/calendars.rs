@@ -292,3 +292,11 @@ fn calendar_event_query_filter_time_range_sets_after_and_before() {
     assert_eq!(filter.before.as_deref(), Some("2026-02-01T00:00:00Z"));
     assert_eq!(filter.in_calendar, None);
 }
+
+#[test]
+fn calendar_set_error_has_event_code() {
+    assert_eq!(
+        jmap_proto::calendars::calendar_set_error::HAS_EVENT,
+        "calendarHasEvent"
+    );
+}

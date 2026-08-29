@@ -204,6 +204,8 @@ pub struct Comparator {
     pub property: String,
     #[serde(default = "default_true")]
     pub is_ascending: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collation: Option<String>,
 }
 
 impl Comparator {
@@ -211,6 +213,7 @@ impl Comparator {
         Self {
             property: property.into(),
             is_ascending: true,
+            collation: None,
         }
     }
 
@@ -218,7 +221,13 @@ impl Comparator {
         Self {
             property: property.into(),
             is_ascending: false,
+            collation: None,
         }
+    }
+
+    pub fn with_collation(mut self, collation: impl Into<String>) -> Self {
+        self.collation = Some(collation.into());
+        self
     }
 }
 
@@ -228,8 +237,11 @@ impl Comparator {
 pub struct QueryResponse {
     pub account_id: Id,
     pub query_state: State,
+    #[serde(default)]
     pub can_calculate_changes: bool,
+    #[serde(default)]
     pub position: u64,
+    #[serde(default)]
     pub ids: Vec<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total: Option<u64>,
@@ -265,8 +277,12 @@ pub struct ChangesResponse {
     pub account_id: Id,
     pub old_state: State,
     pub new_state: State,
+    #[serde(default)]
     pub has_more_changes: bool,
+    #[serde(default)]
     pub created: Vec<Id>,
+    #[serde(default)]
     pub updated: Vec<Id>,
+    #[serde(default)]
     pub destroyed: Vec<Id>,
 }

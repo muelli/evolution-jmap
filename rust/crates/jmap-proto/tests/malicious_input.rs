@@ -67,4 +67,79 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::error::RequestError>(&text);
     }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_changes_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::methods::ChangesResponse>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_query_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::methods::QueryResponse>(&text);
+    }
+
+    #[cfg(feature = "contacts")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_contact_card(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::contacts::ContactCard>(&text);
+    }
+
+    #[cfg(feature = "contacts")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_address_book(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::contacts::AddressBook>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar_event(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::CalendarEvent>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::Calendar>(&text);
+    }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_mailbox(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::Mailbox>(&text);
+    }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_email(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::Email>(&text);
+    }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_email_submission(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::EmailSubmission>(&text);
+    }
+
+    #[cfg(feature = "principals")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_principal(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::principals::Principal>(&text);
+    }
+
+    #[cfg(feature = "principals")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_get_availability_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::principals::GetAvailabilityResponse>(&text);
+    }
 }

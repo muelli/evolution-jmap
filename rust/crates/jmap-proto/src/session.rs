@@ -25,6 +25,7 @@ pub const CAPABILITY_PRINCIPALS_OWNER: &str = "urn:ietf:params:jmap:principals:o
 pub struct Session {
     pub capabilities: BTreeMap<String, Value>,
     pub accounts: BTreeMap<Id, Account>,
+    #[serde(default)]
     pub primary_accounts: BTreeMap<String, Id>,
     pub username: String,
     pub api_url: String,

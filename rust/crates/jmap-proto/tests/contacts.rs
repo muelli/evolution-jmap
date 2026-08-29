@@ -218,3 +218,11 @@ fn contact_card_query_filter_in_address_book_sets_only_that_field() {
     assert_eq!(filter.name, None);
     assert_eq!(filter.email, None);
 }
+
+#[test]
+fn address_book_set_error_has_card_code() {
+    assert_eq!(
+        jmap_proto::contacts::address_book_set_error::HAS_CARD,
+        "addressBookHasCard"
+    );
+}
