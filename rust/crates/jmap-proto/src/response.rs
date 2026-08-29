@@ -19,6 +19,7 @@ pub struct Response {
     pub method_responses: Vec<Invocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_ids: Option<BTreeMap<Id, Id>>,
+    #[serde(default)]
     pub session_state: State,
 }
 

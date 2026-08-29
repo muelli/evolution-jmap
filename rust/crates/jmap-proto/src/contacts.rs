@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::id::Id;
+use crate::state::UtcDate;
 
 /// An address book (RFC 9610 §2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -34,6 +35,8 @@ pub struct AddressBook {
     pub share_with: Option<BTreeMap<Id, Option<AddressBookRights>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_rights: Option<AddressBookRights>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_delete: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -77,6 +80,10 @@ pub struct ContactCard {
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<UtcDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<Name>,
 
@@ -213,6 +220,10 @@ pub struct Name {
     pub components: Option<Vec<NameComponent>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_ordered: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_as: Option<BTreeMap<String, String>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -244,12 +255,6 @@ impl NameComponent {
 
 /// JSContact Nickname (RFC 9553 §2.2.2): one name the contact is also known
 /// by.
-///
-/// `contexts` and `pref` are not modeled: RFC 2426 §3.1.3's `NICKNAME` takes
-/// none of the parameters that could state either — it has no `TYPE` — and
-/// Evolution's contact editor shows a nickname without a context or a
-/// ranking. Both therefore ride in [`Self::extra`], where the save path can
-/// see the members it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Nickname {
@@ -257,6 +262,10 @@ pub struct Nickname {
     /// of it a `NICKNAME` line has room for.
     #[serde(default)]
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -292,40 +301,32 @@ pub struct ContactPhone {
 }
 
 /// JSContact Organization (RFC 9553 §2.2.3).
-///
-/// `sortAs` and `contexts` are not modeled: vCard 3.0's `ORG` (RFC 2426
-/// §3.5.5) has no component and no parameter for either, so they ride in
-/// [`Self::extra`] — where the save path can see them and leave them alone,
-/// which is the whole reason this is a struct and not a `Value`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Organization {
     /// The organisation's own name, which the `ORG` value states first.
-    ///
-    /// Optional, as RFC 9553 §2.2.3 has it: a card may name only the units,
-    /// and answering `Some("")` for that would put an empty employer on the
-    /// server where it never had one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// The units within it, outermost first — the departments the `ORG` value
     /// lists after the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub units: Option<Vec<OrgUnit>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_as: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 /// JSContact OrgUnit (RFC 9553 §2.2.3): one unit of an [`Organization`].
-///
-/// A unit holds a `sortAs` besides its name, which is why the vCard mapping
-/// cannot rebuild the list from the `ORG` components alone — see the save
-/// path, which carries a unit's unmapped members across a rename of its
-/// siblings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OrgUnit {
     #[serde(default)]
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_as: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -334,6 +335,7 @@ impl OrgUnit {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_owned(),
+            sort_as: None,
             extra: BTreeMap::new(),
         }
     }
@@ -341,12 +343,6 @@ impl OrgUnit {
 
 /// JSContact Title (RFC 9553 §2.2.4): a job title the contact holds, or a
 /// role it plays.
-///
-/// `organizationId` — which of the card's `organizations` the title is held
-/// at — is not modeled: vCard 3.0's `TITLE` and `ROLE` (RFC 2426 §§3.5.1,
-/// 3.5.2) are plain text with no component and no parameter naming an
-/// organisation, so it rides in [`Self::extra`], where the save path can see
-/// the member it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Title {
@@ -358,47 +354,40 @@ pub struct Title {
     /// nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 /// JSContact Address (RFC 9553 §2.5.1): one postal address.
-///
-/// Only the three members a vCard can carry are modeled — the `ADR` line's
-/// components and its `TYPE`, and the `LABEL` line's text. `coordinates`,
-/// `countryCode`, `timeZone`, `pref` and the rest ride in [`Self::extra`] —
-/// where the save path can see the members it is refusing to touch, which is
-/// the whole reason this is a struct and not a `Value`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Address {
     /// The parts the address is built from, each naming what it is.
-    ///
-    /// RFC 9553 §2.5.1 leaves the order meaningful only when `isOrdered` is
-    /// set, so this is a list of named parts rather than a fixed shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub components: Option<Vec<AddressComponent>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contexts: Option<Value>,
     /// The address written out as it should be printed, line breaks and all.
-    ///
-    /// RFC 9553 §2.5.1 has this stand on its own — an address may be stated
-    /// here and nowhere else, "even if the individual address components are
-    /// not known" — which is the same thing RFC 2426 §3.2.2's `LABEL` says,
-    /// and what EDS keeps in its three synthetic address-label fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_ordered: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinates: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 /// One part of an [`Address`]: `kind` is `name` (the street), `locality`,
 /// `postcode`, `floor`, …
-///
-/// Like [`NameComponent`], this keeps what it does not model: a component
-/// carries a `phonetic` spelling besides its value, and the save path writes
-/// the component list back whole, so a member dropped on the way in is a
-/// member deleted on the way out.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AddressComponent {
@@ -421,11 +410,6 @@ impl AddressComponent {
 }
 
 /// JSContact Note (RFC 9553 §2.8.3): one free-text note about the contact.
-///
-/// `created` and `author` are not modeled: vCard 3.0's `NOTE` (RFC 2426
-/// §3.6.2) is plain text with no component and no parameter for when a note
-/// was written or by whom, so both ride in [`Self::extra`] — where the save
-/// path can see the members it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {
@@ -433,15 +417,15 @@ pub struct Note {
     /// a note a `NOTE` line has room for.
     #[serde(default)]
     pub note: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 /// JSContact Anniversary (RFC 9553 §2.8.1): one memorable date.
-///
-/// `place` — where the birth or the wedding happened — is not modeled: a
-/// vCard date line is a date and nothing else, so it rides in [`Self::extra`]
-/// where the save path can see the member it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Anniversary {
@@ -453,13 +437,6 @@ pub struct Anniversary {
     pub kind: String,
     /// The date itself, kept as it arrived rather than parsed into a shape
     /// of our own.
-    ///
-    /// RFC 9553 §2.8.1 allows two: a `PartialDate`, which may state only a
-    /// year or only a month and day, and a `Timestamp`, which states a point
-    /// in time. A vCard line can carry neither shape whole — it states one
-    /// calendar day — so the save patches *into* whichever object the server
-    /// sent rather than replacing it, and that is only possible while its
-    /// unmapped members (`calendarScale`, the time of day) are still here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date: Option<Value>,
     #[serde(flatten)]
@@ -467,12 +444,6 @@ pub struct Anniversary {
 }
 
 /// JSContact Link (RFC 9553 §2.6.3): one resource the contact points at.
-///
-/// `mediaType`, `contexts`, `pref` and `label` are not modeled: vCard 3.0's
-/// `URL` (RFC 2426 §3.6.8) is a bare URI with no parameter for what the
-/// resource is, where it is used, how strongly it is preferred or what to call
-/// it, so all four ride in [`Self::extra`] — where the save path can see the
-/// members it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Link {
@@ -482,63 +453,49 @@ pub struct Link {
     pub uri: String,
     /// What kind of link it is — `contact`, a URI for getting in touch, is
     /// the one kind RFC 9553 §2.6.3 defines, and it has no default.
-    ///
-    /// A link that names no kind is the plain website vCard 3.0's `URL` means
-    /// (RFC 9555 §2.6.3 pairs the two), which is why this is modeled rather
-    /// than carried: the mapping has to be able to tell those apart from the
-    /// kinds it must leave alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 /// JSContact Calendar (RFC 9553 §2.4.1): one calendaring resource of the
 /// contact — a calendar of theirs, or the free/busy data drawn from one.
-///
-/// `mediaType`, `contexts`, `pref` and `label` are not modeled, for the reason
-/// [`Link`]'s are not: the `CALURI` and `FBURL` lines EDS keeps these on are
-/// bare URIs with no parameter for what the resource is, where it is used, how
-/// strongly it is preferred or what to call it, so all four ride in
-/// [`Self::extra`] — where the save path can see the members it is refusing to
-/// touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Calendar {
-    /// What the resource is: `calendar` or `freeBusy` per RFC 9553 §2.4.1,
-    /// which makes it mandatory and gives it no default — an entry stating
-    /// none is malformed, and is modeled as `None` rather than refused so that
-    /// one bad entry does not cost the user the whole address book.
-    ///
-    /// Modeled rather than carried because it is the mapping's filter, as
-    /// [`Media`]'s is: it says which of the two lines the URI goes on, and
-    /// there is no third line to put an entry that names neither on.
+    /// What the resource is: `calendar` or `freeBusy` per RFC 9553 §2.4.1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Where the resource is. Mandatory per RFC 9553 §2.4.1, and the only
     /// part of a calendar either line has room for.
     #[serde(default)]
     pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 /// JSContact Media (RFC 9553 §2.6.4): one media resource the card carries.
-///
-/// `pref` and `label` are not modeled, for the reason [`Nickname`]'s are not:
-/// RFC 2426 §3.1.4's `PHOTO` has no parameter for a ranking or for what to call
-/// the picture. Both ride in [`Self::extra`], where the save path can see the
-/// members it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Media {
-    /// What the resource is: `photo`, `sound` or `logo` per RFC 9553 §2.6.4,
-    /// which makes it mandatory — an entry stating none is malformed, and is
-    /// modeled as `None` rather than refused so that one bad entry does not
-    /// cost the user the whole address book.
-    ///
-    /// Modeled rather than carried because it is the mapping's filter: of the
-    /// three kinds, only a photo is the picture Evolution shows.
+    /// What the resource is: `photo`, `sound` or `logo` per RFC 9553 §2.6.4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Where the resource is. Mandatory per RFC 9553 §2.6.4, and for a picture
@@ -546,49 +503,41 @@ pub struct Media {
     #[serde(default)]
     pub uri: String,
     /// The media type of the resource, which RFC 9553 §2.6.4 asks for when the
-    /// URI does not state one. Modeled because a `PHOTO` line's `TYPE` is what
-    /// tells EDS what the bytes are.
+    /// URI does not state one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 /// JSContact OnlineService (RFC 9553 §2.3.2): the contact as one online
 /// service or protocol knows them.
-///
-/// `contexts`, `pref` and `label` are not modeled, for the reason
-/// [`Nickname`]'s are not. The `X-` line EDS keeps a handle on does take a
-/// `TYPE`, but that parameter is the *slot* EDS files the handle in rather than
-/// the entry's contexts — a line without one reaches no field the user can see,
-/// measured against libebook-contacts 3.52 — so the vCard mapping writes it and
-/// reads nothing back off it. All three therefore ride in [`Self::extra`],
-/// where the save path can see the members it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OnlineService {
     /// The name of the service or protocol — `Jabber`, `Matrix`, `Skype`.
-    ///
-    /// RFC 9553 §2.3.2 lets it be capitalised as the service itself
-    /// capitalises it and has two names be equal when they match
-    /// case-insensitively, so the mapping compares rather than rewrites the
-    /// spelling the server chose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
     /// The name the contact is known by at the service. Free text per RFC 9553
-    /// §2.3.2, and what the vCard line states: Evolution's instant-messaging
-    /// field holds a handle rather than a URI.
+    /// §2.3.2, and what the vCard line states.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     /// The contact's identifier at the service as a URI (RFC 9553 §2.3.2
     /// requires RFC 3986 §3).
-    ///
-    /// Drawn only where the service's scheme is known to state the handle and
-    /// nothing besides, which is a short list; elsewhere it is modeled so that
-    /// the save path can tell an entry that states one from an entry that does
-    /// not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

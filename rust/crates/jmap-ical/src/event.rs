@@ -767,7 +767,8 @@ pub fn maps_alerts(event: &CalendarEvent) -> bool {
 /// because the property is not modeled: nothing here writes it, and the only
 /// question asked of it is whether it is `true`.
 fn uses_default_alerts(event: &CalendarEvent) -> bool {
-    event.extra.get("useDefaultAlerts") == Some(&Value::Bool(true))
+    event.use_default_alerts == Some(true)
+        || event.extra.get("useDefaultAlerts") == Some(&Value::Bool(true))
 }
 
 /// One entry of `alerts` as the `VALARM` that states it, or `None` for a reminder
@@ -2224,6 +2225,10 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         // arrived without it would be drawn with alarms the series beside it is
         // drawn without — reminders that never fire, and, read back, an occurrence
         // the user apparently set them on.
+        use_default_alerts: event.use_default_alerts,
+        color: event.color.clone(),
+        locale: event.locale.clone(),
+        localizations: event.localizations.clone(),
         extra: event.extra.clone(),
         ..CalendarEvent::default()
     };
@@ -3385,6 +3390,7 @@ fn read_vevent(
         // scope, so `None` is also the honest answer here.
         time_zones: None,
         extra: Default::default(),
+        ..CalendarEvent::default()
     }
 }
 

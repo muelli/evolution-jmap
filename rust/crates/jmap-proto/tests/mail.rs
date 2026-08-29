@@ -563,3 +563,53 @@ fn mailbox_sharing_identity_draft_and_email_filter_builders_roundtrip() {
         "2026-09-01T00:00:00Z"
     );
 }
+
+#[test]
+fn mail_spec_properties_roundtrip() {
+    use jmap_proto::mail::{EmailBodyPart, EmailHeader, EmailQueryFilter, Identity};
+
+    let identity = Identity {
+        id: Some("id_spec".into()),
+        name: "Security Team".to_owned(),
+        email: "sec@example.com".to_owned(),
+        may_send: Some(true),
+        may_delete: Some(false),
+        ..Identity::default()
+    };
+    let id_json = serde_json::to_value(&identity).unwrap();
+    assert_eq!(id_json["maySend"], true);
+    assert_eq!(id_json["mayDelete"], false);
+    assert_eq!(serde_json::from_value::<Identity>(id_json).unwrap(), identity);
+
+    let part = EmailBodyPart {
+        part_id: Some("part1".to_owned()),
+        content_type: Some("message/rfc822".to_owned()),
+        headers: Some(vec![EmailHeader::new("Content-Description", "Embedded Message")]),
+        ..EmailBodyPart::default()
+    };
+    let p_json = serde_json::to_value(&part).unwrap();
+    assert_eq!(p_json["headers"][0]["name"], "Content-Description");
+    assert_eq!(p_json["headers"][0]["value"], "Embedded Message");
+    assert_eq!(serde_json::from_value::<EmailBodyPart>(p_json).unwrap(), part);
+
+    let filter = EmailQueryFilter::in_mailbox("mb_inbox")
+        .all_in_thread_have_keyword("$seen")
+        .some_in_thread_have_keyword("$flagged")
+        .none_in_thread_have_keyword("$junk")
+        .header("List-Id", "<dev.example.com>");
+
+    assert_eq!(filter.all_in_thread_have_keyword.as_deref(), Some("$seen"));
+    assert_eq!(filter.some_in_thread_have_keyword.as_deref(), Some("$flagged"));
+    assert_eq!(filter.none_in_thread_have_keyword.as_deref(), Some("$junk"));
+    assert_eq!(
+        filter.header.as_ref().unwrap(),
+        &["List-Id".to_owned(), "<dev.example.com>".to_owned()]
+    );
+    let f_json = serde_json::to_value(&filter).unwrap();
+    assert_eq!(f_json["allInThreadHaveKeyword"], "$seen");
+    assert_eq!(f_json["someInThreadHaveKeyword"], "$flagged");
+    assert_eq!(f_json["noneInThreadHaveKeyword"], "$junk");
+    assert_eq!(f_json["header"][0], "List-Id");
+    assert_eq!(f_json["header"][1], "<dev.example.com>");
+}
+

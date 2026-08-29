@@ -168,3 +168,21 @@ fn principal_secret_send_to_typed_and_query_filter_builders_roundtrip() {
     assert_eq!(filter.email.as_deref(), Some("room1@example.com"));
     assert_eq!(filter.text.as_deref(), Some("Room 1"));
 }
+
+#[test]
+fn principal_is_personal_spec_roundtrip() {
+    use jmap_proto::principals::Principal;
+
+    let p = Principal {
+        id: Some("p_self".into()),
+        name: "Self Principal".to_owned(),
+        is_personal: Some(true),
+        ..Principal::default()
+    };
+    let p_val = serde_json::to_value(&p).unwrap();
+    assert_eq!(p_val["isPersonal"], true);
+
+    let round: Principal = serde_json::from_value(p_val).unwrap();
+    assert_eq!(round.is_personal, Some(true));
+}
+

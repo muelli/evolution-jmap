@@ -3884,7 +3884,12 @@ fn an_event_that_takes_the_default_reminders_keeps_them() {
         Some([("k1".to_owned(), quarter_of_an_hour_before())].into()),
         "a property nothing reads must not be written"
     );
-    assert_eq!(stored.extra.get("useDefaultAlerts"), Some(&json!(true)));
+    assert_eq!(
+        stored
+            .use_default_alerts
+            .or_else(|| stored.extra.get("useDefaultAlerts").and_then(|v| v.as_bool())),
+        Some(true)
+    );
     assert_eq!(
         stored.title.as_deref(),
         Some("Standup (short)"),

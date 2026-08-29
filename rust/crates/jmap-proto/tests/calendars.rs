@@ -407,11 +407,19 @@ fn calendar_and_event_advanced_properties_cover_draft_spec() {
     .unwrap();
 
     assert_eq!(
-        event.extra.get("useDefaultAlerts"),
-        Some(&serde_json::json!(true))
+        event
+            .use_default_alerts
+            .or_else(|| event.extra.get("useDefaultAlerts").and_then(|v| v.as_bool())),
+        Some(true)
     );
     assert_eq!(event.extra.get("sequence"), Some(&serde_json::json!(3)));
-    assert_eq!(event.extra.get("locale"), Some(&serde_json::json!("en-US")));
+    assert_eq!(
+        event
+            .locale
+            .as_deref()
+            .or_else(|| event.extra.get("locale").and_then(|v| v.as_str())),
+        Some("en-US")
+    );
     assert_eq!(
         event.extra.get("replyTo"),
         Some(&serde_json::json!({"imip": "mailto:board@example.com"}))
@@ -742,3 +750,46 @@ fn calendar_sharing_timezone_and_recurrence_rule_extensions_roundtrip() {
     assert_eq!(filter.uid.as_deref(), Some("evt-uid-456"));
     assert_eq!(filter.text.as_deref(), Some("quarterly"));
 }
+
+#[test]
+fn calendar_and_event_spec_properties_roundtrip() {
+    use jmap_proto::calendars::{Calendar, CalendarEvent};
+    use std::collections::BTreeMap;
+
+    let cal = Calendar {
+        id: Some("cal_spec".into()),
+        name: "Personal Schedule".to_owned(),
+        may_delete: Some(true),
+        color: Some("#336699".to_owned()),
+        ..Calendar::default()
+    };
+    let c_val = serde_json::to_value(&cal).unwrap();
+    assert_eq!(c_val["mayDelete"], true);
+    assert_eq!(c_val["color"], "#336699");
+    assert_eq!(serde_json::from_value::<Calendar>(c_val).unwrap(), cal);
+
+    let event = CalendarEvent {
+        id: Some("evt_spec".into()),
+        title: Some("International Conference".to_owned()),
+        use_default_alerts: Some(true),
+        color: Some("#ff5500".to_owned()),
+        locale: Some("en-GB".to_owned()),
+        localizations: Some(BTreeMap::from([(
+            "de".to_owned(),
+            serde_json::json!({"title": "Internationale Konferenz"}),
+        )])),
+        ..CalendarEvent::default()
+    };
+    let e_val = serde_json::to_value(&event).unwrap();
+    assert_eq!(e_val["useDefaultAlerts"], true);
+    assert_eq!(e_val["color"], "#ff5500");
+    assert_eq!(e_val["locale"], "en-GB");
+    assert_eq!(
+        e_val["localizations"]["de"]["title"],
+        "Internationale Konferenz"
+    );
+
+    let round_event: CalendarEvent = serde_json::from_value(e_val).unwrap();
+    assert_eq!(round_event, event);
+}
+

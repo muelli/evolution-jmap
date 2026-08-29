@@ -488,6 +488,8 @@ pub struct EmailBodyPart {
     pub location: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub_parts: Option<Vec<EmailBodyPart>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<Vec<EmailHeader>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -531,6 +533,12 @@ pub struct EmailQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_keyword: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub all_in_thread_have_keyword: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub some_in_thread_have_keyword: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub none_in_thread_have_keyword: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub has_attachment: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
@@ -546,6 +554,8 @@ pub struct EmailQueryFilter {
     pub bcc: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<UtcDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -585,6 +595,21 @@ impl EmailQueryFilter {
 
     pub fn not_keyword(mut self, keyword: impl Into<String>) -> Self {
         self.not_keyword = Some(keyword.into());
+        self
+    }
+
+    pub fn all_in_thread_have_keyword(mut self, keyword: impl Into<String>) -> Self {
+        self.all_in_thread_have_keyword = Some(keyword.into());
+        self
+    }
+
+    pub fn some_in_thread_have_keyword(mut self, keyword: impl Into<String>) -> Self {
+        self.some_in_thread_have_keyword = Some(keyword.into());
+        self
+    }
+
+    pub fn none_in_thread_have_keyword(mut self, keyword: impl Into<String>) -> Self {
+        self.none_in_thread_have_keyword = Some(keyword.into());
         self
     }
 
@@ -628,6 +653,11 @@ impl EmailQueryFilter {
         self
     }
 
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.header = Some(vec![name.into(), value.into()]);
+        self
+    }
+
     pub fn before(mut self, before: impl Into<UtcDate>) -> Self {
         self.before = Some(before.into());
         self
@@ -667,6 +697,8 @@ pub struct Identity {
     pub draft_mailbox_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_delete: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_send: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

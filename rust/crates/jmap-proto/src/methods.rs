@@ -160,6 +160,8 @@ pub struct QueryRequest<F> {
     pub limit: Option<u64>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub calculate_total: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub collapse_threads: bool,
 }
 
 impl<F> QueryRequest<F> {
@@ -173,6 +175,7 @@ impl<F> QueryRequest<F> {
             anchor_offset: None,
             limit: None,
             calculate_total: false,
+            collapse_threads: false,
         }
     }
 
@@ -203,6 +206,11 @@ impl<F> QueryRequest<F> {
 
     pub fn calculate_total(mut self) -> Self {
         self.calculate_total = true;
+        self
+    }
+
+    pub fn collapse_threads(mut self) -> Self {
+        self.collapse_threads = true;
         self
     }
 }
@@ -333,6 +341,8 @@ pub struct QueryChangesRequest<F> {
     pub up_to_id: Option<Id>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub calculate_total: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub collapse_threads: bool,
 }
 
 impl<F> QueryChangesRequest<F> {
@@ -345,6 +355,7 @@ impl<F> QueryChangesRequest<F> {
             max_changes: None,
             up_to_id: None,
             calculate_total: false,
+            collapse_threads: false,
         }
     }
 
@@ -370,6 +381,11 @@ impl<F> QueryChangesRequest<F> {
 
     pub fn calculate_total(mut self) -> Self {
         self.calculate_total = true;
+        self
+    }
+
+    pub fn collapse_threads(mut self) -> Self {
+        self.collapse_threads = true;
         self
     }
 }

@@ -54,6 +54,8 @@ pub struct Principal {
     pub capabilities: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accounts: Option<BTreeMap<Id, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_personal: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
