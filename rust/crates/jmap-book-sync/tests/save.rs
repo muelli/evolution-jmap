@@ -5073,3 +5073,233 @@ fn no_op_save_mints_no_patch_on_mixed_populated_and_empty_container_collections(
         "second save must preserve identical revision"
     );
 }
+
+#[test]
+fn editing_an_address_preserves_a_preference_ranking_the_vcard_flattens() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "addresses/a1": {
+                "components": [{"kind": "name", "value": "Hauptstraße 1"}],
+                "pref": 30
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("PREF"), "{vcard}");
+    let edited = vcard.replace("Hauptstraße 1", "Hauptstraße 2");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.addresses.as_ref().unwrap()["a1"].pref,
+        Some(30),
+        "address pref rank must not be flattened to 1 by a save that did not touch it"
+    );
+}
+
+#[test]
+fn clearing_an_address_preference_in_the_vcard_clears_it_on_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "addresses/a1": {
+                "components": [{"kind": "name", "value": "Hauptstraße 1"}],
+                "pref": 30
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard
+        .replace(";TYPE=PREF", "")
+        .replace("TYPE=PREF;", "")
+        .replace("TYPE=PREF:", ":");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.addresses.as_ref().unwrap()["a1"].pref,
+        None,
+        "clearing PREF on address line must clear pref on server"
+    );
+}
+
+#[test]
+fn reclassifying_a_homepage_link_to_a_blog_or_video_url_patches_kind() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "links/l1": {
+                "uri": "https://vera.example.com"
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("URL;X-JMAP-KEY=l1:https://vera.example.com"),
+        "{vcard}"
+    );
+
+    // Reclassify from Homepage URL to Blog URL
+    let edited = vcard.replace("URL;X-JMAP-KEY=l1:", "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.links.as_ref().unwrap()["l1"].kind.as_deref(),
+        Some("blog"),
+        "reclassifying URL to X-EVOLUTION-BLOG-URL must patch kind to 'blog'"
+    );
+
+    // Reclassify from Blog URL to Video URL
+    let vcard2 = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited2 = vcard2.replace(
+        "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:",
+        "X-EVOLUTION-VIDEO-URL;X-JMAP-KEY=l1:",
+    );
+    sync.save_contact(&edited2, Some(id.as_str())).unwrap();
+
+    let stored2 = fixture.card(&id);
+    assert_eq!(
+        stored2.links.as_ref().unwrap()["l1"].kind.as_deref(),
+        Some("video"),
+        "reclassifying X-EVOLUTION-BLOG-URL to X-EVOLUTION-VIDEO-URL must patch kind to 'video'"
+    );
+}
+
+#[test]
+fn reclassifying_a_blog_url_back_to_homepage_patches_kind_to_null() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "links/l1": {
+                "kind": "blog",
+                "uri": "https://blog.example.com"
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:"),
+        "{vcard}"
+    );
+
+    // Reclassify back to standard Homepage URL
+    let edited = vcard.replace("X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:", "URL;X-JMAP-KEY=l1:");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.links.as_ref().unwrap()["l1"].kind,
+        None,
+        "reclassifying blog URL to homepage URL must clear kind"
+    );
+}
+
+#[test]
+fn reclassifying_a_calendar_uri_to_freebusy_url_patches_kind() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "calendars/c1": {
+                "kind": "calendar",
+                "uri": "https://cal.example.com/user"
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("CALURI;X-JMAP-KEY=c1:"), "{vcard}");
+
+    // Reclassify from Calendar URI to Free/Busy URL
+    let edited = vcard.replace("CALURI;X-JMAP-KEY=c1:", "FBURL;X-JMAP-KEY=c1:");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.calendars.as_ref().unwrap()["c1"].kind.as_deref(),
+        Some("freeBusy"),
+        "reclassifying CALURI to FBURL must patch kind to 'freeBusy'"
+    );
+}
+
+#[test]
+fn no_op_save_mints_no_patch_on_address_pref_and_typed_links_and_calendars() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let id = fixture.seed(&fixture.ours, "Seed Name", "seed@example.com");
+
+    fixture.patch(
+        &id,
+        json!({
+            "addresses": {
+                "a1": {
+                    "full": "Preferred Address 123",
+                    "pref": 20,
+                    "contexts": {"work": true}
+                }
+            },
+            "links": {
+                "l1": {
+                    "kind": "blog",
+                    "uri": "https://blog.example.com"
+                },
+                "l2": {
+                    "kind": "video",
+                    "uri": "https://video.example.com/channel"
+                }
+            },
+            "calendars": {
+                "c1": {
+                    "kind": "calendar",
+                    "uri": "https://cal.example.com/events"
+                },
+                "c2": {
+                    "kind": "freeBusy",
+                    "uri": "https://cal.example.com/freebusy"
+                }
+            }
+        }),
+    );
+
+    let initial_card = fixture.card(&id);
+    let loaded1 = sync.load_contact(id.as_str()).unwrap();
+    let parsed_card1 = jmap_vcard::vcard_to_card(&loaded1.vcard).unwrap();
+
+    let patch_diff1 = jmap_book_sync::patch::diff(&initial_card, &parsed_card1);
+    assert!(
+        patch_diff1.is_empty(),
+        "first save must mint no patch for address pref and typed links/calendars, found: {patch_diff1:?}"
+    );
+
+    let saved1 = sync
+        .save_contact(&loaded1.vcard, Some(id.as_str()))
+        .unwrap();
+    let loaded2 = sync.load_contact(id.as_str()).unwrap();
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .unwrap();
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must preserve identical revision"
+    );
+}

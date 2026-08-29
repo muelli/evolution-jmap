@@ -638,6 +638,19 @@ fn diff_addresses(
                 maps_context,
                 slotted_context(&old.contexts),
             );
+            let old_pref = old.pref.or_else(|| {
+                old.extra
+                    .get("pref")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|n| u32::try_from(n).ok())
+            });
+            let new_pref = new.pref.or_else(|| {
+                new.extra
+                    .get("pref")
+                    .and_then(|v| v.as_u64())
+                    .and_then(|n| u32::try_from(n).ok())
+            });
+            diff_pref(patch, path, old_pref, new_pref);
         },
     );
 }
@@ -676,14 +689,11 @@ fn diff_links(
         edited,
         states_link,
         |patch, path, old, new| {
-            // Only the URI can have been edited: what the resource is, where
-            // it is used, how strongly it is preferred and what to call it
-            // never reached the vCard, so they are patched around rather than
-            // through. Nor can the `kind` have changed — a `URL` states the
-            // one kind that has no name, and an entry of any other kind has no
-            // line to be edited on.
             if old.uri != new.uri {
                 patch.insert(format!("{path}/uri"), Value::String(new.uri.clone()));
+            }
+            if old.kind != new.kind {
+                patch.insert(format!("{path}/kind"), value_or_null(new.kind.as_ref()));
             }
         },
     );
@@ -719,6 +729,9 @@ fn diff_calendars(
         |patch, path, old, new| {
             if old.uri != new.uri {
                 patch.insert(format!("{path}/uri"), Value::String(new.uri.clone()));
+            }
+            if old.kind != new.kind {
+                patch.insert(format!("{path}/kind"), value_or_null(new.kind.as_ref()));
             }
         },
     );
