@@ -1324,9 +1324,10 @@ fn assert_the_seeded_calendars_survived(card: &ContactCard) {
         "the save rewrote the calendar address nobody touched: {card:?}"
     );
     assert_eq!(
-        calendar
-            .pref
-            .or_else(|| calendar.extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        calendar.pref.or_else(|| calendar
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
         Some(SEEDED_CALENDAR_PREF),
         "{card:?}"
     );
@@ -1481,9 +1482,7 @@ fn assert_the_seeded_service_survived(card: &ContactCard) {
     );
     assert_eq!(s2.user, None);
     assert_eq!(
-        s2.contexts
-            .as_ref()
-            .or_else(|| s2.extra.get("contexts")),
+        s2.contexts.as_ref().or_else(|| s2.extra.get("contexts")),
         Some(&serde_json::json!({"private": true}))
     );
 
@@ -1500,9 +1499,7 @@ fn assert_the_seeded_service_survived(card: &ContactCard) {
     );
     assert_eq!(s3.uri, None);
     assert_eq!(
-        s3.contexts
-            .as_ref()
-            .or_else(|| s3.extra.get("contexts")),
+        s3.contexts.as_ref().or_else(|| s3.extra.get("contexts")),
         Some(&serde_json::json!({"work": true}))
     );
 }
@@ -2310,9 +2307,10 @@ fn retyping_the_calendar_address_through_eds_patches_the_entry_it_replaces() {
         "the calendar address the user typed did not reach the server: {card:?}"
     );
     assert_eq!(
-        calendar
-            .pref
-            .or_else(|| calendar.extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        calendar.pref.or_else(|| calendar
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
         Some(SEEDED_CALENDAR_PREF),
         "the save replaced the entry instead of patching it: {card:?}"
     );

@@ -103,3 +103,17 @@ pub struct ResultReference {
     pub name: String,
     pub path: String,
 }
+
+impl ResultReference {
+    pub fn new(
+        result_of: impl Into<String>,
+        name: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        Self {
+            result_of: result_of.into(),
+            name: name.into(),
+            path: path.into(),
+        }
+    }
+}

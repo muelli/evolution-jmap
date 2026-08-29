@@ -852,6 +852,13 @@ pub mod identity_set_error {
     pub const CANNOT_DESTROY_DEFAULT: &str = "cannotDestroyDefault";
 }
 
+/// The `SetError` types RFC 8621 §4.6 adds for `Email/set`.
+pub mod email_set_error {
+    pub const BLOB_NOT_FOUND: &str = "blobNotFound";
+    pub const TOO_MANY_KEYWORDS: &str = "tooManyKeywords";
+    pub const TOO_MANY_MAILBOXES: &str = "tooManyMailboxes";
+}
+
 /// The `SetError` types RFC 8621 §7.5 adds for `EmailSubmission/set`.
 pub mod email_submission_set_error {
     pub const CANNOT_UNSEND: &str = "cannotUnsend";

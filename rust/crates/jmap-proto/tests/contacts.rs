@@ -61,9 +61,7 @@ fn contact_card_roundtrip() {
     let organization = &card.organizations.as_ref().unwrap()["o1"];
     assert_eq!(organization.name.as_deref(), Some("Example GmbH"));
     assert_eq!(organization.units.as_ref().unwrap()[0].name, "Research");
-    assert!(
-        organization.sort_as.is_some() || organization.extra.contains_key("sortAs")
-    );
+    assert!(organization.sort_as.is_some() || organization.extra.contains_key("sortAs"));
     assert!(
         organization.units.as_ref().unwrap()[0].sort_as.is_some()
             || organization.units.as_ref().unwrap()[0]
@@ -78,17 +76,14 @@ fn contact_card_roundtrip() {
     );
     assert_eq!(titles["t2"].kind.as_deref(), Some("role"));
     assert!(
-        titles["t2"].organization_id.is_some()
-            || titles["t2"].extra.contains_key("organizationId")
+        titles["t2"].organization_id.is_some() || titles["t2"].extra.contains_key("organizationId")
     );
     let address = &card.addresses.as_ref().unwrap()["a1"];
     let components = address.components.as_ref().unwrap();
     assert_eq!(components[0].kind, "name");
     assert_eq!(components[0].value, "Hauptstraße");
     assert!(components[0].extra.contains_key("phonetic"));
-    assert!(
-        address.country_code.is_some() || address.extra.contains_key("countryCode")
-    );
+    assert!(address.country_code.is_some() || address.extra.contains_key("countryCode"));
     assert_eq!(
         address.full.as_deref(),
         Some("Hauptstraße 1\n10115 Berlin\nGermany")
@@ -99,10 +94,7 @@ fn contact_card_roundtrip() {
     assert!(notes["n1"].author.is_some() || notes["n1"].extra.contains_key("author"));
     let nicknames = card.nicknames.as_ref().unwrap();
     assert_eq!(nicknames["k1"].name, "Vee");
-    assert!(
-        nicknames["k1"].contexts.is_some()
-            || nicknames["k1"].extra.contains_key("contexts")
-    );
+    assert!(nicknames["k1"].contexts.is_some() || nicknames["k1"].extra.contains_key("contexts"));
     assert!(nicknames["k1"].pref.is_some() || nicknames["k1"].extra.contains_key("pref"));
     let links = card.links.as_ref().unwrap();
     assert_eq!(links["l1"].uri, "https://vera.example/");
@@ -122,8 +114,7 @@ fn contact_card_roundtrip() {
         "the kind is the mapping's filter: it says which of the two lines the URI goes on"
     );
     assert!(
-        calendars["c1"].media_type.is_some()
-            || calendars["c1"].extra.contains_key("mediaType")
+        calendars["c1"].media_type.is_some() || calendars["c1"].extra.contains_key("mediaType")
     );
     assert!(calendars["c1"].pref.is_some() || calendars["c1"].extra.contains_key("pref"));
     let media = card.media.as_ref().expect("media");
@@ -145,10 +136,7 @@ fn contact_card_roundtrip() {
         services["s2"].uri.as_deref(),
         Some("https://social.example/@vera")
     );
-    assert!(
-        services["s1"].contexts.is_some()
-            || services["s1"].extra.contains_key("contexts")
-    );
+    assert!(services["s1"].contexts.is_some() || services["s1"].extra.contains_key("contexts"));
     assert!(services["s1"].pref.is_some() || services["s1"].extra.contains_key("pref"));
     // `keywords` is an RFC 9553 §1.4.3 Set — the keys are the tags and every
     // value is `true`. vCard states the whole set on one `CATEGORIES` line.
@@ -569,7 +557,10 @@ fn jscontact_spec_properties_roundtrip() {
         name: Some(Name {
             full: Some("Dr. Ada Lovelace".to_owned()),
             is_ordered: Some(true),
-            sort_as: Some(BTreeMap::from([("en".to_owned(), "Lovelace, Ada".to_owned())])),
+            sort_as: Some(BTreeMap::from([(
+                "en".to_owned(),
+                "Lovelace, Ada".to_owned(),
+            )])),
             ..Name::default()
         }),
         nicknames: Some(BTreeMap::from([(
@@ -587,13 +578,11 @@ fn jscontact_spec_properties_roundtrip() {
                 name: Some("Analytical Engine Corp".to_owned()),
                 sort_as: Some("Analytical".to_owned()),
                 contexts: Some(serde_json::json!({"work": true})),
-                units: Some(vec![
-                    OrgUnit {
-                        name: "Computing".to_owned(),
-                        sort_as: Some("Comp".to_owned()),
-                        ..OrgUnit::default()
-                    }
-                ]),
+                units: Some(vec![OrgUnit {
+                    name: "Computing".to_owned(),
+                    sort_as: Some("Comp".to_owned()),
+                    ..OrgUnit::default()
+                }]),
                 ..Organization::default()
             },
         )])),
@@ -689,7 +678,10 @@ fn jscontact_spec_properties_roundtrip() {
     assert_eq!(c_json["titles"]["t1"]["organizationId"], "o1");
     assert_eq!(c_json["addresses"]["a1"]["countryCode"], "GB");
     assert_eq!(c_json["addresses"]["a1"]["timeZone"], "Europe/London");
-    assert_eq!(c_json["addresses"]["a1"]["coordinates"], "geo:51.5074,-0.1364");
+    assert_eq!(
+        c_json["addresses"]["a1"]["coordinates"],
+        "geo:51.5074,-0.1364"
+    );
     assert_eq!(c_json["notes"]["n1"]["author"], "Charles Babbage");
     assert_eq!(c_json["links"]["l1"]["mediaType"], "text/html");
     assert_eq!(c_json["links"]["l1"]["label"], "Personal Website");
@@ -703,3 +695,48 @@ fn jscontact_spec_properties_roundtrip() {
     assert_eq!(round_card, card);
 }
 
+#[test]
+fn contact_card_parse_and_set_error_roundtrip_covers_rfc9610() {
+    use jmap_proto::contacts::{
+        ContactCard, ContactCardParseRequest, ContactCardParseResponse, contact_card_set_error,
+    };
+    use std::collections::BTreeMap;
+
+    assert_eq!(contact_card_set_error::BLOB_NOT_FOUND, "blobNotFound");
+
+    let parse_req =
+        ContactCardParseRequest::new("A1", ["blob1", "blob2"]).properties(["id", "name", "emails"]);
+    let req_json = serde_json::to_value(&parse_req).unwrap();
+    assert_eq!(req_json["accountId"], "A1");
+    assert_eq!(req_json["blobIds"], serde_json::json!(["blob1", "blob2"]));
+    assert_eq!(
+        req_json["properties"],
+        serde_json::json!(["id", "name", "emails"])
+    );
+    assert_eq!(
+        serde_json::from_value::<ContactCardParseRequest>(req_json).unwrap(),
+        parse_req
+    );
+
+    let parse_resp = ContactCardParseResponse {
+        account_id: "A1".into(),
+        parsed: Some(BTreeMap::from([(
+            "blob1".into(),
+            ContactCard {
+                id: Some("C1".into()),
+                ..ContactCard::default()
+            },
+        )])),
+        not_parsable: Some(vec!["blob2".into()]),
+        not_found: Some(vec!["blob3".into()]),
+    };
+    let resp_json = serde_json::to_value(&parse_resp).unwrap();
+    assert_eq!(resp_json["accountId"], "A1");
+    assert_eq!(resp_json["parsed"]["blob1"]["id"], "C1");
+    assert_eq!(resp_json["notParsable"], serde_json::json!(["blob2"]));
+    assert_eq!(resp_json["notFound"], serde_json::json!(["blob3"]));
+    assert_eq!(
+        serde_json::from_value::<ContactCardParseResponse>(resp_json).unwrap(),
+        parse_resp
+    );
+}

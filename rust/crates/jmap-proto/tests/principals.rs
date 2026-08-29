@@ -185,4 +185,3 @@ fn principal_is_personal_spec_roundtrip() {
     let round: Principal = serde_json::from_value(p_val).unwrap();
     assert_eq!(round.is_personal, Some(true));
 }
-

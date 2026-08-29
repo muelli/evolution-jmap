@@ -855,3 +855,108 @@ pub struct EventRelation {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
+
+/// `CalendarEvent/getFreeBusy` arguments (draft-ietf-jmap-calendars-28 §5.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetFreeBusyRequest {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_ids: Option<Vec<Id>>,
+    pub utc_start: UtcDate,
+    pub utc_end: UtcDate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+}
+
+impl GetFreeBusyRequest {
+    pub fn new(
+        account_id: impl Into<Id>,
+        utc_start: impl Into<UtcDate>,
+        utc_end: impl Into<UtcDate>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            calendar_ids: None,
+            utc_start: utc_start.into(),
+            utc_end: utc_end.into(),
+            time_zone: None,
+        }
+    }
+
+    pub fn calendar_ids(mut self, ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.calendar_ids = Some(ids.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+}
+
+/// One free/busy interval block within `CalendarEvent/getFreeBusy` (draft-ietf-jmap-calendars-28 §5.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FreeBusyBlock {
+    pub utc_start: UtcDate,
+    pub utc_end: UtcDate,
+    pub busy_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<Id>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl FreeBusyBlock {
+    pub fn new(
+        utc_start: impl Into<UtcDate>,
+        utc_end: impl Into<UtcDate>,
+        busy_status: impl Into<String>,
+    ) -> Self {
+        Self {
+            utc_start: utc_start.into(),
+            utc_end: utc_end.into(),
+            busy_status: busy_status.into(),
+            calendar_id: None,
+            event_id: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_calendar_id(mut self, calendar_id: impl Into<Id>) -> Self {
+        self.calendar_id = Some(calendar_id.into());
+        self
+    }
+
+    pub fn with_event_id(mut self, event_id: impl Into<Id>) -> Self {
+        self.event_id = Some(event_id.into());
+        self
+    }
+}
+
+/// `CalendarEvent/getFreeBusy` response (draft-ietf-jmap-calendars-28 §5.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GetFreeBusyResponse {
+    pub account_id: Id,
+    #[serde(default)]
+    pub list: Vec<FreeBusyBlock>,
+}
+
+/// The `SetError` types draft-ietf-jmap-calendars-28 §5.4 adds for `CalendarEvent/set`.
+pub mod calendar_event_set_error {
+    pub const BLOB_NOT_FOUND: &str = "blobNotFound";
+    pub const TOO_MANY_PARTICIPANTS: &str = "tooManyParticipants";
+    pub const TOO_MANY_RECURRENCES: &str = "tooManyRecurrences";
+}
+
+/// Standard free/busy status values (draft-ietf-jmap-calendars-28 §5.7).
+pub mod calendar_free_busy_status {
+    pub const FREE: &str = "free";
+    pub const BUSY: &str = "busy";
+    pub const BUSY_TENTATIVE: &str = "busy-tentative";
+    pub const BUSY_UNAVAILABLE: &str = "busy-unavailable";
+}
