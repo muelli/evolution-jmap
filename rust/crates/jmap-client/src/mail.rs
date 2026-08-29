@@ -16,7 +16,7 @@ use jmap_proto::methods::{
 };
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION};
-use jmap_proto::{Id, State};
+use jmap_proto::{Id, State, UtcDate};
 use serde_json::Value;
 
 use crate::client::Client;
@@ -123,6 +123,7 @@ fn submission_request(
     identity_id: &Id,
     email_id: Id,
     envelope: Option<Envelope>,
+    send_at: Option<UtcDate>,
     on_success_update: Option<Value>,
 ) -> EmailSubmissionSetRequest {
     const SUBMISSION: &str = "submission";
@@ -135,7 +136,7 @@ fn submission_request(
                 email_id,
                 thread_id: None,
                 envelope,
-                send_at: None,
+                send_at,
                 undo_status: None,
                 extra: Default::default(),
             },
@@ -633,6 +634,7 @@ impl Client {
             identity_id,
             Id::new(format!("#{DRAFT}")),
             None,
+            None,
             on_success_update,
         );
 
@@ -697,6 +699,7 @@ impl Client {
             identity_id,
             email_id.clone(),
             None,
+            None,
             on_success_update,
         );
         let arguments = self.single_call(
@@ -739,6 +742,39 @@ impl Client {
         envelope: Option<Envelope>,
         on_success_update: Option<Value>,
     ) -> Result<EmailSubmission, Error> {
+        self.submit_email_at(
+            account_id,
+            email_id,
+            identity_id,
+            envelope,
+            None,
+            on_success_update,
+        )
+    }
+
+    /// [`Client::submit_email`], with an RFC 8621 §7.1 `sendAt` in the
+    /// future: the server holds the message rather than delivering it
+    /// immediately, and answers with `undoStatus: "pending"` instead of
+    /// `"final"`. Only meaningful against a server whose submission account
+    /// capability names a `maxDelayedSend`
+    /// ([`jmap_proto::session::Account::max_delayed_send`]) — nothing here
+    /// checks that before sending, since a server that never advertised
+    /// support is free to refuse or ignore `sendAt` on its own terms, the
+    /// same as any other capability-gated property.
+    ///
+    /// Nothing in this project's EDS integration calls this yet: Evolution
+    /// has no scheduled-send UI or Camel plumbing to drive it
+    /// (`docs/ROADMAP.md` item 29). This exists so the client side is ready
+    /// and proven against the day that changes.
+    pub fn submit_email_at(
+        &self,
+        account_id: &Id,
+        email_id: &Id,
+        identity_id: &Id,
+        envelope: Option<Envelope>,
+        send_at: Option<UtcDate>,
+        on_success_update: Option<Value>,
+    ) -> Result<EmailSubmission, Error> {
         const SUBMISSION: &str = "submission";
 
         let submission_set = submission_request(
@@ -746,6 +782,7 @@ impl Client {
             identity_id,
             email_id.clone(),
             envelope,
+            send_at,
             on_success_update,
         );
         let arguments = self.single_call(
@@ -757,6 +794,41 @@ impl Client {
             backfill_submission_created(arguments, SUBMISSION, identity_id, email_id),
         )?;
         expect_created(&response, SUBMISSION)
+    }
+
+    /// Attempt to cancel a still-pending [`Client::submit_email_at`] submission
+    /// (RFC 8621 §7.4): an `EmailSubmission/set` update setting `undoStatus` to
+    /// `"canceled"`. A submission the server has already sent answers
+    /// [`Error::Set`] with `forbidden` — undoing a delivery that already
+    /// happened is not on offer, spec or otherwise.
+    pub fn cancel_email_submission(
+        &self,
+        account_id: &Id,
+        submission_id: &Id,
+    ) -> Result<(), Error> {
+        let request = SetRequest::<EmailSubmission>::new(account_id.clone()).update(
+            submission_id.clone(),
+            serde_json::json!({"undoStatus": "canceled"}),
+        );
+        let arguments = self.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/set",
+            &request,
+        )?;
+        let response: SetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
+        if response
+            .updated
+            .as_ref()
+            .is_some_and(|updated| updated.contains_key(submission_id))
+        {
+            return Ok(());
+        }
+        Err(crate::contacts::set_failure(
+            response
+                .not_updated
+                .as_ref()
+                .and_then(|map| map.get(submission_id)),
+        ))
     }
 
     /// Upload a blob via the session's `uploadUrl` template (RFC 8620 §6.1).
