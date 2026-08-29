@@ -242,7 +242,7 @@ impl ConnectError {
 /// account is not allowed to do this, which a different password does not fix.
 /// So is an unreachable server.
 pub fn is_wrong_password(error: &Error) -> bool {
-    matches!(error, Error::Http { status: 401, .. })
+    error.is_unauthorized()
 }
 
 /// What to authenticate as, given the source's user name and whatever EDS got
