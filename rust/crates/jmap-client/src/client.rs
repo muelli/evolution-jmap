@@ -4,6 +4,7 @@
 //! The blocking JMAP client.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{PoisonError, RwLock};
 use std::time::Duration;
 
 use jmap_proto::error::RequestError;
@@ -156,7 +157,7 @@ impl ClientBuilder {
         let session_url = format!("{origin}/.well-known/jmap");
         let mut client = Client {
             transport,
-            authorization: credentials.authorization_header(),
+            authorization: RwLock::new(credentials.authorization_header()),
             cancel: self.cancel,
             session_url,
             session: None,
@@ -184,7 +185,13 @@ impl ClientBuilder {
 
 pub struct Client {
     transport: Box<dyn Transport>,
-    authorization: Option<String>,
+    /// Behind a lock rather than plain interior state so
+    /// [`Client::set_credentials`] can take `&self`: the point of that method
+    /// is replacing a stale token on a connection callers already hold a
+    /// shared reference to (an `RwLock<Option<CalSync>>` entry, in the EDS
+    /// backends), where taking `&mut self` would mean an exclusive lock for
+    /// every other operation in flight too.
+    authorization: RwLock<Option<String>>,
     cancel: Option<CancelFlag>,
     session_url: String,
     session: Option<Session>,
@@ -199,9 +206,14 @@ pub struct Client {
 
 impl std::fmt::Debug for Client {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let authenticated = self
+            .authorization
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some();
         f.debug_struct("Client")
             .field("session_url", &self.session_url)
-            .field("authenticated", &self.authorization.is_some())
+            .field("authenticated", &authenticated)
             .finish_non_exhaustive()
     }
 }
@@ -265,6 +277,23 @@ impl Client {
     /// actually changed its origin — see [`Error::CrossOriginRedirect`].
     pub(crate) fn rebase_note(&self) -> Option<&str> {
         self.rebase_note.as_deref()
+    }
+
+    /// Replaces the credentials every request from now on authenticates
+    /// with, without fetching a new session or touching the transport.
+    ///
+    /// For an OAuth 2.0 bearer token this is the primitive a live connection
+    /// needs to survive its access token expiring: `docs/ROADMAP.md` item 23
+    /// is a backend that keeps using a cached, now-expired bearer forever
+    /// because nothing ever calls this. A caller that gets `Error::Http {
+    /// status: 401, .. }` from an OAuth 2.0 attempt should refresh the token
+    /// through EDS/Camel's own credential store, call this, and retry the
+    /// operation once — never reconnect just to change a header.
+    pub fn set_credentials(&self, credentials: Credentials) {
+        *self
+            .authorization
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = credentials.authorization_header();
     }
 
     /// The account id serving a capability URN — `primaryAccounts` where the
@@ -466,7 +495,11 @@ impl Client {
         if let Some(content_type) = content_type {
             headers.push(("Content-Type".to_owned(), content_type.to_owned()));
         }
-        if let Some(authorization) = &self.authorization {
+        if let Some(authorization) = &*self
+            .authorization
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
             headers.push(("Authorization".to_owned(), authorization.clone()));
         }
 
