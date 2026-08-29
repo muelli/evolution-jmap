@@ -6,7 +6,9 @@
 
 #![cfg(feature = "calendars")]
 
-use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter, NDay, RecurrenceRule};
+use jmap_proto::calendars::{
+    Calendar, CalendarEvent, CalendarEventQueryFilter, NDay, RecurrenceRule,
+};
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -369,4 +371,54 @@ fn calendar_event_query_filter_properties_cover_draft_spec() {
     assert_eq!(filter.description.as_deref(), Some("Sprint planning"));
     assert_eq!(filter.location.as_deref(), Some("Room 101"));
     assert_eq!(filter.uid.as_deref(), Some("evt-1234"));
+}
+
+#[test]
+fn calendar_and_event_advanced_properties_cover_draft_spec() {
+    let cal: Calendar = serde_json::from_value(serde_json::json!({
+        "name": "Team Calendar",
+        "timeZone": "Europe/Berlin",
+        "myRights": {
+            "mayReadItems": true,
+            "mayAddItems": true,
+            "mayModifyItems": true,
+            "mayRemoveItems": false,
+            "mayDelete": false
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(
+        cal.extra.get("timeZone"),
+        Some(&serde_json::json!("Europe/Berlin"))
+    );
+    let rights_val = cal.extra.get("myRights").unwrap();
+    let rights: jmap_proto::calendars::CalendarRights =
+        serde_json::from_value(rights_val.clone()).unwrap();
+    assert!(rights.may_read_items);
+    assert!(rights.may_add_items);
+    assert!(rights.may_modify_items);
+    assert!(!rights.may_remove_items);
+
+    let event: CalendarEvent = serde_json::from_value(serde_json::json!({
+        "title": "Board Meeting",
+        "useDefaultAlerts": true,
+        "sequence": 3,
+        "locale": "en-US",
+        "replyTo": {
+            "imip": "mailto:board@example.com"
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(
+        event.extra.get("useDefaultAlerts"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(event.extra.get("sequence"), Some(&serde_json::json!(3)));
+    assert_eq!(event.extra.get("locale"), Some(&serde_json::json!("en-US")));
+    assert_eq!(
+        event.extra.get("replyTo"),
+        Some(&serde_json::json!({"imip": "mailto:board@example.com"}))
+    );
 }

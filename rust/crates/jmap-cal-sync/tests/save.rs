@@ -5547,7 +5547,14 @@ fn no_op_save_mints_no_patch_on_empty_container_collections_and_empty_strings() 
             },
             "keywords": {},
             "alerts": {},
-            "recurrenceOverrides": {}
+            "recurrenceOverrides": {},
+            "timeZone": "",
+            "links": {
+                "l1": {
+                    "@type": "Link",
+                    "href": ""
+                }
+            }
         }),
     );
 
@@ -5563,7 +5570,7 @@ fn no_op_save_mints_no_patch_on_empty_container_collections_and_empty_strings() 
 
     assert_eq!(
         saved1.revision, saved2.revision,
-        "second save must not bump revision for empty containers and empty strings"
+        "second save must not bump revision for empty containers, empty timeZone, and empty strings"
     );
 
     let current_event = fixture.event(&id);
@@ -5576,6 +5583,7 @@ fn no_op_save_mints_no_patch_on_empty_container_collections_and_empty_strings() 
 
     // Direct diff when edited carries explicit empty containers / empty names:
     let mut edited_with_empty = parsed_event.clone();
+    edited_with_empty.time_zone = Some("".to_owned());
     edited_with_empty.locations =
         Some([("1".into(), json!({"@type": "Location", "name": ""}))].into());
     edited_with_empty.virtual_locations = Some(
@@ -5586,6 +5594,16 @@ fn no_op_save_mints_no_patch_on_empty_container_collections_and_empty_strings() 
                 "uri": "https://meet.example.com/standup",
                 "name": "",
                 "features": {}
+            }),
+        )]
+        .into(),
+    );
+    edited_with_empty.links = Some(
+        [(
+            "l1".into(),
+            json!({
+                "@type": "Link",
+                "href": ""
             }),
         )]
         .into(),

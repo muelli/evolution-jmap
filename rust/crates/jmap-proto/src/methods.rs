@@ -140,7 +140,7 @@ pub struct SetResponse<T> {
     pub not_destroyed: Option<BTreeMap<Id, SetError>>,
 }
 
-/// `Foo/query` arguments (RFC 8620 §5.5), minus anchors (unused so far).
+/// `Foo/query` arguments (RFC 8620 §5.5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(bound(serialize = "F: Serialize", deserialize = "F: serde::Deserialize<'de>"))]
@@ -152,6 +152,10 @@ pub struct QueryRequest<F> {
     pub sort: Option<Vec<Comparator>>,
     #[serde(default, skip_serializing_if = "is_default_position")]
     pub position: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_offset: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -165,6 +169,8 @@ impl<F> QueryRequest<F> {
             filter: None,
             sort: None,
             position: 0,
+            anchor: None,
+            anchor_offset: None,
             limit: None,
             calculate_total: false,
         }
@@ -177,6 +183,16 @@ impl<F> QueryRequest<F> {
 
     pub fn sort(mut self, sort: impl IntoIterator<Item = Comparator>) -> Self {
         self.sort = Some(sort.into_iter().collect());
+        self
+    }
+
+    pub fn anchor(mut self, anchor: impl Into<Id>) -> Self {
+        self.anchor = Some(anchor.into());
+        self
+    }
+
+    pub fn anchor_offset(mut self, offset: i64) -> Self {
+        self.anchor_offset = Some(offset);
         self
     }
 
