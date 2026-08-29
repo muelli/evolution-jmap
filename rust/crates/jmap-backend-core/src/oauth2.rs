@@ -116,7 +116,10 @@ use eds_sys::{
     e_oauth2_services_is_oauth2_alias, e_oauth2_services_new, e_source_authentication_get_method,
     e_source_authentication_get_type, e_source_get_oauth2_access_token_sync,
 };
-use gio_sys::{G_IO_ERROR_NOT_FOUND, GCancellable, g_dbus_error_quark, g_io_error_quark};
+use gio_sys::{
+    G_DBUS_ERROR_NAME_HAS_NO_OWNER, G_DBUS_ERROR_SERVICE_UNKNOWN, G_IO_ERROR_NOT_FOUND,
+    GCancellable, g_dbus_error_quark, g_io_error_quark,
+};
 use glib_sys::{GError, GFALSE, g_error_free, g_free};
 
 use crate::connect::ConnectError;
@@ -250,6 +253,9 @@ pub enum SilentRefreshFailureReason {
     KeyringLocked,
     /// A secret store (D-Bus / daemon) transport or spawn failure occurred.
     SecretStoreFailure,
+    /// A D-Bus peer the token fetch had to reach does not exist — see
+    /// [`is_service_gone`]. Infrastructure, never a credential.
+    ServiceGone,
     /// The authorization server rejected the refresh token exchange (e.g.
     /// `invalid_grant`, expired refresh token, or rotation mismatch).
     ServerRejectedRefresh,
@@ -273,6 +279,7 @@ impl SilentRefreshFailureReason {
             Self::NoStoredSecret => "no_stored_secret",
             Self::KeyringLocked => "keyring_locked",
             Self::SecretStoreFailure => "secret_store_failure",
+            Self::ServiceGone => "service_gone",
             Self::ServerRejectedRefresh => "server_rejected_refresh",
             Self::UnregisteredService => "unregistered_service",
             Self::Cancelled => "cancelled",
@@ -292,7 +299,10 @@ impl SilentRefreshFailureReason {
             | Self::OtherIoError
             | Self::OtherError
             | Self::NullError => true,
-            Self::KeyringLocked | Self::SecretStoreFailure | Self::Cancelled => false,
+            Self::KeyringLocked
+            | Self::SecretStoreFailure
+            | Self::ServiceGone
+            | Self::Cancelled => false,
         }
     }
 }
@@ -331,7 +341,13 @@ pub unsafe fn classify_failure(
         read_string(ptr)
     };
 
-    let reason = if unsafe { is_secret_store_failure(error) } {
+    // Asked before the secret-store question because it is the narrower of
+    // the two D-Bus-domain outcomes — a name nobody owns is not a store that
+    // misbehaved. `is_secret_store_failure` excludes it in its own right, so
+    // this order is how the pair reads rather than what makes it correct.
+    let reason = if unsafe { is_service_gone(error) } {
+        SilentRefreshFailureReason::ServiceGone
+    } else if unsafe { is_secret_store_failure(error) } {
         SilentRefreshFailureReason::SecretStoreFailure
     } else if unsafe { is_secret_not_found(error) } {
         if crate::secret_store::default_collection_is_locked() == Some(true) {
@@ -377,6 +393,11 @@ pub unsafe fn classify_failure(
 /// distinction drawn here rather than guessing at every code EDS's own
 /// machinery might set.
 ///
+/// **Two D-Bus codes are carved out**, and only two:
+/// [`is_service_gone`]'s. They are the ones that mean "nothing owns that bus
+/// name", which is `docs/ROADMAP.md` item 22's failure and not a store
+/// failure at all.
+///
 /// **Does not catch every "the store is locked" case.** A collection that
 /// exists but is locked, whose unlock prompt cannot be shown (no display,
 /// or the user dismisses it), answers libsecret's search as "not found" —
@@ -392,7 +413,70 @@ pub unsafe fn classify_failure(
 /// `error` must be a valid, non-NULL `GError`.
 unsafe fn is_secret_store_failure(error: *const GError) -> bool {
     // SAFETY: the caller's contract; `g_dbus_error_quark` takes no arguments.
-    unsafe { (*error).domain == g_dbus_error_quark() }
+    unsafe { (*error).domain == g_dbus_error_quark() && !is_service_gone(error) }
+}
+
+/// Whether `error` is "the bus has no owner for the name this call was
+/// addressed to" — `docs/ROADMAP.md` item 22's captured failure, and the one
+/// D-Bus outcome that is neither a credential nor a secret store.
+///
+/// **The mechanism, established from source rather than from the trace.** A
+/// backend process holds the `ESource` EDS handed it for the account's
+/// lifetime, and that `ESource` holds — strongly, in `priv->dbus_object`
+/// (`e-source.c`, set once, cleared only in dispose or by
+/// `__e_source_private_replace_dbus_object`) — the `GDBusObject` proxy its
+/// `ESourceRegistry`'s `GDBusObjectManagerClient` built for it. GLib builds
+/// every such interface proxy addressed to the manager's `name_owner`, which
+/// is a **unique** bus name and asserted to be one
+/// (`gio/gdbusobjectmanagerclient.c`, GLib 2.80.0: `"g-name", name_owner` at
+/// the `g_initable_new` in `add_interfaces`, `g_dbus_is_unique_name` at that
+/// function's head, and the comment "this is fine … and use a unique name").
+/// When `evolution-source-registry` restarts, the manager drops the proxies
+/// from *its own* map (`on_notify_g_name_owner`) but the ones an `ESource`
+/// holds live on, still addressed to the unique name of the process that is
+/// gone; EDS re-points them only later and asynchronously, from the
+/// registry's own `GMainContext` (`source_registry_name_appeared` →
+/// `source_registry_object_added_no_owner` →
+/// `__e_source_private_replace_dbus_object`, `e-source-registry.c`). Any
+/// synchronous token fetch inside that window is addressed at a dead peer,
+/// and the bus answers `G_DBUS_ERROR_SERVICE_UNKNOWN` with the message that
+/// names it: "The name :1.4 was not provided by any .service files".
+///
+/// **EDS 3.52 does not recover from it, and that is upstream's, not ours.**
+/// `source_get_oauth2_access_token_sync` (`e-source.c`) does have an
+/// in-process fallback — find the account's `EOAuth2Service` and call it
+/// directly — but reaches it only when the D-Bus *interface object* is
+/// absent, never when a call on a present one fails. So this classification
+/// is the whole of what this crate can do about it, which is item 22's Do(3)
+/// second branch: report it, never consent over it.
+///
+/// **Both codes, because a bus can answer either.** `SERVICE_UNKNOWN` is what
+/// a method call on an unowned, unactivatable name gets; `NAME_HAS_NO_OWNER`
+/// is the sibling other bus operations answer with. Neither is a password
+/// problem and neither is fixed by signing in again.
+///
+/// **Deliberately not narrowed to unique names.** The peer in the captured
+/// trace is a `:1.N`, and `org.freedesktop.secrets` failing to activate
+/// produces the same two codes with a well-known name in the message — but
+/// telling those apart would mean parsing `dbus-daemon`'s English error text,
+/// which `docs/ROADMAP.md` item 17 ruled out for exactly this classification
+/// ("domain **and** code, not message text"). It does not need telling apart:
+/// both are "a service this sign-in needs is not running", both are `ERROR`
+/// and never consent, and the message this produces names whichever one it
+/// was rather than asserting which.
+///
+/// # Safety
+///
+/// `error` must be a valid, non-NULL `GError`.
+unsafe fn is_service_gone(error: *const GError) -> bool {
+    // SAFETY: the caller's contract; `g_dbus_error_quark` takes no arguments.
+    unsafe {
+        (*error).domain == g_dbus_error_quark()
+            && matches!(
+                (*error).code,
+                G_DBUS_ERROR_SERVICE_UNKNOWN | G_DBUS_ERROR_NAME_HAS_NO_OWNER
+            )
+    }
 }
 
 /// Whether `error` is EDS's "this account has no stored secret" — the one
@@ -420,6 +504,24 @@ unsafe fn is_secret_store_failure(error: *const GError) -> bool {
 unsafe fn is_secret_not_found(error: *const GError) -> bool {
     // SAFETY: the caller's contract; `g_io_error_quark` takes no arguments.
     unsafe { (*error).domain == g_io_error_quark() && (*error).code == G_IO_ERROR_NOT_FOUND }
+}
+
+/// What a dead peer is reported as — [`ConnectError::ServiceGone`] carrying
+/// the bus's own message, which is where the peer gets *named*.
+///
+/// Split out of [`access_token`] only so that a test can drive it: the
+/// naming is `docs/ROADMAP.md` item 22's Do(3) in full ("surface item-17-style
+/// as an ERROR naming the dead peer"), and a message that quietly stopped
+/// including EDS's own text would still compile, still be `ERROR`, and still
+/// leave nobody able to tell which service died.
+fn service_gone_error(message: Option<String>) -> ConnectError {
+    ConnectError::ServiceGone(translate_with(
+        // TRANSLATORS: %1$s is the message bus's own text naming which service
+        // has no owner, e.g. "The name :1.4 was not provided by any .service
+        // files".
+        c"a service this account's sign-in needs is not running, so no access token could be fetched: %1$s",
+        &[&message.unwrap_or_else(|| translate(c"no further detail was given"))],
+    ))
 }
 
 /// The OAuth 2.0 access token to send this account's requests as, from
@@ -475,6 +577,7 @@ pub unsafe fn access_token(
             message,
             store_failure,
             secret_not_found,
+            service_gone,
         ) = unsafe {
             let (r, dq, dn, c, msg) = classify_failure(error);
             let sf = if error.is_null() {
@@ -487,10 +590,15 @@ pub unsafe fn access_token(
             } else {
                 is_secret_not_found(error)
             };
+            let sg = if error.is_null() {
+                false
+            } else {
+                is_service_gone(error)
+            };
             if !error.is_null() {
                 g_error_free(error);
             }
-            (r, dq, dn, c, msg, sf, snf)
+            (r, dq, dn, c, msg, sf, snf, sg)
         };
 
         let escalates_to_consent = reason.escalates_to_consent();
@@ -506,8 +614,16 @@ pub unsafe fn access_token(
             error_message = message.as_deref(),
             store_failure,
             secret_not_found,
+            service_gone,
             "failed to obtain OAuth 2.0 access token"
         );
+
+        // Asked before the store question, the same order `classify_failure`
+        // uses and for the same reason: both are D-Bus-domain failures, and
+        // this one is not the store's.
+        if service_gone {
+            return Err(service_gone_error(message));
+        }
 
         if store_failure {
             return Err(ConnectError::SecretStore(translate_with(
@@ -598,6 +714,7 @@ mod tests {
     use std::ffi::CString;
 
     use gio_sys::{
+        G_DBUS_ERROR_NAME_HAS_NO_OWNER, G_DBUS_ERROR_SERVICE_UNKNOWN,
         G_DBUS_ERROR_SPAWN_EXEC_FAILED, G_IO_ERROR_NOT_FOUND, G_IO_ERROR_NOT_SUPPORTED,
         g_dbus_error_quark, g_io_error_quark,
     };
@@ -683,13 +800,15 @@ mod tests {
         unsafe { g_error_free(error) };
     }
 
-    /// D-Bus timeouts, missing services, or communication failures underneath
-    /// libsecret are in the `g_dbus_error_quark()` domain and are classified
-    /// as secret-store failures regardless of code.
+    /// D-Bus timeouts and spawn failures underneath libsecret are in the
+    /// `g_dbus_error_quark()` domain and are classified as secret-store
+    /// failures. `SERVICE_UNKNOWN`/`NAME_HAS_NO_OWNER` are deliberately *not*
+    /// among them any more — see
+    /// [`the_dead_peer_codes_are_not_blamed_on_the_keyring`].
     #[test]
     fn dbus_timeout_and_transport_errors_are_secret_store_failures() {
-        // Various D-Bus codes (e.g. TIMEOUT=24, NO_REPLY=4, SERVICE_UNKNOWN=2)
-        for code in [2, 4, 24, G_DBUS_ERROR_SPAWN_EXEC_FAILED] {
+        // Various D-Bus codes (e.g. TIMEOUT=24, NO_REPLY=4)
+        for code in [4, 24, G_DBUS_ERROR_SPAWN_EXEC_FAILED] {
             let error = error(unsafe { g_dbus_error_quark() }, code);
             assert!(
                 unsafe { is_secret_store_failure(error) },
@@ -697,6 +816,111 @@ mod tests {
             );
             unsafe { g_error_free(error) };
         }
+    }
+
+    /// The captured shape of `docs/ROADMAP.md` item 22: a token fetch that
+    /// dies with `G_DBUS_ERROR_SERVICE_UNKNOWN` ("The name :1.4 was not
+    /// provided by any .service files") because the `ESource` still holds a
+    /// `GDBusObjectManagerClient` proxy addressed to a registry that has
+    /// since restarted.
+    ///
+    /// It must not be reported as a keyring failure: the keyring is fine, and
+    /// telling someone to unlock it sends them at the wrong thing. Both codes
+    /// a bus answers for "nobody owns that name" are covered.
+    #[test]
+    fn the_dead_peer_codes_are_not_blamed_on_the_keyring() {
+        for code in [G_DBUS_ERROR_SERVICE_UNKNOWN, G_DBUS_ERROR_NAME_HAS_NO_OWNER] {
+            let error = error(unsafe { g_dbus_error_quark() }, code);
+            assert!(
+                unsafe { is_service_gone(error) },
+                "expected D-Bus error code {code} to be classified as a dead peer"
+            );
+            assert!(
+                !unsafe { is_secret_store_failure(error) },
+                "expected D-Bus error code {code} to stop being a secret-store failure"
+            );
+            unsafe { g_error_free(error) };
+        }
+    }
+
+    /// A dead peer is `ServiceGone`, and — like every other infrastructure
+    /// failure item 17 classified — it never escalates to a consent window.
+    /// This is item 22's Do(3) in one assertion.
+    #[test]
+    fn a_dead_peer_never_escalates_to_consent() {
+        let dead = error(
+            unsafe { g_dbus_error_quark() },
+            G_DBUS_ERROR_SERVICE_UNKNOWN,
+        );
+        let (reason, _quark, _domain_name, code, _msg) = unsafe { classify_failure(dead) };
+        assert_eq!(reason, SilentRefreshFailureReason::ServiceGone);
+        assert_eq!(reason.as_str(), "service_gone");
+        assert!(!reason.escalates_to_consent());
+        assert_eq!(code, G_DBUS_ERROR_SERVICE_UNKNOWN);
+        unsafe { g_error_free(dead) };
+    }
+
+    /// The captured failure end to end, built the way production builds it
+    /// rather than by hardcoding a code.
+    ///
+    /// `g_dbus_error_new_for_dbus_error` is the exact conversion
+    /// `gdbusconnection.c` applies to a bus reply, and
+    /// `org.freedesktop.DBus.Error.ServiceUnknown` with this message is what
+    /// `dbus-daemon` really answers a method call addressed at an unowned
+    /// unique name — confirmed by hand on this machine, not assumed:
+    ///
+    /// ```text
+    /// $ dbus-run-session -- dbus-send --session --print-reply \
+    ///       --dest=:1.9999 /org/freedesktop/DBus org.freedesktop.DBus.Peer.Ping
+    /// Error org.freedesktop.DBus.Error.ServiceUnknown: The name :1.9999 was
+    /// not provided by any .service files
+    /// ```
+    ///
+    /// `g_dbus_error_strip_remote_error` is then EDS's own next line
+    /// (`source_get_oauth2_access_token_sync`, `e-source.c`), which is why the
+    /// message the trace shows has no `GDBus.Error:` prefix. So this is the
+    /// real `GError` [`access_token`] classifies, minus only the dead registry.
+    #[test]
+    fn the_wire_error_a_dead_peer_produces_is_service_gone_and_still_names_it() {
+        let name = CString::new("org.freedesktop.DBus.Error.ServiceUnknown").unwrap();
+        let text = CString::new("The name :1.4 was not provided by any .service files").unwrap();
+        // SAFETY: two NUL-terminated strings; the `GError` returned is owned
+        // here and freed below.
+        let error = unsafe {
+            let error = gio_sys::g_dbus_error_new_for_dbus_error(name.as_ptr(), text.as_ptr());
+            gio_sys::g_dbus_error_strip_remote_error(error);
+            error
+        };
+
+        assert!(unsafe { is_service_gone(error) });
+        let (reason, _quark, _domain_name, _code, message) = unsafe { classify_failure(error) };
+        assert_eq!(reason, SilentRefreshFailureReason::ServiceGone);
+        assert!(!reason.escalates_to_consent());
+
+        // The peer has to survive into what the user is shown; that is the
+        // whole of "naming the dead peer".
+        let reported = service_gone_error(message).to_string();
+        assert!(
+            reported.contains(":1.4"),
+            "expected the dead peer to be named, got {reported:?}"
+        );
+        assert!(
+            !reported.to_lowercase().contains("keyring"),
+            "expected the keyring not to be blamed, got {reported:?}"
+        );
+
+        unsafe { g_error_free(error) };
+    }
+
+    /// Domain as well as code, the same narrowness
+    /// [`a_missing_secret_is_recognised_by_domain_not_by_code_alone`] pins:
+    /// `G_DBUS_ERROR_SERVICE_UNKNOWN` is the integer 2, an entirely ordinary
+    /// code in `G_IO_ERROR` too (`G_IO_ERROR_NOT_FOUND` is 1, `EXISTS` 2).
+    #[test]
+    fn a_dead_peer_is_recognised_by_domain_not_by_code_alone() {
+        let error = error(unsafe { g_io_error_quark() }, G_DBUS_ERROR_SERVICE_UNKNOWN);
+        assert!(!unsafe { is_service_gone(error) });
+        unsafe { g_error_free(error) };
     }
 
     /// Classifies each category of silent-refresh failure into its attributable
