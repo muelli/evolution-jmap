@@ -833,3 +833,85 @@ fn push_and_state_change_roundtrip_covers_rfc8620() {
     let sc_round_tripped: StateChange = serde_json::from_value(sc_val).unwrap();
     assert_eq!(sc_round_tripped, state_change);
 }
+
+/// BlobCopyRequest, BlobCopyResponse, and CoreCapability cover RFC 8620 §5.7 & §2.
+#[test]
+fn blob_copy_and_core_capabilities_roundtrip_covers_rfc8620() {
+    use jmap_proto::methods::{BlobCopyRequest, BlobCopyResponse};
+    use jmap_proto::session::CoreCapability;
+    use std::collections::BTreeMap;
+
+    let req = BlobCopyRequest::new("acc_source", "acc_target", vec!["blob_1", "blob_2"]);
+    let req_val = serde_json::to_value(&req).unwrap();
+    assert_eq!(req_val["fromAccountId"], "acc_source");
+    assert_eq!(req_val["accountId"], "acc_target");
+    assert_eq!(req_val["blobIds"], serde_json::json!(["blob_1", "blob_2"]));
+
+    let round_req: BlobCopyRequest = serde_json::from_value(req_val).unwrap();
+    assert_eq!(round_req, req);
+
+    let resp = BlobCopyResponse {
+        from_account_id: Id::new("acc_source"),
+        account_id: Id::new("acc_target"),
+        copied: Some(BTreeMap::from([(Id::new("blob_1"), Id::new("blob_1_new"))])),
+        not_copied: Some(BTreeMap::from([(
+            Id::new("blob_2"),
+            jmap_proto::error::SetError::new("notFound"),
+        )])),
+    };
+    let resp_val = serde_json::to_value(&resp).unwrap();
+    assert_eq!(resp_val["copied"]["blob_1"], "blob_1_new");
+    assert_eq!(resp_val["notCopied"]["blob_2"]["type"], "notFound");
+
+    let round_resp: BlobCopyResponse = serde_json::from_value(resp_val).unwrap();
+    assert_eq!(round_resp, resp);
+
+    let cap = CoreCapability {
+        max_size_upload: 10_000_000,
+        max_concurrent_upload: 4,
+        max_size_request: 5_000_000,
+        max_concurrent_requests: 8,
+        max_calls_in_request: 16,
+        max_objects_in_get: 256,
+        max_objects_in_set: 128,
+        collation_algorithms: vec!["i;ascii-casemap".to_owned(), "i;octet".to_owned()],
+        extra: BTreeMap::new(),
+    };
+    let cap_val = serde_json::to_value(&cap).unwrap();
+    assert_eq!(cap_val["maxSizeUpload"], 10_000_000);
+    assert_eq!(cap_val["maxConcurrentUpload"], 4);
+    assert_eq!(cap_val["maxSizeRequest"], 5_000_000);
+    assert_eq!(cap_val["maxConcurrentRequests"], 8);
+    assert_eq!(cap_val["maxCallsInRequest"], 16);
+    assert_eq!(cap_val["maxObjectsInGet"], 256);
+    assert_eq!(cap_val["maxObjectsInSet"], 128);
+    assert_eq!(
+        cap_val["collationAlgorithms"],
+        serde_json::json!(["i;ascii-casemap", "i;octet"])
+    );
+
+    let round_cap: CoreCapability = serde_json::from_value(cap_val.clone()).unwrap();
+    assert_eq!(round_cap, cap);
+
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": cap_val
+        },
+        "accounts": {},
+        "username": "user@example.com",
+        "apiUrl": "https://api.example.com/jmap",
+        "downloadUrl": "https://api.example.com/download",
+        "uploadUrl": "https://api.example.com/upload",
+        "state": "s1"
+    }))
+    .unwrap();
+
+    assert_eq!(session.max_concurrent_upload(), Some(4));
+    assert_eq!(session.max_concurrent_requests(), Some(8));
+    assert_eq!(session.max_objects_in_set(), Some(128));
+    assert_eq!(
+        session.collation_algorithms(),
+        Some(vec!["i;ascii-casemap".to_owned(), "i;octet".to_owned()])
+    );
+    assert_eq!(session.core_capability(), Some(cap));
+}

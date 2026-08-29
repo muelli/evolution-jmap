@@ -473,3 +473,38 @@ pub struct CopyResponse<T> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_created: Option<BTreeMap<String, SetError>>,
 }
+
+/// `Blob/copy` arguments (RFC 8620 §5.7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobCopyRequest {
+    pub from_account_id: Id,
+    pub account_id: Id,
+    pub blob_ids: Vec<Id>,
+}
+
+impl BlobCopyRequest {
+    pub fn new(
+        from_account_id: impl Into<Id>,
+        account_id: impl Into<Id>,
+        blob_ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        Self {
+            from_account_id: from_account_id.into(),
+            account_id: account_id.into(),
+            blob_ids: blob_ids.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// `Blob/copy` response (RFC 8620 §5.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobCopyResponse {
+    pub from_account_id: Id,
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copied: Option<BTreeMap<Id, Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_copied: Option<BTreeMap<Id, SetError>>,
+}

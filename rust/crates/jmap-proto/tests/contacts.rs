@@ -396,3 +396,74 @@ fn jscontact_crypto_keys_directories_personal_info_and_groups_roundtrip() {
     let g_round_tripped: CardGroup = serde_json::from_value(g_val).unwrap();
     assert_eq!(g_round_tripped, group);
 }
+
+/// ContactsCapability, SpeakToAs, LanguagePref, and card kinds cover RFC 9610 §1.3 and RFC 9553 §2.1.1, §2.2.5, §2.8.5.
+#[test]
+fn contacts_capabilities_speak_to_as_and_languages_roundtrip_covers_rfc9610_rfc9553() {
+    use jmap_proto::contacts::{
+        ContactCard, ContactsCapability, LanguagePref, SpeakToAs, card_kind, grammatical_gender,
+    };
+    use std::collections::BTreeMap;
+
+    assert_eq!(grammatical_gender::ANIMATE, "animate");
+    assert_eq!(grammatical_gender::INANIMATE, "inanimate");
+    assert_eq!(grammatical_gender::FEMININE, "feminine");
+    assert_eq!(grammatical_gender::MASCULINE, "masculine");
+    assert_eq!(grammatical_gender::NEUTER, "neuter");
+    assert_eq!(grammatical_gender::COMMON, "common");
+
+    assert_eq!(card_kind::INDIVIDUAL, "individual");
+    assert_eq!(card_kind::GROUP, "group");
+    assert_eq!(card_kind::ORG, "org");
+    assert_eq!(card_kind::LOCATION, "location");
+    assert_eq!(card_kind::DEVICE, "device");
+    assert_eq!(card_kind::APPLICATION, "application");
+
+    let cap = ContactsCapability {
+        max_size_attachments_per_card: 10_000_000,
+        max_number_of_cards_in_set: 500,
+        extra: BTreeMap::new(),
+    };
+    let cap_val = serde_json::to_value(&cap).unwrap();
+    assert_eq!(cap_val["maxSizeAttachmentsPerCard"], 10_000_000);
+    assert_eq!(cap_val["maxNumberOfCardsInSet"], 500);
+
+    let round_cap: ContactsCapability = serde_json::from_value(cap_val).unwrap();
+    assert_eq!(round_cap, cap);
+
+    let speak = SpeakToAs {
+        grammatical_gender: Some(grammatical_gender::NEUTER.to_owned()),
+        pronouns: Some("they/them".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let s_val = serde_json::to_value(&speak).unwrap();
+    assert_eq!(s_val["grammaticalGender"], "neuter");
+    assert_eq!(s_val["pronouns"], "they/them");
+    let round_speak: SpeakToAs = serde_json::from_value(s_val).unwrap();
+    assert_eq!(round_speak, speak);
+
+    let lang = LanguagePref {
+        language: "en-US".to_owned(),
+        contexts: Some(serde_json::json!({"work": true})),
+        pref: Some(1),
+        extra: BTreeMap::new(),
+    };
+    let l_val = serde_json::to_value(&lang).unwrap();
+    assert_eq!(l_val["language"], "en-US");
+    assert_eq!(l_val["pref"], 1);
+    let round_lang: LanguagePref = serde_json::from_value(l_val).unwrap();
+    assert_eq!(round_lang, lang);
+
+    let card = ContactCard {
+        id: Some("C1".into()),
+        card_type: Some("Card".to_owned()),
+        kind: Some(card_kind::INDIVIDUAL.to_owned()),
+        ..ContactCard::default()
+    };
+    let c_val = serde_json::to_value(&card).unwrap();
+    assert_eq!(c_val["@type"], "Card");
+    assert_eq!(c_val["kind"], "individual");
+
+    let round_card: ContactCard = serde_json::from_value(c_val).unwrap();
+    assert_eq!(round_card, card);
+}

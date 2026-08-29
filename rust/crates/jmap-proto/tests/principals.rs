@@ -114,3 +114,26 @@ fn share_notification_roundtrip_covers_rfc9670() {
     let round_tripped: ShareNotification = serde_json::from_value(n_val).unwrap();
     assert_eq!(round_tripped, notif);
 }
+
+/// PrincipalsCapability and principal_set_error cover RFC 9670 §1.3 and §2.
+#[test]
+fn principals_capabilities_and_set_error_roundtrip_covers_rfc9670() {
+    use jmap_proto::principals::{PrincipalsCapability, principal_set_error};
+    use std::collections::BTreeMap;
+
+    assert_eq!(principal_set_error::FORBIDDEN, "forbidden");
+    assert_eq!(
+        principal_set_error::PRINCIPAL_ALREADY_EXISTS,
+        "principalAlreadyExists"
+    );
+
+    let cap = PrincipalsCapability {
+        max_principals_per_get: Some(100),
+        extra: BTreeMap::new(),
+    };
+    let cap_val = serde_json::to_value(&cap).unwrap();
+    assert_eq!(cap_val["maxPrincipalsPerGet"], 100);
+
+    let round_cap: PrincipalsCapability = serde_json::from_value(cap_val).unwrap();
+    assert_eq!(round_cap, cap);
+}

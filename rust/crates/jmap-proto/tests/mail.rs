@@ -423,3 +423,48 @@ fn email_parse_and_headers_roundtrip_cover_rfc8621() {
         addr_group
     );
 }
+
+/// MailCapability and SubmissionCapability cover RFC 8621 §1.3 and §1.4.
+#[test]
+fn mail_capabilities_roundtrip_covers_rfc8621() {
+    use jmap_proto::mail::{MailCapability, SubmissionCapability};
+    use std::collections::BTreeMap;
+
+    let mail_cap = MailCapability {
+        max_size_attachments_per_email: 50_000_000,
+        max_size_email_in_bytes: 75_000_000,
+        max_size_body_value_bytes: 2_000_000,
+        max_number_of_attachments_per_email: 100,
+        max_number_of_recipients_per_email: 50,
+        may_create_top_level_mailbox: true,
+        extra: BTreeMap::new(),
+    };
+    let mc_val = serde_json::to_value(&mail_cap).unwrap();
+    assert_eq!(mc_val["maxSizeAttachmentsPerEmail"], 50_000_000);
+    assert_eq!(mc_val["maxSizeEmailInBytes"], 75_000_000);
+    assert_eq!(mc_val["maxSizeBodyValueBytes"], 2_000_000);
+    assert_eq!(mc_val["maxNumberOfAttachmentsPerEmail"], 100);
+    assert_eq!(mc_val["maxNumberOfRecipientsPerEmail"], 50);
+    assert_eq!(mc_val["mayCreateTopLevelMailbox"], true);
+
+    let round_mc: MailCapability = serde_json::from_value(mc_val).unwrap();
+    assert_eq!(round_mc, mail_cap);
+
+    let sub_cap = SubmissionCapability {
+        max_delayed_send: 86400,
+        submission_extensions: BTreeMap::from([(
+            "FUTURERELEASE".to_owned(),
+            vec!["MAXDISCARD".to_owned()],
+        )]),
+        extra: BTreeMap::new(),
+    };
+    let sc_val = serde_json::to_value(&sub_cap).unwrap();
+    assert_eq!(sc_val["maxDelayedSend"], 86400);
+    assert_eq!(
+        sc_val["submissionExtensions"]["FUTURERELEASE"],
+        serde_json::json!(["MAXDISCARD"])
+    );
+
+    let round_sc: SubmissionCapability = serde_json::from_value(sc_val).unwrap();
+    assert_eq!(round_sc, sub_cap);
+}

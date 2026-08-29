@@ -2605,6 +2605,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         crypto_keys: None,
         directories: None,
         personal_info: None,
+        kind: None,
         extra: BTreeMap::new(),
     })
 }

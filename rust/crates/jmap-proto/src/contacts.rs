@@ -68,16 +68,20 @@ pub struct ContactCard {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub card_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<Name>,
+
     /// The names the contact is also known by (RFC 9553 §2.2.2), keyed like
     /// the other JSContact maps. vCard states each on a `NICKNAME` line of
     /// its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nicknames: Option<BTreeMap<String, Nickname>>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emails: Option<BTreeMap<String, ContactEmail>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -774,6 +778,64 @@ pub struct CardGroup {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub members: Option<BTreeMap<String, bool>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Contacts capability properties (RFC 9610 §1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsCapability {
+    #[serde(default)]
+    pub max_size_attachments_per_card: u64,
+    #[serde(default)]
+    pub max_number_of_cards_in_set: u64,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Standard RFC 9553 §2.1.1 JSContact card kinds.
+pub mod card_kind {
+    pub const INDIVIDUAL: &str = "individual";
+    pub const GROUP: &str = "group";
+    pub const ORG: &str = "org";
+    pub const LOCATION: &str = "location";
+    pub const DEVICE: &str = "device";
+    pub const APPLICATION: &str = "application";
+}
+
+/// Standard RFC 9553 §2.2.5 grammatical genders.
+pub mod grammatical_gender {
+    pub const ANIMATE: &str = "animate";
+    pub const INANIMATE: &str = "inanimate";
+    pub const FEMININE: &str = "feminine";
+    pub const MASCULINE: &str = "masculine";
+    pub const NEUTER: &str = "neuter";
+    pub const COMMON: &str = "common";
+}
+
+/// JSContact SpeakToAs (RFC 9553 §2.2.5): how to address the contact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeakToAs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grammatical_gender: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pronouns: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSContact LanguagePref (RFC 9553 §2.8.5): preferred language for communication.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguagePref {
+    #[serde(default)]
+    pub language: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

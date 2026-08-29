@@ -712,3 +712,54 @@ pub struct CalendarEventParseResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_found: Option<Vec<Id>>,
 }
+
+/// Calendars capability properties (draft-ietf-jmap-calendars-28 §1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarsCapability {
+    #[serde(default)]
+    pub max_size_attachments_per_event: u64,
+    #[serde(default)]
+    pub max_concurrent_availabilities: u64,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Standard RFC 8984 §4.4.5 event relation types.
+pub mod event_relation_type {
+    pub const FIRST: &str = "first";
+    pub const NEXT: &str = "next";
+    pub const PARENT: &str = "parent";
+    pub const CHILD: &str = "child";
+}
+
+/// Standard RFC 8984 §4.4.1 / RFC 5545 §3.8.1.9 priority constants.
+pub mod priority {
+    pub const UNDEFINED: i64 = 0;
+    pub const HIGH: i64 = 1;
+    pub const MEDIUM: i64 = 5;
+    pub const LOW: i64 = 9;
+}
+
+/// JSCalendar AbsoluteTrigger (RFC 8984 §4.5.2): an alert trigger specified as an absolute UTC timestamp.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AbsoluteTrigger {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub trigger_type: Option<String>,
+    pub when: UtcDate,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSCalendar Relation (RFC 8984 §4.4.5): how this event relates to another.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EventRelation {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub relation_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation: Option<BTreeMap<String, bool>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}

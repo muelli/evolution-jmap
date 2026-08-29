@@ -201,8 +201,26 @@ pub mod share_notification_object_type {
     pub const MAILBOX: &str = "Mailbox";
 }
 
+/// Principals capability properties (RFC 9670 §1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrincipalsCapability {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_principals_per_get: Option<u64>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// The `SetError` types RFC 9670 §2 adds for `Principal/set`.
+pub mod principal_set_error {
+    pub const FORBIDDEN: &str = "forbidden";
+    pub const PRINCIPAL_ALREADY_EXISTS: &str = "principalAlreadyExists";
+    pub const INVALID_PROPERTIES: &str = "invalidProperties";
+}
+
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
