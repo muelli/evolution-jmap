@@ -433,6 +433,111 @@ fn every_role_is_named_by_the_jmap_role_it_is_read_from() {
     }
 }
 
+/// An unrecognised mailbox role — specifically `"snoozed"` from
+/// `draft-ietf-extra-email-snooze`, but also other roles from the RFC 8457
+/// registry (`\Important`, `\Flagged`, …) or vendor extensions — maps to
+/// `None` via [`FolderRole::from_jmap`].
+///
+/// In Evolution, `role: None` maps to `CAMEL_FOLDER_TYPE_NORMAL`. A mailbox
+/// holding snoozed messages therefore degrades gracefully to an ordinary
+/// folder and does NOT sink or reject the enclosing `Mailbox/get` response.
+#[test]
+fn unrecognised_and_snoozed_mailbox_roles_degrade_to_normal_folders() {
+    let unrecognised_roles = [
+        "snoozed",
+        "Snoozed",
+        "SNOOZED",
+        "important",
+        "flagged",
+        "starred",
+        "promotions",
+        "social",
+        "updates",
+        "forums",
+        "quarantine",
+        "custom_vendor_role",
+        "",
+    ];
+
+    for role_name in unrecognised_roles {
+        assert_eq!(
+            FolderRole::from_jmap(role_name),
+            None,
+            "role '{role_name}' should map to None (normal folder)"
+        );
+    }
+
+    // Deserializing a full Mailbox/get payload containing standard mailboxes
+    // alongside a snoozed mailbox with custom extensions (RFC 8621 / draft-ietf-extra-email-snooze)
+    let payload = serde_json::json!({
+        "accountId": "acc_main",
+        "state": "state_123",
+        "list": [
+            {
+                "id": "M_inbox",
+                "name": "Inbox",
+                "role": "inbox",
+                "sortOrder": 1,
+                "totalEmails": 42,
+                "unreadEmails": 5
+            },
+            {
+                "id": "M_snoozed",
+                "name": "Snoozed",
+                "role": "snoozed",
+                "sortOrder": 2,
+                "totalEmails": 3,
+                "unreadEmails": 0,
+                "snoozeInfo": {
+                    "activeUntil": "2026-09-01T12:00:00Z"
+                }
+            },
+            {
+                "id": "M_sent",
+                "name": "Sent",
+                "role": "sent",
+                "sortOrder": 3
+            },
+            {
+                "id": "M_custom",
+                "name": "Important Topics",
+                "role": "important",
+                "sortOrder": 4
+            }
+        ]
+    });
+
+    let response: jmap_proto::methods::GetResponse<Mailbox> =
+        serde_json::from_value(payload).expect("GetResponse<Mailbox> deserializes");
+    assert_eq!(response.list.len(), 4);
+
+    let tree = FolderTree::from_mailboxes(&response.list).expect("builds FolderTree");
+    assert_eq!(tree.len(), 4);
+
+    // Standard folders retain their assigned roles
+    assert_eq!(
+        tree.role(FolderRole::Inbox).map(|f| f.id.as_str()),
+        Some("M_inbox")
+    );
+    assert_eq!(
+        tree.role(FolderRole::Sent).map(|f| f.id.as_str()),
+        Some("M_sent")
+    );
+
+    // Snoozed and important folders degrade to normal folders (role: None)
+    let snoozed_folder = tree.find("Snoozed").expect("snoozed folder exists in tree");
+    assert_eq!(snoozed_folder.id.as_str(), "M_snoozed");
+    assert_eq!(snoozed_folder.role, None);
+    assert_eq!(snoozed_folder.total, 3);
+    assert_eq!(snoozed_folder.unread, 0);
+
+    let important_folder = tree
+        .find("Important Topics")
+        .expect("important folder exists");
+    assert_eq!(important_folder.id.as_str(), "M_custom");
+    assert_eq!(important_folder.role, None);
+}
+
 // ---------------------------------------------------------------------------
 // the one editable property
 
