@@ -117,6 +117,28 @@ pub struct CalendarRights {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl CalendarRights {
+    pub fn all() -> Self {
+        Self {
+            may_read_items: true,
+            may_add_items: true,
+            may_modify_items: true,
+            may_remove_items: true,
+            may_delete: true,
+            may_rename: true,
+            may_admin: true,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn read_only() -> Self {
+        Self {
+            may_read_items: true,
+            ..Self::default()
+        }
+    }
+}
+
 /// A calendar event (draft §5): JSCalendar Event plus JMAP `id` and
 /// `calendarIds`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -478,18 +500,59 @@ impl NDay {
         Self {
             day_type: Some("NDay".to_owned()),
             day: day.to_owned(),
-            ..Self::default()
+            nth_of_period: None,
+            extra: BTreeMap::new(),
         }
+    }
+
+    pub fn with_nth_of_period(mut self, nth: i32) -> Self {
+        self.nth_of_period = Some(nth);
+        self
     }
 }
 
 impl RecurrenceRule {
-    pub fn new(frequency: &str) -> Self {
+    pub fn new(frequency: impl Into<String>) -> Self {
         Self {
             rule_type: Some("RecurrenceRule".to_owned()),
-            frequency: frequency.to_owned(),
+            frequency: frequency.into(),
             ..Self::default()
         }
+    }
+
+    pub fn with_interval(mut self, interval: u32) -> Self {
+        self.interval = Some(interval);
+        self
+    }
+
+    pub fn with_count(mut self, count: u32) -> Self {
+        self.count = Some(count);
+        self
+    }
+
+    pub fn with_until(mut self, until: impl Into<String>) -> Self {
+        self.until = Some(until.into());
+        self
+    }
+
+    pub fn with_by_day(mut self, by_day: impl IntoIterator<Item = NDay>) -> Self {
+        self.by_day = Some(by_day.into_iter().collect());
+        self
+    }
+
+    pub fn with_by_month(mut self, by_month: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.by_month = Some(by_month.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_rscale(mut self, rscale: impl Into<String>) -> Self {
+        self.rscale = Some(rscale.into());
+        self
+    }
+
+    pub fn with_skip(mut self, skip: impl Into<String>) -> Self {
+        self.skip = Some(skip.into());
+        self
     }
 }
 
@@ -743,6 +806,42 @@ pub struct Participant {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Participant {
+    pub fn new(name: impl Into<String>, email: impl Into<String>) -> Self {
+        Self {
+            participant_type: Some("Participant".to_owned()),
+            name: Some(name.into()),
+            email: Some(email.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_roles(mut self, roles: BTreeMap<String, bool>) -> Self {
+        self.roles = Some(roles);
+        self
+    }
+
+    pub fn with_participation_status(mut self, status: impl Into<String>) -> Self {
+        self.participation_status = Some(status.into());
+        self
+    }
+
+    pub fn with_attendance(mut self, attendance: impl Into<String>) -> Self {
+        self.attendance = Some(attendance.into());
+        self
+    }
+
+    pub fn expect_reply(mut self, expect: bool) -> Self {
+        self.expect_reply = Some(expect);
+        self
+    }
+
+    pub fn with_schedule_agent(mut self, schedule_agent: impl Into<String>) -> Self {
+        self.schedule_agent = Some(schedule_agent.into());
+        self
+    }
+}
+
 /// JSCalendar Location (RFC 8984 §4.2.5): a physical location for the event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -765,6 +864,36 @@ pub struct Location {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Location {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            location_type: Some("Location".to_owned()),
+            name: Some(name.into()),
+            description: None,
+            relative_to: None,
+            time_zone: None,
+            coordinates: None,
+            location_types: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_coordinates(mut self, coordinates: impl Into<String>) -> Self {
+        self.coordinates = Some(coordinates.into());
+        self
+    }
+}
+
 /// JSCalendar VirtualLocation (RFC 8984 §4.2.6): an online conference or meeting room.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -781,6 +910,34 @@ pub struct VirtualLocation {
     pub features: Option<BTreeMap<String, bool>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl VirtualLocation {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            virtual_location_type: Some("VirtualLocation".to_owned()),
+            name: None,
+            description: None,
+            uri: uri.into(),
+            features: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_features(mut self, features: BTreeMap<String, bool>) -> Self {
+        self.features = Some(features);
+        self
+    }
 }
 
 /// JSCalendar Alert (RFC 8984 §4.5.2): an alarm or reminder for the event.
@@ -801,6 +958,29 @@ pub struct Alert {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Alert {
+    pub fn new(action: impl Into<String>, trigger: Value) -> Self {
+        Self {
+            alert_type: Some("Alert".to_owned()),
+            action: Some(action.into()),
+            trigger: Some(trigger),
+            acknowledged: None,
+            related_to: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_acknowledged(mut self, acknowledged: impl Into<UtcDate>) -> Self {
+        self.acknowledged = Some(acknowledged.into());
+        self
+    }
+
+    pub fn with_related_to(mut self, related_to: impl Into<String>) -> Self {
+        self.related_to = Some(related_to.into());
+        self
+    }
+}
+
 /// JSCalendar OffsetTrigger (RFC 8984 §4.5.2): an alert trigger specified as an offset duration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -810,6 +990,21 @@ pub struct OffsetTrigger {
     pub offset: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_to: Option<String>,
+}
+
+impl OffsetTrigger {
+    pub fn new(offset: impl Into<String>) -> Self {
+        Self {
+            trigger_type: Some("OffsetTrigger".to_owned()),
+            offset: offset.into(),
+            relative_to: None,
+        }
+    }
+
+    pub fn relative_to(mut self, relative_to: impl Into<String>) -> Self {
+        self.relative_to = Some(relative_to.into());
+        self
+    }
 }
 
 /// Calendar user preferences (draft-ietf-jmap-calendars-28 §6).
@@ -857,6 +1052,24 @@ pub struct CalendarEventParseRequest {
     pub properties: Option<Vec<String>>,
 }
 
+impl CalendarEventParseRequest {
+    pub fn new(
+        account_id: impl Into<Id>,
+        blob_ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            blob_ids: blob_ids.into_iter().map(Into::into).collect(),
+            properties: None,
+        }
+    }
+
+    pub fn properties(mut self, properties: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.properties = Some(properties.into_iter().map(Into::into).collect());
+        self
+    }
+}
+
 /// `CalendarEvent/parse` response (draft-ietf-jmap-calendars-28 §5.7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -868,6 +1081,35 @@ pub struct CalendarEventParseResponse {
     pub not_parsable: Option<Vec<Id>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_found: Option<Vec<Id>>,
+}
+
+impl CalendarEventParseResponse {
+    pub fn new(account_id: impl Into<Id>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            parsed: None,
+            not_parsable: None,
+            not_found: None,
+        }
+    }
+
+    pub fn with_parsed(mut self, parsed: BTreeMap<Id, CalendarEvent>) -> Self {
+        self.parsed = Some(parsed);
+        self
+    }
+
+    pub fn with_not_parsable(
+        mut self,
+        not_parsable: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        self.not_parsable = Some(not_parsable.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_not_found(mut self, not_found: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.not_found = Some(not_found.into_iter().map(Into::into).collect());
+        self
+    }
 }
 
 /// Calendars capability properties (draft-ietf-jmap-calendars-28 §1.3).
@@ -909,6 +1151,16 @@ pub struct AbsoluteTrigger {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl AbsoluteTrigger {
+    pub fn new(when: impl Into<UtcDate>) -> Self {
+        Self {
+            trigger_type: Some("AbsoluteTrigger".to_owned()),
+            when: when.into(),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
 /// JSCalendar Relation (RFC 8984 §4.4.5): how this event relates to another.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -919,6 +1171,16 @@ pub struct EventRelation {
     pub relation: Option<BTreeMap<String, bool>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl EventRelation {
+    pub fn new(relation: BTreeMap<String, bool>) -> Self {
+        Self {
+            relation_type: Some("Relation".to_owned()),
+            relation: Some(relation),
+            extra: BTreeMap::new(),
+        }
+    }
 }
 
 /// `CalendarEvent/getFreeBusy` arguments (draft-ietf-jmap-calendars-28 §5.7).
@@ -1009,6 +1271,15 @@ pub struct GetFreeBusyResponse {
     pub account_id: Id,
     #[serde(default)]
     pub list: Vec<FreeBusyBlock>,
+}
+
+impl GetFreeBusyResponse {
+    pub fn new(account_id: impl Into<Id>, list: impl IntoIterator<Item = FreeBusyBlock>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            list: list.into_iter().collect(),
+        }
+    }
 }
 
 /// The `SetError` types draft-ietf-jmap-calendars-28 §5.4 adds for `CalendarEvent/set`.

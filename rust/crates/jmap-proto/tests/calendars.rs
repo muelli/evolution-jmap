@@ -926,3 +926,109 @@ fn calendar_and_preferences_builders_roundtrip() {
         prefs
     );
 }
+
+#[test]
+fn calendar_event_parse_response_free_busy_response_and_entity_builders() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::calendars::{
+        AbsoluteTrigger, Alert, CalendarEvent, CalendarEventParseResponse, CalendarRights,
+        EventRelation, FreeBusyBlock, GetFreeBusyResponse, Location, NDay, OffsetTrigger,
+        Participant, RecurrenceRule, VirtualLocation,
+    };
+    use std::collections::BTreeMap;
+
+    let parse_resp = CalendarEventParseResponse::new("acc1")
+        .with_parsed(BTreeMap::from([("b1".into(), CalendarEvent::default())]))
+        .with_not_parsable(["b2"])
+        .with_not_found(["b3"]);
+
+    assert_eq!(parse_resp.account_id.as_str(), "acc1");
+    assert_eq!(parse_resp.parsed.as_ref().unwrap().len(), 1);
+    assert_eq!(parse_resp.not_parsable.as_ref().unwrap().len(), 1);
+    assert_eq!(parse_resp.not_found.as_ref().unwrap().len(), 1);
+
+    let fb_resp = GetFreeBusyResponse::new(
+        "acc1",
+        [FreeBusyBlock::new(
+            UtcDate::new("2026-09-01T10:00:00Z"),
+            UtcDate::new("2026-09-01T11:00:00Z"),
+            "busy",
+        )
+        .with_calendar_id("cal1")
+        .with_event_id("evt1")],
+    );
+    assert_eq!(fb_resp.account_id.as_str(), "acc1");
+    assert_eq!(fb_resp.list.len(), 1);
+
+    let rights_all = CalendarRights::all();
+    assert!(rights_all.may_read_items);
+    assert!(rights_all.may_add_items);
+    assert!(rights_all.may_modify_items);
+    assert!(rights_all.may_remove_items);
+    assert!(rights_all.may_delete);
+    assert!(rights_all.may_rename);
+    assert!(rights_all.may_admin);
+
+    let rights_ro = CalendarRights::read_only();
+    assert!(rights_ro.may_read_items);
+    assert!(!rights_ro.may_add_items);
+
+    let loc = Location::new("Meeting Room A")
+        .with_description("Room 101")
+        .with_time_zone("Europe/London")
+        .with_coordinates("geo:51.5074,-0.1278");
+    assert_eq!(loc.name.as_deref(), Some("Meeting Room A"));
+    assert_eq!(loc.description.as_deref(), Some("Room 101"));
+    assert_eq!(loc.time_zone.as_deref(), Some("Europe/London"));
+
+    let vloc = VirtualLocation::new("https://meet.example.com/room")
+        .with_name("Main Bridge")
+        .with_description("Jitsi meeting")
+        .with_features(BTreeMap::from([("video".to_string(), true)]));
+    assert_eq!(vloc.uri, "https://meet.example.com/room");
+    assert_eq!(vloc.name.as_deref(), Some("Main Bridge"));
+
+    let alert = Alert::new(
+        "display",
+        serde_json::json!({"@type": "OffsetTrigger", "offset": "-PT15M"}),
+    )
+    .with_acknowledged(UtcDate::new("2026-09-01T09:45:00Z"))
+    .with_related_to("start");
+    assert_eq!(alert.action.as_deref(), Some("display"));
+    assert_eq!(alert.related_to.as_deref(), Some("start"));
+
+    let offset_trig = OffsetTrigger::new("-PT30M").relative_to("start");
+    assert_eq!(offset_trig.offset, "-PT30M");
+    assert_eq!(offset_trig.relative_to.as_deref(), Some("start"));
+
+    let abs_trig = AbsoluteTrigger::new(UtcDate::new("2026-09-01T09:00:00Z"));
+    assert_eq!(abs_trig.when.as_str(), "2026-09-01T09:00:00Z");
+
+    let relation = EventRelation::new(BTreeMap::from([("parent".to_string(), true)]));
+    assert!(relation.relation.as_ref().unwrap().contains_key("parent"));
+
+    let part = Participant::new("Bob Smith", "bob@example.com")
+        .with_roles(BTreeMap::from([("attendee".to_string(), true)]))
+        .with_participation_status("accepted")
+        .with_attendance("required")
+        .expect_reply(true)
+        .with_schedule_agent("server");
+    assert_eq!(part.name.as_deref(), Some("Bob Smith"));
+    assert_eq!(part.email.as_deref(), Some("bob@example.com"));
+    assert_eq!(part.participation_status.as_deref(), Some("accepted"));
+
+    let rrule = RecurrenceRule::new("weekly")
+        .with_interval(2)
+        .with_count(10)
+        .with_until("2026-12-31T23:59:59Z")
+        .with_by_day([NDay::new("mo").with_nth_of_period(1), NDay::new("fr")])
+        .with_by_month(["1", "6"])
+        .with_rscale("gregorian")
+        .with_skip("omit");
+    assert_eq!(rrule.frequency, "weekly");
+    assert_eq!(rrule.interval, Some(2));
+    assert_eq!(rrule.count, Some(10));
+    assert_eq!(rrule.by_day.as_ref().unwrap().len(), 2);
+    assert_eq!(rrule.rscale.as_deref(), Some("gregorian"));
+    assert_eq!(rrule.skip.as_deref(), Some("omit"));
+}

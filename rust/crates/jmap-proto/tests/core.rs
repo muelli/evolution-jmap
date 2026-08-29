@@ -1180,3 +1180,91 @@ fn session_typed_capability_accessors_and_websocket_roundtrip() {
         ws_cap
     );
 }
+
+#[test]
+fn core_response_and_request_error_builders() {
+    use jmap_proto::error::{RequestError, SetError, request};
+    use jmap_proto::methods::{
+        AddedItem, BlobCopyResponse, ChangesResponse, CopyResponse, GetResponse,
+        QueryChangesResponse, QueryResponse,
+    };
+    use std::collections::BTreeMap;
+
+    let get_resp = GetResponse::new("acc1", "s1", vec![10, 20, 30]).with_not_found(["id4", "id5"]);
+    assert_eq!(get_resp.account_id.as_str(), "acc1");
+    assert_eq!(get_resp.state.as_str(), "s1");
+    assert_eq!(get_resp.list, vec![10, 20, 30]);
+    assert_eq!(get_resp.not_found.len(), 2);
+
+    let changes_resp = ChangesResponse::new("acc1", "s1", "s2")
+        .with_created(["c1"])
+        .with_updated(["u1", "u2"])
+        .with_destroyed(["d1"])
+        .has_more_changes(true);
+    assert_eq!(changes_resp.account_id.as_str(), "acc1");
+    assert_eq!(changes_resp.old_state.as_str(), "s1");
+    assert_eq!(changes_resp.new_state.as_str(), "s2");
+    assert_eq!(changes_resp.created.len(), 1);
+    assert_eq!(changes_resp.updated.len(), 2);
+    assert_eq!(changes_resp.destroyed.len(), 1);
+    assert!(changes_resp.has_more_changes);
+
+    let query_resp = QueryResponse::new("acc1", "qs1", ["i1", "i2"])
+        .with_total(100)
+        .with_limit(2)
+        .with_position(0)
+        .can_calculate_changes(true);
+    assert_eq!(query_resp.account_id.as_str(), "acc1");
+    assert_eq!(query_resp.query_state.as_str(), "qs1");
+    assert_eq!(query_resp.ids.len(), 2);
+    assert_eq!(query_resp.total, Some(100));
+    assert_eq!(query_resp.limit, Some(2));
+    assert_eq!(query_resp.position, 0);
+    assert!(query_resp.can_calculate_changes);
+
+    let query_changes_resp = QueryChangesResponse::new("acc1", "qs1", "qs2")
+        .with_added([AddedItem::new("i3", 2)])
+        .with_removed(["i1"])
+        .with_total(100);
+    assert_eq!(query_changes_resp.account_id.as_str(), "acc1");
+    assert_eq!(query_changes_resp.old_query_state.as_str(), "qs1");
+    assert_eq!(query_changes_resp.new_query_state.as_str(), "qs2");
+    assert_eq!(query_changes_resp.added.len(), 1);
+    assert_eq!(query_changes_resp.removed.len(), 1);
+    assert_eq!(query_changes_resp.total, Some(100));
+
+    let blob_copy_resp = BlobCopyResponse::new("acc_src", "acc_dst")
+        .with_copied(BTreeMap::from([("b1".into(), "b1_dst".into())]))
+        .with_not_copied(BTreeMap::from([("b2".into(), SetError::new("notFound"))]));
+    assert_eq!(blob_copy_resp.from_account_id.as_str(), "acc_src");
+    assert_eq!(blob_copy_resp.account_id.as_str(), "acc_dst");
+    assert_eq!(blob_copy_resp.copied.as_ref().unwrap().len(), 1);
+    assert_eq!(blob_copy_resp.not_copied.as_ref().unwrap().len(), 1);
+
+    let copy_resp = CopyResponse::<serde_json::Value>::new("acc_src", "acc_dst", "s2")
+        .with_old_state("s1")
+        .with_created(BTreeMap::from([(
+            "k1".to_string(),
+            serde_json::json!({"id": "new_1"}),
+        )]))
+        .with_not_created(BTreeMap::from([(
+            "k2".to_string(),
+            SetError::new("alreadyExists"),
+        )]));
+    assert_eq!(copy_resp.from_account_id.as_str(), "acc_src");
+    assert_eq!(copy_resp.account_id.as_str(), "acc_dst");
+    assert_eq!(copy_resp.old_state.as_ref().unwrap().as_str(), "s1");
+    assert_eq!(copy_resp.new_state.as_str(), "s2");
+    assert_eq!(copy_resp.created.as_ref().unwrap().len(), 1);
+    assert_eq!(copy_resp.not_created.as_ref().unwrap().len(), 1);
+
+    let req_err = RequestError::new(request::NOT_REQUEST)
+        .with_status(400)
+        .with_detail("The request was malformed JSON");
+    assert_eq!(req_err.error_type, request::NOT_REQUEST);
+    assert_eq!(req_err.status, Some(400));
+    assert_eq!(
+        req_err.detail.as_deref(),
+        Some("The request was malformed JSON")
+    );
+}

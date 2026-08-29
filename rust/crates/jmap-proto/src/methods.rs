@@ -71,6 +71,26 @@ pub struct GetResponse<T> {
     pub not_found: Vec<Id>,
 }
 
+impl<T> GetResponse<T> {
+    pub fn new(
+        account_id: impl Into<Id>,
+        state: impl Into<State>,
+        list: impl IntoIterator<Item = T>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            state: state.into(),
+            list: list.into_iter().collect(),
+            not_found: Vec::new(),
+        }
+    }
+
+    pub fn with_not_found(mut self, not_found: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.not_found = not_found.into_iter().map(Into::into).collect();
+        self
+    }
+}
+
 /// `Foo/set` arguments (RFC 8620 §5.3).
 ///
 /// `update` values are `PatchObject`s — maps of (JSON-pointer-ish) paths to
@@ -289,6 +309,44 @@ pub struct QueryResponse {
     pub limit: Option<u64>,
 }
 
+impl QueryResponse {
+    pub fn new(
+        account_id: impl Into<Id>,
+        query_state: impl Into<State>,
+        ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            query_state: query_state.into(),
+            can_calculate_changes: false,
+            position: 0,
+            ids: ids.into_iter().map(Into::into).collect(),
+            total: None,
+            limit: None,
+        }
+    }
+
+    pub fn with_total(mut self, total: u64) -> Self {
+        self.total = Some(total);
+        self
+    }
+
+    pub fn with_limit(mut self, limit: u64) -> Self {
+        self.limit = Some(limit);
+        self
+    }
+
+    pub fn with_position(mut self, position: u64) -> Self {
+        self.position = position;
+        self
+    }
+
+    pub fn can_calculate_changes(mut self, can: bool) -> Self {
+        self.can_calculate_changes = can;
+        self
+    }
+}
+
 /// `Foo/changes` arguments (RFC 8620 §5.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -369,6 +427,44 @@ pub struct ChangesResponse {
     pub updated: Vec<Id>,
     #[serde(default)]
     pub destroyed: Vec<Id>,
+}
+
+impl ChangesResponse {
+    pub fn new(
+        account_id: impl Into<Id>,
+        old_state: impl Into<State>,
+        new_state: impl Into<State>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            old_state: old_state.into(),
+            new_state: new_state.into(),
+            has_more_changes: false,
+            created: Vec::new(),
+            updated: Vec::new(),
+            destroyed: Vec::new(),
+        }
+    }
+
+    pub fn with_created(mut self, created: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.created = created.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_updated(mut self, updated: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.updated = updated.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_destroyed(mut self, destroyed: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.destroyed = destroyed.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn has_more_changes(mut self, has_more: bool) -> Self {
+        self.has_more_changes = has_more;
+        self
+    }
 }
 
 /// Standard boolean filter operators (RFC 8620 §5.5).
@@ -476,6 +572,38 @@ pub struct QueryChangesResponse {
     pub total: Option<u64>,
 }
 
+impl QueryChangesResponse {
+    pub fn new(
+        account_id: impl Into<Id>,
+        old_query_state: impl Into<State>,
+        new_query_state: impl Into<State>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            old_query_state: old_query_state.into(),
+            new_query_state: new_query_state.into(),
+            added: Vec::new(),
+            removed: Vec::new(),
+            total: None,
+        }
+    }
+
+    pub fn with_added(mut self, added: impl IntoIterator<Item = AddedItem>) -> Self {
+        self.added = added.into_iter().collect();
+        self
+    }
+
+    pub fn with_removed(mut self, removed: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.removed = removed.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_total(mut self, total: u64) -> Self {
+        self.total = Some(total);
+        self
+    }
+}
+
 /// `Foo/copy` arguments (RFC 8620 §5.4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -549,6 +677,38 @@ pub struct CopyResponse<T> {
     pub not_created: Option<BTreeMap<String, SetError>>,
 }
 
+impl<T> CopyResponse<T> {
+    pub fn new(
+        from_account_id: impl Into<Id>,
+        account_id: impl Into<Id>,
+        new_state: impl Into<State>,
+    ) -> Self {
+        Self {
+            from_account_id: from_account_id.into(),
+            account_id: account_id.into(),
+            old_state: None,
+            new_state: new_state.into(),
+            created: None,
+            not_created: None,
+        }
+    }
+
+    pub fn with_old_state(mut self, old_state: impl Into<State>) -> Self {
+        self.old_state = Some(old_state.into());
+        self
+    }
+
+    pub fn with_created(mut self, created: BTreeMap<String, T>) -> Self {
+        self.created = Some(created);
+        self
+    }
+
+    pub fn with_not_created(mut self, not_created: BTreeMap<String, SetError>) -> Self {
+        self.not_created = Some(not_created);
+        self
+    }
+}
+
 /// `Blob/copy` arguments (RFC 8620 §5.7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -582,4 +742,25 @@ pub struct BlobCopyResponse {
     pub copied: Option<BTreeMap<Id, Id>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_copied: Option<BTreeMap<Id, SetError>>,
+}
+
+impl BlobCopyResponse {
+    pub fn new(from_account_id: impl Into<Id>, account_id: impl Into<Id>) -> Self {
+        Self {
+            from_account_id: from_account_id.into(),
+            account_id: account_id.into(),
+            copied: None,
+            not_copied: None,
+        }
+    }
+
+    pub fn with_copied(mut self, copied: BTreeMap<Id, Id>) -> Self {
+        self.copied = Some(copied);
+        self
+    }
+
+    pub fn with_not_copied(mut self, not_copied: BTreeMap<Id, SetError>) -> Self {
+        self.not_copied = Some(not_copied);
+        self
+    }
 }
