@@ -113,11 +113,50 @@ Same second, no prompt, no stall, account live. The only variable changed was
 Three distinct defects sit on top of each other. Any one of them being fixed
 would make the symptom much less severe.
 
-1. **libsecret** — the GLib warning is explicit and self-diagnosing:
-   `GTask secret_service_real_prompt_async ... finalized without ever returning`.
-   A prompt whose peer disappears mid-flight must complete with an error, not
-   be finalized silently. As it stands the caller's async op never completes,
-   which is what turns a recoverable disconnect into a hang.
+1. **libsecret — and the faulty call can be named, not just the symptom.**
+   The two lines come out together, in this order:
+
+   ```
+   g_task_return_error: assertion 'error != NULL' failed
+   GTask secret_service_real_prompt_async (...) finalized without ever returning
+   ```
+
+   `secret_service_real_prompt_async` calls `g_task_return_error()` with a
+   **NULL** `GError`. GLib refuses it, so the task is never completed at all,
+   so the caller's async operation never finishes, so a sync wrapper blocks
+   until something upstream times out — the 25 s above.
+
+   The NULL is not mysterious, and it is arguably the API's own doing.
+   libsecret documents `secret_service_prompt_sync` as returning "%NULL if
+   the prompt was dismissed **or** an error occurred": a dismissed prompt is
+   deliberately *not* a `GError`. The async prompt path conflates the two and
+   returns an error it does not have. A prompt whose peer disappears
+   mid-flight lands in exactly that hole.
+
+   **Independently sighted.** A user running `secret-tool` on Ubuntu 24.04,
+   setting up GNOME Remote Desktop, reported the identical pair of lines
+   (https://gist.github.com/greyltc/7085bff8f2e728b60077b81329019828?permalink_comment_id=4819806).
+   Nothing about this is specific to Evolution, to this VM, or to a daemon
+   replacement — the replacement is just one reliable way to reach it.
+
+   **Prior art for the class, though not duplicates.** libsecret #75 and #113
+   are the same exactly-once discipline failing in the *other* direction —
+   `g_task_return_error: assertion '!task->ever_returned' failed`, a task
+   returned twice, in `on_search_loaded()` where `search_load_item_async()`
+   starts N operations any of which may return an error. Those crash; this
+   one hangs. Worth citing, not worth filing against.
+
+   **A closely-related bug that was fixed.** Ubuntu #2125590 ("g-c-c freezes
+   after entering System->Remote Desktop", Fix Released) is
+   `GTask secret_service_async_initable_init_async finalized without ever
+   returning`, hanging gnome-control-center forever inside
+   `secret_password_store_sync()`, on a fresh **autologin** install, cleared
+   by restarting the keyring daemon. Same signature, same hang, same
+   autologin context, same restart-fixes-it. Its root cause turned out to be
+   gnome-keyring creating the login keyring without exporting it on D-Bus,
+   and it was **fixed in gnome-keyring rather than in libsecret** — which is
+   both a precedent that this class gets fixed and a hint about where a
+   maintainer may want this one to land.
 
 2. **gnome-keyring** — `--replace` tears down a daemon that has prompts in
    flight and clients connected, with no mechanism for those clients to
@@ -135,10 +174,15 @@ lifetime.
 
 ## Is this worth filing at all?
 
-Honestly assessed: the libsecret half is. `GTask ... finalized without ever
-returning` is GLib telling us about a defect in so many words, it is
-reproducible, and it converts a recoverable disconnect into a hang. The
-gnome-keyring half is weaker — "don't use `--replace` while clients are
+Yes, and more confidently than when this document was first drafted. The
+libsecret half now names a specific faulty call — `g_task_return_error()`
+with a NULL error in `secret_service_real_prompt_async` — rather than
+describing a symptom, it has an independent sighting from an unrelated
+workflow, and the closely-related Ubuntu #2125590 shows this hang class being
+taken seriously and fixed. The `--replace` framing should be demoted to "one
+reliable way to reach it" rather than presented as the bug.
+
+The gnome-keyring half is weaker — "don't use `--replace` while clients are
 connected" is a defensible answer, though the option's documentation says
 nothing about it.
 
