@@ -610,3 +610,52 @@ fn id_implements_default_trait() {
     let id = Id::default();
     assert_eq!(id.as_str(), "");
 }
+
+/// `RequestError` supports standard RFC 7807 / RFC 8620 §3.6.1 problem details members.
+#[test]
+fn request_error_problem_details_fields_cover_rfc7807_and_rfc8620() {
+    let value = serde_json::json!({
+        "type": "urn:ietf:params:jmap:error:limit",
+        "status": 400,
+        "title": "Request limit exceeded",
+        "detail": "maxCallsInRequest exceeded",
+        "instance": "urn:uuid:12345678-1234-5678-1234-567812345678",
+        "limit": "maxCallsInRequest"
+    });
+    let err: jmap_proto::error::RequestError = serde_json::from_value(value).unwrap();
+    assert_eq!(err.error_type, "urn:ietf:params:jmap:error:limit");
+    assert_eq!(err.status, Some(400));
+    assert_eq!(
+        err.extra.get("title"),
+        Some(&serde_json::json!("Request limit exceeded"))
+    );
+    assert_eq!(err.detail.as_deref(), Some("maxCallsInRequest exceeded"));
+    assert_eq!(
+        err.extra.get("instance"),
+        Some(&serde_json::json!(
+            "urn:uuid:12345678-1234-5678-1234-567812345678"
+        ))
+    );
+    assert_eq!(
+        err.extra.get("limit"),
+        Some(&serde_json::json!("maxCallsInRequest"))
+    );
+}
+
+/// `QueryRequest` supports RFC 8620 §5.5 anchor and anchorOffset properties.
+#[test]
+fn query_request_anchor_and_anchor_offset_cover_rfc8620() {
+    let req = QueryRequest::<serde_json::Value>::new("A1")
+        .anchor("msg_123")
+        .anchor_offset(-5);
+    assert_eq!(req.anchor.as_ref().unwrap().as_str(), "msg_123");
+    assert_eq!(req.anchor_offset, Some(-5));
+
+    let json = serde_json::to_value(&req).unwrap();
+    assert_eq!(json["anchor"], "msg_123");
+    assert_eq!(json["anchorOffset"], -5);
+
+    let roundtrip: QueryRequest<serde_json::Value> = serde_json::from_value(json).unwrap();
+    assert_eq!(roundtrip.anchor.as_ref().unwrap().as_str(), "msg_123");
+    assert_eq!(roundtrip.anchor_offset, Some(-5));
+}

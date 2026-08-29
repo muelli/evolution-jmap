@@ -42,6 +42,66 @@ pub struct Mailbox {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// The permissions the user has for a mailbox (RFC 8621 §2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MailboxRights {
+    #[serde(default)]
+    pub may_read_items: bool,
+    #[serde(default)]
+    pub may_add_items: bool,
+    #[serde(default)]
+    pub may_remove_items: bool,
+    #[serde(default)]
+    pub may_set_seen: bool,
+    #[serde(default)]
+    pub may_set_keywords: bool,
+    #[serde(default)]
+    pub may_create_child: bool,
+    #[serde(default)]
+    pub may_rename: bool,
+    #[serde(default)]
+    pub may_delete: bool,
+    #[serde(default)]
+    pub may_submit: bool,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// A thread of emails (RFC 8621 §3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Thread {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(default)]
+    pub email_ids: Vec<Id>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Vacation response auto-responder settings (RFC 8621 §8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VacationResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(default)]
+    pub is_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_date: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_date: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_body: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
 /// The two `SetError` types RFC 8621 §2.5 adds for `Mailbox/set`.
 ///
 /// Both are refusals to *destroy*, and both exist because the generic types of
@@ -473,4 +533,11 @@ pub mod email_submission_set_error {
     pub const INVALID_RECIPIENTS: &str = "invalidRecipients";
     pub const FORBIDDEN_MAIL_FROM: &str = "forbiddenMailFrom";
     pub const FORBIDDEN_FROM: &str = "forbiddenFrom";
+}
+
+/// Standard undoStatus values (RFC 8621 §7).
+pub mod undo_status {
+    pub const PENDING: &str = "pending";
+    pub const FINAL: &str = "final";
+    pub const CANCELED: &str = "canceled";
 }

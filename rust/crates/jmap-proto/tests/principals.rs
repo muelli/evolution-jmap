@@ -52,3 +52,27 @@ fn busy_period_and_get_availability_response_deserialize_unknown_properties_clea
     assert_eq!(resp.list.len(), 1);
     assert_eq!(resp.list[0].busy_status, "confirmed");
 }
+
+#[test]
+fn principal_secret_and_send_to_cover_rfc9670() {
+    use jmap_proto::principals::Principal;
+    let value = serde_json::json!({
+        "id": "p_conf1",
+        "name": "Room 404",
+        "type": "location",
+        "secret": "s3cr3t",
+        "sendTo": {
+            "imip": "mailto:room404@example.com"
+        }
+    });
+
+    let p: Principal = serde_json::from_value(value).unwrap();
+    assert_eq!(p.id.as_ref().unwrap().as_str(), "p_conf1");
+    assert_eq!(p.name, "Room 404");
+    assert_eq!(p.principal_type.as_deref(), Some("location"));
+    assert_eq!(p.extra.get("secret"), Some(&serde_json::json!("s3cr3t")));
+    assert_eq!(
+        p.extra.get("sendTo"),
+        Some(&serde_json::json!({"imip": "mailto:room404@example.com"}))
+    );
+}

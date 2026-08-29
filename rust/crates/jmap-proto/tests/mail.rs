@@ -162,3 +162,90 @@ fn email_address_and_submission_deserialize_with_missing_optional_fields() {
     .expect("Partial EmailSubmission must deserialize cleanly");
     assert_eq!(sub.id.as_ref().unwrap().as_str(), "S1");
 }
+
+#[test]
+fn email_submission_delivery_status_and_undo_status_cover_rfc8621() {
+    use jmap_proto::mail::undo_status::*;
+    assert_eq!(PENDING, "pending");
+    assert_eq!(FINAL, "final");
+    assert_eq!(CANCELED, "canceled");
+
+    let sub: EmailSubmission = serde_json::from_value(serde_json::json!({
+        "id": "S2",
+        "identityId": "I1",
+        "emailId": "M1",
+        "undoStatus": "pending",
+        "deliveryStatus": {
+            "bob@example.com": {
+                "smtpReply": "250 2.1.5 Ok",
+                "delivered": "queued"
+            }
+        },
+        "dsnBlobIds": ["B1", "B2"],
+        "mdnBlobIds": ["B3"]
+    }))
+    .unwrap();
+
+    assert_eq!(sub.undo_status.as_deref(), Some("pending"));
+    assert!(sub.extra.contains_key("deliveryStatus"));
+    assert_eq!(
+        sub.extra.get("dsnBlobIds"),
+        Some(&serde_json::json!(["B1", "B2"]))
+    );
+    assert_eq!(
+        sub.extra.get("mdnBlobIds"),
+        Some(&serde_json::json!(["B3"]))
+    );
+}
+
+#[test]
+fn mailbox_rights_and_thread_roundtrip_cover_rfc8621() {
+    let mailbox: Mailbox = serde_json::from_value(serde_json::json!({
+        "name": "Shared Archive",
+        "myRights": {
+            "mayReadItems": true,
+            "mayAddItems": false,
+            "maySetSeen": true
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(mailbox.name, "Shared Archive");
+    let rights_val = mailbox.extra.get("myRights").unwrap();
+    let rights: jmap_proto::mail::MailboxRights =
+        serde_json::from_value(rights_val.clone()).unwrap();
+    assert!(rights.may_read_items);
+    assert!(!rights.may_add_items);
+    assert!(rights.may_set_seen);
+
+    let thread: jmap_proto::mail::Thread = serde_json::from_value(serde_json::json!({
+        "id": "T1",
+        "emailIds": ["M1", "M2", "M3"]
+    }))
+    .unwrap();
+
+    assert_eq!(thread.id.as_ref().unwrap().as_str(), "T1");
+    assert_eq!(thread.email_ids.len(), 3);
+}
+
+#[test]
+fn vacation_response_roundtrip_covers_rfc8621() {
+    let vacation: jmap_proto::mail::VacationResponse = serde_json::from_value(serde_json::json!({
+        "id": "singleton",
+        "isEnabled": true,
+        "fromDate": "2026-09-01T00:00:00Z",
+        "toDate": "2026-09-10T00:00:00Z",
+        "subject": "Out of office",
+        "textBody": "I am on annual leave."
+    }))
+    .unwrap();
+
+    assert_eq!(vacation.id.as_ref().unwrap().as_str(), "singleton");
+    assert!(vacation.is_enabled);
+    assert_eq!(
+        vacation.from_date.as_ref().unwrap().as_str(),
+        "2026-09-01T00:00:00Z"
+    );
+    assert_eq!(vacation.subject.as_deref(), Some("Out of office"));
+    assert_eq!(vacation.text_body.as_deref(), Some("I am on annual leave."));
+}
