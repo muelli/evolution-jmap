@@ -9,6 +9,10 @@ use std::sync::mpsc::Sender;
 
 use jmap_proto::{Id, State};
 
+/// One [`ServerState::type_state_snapshot`] — every account's state counter
+/// per tracked type name, at one point in time.
+pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
+
 /// Everything the mock server knows. Tests hold this behind
 /// `Arc<Mutex<..>>` (via `MockServer::state()`) to seed data and make
 /// white-box assertions.
@@ -235,6 +239,30 @@ impl ServerState {
 
     pub fn session_state(&self) -> State {
         State::new(self.session_state.to_string())
+    }
+
+    /// Every account's state counter for the six types RFC 8620 push (and
+    /// this mock's own `/changes` methods) track, as of right now.
+    ///
+    /// [`crate::dispatch::handle_api`] takes one of these before and one
+    /// after running a request's method calls, and diffs them to find out
+    /// what actually changed — the automatic half of `docs/ROADMAP.md` item
+    /// 28's push, which no individual `*/set` handler has to know about.
+    pub fn type_state_snapshot(&self) -> TypeStateSnapshot {
+        self.accounts
+            .iter()
+            .map(|(id, account)| {
+                let types = BTreeMap::from([
+                    ("Mailbox", account.mailboxes.state_counter()),
+                    ("Email", account.emails.state_counter()),
+                    ("ContactCard", account.contact_cards.state_counter()),
+                    ("AddressBook", account.address_books.state_counter()),
+                    ("Calendar", account.calendars.state_counter()),
+                    ("CalendarEvent", account.calendar_events.state_counter()),
+                ]);
+                (id.clone(), types)
+            })
+            .collect()
     }
 
     /// The `maxObjectsInGet` this server advertises, which is also the one it
