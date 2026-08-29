@@ -2902,14 +2902,16 @@ fn restore_shared_fields<T: Clone>(
     restored
 }
 
-/// The preference rank of an address, stored in its `extra` map (as `Address`
+/// The preference rank of an address, stored in its `pref` property (as `Address`
 /// in JSContact RFC 9553 §2.5.1 has a `pref` property), or `None` if unranked.
 fn address_pref(address: &Address) -> Option<u32> {
-    address
-        .extra
-        .get("pref")
-        .and_then(|v| v.as_u64())
-        .and_then(|n| u32::try_from(n).ok())
+    address.pref.or_else(|| {
+        address
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64())
+            .and_then(|n| u32::try_from(n).ok())
+    })
 }
 
 /// The address an `ADR` line states, or `None` when every field of it is
