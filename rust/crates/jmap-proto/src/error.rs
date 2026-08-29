@@ -97,6 +97,9 @@ pub mod method {
     pub const ACCOUNT_NOT_SUPPORTED_BY_METHOD: &str = "accountNotSupportedByMethod";
     pub const ACCOUNT_READ_ONLY: &str = "accountReadOnly";
     pub const SERVER_FAIL: &str = "serverFail";
+    pub const SERVER_UNAVAILABLE: &str = "serverUnavailable";
+    pub const SERVER_PARTIAL_FAIL: &str = "serverPartialFail";
+    pub const UNKNOWN_CAPABILITY: &str = "unknownCapability";
     pub const STATE_MISMATCH: &str = "stateMismatch";
     /// The `since_state` of a `/changes` call is too old for the server to
     /// answer from its log; the client must resynchronise in full.
@@ -113,9 +116,20 @@ pub mod set {
     pub const FORBIDDEN: &str = "forbidden";
     pub const OVER_QUOTA: &str = "overQuota";
     pub const TOO_LARGE: &str = "tooLarge";
+    pub const RATE_LIMIT: &str = "rateLimit";
     pub const NOT_FOUND: &str = "notFound";
     pub const INVALID_PATCH: &str = "invalidPatch";
     pub const INVALID_PROPERTIES: &str = "invalidProperties";
     pub const SINGLETON: &str = "singleton";
     pub const WILL_DESTROY: &str = "willDestroy";
+    pub const STATE_MISMATCH: &str = "stateMismatch";
+    pub const REQUEST_TOO_LARGE: &str = "requestTooLarge";
+}
+
+/// Standard RFC 8620 §3.6.1 request-level problem types (RFC 7807 URI format).
+pub mod request {
+    pub const UNKNOWN_CAPABILITY: &str = "urn:ietf:params:jmap:error:unknownCapability";
+    pub const NOT_JSON: &str = "urn:ietf:params:jmap:error:notJSON";
+    pub const NOT_REQUEST: &str = "urn:ietf:params:jmap:error:notRequest";
+    pub const LIMIT: &str = "urn:ietf:params:jmap:error:limit";
 }

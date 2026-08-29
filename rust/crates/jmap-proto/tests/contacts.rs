@@ -226,3 +226,59 @@ fn address_book_set_error_has_card_code() {
         "addressBookHasCard"
     );
 }
+
+#[test]
+fn contact_card_query_filter_properties_cover_rfc9610() {
+    let filter: ContactCardQueryFilter = serde_json::from_value(serde_json::json!({
+        "uid": "urn:uuid:1234",
+        "phone": "+1234567890",
+        "onlineService": "matrix",
+        "address": "Berlin",
+        "kind": "individual"
+    }))
+    .unwrap();
+
+    assert_eq!(filter.uid.as_deref(), Some("urn:uuid:1234"));
+    assert_eq!(filter.phone.as_deref(), Some("+1234567890"));
+    assert_eq!(filter.online_service.as_deref(), Some("matrix"));
+    assert_eq!(filter.address.as_deref(), Some("Berlin"));
+    assert_eq!(filter.kind.as_deref(), Some("individual"));
+}
+
+#[test]
+fn contact_constants_cover_rfc9553_kinds() {
+    use jmap_proto::contacts::*;
+    assert_eq!(anniversary_kind::BIRTH, "birth");
+    assert_eq!(anniversary_kind::DEATH, "death");
+    assert_eq!(anniversary_kind::WEDDING, "wedding");
+
+    assert_eq!(title_kind::TITLE, "title");
+    assert_eq!(title_kind::ROLE, "role");
+
+    assert_eq!(calendar_kind::CALENDAR, "calendar");
+    assert_eq!(calendar_kind::FREE_BUSY, "freeBusy");
+
+    assert_eq!(media_kind::PHOTO, "photo");
+    assert_eq!(media_kind::SOUND, "sound");
+    assert_eq!(media_kind::LOGO, "logo");
+
+    assert_eq!(link_kind::CONTACT, "contact");
+
+    assert_eq!(name_component_kind::PREFIX, "prefix");
+    assert_eq!(name_component_kind::GIVEN, "given");
+    assert_eq!(name_component_kind::MIDDLE, "middle");
+    assert_eq!(name_component_kind::SURNAME, "surname");
+    assert_eq!(name_component_kind::SUFFIX, "suffix");
+
+    assert_eq!(address_component_kind::NAME, "name");
+    assert_eq!(address_component_kind::UNIT, "unit");
+    assert_eq!(address_component_kind::FLOOR, "floor");
+    assert_eq!(address_component_kind::STREET, "street");
+    assert_eq!(address_component_kind::APPARTMENT, "appartment");
+    assert_eq!(address_component_kind::ROOM, "room");
+    assert_eq!(address_component_kind::BUILDING, "building");
+    assert_eq!(address_component_kind::LOCALITY, "locality");
+    assert_eq!(address_component_kind::REGION, "region");
+    assert_eq!(address_component_kind::POSTCODE, "postcode");
+    assert_eq!(address_component_kind::COUNTRY, "country");
+}

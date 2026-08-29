@@ -15,6 +15,7 @@ use crate::state::State;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Response {
+    #[serde(default)]
     pub method_responses: Vec<Invocation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_ids: Option<BTreeMap<Id, Id>>,

@@ -31,6 +31,7 @@ pub struct Session {
     pub api_url: String,
     pub download_url: String,
     pub upload_url: String,
+    #[serde(default)]
     pub event_source_url: String,
     pub state: State,
     #[serde(flatten)]
@@ -173,7 +174,9 @@ impl Session {
 #[serde(rename_all = "camelCase")]
 pub struct Account {
     pub name: String,
+    #[serde(default)]
     pub is_personal: bool,
+    #[serde(default)]
     pub is_read_only: bool,
     pub account_capabilities: BTreeMap<String, Value>,
     #[serde(flatten)]
