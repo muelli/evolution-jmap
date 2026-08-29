@@ -1,26 +1,37 @@
 # libsecret: `secret_service_real_prompt_async` never completes its `GTask` when a prompt is dismissed
 
 Submit-ready. File at https://gitlab.gnome.org/GNOME/libsecret/-/issues
-Everything below the line is the issue body.
+Everything below the horizontal rule is the issue body.
 
 ---
 
 ## Summary
 
-When a Secret Service prompt is dismissed, `secret_prompt_perform_finish()`
+When a Secret Service prompt is dismissed,
+[`secret_prompt_perform_finish()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-prompt.c#L508)
 returns `NULL` **without setting a `GError`** — which its own documented
-contract allows. `on_real_prompt_completed()` passes that `NULL` straight to
-`g_task_return_error()`, which GLib rejects, so the `GTask` is never completed
-at all.
+contract allows.
+[`on_real_prompt_completed()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-service.c#L320-L339)
+passes that `NULL` straight to
+[`g_task_return_error()`](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L2039-L2050),
+which GLib rejects, so the `GTask` is never completed at all.
 
 The callback of the async prompt operation therefore never runs, and any
-synchronous caller above it blocks until something further up times out.
+synchronous caller above it — including
+[`secret_service_prompt_sync()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-service.c#L1855)
+— blocks until something further up times out.
 
 ## Affected versions
 
-Observed on libsecret 0.21.4 (Ubuntu 24.04, package `0.21.4-1build3`).
+Observed on libsecret 0.21.4 (Ubuntu 24.04, package `0.21.4-1build3`), with
+GLib 2.80.0.
 
-The code is unchanged on `main` as of 2026-08-29, so this is not fixed.
+Still present on `main`, so this is not fixed. All libsecret permalinks below
+are pinned to
+[`98fc993`](https://gitlab.gnome.org/GNOME/libsecret/-/tree/98fc993200bedc925b6779a2998de1c3e58f0cad).
+`secret-prompt.c` is byte-identical between 0.21.4 and that commit;
+`secret-service.c` differs only by an offset of three lines, so
+`on_real_prompt_completed()` is at 317-336 in 0.21.4 and 320-339 here.
 
 ## Symptom
 
@@ -36,55 +47,57 @@ The application then hangs rather than reporting a failure.
 
 ## Analysis
 
-`libsecret/secret-service.c`,
-[`on_real_prompt_completed()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/0.21.4/libsecret/secret-service.c#L317-L336)
-— lines 317-336 in 0.21.4, lines 320-339 on `main` — branches solely on whether the returned
-variant is `NULL`. In the `NULL` branch it calls `g_task_return_error()` with
-whatever the local `error` holds, without checking that anything was set.
+[`on_real_prompt_completed()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-service.c#L320-L339)
+branches solely on whether the returned variant is `NULL`: non-`NULL` goes to
+[`g_task_return_pointer()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-service.c#L332),
+and everything else to
+[`g_task_return_error()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-service.c#L336)
+with whatever the local `error` holds, without checking that anything set it.
 
-`libsecret/secret-prompt.c`,
-[`secret_prompt_perform_finish()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/0.21.4/libsecret/secret-prompt.c#L507-L536)
+[`secret_prompt_perform_finish()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-prompt.c#L508)
 has three `return NULL` paths, and **two of them leave `*error` untouched**:
 
-- the dismissed case, where the closure's result is `NULL`
-  (0.21.4, secret-prompt.c:526-527);
-- the unexpected-result-type case, which only issues a `g_warning()`
-  (secret-prompt.c:528-533).
+- the [dismissed case](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-prompt.c#L526-L527),
+  where the closure's result is `NULL`;
+- the [unexpected-result-type case](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-prompt.c#L528-L533),
+  which only issues a `g_warning()`.
 
-Only the `g_task_propagate_boolean()` failure sets an error.
+Only the [`g_task_propagate_boolean()` failure](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-prompt.c#L520-L523)
+sets an error.
 
-This is deliberate, not an oversight in that function. Its own documentation
-states it returns "%NULL if the prompt was dismissed or an error occurred"
-(secret-prompt.c:504). A dismissed prompt is by design *not* a `GError`, and
-the same wording appears on `secret_prompt_perform_sync()`.
+This is deliberate, not an oversight in that function. Its own
+[documented return contract](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-prompt.c#L504)
+states it returns "%NULL if the prompt was dismissed or an error occurred",
+and the same wording appears on
+[`secret_prompt_perform_sync()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-prompt.c#L198).
+A dismissed prompt is by design *not* a `GError`.
 
 So "`NULL` with no error set" is a normal, expected, documented outcome, and
 `on_real_prompt_completed()` treats it as impossible.
 
-The consequence then follows from GLib's own code. All references are to
-GLib 2.80.0, the version this was observed on:
+The consequence then follows from GLib's own code. All references are to GLib
+2.80.0, the version this was observed on:
 
-1. `g_task_return_error()` guards `g_return_if_fail (error != NULL)` at
-   [gio/gtask.c:2045](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L2039-L2050),
-   *above* `task->error = error` (2047) and `g_task_return()` (2049).
-2. `g_return_if_fail()` logs and then returns from the enclosing function
-   ([glib/gmessages.h:649-660](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/glib/gmessages.h#L649-L660)),
-   so neither of those two statements is reached.
+1. [`g_task_return_error()`](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L2039-L2050)
+   guards `g_return_if_fail (error != NULL)` at gtask.c:2045, *above*
+   `task->error = error` (2047) and `g_task_return()` (2049).
+2. [`g_return_if_fail()`](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/glib/gmessages.h#L649-L660)
+   logs and then returns from the enclosing function, so neither of those two
+   statements is reached.
 3. `task->ever_returned` is assigned in exactly one place in the file, inside
-   `g_task_return()`
-   ([gio/gtask.c:1393](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L1387-L1393)),
+   [`g_task_return()`](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L1387-L1393),
    so it stays unset.
-4. At finalization, `if (!task->ever_returned)` emits the second critical
-   ([gio/gtask.c:732-745](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L726-L745)).
+4. At finalization,
+   [`if (!task->ever_returned)`](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L726-L745)
+   emits the second critical.
 
 That accounts for both observed messages and their order. The first is
 generated at gtask.c:2045 specifically: `g_return_if_fail()` passes
 `G_STRFUNC` and the stringified expression to `g_return_if_fail_warning()`,
-which is why the logged text names `g_task_return_error` and
-`'error != NULL'`.
+which is why the logged text names `g_task_return_error` and `'error != NULL'`.
 
-The task is therefore never completed. Every caller waiting on that operation
-waits forever, and `secret_service_prompt_sync()` and its callers block.
+The task is therefore never completed, so every caller waiting on that
+operation waits forever.
 
 ## How a prompt gets dismissed without an error
 
@@ -138,15 +151,17 @@ prompt failure, not a hang.
 
 ## Suggested fix
 
-In `on_real_prompt_completed()`, distinguish dismissal from failure:
+In [`on_real_prompt_completed()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-service.c#L320-L339),
+distinguish dismissal from failure:
 
 - if `error` is set, `g_task_return_error()` as now;
 - otherwise `g_task_return_pointer (task, NULL, NULL)`.
 
-`secret_service_real_prompt_finish()` already handles a `NULL` pointer
-correctly — it propagates the pointer and returns `NULL` when there is none —
-so this preserves the documented "`NULL` means dismissed" semantics through the
-async path without changing any public contract.
+[`secret_service_real_prompt_finish()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-service.c#L362-L379)
+already handles a `NULL` pointer correctly — it propagates the pointer and
+returns `NULL` when there is none — so this preserves the documented "`NULL`
+means dismissed" semantics through the async path without changing any public
+contract.
 
 If instead a dismissed prompt ought to be an error at this layer, then
 `secret_prompt_perform_finish()` should set one, and its documented return
@@ -158,7 +173,10 @@ treats it as unreachable.
 
 #75 and #113 are the same exactly-once `GTask` discipline failing in the
 opposite direction — `g_task_return_error: assertion '!task->ever_returned'
-failed`, a task returned *twice*, in `on_search_loaded()`. Different function
-and different outcome (a crash rather than a hang); mentioned only because the
-shared underlying theme is async completion paths that do not guarantee exactly
-one return.
+failed`, a task returned *twice*, in
+[`on_search_loaded()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-methods.c#L121)
+from
+[`search_load_item_async()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/98fc993200bedc925b6779a2998de1c3e58f0cad/libsecret/secret-methods.c#L150).
+Different function and different outcome (a crash rather than a hang);
+mentioned only because the shared underlying theme is async completion paths
+that do not guarantee exactly one return.
