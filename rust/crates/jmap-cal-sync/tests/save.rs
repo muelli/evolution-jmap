@@ -5519,3 +5519,83 @@ fn no_op_save_mints_no_patch_across_all_calendar_mapped_surfaces_matrix() {
         );
     }
 }
+
+#[test]
+fn no_op_save_mints_no_patch_on_empty_container_collections_and_empty_strings() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    let id = fixture.seed(&fixture.ours, "Seed Event", "2026-01-15T10:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "title": "",
+            "description": "",
+            "locations": {
+                "loc1": {
+                    "@type": "Location",
+                    "name": ""
+                }
+            },
+            "virtualLocations": {
+                "v1": {
+                    "@type": "VirtualLocation",
+                    "uri": "https://meet.example.com/standup",
+                    "name": "",
+                    "features": {}
+                }
+            },
+            "keywords": {},
+            "alerts": {},
+            "recurrenceOverrides": {}
+        }),
+    );
+
+    let loaded1 = sync.load_component(id.as_str()).expect("load 1");
+    let saved1 = sync
+        .save_component(&loaded1.icalendar, Some(id.as_str()))
+        .expect("save 1");
+
+    let loaded2 = sync.load_component(id.as_str()).expect("load 2");
+    let saved2 = sync
+        .save_component(&loaded2.icalendar, Some(id.as_str()))
+        .expect("save 2");
+
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must not bump revision for empty containers and empty strings"
+    );
+
+    let current_event = fixture.event(&id);
+    let parsed_event = jmap_ical::ical_to_event(&loaded2.icalendar).expect("parse loaded2");
+    let patch_diff = jmap_cal_sync::patch::diff(&current_event, &parsed_event);
+    assert!(
+        patch_diff.is_empty(),
+        "diff after round-trip must be empty, found: {patch_diff:?}"
+    );
+
+    // Direct diff when edited carries explicit empty containers / empty names:
+    let mut edited_with_empty = parsed_event.clone();
+    edited_with_empty.locations =
+        Some([("1".into(), json!({"@type": "Location", "name": ""}))].into());
+    edited_with_empty.virtual_locations = Some(
+        [(
+            "v1".into(),
+            json!({
+                "@type": "VirtualLocation",
+                "uri": "https://meet.example.com/standup",
+                "name": "",
+                "features": {}
+            }),
+        )]
+        .into(),
+    );
+    edited_with_empty.alerts = Some(std::collections::BTreeMap::new());
+    edited_with_empty.recurrence_overrides = Some(std::collections::BTreeMap::new());
+
+    let direct_diff = jmap_cal_sync::patch::diff(&current_event, &edited_with_empty);
+    assert!(
+        direct_diff.is_empty(),
+        "diff with empty containers must be empty, found: {direct_diff:?}"
+    );
+}
