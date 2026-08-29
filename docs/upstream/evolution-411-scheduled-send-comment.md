@@ -5,9 +5,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # DRAFT comment for GNOME/evolution#411, "Schedule sending an email to a later date and time"
 
-**Status: draft, not filed.** Review before posting. This is a *comment on the
-existing issue*, deliberately not a new report: #411 is open and already notes
-that JMAP could schedule server-side, so a duplicate would only add noise.
+**Status: POSTED by the maintainer on 2026-08-29** to
+<https://gitlab.gnome.org/GNOME/evolution/-/work_items/411>. Kept here as the
+record of what was said, since gitlab.gnome.org renders comments client-side
+and cannot be read back automatically. Any reply has to be checked in a
+browser.
+
+It was posted as a *comment on the existing issue*, deliberately not a new
+report: #411 is open and already notes that JMAP could schedule server-side, so
+a duplicate would only have added noise.
 
 **Revision note (2026-08-29):** an earlier draft proposed carrying the send
 time as an X-header on the `CamelMimeMessage`. That was a workaround chosen to
