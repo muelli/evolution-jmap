@@ -256,6 +256,7 @@ fn a_cached_child_is_brought_up_to_date_the_moment_it_is_bound() {
                 target: ConnectTarget::Origin("https://old.example.com:1234".to_owned()),
                 user: Some("someone-else@example.com".to_owned()),
                 resource_id: Some("AB1".to_owned()),
+                rebase_urls: false,
             },
             "the test did not start from a stale child"
         );
@@ -269,6 +270,7 @@ fn a_cached_child_is_brought_up_to_date_the_moment_it_is_bound() {
                 target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
                 user: Some("vera@example.com".to_owned()),
                 resource_id: Some("AB1".to_owned()),
+                rebase_urls: false,
             },
             "the child is still asking last session's server"
         );

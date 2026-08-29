@@ -39,7 +39,7 @@ pub fn open_book(
     config: &SourceConfig,
     credentials: Credentials,
 ) -> Result<BookSync, ConnectError> {
-    let client = source::connect(&config.target, credentials)?;
+    let client = source::connect(&config.target, config.rebase_urls, credentials)?;
     let account_id = client.primary_account(CAPABILITY_CONTACTS)?;
     let books = client.address_books(&account_id)?;
 

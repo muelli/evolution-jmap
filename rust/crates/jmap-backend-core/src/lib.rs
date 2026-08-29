@@ -33,6 +33,8 @@
 //! - [`push`] turns a server-pushed JMAP `StateChange` into the refresh EDS
 //!   already runs, and [`weak`] is how its thread reaches a backend it does
 //!   not own without racing the backend's destruction.
+//! - [`rebase`] is the per-account opt-in for rebasing a session's advertised
+//!   URLs onto the origin actually connected through.
 //!
 //! [`CancelFlag`]: jmap_client::transport::CancelFlag
 //!
@@ -51,6 +53,7 @@ pub mod marshal;
 pub mod oauth2;
 pub mod owned;
 pub mod push;
+pub mod rebase;
 pub mod resolver;
 pub mod retry;
 pub mod secret_store;

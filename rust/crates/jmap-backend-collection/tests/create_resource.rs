@@ -185,6 +185,7 @@ fn create(server: &MockServer, scratch: &Scratch) -> Child {
     let requested = requested_kind(scratch).expect("the scratch source names a kind");
     let child = create_on_server(
         &ConnectTarget::Origin(server.origin().to_owned()),
+        false,
         Credentials::none(),
         &requested,
     )

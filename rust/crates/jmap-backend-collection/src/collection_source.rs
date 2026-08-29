@@ -96,6 +96,10 @@ pub struct Server {
     /// writes `[Authentication]` and `[Security]` keys, and taking a URL apart
     /// again to get them back would be a second parser to disagree with.
     pub connection: Connection,
+    /// Whether this account opts into rebasing the session's advertised URLs
+    /// onto the origin actually connected through — see
+    /// [`jmap_backend_core::rebase::rebase_urls`].
+    pub rebase_urls: bool,
 }
 
 /// Which parts of the account are switched on, by
@@ -220,8 +224,12 @@ pub unsafe fn server_of(source: *mut ESource) -> Result<Server, SourceError> {
     // checked fields.
     let target = connect_target(host.as_deref(), port, secure)?;
 
+    // SAFETY: `source` is valid by this function's own contract.
+    let rebase_urls = unsafe { jmap_backend_core::rebase::rebase_urls(source) };
+
     Ok(Server {
         target,
+        rebase_urls,
         connection: Connection {
             // `connect_target` returned Ok, so the host is present;
             // unwrapping it here rather than earlier keeps `MissingHost` a

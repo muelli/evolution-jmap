@@ -447,7 +447,8 @@ fn create_on_server_traces_structured_fields() {
         };
 
         let captured = capture(|| {
-            let _ = create_on_server(&target, Credentials::none(), &requested).expect("created");
+            let _ =
+                create_on_server(&target, false, Credentials::none(), &requested).expect("created");
         });
 
         assert!(
@@ -482,7 +483,7 @@ fn delete_on_server_traces_structured_fields() {
         };
 
         let created = untraced(|| {
-            create_on_server(&target, Credentials::none(), &requested).expect("created")
+            create_on_server(&target, false, Credentials::none(), &requested).expect("created")
         });
 
         let doomed = Doomed {
@@ -491,7 +492,7 @@ fn delete_on_server_traces_structured_fields() {
         };
 
         let captured = capture(|| {
-            delete_on_server(&target, Credentials::none(), &doomed).expect("deleted");
+            delete_on_server(&target, false, Credentials::none(), &doomed).expect("deleted");
         });
 
         assert!(
@@ -523,6 +524,7 @@ fn fan_out_traces_structured_fields() {
             server: Server {
                 target: ConnectTarget::Origin(server.origin().to_owned()),
                 connection: connection(),
+                rebase_urls: false,
             },
             parts: Parts::ALL,
             credentials: Credentials::none(),

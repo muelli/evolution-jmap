@@ -218,6 +218,7 @@ fn a_written_child_reaches_the_server_its_account_named() {
                 target: ConnectTarget::Origin("https://jmap.example.com:8443".to_owned()),
                 user: Some("vera@example.com".to_owned()),
                 resource_id: Some("AB1".to_owned()),
+                rebase_urls: false,
             }
         );
         assert_eq!(

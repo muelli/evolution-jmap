@@ -43,7 +43,7 @@ pub fn open_calendar(
     config: &SourceConfig,
     credentials: Credentials,
 ) -> Result<CalSync, ConnectError> {
-    let client = source::connect(&config.target, credentials)?;
+    let client = source::connect(&config.target, config.rebase_urls, credentials)?;
     let account_id = client.primary_account(CAPABILITY_CALENDARS)?;
     let calendars = client.calendars(&account_id)?;
 
