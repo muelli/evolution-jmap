@@ -1,3 +1,25 @@
+evolution-jmap (0.3.0) unstable; urgency=medium
+
+  * Fixed the hourly OAuth2 re-consent: a long-lived backend connection kept
+    an expired access token and escalated its 401 to a consent window instead
+    of refreshing. All four connection paths (calendar, address book, mail
+    store, mail transport) now refresh once and retry. Operator-validated
+    against a real account: seven token expiries handled silently, no consent
+    windows.
+  * Fixed mail body downloads against real servers: a cross-origin redirect on
+    the blob download is now refused rather than returned as if it were the
+    message.
+  * Fixed the Inbox showing "no messages" until the user switched folders and
+    back.
+  * A dead Evolution instance's stale OAuth2 D-Bus proxy is now reported as
+    itself rather than misclassified as a keyring failure.
+  * Account setup and OAuth 2.0 improvements, especially against Fastmail.
+  * Calendar and address-book creation and deletion.
+  * A large batch of contact and calendar field-mapping fidelity work, driven
+    by real-exporter fixtures, property-based tests and mutation testing.
+
+ -- Tobias Mueller <muelli@cryptobitch.de>  Sat, 29 Aug 2026 11:36:58 -0700
+
 evolution-jmap (0.2.0) unstable; urgency=medium
 
   * Account-setup UI (M7), CI-verified against real Evolution, and the
