@@ -1306,6 +1306,8 @@ fn read_alert(valarm: &ICalendarComponent) -> Option<Value> {
 /// then leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty()
+        && rule.rscale.is_none()
+        && rule.skip.is_none()
         && writable(rule)
         && rule
             .by_day

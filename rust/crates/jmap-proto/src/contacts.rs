@@ -30,6 +30,10 @@ pub struct AddressBook {
     pub is_default: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_subscribed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_with: Option<BTreeMap<Id, Option<AddressBookRights>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_rights: Option<AddressBookRights>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -161,6 +165,15 @@ pub struct ContactCard {
     /// Personal information such as gender, expertise, hobbies (RFC 9553 §2.8.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub personal_info: Option<BTreeMap<String, PersonalInfo>>,
+    /// How to address the contact (RFC 9553 §2.2.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speak_to_as: Option<SpeakToAs>,
+    /// Preferred languages for communication (RFC 9553 §2.8.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_languages: Option<BTreeMap<String, LanguagePref>>,
+    /// Localized property values (RFC 9553 §2.7.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localizations: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -639,6 +652,46 @@ impl ContactCardQueryFilter {
             ..Self::default()
         }
     }
+
+    pub fn uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn email(mut self, email: impl Into<String>) -> Self {
+        self.email = Some(email.into());
+        self
+    }
+
+    pub fn phone(mut self, phone: impl Into<String>) -> Self {
+        self.phone = Some(phone.into());
+        self
+    }
+
+    pub fn online_service(mut self, service: impl Into<String>) -> Self {
+        self.online_service = Some(service.into());
+        self
+    }
+
+    pub fn address(mut self, address: impl Into<String>) -> Self {
+        self.address = Some(address.into());
+        self
+    }
+
+    pub fn kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
 }
 
 /// The `SetError` type RFC 9610 §2.4 adds for `AddressBook/set`.
@@ -827,7 +880,7 @@ pub struct SpeakToAs {
 }
 
 /// JSContact LanguagePref (RFC 9553 §2.8.5): preferred language for communication.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct LanguagePref {
     #[serde(default)]
@@ -838,4 +891,81 @@ pub struct LanguagePref {
     pub pref: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl<'de> serde::Deserialize<'de> for LanguagePref {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct LanguagePrefVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for LanguagePrefVisitor {
+            type Value = LanguagePref;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a LanguagePref object, number, or string")
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<LanguagePref, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LanguagePref {
+                    pref: Some(value as u32),
+                    ..LanguagePref::default()
+                })
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<LanguagePref, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LanguagePref {
+                    pref: Some(value as u32),
+                    ..LanguagePref::default()
+                })
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<LanguagePref, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LanguagePref {
+                    language: value.to_owned(),
+                    ..LanguagePref::default()
+                })
+            }
+
+            fn visit_map<M>(self, map: M) -> Result<LanguagePref, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct RawLanguagePref {
+                    #[serde(default)]
+                    language: String,
+                    #[serde(default)]
+                    contexts: Option<Value>,
+                    #[serde(default)]
+                    pref: Option<u32>,
+                    #[serde(flatten)]
+                    extra: BTreeMap<String, Value>,
+                }
+
+                let raw = RawLanguagePref::deserialize(
+                    serde::de::value::MapAccessDeserializer::new(map),
+                )?;
+                Ok(LanguagePref {
+                    language: raw.language,
+                    contexts: raw.contexts,
+                    pref: raw.pref,
+                    extra: raw.extra,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(LanguagePrefVisitor)
+    }
 }

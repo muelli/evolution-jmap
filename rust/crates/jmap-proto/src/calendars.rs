@@ -39,6 +39,12 @@ pub struct Calendar {
     pub is_visible: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_in_availability: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_with: Option<BTreeMap<Id, Option<CalendarRights>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_rights: Option<CalendarRights>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -383,6 +389,12 @@ pub struct RecurrenceRule {
     /// Tuesdays.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_day_of_week: Option<String>,
+    /// The calendar scale the recurrence rule is defined in (RFC 8984 §4.3.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rscale: Option<String>,
+    /// How to handle occurrences spanning leap months or invalid dates (RFC 8984 §4.3.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -458,13 +470,83 @@ impl CalendarEventQueryFilter {
         }
     }
 
-    pub fn time_range(after: &str, before: &str) -> Self {
+    pub fn time_range(after: impl Into<String>, before: impl Into<String>) -> Self {
         Self {
-            after: Some(after.to_owned()),
-            before: Some(before.to_owned()),
+            after: Some(after.into()),
+            before: Some(before.into()),
             ..Self::default()
         }
     }
+
+    pub fn with_time_range(mut self, after: impl Into<String>, before: impl Into<String>) -> Self {
+        self.after = Some(after.into());
+        self.before = Some(before.into());
+        self
+    }
+
+    pub fn after(mut self, after: impl Into<String>) -> Self {
+        self.after = Some(after.into());
+        self
+    }
+
+    pub fn before(mut self, before: impl Into<String>) -> Self {
+        self.before = Some(before.into());
+        self
+    }
+
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
+    }
+
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn location(mut self, location: impl Into<String>) -> Self {
+        self.location = Some(location.into());
+        self
+    }
+
+    pub fn uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+}
+
+/// Standard recurrence frequency values (RFC 8984 §4.3.3).
+pub mod frequency {
+    pub const SECONDLY: &str = "secondly";
+    pub const MINUTELY: &str = "minutely";
+    pub const HOURLY: &str = "hourly";
+    pub const DAILY: &str = "daily";
+    pub const WEEKLY: &str = "weekly";
+    pub const MONTHLY: &str = "monthly";
+    pub const YEARLY: &str = "yearly";
+}
+
+/// Standard recurrence skip values (RFC 8984 §4.3.3).
+pub mod recurrence_skip {
+    pub const OMIT: &str = "omit";
+    pub const BACKWARD: &str = "backward";
+    pub const FORWARD: &str = "forward";
+}
+
+/// Standard two-letter weekday codes (RFC 8984 §4.3.3).
+pub mod weekday {
+    pub const MO: &str = "mo";
+    pub const TU: &str = "tu";
+    pub const WE: &str = "we";
+    pub const TH: &str = "th";
+    pub const FR: &str = "fr";
+    pub const SA: &str = "sa";
+    pub const SU: &str = "su";
 }
 
 /// The `SetError` type draft-ietf-jmap-calendars §4.4 adds for `Calendar/set`.

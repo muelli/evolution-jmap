@@ -915,3 +915,18 @@ fn blob_copy_and_core_capabilities_roundtrip_covers_rfc8620() {
     );
     assert_eq!(session.core_capability(), Some(cap));
 }
+
+#[test]
+fn query_request_and_changes_request_calculate_total_builder() {
+    use jmap_proto::methods::{QueryChangesRequest, QueryRequest};
+
+    let q: QueryRequest<()> = QueryRequest::new("A1").calculate_total();
+    assert!(q.calculate_total);
+    let q_val = serde_json::to_value(&q).unwrap();
+    assert_eq!(q_val["calculateTotal"], true);
+
+    let qc: QueryChangesRequest<()> = QueryChangesRequest::new("A1", "s1").calculate_total();
+    assert!(qc.calculate_total);
+    let qc_val = serde_json::to_value(&qc).unwrap();
+    assert_eq!(qc_val["calculateTotal"], true);
+}

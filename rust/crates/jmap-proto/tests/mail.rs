@@ -216,9 +216,7 @@ fn mailbox_rights_and_thread_roundtrip_cover_rfc8621() {
     .unwrap();
 
     assert_eq!(mailbox.name, "Shared Archive");
-    let rights_val = mailbox.extra.get("myRights").unwrap();
-    let rights: jmap_proto::mail::MailboxRights =
-        serde_json::from_value(rights_val.clone()).unwrap();
+    let rights = mailbox.my_rights.as_ref().unwrap();
     assert!(rights.may_read_items);
     assert!(!rights.may_add_items);
     assert!(rights.may_set_seen);
@@ -467,4 +465,101 @@ fn mail_capabilities_roundtrip_covers_rfc8621() {
 
     let round_sc: SubmissionCapability = serde_json::from_value(sc_val).unwrap();
     assert_eq!(round_sc, sub_cap);
+}
+
+#[test]
+fn mailbox_sharing_identity_draft_and_email_filter_builders_roundtrip() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::mail::{
+        Email, EmailHeader, EmailQueryFilter, Identity, Mailbox, MailboxRights,
+    };
+    use std::collections::BTreeMap;
+
+    let rights = MailboxRights {
+        may_read_items: true,
+        may_add_items: true,
+        may_remove_items: false,
+        may_set_seen: true,
+        may_set_keywords: true,
+        may_create_child: false,
+        may_rename: false,
+        may_delete: false,
+        may_submit: false,
+        extra: BTreeMap::new(),
+    };
+
+    let mailbox = Mailbox {
+        id: Some("mb1".into()),
+        name: "Shared Support Inbox".to_owned(),
+        share_with: Some(BTreeMap::from([("usr_carol".into(), Some(rights.clone()))])),
+        my_rights: Some(rights.clone()),
+        ..Mailbox::default()
+    };
+
+    let mb_val = serde_json::to_value(&mailbox).unwrap();
+    assert_eq!(mb_val["shareWith"]["usr_carol"]["maySetSeen"], true);
+    assert_eq!(mb_val["myRights"]["maySetKeywords"], true);
+
+    let round_mb: Mailbox = serde_json::from_value(mb_val).unwrap();
+    assert_eq!(round_mb, mailbox);
+
+    let identity = Identity {
+        id: Some("id1".into()),
+        name: "Support".to_owned(),
+        email: "support@example.com".to_owned(),
+        draft_mailbox_id: Some("mb_drafts".into()),
+        ..Identity::default()
+    };
+
+    let id_val = serde_json::to_value(&identity).unwrap();
+    assert_eq!(id_val["draftMailboxId"], "mb_drafts");
+
+    let round_id: Identity = serde_json::from_value(id_val).unwrap();
+    assert_eq!(round_id, identity);
+
+    let email = Email {
+        id: Some("em1".into()),
+        subject: Some("Report".to_owned()),
+        headers: Some(vec![EmailHeader::new("X-Custom", "value1")]),
+        ..Email::default()
+    };
+
+    let em_val = serde_json::to_value(&email).unwrap();
+    assert_eq!(em_val["headers"][0]["name"], "X-Custom");
+    assert_eq!(em_val["headers"][0]["value"], "value1");
+
+    let round_em: Email = serde_json::from_value(em_val).unwrap();
+    assert_eq!(round_em, email);
+
+    let filter = EmailQueryFilter::in_mailbox("mb1")
+        .in_mailbox_other_than(["mb_trash", "mb_junk"])
+        .has_keyword("$flagged")
+        .not_keyword("$seen")
+        .has_attachment(true)
+        .from("boss@example.com")
+        .to("team@example.com")
+        .subject("Quarterly Report")
+        .text("urgent")
+        .time_range(
+            Some(UtcDate::new("2026-09-01T00:00:00Z")),
+            Some(UtcDate::new("2026-09-02T00:00:00Z")),
+        );
+
+    assert_eq!(filter.in_mailbox.as_ref().unwrap().as_str(), "mb1");
+    assert_eq!(filter.in_mailbox_other_than.as_ref().unwrap().len(), 2);
+    assert_eq!(filter.has_keyword.as_deref(), Some("$flagged"));
+    assert_eq!(filter.not_keyword.as_deref(), Some("$seen"));
+    assert_eq!(filter.has_attachment, Some(true));
+    assert_eq!(filter.from.as_deref(), Some("boss@example.com"));
+    assert_eq!(filter.to.as_deref(), Some("team@example.com"));
+    assert_eq!(filter.subject.as_deref(), Some("Quarterly Report"));
+    assert_eq!(filter.text.as_deref(), Some("urgent"));
+    assert_eq!(
+        filter.before.as_ref().unwrap().as_str(),
+        "2026-09-02T00:00:00Z"
+    );
+    assert_eq!(
+        filter.after.as_ref().unwrap().as_str(),
+        "2026-09-01T00:00:00Z"
+    );
 }

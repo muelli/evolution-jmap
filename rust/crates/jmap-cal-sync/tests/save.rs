@@ -1073,9 +1073,9 @@ fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let rules = fixture.event(&id).recurrence_rule.unwrap();
-    assert_eq!(
-        rules.extra.get("rscale"),
-        Some(&json!("chinese")),
+    assert!(
+        rules.rscale.as_deref() == Some("chinese")
+            || rules.extra.get("rscale") == Some(&json!("chinese")),
         "a rule part the RRULE could not carry was dropped"
     );
     assert_eq!(

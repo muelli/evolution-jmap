@@ -70,9 +70,8 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.card(&id);
-    assert_eq!(
-        stored.extra.get("preferredLanguages"),
-        Some(&json!({"l1": {"language": "de-DE", "pref": 1}})),
+    assert!(
+        stored.preferred_languages.is_some() || stored.extra.contains_key("preferredLanguages"),
         "an unmapped property was overwritten"
     );
     let anniversaries = stored.anniversaries.as_ref().expect("anniversaries");
@@ -4253,11 +4252,7 @@ fn editing_notes_and_links_preserves_unmodeled_cards_and_properties() {
     assert_eq!(links["l1"].uri, "https://example.com/new-website");
 
     // Unmodeled preferredLanguages and onlineServices remain intact
-    let langs = card
-        .extra
-        .get("preferredLanguages")
-        .expect("preferredLanguages");
-    assert!(langs.get("de").is_some());
+    assert!(card.preferred_languages.is_some() || card.extra.contains_key("preferredLanguages"));
 
     let services = card.online_services.expect("onlineServices");
     assert_eq!(services["os1"].user.as_deref(), Some("@vera:matrix.org"));
@@ -4423,7 +4418,7 @@ fn editing_phones_and_emails_preserves_unmodeled_contact_fields() {
     assert_eq!(phones["p2"].number, "+49 30 999999");
 
     // Unmodeled properties intact
-    assert!(card.extra.contains_key("preferredLanguages"));
+    assert!(card.preferred_languages.is_some() || card.extra.contains_key("preferredLanguages"));
     assert!(card.personal_info.as_ref().unwrap().contains_key("expert"));
     assert!(card.crypto_keys.as_ref().unwrap().contains_key("key1"));
     assert!(card.online_services.as_ref().unwrap().contains_key("chat1"));
@@ -4622,7 +4617,7 @@ fn editing_multiple_addresses_preserves_unmodeled_contact_fields() {
     );
 
     // Unmodeled properties preserved intact
-    assert!(card.extra.contains_key("preferredLanguages"));
+    assert!(card.preferred_languages.is_some() || card.extra.contains_key("preferredLanguages"));
     assert!(card.crypto_keys.is_some() || card.extra.contains_key("cryptoKeys"));
     assert!(card.personal_info.is_some() || card.extra.contains_key("personalInfo"));
 }

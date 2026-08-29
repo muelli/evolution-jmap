@@ -38,6 +38,12 @@ pub struct Principal {
     pub email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_zone: Option<String>,
+    /// An alphanumeric secret string to authorize access to this principal (RFC 9670 §2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Valid methods for sending scheduling messages to this principal (RFC 9670 §2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_to: Option<BTreeMap<String, String>>,
     /// Server-set, per-*principal* capability bag — distinct from the
     /// account/server capability maps in `session.rs`. This is where the
     /// calendars draft hangs `mayGetAvailability` (draft-ietf-jmap-calendars
@@ -71,6 +77,16 @@ impl PrincipalQueryFilter {
             email: Some(email.into()),
             ..Self::default()
         }
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
     }
 }
 

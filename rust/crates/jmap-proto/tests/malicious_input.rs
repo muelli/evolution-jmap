@@ -359,4 +359,32 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::principals::PrincipalsCapability>(&text);
     }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_identity(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::Identity>(&text);
+    }
+
+    #[cfg(feature = "contacts")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_contact_card_query_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::contacts::ContactCardQueryFilter>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar_event_query_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::CalendarEventQueryFilter>(&text);
+    }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_email_query_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::EmailQueryFilter>(&text);
+    }
 }

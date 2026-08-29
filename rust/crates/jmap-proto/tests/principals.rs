@@ -69,11 +69,10 @@ fn principal_secret_and_send_to_cover_rfc9670() {
     let p: Principal = serde_json::from_value(value).unwrap();
     assert_eq!(p.id.as_ref().unwrap().as_str(), "p_conf1");
     assert_eq!(p.name, "Room 404");
-    assert_eq!(p.principal_type.as_deref(), Some("location"));
-    assert_eq!(p.extra.get("secret"), Some(&serde_json::json!("s3cr3t")));
+    assert_eq!(p.secret.as_deref(), Some("s3cr3t"));
     assert_eq!(
-        p.extra.get("sendTo"),
-        Some(&serde_json::json!({"imip": "mailto:room404@example.com"}))
+        p.send_to.as_ref().unwrap()["imip"],
+        "mailto:room404@example.com"
     );
 }
 
@@ -136,4 +135,36 @@ fn principals_capabilities_and_set_error_roundtrip_covers_rfc9670() {
 
     let round_cap: PrincipalsCapability = serde_json::from_value(cap_val).unwrap();
     assert_eq!(round_cap, cap);
+}
+
+#[test]
+fn principal_secret_send_to_typed_and_query_filter_builders_roundtrip() {
+    use jmap_proto::principals::{Principal, PrincipalQueryFilter};
+    use std::collections::BTreeMap;
+
+    let p = Principal {
+        id: Some("p_typed".into()),
+        name: "Meeting Room 1".to_owned(),
+        secret: Some("secret123".to_owned()),
+        send_to: Some(BTreeMap::from([(
+            "imip".to_owned(),
+            "mailto:room1@example.com".to_owned(),
+        )])),
+        ..Principal::default()
+    };
+
+    let p_val = serde_json::to_value(&p).unwrap();
+    assert_eq!(p_val["secret"], "secret123");
+    assert_eq!(p_val["sendTo"]["imip"], "mailto:room1@example.com");
+
+    let round_p: Principal = serde_json::from_value(p_val).unwrap();
+    assert_eq!(round_p, p);
+
+    let filter = PrincipalQueryFilter::email("room1@example.com")
+        .name("Meeting Room")
+        .text("Room 1");
+
+    assert_eq!(filter.name.as_deref(), Some("Meeting Room"));
+    assert_eq!(filter.email.as_deref(), Some("room1@example.com"));
+    assert_eq!(filter.text.as_deref(), Some("Room 1"));
 }
