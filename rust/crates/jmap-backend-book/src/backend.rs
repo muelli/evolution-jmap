@@ -51,9 +51,13 @@ use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
+use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
+use jmap_backend_core::retry::retry_on_authentication_failure;
+use jmap_backend_core::source::backend_source;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::guard_bool;
 use jmap_book_sync::BookSync;
+use jmap_client::Credentials;
 
 use crate::connect::{self, ACCEPTED_AUTH_RESULT, write_auth_result};
 use crate::ops::{self, Outcome};
@@ -132,6 +136,20 @@ impl JmapBookBackend {
         let backend: Box<Self> = unsafe { zeroed_box() };
         backend.session.init(RwLock::new(None));
         backend
+    }
+
+    /// Runs `f` against the live connection the way [`with_connection`] does —
+    /// under a read guard, without replacing it — and answers `None` if there
+    /// is none.
+    ///
+    /// For the tests only, and specifically for the one thing
+    /// [`refresh_credentials`] does that a test can reach without an
+    /// `ESource`: installing fresh credentials on the pooled connection.
+    #[cfg(feature = "testing")]
+    pub fn inspect_connection<R>(&self, f: impl FnOnce(&BookSync) -> R) -> Option<R> {
+        let session = self.session()?;
+        let guard = read(session);
+        guard.as_ref().map(f)
     }
 
     /// The connection slot, or `None` on an instance whose `instance_init` has
@@ -298,7 +316,7 @@ unsafe extern "C" fn list_existing_sync(
             meta_backend,
             cancellable,
             error,
-            |sync| ops::list_existing(sync, out_new_sync_tag, out_existing_objects, error),
+            |sync, error| ops::list_existing(sync, out_new_sync_tag, out_existing_objects, error),
         )
     }
 }
@@ -323,7 +341,7 @@ unsafe extern "C" fn get_changes_sync(
             meta_backend,
             cancellable,
             error,
-            |sync| {
+            |sync, error| {
                 match ops::get_changes(
                     sync,
                     last_sync_tag,
@@ -380,7 +398,7 @@ unsafe extern "C" fn load_contact_sync(
             meta_backend,
             cancellable,
             error,
-            |sync| ops::load_contact(sync, uid, out_contact, out_extra, error),
+            |sync, error| ops::load_contact(sync, uid, out_contact, out_extra, error),
         )
     }
 }
@@ -407,7 +425,7 @@ unsafe extern "C" fn save_contact_sync(
             meta_backend,
             cancellable,
             error,
-            |sync| {
+            |sync, error| {
                 ops::save_contact(
                     sync,
                     overwrite_existing,
@@ -439,7 +457,7 @@ unsafe extern "C" fn remove_contact_sync(
             meta_backend,
             cancellable,
             error,
-            |sync| ops::remove_contact(sync, uid, error),
+            |sync, error| ops::remove_contact(sync, uid, error),
         )
     }
 }
@@ -460,6 +478,23 @@ unsafe extern "C" fn remove_contact_sync(
 /// what the caller asked for whether or not they then pressed Stop; refusing
 /// would leave the backend connected to a socket EDS believes is closed.
 ///
+/// ## The stale access token, and why the retry lives here
+///
+/// `docs/ROADMAP.md` item 23, and the calendar backend's `with_connection`
+/// says the whole of it: this connection is pooled from `connect_sync` to
+/// `disconnect_sync` and carries the bearer token it was *built* with, an
+/// OAuth 2.0 access token lives about an hour, and the 401 that follows used
+/// to travel straight up to EDS as `E_CLIENT_ERROR_AUTHENTICATION_FAILED` —
+/// the shell's cue to put a consent window in front of the user, once an
+/// hour, with a good refresh token in the keyring the whole time.
+///
+/// So a 401 out of `f` is not reported until a fresh token has been asked for
+/// and the operation tried again on it. `f` runs against a private `GError`
+/// slot rather than the caller's; see [`retry_on_authentication_failure`] for
+/// why that is load-bearing, and for the requirement it puts on `f` (safe to
+/// run twice — every `ops` entry point here writes its out-parameters only in
+/// its success tail).
+///
 /// # Safety
 ///
 /// `meta_backend` must be NULL or a valid instance of this type, `cancellable`
@@ -472,7 +507,7 @@ unsafe fn with_connection(
     meta_backend: *mut EBookMetaBackend,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
-    f: impl FnOnce(&BookSync) -> gboolean,
+    mut f: impl FnMut(&BookSync, *mut *mut GError) -> gboolean,
 ) -> gboolean {
     unsafe {
         guard_bool(context, error, || {
@@ -480,11 +515,66 @@ unsafe fn with_connection(
             let Some(session) = instance(meta_backend).and_then(JmapBookBackend::session) else {
                 return fail_offline(error);
             };
-            match read(session).as_ref() {
-                Some(sync) => f(sync),
-                None => fail_offline(error),
-            }
+            // Held across both attempts: the retry replaces the credentials on
+            // the connection rather than the connection, which is what makes a
+            // read guard — and therefore the other threads' concurrent
+            // operations — enough.
+            let guard = read(session);
+            let Some(sync) = guard.as_ref() else {
+                return fail_offline(error);
+            };
+            retry_on_authentication_failure(
+                error,
+                |slot| f(sync, slot),
+                || refresh_credentials(meta_backend, sync, cancellable),
+            )
         })
+    }
+}
+
+/// Fetches a fresh OAuth 2.0 access token for the account and installs it on
+/// the live connection, reporting whether an operation is now worth retrying.
+/// The calendar backend's `refresh_credentials` is the same function on the
+/// same reasoning, against `ECalMetaBackend`.
+///
+/// # Safety
+///
+/// `meta_backend` must be a valid instance of this type and `cancellable` NULL
+/// or a valid `GCancellable` — what the vfunc above was called with.
+unsafe fn refresh_credentials(
+    meta_backend: *mut EBookMetaBackend,
+    sync: &BookSync,
+    cancellable: *mut GCancellable,
+) -> bool {
+    // SAFETY: a valid instance of a type derived from `EBackend`, or one of
+    // this crate's detached test instances — which is exactly what
+    // `backend_source` exists to tell apart. The source is borrowed, not
+    // owned.
+    let source = unsafe { backend_source(meta_backend.cast()) };
+    // SAFETY: NULL or a valid `ESource`, which is what `source_uses_oauth2`
+    // and `access_token` each ask for. A non-OAuth2 account's 401 means the
+    // stored password is wrong, which a re-fetch would only reproduce.
+    if source.is_null() || !unsafe { source_uses_oauth2(source) } {
+        return false;
+    }
+
+    // SAFETY: a valid `ESource`, checked non-NULL above, and a cancellable
+    // satisfying the contract by this function's own.
+    match unsafe { access_token(source, cancellable) } {
+        Ok(token) => {
+            tracing::debug!("refreshed the address book connection's OAuth 2.0 access token");
+            sync.client().set_credentials(Credentials::bearer(token));
+            true
+        }
+        Err(failure) => {
+            // Reported at debug rather than as an error: the original 401 is
+            // still on its way to EDS, which will raise it properly.
+            tracing::debug!(
+                ?failure,
+                "could not refresh the address book connection's OAuth 2.0 access token"
+            );
+            false
+        }
     }
 }
 
