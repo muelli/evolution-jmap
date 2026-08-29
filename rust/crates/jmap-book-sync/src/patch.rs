@@ -131,7 +131,7 @@ use jmap_vcard::{
     online_service_uri, restore_address_components, restore_name_components, same_photo,
     same_service, states_a_point_in_time, states_address, states_address_component,
     states_anniversary, states_assistant, states_calendar, states_context, states_email,
-    states_keyword, states_link, states_manager, states_media, states_name_component,
+    states_keyword, states_link, states_manager, states_media, states_name, states_name_component,
     states_nickname, states_note, states_online_service, states_org_unit, states_organization,
     states_phone, states_phone_feature, states_spouse, states_title, title_kind,
 };
@@ -402,10 +402,40 @@ fn diff_keywords(patch: &mut Map<String, Value>, current: &ContactCard, edited: 
     );
 }
 
+fn has_unmapped_name_metadata(name: &Name) -> bool {
+    name.is_ordered.is_some()
+        || name.sort_as.is_some()
+        || name.extra.keys().any(|k| k != "fileAs" && k != "file_as")
+        || name
+            .components
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|c| !states_name_component(c))
+}
+
 fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Option<&Name>) {
+    let current_stated = current.is_some_and(states_name);
+    let edited_stated = edited.is_some_and(states_name);
+
+    if !current_stated && !edited_stated {
+        return;
+    }
+
     let (Some(current), Some(edited)) = (current, edited) else {
         match (current, edited) {
-            (Some(_), None) => drop(patch.insert("name".to_owned(), Value::Null)),
+            (Some(current), None) => {
+                if has_unmapped_name_metadata(current) {
+                    if current.full.is_some() {
+                        patch.insert("name/full".to_owned(), Value::Null);
+                    }
+                    if current.components.is_some() {
+                        patch.insert("name/components".to_owned(), Value::Null);
+                    }
+                } else {
+                    patch.insert("name".to_owned(), Value::Null);
+                }
+            }
             (None, Some(edited)) => {
                 patch.insert("name".to_owned(), json_of(edited));
             }
@@ -473,6 +503,15 @@ fn diff_nicknames(
     );
 }
 
+fn entry_pref(pref: Option<u32>, extra: &BTreeMap<String, Value>) -> Option<u32> {
+    pref.or_else(|| {
+        extra
+            .get("pref")
+            .and_then(|v| v.as_u64())
+            .and_then(|n| u32::try_from(n).ok())
+    })
+}
+
 fn diff_emails(
     patch: &mut Map<String, Value>,
     current: Option<&BTreeMap<String, ContactEmail>>,
@@ -500,7 +539,12 @@ fn diff_emails(
                 maps_context,
                 maps_context,
             );
-            diff_pref(patch, path, old.pref, new.pref);
+            diff_pref(
+                patch,
+                path,
+                entry_pref(old.pref, &old.extra),
+                entry_pref(new.pref, &new.extra),
+            );
         },
     );
 }
@@ -538,7 +582,12 @@ fn diff_phones(
                 maps_phone_feature,
                 slotted_feature(&old.features),
             );
-            diff_pref(patch, path, old.pref, new.pref);
+            diff_pref(
+                patch,
+                path,
+                entry_pref(old.pref, &old.extra),
+                entry_pref(new.pref, &new.extra),
+            );
         },
     );
 }
@@ -638,19 +687,12 @@ fn diff_addresses(
                 maps_context,
                 slotted_context(&old.contexts),
             );
-            let old_pref = old.pref.or_else(|| {
-                old.extra
-                    .get("pref")
-                    .and_then(|v| v.as_u64())
-                    .and_then(|n| u32::try_from(n).ok())
-            });
-            let new_pref = new.pref.or_else(|| {
-                new.extra
-                    .get("pref")
-                    .and_then(|v| v.as_u64())
-                    .and_then(|n| u32::try_from(n).ok())
-            });
-            diff_pref(patch, path, old_pref, new_pref);
+            diff_pref(
+                patch,
+                path,
+                entry_pref(old.pref, &old.extra),
+                entry_pref(new.pref, &new.extra),
+            );
         },
     );
 }

@@ -5303,3 +5303,141 @@ fn no_op_save_mints_no_patch_on_address_pref_and_typed_links_and_calendars() {
         "second save must preserve identical revision"
     );
 }
+
+#[test]
+fn no_op_save_mints_no_patch_on_empty_or_unstated_name() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "full": "",
+                "components": []
+            }
+        }),
+    );
+
+    let initial_card = fixture.card(&id);
+    let loaded1 = sync.load_contact(id.as_str()).unwrap();
+    let parsed_card1 = jmap_vcard::vcard_to_card(&loaded1.vcard).unwrap();
+
+    let patch_diff1 = jmap_book_sync::patch::diff(&initial_card, &parsed_card1);
+    assert!(
+        patch_diff1.is_empty(),
+        "no-op save on empty/unstated name must mint no patch, found: {patch_diff1:?}"
+    );
+
+    let saved1 = sync
+        .save_contact(&loaded1.vcard, Some(id.as_str()))
+        .unwrap();
+    let loaded2 = sync.load_contact(id.as_str()).unwrap();
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .unwrap();
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must preserve identical revision on empty/unstated name"
+    );
+}
+
+#[test]
+fn clearing_stated_name_with_unmapped_fields_preserves_unmapped_name_metadata() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "full": "Vera Oldenburg",
+                "components": [{"kind": "given", "value": "Vera"}],
+                "isOrdered": true,
+                "sortAs": {"de": "Oldenburg, Vera"},
+                "phonetic": "veːʁa"
+            }
+        }),
+    );
+
+    let loaded = sync.load_contact(id.as_str()).unwrap();
+    // User clears the name in Evolution (removes FN and N lines)
+    let mut cleared_vcard = String::new();
+    for line in loaded.vcard.lines() {
+        if !line.starts_with("FN:") && !line.starts_with("N:") {
+            cleared_vcard.push_str(line);
+            cleared_vcard.push_str("\r\n");
+        }
+    }
+
+    sync.save_contact(&cleared_vcard, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.card(&id);
+    let name = stored
+        .name
+        .as_ref()
+        .expect("name object should be preserved");
+    assert_eq!(name.full, None, "full name should be cleared");
+    assert_eq!(name.components, None, "components should be cleared");
+    assert_eq!(name.is_ordered, Some(true), "isOrdered should be preserved");
+    assert_eq!(
+        name.sort_as,
+        Some(std::collections::BTreeMap::from([(
+            "de".to_string(),
+            "Oldenburg, Vera".to_string()
+        )])),
+        "sortAs should be preserved"
+    );
+    assert_eq!(
+        name.extra.get("phonetic"),
+        Some(&json!("veːʁa")),
+        "extra phonetic field should be preserved"
+    );
+}
+
+#[test]
+fn editing_preserves_extra_pref_ranking_on_emails_and_phones() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    fixture.patch(
+        &id,
+        json!({
+            "emails/e0/pref": 42,
+            "phones/p1": {
+                "number": "+49 30 111",
+                "pref": 55
+            }
+        }),
+    );
+
+    let initial_card = fixture.card(&id);
+    let loaded1 = sync.load_contact(id.as_str()).unwrap();
+    let parsed_card1 = jmap_vcard::vcard_to_card(&loaded1.vcard).unwrap();
+
+    let patch_diff1 = jmap_book_sync::patch::diff(&initial_card, &parsed_card1);
+    assert!(
+        patch_diff1.is_empty(),
+        "first save must mint no patch for email and phone pref ranks, found: {patch_diff1:?}"
+    );
+
+    let saved1 = sync
+        .save_contact(&loaded1.vcard, Some(id.as_str()))
+        .unwrap();
+    let loaded2 = sync.load_contact(id.as_str()).unwrap();
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .unwrap();
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must preserve identical revision for email and phone pref ranks"
+    );
+
+    let stored = fixture.card(&id);
+    assert_eq!(stored.emails.as_ref().unwrap()["e0"].pref, Some(42));
+    assert_eq!(stored.phones.as_ref().unwrap()["p1"].pref, Some(55));
+}
