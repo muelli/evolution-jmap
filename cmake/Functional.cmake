@@ -222,7 +222,11 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# identity to transport, through two uids — has nothing in common with
 	# opening a folder. Same libraries, because it is the same kind of
 	# process: a libcamel consumer that is also the provider's host.
-	foreach(_client mail transport)
+	# `mail-stale-token` is a third program of the same kind, and the only
+	# one here that subclasses a Camel class: `docs/ROADMAP.md` item 25 needs
+	# a session that answers `get_oauth2_access_token_sync`, which the base
+	# `CamelSession` does not — see the file's own header.
+	foreach(_client mail transport mail-stale-token)
 		add_executable(functional-${_client}-client tests/functional/${_client}-client.c)
 		target_include_directories(functional-${_client}-client PRIVATE
 			${CAMEL_CLIENT_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
@@ -441,6 +445,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_TRANSPORT_CLIENT=$<TARGET_FILE:functional-transport-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+	)
+
+	# docs/ROADMAP.md item 25: item 23's acceptance test, made headless — the
+	# hourly re-consent, driven through a real `CamelService` rather than
+	# through the operator leaving Evolution open for an afternoon. Stages the
+	# same module and `.urls` file as the two legs above, under the same two
+	# variable names and for the same reason: it is one provider.
+	add_test(
+		NAME functional-mail-stale-token
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test mail-stale-token -- --test-threads=1
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-mail-stale-token PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-mail-stale-token-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 
 	# docs/ROADMAP.md item 22 Do(1): the stale Source.OAuth2Support proxy that
