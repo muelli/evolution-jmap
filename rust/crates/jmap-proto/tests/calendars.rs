@@ -432,3 +432,171 @@ fn jscalendar_constants_cover_alert_action_and_relative_to() {
     assert_eq!(relative_to::START, "start");
     assert_eq!(relative_to::END, "end");
 }
+
+#[test]
+fn jscalendar_participant_location_alert_and_parse_roundtrip() {
+    use jmap_proto::calendars::{
+        Alert, CalendarEvent, CalendarEventParseRequest, CalendarEventParseResponse,
+        CalendarPreferences, Location, OffsetTrigger, Participant, VirtualLocation,
+        participant_attendance, participant_progress, schedule_agent,
+    };
+    use jmap_proto::state::UtcDate;
+    use std::collections::BTreeMap;
+
+    assert_eq!(schedule_agent::SERVER, "server");
+    assert_eq!(schedule_agent::CLIENT, "client");
+    assert_eq!(schedule_agent::NONE, "none");
+
+    assert_eq!(participant_progress::NEEDS_ACTION, "needs-action");
+    assert_eq!(participant_progress::IN_PROCESS, "in-process");
+    assert_eq!(participant_progress::COMPLETED, "completed");
+    assert_eq!(participant_progress::FAILED, "failed");
+
+    assert_eq!(participant_attendance::REQUIRED, "required");
+    assert_eq!(participant_attendance::OPTIONAL, "optional");
+    assert_eq!(participant_attendance::INFORMATIONAL, "informational");
+
+    let participant = Participant {
+        participant_type: Some("Participant".to_owned()),
+        name: Some("Alice Example".to_owned()),
+        email: Some("alice@example.com".to_owned()),
+        description: Some("Project Lead".to_owned()),
+        send_to: Some(BTreeMap::from([(
+            "imip".to_owned(),
+            "mailto:alice@example.com".to_owned(),
+        )])),
+        kind: Some("individual".to_owned()),
+        roles: Some(BTreeMap::from([("owner".to_owned(), true)])),
+        participation_status: Some("accepted".to_owned()),
+        attendance: Some(participant_attendance::REQUIRED.to_owned()),
+        expect_reply: Some(false),
+        schedule_agent: Some(schedule_agent::SERVER.to_owned()),
+        schedule_sequence: Some(1),
+        progress: Some(participant_progress::IN_PROCESS.to_owned()),
+        progress_updated: Some(UtcDate::new("2026-09-01T12:00:00Z")),
+        ..Participant::default()
+    };
+
+    let p_val = serde_json::to_value(&participant).unwrap();
+    assert_eq!(p_val["@type"], "Participant");
+    assert_eq!(p_val["name"], "Alice Example");
+    assert_eq!(p_val["email"], "alice@example.com");
+    assert_eq!(p_val["roles"]["owner"], true);
+    assert_eq!(p_val["attendance"], "required");
+    assert_eq!(p_val["progress"], "in-process");
+
+    let p_round_tripped: Participant = serde_json::from_value(p_val).unwrap();
+    assert_eq!(p_round_tripped, participant);
+
+    let location = Location {
+        location_type: Some("Location".to_owned()),
+        name: Some("Conference Room A".to_owned()),
+        description: Some("Building 2, Floor 3".to_owned()),
+        time_zone: Some("Europe/London".to_owned()),
+        coordinates: Some("geo:51.5074,-0.1278".to_owned()),
+        location_types: Some(BTreeMap::from([("room".to_owned(), true)])),
+        ..Location::default()
+    };
+    let loc_val = serde_json::to_value(&location).unwrap();
+    assert_eq!(loc_val["@type"], "Location");
+    assert_eq!(loc_val["name"], "Conference Room A");
+    assert_eq!(loc_val["timeZone"], "Europe/London");
+    assert_eq!(
+        serde_json::from_value::<Location>(loc_val).unwrap(),
+        location
+    );
+
+    let vloc = VirtualLocation {
+        virtual_location_type: Some("VirtualLocation".to_owned()),
+        name: Some("Video Bridge".to_owned()),
+        description: Some("Passcode: 1234".to_owned()),
+        uri: "https://meet.example.com/bridge".to_owned(),
+        features: Some(BTreeMap::from([("video".to_owned(), true)])),
+        extra: BTreeMap::new(),
+    };
+    let vloc_val = serde_json::to_value(&vloc).unwrap();
+    assert_eq!(vloc_val["@type"], "VirtualLocation");
+    assert_eq!(vloc_val["uri"], "https://meet.example.com/bridge");
+    assert_eq!(
+        serde_json::from_value::<VirtualLocation>(vloc_val).unwrap(),
+        vloc
+    );
+
+    let alert = Alert {
+        alert_type: Some("Alert".to_owned()),
+        action: Some("display".to_owned()),
+        trigger: Some(serde_json::json!({
+            "@type": "OffsetTrigger",
+            "offset": "-PT15M",
+            "relativeTo": "start"
+        })),
+        acknowledged: Some(UtcDate::new("2026-09-01T09:00:00Z")),
+        related_to: Some("start".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let a_val = serde_json::to_value(&alert).unwrap();
+    assert_eq!(a_val["@type"], "Alert");
+    assert_eq!(a_val["action"], "display");
+    assert_eq!(a_val["trigger"]["offset"], "-PT15M");
+    assert_eq!(serde_json::from_value::<Alert>(a_val).unwrap(), alert);
+
+    let trigger = OffsetTrigger {
+        trigger_type: Some("OffsetTrigger".to_owned()),
+        offset: "-PT10M".to_owned(),
+        relative_to: Some("start".to_owned()),
+    };
+    let t_val = serde_json::to_value(&trigger).unwrap();
+    assert_eq!(t_val["@type"], "OffsetTrigger");
+    assert_eq!(t_val["offset"], "-PT10M");
+    assert_eq!(
+        serde_json::from_value::<OffsetTrigger>(t_val).unwrap(),
+        trigger
+    );
+
+    let prefs = CalendarPreferences {
+        id: Some("singleton".into()),
+        time_zone: Some("UTC".to_owned()),
+        first_day_of_week: Some("mo".to_owned()),
+        extra: BTreeMap::new(),
+    };
+    let prefs_val = serde_json::to_value(&prefs).unwrap();
+    assert_eq!(prefs_val["timeZone"], "UTC");
+    assert_eq!(prefs_val["firstDayOfWeek"], "mo");
+    assert_eq!(
+        serde_json::from_value::<CalendarPreferences>(prefs_val).unwrap(),
+        prefs
+    );
+
+    let parse_req = CalendarEventParseRequest {
+        account_id: "A1".into(),
+        blob_ids: vec!["b1".into()],
+        properties: Some(vec!["id".to_owned(), "title".to_owned()]),
+    };
+    let pr_val = serde_json::to_value(&parse_req).unwrap();
+    assert_eq!(pr_val["accountId"], "A1");
+    assert_eq!(pr_val["blobIds"], serde_json::json!(["b1"]));
+    assert_eq!(
+        serde_json::from_value::<CalendarEventParseRequest>(pr_val).unwrap(),
+        parse_req
+    );
+
+    let parse_resp = CalendarEventParseResponse {
+        account_id: "A1".into(),
+        parsed: Some(BTreeMap::from([(
+            "b1".into(),
+            CalendarEvent {
+                id: Some("E1".into()),
+                title: Some("Standup".to_owned()),
+                ..CalendarEvent::default()
+            },
+        )])),
+        not_parsable: None,
+        not_found: None,
+    };
+    let pr_resp_val = serde_json::to_value(&parse_resp).unwrap();
+    assert_eq!(pr_resp_val["parsed"]["b1"]["title"], "Standup");
+    assert_eq!(
+        serde_json::from_value::<CalendarEventParseResponse>(pr_resp_val).unwrap(),
+        parse_resp
+    );
+}

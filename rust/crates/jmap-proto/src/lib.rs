@@ -36,6 +36,7 @@ pub mod mail;
 pub mod methods;
 #[cfg(feature = "principals")]
 pub mod principals;
+pub mod push;
 pub mod request;
 pub mod response;
 pub mod session;

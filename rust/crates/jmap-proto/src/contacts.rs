@@ -148,6 +148,15 @@ pub struct ContactCard {
     /// line EDS keeps `E_CONTACT_SPOUSE` on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_to: Option<BTreeMap<String, Relation>>,
+    /// The cryptographic keys for the contact (RFC 9553 §2.6.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crypto_keys: Option<BTreeMap<String, CryptoKey>>,
+    /// The directory services that may be searched for more info on the contact (RFC 9553 §2.6.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directories: Option<BTreeMap<String, Directory>>,
+    /// Personal information such as gender, expertise, hobbies (RFC 9553 §2.8.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_info: Option<BTreeMap<String, PersonalInfo>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -686,4 +695,85 @@ pub mod address_component_kind {
     pub const REGION: &str = "region";
     pub const POSTCODE: &str = "postcode";
     pub const COUNTRY: &str = "country";
+}
+
+/// JSContact CryptoKey (RFC 9553 §2.6.1): a cryptographic key for the contact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CryptoKey {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Standard RFC 9553 §2.6.1 crypto key kinds.
+pub mod crypto_key_kind {
+    pub const KEY: &str = "key";
+    pub const CERT: &str = "cert";
+}
+
+/// JSContact Directory (RFC 9553 §2.6.2): a directory service for the contact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Directory {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Standard RFC 9553 §2.6.2 directory kinds.
+pub mod directory_kind {
+    pub const DIRECTORY: &str = "directory";
+}
+
+/// JSContact PersonalInfo (RFC 9553 §2.8.4): personal information about the contact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalInfo {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_as: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Standard RFC 9553 §2.8.4 personal info kinds.
+pub mod personal_info_kind {
+    pub const GENDER: &str = "gender";
+    pub const EXPERTISE: &str = "expertise";
+    pub const HOBBY: &str = "hobby";
+    pub const INTEREST: &str = "interest";
+}
+
+/// JSContact CardGroup (RFC 9553 §2.1.2): a group of contact cards.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CardGroup {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub card_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<BTreeMap<String, bool>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }

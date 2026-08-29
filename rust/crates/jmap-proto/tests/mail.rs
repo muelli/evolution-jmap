@@ -343,3 +343,83 @@ fn search_snippet_roundtrip_covers_rfc8621() {
         Some("This is <b>important</b> message")
     );
 }
+
+#[test]
+fn email_parse_and_headers_roundtrip_cover_rfc8621() {
+    use jmap_proto::mail::{
+        EmailAddress, EmailAddressGroup, EmailHeader, EmailParseRequest, EmailParseResponse,
+    };
+
+    let req = EmailParseRequest::new("A1", ["b1", "b2"])
+        .properties(["id", "subject", "from"])
+        .body_properties(["partId", "value"])
+        .fetch_text_body_values()
+        .fetch_html_body_values()
+        .fetch_all_body_values()
+        .max_body_value_bytes(4096);
+
+    let json = serde_json::to_value(&req).unwrap();
+    assert_eq!(json["accountId"], "A1");
+    assert_eq!(json["blobIds"], serde_json::json!(["b1", "b2"]));
+    assert_eq!(
+        json["properties"],
+        serde_json::json!(["id", "subject", "from"])
+    );
+    assert_eq!(
+        json["bodyProperties"],
+        serde_json::json!(["partId", "value"])
+    );
+    assert_eq!(json["fetchTextBodyValues"], true);
+    assert_eq!(json["fetchHTMLBodyValues"], true);
+    assert_eq!(json["fetchAllBodyValues"], true);
+    assert_eq!(json["maxBodyValueBytes"], 4096);
+
+    let resp_val = serde_json::json!({
+        "accountId": "A1",
+        "parsed": {
+            "b1": {
+                "id": "E1",
+                "subject": "Parsed Email"
+            }
+        },
+        "notParsable": ["b2"],
+        "notFound": ["b3"]
+    });
+    let resp: EmailParseResponse = serde_json::from_value(resp_val.clone()).unwrap();
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(
+        resp.parsed.as_ref().unwrap()[&jmap_proto::Id::new("b1")]
+            .subject
+            .as_deref(),
+        Some("Parsed Email")
+    );
+    assert_eq!(resp.not_parsable.as_ref().unwrap().len(), 1);
+    assert_eq!(resp.not_found.as_ref().unwrap().len(), 1);
+
+    let header = EmailHeader {
+        name: "X-Spam-Score".to_owned(),
+        value: "0.0".to_owned(),
+    };
+    let h_val = serde_json::to_value(&header).unwrap();
+    assert_eq!(h_val["name"], "X-Spam-Score");
+    assert_eq!(h_val["value"], "0.0");
+    assert_eq!(
+        serde_json::from_value::<EmailHeader>(h_val).unwrap(),
+        header
+    );
+
+    let addr_group = EmailAddressGroup {
+        name: Some("Engineering".to_owned()),
+        addresses: vec![
+            EmailAddress::new(Some("Alice"), "alice@example.com"),
+            EmailAddress::new(Some("Bob"), "bob@example.com"),
+        ],
+    };
+    let ag_val = serde_json::to_value(&addr_group).unwrap();
+    assert_eq!(ag_val["name"], "Engineering");
+    assert_eq!(ag_val["addresses"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        serde_json::from_value::<EmailAddressGroup>(ag_val).unwrap(),
+        addr_group
+    );
+}

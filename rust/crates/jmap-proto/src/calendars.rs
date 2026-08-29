@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::id::Id;
+use crate::state::UtcDate;
 
 /// A calendar (draft §4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -534,4 +535,180 @@ pub mod alert_action {
 pub mod relative_to {
     pub const START: &str = "start";
     pub const END: &str = "end";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) schedule agent values.
+pub mod schedule_agent {
+    pub const SERVER: &str = "server";
+    pub const CLIENT: &str = "client";
+    pub const NONE: &str = "none";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) participant progress values.
+pub mod participant_progress {
+    pub const NEEDS_ACTION: &str = "needs-action";
+    pub const IN_PROCESS: &str = "in-process";
+    pub const COMPLETED: &str = "completed";
+    pub const FAILED: &str = "failed";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) participant attendance values.
+pub mod participant_attendance {
+    pub const REQUIRED: &str = "required";
+    pub const OPTIONAL: &str = "optional";
+    pub const INFORMATIONAL: &str = "informational";
+}
+
+/// JSCalendar Participant (RFC 8984 §4.4.6): an attendee or organizer of the event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Participant {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub participant_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_to: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participation_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attendance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_reply: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_sequence: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_status: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_updated: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_to: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_from: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_of: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_updated: Option<UtcDate>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSCalendar Location (RFC 8984 §4.2.5): a physical location for the event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Location {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub location_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinates: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_types: Option<BTreeMap<String, bool>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSCalendar VirtualLocation (RFC 8984 §4.2.6): an online conference or meeting room.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VirtualLocation {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub virtual_location_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features: Option<BTreeMap<String, bool>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSCalendar Alert (RFC 8984 §4.5.2): an alarm or reminder for the event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Alert {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub alert_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related_to: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// JSCalendar OffsetTrigger (RFC 8984 §4.5.2): an alert trigger specified as an offset duration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OffsetTrigger {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub trigger_type: Option<String>,
+    pub offset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_to: Option<String>,
+}
+
+/// Calendar user preferences (draft-ietf-jmap-calendars-28 §6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_day_of_week: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// `CalendarEvent/parse` arguments (draft-ietf-jmap-calendars-28 §5.7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventParseRequest {
+    pub account_id: Id,
+    pub blob_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Vec<String>>,
+}
+
+/// `CalendarEvent/parse` response (draft-ietf-jmap-calendars-28 §5.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventParseResponse {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parsed: Option<BTreeMap<Id, CalendarEvent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_parsable: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_found: Option<Vec<Id>>,
 }

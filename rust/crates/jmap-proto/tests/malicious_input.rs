@@ -182,4 +182,106 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::principals::GetAvailabilityResponse>(&text);
     }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_push_subscription(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::push::PushSubscription>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_push_verification(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::push::PushVerification>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_state_change(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::push::StateChange>(&text);
+    }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_email_parse_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::EmailParseResponse>(&text);
+    }
+
+    #[cfg(feature = "contacts")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_crypto_key(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::contacts::CryptoKey>(&text);
+    }
+
+    #[cfg(feature = "contacts")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_directory(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::contacts::Directory>(&text);
+    }
+
+    #[cfg(feature = "contacts")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_personal_info(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::contacts::PersonalInfo>(&text);
+    }
+
+    #[cfg(feature = "contacts")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_card_group(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::contacts::CardGroup>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_participant(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::Participant>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_location(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::Location>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_virtual_location(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::VirtualLocation>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_alert(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::Alert>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar_preferences(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::CalendarPreferences>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar_event_parse_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::CalendarEventParseResponse>(&text);
+    }
+
+    #[cfg(feature = "principals")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_share_notification(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::principals::ShareNotification>(&text);
+    }
 }

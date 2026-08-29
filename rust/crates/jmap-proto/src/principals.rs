@@ -174,6 +174,33 @@ impl BusyPeriod {
     }
 }
 
+/// A notification that a share was created, updated, or removed (RFC 9670 §4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareNotification {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    pub created: UtcDate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Principal>,
+    pub object_type: String,
+    pub object_id: Id,
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_rights: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_rights: Option<Value>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Standard RFC 9670 §4 share notification object types.
+pub mod share_notification_object_type {
+    pub const ADDRESS_BOOK: &str = "AddressBook";
+    pub const CALENDAR: &str = "Calendar";
+    pub const MAILBOX: &str = "Mailbox";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2602,6 +2602,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         // every other entity the card relates to is read back by nothing and
         // left to the save to patch around.
         related_to: (!related_to.is_empty()).then_some(related_to),
+        crypto_keys: None,
+        directories: None,
+        personal_info: None,
         extra: BTreeMap::new(),
     })
 }
