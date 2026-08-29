@@ -5,8 +5,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # DRAFT comment for GNOME/evolution#374, "Snooze - ability to shelve a mail for later"
 
-**Status: draft, ready for review.** #374 is CLOSED (`1. Feature`,
-`3. Not Actionable`), opened 2019-03-26, last touched 2025-11-23.
+**Status: #374 was REOPENED by the maintainer on 2026-08-29.** It had been
+CLOSED (`1. Feature`, `3. Not Actionable`), opened 2019-03-26, last touched
+2025-11-23. Whether this comment itself was posted is not recorded here; ask
+before assuming either way. gitlab.gnome.org renders issue state, labels and
+comments client-side, so none of it can be read back automatically and every
+check needs a browser.
 
 This replaces an earlier draft that proposed a *new* issue on a false premise.
 #374 exists and filing again would have duplicated a closed report.
