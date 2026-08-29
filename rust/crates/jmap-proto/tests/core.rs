@@ -958,3 +958,53 @@ fn response_deserializes_missing_session_state_with_default() {
     assert_eq!(resp.session_state.as_str(), "");
 }
 
+#[test]
+fn result_reference_and_push_builders_roundtrip() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::push::{PushSubscription, PushVerification, StateChange};
+    use jmap_proto::request::ResultReference;
+    use std::collections::BTreeMap;
+
+    let rr = ResultReference::new("call1", "Email/query", "/ids");
+    assert_eq!(rr.result_of, "call1");
+    assert_eq!(rr.name, "Email/query");
+    assert_eq!(rr.path, "/ids");
+    let rr_val = serde_json::to_value(&rr).unwrap();
+    assert_eq!(rr_val["resultOf"], "call1");
+    assert_eq!(rr_val["name"], "Email/query");
+    assert_eq!(rr_val["path"], "/ids");
+    assert_eq!(
+        serde_json::from_value::<ResultReference>(rr_val).unwrap(),
+        rr
+    );
+
+    let sub = PushSubscription::new("dev_1", "https://push.example.com/sub")
+        .with_keys("key_p256", "auth_secret")
+        .with_expires(UtcDate::new("2026-10-01T00:00:00Z"))
+        .with_types(["Email", "ContactCard", "CalendarEvent"]);
+
+    assert_eq!(sub.device_client_id, "dev_1");
+    assert_eq!(sub.url, "https://push.example.com/sub");
+    assert_eq!(sub.keys.as_ref().unwrap().p256dh, "key_p256");
+    assert_eq!(sub.keys.as_ref().unwrap().auth, "auth_secret");
+    assert_eq!(
+        sub.expires.as_ref().unwrap().as_str(),
+        "2026-10-01T00:00:00Z"
+    );
+    assert_eq!(sub.types.as_ref().unwrap().len(), 3);
+
+    let ver = PushVerification::new("sub_42", "challenge_xyz");
+    assert_eq!(ver.object_type, "PushVerification");
+    assert_eq!(ver.push_subscription_id.as_str(), "sub_42");
+    assert_eq!(ver.verification_code, "challenge_xyz");
+
+    let change = StateChange::new(BTreeMap::from([(
+        "acc1".into(),
+        BTreeMap::from([("Email".to_owned(), "state_123".into())]),
+    )]));
+    assert_eq!(change.object_type, "StateChange");
+    assert_eq!(
+        change.changed[&"acc1".into()]["Email"].as_str(),
+        "state_123"
+    );
+}

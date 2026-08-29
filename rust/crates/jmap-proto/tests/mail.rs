@@ -579,18 +579,27 @@ fn mail_spec_properties_roundtrip() {
     let id_json = serde_json::to_value(&identity).unwrap();
     assert_eq!(id_json["maySend"], true);
     assert_eq!(id_json["mayDelete"], false);
-    assert_eq!(serde_json::from_value::<Identity>(id_json).unwrap(), identity);
+    assert_eq!(
+        serde_json::from_value::<Identity>(id_json).unwrap(),
+        identity
+    );
 
     let part = EmailBodyPart {
         part_id: Some("part1".to_owned()),
         content_type: Some("message/rfc822".to_owned()),
-        headers: Some(vec![EmailHeader::new("Content-Description", "Embedded Message")]),
+        headers: Some(vec![EmailHeader::new(
+            "Content-Description",
+            "Embedded Message",
+        )]),
         ..EmailBodyPart::default()
     };
     let p_json = serde_json::to_value(&part).unwrap();
     assert_eq!(p_json["headers"][0]["name"], "Content-Description");
     assert_eq!(p_json["headers"][0]["value"], "Embedded Message");
-    assert_eq!(serde_json::from_value::<EmailBodyPart>(p_json).unwrap(), part);
+    assert_eq!(
+        serde_json::from_value::<EmailBodyPart>(p_json).unwrap(),
+        part
+    );
 
     let filter = EmailQueryFilter::in_mailbox("mb_inbox")
         .all_in_thread_have_keyword("$seen")
@@ -599,7 +608,10 @@ fn mail_spec_properties_roundtrip() {
         .header("List-Id", "<dev.example.com>");
 
     assert_eq!(filter.all_in_thread_have_keyword.as_deref(), Some("$seen"));
-    assert_eq!(filter.some_in_thread_have_keyword.as_deref(), Some("$flagged"));
+    assert_eq!(
+        filter.some_in_thread_have_keyword.as_deref(),
+        Some("$flagged")
+    );
     assert_eq!(filter.none_in_thread_have_keyword.as_deref(), Some("$junk"));
     assert_eq!(
         filter.header.as_ref().unwrap(),
@@ -613,3 +625,11 @@ fn mail_spec_properties_roundtrip() {
     assert_eq!(f_json["header"][1], "<dev.example.com>");
 }
 
+#[test]
+fn email_set_errors_cover_rfc8621() {
+    use jmap_proto::mail::email_set_error;
+
+    assert_eq!(email_set_error::BLOB_NOT_FOUND, "blobNotFound");
+    assert_eq!(email_set_error::TOO_MANY_KEYWORDS, "tooManyKeywords");
+    assert_eq!(email_set_error::TOO_MANY_MAILBOXES, "tooManyMailboxes");
+}

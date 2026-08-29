@@ -918,3 +918,49 @@ impl<'de> serde::Deserialize<'de> for LanguagePref {
         deserializer.deserialize_any(LanguagePrefVisitor)
     }
 }
+
+/// `ContactCard/parse` arguments (RFC 9610 §3.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactCardParseRequest {
+    pub account_id: Id,
+    pub blob_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Vec<String>>,
+}
+
+impl ContactCardParseRequest {
+    pub fn new(
+        account_id: impl Into<Id>,
+        blob_ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            blob_ids: blob_ids.into_iter().map(Into::into).collect(),
+            properties: None,
+        }
+    }
+
+    pub fn properties(mut self, properties: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.properties = Some(properties.into_iter().map(Into::into).collect());
+        self
+    }
+}
+
+/// `ContactCard/parse` response (RFC 9610 §3.4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactCardParseResponse {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parsed: Option<BTreeMap<Id, ContactCard>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_parsable: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_found: Option<Vec<Id>>,
+}
+
+/// The `SetError` types RFC 9610 §3.2 adds for `ContactCard/set`.
+pub mod contact_card_set_error {
+    pub const BLOB_NOT_FOUND: &str = "blobNotFound";
+}

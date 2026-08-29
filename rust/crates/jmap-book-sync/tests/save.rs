@@ -833,7 +833,10 @@ fn changing_a_job_title_keeps_which_organisation_it_is_held_at() {
         titles["t1"]
             .organization_id
             .as_deref()
-            .or_else(|| titles["t1"].extra.get("organizationId").and_then(|v| v.as_str())),
+            .or_else(|| titles["t1"]
+                .extra
+                .get("organizationId")
+                .and_then(|v| v.as_str())),
         Some("o1"),
         "a member the TITLE line cannot carry was overwritten"
     );
@@ -1060,7 +1063,10 @@ fn an_address_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
         addresses["a1"]
             .coordinates
             .as_deref()
-            .or_else(|| addresses["a1"].extra.get("coordinates").and_then(|v| v.as_str())),
+            .or_else(|| addresses["a1"]
+                .extra
+                .get("coordinates")
+                .and_then(|v| v.as_str())),
         Some("geo:52.5,13.4"),
         "an entry the vCard never showed was overwritten: {addresses:?}"
     );
@@ -1146,7 +1152,10 @@ fn an_address_stated_only_as_a_label_is_patched_in_place() {
         addresses["a1"]
             .coordinates
             .as_deref()
-            .or_else(|| addresses["a1"].extra.get("coordinates").and_then(|v| v.as_str())),
+            .or_else(|| addresses["a1"]
+                .extra
+                .get("coordinates")
+                .and_then(|v| v.as_str())),
         Some("geo:52.5,13.4"),
         "a member no line can carry was overwritten"
     );
@@ -1566,9 +1575,10 @@ fn editing_a_nickname_keeps_the_context_and_ranking_the_line_cannot_carry() {
         "a member the NICKNAME line cannot carry was overwritten"
     );
     assert_eq!(
-        nicknames["k1"]
-            .pref
-            .or_else(|| nicknames["k1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        nicknames["k1"].pref.or_else(|| nicknames["k1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
         Some(1)
     );
 }
@@ -1595,9 +1605,10 @@ fn a_nickname_with_no_name_survives_a_save_it_was_never_part_of() {
 
     let nicknames = fixture.card(&id).nicknames.expect("nicknames");
     assert_eq!(
-        nicknames["k1"]
-            .pref
-            .or_else(|| nicknames["k1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        nicknames["k1"].pref.or_else(|| nicknames["k1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
         Some(1),
         "an entry the vCard never showed was overwritten: {nicknames:?}"
     );
@@ -1672,9 +1683,10 @@ fn editing_a_home_page_keeps_what_the_url_line_cannot_carry() {
         "a member the URL line cannot carry was overwritten"
     );
     assert_eq!(
-        links["l1"]
-            .pref
-            .or_else(|| links["l1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        links["l1"].pref.or_else(|| links["l1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
         Some(1)
     );
 }
@@ -1792,14 +1804,18 @@ fn editing_a_calendar_address_keeps_what_the_caluri_line_cannot_carry() {
         calendars["c1"]
             .media_type
             .as_deref()
-            .or_else(|| calendars["c1"].extra.get("mediaType").and_then(|v| v.as_str())),
+            .or_else(|| calendars["c1"]
+                .extra
+                .get("mediaType")
+                .and_then(|v| v.as_str())),
         Some("text/calendar"),
         "a member the CALURI line cannot carry was overwritten"
     );
     assert_eq!(
-        calendars["c1"]
-            .pref
-            .or_else(|| calendars["c1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        calendars["c1"].pref.or_else(|| calendars["c1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
         Some(1)
     );
 }
@@ -2251,9 +2267,10 @@ fn a_title_with_no_name_survives_a_save_it_was_never_part_of() {
 
     let titles = fixture.card(&id).titles.expect("titles");
     assert_eq!(
-        titles
-            .get("t1")
-            .and_then(|title| title.organization_id.as_deref().or_else(|| title.extra.get("organizationId").and_then(|v| v.as_str()))),
+        titles.get("t1").and_then(|title| title
+            .organization_id
+            .as_deref()
+            .or_else(|| title.extra.get("organizationId").and_then(|v| v.as_str()))),
         Some("o1"),
         "an entry the vCard never showed was overwritten: {titles:?}"
     );
@@ -2283,9 +2300,10 @@ fn an_organization_with_nothing_to_name_survives_a_save_it_was_never_part_of() {
 
     let organizations = fixture.card(&id).organizations.expect("organizations");
     assert_eq!(
-        organizations
-            .get("o1")
-            .and_then(|organization| organization.sort_as.as_deref().or_else(|| organization.extra.get("sortAs").and_then(|v| v.as_str()))),
+        organizations.get("o1").and_then(|organization| organization
+            .sort_as
+            .as_deref()
+            .or_else(|| organization.extra.get("sortAs").and_then(|v| v.as_str()))),
         Some("Oldenburg"),
         "an entry the vCard never showed was overwritten: {organizations:?}"
     );
@@ -2550,9 +2568,10 @@ fn editing_an_im_handle_patches_the_entry_by_its_key() {
     assert_eq!(services["s1"].user.as_deref(), Some("vera@xmpp.example"));
     assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
     assert_eq!(
-        services["s1"]
-            .pref
-            .or_else(|| services["s1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        services["s1"].pref.or_else(|| services["s1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
         Some(1)
     );
 }
@@ -2885,9 +2904,10 @@ fn the_photo_the_user_chose_reaches_the_server() {
     assert_eq!(media["m1"].uri, "data:image/png;base64,bmV3LXBob3RvISE=");
     assert_eq!(media["m1"].media_type.as_deref(), Some("image/png"));
     assert_eq!(
-        media["m1"]
-            .pref
-            .or_else(|| media["m1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        media["m1"].pref.or_else(|| media["m1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
         Some(1),
         "a member the PHOTO line cannot carry was overwritten: {media:?}"
     );
@@ -3938,7 +3958,10 @@ fn saving_contact_with_multiple_addresses_and_labels_preserves_all_entries() {
         addresses["a1"]
             .coordinates
             .as_deref()
-            .or_else(|| addresses["a1"].extra.get("coordinates").and_then(|v| v.as_str())),
+            .or_else(|| addresses["a1"]
+                .extra
+                .get("coordinates")
+                .and_then(|v| v.as_str())),
         Some("geo:52.5,13.4")
     );
 
@@ -3947,9 +3970,10 @@ fn saving_contact_with_multiple_addresses_and_labels_preserves_all_entries() {
         Some("Heimweg 2\n80331 München\nGermany")
     );
     assert_eq!(
-        addresses["a2"]
-            .pref
-            .or_else(|| addresses["a2"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        addresses["a2"].pref.or_else(|| addresses["a2"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
         Some(1)
     );
 
@@ -3961,7 +3985,10 @@ fn saving_contact_with_multiple_addresses_and_labels_preserves_all_entries() {
         addresses["a3"]
             .time_zone
             .as_deref()
-            .or_else(|| addresses["a3"].extra.get("timeZone").and_then(|v| v.as_str())),
+            .or_else(|| addresses["a3"]
+                .extra
+                .get("timeZone")
+                .and_then(|v| v.as_str())),
         Some("Europe/Berlin")
     );
 }

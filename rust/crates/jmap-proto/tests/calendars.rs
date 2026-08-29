@@ -407,9 +407,10 @@ fn calendar_and_event_advanced_properties_cover_draft_spec() {
     .unwrap();
 
     assert_eq!(
-        event
-            .use_default_alerts
-            .or_else(|| event.extra.get("useDefaultAlerts").and_then(|v| v.as_bool())),
+        event.use_default_alerts.or_else(|| event
+            .extra
+            .get("useDefaultAlerts")
+            .and_then(|v| v.as_bool())),
         Some(true)
     );
     assert_eq!(event.extra.get("sequence"), Some(&serde_json::json!(3)));
@@ -793,3 +794,77 @@ fn calendar_and_event_spec_properties_roundtrip() {
     assert_eq!(round_event, event);
 }
 
+#[test]
+fn calendar_event_get_free_busy_and_set_error_roundtrip_covers_draft_spec() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::calendars::{
+        FreeBusyBlock, GetFreeBusyRequest, GetFreeBusyResponse, calendar_event_set_error,
+        calendar_free_busy_status,
+    };
+
+    assert_eq!(calendar_event_set_error::BLOB_NOT_FOUND, "blobNotFound");
+    assert_eq!(
+        calendar_event_set_error::TOO_MANY_PARTICIPANTS,
+        "tooManyParticipants"
+    );
+    assert_eq!(
+        calendar_event_set_error::TOO_MANY_RECURRENCES,
+        "tooManyRecurrences"
+    );
+
+    assert_eq!(calendar_free_busy_status::FREE, "free");
+    assert_eq!(calendar_free_busy_status::BUSY, "busy");
+    assert_eq!(calendar_free_busy_status::BUSY_TENTATIVE, "busy-tentative");
+    assert_eq!(
+        calendar_free_busy_status::BUSY_UNAVAILABLE,
+        "busy-unavailable"
+    );
+
+    let req = GetFreeBusyRequest::new(
+        "A1",
+        UtcDate::new("2026-09-01T00:00:00Z"),
+        UtcDate::new("2026-09-02T00:00:00Z"),
+    )
+    .calendar_ids(["cal1", "cal2"])
+    .time_zone("Europe/London");
+
+    let req_json = serde_json::to_value(&req).unwrap();
+    assert_eq!(req_json["accountId"], "A1");
+    assert_eq!(req_json["utcStart"], "2026-09-01T00:00:00Z");
+    assert_eq!(req_json["utcEnd"], "2026-09-02T00:00:00Z");
+    assert_eq!(req_json["calendarIds"], serde_json::json!(["cal1", "cal2"]));
+    assert_eq!(req_json["timeZone"], "Europe/London");
+    assert_eq!(
+        serde_json::from_value::<GetFreeBusyRequest>(req_json).unwrap(),
+        req
+    );
+
+    let resp = GetFreeBusyResponse {
+        account_id: "A1".into(),
+        list: vec![
+            FreeBusyBlock::new(
+                UtcDate::new("2026-09-01T09:00:00Z"),
+                UtcDate::new("2026-09-01T10:00:00Z"),
+                "busy",
+            )
+            .with_calendar_id("cal1")
+            .with_event_id("evt1"),
+            FreeBusyBlock::new(
+                UtcDate::new("2026-09-01T14:00:00Z"),
+                UtcDate::new("2026-09-01T15:00:00Z"),
+                "busy-tentative",
+            ),
+        ],
+    };
+
+    let resp_json = serde_json::to_value(&resp).unwrap();
+    assert_eq!(resp_json["accountId"], "A1");
+    assert_eq!(resp_json["list"][0]["busyStatus"], "busy");
+    assert_eq!(resp_json["list"][0]["calendarId"], "cal1");
+    assert_eq!(resp_json["list"][0]["eventId"], "evt1");
+    assert_eq!(resp_json["list"][1]["busyStatus"], "busy-tentative");
+    assert_eq!(
+        serde_json::from_value::<GetFreeBusyResponse>(resp_json).unwrap(),
+        resp
+    );
+}

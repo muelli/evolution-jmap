@@ -387,4 +387,45 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::mail::EmailQueryFilter>(&text);
     }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_result_reference(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::request::ResultReference>(&text);
+    }
+
+    #[cfg(feature = "contacts")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_contact_card_parse_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::contacts::ContactCardParseResponse>(&text);
+    }
+
+    #[cfg(feature = "contacts")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_contact_card_parse_request(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::contacts::ContactCardParseRequest>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_get_free_busy_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::GetFreeBusyResponse>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_get_free_busy_request(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::GetFreeBusyRequest>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_free_busy_block(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::FreeBusyBlock>(&text);
+    }
 }
