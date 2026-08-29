@@ -388,13 +388,8 @@ fn calendar_and_event_advanced_properties_cover_draft_spec() {
     }))
     .unwrap();
 
-    assert_eq!(
-        cal.extra.get("timeZone"),
-        Some(&serde_json::json!("Europe/Berlin"))
-    );
-    let rights_val = cal.extra.get("myRights").unwrap();
-    let rights: jmap_proto::calendars::CalendarRights =
-        serde_json::from_value(rights_val.clone()).unwrap();
+    assert_eq!(cal.time_zone.as_deref(), Some("Europe/Berlin"));
+    let rights = cal.my_rights.as_ref().unwrap();
     assert!(rights.may_read_items);
     assert!(rights.may_add_items);
     assert!(rights.may_modify_items);
@@ -656,4 +651,94 @@ fn calendars_capabilities_absolute_trigger_and_event_relation_roundtrip_covers_d
 
     let round_rel: EventRelation = serde_json::from_value(rel_val).unwrap();
     assert_eq!(round_rel, relation);
+}
+
+#[test]
+fn calendar_sharing_timezone_and_recurrence_rule_extensions_roundtrip() {
+    use jmap_proto::calendars::{
+        Calendar, CalendarEventQueryFilter, CalendarRights, RecurrenceRule, frequency,
+        recurrence_skip, weekday,
+    };
+    use std::collections::BTreeMap;
+
+    assert_eq!(frequency::SECONDLY, "secondly");
+    assert_eq!(frequency::MINUTELY, "minutely");
+    assert_eq!(frequency::HOURLY, "hourly");
+    assert_eq!(frequency::DAILY, "daily");
+    assert_eq!(frequency::WEEKLY, "weekly");
+    assert_eq!(frequency::MONTHLY, "monthly");
+    assert_eq!(frequency::YEARLY, "yearly");
+
+    assert_eq!(recurrence_skip::OMIT, "omit");
+    assert_eq!(recurrence_skip::BACKWARD, "backward");
+    assert_eq!(recurrence_skip::FORWARD, "forward");
+
+    assert_eq!(weekday::MO, "mo");
+    assert_eq!(weekday::TU, "tu");
+    assert_eq!(weekday::WE, "we");
+    assert_eq!(weekday::TH, "th");
+    assert_eq!(weekday::FR, "fr");
+    assert_eq!(weekday::SA, "sa");
+    assert_eq!(weekday::SU, "su");
+
+    let rights = CalendarRights {
+        may_read_items: true,
+        may_add_items: true,
+        may_modify_items: true,
+        may_remove_items: false,
+        may_delete: false,
+        may_rename: false,
+        may_admin: false,
+        extra: BTreeMap::new(),
+    };
+
+    let cal = Calendar {
+        id: Some("cal1".into()),
+        name: "Shared Team Calendar".to_owned(),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        share_with: Some(BTreeMap::from([("usr_bob".into(), Some(rights.clone()))])),
+        my_rights: Some(rights.clone()),
+        ..Calendar::default()
+    };
+
+    let c_val = serde_json::to_value(&cal).unwrap();
+    assert_eq!(c_val["timeZone"], "Europe/Berlin");
+    assert_eq!(c_val["shareWith"]["usr_bob"]["mayReadItems"], true);
+    assert_eq!(c_val["myRights"]["mayModifyItems"], true);
+
+    let round_cal: Calendar = serde_json::from_value(c_val).unwrap();
+    assert_eq!(round_cal, cal);
+
+    let rrule = RecurrenceRule {
+        rule_type: Some("RecurrenceRule".to_owned()),
+        frequency: frequency::MONTHLY.to_owned(),
+        rscale: Some("hebrew".to_owned()),
+        skip: Some(recurrence_skip::FORWARD.to_owned()),
+        ..RecurrenceRule::default()
+    };
+
+    let r_val = serde_json::to_value(&rrule).unwrap();
+    assert_eq!(r_val["frequency"], "monthly");
+    assert_eq!(r_val["rscale"], "hebrew");
+    assert_eq!(r_val["skip"], "forward");
+
+    let round_rrule: RecurrenceRule = serde_json::from_value(r_val).unwrap();
+    assert_eq!(round_rrule, rrule);
+
+    let filter = CalendarEventQueryFilter::in_calendar("cal1")
+        .with_time_range("2026-09-01T00:00:00Z", "2026-09-30T23:59:59Z")
+        .title("Planning")
+        .description("Sprint planning")
+        .location("Room 101")
+        .uid("evt-uid-456")
+        .text("quarterly");
+
+    assert_eq!(filter.in_calendar.as_ref().unwrap().as_str(), "cal1");
+    assert_eq!(filter.after.as_deref(), Some("2026-09-01T00:00:00Z"));
+    assert_eq!(filter.before.as_deref(), Some("2026-09-30T23:59:59Z"));
+    assert_eq!(filter.title.as_deref(), Some("Planning"));
+    assert_eq!(filter.description.as_deref(), Some("Sprint planning"));
+    assert_eq!(filter.location.as_deref(), Some("Room 101"));
+    assert_eq!(filter.uid.as_deref(), Some("evt-uid-456"));
+    assert_eq!(filter.text.as_deref(), Some("quarterly"));
 }

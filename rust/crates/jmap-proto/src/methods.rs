@@ -200,6 +200,11 @@ impl<F> QueryRequest<F> {
         self.limit = Some(limit);
         self
     }
+
+    pub fn calculate_total(mut self) -> Self {
+        self.calculate_total = true;
+        self
+    }
 }
 
 fn is_default_position(position: &i64) -> bool {

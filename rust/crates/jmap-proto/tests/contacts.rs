@@ -185,8 +185,8 @@ fn contact_card_roundtrip() {
             .collect::<Vec<_>>(),
         ["colleague"]
     );
-    // Unmodeled JSContact properties (preferredLanguages) survive via `extra`.
-    assert!(card.extra.contains_key("preferredLanguages"));
+    // Modeled JSContact properties (preferredLanguages) are parsed into typed fields.
+    assert!(card.preferred_languages.is_some());
 }
 
 #[test]
@@ -300,9 +300,7 @@ fn address_book_rights_roundtrip_covers_rfc9610() {
     .unwrap();
 
     assert_eq!(book.name, "Shared Book");
-    let rights_val = book.extra.get("myRights").unwrap();
-    let rights: jmap_proto::contacts::AddressBookRights =
-        serde_json::from_value(rights_val.clone()).unwrap();
+    let rights = book.my_rights.as_ref().unwrap();
     assert!(rights.may_read_items);
     assert!(rights.may_add_items);
     assert!(!rights.may_modify_items);
@@ -466,4 +464,87 @@ fn contacts_capabilities_speak_to_as_and_languages_roundtrip_covers_rfc9610_rfc9
 
     let round_card: ContactCard = serde_json::from_value(c_val).unwrap();
     assert_eq!(round_card, card);
+}
+
+#[test]
+fn address_book_sharing_rights_and_contact_card_extensions_roundtrip() {
+    use jmap_proto::contacts::{
+        AddressBook, AddressBookRights, ContactCard, ContactCardQueryFilter, LanguagePref,
+        SpeakToAs, grammatical_gender,
+    };
+    use std::collections::BTreeMap;
+
+    let rights = AddressBookRights {
+        may_read_items: true,
+        may_add_items: true,
+        may_modify_items: true,
+        may_remove_items: false,
+        may_delete: false,
+        may_rename: false,
+        may_admin: false,
+        extra: BTreeMap::new(),
+    };
+
+    let book = AddressBook {
+        id: Some("ab1".into()),
+        name: "Shared Team Contacts".to_owned(),
+        share_with: Some(BTreeMap::from([("usr_alice".into(), Some(rights.clone()))])),
+        my_rights: Some(rights.clone()),
+        ..AddressBook::default()
+    };
+
+    let b_val = serde_json::to_value(&book).unwrap();
+    assert_eq!(b_val["shareWith"]["usr_alice"]["mayReadItems"], true);
+    assert_eq!(b_val["myRights"]["mayModifyItems"], true);
+
+    let round_book: AddressBook = serde_json::from_value(b_val).unwrap();
+    assert_eq!(round_book, book);
+
+    let card = ContactCard {
+        id: Some("card_ext".into()),
+        speak_to_as: Some(SpeakToAs {
+            grammatical_gender: Some(grammatical_gender::FEMININE.to_owned()),
+            pronouns: Some("she/her".to_owned()),
+            extra: BTreeMap::new(),
+        }),
+        preferred_languages: Some(BTreeMap::from([(
+            "en".to_owned(),
+            LanguagePref {
+                language: "en".to_owned(),
+                contexts: None,
+                pref: Some(1),
+                extra: BTreeMap::new(),
+            },
+        )])),
+        localizations: Some(BTreeMap::from([(
+            "de".to_owned(),
+            serde_json::json!({"name/full": "Erika Mustermann"}),
+        )])),
+        ..ContactCard::default()
+    };
+
+    let c_val = serde_json::to_value(&card).unwrap();
+    assert_eq!(c_val["speakToAs"]["grammaticalGender"], "feminine");
+    assert_eq!(c_val["preferredLanguages"]["en"]["language"], "en");
+    assert_eq!(
+        c_val["localizations"]["de"]["name/full"],
+        "Erika Mustermann"
+    );
+
+    let round_card: ContactCard = serde_json::from_value(c_val).unwrap();
+    assert_eq!(round_card, card);
+
+    let filter = ContactCardQueryFilter::in_address_book("ab1")
+        .uid("urn:uuid:123")
+        .name("Erika")
+        .email("erika@example.com")
+        .phone("+49123456")
+        .text("Mustermann");
+
+    assert_eq!(filter.in_address_book.as_ref().unwrap().as_str(), "ab1");
+    assert_eq!(filter.uid.as_deref(), Some("urn:uuid:123"));
+    assert_eq!(filter.name.as_deref(), Some("Erika"));
+    assert_eq!(filter.email.as_deref(), Some("erika@example.com"));
+    assert_eq!(filter.phone.as_deref(), Some("+49123456"));
+    assert_eq!(filter.text.as_deref(), Some("Mustermann"));
 }

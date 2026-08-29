@@ -38,6 +38,10 @@ pub struct Mailbox {
     pub unread_threads: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_subscribed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_with: Option<BTreeMap<Id, Option<MailboxRights>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_rights: Option<MailboxRights>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -184,6 +188,8 @@ pub struct Email {
     pub text_body: Option<Vec<EmailBodyPart>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub html_body: Option<Vec<EmailBodyPart>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<Vec<EmailHeader>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<EmailBodyPart>>,
     #[serde(flatten)]
@@ -553,6 +559,90 @@ impl EmailQueryFilter {
             ..Self::default()
         }
     }
+
+    pub fn in_mailbox_other_than(
+        mut self,
+        mailboxes: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        self.in_mailbox_other_than = Some(mailboxes.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn min_size(mut self, min_size: u64) -> Self {
+        self.min_size = Some(min_size);
+        self
+    }
+
+    pub fn max_size(mut self, max_size: u64) -> Self {
+        self.max_size = Some(max_size);
+        self
+    }
+
+    pub fn has_keyword(mut self, keyword: impl Into<String>) -> Self {
+        self.has_keyword = Some(keyword.into());
+        self
+    }
+
+    pub fn not_keyword(mut self, keyword: impl Into<String>) -> Self {
+        self.not_keyword = Some(keyword.into());
+        self
+    }
+
+    pub fn has_attachment(mut self, has: bool) -> Self {
+        self.has_attachment = Some(has);
+        self
+    }
+
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
+    }
+
+    pub fn body(mut self, body: impl Into<String>) -> Self {
+        self.body = Some(body.into());
+        self
+    }
+
+    pub fn from(mut self, from: impl Into<String>) -> Self {
+        self.from = Some(from.into());
+        self
+    }
+
+    pub fn to(mut self, to: impl Into<String>) -> Self {
+        self.to = Some(to.into());
+        self
+    }
+
+    pub fn cc(mut self, cc: impl Into<String>) -> Self {
+        self.cc = Some(cc.into());
+        self
+    }
+
+    pub fn bcc(mut self, bcc: impl Into<String>) -> Self {
+        self.bcc = Some(bcc.into());
+        self
+    }
+
+    pub fn subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
+
+    pub fn before(mut self, before: impl Into<UtcDate>) -> Self {
+        self.before = Some(before.into());
+        self
+    }
+
+    pub fn after(mut self, after: impl Into<UtcDate>) -> Self {
+        self.after = Some(after.into());
+        self
+    }
+
+    pub fn time_range(mut self, after: Option<UtcDate>, before: Option<UtcDate>) -> Self {
+        self.after = after;
+        self.before = before;
+        self
+    }
 }
 
 /// A sending identity (RFC 8621 §6).
@@ -573,6 +663,8 @@ pub struct Identity {
     pub text_signature: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub html_signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_mailbox_id: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_delete: Option<bool>,
     #[serde(flatten)]
