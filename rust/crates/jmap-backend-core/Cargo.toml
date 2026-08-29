@@ -34,4 +34,7 @@ tracing-journald = { workspace = true }
 
 [dev-dependencies]
 libc = "0.2.189"
+# `push`'s pump is tested against a real EventSource connection, which needs
+# a real server; the mock needs no EDS headers of its own.
+evolution-jmap-mock = { workspace = true }
 
