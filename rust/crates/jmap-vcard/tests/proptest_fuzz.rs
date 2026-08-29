@@ -1167,6 +1167,72 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
     );
 }
 
+// Regression for empty organisation name normalization (Batch 13 Item 8 / docs/BACKLOG.md):
+// An organisation whose name is `Some("")` and has units must normalize to `name: None` on the
+// first parse, emit the leading semicolon to preserve the unit's department slot, and reach
+// immediate fixed-point stability.
+#[test]
+fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first_emit() {
+    let mut organizations = BTreeMap::new();
+    organizations.insert(
+        "o1".to_owned(),
+        Organization {
+            name: Some(String::new()),
+            units: Some(vec![OrgUnit::new("Engineering")]),
+            extra: BTreeMap::new(),
+        },
+    );
+    let card = ContactCard {
+        organizations: Some(organizations),
+        ..Default::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    assert!(
+        vcard1.contains("ORG;X-JMAP-KEY=o1:;Engineering"),
+        "must emit leading semicolon for unit slot: {vcard1}"
+    );
+
+    let parsed1 = vcard_to_card(&vcard1).expect("first roundtrip must parse cleanly");
+    assert_eq!(
+        parsed1.organizations.as_ref().unwrap()["o1"].name,
+        None,
+        "empty organisation name must normalize to None (absent)"
+    );
+
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("second roundtrip must parse cleanly");
+
+    assert_eq!(vcard1, vcard2, "vCard pass 1 == pass 2");
+    assert_eq!(parsed1, parsed2, "ContactCard pass 1 == pass 2");
+}
+
+#[test]
+fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
+    let mut organizations = BTreeMap::new();
+    organizations.insert(
+        "o1".to_owned(),
+        Organization {
+            name: Some(String::new()),
+            units: None,
+            extra: BTreeMap::new(),
+        },
+    );
+    let card = ContactCard {
+        organizations: Some(organizations),
+        ..Default::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    assert!(
+        !vcard1.contains("ORG"),
+        "must emit no ORG line when organization has empty name and no units: {vcard1}"
+    );
+
+    let parsed1 = vcard_to_card(&vcard1).expect("first roundtrip must parse cleanly");
+    assert_eq!(parsed1.organizations, None);
+}
+
 // Regression for `prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8`
 // found on a random seed (CI run 32663971912): calcard's writer emits a
 // structured value's `;` separators *after* its fold check, and skips the fold

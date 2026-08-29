@@ -20936,3 +20936,332 @@ fn vcard_trailing_whitespace_roundtrip_multi_pass_convergence() {
     assert_eq!(card2, card3, "ContactCard pass 2 == pass 3");
     assert_eq!(card3, card4, "ContactCard pass 3 == pass 4");
 }
+
+#[test]
+fn empty_org_name_reads_as_absent_inbound_matrix() {
+    // 1. Inbound vCards where ORG has only empty components parse to organizations: None
+    let empty_org_vcards = [
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;;;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;;;;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG;X-JMAP-KEY=o1:\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG;X-JMAP-KEY=o1:;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG;X-JMAP-KEY=o1:;;;\r\nEND:VCARD\r\n",
+    ];
+    for vcard in empty_org_vcards {
+        let card = vcard_to_card(vcard).expect("parse empty org vcard");
+        assert_eq!(
+            card.organizations, None,
+            "empty ORG components must yield organizations: None for {vcard}"
+        );
+    }
+
+    // 2. Inbound vCards with empty first component but non-empty units read name as None (absent)
+    let unit_only_vcards = [
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;Engineering\r\nEND:VCARD\r\n",
+            vec!["Engineering"],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;;Platform\r\nEND:VCARD\r\n",
+            vec!["Platform"],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;Engineering;Security\r\nEND:VCARD\r\n",
+            vec!["Engineering", "Security"],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;;;Security;Ops\r\nEND:VCARD\r\n",
+            vec!["Security", "Ops"],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG;X-JMAP-KEY=o1:;Research;Optics;\r\nEND:VCARD\r\n",
+            vec!["Research", "Optics"],
+        ),
+    ];
+    for (vcard, expected_units) in unit_only_vcards {
+        let card = vcard_to_card(vcard).expect("parse unit-only org vcard");
+        let orgs = card.organizations.expect("organizations present");
+        let org = orgs.values().next().expect("single organization");
+        assert_eq!(
+            org.name, None,
+            "first empty component must read as name: None for {vcard}"
+        );
+        let units: Vec<&str> = org
+            .units
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|u| u.name.as_str())
+            .collect();
+        assert_eq!(units, expected_units, "units parsed correctly for {vcard}");
+    }
+
+    // 3. Inbound vCards with employer name and trailing empty components read name as Some and drop trailing empty units
+    let named_org_vcards: [(&str, &str, Vec<&str>); 5] = [
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp\r\nEND:VCARD\r\n",
+            "Acme Corp",
+            vec![],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp;\r\nEND:VCARD\r\n",
+            "Acme Corp",
+            vec![],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp;;;\r\nEND:VCARD\r\n",
+            "Acme Corp",
+            vec![],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp;Engineering;\r\nEND:VCARD\r\n",
+            "Acme Corp",
+            vec!["Engineering"],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp;;Security;\r\nEND:VCARD\r\n",
+            "Acme Corp",
+            vec!["Security"],
+        ),
+    ];
+    for (vcard, expected_name, expected_units) in named_org_vcards {
+        let card = vcard_to_card(vcard).expect("parse named org vcard");
+        let orgs = card.organizations.expect("organizations present");
+        let org = orgs.values().next().expect("single organization");
+        assert_eq!(org.name.as_deref(), Some(expected_name));
+        let units: Vec<&str> = org
+            .units
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|u| u.name.as_str())
+            .collect();
+        assert_eq!(units, expected_units);
+    }
+}
+
+#[test]
+fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
+    // 1. Organization with name: None and no units states nothing and emits no ORG line
+    let org_none_no_units = Organization {
+        name: None,
+        units: None,
+        ..Default::default()
+    };
+    assert!(!states_organization(&org_none_no_units));
+
+    // 2. Organization with name: Some("") and no units states nothing and emits no ORG line
+    let org_empty_name_no_units = Organization {
+        name: Some(String::new()),
+        units: None,
+        ..Default::default()
+    };
+    assert!(!states_organization(&org_empty_name_no_units));
+
+    // 3. Organization with name: Some("") and only empty units states nothing and emits no ORG line
+    let org_empty_name_empty_units = Organization {
+        name: Some(String::new()),
+        units: Some(vec![OrgUnit::new(""), OrgUnit::new("")]),
+        ..Default::default()
+    };
+    assert!(!states_organization(&org_empty_name_empty_units));
+
+    // 4. ContactCard with empty-named org and no units emits no ORG property
+    let card_empty_org = ContactCard {
+        organizations: Some([("o1".to_owned(), org_empty_name_no_units.clone())].into()),
+        ..Default::default()
+    };
+    let vcard_empty_org = card_to_vcard(&card_empty_org);
+    assert!(
+        !vcard_empty_org.contains("ORG"),
+        "must emit no ORG line when org name is empty and no units exist"
+    );
+
+    // 5. ContactCard with employer name and no units emits single component (no empty trailing component)
+    let card_named_org = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme Corp".to_owned()),
+                    units: None,
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let vcard_named_org = card_to_vcard(&card_named_org);
+    assert_eq!(line(&vcard_named_org, "ORG"), "ORG;X-JMAP-KEY=o1:Acme Corp");
+
+    // 6. ContactCard with employer name and empty units emits employer name without empty unit components
+    let card_named_org_empty_units = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme Corp".to_owned()),
+                    units: Some(vec![OrgUnit::new(""), OrgUnit::new("")]),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let vcard_named_org_empty_units = card_to_vcard(&card_named_org_empty_units);
+    assert_eq!(
+        line(&vcard_named_org_empty_units, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Acme Corp"
+    );
+
+    // 7. ContactCard with name: Some("") and valid units emits leading empty component to preserve slot
+    let card_empty_name_valid_units = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some(String::new()),
+                    units: Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Security")]),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let vcard_empty_name_valid_units = card_to_vcard(&card_empty_name_valid_units);
+    assert_eq!(
+        line(&vcard_empty_name_valid_units, "ORG"),
+        "ORG;X-JMAP-KEY=o1:;Engineering;Security"
+    );
+}
+
+#[test]
+fn empty_org_name_normalisation_and_fixpoint_stability() {
+    // Starting with an organisation that explicitly sets name: Some("") and valid units
+    let initial_card = ContactCard {
+        name: Some(Name {
+            full: Some("Alice Smith".to_owned()),
+            ..Default::default()
+        }),
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some(String::new()),
+                    units: Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Platform")]),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        ),
+        ..Default::default()
+    };
+
+    // Pass 1: emit vCard and read back
+    let vcard1 = card_to_vcard(&initial_card);
+    assert_eq!(
+        line(&vcard1, "ORG"),
+        "ORG;X-JMAP-KEY=o1:;Engineering;Platform"
+    );
+
+    let card1 = vcard_to_card(&vcard1).expect("pass 1 parse");
+    let org1 = &card1.organizations.as_ref().unwrap()["o1"];
+    // Verifying normalization: empty name normalized to None (absent)
+    assert_eq!(
+        org1.name, None,
+        "empty org name must be normalized to None (absent)"
+    );
+    assert_eq!(
+        org1.units.as_deref(),
+        Some([OrgUnit::new("Engineering"), OrgUnit::new("Platform")].as_slice())
+    );
+
+    // Pass 2: re-emit and re-read
+    let vcard2 = card_to_vcard(&card1);
+    let card2 = vcard_to_card(&vcard2).expect("pass 2 parse");
+
+    // Pass 3: re-emit and re-read
+    let vcard3 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&vcard3).expect("pass 3 parse");
+
+    // Immediate byte-identical and structural fixed-point convergence
+    assert_eq!(vcard1, vcard2, "vCard pass 1 == pass 2");
+    assert_eq!(vcard2, vcard3, "vCard pass 2 == pass 3");
+    assert_eq!(card1, card2, "ContactCard pass 1 == pass 2");
+    assert_eq!(card2, card3, "ContactCard pass 2 == pass 3");
+}
+
+#[test]
+fn empty_org_name_multiple_organizations_matrix() {
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Bob MultiOrg".to_owned()),
+            ..Default::default()
+        }),
+        organizations: Some(
+            [
+                (
+                    "o1".to_owned(),
+                    Organization {
+                        name: Some("Acme Corp".to_owned()),
+                        units: Some(vec![OrgUnit::new("Primary")]),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "o2".to_owned(),
+                    Organization {
+                        name: Some(String::new()),
+                        units: Some(vec![OrgUnit::new("Contracting")]),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "o3".to_owned(),
+                    Organization {
+                        name: None,
+                        units: Some(vec![OrgUnit::new("Advisory")]),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "o4".to_owned(),
+                    Organization {
+                        name: Some(String::new()),
+                        units: None,
+                        ..Default::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..Default::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    // o4 has no employer name and no units -> omitted
+    let org_lines: Vec<&str> = vcard.lines().filter(|l| l.starts_with("ORG")).collect();
+    assert_eq!(
+        org_lines.len(),
+        3,
+        "only o1, o2, o3 must be emitted; o4 must be omitted"
+    );
+    assert!(vcard.contains("ORG;X-JMAP-KEY=o1:Acme Corp;Primary"));
+    assert!(vcard.contains("ORG;X-JMAP-KEY=o2:;Contracting"));
+    assert!(vcard.contains("ORG;X-JMAP-KEY=o3:;Advisory"));
+    assert!(!vcard.contains("X-JMAP-KEY=o4"));
+
+    let back = vcard_to_card(&vcard).expect("parse multi-org vcard");
+    let orgs = back.organizations.expect("organizations present");
+    assert_eq!(orgs.len(), 3);
+    assert_eq!(orgs["o1"].name.as_deref(), Some("Acme Corp"));
+    assert_eq!(orgs["o2"].name, None);
+    assert_eq!(orgs["o3"].name, None);
+    assert!(!orgs.contains_key("o4"));
+}
