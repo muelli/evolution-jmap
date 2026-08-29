@@ -116,6 +116,45 @@ impl Session {
         self.root.join("config/evolution/sources")
     }
 
+    /// Where a collection backend writes its *children*, which is somewhere
+    /// else entirely: `collection_backend_new_user_file` (EDS 3.52.3,
+    /// `e-collection-backend.c:176-200`) builds the child's file name under
+    /// `e_collection_backend_get_cache_dir()`, itself
+    /// `$XDG_CACHE_HOME/evolution/sources/<collection-uid>`
+    /// (`collection_backend_constructed`, line 927).
+    ///
+    /// So a child source's keyfile is never in [`Self::sources_directory`],
+    /// and "this UID matches no configured source" is the normal condition of
+    /// every source Evolution ever fanned an account out into rather than
+    /// evidence of debris — which is the whole of `docs/ROADMAP.md` item 26.
+    /// Exposed so `tests/stale-source-uid.rs` can go and look in both places
+    /// instead of taking the client program's word for where a child landed.
+    pub fn cache_sources_directory(&self, collection_uid: &str) -> PathBuf {
+        self.root
+            .join("cache/evolution/sources")
+            .join(collection_uid)
+    }
+
+    /// Set one more environment variable for the daemons and the client this
+    /// session starts.
+    ///
+    /// The session's environment is built from nothing rather than inherited
+    /// (see [`Self::new`]), so a test that needs EDS's own diagnostics — the
+    /// `ESR_DEBUG=1` that `e_source_registry_debug_enabled`
+    /// (`e-data-server-util.c:2372`) gates every `e_source_registry_debug_print`
+    /// on, and with it the `Failed to lookup password for source …` line
+    /// `docs/ROADMAP.md` item 26 is about — has no other way to ask for them.
+    ///
+    /// The output lands in the same captured stdout as the client's own
+    /// `key=value` observations, because `dbus-run-session`'s `dbus-daemon`
+    /// hands its own stdout to every service it activates. That is safe to mix:
+    /// EDS's debug lines that contain `=` are keyfile diffs of the form
+    /// `" + : Key=Value"`, whose "key" begins with a space and so can never
+    /// collide with an observation's.
+    pub fn set_variable(&mut self, name: &str, value: &str) {
+        self.environment.insert(name.into(), value.into());
+    }
+
     /// Write a `.source` keyfile. The file name is the source UID, which is
     /// how EDS identifies it and how the client program asks for it.
     pub fn write_source(&self, uid: &str, contents: &str) {

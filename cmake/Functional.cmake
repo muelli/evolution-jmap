@@ -235,6 +235,18 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_directories(functional-book-stale-token-client PRIVATE
 		${LIBEBOOK_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# docs/ROADMAP.md item 26's reproduction client. A registry-only
+	# libedataserver consumer like functional-collection-client, plus GSettings
+	# — which is not a separate dependency here: `gio-2.0` comes in with
+	# libedataserver's own pkg-config, and `g_settings_new` is what lets this
+	# client plant the operator's dconf debris itself rather than have the
+	# harness hand-edit a GVDB file.
+	add_executable(functional-stale-source-uid-client tests/functional/stale-source-uid-client.c)
+	target_include_directories(functional-stale-source-uid-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-stale-source-uid-client PRIVATE ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-stale-source-uid-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-stale-source-uid-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	add_executable(functional-config-lookup-client tests/functional/config-lookup-client.c)
 	target_include_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_INCLUDE_DIRS})
 	target_compile_options(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_CFLAGS_OTHER})
@@ -540,6 +552,28 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-book-stale-token-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
+	)
+
+	# docs/ROADMAP.md item 26: whether a source UID reachable only from
+	# dconf/GSettings can drive the registry into a credential lookup and a
+	# consent window, and — since it cannot — what actually produces the
+	# operator's `Failed to lookup password for source <uid>` line for a UID
+	# with no keyfile in the config directory. Uses the collection backend's
+	# module because the answer is a collection *child*, whose keyfile EDS
+	# writes to the cache directory instead.
+	# `--test-threads=1`: the three tests each stand up a registry and a
+	# keyring daemon of their own, and two of them a mock server as well.
+	add_test(
+		NAME functional-stale-source-uid
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test stale-source-uid -- --test-threads=1
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-stale-source-uid PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_STALE_SOURCE_UID_CLIENT=$<TARGET_FILE:functional-stale-source-uid-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
 	# docs/ROADMAP.md item 22 Do(1): the stale Source.OAuth2Support proxy that
