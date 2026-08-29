@@ -199,6 +199,54 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"extending it.")
 	endif()
 
+	# docs/ROADMAP.md item 25's calendar leg. Another libecal consumer, but
+	# with two things the five above do not need: it seeds the secret store
+	# (`e_secret_store_store_sync`) before it connects, and it asks whether the
+	# registry exported `Source.OAuth2Support` for its source
+	# (`e_source_ref_dbus_object`). Both are libedataserver, which is therefore
+	# named here rather than relied on as a transitive of libecal — and which
+	# is why this target sits below `pkg_check_modules(LIBEDATASERVER ...)`
+	# rather than beside the other calendar clients.
+	add_executable(functional-cal-stale-token-client
+		tests/functional/cal-stale-token-client.c
+		tests/functional/connection-status.c)
+	target_include_directories(functional-cal-stale-token-client PRIVATE
+		${LIBECAL_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-cal-stale-token-client PRIVATE
+		${LIBECAL_CFLAGS_OTHER} ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-cal-stale-token-client PRIVATE
+		${LIBECAL_LIBRARIES} ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-cal-stale-token-client PRIVATE
+		${LIBECAL_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
+
+	# docs/ROADMAP.md item 25's address-book leg. The same shape as
+	# functional-cal-stale-token-client above, with libebook swapped for
+	# libecal — see that target's own comment and the client's header for
+	# why libedataserver is named here too.
+	add_executable(functional-book-stale-token-client
+		tests/functional/book-stale-token-client.c
+		tests/functional/connection-status.c)
+	target_include_directories(functional-book-stale-token-client PRIVATE
+		${LIBEBOOK_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-book-stale-token-client PRIVATE
+		${LIBEBOOK_CFLAGS_OTHER} ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-book-stale-token-client PRIVATE
+		${LIBEBOOK_LIBRARIES} ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-book-stale-token-client PRIVATE
+		${LIBEBOOK_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
+
+	# docs/ROADMAP.md item 26's reproduction client. A registry-only
+	# libedataserver consumer like functional-collection-client, plus GSettings
+	# — which is not a separate dependency here: `gio-2.0` comes in with
+	# libedataserver's own pkg-config, and `g_settings_new` is what lets this
+	# client plant the operator's dconf debris itself rather than have the
+	# harness hand-edit a GVDB file.
+	add_executable(functional-stale-source-uid-client tests/functional/stale-source-uid-client.c)
+	target_include_directories(functional-stale-source-uid-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-stale-source-uid-client PRIVATE ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-stale-source-uid-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-stale-source-uid-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	add_executable(functional-config-lookup-client tests/functional/config-lookup-client.c)
 	target_include_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_INCLUDE_DIRS})
 	target_compile_options(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_CFLAGS_OTHER})
@@ -463,6 +511,69 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-mail-stale-token-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+	)
+
+	# docs/ROADMAP.md item 25's calendar leg: the same acceptance test as
+	# `functional-mail-stale-token`, for the backend whose refresh goes through
+	# an `ESource` rather than a `CamelSession`. Needs three modules where
+	# every other calendar test needs one — the calendar backend in the
+	# factory, and, in the registry, `module-jmap-backend.so` (the "JMAP"
+	# EOAuth2Service and the `[JMAP OAuth2]` extension type) beside EDS's own
+	# oauth2-services module (which exports `Source.OAuth2Support`). See the
+	# test's own header for why none of the three is optional.
+	# `--test-threads=1`: the two tests each stand up a registry, a factory and
+	# a keyring daemon of their own.
+	add_test(
+		NAME functional-cal-stale-token
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test cal-stale-token -- --test-threads=1
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-stale-token PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-cal-stale-token-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
+	)
+
+	# docs/ROADMAP.md item 25's address-book leg: the same acceptance test as
+	# `functional-cal-stale-token`, for `jmap-backend-book`'s own
+	# `with_connection`/`retry_on_authentication_failure` wiring. Same three
+	# modules, same reasoning, with libebook's factory and backend in place of
+	# libecal's.
+	add_test(
+		NAME functional-book-stale-token
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test book-stale-token -- --test-threads=1
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-stale-token PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-book-stale-token-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
+	)
+
+	# docs/ROADMAP.md item 26: whether a source UID reachable only from
+	# dconf/GSettings can drive the registry into a credential lookup and a
+	# consent window, and — since it cannot — what actually produces the
+	# operator's `Failed to lookup password for source <uid>` line for a UID
+	# with no keyfile in the config directory. Uses the collection backend's
+	# module because the answer is a collection *child*, whose keyfile EDS
+	# writes to the cache directory instead.
+	# `--test-threads=1`: the three tests each stand up a registry and a
+	# keyring daemon of their own, and two of them a mock server as well.
+	add_test(
+		NAME functional-stale-source-uid
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test stale-source-uid -- --test-threads=1
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-stale-source-uid PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_STALE_SOURCE_UID_CLIENT=$<TARGET_FILE:functional-stale-source-uid-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
 	# docs/ROADMAP.md item 22 Do(1): the stale Source.OAuth2Support proxy that
