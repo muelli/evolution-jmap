@@ -364,6 +364,97 @@ pub struct CalendarEvent {
 }
 
 impl CalendarEvent {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_calendar_id(mut self, id: impl Into<Id>) -> Self {
+        let mut map = self.calendar_ids.unwrap_or_default();
+        map.insert(id.into(), true);
+        self.calendar_ids = Some(map);
+        self
+    }
+
+    pub fn with_uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_start(mut self, start: impl Into<String>) -> Self {
+        self.start = Some(start.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_duration(mut self, duration: impl Into<String>) -> Self {
+        self.duration = Some(duration.into());
+        self
+    }
+
+    pub fn with_status(mut self, status: impl Into<String>) -> Self {
+        self.status = Some(status.into());
+        self
+    }
+
+    pub fn with_free_busy_status(mut self, free_busy_status: impl Into<String>) -> Self {
+        self.free_busy_status = Some(free_busy_status.into());
+        self
+    }
+
+    pub fn with_priority(mut self, priority: i64) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
+    pub fn with_privacy(mut self, privacy: impl Into<String>) -> Self {
+        self.privacy = Some(privacy.into());
+        self
+    }
+
+    pub fn show_without_time(mut self, show_without_time: bool) -> Self {
+        self.show_without_time = Some(show_without_time);
+        self
+    }
+
+    pub fn use_default_alerts(mut self, use_default: bool) -> Self {
+        self.use_default_alerts = Some(use_default);
+        self
+    }
+
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
+    }
+
+    pub fn with_locale(mut self, locale: impl Into<String>) -> Self {
+        self.locale = Some(locale.into());
+        self
+    }
+
+    pub fn with_recurrence_rule(mut self, rrule: RecurrenceRule) -> Self {
+        self.recurrence_rule = Some(rrule);
+        self
+    }
+
     /// A minimal one-off event, ready for `CalendarEvent/set` create.
     pub fn simple(calendar_id: impl Into<Id>, title: &str, start: &str, duration: &str) -> Self {
         Self {
@@ -1122,6 +1213,22 @@ pub struct CalendarsCapability {
     pub max_concurrent_availabilities: u64,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarsCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_size_attachments_per_event(mut self, max: u64) -> Self {
+        self.max_size_attachments_per_event = max;
+        self
+    }
+
+    pub fn with_max_concurrent_availabilities(mut self, max: u64) -> Self {
+        self.max_concurrent_availabilities = max;
+        self
+    }
 }
 
 /// Standard RFC 8984 §4.4.5 event relation types.

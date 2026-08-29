@@ -333,6 +333,17 @@ pub struct PrincipalsCapability {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl PrincipalsCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_principals_per_get(mut self, max: u64) -> Self {
+        self.max_principals_per_get = Some(max);
+        self
+    }
+}
+
 /// The `SetError` types RFC 9670 §2 adds for `Principal/set`.
 pub mod principal_set_error {
     pub const FORBIDDEN: &str = "forbidden";

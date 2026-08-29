@@ -1268,3 +1268,82 @@ fn core_response_and_request_error_builders() {
         Some("The request was malformed JSON")
     );
 }
+
+#[test]
+fn session_account_core_capability_and_state_builders() {
+    use jmap_proto::session::{Account, CoreCapability, Session, WebSocketCapability};
+    use jmap_proto::{Id, State, UtcDate};
+
+    let s = State::new("state_123");
+    assert_eq!(s.as_ref(), "state_123");
+
+    let d_str: String = "2026-08-29T12:00:00Z".to_string();
+    let d: UtcDate = d_str.into();
+    assert_eq!(d.as_ref(), "2026-08-29T12:00:00Z");
+
+    let core_cap = CoreCapability::new()
+        .with_max_size_upload(10_000_000)
+        .with_max_concurrent_upload(5)
+        .with_max_size_request(20_000_000)
+        .with_max_concurrent_requests(10)
+        .with_max_calls_in_request(20)
+        .with_max_objects_in_get(500)
+        .with_max_objects_in_set(100)
+        .with_collation_algorithms(["i;ascii-casemap", "i;octet"]);
+
+    assert_eq!(core_cap.max_size_upload, 10_000_000);
+    assert_eq!(core_cap.max_concurrent_upload, 5);
+    assert_eq!(core_cap.max_size_request, 20_000_000);
+    assert_eq!(core_cap.max_concurrent_requests, 10);
+    assert_eq!(core_cap.max_calls_in_request, 20);
+    assert_eq!(core_cap.max_objects_in_get, 500);
+    assert_eq!(core_cap.max_objects_in_set, 100);
+    assert_eq!(core_cap.collation_algorithms.len(), 2);
+
+    let ws_cap = WebSocketCapability::new("wss://api.example.com/jmap/ws").supports_push(true);
+    assert_eq!(ws_cap.url, "wss://api.example.com/jmap/ws");
+    assert!(ws_cap.supports_push);
+
+    let acct = Account::new("Alice")
+        .is_personal(true)
+        .is_read_only(false)
+        .with_capability("urn:ietf:params:jmap:mail", serde_json::json!({}));
+    assert_eq!(acct.name, "Alice");
+    assert!(acct.is_personal);
+    assert!(!acct.is_read_only);
+    assert!(
+        acct.account_capabilities
+            .contains_key("urn:ietf:params:jmap:mail")
+    );
+
+    let session = Session::new(
+        "alice@example.com",
+        "https://api.example.com/jmap",
+        "https://api.example.com/download/{blobId}",
+        "https://api.example.com/upload",
+        "state_abc",
+    )
+    .with_event_source_url("https://api.example.com/events")
+    .with_capability(
+        "urn:ietf:params:jmap:core",
+        serde_json::to_value(&core_cap).unwrap(),
+    )
+    .with_capability("urn:ietf:params:jmap:mail", serde_json::json!({}))
+    .with_account("A1", acct)
+    .with_primary_account("urn:ietf:params:jmap:mail", "A1");
+
+    assert_eq!(session.username, "alice@example.com");
+    assert_eq!(session.api_url, "https://api.example.com/jmap");
+    assert_eq!(
+        session.download_url,
+        "https://api.example.com/download/{blobId}"
+    );
+    assert_eq!(session.upload_url, "https://api.example.com/upload");
+    assert_eq!(session.event_source_url, "https://api.example.com/events");
+    assert_eq!(session.state.as_str(), "state_abc");
+    assert_eq!(session.accounts.len(), 1);
+    assert_eq!(
+        session.resolve_primary_account("urn:ietf:params:jmap:mail"),
+        Some(&Id::new("A1"))
+    );
+}

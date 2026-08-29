@@ -304,6 +304,146 @@ pub struct Email {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Email {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_blob_id(mut self, blob_id: impl Into<Id>) -> Self {
+        self.blob_id = Some(blob_id.into());
+        self
+    }
+
+    pub fn with_thread_id(mut self, thread_id: impl Into<Id>) -> Self {
+        self.thread_id = Some(thread_id.into());
+        self
+    }
+
+    pub fn in_mailbox(mut self, mailbox_id: impl Into<Id>) -> Self {
+        self.mailbox_ids
+            .get_or_insert_with(BTreeMap::new)
+            .insert(mailbox_id.into(), true);
+        self
+    }
+
+    pub fn with_mailbox_ids(mut self, mailbox_ids: BTreeMap<Id, bool>) -> Self {
+        self.mailbox_ids = Some(mailbox_ids);
+        self
+    }
+
+    pub fn with_keyword(mut self, keyword: impl Into<String>) -> Self {
+        self.keywords
+            .get_or_insert_with(BTreeMap::new)
+            .insert(keyword.into(), true);
+        self
+    }
+
+    pub fn with_keywords(mut self, keywords: BTreeMap<String, bool>) -> Self {
+        self.keywords = Some(keywords);
+        self
+    }
+
+    pub fn with_size(mut self, size: u64) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    pub fn with_received_at(mut self, received_at: impl Into<UtcDate>) -> Self {
+        self.received_at = Some(received_at.into());
+        self
+    }
+
+    pub fn with_from(mut self, from: impl IntoIterator<Item = EmailAddress>) -> Self {
+        self.from = Some(from.into_iter().collect());
+        self
+    }
+
+    pub fn with_to(mut self, to: impl IntoIterator<Item = EmailAddress>) -> Self {
+        self.to = Some(to.into_iter().collect());
+        self
+    }
+
+    pub fn with_cc(mut self, cc: impl IntoIterator<Item = EmailAddress>) -> Self {
+        self.cc = Some(cc.into_iter().collect());
+        self
+    }
+
+    pub fn with_bcc(mut self, bcc: impl IntoIterator<Item = EmailAddress>) -> Self {
+        self.bcc = Some(bcc.into_iter().collect());
+        self
+    }
+
+    pub fn with_reply_to(mut self, reply_to: impl IntoIterator<Item = EmailAddress>) -> Self {
+        self.reply_to = Some(reply_to.into_iter().collect());
+        self
+    }
+
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
+
+    pub fn with_sent_at(mut self, sent_at: impl Into<String>) -> Self {
+        self.sent_at = Some(sent_at.into());
+        self
+    }
+
+    pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
+        self.preview = Some(preview.into());
+        self
+    }
+
+    pub fn has_attachment(mut self, has: bool) -> Self {
+        self.has_attachment = Some(has);
+        self
+    }
+
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers
+            .get_or_insert_with(Vec::new)
+            .push(EmailHeader::new(name, value));
+        self
+    }
+
+    pub fn with_headers(mut self, headers: impl IntoIterator<Item = EmailHeader>) -> Self {
+        self.headers = Some(headers.into_iter().collect());
+        self
+    }
+
+    pub fn with_body_structure(mut self, body_structure: EmailBodyPart) -> Self {
+        self.body_structure = Some(body_structure);
+        self
+    }
+
+    pub fn with_body_values(mut self, body_values: BTreeMap<String, EmailBodyValue>) -> Self {
+        self.body_values = Some(body_values);
+        self
+    }
+
+    pub fn with_text_body(mut self, text_body: impl IntoIterator<Item = EmailBodyPart>) -> Self {
+        self.text_body = Some(text_body.into_iter().collect());
+        self
+    }
+
+    pub fn with_html_body(mut self, html_body: impl IntoIterator<Item = EmailBodyPart>) -> Self {
+        self.html_body = Some(html_body.into_iter().collect());
+        self
+    }
+
+    pub fn with_attachments(
+        mut self,
+        attachments: impl IntoIterator<Item = EmailBodyPart>,
+    ) -> Self {
+        self.attachments = Some(attachments.into_iter().collect());
+        self
+    }
+}
+
 /// One message handed to `Email/import` (RFC 8621 §4.8): the blob the raw
 /// message was uploaded as, and what the account should file it under.
 ///
@@ -675,6 +815,67 @@ pub struct EmailBodyPart {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl EmailBodyPart {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_part_id(mut self, part_id: impl Into<String>) -> Self {
+        self.part_id = Some(part_id.into());
+        self
+    }
+
+    pub fn with_blob_id(mut self, blob_id: impl Into<Id>) -> Self {
+        self.blob_id = Some(blob_id.into());
+        self
+    }
+
+    pub fn with_size(mut self, size: u64) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn with_content_type(mut self, content_type: impl Into<String>) -> Self {
+        self.content_type = Some(content_type.into());
+        self
+    }
+
+    pub fn with_charset(mut self, charset: impl Into<String>) -> Self {
+        self.charset = Some(charset.into());
+        self
+    }
+
+    pub fn with_disposition(mut self, disposition: impl Into<String>) -> Self {
+        self.disposition = Some(disposition.into());
+        self
+    }
+
+    pub fn with_cid(mut self, cid: impl Into<String>) -> Self {
+        self.cid = Some(cid.into());
+        self
+    }
+
+    pub fn with_location(mut self, location: impl Into<String>) -> Self {
+        self.location = Some(location.into());
+        self
+    }
+
+    pub fn with_sub_parts(mut self, sub_parts: impl IntoIterator<Item = EmailBodyPart>) -> Self {
+        self.sub_parts = Some(sub_parts.into_iter().collect());
+        self
+    }
+
+    pub fn with_headers(mut self, headers: impl IntoIterator<Item = EmailHeader>) -> Self {
+        self.headers = Some(headers.into_iter().collect());
+        self
+    }
+}
+
 /// Decoded body content addressed by `partId` (RFC 8621 §4.1.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1043,6 +1244,51 @@ pub struct EmailSubmissionQueryFilter {
     pub after: Option<UtcDate>,
 }
 
+impl EmailSubmissionQueryFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_identity_ids(
+        mut self,
+        identity_ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        self.identity_ids = Some(identity_ids.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_email_ids(mut self, email_ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.email_ids = Some(email_ids.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_thread_ids(mut self, thread_ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.thread_ids = Some(thread_ids.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_undo_status(mut self, undo_status: impl Into<String>) -> Self {
+        self.undo_status = Some(undo_status.into());
+        self
+    }
+
+    pub fn before(mut self, before: impl Into<UtcDate>) -> Self {
+        self.before = Some(before.into());
+        self
+    }
+
+    pub fn after(mut self, after: impl Into<UtcDate>) -> Self {
+        self.after = Some(after.into());
+        self
+    }
+
+    pub fn time_range(mut self, after: Option<UtcDate>, before: Option<UtcDate>) -> Self {
+        self.after = after;
+        self.before = before;
+        self
+    }
+}
+
 /// Snippet of matching text in an email search (RFC 8621 §5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1253,6 +1499,42 @@ pub struct MailCapability {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl MailCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_size_attachments_per_email(mut self, max: u64) -> Self {
+        self.max_size_attachments_per_email = max;
+        self
+    }
+
+    pub fn with_max_size_email_in_bytes(mut self, max: u64) -> Self {
+        self.max_size_email_in_bytes = max;
+        self
+    }
+
+    pub fn with_max_size_body_value_bytes(mut self, max: u64) -> Self {
+        self.max_size_body_value_bytes = max;
+        self
+    }
+
+    pub fn with_max_number_of_attachments_per_email(mut self, max: u64) -> Self {
+        self.max_number_of_attachments_per_email = max;
+        self
+    }
+
+    pub fn with_max_number_of_recipients_per_email(mut self, max: u64) -> Self {
+        self.max_number_of_recipients_per_email = max;
+        self
+    }
+
+    pub fn may_create_top_level_mailbox(mut self, may: bool) -> Self {
+        self.may_create_top_level_mailbox = may;
+        self
+    }
+}
+
 /// Submission capability properties (RFC 8621 §1.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1263,6 +1545,22 @@ pub struct SubmissionCapability {
     pub submission_extensions: BTreeMap<String, Vec<String>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl SubmissionCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_delayed_send(mut self, max: u64) -> Self {
+        self.max_delayed_send = max;
+        self
+    }
+
+    pub fn with_submission_extensions(mut self, extensions: BTreeMap<String, Vec<String>>) -> Self {
+        self.submission_extensions = extensions;
+        self
+    }
 }
 
 /// A Message Disposition Notification (RFC 9007 §2).

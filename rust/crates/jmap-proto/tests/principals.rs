@@ -291,3 +291,17 @@ fn principal_and_availability_builders() {
         avail
     );
 }
+
+#[test]
+fn principals_capability_builder() {
+    use jmap_proto::principals::PrincipalsCapability;
+
+    let cap = PrincipalsCapability::new().with_max_principals_per_get(250);
+    assert_eq!(cap.max_principals_per_get, Some(250));
+    let val = serde_json::to_value(&cap).unwrap();
+    assert_eq!(val["maxPrincipalsPerGet"], 250);
+    assert_eq!(
+        serde_json::from_value::<PrincipalsCapability>(val).unwrap(),
+        cap
+    );
+}

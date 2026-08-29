@@ -1004,3 +1004,141 @@ fn email_responses_and_entities_builders_roundtrip() {
     assert_eq!(parse_resp.not_parsable.as_ref().unwrap().len(), 1);
     assert_eq!(parse_resp.not_found.as_ref().unwrap().len(), 1);
 }
+
+#[test]
+fn email_body_part_capability_and_submission_filter_builders() {
+    use jmap_proto::mail::{
+        Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailHeader,
+        EmailSubmissionQueryFilter, MailCapability, SubmissionCapability,
+    };
+    use jmap_proto::{Id, UtcDate};
+    use std::collections::BTreeMap;
+
+    let mail_cap = MailCapability::new()
+        .with_max_size_attachments_per_email(50_000_000)
+        .with_max_size_email_in_bytes(100_000_000)
+        .with_max_size_body_value_bytes(1_000_000)
+        .with_max_number_of_attachments_per_email(20)
+        .with_max_number_of_recipients_per_email(100)
+        .may_create_top_level_mailbox(true);
+
+    assert_eq!(mail_cap.max_size_attachments_per_email, 50_000_000);
+    assert_eq!(mail_cap.max_size_email_in_bytes, 100_000_000);
+    assert_eq!(mail_cap.max_size_body_value_bytes, 1_000_000);
+    assert_eq!(mail_cap.max_number_of_attachments_per_email, 20);
+    assert_eq!(mail_cap.max_number_of_recipients_per_email, 100);
+    assert!(mail_cap.may_create_top_level_mailbox);
+
+    let sub_cap = SubmissionCapability::new()
+        .with_max_delayed_send(86400)
+        .with_submission_extensions(BTreeMap::from([(
+            "FUTURERELEASE".to_string(),
+            vec!["max=604800".to_string()],
+        )]));
+
+    assert_eq!(sub_cap.max_delayed_send, 86400);
+    assert_eq!(sub_cap.submission_extensions.len(), 1);
+
+    let part = EmailBodyPart::new()
+        .with_part_id("1")
+        .with_blob_id("b_text_1")
+        .with_size(1024)
+        .with_name("notes.txt")
+        .with_content_type("text/plain")
+        .with_charset("utf-8")
+        .with_disposition("inline")
+        .with_cid("cid_notes")
+        .with_location("https://example.com/notes.txt")
+        .with_headers([EmailHeader::new("Content-Description", "Text Notes")]);
+
+    assert_eq!(part.part_id.as_deref(), Some("1"));
+    assert_eq!(part.blob_id.as_ref().unwrap().as_str(), "b_text_1");
+    assert_eq!(part.size, Some(1024));
+    assert_eq!(part.name.as_deref(), Some("notes.txt"));
+    assert_eq!(part.content_type.as_deref(), Some("text/plain"));
+    assert_eq!(part.charset.as_deref(), Some("utf-8"));
+    assert_eq!(part.disposition.as_deref(), Some("inline"));
+    assert_eq!(part.cid.as_deref(), Some("cid_notes"));
+    assert_eq!(
+        part.location.as_deref(),
+        Some("https://example.com/notes.txt")
+    );
+    assert_eq!(part.headers.as_ref().unwrap().len(), 1);
+
+    let email = Email::new()
+        .with_id("e_100")
+        .with_blob_id("b_msg_100")
+        .with_thread_id("th_100")
+        .in_mailbox("mb_inbox")
+        .with_keyword("$seen")
+        .with_size(2048)
+        .with_received_at(UtcDate::new("2026-08-29T10:00:00Z"))
+        .with_from([EmailAddress::new(Some("Alice"), "alice@example.com")])
+        .with_to([EmailAddress::new(Some("Bob"), "bob@example.com")])
+        .with_cc([EmailAddress::new(None, "carol@example.com")])
+        .with_bcc([EmailAddress::new(None, "dave@example.com")])
+        .with_reply_to([EmailAddress::new(Some("Alice"), "alice-reply@example.com")])
+        .with_subject("Release update")
+        .with_sent_at("Sat, 29 Aug 2026 10:00:00 +0000")
+        .with_preview("Here is the release update...")
+        .has_attachment(true)
+        .with_header("X-Custom", "Value")
+        .with_body_structure(part.clone())
+        .with_body_values(BTreeMap::from([(
+            "1".to_string(),
+            EmailBodyValue::new("Here is the release update text"),
+        )]))
+        .with_text_body([part.clone()])
+        .with_attachments([part]);
+
+    assert_eq!(email.id.as_ref().unwrap().as_str(), "e_100");
+    assert_eq!(email.blob_id.as_ref().unwrap().as_str(), "b_msg_100");
+    assert_eq!(email.thread_id.as_ref().unwrap().as_str(), "th_100");
+    assert!(
+        email
+            .mailbox_ids
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::new("mb_inbox"))
+    );
+    assert!(email.keywords.as_ref().unwrap().contains_key("$seen"));
+    assert_eq!(email.size, Some(2048));
+    assert_eq!(email.from.as_ref().unwrap().len(), 1);
+    assert_eq!(email.to.as_ref().unwrap().len(), 1);
+    assert_eq!(email.cc.as_ref().unwrap().len(), 1);
+    assert_eq!(email.bcc.as_ref().unwrap().len(), 1);
+    assert_eq!(email.reply_to.as_ref().unwrap().len(), 1);
+    assert_eq!(email.subject.as_deref(), Some("Release update"));
+    assert_eq!(
+        email.preview.as_deref(),
+        Some("Here is the release update...")
+    );
+    assert_eq!(email.has_attachment, Some(true));
+    assert_eq!(email.headers.as_ref().unwrap().len(), 1);
+    assert!(email.body_structure.is_some());
+    assert_eq!(email.text_body.as_ref().unwrap().len(), 1);
+    assert_eq!(email.attachments.as_ref().unwrap().len(), 1);
+
+    let sub_filter = EmailSubmissionQueryFilter::new()
+        .with_identity_ids(["id_1", "id_2"])
+        .with_email_ids(["e_1"])
+        .with_thread_ids(["th_1"])
+        .with_undo_status("pending")
+        .time_range(
+            Some(UtcDate::new("2026-08-01T00:00:00Z")),
+            Some(UtcDate::new("2026-09-01T00:00:00Z")),
+        );
+
+    assert_eq!(sub_filter.identity_ids.as_ref().unwrap().len(), 2);
+    assert_eq!(sub_filter.email_ids.as_ref().unwrap().len(), 1);
+    assert_eq!(sub_filter.thread_ids.as_ref().unwrap().len(), 1);
+    assert_eq!(sub_filter.undo_status.as_deref(), Some("pending"));
+    assert_eq!(
+        sub_filter.after.as_ref().unwrap().as_str(),
+        "2026-08-01T00:00:00Z"
+    );
+    assert_eq!(
+        sub_filter.before.as_ref().unwrap().as_str(),
+        "2026-09-01T00:00:00Z"
+    );
+}

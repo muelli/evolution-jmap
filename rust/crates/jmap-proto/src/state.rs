@@ -38,6 +38,12 @@ impl From<&str> for State {
     }
 }
 
+impl AsRef<str> for State {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A date-time in UTC, `YYYY-MM-DDTHH:MM:SSZ` (RFC 3339 subset).
 ///
 /// Deliberately a string: Evolution Data Server converts to `GDateTime`; this
@@ -63,8 +69,20 @@ impl std::fmt::Display for UtcDate {
     }
 }
 
+impl From<String> for UtcDate {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
 impl From<&str> for UtcDate {
     fn from(value: &str) -> Self {
         Self(value.to_owned())
+    }
+}
+
+impl AsRef<str> for UtcDate {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
