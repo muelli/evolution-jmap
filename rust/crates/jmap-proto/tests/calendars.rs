@@ -600,3 +600,60 @@ fn jscalendar_participant_location_alert_and_parse_roundtrip() {
         parse_resp
     );
 }
+
+/// CalendarsCapability, AbsoluteTrigger, and EventRelation cover draft-ietf-jmap-calendars-28 §1.3 and RFC 8984 §4.4.5, §4.5.2.
+#[test]
+fn calendars_capabilities_absolute_trigger_and_event_relation_roundtrip_covers_draft_jmap_calendars()
+ {
+    use jmap_proto::calendars::{
+        AbsoluteTrigger, CalendarsCapability, EventRelation, event_relation_type, priority,
+    };
+
+    use std::collections::BTreeMap;
+
+    assert_eq!(event_relation_type::FIRST, "first");
+    assert_eq!(event_relation_type::NEXT, "next");
+    assert_eq!(event_relation_type::PARENT, "parent");
+    assert_eq!(event_relation_type::CHILD, "child");
+
+    assert_eq!(priority::UNDEFINED, 0);
+    assert_eq!(priority::HIGH, 1);
+    assert_eq!(priority::MEDIUM, 5);
+    assert_eq!(priority::LOW, 9);
+
+    let cap = CalendarsCapability {
+        max_size_attachments_per_event: 25_000_000,
+        max_concurrent_availabilities: 10,
+        extra: BTreeMap::new(),
+    };
+    let cap_val = serde_json::to_value(&cap).unwrap();
+    assert_eq!(cap_val["maxSizeAttachmentsPerEvent"], 25_000_000);
+    assert_eq!(cap_val["maxConcurrentAvailabilities"], 10);
+
+    let round_cap: CalendarsCapability = serde_json::from_value(cap_val).unwrap();
+    assert_eq!(round_cap, cap);
+
+    let abs_trigger = AbsoluteTrigger {
+        trigger_type: Some("AbsoluteTrigger".to_owned()),
+        when: jmap_proto::UtcDate::new("2026-09-01T08:30:00Z"),
+        extra: BTreeMap::new(),
+    };
+    let at_val = serde_json::to_value(&abs_trigger).unwrap();
+    assert_eq!(at_val["@type"], "AbsoluteTrigger");
+    assert_eq!(at_val["when"], "2026-09-01T08:30:00Z");
+
+    let relation = EventRelation {
+        relation_type: Some("Relation".to_owned()),
+        relation: Some(BTreeMap::from([(
+            event_relation_type::PARENT.to_owned(),
+            true,
+        )])),
+        extra: BTreeMap::new(),
+    };
+    let rel_val = serde_json::to_value(&relation).unwrap();
+    assert_eq!(rel_val["@type"], "Relation");
+    assert_eq!(rel_val["relation"]["parent"], true);
+
+    let round_rel: EventRelation = serde_json::from_value(rel_val).unwrap();
+    assert_eq!(round_rel, relation);
+}

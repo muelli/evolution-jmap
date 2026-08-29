@@ -744,3 +744,35 @@ pub mod undo_status {
     pub const FINAL: &str = "final";
     pub const CANCELED: &str = "canceled";
 }
+
+/// Mail capability properties (RFC 8621 §1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MailCapability {
+    #[serde(default)]
+    pub max_size_attachments_per_email: u64,
+    #[serde(default)]
+    pub max_size_email_in_bytes: u64,
+    #[serde(default)]
+    pub max_size_body_value_bytes: u64,
+    #[serde(default)]
+    pub max_number_of_attachments_per_email: u64,
+    #[serde(default)]
+    pub max_number_of_recipients_per_email: u64,
+    #[serde(default)]
+    pub may_create_top_level_mailbox: bool,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Submission capability properties (RFC 8621 §1.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmissionCapability {
+    #[serde(default)]
+    pub max_delayed_send: u64,
+    #[serde(default)]
+    pub submission_extensions: BTreeMap<String, Vec<String>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}

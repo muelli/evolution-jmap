@@ -167,6 +167,74 @@ impl Session {
             .get("maxSizeUpload")?
             .as_u64()
     }
+
+    /// The maximum number of concurrent upload requests the server will take on `uploadUrl` (RFC 8620 §2).
+    pub fn max_concurrent_upload(&self) -> Option<u64> {
+        self.capabilities
+            .get(CAPABILITY_CORE)?
+            .get("maxConcurrentUpload")?
+            .as_u64()
+    }
+
+    /// The maximum number of concurrent requests the server will take on `apiUrl` (RFC 8620 §2).
+    pub fn max_concurrent_requests(&self) -> Option<u64> {
+        self.capabilities
+            .get(CAPABILITY_CORE)?
+            .get("maxConcurrentRequests")?
+            .as_u64()
+    }
+
+    /// The maximum number of objects the server will process in a single `/set` call (RFC 8620 §2).
+    pub fn max_objects_in_set(&self) -> Option<u64> {
+        self.capabilities
+            .get(CAPABILITY_CORE)?
+            .get("maxObjectsInSet")?
+            .as_u64()
+    }
+
+    /// Supported collation algorithms for sorting (RFC 8620 §2).
+    pub fn collation_algorithms(&self) -> Option<Vec<String>> {
+        let arr = self
+            .capabilities
+            .get(CAPABILITY_CORE)?
+            .get("collationAlgorithms")?
+            .as_array()?;
+        Some(
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect(),
+        )
+    }
+
+    /// Typed core capability struct, if present.
+    pub fn core_capability(&self) -> Option<CoreCapability> {
+        let val = self.capabilities.get(CAPABILITY_CORE)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+}
+
+/// Core capability properties (RFC 8620 §2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreCapability {
+    #[serde(default)]
+    pub max_size_upload: u64,
+    #[serde(default)]
+    pub max_concurrent_upload: u64,
+    #[serde(default)]
+    pub max_size_request: u64,
+    #[serde(default)]
+    pub max_concurrent_requests: u64,
+    #[serde(default)]
+    pub max_calls_in_request: u64,
+    #[serde(default)]
+    pub max_objects_in_get: u64,
+    #[serde(default)]
+    pub max_objects_in_set: u64,
+    #[serde(default)]
+    pub collation_algorithms: Vec<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 /// One account the user has access to (RFC 8620 §1.6.2).

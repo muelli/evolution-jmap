@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// An opaque per-datatype state token; changes whenever server data changes.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 #[serde(transparent)]
 pub struct State(String);
 
@@ -43,7 +43,7 @@ impl From<&str> for State {
 /// Deliberately a string: Evolution Data Server converts to `GDateTime`; this
 /// crate never does date arithmetic. Lexicographic order equals chronological
 /// order for this format, which is all queries need.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 #[serde(transparent)]
 pub struct UtcDate(String);
 
