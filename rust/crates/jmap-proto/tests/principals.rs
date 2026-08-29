@@ -76,3 +76,41 @@ fn principal_secret_and_send_to_cover_rfc9670() {
         Some(&serde_json::json!({"imip": "mailto:room404@example.com"}))
     );
 }
+
+#[test]
+fn share_notification_roundtrip_covers_rfc9670() {
+    use jmap_proto::principals::{Principal, ShareNotification, share_notification_object_type};
+    use jmap_proto::state::UtcDate;
+    use std::collections::BTreeMap;
+
+    assert_eq!(share_notification_object_type::ADDRESS_BOOK, "AddressBook");
+    assert_eq!(share_notification_object_type::CALENDAR, "Calendar");
+    assert_eq!(share_notification_object_type::MAILBOX, "Mailbox");
+
+    let notif = ShareNotification {
+        id: Some("sn_1".into()),
+        created: UtcDate::new("2026-09-01T14:00:00Z"),
+        changed_by: Some(Principal {
+            name: "Alice Admin".to_owned(),
+            email: Some("alice@example.com".to_owned()),
+            ..Principal::default()
+        }),
+        object_type: share_notification_object_type::CALENDAR.to_owned(),
+        object_id: "cal_123".into(),
+        account_id: "A1".into(),
+        old_rights: Some(serde_json::json!({"mayReadItems": true})),
+        new_rights: Some(serde_json::json!({"mayReadItems": true, "mayAddItems": true})),
+        extra: BTreeMap::new(),
+    };
+
+    let n_val = serde_json::to_value(&notif).unwrap();
+    assert_eq!(n_val["id"], "sn_1");
+    assert_eq!(n_val["objectType"], "Calendar");
+    assert_eq!(n_val["objectId"], "cal_123");
+    assert_eq!(n_val["accountId"], "A1");
+    assert_eq!(n_val["changedBy"]["name"], "Alice Admin");
+    assert_eq!(n_val["newRights"]["mayAddItems"], true);
+
+    let round_tripped: ShareNotification = serde_json::from_value(n_val).unwrap();
+    assert_eq!(round_tripped, notif);
+}

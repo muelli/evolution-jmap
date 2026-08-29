@@ -311,3 +311,88 @@ fn address_book_rights_roundtrip_covers_rfc9610() {
     assert!(!rights.may_rename);
     assert!(!rights.may_admin);
 }
+
+#[test]
+fn jscontact_crypto_keys_directories_personal_info_and_groups_roundtrip() {
+    use jmap_proto::contacts::{
+        CardGroup, ContactCard, CryptoKey, Directory, PersonalInfo, crypto_key_kind,
+        directory_kind, personal_info_kind,
+    };
+    use std::collections::BTreeMap;
+
+    assert_eq!(crypto_key_kind::KEY, "key");
+    assert_eq!(crypto_key_kind::CERT, "cert");
+
+    assert_eq!(directory_kind::DIRECTORY, "directory");
+
+    assert_eq!(personal_info_kind::GENDER, "gender");
+    assert_eq!(personal_info_kind::EXPERTISE, "expertise");
+    assert_eq!(personal_info_kind::HOBBY, "hobby");
+    assert_eq!(personal_info_kind::INTEREST, "interest");
+
+    let card = ContactCard {
+        id: Some("C1".into()),
+        crypto_keys: Some(BTreeMap::from([(
+            "k1".to_owned(),
+            CryptoKey {
+                kind: Some(crypto_key_kind::KEY.to_owned()),
+                uri: "https://example.com/pgp.asc".to_owned(),
+                media_type: Some("application/pgp-keys".to_owned()),
+                pref: Some(1),
+                extra: BTreeMap::new(),
+            },
+        )])),
+        directories: Some(BTreeMap::from([(
+            "d1".to_owned(),
+            Directory {
+                kind: Some(directory_kind::DIRECTORY.to_owned()),
+                uri: "ldap://ldap.example.com/ou=people".to_owned(),
+                media_type: None,
+                pref: None,
+                extra: BTreeMap::new(),
+            },
+        )])),
+        personal_info: Some(BTreeMap::from([(
+            "pi1".to_owned(),
+            PersonalInfo {
+                kind: personal_info_kind::EXPERTISE.to_owned(),
+                value: Some("Rust Programming".to_owned()),
+                list_as: Some("Developer".to_owned()),
+                extra: BTreeMap::new(),
+            },
+        )])),
+        ..ContactCard::default()
+    };
+
+    let json = serde_json::to_value(&card).unwrap();
+    assert_eq!(
+        json["cryptoKeys"]["k1"]["uri"],
+        "https://example.com/pgp.asc"
+    );
+    assert_eq!(
+        json["directories"]["d1"]["uri"],
+        "ldap://ldap.example.com/ou=people"
+    );
+    assert_eq!(json["personalInfo"]["pi1"]["value"], "Rust Programming");
+
+    let round_tripped: ContactCard = serde_json::from_value(json).unwrap();
+    assert_eq!(round_tripped, card);
+
+    let group = CardGroup {
+        id: Some("G1".into()),
+        card_type: Some("Group".to_owned()),
+        name: Some("Core Team".to_owned()),
+        members: Some(BTreeMap::from([
+            ("urn:uuid:c1".to_owned(), true),
+            ("urn:uuid:c2".to_owned(), true),
+        ])),
+        extra: BTreeMap::new(),
+    };
+    let g_val = serde_json::to_value(&group).unwrap();
+    assert_eq!(g_val["@type"], "Group");
+    assert_eq!(g_val["name"], "Core Team");
+    assert_eq!(g_val["members"]["urn:uuid:c1"], true);
+
+    let g_round_tripped: CardGroup = serde_json::from_value(g_val).unwrap();
+    assert_eq!(g_round_tripped, group);
+}

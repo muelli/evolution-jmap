@@ -758,3 +758,78 @@ fn standard_filter_operators_and_error_codes_cover_rfc8620() {
         "cannotDestroyOriginal"
     );
 }
+
+/// PushSubscription, PushVerification, and StateChange types cover RFC 8620 §7.
+#[test]
+fn push_and_state_change_roundtrip_covers_rfc8620() {
+    use jmap_proto::push::{
+        PushSubscription, PushSubscriptionKeys, PushVerification, StateChange,
+        push_subscription_set_error,
+    };
+    use std::collections::BTreeMap;
+
+    assert_eq!(push_subscription_set_error::INVALID_URL, "invalidUrl");
+    assert_eq!(
+        push_subscription_set_error::EXPIRES_TOO_FAR,
+        "expiresTooFar"
+    );
+
+    let sub = PushSubscription {
+        id: Some(Id::new("sub_1")),
+        device_client_id: "device_abc".to_owned(),
+        url: "https://push.example.com/endpoint".to_owned(),
+        keys: Some(PushSubscriptionKeys {
+            p256dh: "key_p256dh".to_owned(),
+            auth: "key_auth".to_owned(),
+        }),
+        expires: Some(UtcDate::new("2026-10-01T00:00:00Z")),
+        types: Some(vec!["Email".to_owned(), "CalendarEvent".to_owned()]),
+        extra: BTreeMap::new(),
+    };
+
+    let sub_val = serde_json::to_value(&sub).unwrap();
+    assert_eq!(sub_val["id"], "sub_1");
+    assert_eq!(sub_val["deviceClientId"], "device_abc");
+    assert_eq!(sub_val["url"], "https://push.example.com/endpoint");
+    assert_eq!(sub_val["keys"]["p256dh"], "key_p256dh");
+    assert_eq!(sub_val["expires"], "2026-10-01T00:00:00Z");
+    assert_eq!(
+        sub_val["types"],
+        serde_json::json!(["Email", "CalendarEvent"])
+    );
+
+    let round_tripped: PushSubscription = serde_json::from_value(sub_val).unwrap();
+    assert_eq!(round_tripped, sub);
+
+    let verification = PushVerification {
+        object_type: "PushVerification".to_owned(),
+        push_subscription_id: Id::new("sub_1"),
+        verification_code: "code_12345".to_owned(),
+        extra: BTreeMap::new(),
+    };
+    let ver_val = serde_json::to_value(&verification).unwrap();
+    assert_eq!(ver_val["@type"], "PushVerification");
+    assert_eq!(ver_val["pushSubscriptionId"], "sub_1");
+    assert_eq!(ver_val["verificationCode"], "code_12345");
+
+    let ver_round_tripped: PushVerification = serde_json::from_value(ver_val).unwrap();
+    assert_eq!(ver_round_tripped, verification);
+
+    let state_change = StateChange {
+        object_type: "StateChange".to_owned(),
+        changed: BTreeMap::from([(
+            Id::new("A1"),
+            BTreeMap::from([
+                ("Email".to_owned(), State::new("s_email_1")),
+                ("Mailbox".to_owned(), State::new("s_box_1")),
+            ]),
+        )]),
+        extra: BTreeMap::new(),
+    };
+    let sc_val = serde_json::to_value(&state_change).unwrap();
+    assert_eq!(sc_val["@type"], "StateChange");
+    assert_eq!(sc_val["changed"]["A1"]["Email"], "s_email_1");
+
+    let sc_round_tripped: StateChange = serde_json::from_value(sc_val).unwrap();
+    assert_eq!(sc_round_tripped, state_change);
+}

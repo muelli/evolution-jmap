@@ -296,6 +296,98 @@ pub struct EmailImportResponse {
     pub not_created: Option<BTreeMap<String, crate::error::SetError>>,
 }
 
+/// `Email/parse` arguments (RFC 8621 §4.7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailParseRequest {
+    pub account_id: Id,
+    pub blob_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_properties: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fetch_text_body_values: bool,
+    #[serde(
+        rename = "fetchHTMLBodyValues",
+        default,
+        skip_serializing_if = "is_false"
+    )]
+    pub fetch_html_body_values: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fetch_all_body_values: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_body_value_bytes: Option<u64>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl EmailParseRequest {
+    pub fn new(
+        account_id: impl Into<Id>,
+        blob_ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            blob_ids: blob_ids.into_iter().map(Into::into).collect(),
+            properties: None,
+            body_properties: None,
+            fetch_text_body_values: false,
+            fetch_html_body_values: false,
+            fetch_all_body_values: false,
+            max_body_value_bytes: None,
+        }
+    }
+
+    pub fn properties(mut self, properties: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.properties = Some(properties.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn body_properties(
+        mut self,
+        body_properties: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.body_properties = Some(body_properties.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn fetch_text_body_values(mut self) -> Self {
+        self.fetch_text_body_values = true;
+        self
+    }
+
+    pub fn fetch_html_body_values(mut self) -> Self {
+        self.fetch_html_body_values = true;
+        self
+    }
+
+    pub fn fetch_all_body_values(mut self) -> Self {
+        self.fetch_all_body_values = true;
+        self
+    }
+
+    pub fn max_body_value_bytes(mut self, max_bytes: u64) -> Self {
+        self.max_body_value_bytes = Some(max_bytes);
+        self
+    }
+}
+
+/// `Email/parse` response (RFC 8621 §4.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailParseResponse {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parsed: Option<BTreeMap<Id, Email>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_parsable: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_found: Option<Vec<Id>>,
+}
+
 /// The `SetError` type RFC 8621 §4.8 adds for `Email/import`.
 ///
 /// The generic types of RFC 8620 §5.3 cannot say this one: the properties of
@@ -323,6 +415,22 @@ pub mod keyword {
     pub const NOT_JUNK: &str = "$notjunk";
 }
 
+/// A parsed email header (RFC 8621 §4.1.2.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmailHeader {
+    pub name: String,
+    pub value: String,
+}
+
+impl EmailHeader {
+    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: value.into(),
+        }
+    }
+}
+
 /// A name/address pair (RFC 8621 §4.1.2.3). `name` is nullable but always
 /// present on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -339,6 +447,15 @@ impl EmailAddress {
             email: email.to_owned(),
         }
     }
+}
+
+/// An RFC 5322 address group (RFC 8621 §4.1.2.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct EmailAddressGroup {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub addresses: Vec<EmailAddress>,
 }
 
 /// A node in the MIME tree (RFC 8621 §4.1.4).

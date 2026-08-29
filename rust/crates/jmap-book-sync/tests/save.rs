@@ -4313,8 +4313,8 @@ fn editing_calendars_nicknames_and_spouse_preserves_unmodeled_contact_fields() {
     assert!(rels.contains_key("Taylor Olden"));
 
     // CryptoKeys preserved
-    let crypto = card.extra.get("cryptoKeys").expect("cryptoKeys");
-    assert!(crypto.get("key1").is_some());
+    let crypto = card.crypto_keys.as_ref().expect("cryptoKeys");
+    assert!(crypto.contains_key("key1"));
 }
 
 #[test]
@@ -4424,8 +4424,8 @@ fn editing_phones_and_emails_preserves_unmodeled_contact_fields() {
 
     // Unmodeled properties intact
     assert!(card.extra.contains_key("preferredLanguages"));
-    assert!(card.extra.contains_key("personalInfo"));
-    assert!(card.extra.contains_key("cryptoKeys"));
+    assert!(card.personal_info.as_ref().unwrap().contains_key("expert"));
+    assert!(card.crypto_keys.as_ref().unwrap().contains_key("key1"));
     assert!(card.online_services.as_ref().unwrap().contains_key("chat1"));
 }
 
@@ -4491,7 +4491,7 @@ fn editing_structured_name_components_preserves_unmodeled_crypto_and_personal_in
                 "k1": {"uri": "https://keys.example.com/openpgp.asc"}
             },
             "personalInfo": {
-                "expertise": ["C", "Rust"]
+                "pi1": {"kind": "expertise", "value": "Rust"}
             }
         }),
     );
@@ -4526,8 +4526,8 @@ fn editing_structured_name_components_preserves_unmodeled_crypto_and_personal_in
     assert_eq!(find_comp("credential"), Some("MSc"));
 
     // Unmodeled properties intact
-    assert!(card.extra.contains_key("cryptoKeys"));
-    assert!(card.extra.contains_key("personalInfo"));
+    assert!(card.crypto_keys.is_some() || card.extra.contains_key("cryptoKeys"));
+    assert!(card.personal_info.is_some() || card.extra.contains_key("personalInfo"));
 }
 
 #[test]
@@ -4562,7 +4562,7 @@ fn editing_multiple_addresses_preserves_unmodeled_contact_fields() {
             },
             "preferredLanguages": {"de": 1, "en": 2},
             "cryptoKeys": {"k1": {"uri": "https://keys.example.com/pkr.asc"}},
-            "personalInfo": {"expertise": ["Rust", "Evolution"]},
+            "personalInfo": {"pi1": {"kind": "expertise", "value": "Rust"}},
         }),
     );
     let sync = fixture.sync();
@@ -4623,8 +4623,8 @@ fn editing_multiple_addresses_preserves_unmodeled_contact_fields() {
 
     // Unmodeled properties preserved intact
     assert!(card.extra.contains_key("preferredLanguages"));
-    assert!(card.extra.contains_key("cryptoKeys"));
-    assert!(card.extra.contains_key("personalInfo"));
+    assert!(card.crypto_keys.is_some() || card.extra.contains_key("cryptoKeys"));
+    assert!(card.personal_info.is_some() || card.extra.contains_key("personalInfo"));
 }
 
 #[test]
