@@ -219,6 +219,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_directories(functional-cal-stale-token-client PRIVATE
 		${LIBECAL_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# docs/ROADMAP.md item 25's address-book leg. The same shape as
+	# functional-cal-stale-token-client above, with libebook swapped for
+	# libecal — see that target's own comment and the client's header for
+	# why libedataserver is named here too.
+	add_executable(functional-book-stale-token-client
+		tests/functional/book-stale-token-client.c
+		tests/functional/connection-status.c)
+	target_include_directories(functional-book-stale-token-client PRIVATE
+		${LIBEBOOK_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-book-stale-token-client PRIVATE
+		${LIBEBOOK_CFLAGS_OTHER} ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-book-stale-token-client PRIVATE
+		${LIBEBOOK_LIBRARIES} ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-book-stale-token-client PRIVATE
+		${LIBEBOOK_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	add_executable(functional-config-lookup-client tests/functional/config-lookup-client.c)
 	target_include_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_INCLUDE_DIRS})
 	target_compile_options(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_CFLAGS_OTHER})
@@ -506,6 +522,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-cal-stale-token-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
+	)
+
+	# docs/ROADMAP.md item 25's address-book leg: the same acceptance test as
+	# `functional-cal-stale-token`, for `jmap-backend-book`'s own
+	# `with_connection`/`retry_on_authentication_failure` wiring. Same three
+	# modules, same reasoning, with libebook's factory and backend in place of
+	# libecal's.
+	add_test(
+		NAME functional-book-stale-token
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test book-stale-token -- --test-threads=1
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-stale-token PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-book-stale-token-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
 	)
 
 	# docs/ROADMAP.md item 22 Do(1): the stale Source.OAuth2Support proxy that
