@@ -443,7 +443,7 @@ fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Opt
         states_name_component,
     );
     let merged = (!merged.is_empty()).then_some(merged);
-    if current.components != merged {
+    if current.components.as_ref().filter(|c| !c.is_empty()) != merged.as_ref() {
         patch.insert(
             "name/components".to_owned(),
             merged.map_or(Value::Null, |components| json_of(&components)),
@@ -564,7 +564,7 @@ fn diff_organizations(
                 );
             }
             let units = merge_units(old.units.as_deref(), new.units.as_deref());
-            if old.units.as_deref() != units.as_deref() {
+            if old.units.as_deref().filter(|u| !u.is_empty()) != units.as_deref() {
                 patch.insert(
                     format!("{path}/units"),
                     units.map_or(Value::Null, |units| json_of(&units)),
@@ -613,7 +613,7 @@ fn diff_addresses(
         states_address,
         |patch, path, old, new| {
             let components = merge_components(old.components.as_deref(), new.components.as_deref());
-            if old.components.as_deref() != components.as_deref() {
+            if old.components.as_deref().filter(|c| !c.is_empty()) != components.as_deref() {
                 patch.insert(
                     format!("{path}/components"),
                     components.map_or(Value::Null, |components| json_of(&components)),
@@ -1214,7 +1214,11 @@ fn diff_flags(
     }
 
     let merged = (!merged.is_empty()).then_some(Value::Object(merged));
-    if current.as_ref() != merged.as_ref() {
+    let current_normalized = match current {
+        Some(Value::Object(flags)) if !flags.is_empty() => current.as_ref(),
+        _ => None,
+    };
+    if current_normalized != merged.as_ref() {
         patch.insert(format!("{path}/{property}"), merged.unwrap_or(Value::Null));
     }
 }
