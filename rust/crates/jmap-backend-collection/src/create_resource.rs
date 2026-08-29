@@ -261,10 +261,11 @@ pub unsafe fn requested_of(source: *mut ESource) -> Option<Requested> {
 /// [`create_collection`]'s.
 pub fn create_on_server(
     target: &ConnectTarget,
+    rebase_urls: bool,
     credentials: Credentials,
     requested: &Requested,
 ) -> Result<Child, CreateError> {
-    let client = source::connect(target, credentials)?;
+    let client = source::connect(target, rebase_urls, credentials)?;
     let child = create_collection(&client, requested)?;
     tracing::debug!(
         account_id = child.account_id.as_str(),

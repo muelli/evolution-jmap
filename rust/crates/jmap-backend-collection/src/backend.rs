@@ -563,14 +563,18 @@ unsafe extern "C" fn create_resource_sync(
         // for the duration of the vfunc.
         let _cancel = unsafe { observe(cancellable) };
 
-        let child =
-            match create_on_server(&login.server.target, login.credentials.clone(), &requested) {
-                Ok(child) => child,
-                // SAFETY: as above.
-                Err(failure) => {
-                    return unsafe { fail_bool(error, &failure, CreateError::to_gerror) };
-                }
-            };
+        let child = match create_on_server(
+            &login.server.target,
+            login.server.rebase_urls,
+            login.credentials.clone(),
+            &requested,
+        ) {
+            Ok(child) => child,
+            // SAFETY: as above.
+            Err(failure) => {
+                return unsafe { fail_bool(error, &failure, CreateError::to_gerror) };
+            }
+        };
 
         // SAFETY: a valid account source; both getters answer NULL or a string
         // the object owns.
@@ -712,9 +716,12 @@ unsafe extern "C" fn delete_resource_sync(
         // for the duration of the vfunc.
         let _cancel = unsafe { observe(cancellable) };
 
-        if let Err(failure) =
-            delete_on_server(&login.server.target, login.credentials.clone(), &doomed)
-        {
+        if let Err(failure) = delete_on_server(
+            &login.server.target,
+            login.server.rebase_urls,
+            login.credentials.clone(),
+            &doomed,
+        ) {
             // SAFETY: as above.
             return unsafe { fail_bool(error, &failure, DeleteError::to_gerror) };
         }

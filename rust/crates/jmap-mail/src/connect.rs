@@ -406,7 +406,13 @@ pub fn open_mail(config: &ServerConfig, credentials: Credentials) -> Result<Mail
     // pressed once and honoured forever. What cancels a JMAP operation is the
     // scope its vfunc installs — `jmap_backend_core::cancel::observe` — which
     // the client checks in preference to anything it was built with.
-    let client = source::connect(&config.target, credentials)?;
+    // `false`: Camel keeps this account's server on `CamelNetworkSettings`,
+    // not an `ESource` extension (see `crate::server`'s own docs on why), so
+    // there is nowhere here to read the per-source rebase opt-in
+    // (`jmap_backend_core::rebase::rebase_urls`) from. `JMAP_LIVE_SERVER_
+    // REBASE_URLS` still applies, unchanged, through `source::connect`'s own
+    // OR with the environment variable.
+    let client = source::connect(&config.target, false, credentials)?;
     // Under `urn:ietf:params:jmap:mail`, the way the address book backend
     // resolves its own account under `:contacts`. An account that offers the
     // one and not the other is not a mail account, and a store that ignored

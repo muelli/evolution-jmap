@@ -195,7 +195,11 @@ pub unsafe fn fan_out<C: Collection + ?Sized>(
     collection: &C,
     login: &Login,
 ) -> Result<Populated, jmap_client::Error> {
-    let client = source::connect(&login.server.target, login.credentials.clone())?;
+    let client = source::connect(
+        &login.server.target,
+        login.server.rebase_urls,
+        login.credentials.clone(),
+    )?;
     let fanout = Fanout::discover(&client, login.parts)?;
     tracing::debug!(
         address_books_count = fanout.address_books.len(),

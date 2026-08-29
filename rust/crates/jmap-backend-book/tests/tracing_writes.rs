@@ -165,6 +165,7 @@ impl Fixture {
             target: ConnectTarget::Origin(self.server.origin().to_owned()),
             user: None,
             resource_id: Some(self.book_id.to_string()),
+            rebase_urls: false,
         }
     }
 

@@ -251,10 +251,11 @@ pub unsafe fn offer_deletion(child: *mut ESource) -> bool {
 /// destroy is [`delete_collection`]'s.
 pub fn delete_on_server(
     target: &ConnectTarget,
+    rebase_urls: bool,
     credentials: Credentials,
     doomed: &Doomed,
 ) -> Result<(), DeleteError> {
-    let client = source::connect(target, credentials)?;
+    let client = source::connect(target, rebase_urls, credentials)?;
     delete_collection(&client, doomed)?;
     tracing::debug!(
         collection_id = doomed.collection_id.as_str(),

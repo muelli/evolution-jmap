@@ -271,6 +271,7 @@ fn login(origin: &str, parts: Parts) -> Login {
         server: Server {
             target: ConnectTarget::Origin(origin.to_owned()),
             connection: connection(),
+            rebase_urls: false,
         },
         parts,
         credentials: Credentials::none(),
