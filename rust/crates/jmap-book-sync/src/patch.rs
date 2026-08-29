@@ -130,12 +130,21 @@ use jmap_vcard::{
     address_label, anniversary_date, maps_context, maps_phone_feature, online_service_handle,
     online_service_uri, restore_address_components, restore_name_components, same_photo,
     same_service, states_a_point_in_time, states_address, states_address_component,
-    states_anniversary, states_calendar, states_context, states_email, states_keyword, states_link,
-    states_media, states_name_component, states_nickname, states_note,
-    states_nothing_but_the_marriage, states_online_service, states_org_unit, states_organization,
+    states_anniversary, states_assistant, states_calendar, states_context, states_email,
+    states_keyword, states_link, states_manager, states_media, states_name_component,
+    states_nickname, states_note, states_online_service, states_org_unit, states_organization,
     states_phone, states_phone_feature, states_spouse, states_title, title_kind,
 };
 use serde_json::{Map, Value, json};
+
+type RelationPredicate = fn(&str, &Relation) -> bool;
+
+/// The mapped relation types that have dedicated vCard property lines in EDS.
+const MAPPED_RELATIONS: &[(&str, RelationPredicate)] = &[
+    ("spouse", states_spouse),
+    ("manager", states_manager),
+    ("assistant", states_assistant),
+];
 
 /// The patch that turns the card the server holds into the card Evolution
 /// just saved. Empty when the edit changed nothing this mapping can see.
@@ -187,30 +196,24 @@ pub fn diff(current: &ContactCard, edited: &ContactCard) -> Map<String, Value> {
     patch
 }
 
-/// Who else the contact is related to — the one mapped property whose *key* is
-/// what the line shows, and so the one where an edit is not a change to an entry
-/// but a withdrawal and a claim.
+/// Who else the contact is related to — the mapped properties (`spouse`, `manager`,
+/// `assistant`) whose *key* is what the line shows, and so where an edit is not
+/// a change to an entry but a withdrawal and a claim.
 ///
 /// RFC 9553 §2.1.8 keys `relatedTo` by the related entity itself, and RFC 9555
 /// §2.9.5 is what allows that key to be a person's name rather than a `uid`. So
 /// there is nothing on the entry to patch: a name the user respells names another
-/// entity, and the line said exactly one thing about the old one — that it is a
-/// spouse. That one thing is all the save may withdraw:
+/// entity, and the line said exactly one thing about the old one — its relation
+/// type. That relation type is all the save may withdraw:
 ///
-/// - a name gone from the field loses the marriage, and the entry with it when
-///   the marriage was all it said ([`states_nothing_but_the_marriage`]). Where the
-///   server also called that entity `kin`, the entry stays and only the marriage
-///   is struck off — the `kin` was never on the line and is not the user's to have
-///   deleted.
-/// - a name arrived in the field *gains* the marriage. If the card already relates
+/// - a name gone from the field loses that relation, and the entry with it when
+///   that relation was all it said. Where the server also called that entity
+///   `kin` (or another unmapped relation), the entry stays and only the mapped
+///   relation is struck off.
+/// - a name arrived in the field *gains* the relation. If the card already relates
 ///   to somebody of that name, that is the same entity — the key says so — so the
 ///   type is added to the set rather than replacing it, and a relation the user
-///   cannot see survives being married.
-///
-/// Which also means this property needs no [`diff_entries`]: there are no keys
-/// this side invented for the reader to collide with. A name is a name on both
-/// sides, and an entry the vCard never showed is either keyed by something no
-/// field can produce — a URI — or is the very entity the user just named.
+///   cannot see survives being related.
 fn diff_related_to(
     patch: &mut Map<String, Value>,
     current: Option<&BTreeMap<String, Relation>>,
@@ -218,70 +221,125 @@ fn diff_related_to(
 ) {
     let empty = BTreeMap::new();
     let current = current.unwrap_or(&empty);
-    let shown = spouses(current);
-    let wanted = spouses(edited.unwrap_or(&empty));
-    if shown.keys().eq(wanted.keys()) {
+    let edited = edited.unwrap_or(&empty);
+
+    let mut changes_found = false;
+    for &(_, predicate) in MAPPED_RELATIONS {
+        let shown: BTreeSet<&String> = current
+            .iter()
+            .filter(|(key, rel)| predicate(key, rel))
+            .map(|(key, _)| key)
+            .collect();
+        let wanted: BTreeSet<&String> = edited
+            .iter()
+            .filter(|(key, rel)| predicate(key, rel))
+            .map(|(key, _)| key)
+            .collect();
+        if shown != wanted {
+            changes_found = true;
+            break;
+        }
+    }
+
+    if !changes_found {
         return;
     }
 
     // RFC 8620 §5.3 requires every path segment before the last to exist on the
     // object already, and a card relating to nobody has no `relatedTo` to reach
-    // into, so the property is written whole. Nothing is lost by that: there are
-    // no entries to keep.
+    // into, so the property is written whole.
     if current.is_empty() {
-        patch.insert("relatedTo".to_owned(), json_of(&wanted));
+        let wanted_map: BTreeMap<&String, &Relation> = edited
+            .iter()
+            .filter(|(key, rel)| {
+                MAPPED_RELATIONS
+                    .iter()
+                    .any(|&(_, predicate)| predicate(key, rel))
+            })
+            .collect();
+        if !wanted_map.is_empty() {
+            patch.insert("relatedTo".to_owned(), json_of(&wanted_map));
+        }
         return;
     }
 
-    let withdrawn: Vec<(&&String, &&Relation)> = shown
-        .iter()
-        .filter(|(key, _)| !wanted.contains_key(**key))
-        .collect();
-    let dropped = |relation: &Relation| states_nothing_but_the_marriage(relation);
-    // Every entry the card holds was a marriage, and the field now names none:
-    // the property goes rather than being left as the empty map, which is a
-    // different thing to store than §2.1.8's default of no relations.
-    if wanted.is_empty()
-        && withdrawn.len() == current.len()
-        && withdrawn.iter().all(|(_, relation)| dropped(relation))
-    {
+    // Check if all relations in current were mapped and are now all removed
+    let any_wanted = edited.iter().any(|(key, rel)| {
+        MAPPED_RELATIONS
+            .iter()
+            .any(|&(_, predicate)| predicate(key, rel))
+    });
+    let all_current_only_mapped = current.values().all(|relation| {
+        relation.extra.keys().all(|member| member == "@type")
+            && relation
+                .relation
+                .iter()
+                .flatten()
+                .all(|(kind, _)| MAPPED_RELATIONS.iter().any(|&(mapped, _)| mapped == kind))
+    });
+
+    if !any_wanted && all_current_only_mapped {
         patch.insert("relatedTo".to_owned(), Value::Null);
         return;
     }
 
-    for (key, relation) in withdrawn {
-        let path = format!("relatedTo/{}", escape(key));
-        match dropped(relation) {
-            true => drop(patch.insert(path, Value::Null)),
-            false => drop(patch.insert(format!("{path}/relation/spouse"), Value::Null)),
-        }
-    }
-    for (key, relation) in wanted.iter().filter(|(key, _)| !shown.contains_key(**key)) {
-        let path = format!("relatedTo/{}", escape(key));
-        match current.get(*key) {
-            // The same entity, said one more thing about.
-            Some(existing) => {
-                // §5.3 again: the set has to be there to be added to, and an
-                // entry stating no type at all — RFC 9555 §2.9.5 reads a
-                // `RELATED` line carrying no `TYPE` into exactly that — has no
-                // `relation` member for a path to end in.
-                match existing.relation.is_some() {
-                    true => patch.insert(format!("{path}/relation/spouse"), Value::Bool(true)),
-                    false => patch.insert(format!("{path}/relation"), json!({"spouse": true})),
-                };
-            }
-            None => drop(patch.insert(path, json_of(relation))),
-        }
-    }
-}
+    for &(kind, predicate) in MAPPED_RELATIONS {
+        let shown: BTreeMap<&String, &Relation> = current
+            .iter()
+            .filter(|(key, rel)| predicate(key, rel))
+            .collect();
+        let wanted: BTreeMap<&String, &Relation> = edited
+            .iter()
+            .filter(|(key, rel)| predicate(key, rel))
+            .collect();
 
-/// The entries of a `relatedTo` map that reach the spouse line, in the order the
-/// map holds them.
-fn spouses(entries: &BTreeMap<String, Relation>) -> BTreeMap<&String, &Relation> {
-    entries
-        .iter()
-        .filter(|(key, relation)| states_spouse(key, relation))
-        .collect()
+        if shown.keys().eq(wanted.keys()) {
+            continue;
+        }
+
+        // Withdrawn relations of this kind
+        for (&key, relation) in shown.iter().filter(|(key, _)| !wanted.contains_key(*key)) {
+            let path = format!("relatedTo/{}", escape(key));
+            let is_only_this_kind = relation.extra.keys().all(|member| member == "@type")
+                && relation.relation.iter().flatten().all(|(k, _)| k == kind);
+
+            let is_gaining_other_kind = MAPPED_RELATIONS
+                .iter()
+                .filter(|&(other_kind, _)| *other_kind != kind)
+                .any(|&(_, other_pred)| {
+                    edited.get(key).is_some_and(|r| other_pred(key, r))
+                        && !current.get(key).is_some_and(|r| other_pred(key, r))
+                });
+
+            if is_only_this_kind && !is_gaining_other_kind {
+                patch.insert(path, Value::Null);
+            } else {
+                patch.insert(format!("{path}/relation/{kind}"), Value::Null);
+            }
+        }
+
+        // Added relations of this kind
+        for (&key, relation) in wanted.iter().filter(|(key, _)| !shown.contains_key(*key)) {
+            let path = format!("relatedTo/{}", escape(key));
+            match current.get(key) {
+                Some(existing) => match existing.relation.is_some() {
+                    true => {
+                        patch.insert(format!("{path}/relation/{kind}"), Value::Bool(true));
+                    }
+                    false => {
+                        patch.insert(format!("{path}/relation"), json!({kind: true}));
+                    }
+                },
+                None => {
+                    if patch.contains_key(&path) && patch[&path].is_object() {
+                        patch.insert(format!("{path}/relation/{kind}"), Value::Bool(true));
+                    } else {
+                        patch.insert(path, json_of(relation));
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The tags the contact is filed under — the one mapped property that goes back
@@ -359,7 +417,10 @@ fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Opt
     let current_full = current.full.as_deref().filter(|full| !full.is_empty());
     let edited_full = edited.full.as_deref().filter(|full| !full.is_empty());
     if current_full != edited_full {
-        patch.insert("name/full".to_owned(), value_or_null(edited.full.as_ref()));
+        patch.insert(
+            "name/full".to_owned(),
+            edited_full.map_or(Value::Null, |full| Value::String(full.to_owned())),
+        );
     }
 
     // The component list is written back whole — a name has no keys to patch
@@ -497,7 +558,10 @@ fn diff_organizations(
             let old_name = old.name.as_deref().filter(|name| !name.is_empty());
             let new_name = new.name.as_deref().filter(|name| !name.is_empty());
             if old_name != new_name {
-                patch.insert(format!("{path}/name"), value_or_null(new.name.as_ref()));
+                patch.insert(
+                    format!("{path}/name"),
+                    new_name.map_or(Value::Null, |name| Value::String(name.to_owned())),
+                );
             }
             let units = merge_units(old.units.as_deref(), new.units.as_deref());
             if old.units.as_deref() != units.as_deref() {

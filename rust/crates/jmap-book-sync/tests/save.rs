@@ -3330,6 +3330,239 @@ fn a_spouse_whose_name_holds_a_pointer_character_is_patched_under_that_name() {
     );
 }
 
+/// The manager line as EDS hands it back after the user has typed in the field.
+fn as_evolution_retypes_the_manager(vcard: &str, name: &str) -> String {
+    let mut rewritten = false;
+    let rebuilt: String = vcard
+        .lines()
+        .map(
+            |line| match !rewritten && line.starts_with("X-EVOLUTION-MANAGER") {
+                true => {
+                    rewritten = true;
+                    format!("X-EVOLUTION-MANAGER:{name}\r\n")
+                }
+                false => format!("{line}\r\n"),
+            },
+        )
+        .collect();
+    assert!(rewritten, "no manager line to rewrite in\n{vcard}");
+    rebuilt
+}
+
+/// The assistant line as EDS hands it back after the user has typed in the field.
+fn as_evolution_retypes_the_assistant(vcard: &str, name: &str) -> String {
+    let mut rewritten = false;
+    let rebuilt: String = vcard
+        .lines()
+        .map(
+            |line| match !rewritten && line.starts_with("X-EVOLUTION-ASSISTANT") {
+                true => {
+                    rewritten = true;
+                    format!("X-EVOLUTION-ASSISTANT:{name}\r\n")
+                }
+                false => format!("{line}\r\n"),
+            },
+        )
+        .collect();
+    assert!(rewritten, "no assistant line to rewrite in\n{vcard}");
+    rebuilt
+}
+
+#[test]
+fn retyping_a_manager_withdraws_manager_and_keeps_what_else_was_said() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"Sarah Connor": {
+            "@type": "Relation",
+            "relation": {"manager": true, "kin": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("X-EVOLUTION-MANAGER:Sarah Connor"),
+        "{vcard}"
+    );
+
+    let edited = as_evolution_retypes_the_manager(&vcard, "Miles Dyson");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec!["Miles Dyson", "Sarah Connor"],
+        "{related:?}"
+    );
+    assert_eq!(
+        related["Sarah Connor"].relation,
+        Some([("kin".to_owned(), json!(true))].into()),
+        "the relation the line never showed went with the manager: {related:?}"
+    );
+    assert_eq!(
+        related["Miles Dyson"].relation,
+        Some([("manager".to_owned(), json!(true))].into()),
+        "the name the user typed is a manager and nothing more: {related:?}"
+    );
+}
+
+#[test]
+fn retyping_a_manager_who_was_nothing_else_leaves_no_entry_behind() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {
+            "Sarah Connor": {"relation": {"manager": true}},
+            "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {"relation": {"manager": true}},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert_eq!(vcard.matches("X-EVOLUTION-MANAGER").count(), 1, "{vcard}");
+
+    let edited = as_evolution_retypes_the_manager(&vcard, "Miles Dyson");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec![
+            "Miles Dyson",
+            "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44"
+        ],
+        "{related:?}"
+    );
+    assert_eq!(
+        related["urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44"].relation,
+        Some([("manager".to_owned(), json!(true))].into()),
+        "an entry the vCard never showed was rewritten: {related:?}"
+    );
+}
+
+#[test]
+fn clearing_the_manager_field_removes_the_relation() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"Sarah Connor": {
+            "@type": "Relation",
+            "relation": {"manager": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = as_evolution_retypes_the_manager(&vcard, "");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).related_to, None);
+}
+
+#[test]
+fn retyping_an_assistant_withdraws_assistant_and_keeps_what_else_was_said() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"John Connor": {
+            "@type": "Relation",
+            "relation": {"assistant": true, "kin": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("X-EVOLUTION-ASSISTANT:John Connor"),
+        "{vcard}"
+    );
+
+    let edited = as_evolution_retypes_the_assistant(&vcard, "Kyle Reese");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec!["John Connor", "Kyle Reese"],
+        "{related:?}"
+    );
+    assert_eq!(
+        related["John Connor"].relation,
+        Some([("kin".to_owned(), json!(true))].into())
+    );
+    assert_eq!(
+        related["Kyle Reese"].relation,
+        Some([("assistant".to_owned(), json!(true))].into())
+    );
+}
+
+#[test]
+fn clearing_the_assistant_field_removes_the_relation() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"John Connor": {
+            "@type": "Relation",
+            "relation": {"assistant": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = as_evolution_retypes_the_assistant(&vcard, "");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).related_to, None);
+}
+
+#[test]
+fn a_card_with_spouse_manager_and_assistant_can_edit_each_independently() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "relatedTo": {
+                "Alex Spouse": {"@type": "Relation", "relation": {"spouse": true}},
+                "Morgan Manager": {"@type": "Relation", "relation": {"manager": true}},
+                "Sam Assistant": {"@type": "Relation", "relation": {"assistant": true}},
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("X-EVOLUTION-SPOUSE:Alex Spouse"));
+    assert!(vcard.contains("X-EVOLUTION-MANAGER:Morgan Manager"));
+    assert!(vcard.contains("X-EVOLUTION-ASSISTANT:Sam Assistant"));
+
+    // Edit only manager
+    let edited = vcard.replace("Morgan Manager", "Taylor Manager");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let rels = card.related_to.expect("relatedTo");
+    assert_eq!(rels.len(), 3);
+    assert_eq!(
+        rels["Alex Spouse"].relation,
+        Some([("spouse".to_owned(), json!(true))].into())
+    );
+    assert_eq!(
+        rels["Taylor Manager"].relation,
+        Some([("manager".to_owned(), json!(true))].into())
+    );
+    assert_eq!(
+        rels["Sam Assistant"].relation,
+        Some([("assistant".to_owned(), json!(true))].into())
+    );
+}
+
 #[test]
 fn unmapped_or_unslotted_services_are_preserved_across_saves() {
     let fixture = Fixture::start();
@@ -4604,6 +4837,21 @@ fn no_op_save_mints_no_patch_across_all_contact_mapped_surfaces_matrix() {
                     "os1": {"uri": "xmpp:alice@example.com"},
                     "os2": {"uri": "sip:alice@example.com"}
                 }
+            }),
+        ),
+        (
+            "multi_relations_and_unmapped",
+            json!({
+                "name": {"full": "Relations Matrix Contact"},
+                "relatedTo": {
+                    "Alex Spouse": {"@type": "Relation", "relation": {"spouse": true}},
+                    "Morgan Manager": {"@type": "Relation", "relation": {"manager": true}},
+                    "Sam Assistant": {"@type": "Relation", "relation": {"assistant": true}},
+                    "Taylor Mixed": {"@type": "Relation", "relation": {"spouse": true, "manager": true, "assistant": true, "kin": true}},
+                    "Jordan Kin": {"@type": "Relation", "relation": {"kin": true}},
+                    "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {"@type": "Relation", "relation": {"spouse": true}}
+                },
+                "emails": {"e1": {"address": "relmatrix@example.org"}}
             }),
         ),
     ];
