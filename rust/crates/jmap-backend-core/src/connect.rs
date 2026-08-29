@@ -107,6 +107,20 @@ pub enum ConnectError {
     /// window on a dead keyring is exactly the loop this variant exists to
     /// stop.
     SecretStore(String),
+    /// An OAuth 2.0 token fetch was addressed at a D-Bus peer that no longer
+    /// exists — `docs/ROADMAP.md` item 22: the account's `ESource` still holds
+    /// the interface proxy of an `evolution-source-registry` that has since
+    /// restarted, and the bus answers `SERVICE_UNKNOWN` naming the dead unique
+    /// name. See [`crate::oauth2::is_service_gone`] for the mechanism and for
+    /// why EDS 3.52 does not recover from it by itself.
+    ///
+    /// Distinct from [`Self::SecretStore`] rather than folded into it, even
+    /// though both are `ERROR` and neither ever consents: the keyring is fine
+    /// in this case, and a message telling its owner to unlock it points at
+    /// the wrong thing to fix. Classified as `ERROR` for the same reason
+    /// `SecretStore` is — a dead peer is not fixed by asking anyone to sign in
+    /// again, only by asking again and again.
+    ServiceGone(String),
     /// The server refused, failed, or is unreachable.
     Client(Error),
     /// The account names a collection the server does not have.
@@ -131,6 +145,7 @@ impl fmt::Display for ConnectError {
             )),
             Self::OAuth2(message) => f.write_str(message),
             Self::SecretStore(message) => f.write_str(message),
+            Self::ServiceGone(message) => f.write_str(message),
             Self::Client(error) => error.fmt(f),
             Self::NoSuchCollection(kind, id) => f.write_str(&translate_with(
                 // TRANSLATORS: %1$s is "address book" or "calendar"; %2$s is
@@ -162,11 +177,11 @@ impl ConnectError {
         match self {
             Self::CredentialsRequired | Self::OAuth2(_) => E_SOURCE_AUTHENTICATION_REQUIRED,
             Self::Client(error) if is_wrong_password(error) => E_SOURCE_AUTHENTICATION_REJECTED,
-            // Every other case, `SecretStore` included: deliberately not
-            // `REQUIRED` for that one — a dead secret store is not fixed by
-            // asking the user to consent again, only by asking again and
-            // again, which is the loop `docs/ROADMAP.md` item 17 exists to
-            // stop.
+            // Every other case, `SecretStore` and `ServiceGone` included:
+            // deliberately not `REQUIRED` for those two — a dead secret store
+            // or a dead D-Bus peer is not fixed by asking the user to consent
+            // again, only by asking again and again, which is the loop
+            // `docs/ROADMAP.md` items 17 and 22 exist to stop.
             _ => E_SOURCE_AUTHENTICATION_ERROR,
         }
     }
@@ -216,8 +231,9 @@ impl ConnectError {
         match self {
             Self::CredentialsRequired | Self::OAuth2(_) => E_CLIENT_ERROR_AUTHENTICATION_REQUIRED,
             // Not an authentication problem and not fixed by editing the
-            // account either — the secret store itself is unreachable.
-            Self::SecretStore(_) => E_CLIENT_ERROR_DBUS_ERROR,
+            // account either — the secret store itself, or the D-Bus peer the
+            // token fetch was addressed at, is unreachable.
+            Self::SecretStore(_) | Self::ServiceGone(_) => E_CLIENT_ERROR_DBUS_ERROR,
             // Both collection failures are fixed by editing the account (or by
             // creating the collection on the server), never by retrying, so
             // they are reported the same way a malformed host is.
@@ -449,6 +465,7 @@ where
             let reason = match &failure {
                 ConnectError::OAuth2(_) => "oauth2_token_unavailable",
                 ConnectError::SecretStore(_) => "secret_store_failure",
+                ConnectError::ServiceGone(_) => "service_gone",
                 ConnectError::CredentialsRequired => "password_required",
                 _ => "credentials_error",
             };
@@ -526,6 +543,8 @@ fn finish_connect<T>(
                 "oauth2_consent_required"
             } else if matches!(error, ConnectError::SecretStore(_)) {
                 "secret_store_failure"
+            } else if matches!(error, ConnectError::ServiceGone(_)) {
+                "service_gone"
             } else if matches!(error, ConnectError::CredentialsRequired) {
                 "credentials_required"
             } else {
@@ -600,6 +619,7 @@ mod tests {
             ConnectError::NoDefaultCollection(Collection::Calendar),
             ConnectError::NoSuchCollection(Collection::AddressBook, "Ab1".to_owned()),
             ConnectError::SecretStore("the login keyring is locked".to_owned()),
+            ConnectError::ServiceGone("the name :1.4 has no owner".to_owned()),
         ] {
             assert_eq!(
                 error.auth_result(),
@@ -657,6 +677,10 @@ mod tests {
                 E_CLIENT_ERROR_DBUS_ERROR,
             ),
             (
+                ConnectError::ServiceGone("the name :1.4 has no owner".into()),
+                E_CLIENT_ERROR_DBUS_ERROR,
+            ),
+            (
                 ConnectError::NoSuchCollection(Collection::AddressBook, "x".into()),
                 E_CLIENT_ERROR_INVALID_ARG,
             ),
@@ -705,6 +729,26 @@ mod tests {
         let result = finish_connect(Collection::AddressBook, Some("acc-1"), true, store_error());
         assert!(
             matches!(result, Err(ConnectError::SecretStore(ref msg)) if msg == "keyring locked")
+        );
+        let err = result.unwrap_err();
+        assert_eq!(err.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
+    }
+
+    /// Item 22's sibling of the test above: a dead D-Bus peer survives
+    /// `finish_connect` on an OAuth 2.0 account as `ServiceGone`, so it stays
+    /// `ERROR` and never turns into the consent window the captured trace
+    /// showed. The reclassification only ever touches a 401 — this pins that
+    /// the account being OAuth 2.0 is not by itself enough to reopen consent.
+    #[test]
+    fn finish_connect_leaves_a_dead_peer_unmodified_for_oauth2_account() {
+        let dead_peer = || {
+            Err::<(), _>(ConnectError::ServiceGone(
+                "the name :1.4 has no owner".to_owned(),
+            ))
+        };
+        let result = finish_connect(Collection::Calendar, Some("acc-1"), true, dead_peer());
+        assert!(
+            matches!(result, Err(ConnectError::ServiceGone(ref msg)) if msg == "the name :1.4 has no owner")
         );
         let err = result.unwrap_err();
         assert_eq!(err.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);
