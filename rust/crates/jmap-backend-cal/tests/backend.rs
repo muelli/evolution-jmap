@@ -35,8 +35,10 @@ use gobject_sys::{
 };
 use jmap_backend_cal::backend::{JmapCalBackend, JmapCalBackendClass, parent_class};
 use jmap_backend_cal::marshal;
+use jmap_backend_core::push::PushRefresh;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_cal_sync::CalSync;
+use jmap_client::eventsource::expand_url;
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -544,4 +546,80 @@ fn finalize_drops_the_connection_the_instance_still_holds() {
     unsafe { JmapCalBackend::finalize(ptr::from_mut(&mut *backend.0)) };
 
     assert!(!backend.0.is_connected(), "finalize kept the connection");
+}
+
+// ---------------------------------------------------------------------------
+// JMAP Push (docs/ROADMAP.md item 28)
+
+/// A live push subscription against the fixture's own mock, which needs no
+/// GObject — `PushRefresh` is deliberately given its refresh action rather
+/// than deriving it from a backend, so a detached instance can hold one.
+fn subscription(fixture: &Fixture) -> PushRefresh {
+    let url = expand_url(
+        &format!("{}/eventsource", fixture.server.origin()),
+        &["CalendarEvent"],
+        false,
+        0,
+    );
+    PushRefresh::start(
+        url,
+        Vec::new(),
+        fixture.account_id.clone(),
+        vec!["CalendarEvent".to_owned()],
+        || {},
+    )
+}
+
+/// `disconnect_sync` has to end the push subscription as well as the
+/// connection. A subscription that outlived its connection would keep
+/// scheduling refreshes on a backend with nothing to refresh with — and, once
+/// EDS dropped the backend, on nothing at all.
+#[test]
+fn disconnect_stops_the_push_subscription_with_the_connection() {
+    let fixture = Fixture::start();
+    let class = Class::get();
+    let mut backend = Detached::new();
+    backend.0.store_connection(fixture.sync());
+    backend.0.store_push(subscription(&fixture));
+    assert!(backend.0.is_pushing());
+
+    unsafe {
+        let disconnect = class.vfuncs().disconnect_sync.unwrap();
+        let mut error: *mut GError = ptr::null_mut();
+        assert_eq!(
+            disconnect(backend.as_ptr(), ptr::null_mut(), &mut error),
+            GTRUE
+        );
+        assert!(error.is_null());
+    }
+
+    assert!(
+        !backend.0.is_pushing(),
+        "disconnect left the push subscription running"
+    );
+    assert!(!backend.0.is_connected());
+}
+
+/// And `finalize` has to do it too, because EDS does not promise a
+/// `disconnect_sync` first: `ecmb_dispose` cancels its own refreshes and
+/// drops its own cache, but never asks the subclass to disconnect. A push
+/// thread that survived here would be holding a `GWeakRef` to freed instance
+/// memory.
+#[test]
+fn finalize_stops_a_push_subscription_no_disconnect_ever_reached() {
+    let fixture = Fixture::start();
+    let mut backend = Detached::new();
+    backend.0.store_connection(fixture.sync());
+    backend.0.store_push(subscription(&fixture));
+    assert!(backend.0.is_pushing());
+
+    // SAFETY: nothing else can reach this instance, which is what GObject
+    // guarantees the real finalize.
+    unsafe { JmapCalBackend::finalize(ptr::from_mut(&mut *backend.0)) };
+
+    assert!(
+        !backend.0.is_pushing(),
+        "finalize kept the push subscription, and its thread"
+    );
+    assert!(!backend.0.is_connected());
 }
