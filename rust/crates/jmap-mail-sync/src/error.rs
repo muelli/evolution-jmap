@@ -61,6 +61,15 @@ impl SyncError {
     pub(crate) fn protocol(message: impl Into<String>) -> Self {
         Self::Client(jmap_client::Error::Protocol(message.into()))
     }
+
+    /// Whether the server rejected the request with HTTP 401 — on a
+    /// long-lived connection, what a bearer token that expired while the
+    /// connection sat idle looks like. The caller's answer is to refresh the
+    /// token and retry once, not to reopen the consent window immediately
+    /// (`docs/ROADMAP.md` item 23).
+    pub fn is_unauthorized(&self) -> bool {
+        matches!(self, Self::Client(error) if error.is_unauthorized())
+    }
 }
 
 impl std::fmt::Display for SyncError {
@@ -98,5 +107,29 @@ impl std::error::Error for SyncError {
 impl From<jmap_client::Error> for SyncError {
     fn from(error: jmap_client::Error) -> Self {
         Self::Client(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SyncError;
+
+    #[test]
+    fn only_a_client_401_is_unauthorized() {
+        assert!(
+            SyncError::Client(jmap_client::Error::Http {
+                status: 401,
+                problem: None,
+            })
+            .is_unauthorized()
+        );
+        assert!(
+            !SyncError::Client(jmap_client::Error::Http {
+                status: 403,
+                problem: None,
+            })
+            .is_unauthorized()
+        );
+        assert!(!SyncError::NoOutgoingFolder.is_unauthorized());
     }
 }

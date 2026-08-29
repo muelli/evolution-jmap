@@ -24,8 +24,10 @@ pub struct ServerState {
     /// difference between them is entirely in what went over the wire, and
     /// cheapness that is not asserted is cheapness that quietly goes away.
     pub method_calls: Vec<String>,
-    /// How many requests this server has taken at the API endpoint, whatever
-    /// it answered them with.
+    /// How many requests this server has dispatched at the API endpoint —
+    /// that is, requests that got past authentication and were answered from
+    /// the account rather than refused. [`Self::unauthorized_responses`] is
+    /// the other half.
     ///
     /// [`Self::method_calls`] counts calls; this counts round trips, and the
     /// two only differ where it matters — a client that chains `Email/query`
@@ -33,6 +35,17 @@ pub struct ServerState {
     /// one that sends them separately, and pays one round trip instead of two.
     /// Nothing about the account afterwards says which it did.
     pub api_requests: usize,
+    /// How many requests this server has refused with a 401, at any endpoint.
+    ///
+    /// A refused request never reaches the dispatcher, so it leaves no trace
+    /// in [`Self::api_requests`] or [`Self::method_calls`] — which makes "how
+    /// many times did the client try, before it gave up or found a token that
+    /// worked" unanswerable without this. `docs/ROADMAP.md` item 23's
+    /// refresh-and-retry is exactly a question of that count: a backend that
+    /// retried a 401 it had no fresher credentials for would double every
+    /// rejection the user's own wrong password caused, and nothing else the
+    /// server records would show it.
+    pub unauthorized_responses: usize,
     /// Capability URNs to leave out of the session document, as
     /// [`crate::MockServerBuilder::without_capability`] asked. A real account
     /// need not offer all four, and a client that resolves an account under
@@ -174,6 +187,7 @@ impl ServerState {
             accounts: BTreeMap::new(),
             method_calls: Vec::new(),
             api_requests: 0,
+            unauthorized_responses: 0,
             omitted_capabilities: BTreeSet::new(),
             omit_primary_accounts: false,
             calls_in_request: Some(crate::DEFAULT_CALLS_IN_REQUEST),
