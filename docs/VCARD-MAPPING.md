@@ -76,13 +76,13 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 | **`X-EVOLUTION-VIDEO-URL`** | `X-JMAP-KEY` | `card.links` (`Link.uri`, `kind: "video"`) | `E_CONTACT_VIDEO_URL` | `states_link`, `maps_link_kind` | EDS video stream URL field. Maps to `links` with `kind: "video"`. |
 | **`CALURI`** | `X-JMAP-KEY` | `card.calendars` (`Calendar.uri`, `kind: "calendar"`) | `E_CONTACT_CALENDAR_URI` | `states_calendar`, `calendar_property`, `calendar_kind` | vCard 4.0 property emitted on vCard 3.0 for EDS 3.52 compatibility. `ICSCALENDAR` excluded. |
 | **`FBURL`** | `X-JMAP-KEY` | `card.calendars` (`Calendar.uri`, `kind: "freeBusy"`) | `E_CONTACT_FREEBUSY_URL` | `states_calendar`, `calendar_property`, `calendar_kind` | vCard 4.0 property emitted on vCard 3.0 for EDS 3.52 compatibility. |
-| **`ANNIVERSARY`** | `X-JMAP-KEY`, `VALUE=date` | `card.anniversaries` (`kind: "wedding"`, `date`) | `E_CONTACT_ANNIVERSARY` | `read_anniversary`, `Day` | vCard 4.0 standard anniversary property (RFC 6350 §6.4.3). Maps to `kind: "wedding"`. Outbound normalizes to `X-EVOLUTION-ANNIVERSARY`. |
+| **`ANNIVERSARY`** | `X-JMAP-KEY`, `VALUE=date` | `card.anniversaries` (`kind: "wedding"`, `date`) | `E_CONTACT_ANNIVERSARY` | `read_anniversary`, `Day` | vCard 4.0 standard anniversary property (RFC 6350 §6.4.3). Maps to `kind: "wedding"`. Outbound emits both `X-EVOLUTION-ANNIVERSARY` (EDS 3.52) and `ANNIVERSARY` (EDS 3.60+). |
 | **`RELATED`** | `TYPE` (`spouse`, `partner`, `manager`, `assistant`, custom) | `card.related_to` (Key = Person Name, `relation: { "<type>": true }`) | `E_CONTACT_SPOUSE`, `_MANAGER`, `_ASSISTANT` | `names_a_person`, `vcard_to_card` | vCard 4.0 standard relationship property (RFC 6350 §6.6.6). Maps `TYPE=spouse`/`partner` -> `spouse`, `TYPE=manager` -> `manager`, `TYPE=assistant` -> `assistant`, or custom relations when `names_a_person` holds. Outbound normalizes to standard `X-EVOLUTION-*`. |
 | **`IMPP`** | `TYPE` (`WORK`, `HOME`), `X-JMAP-KEY` | `card.online_services` (`service`, `user`) | `E_CONTACT_IM_<SERVICE>_HOME_1..3`, `_WORK_1..3` | `SERVICE_SCHEMES`, `plain_handle`, `vcard_to_card` | vCard 4.0 standard instant messaging property (RFC 4770 / RFC 6350 §6.4.3). Maps URI schemes (`xmpp:`, `skype:`, `matrix:`, `aim:`, `icq:`, `msn:`, `yahoo:`, `groupwise:`, `gg:`, `gtalk:`) to matching service handle. Action/query URIs safely rejected. Outbound normalizes to slotted `X-` properties (`X-JABBER`, `X-SKYPE`, `X-MATRIX`, etc.). |
 | **`PHOTO`** | `TYPE`, `MEDIATYPE`, `ENCODING=b`, `VALUE=uri`, `X-JMAP-KEY` | `card.media` (`Media.uri`, `media_type`, `kind: "photo"`) | `E_CONTACT_PHOTO` | `photo`, `read_photo`, [`states_media`], [`same_photo`], `image_subtype` | Only `kind: "photo"` mapped. Inbound accepts RFC 2397 `data:` URIs (direct without double-base64 encoding), direct HTTP/HTTPS URIs without `VALUE=uri`, and `MEDIATYPE` parameters (RFC 6350 §5.7). Outbound uses canonical vCard 3.0 base64 + `ENCODING=b`. Re-paired via `same_photo` since EDS drops `X-JMAP-KEY` on photo edit. |
 | **`CATEGORIES`** | — | `card.keywords` (`Set<String>`) | `E_CONTACT_CATEGORY_LIST` | `drawn_tags`, `read_keywords`, [`states_keyword`] | Single sorted line emitted. Comma-separated on wire. Trimming protection: tags with leading/trailing whitespace or carriage returns omitted from emission to prevent EDS corruption. |
 | **`BDAY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "birth"`, `date`) | `E_CONTACT_BIRTH_DATE` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`], [`states_a_point_in_time`], `Day` | Single calendar day formatted `YYYY-MM-DD`. Truncated/bare years (`1984`) or years < 1000 omitted to prevent EDS clamping corruption (`1000..=9999`). `Timestamp` converted to UTC day. |
-| **`X-EVOLUTION-ANNIVERSARY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "wedding"`, `date`) | `E_CONTACT_ANNIVERSARY` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`] | EDS wedding anniversary field. Same date validation and year >= 1000 clamping rules as `BDAY`. `kind: "death"` dropped. |
+| **`X-EVOLUTION-ANNIVERSARY`** | `X-JMAP-KEY` | `card.anniversaries` (`kind: "wedding"`, `date`) | `E_CONTACT_ANNIVERSARY` | `read_anniversary`, [`states_anniversary`], [`anniversary_date`] | EDS 3.52 wedding anniversary field. Same date validation and year >= 1000 clamping rules as `BDAY`. Outbound emits both `X-EVOLUTION-ANNIVERSARY` and `ANNIVERSARY` for dual-version compatibility. `kind: "death"` dropped. |
 | **`X-EVOLUTION-SPOUSE`** | — | `card.related_to` (Key = Person Name, `relation: { "spouse": true }`) | `E_CONTACT_SPOUSE` | [`states_spouse`], [`states_nothing_but_the_marriage`], `names_a_person` | Key in JSContact `related_to` is the spouse name (RFC 9555 §2.9.5). No `X-JMAP-KEY` needed. Non-person/URI keys dropped. |
 | **`X-EVOLUTION-MANAGER`** | — | `card.related_to` (Key = Person Name, `relation: { "manager": true }`) | `E_CONTACT_MANAGER` | [`states_manager`], `names_a_person` | Key in JSContact `related_to` is the manager name (RFC 9553 §2.1.8). No `X-JMAP-KEY` needed. Non-person/URI keys dropped. |
 | **`X-EVOLUTION-ASSISTANT`** | — | `card.related_to` (Key = Person Name, `relation: { "assistant": true }`) | `E_CONTACT_ASSISTANT` | [`states_assistant`], `names_a_person` | Key in JSContact `related_to` is the assistant name (RFC 9553 §2.1.8). No `X-JMAP-KEY` needed. Non-person/URI keys dropped. |
@@ -219,9 +219,12 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
   - `kind: "role"` -> `ROLE` -> `E_CONTACT_ROLE`
   - Vendor kinds (e.g. `x-honorific`) are dropped from vCard 3.0 and preserved on the server.
 
-### 3.6 Anniversaries & Birthdays (`BDAY`, `X-EVOLUTION-ANNIVERSARY`)
+### 3.6 Anniversaries & Birthdays (`BDAY`, `X-EVOLUTION-ANNIVERSARY`, `ANNIVERSARY`)
 - **`BDAY`**: `kind: "birth"` -> `E_CONTACT_BIRTH_DATE`.
-- **`X-EVOLUTION-ANNIVERSARY`**: `kind: "wedding"` -> `E_CONTACT_ANNIVERSARY`.
+- **`X-EVOLUTION-ANNIVERSARY` & `ANNIVERSARY`**: `kind: "wedding"` -> `E_CONTACT_ANNIVERSARY`.
+  - **EDS Version Asymmetry (3.52 vs 3.60+)**: EDS 3.52 reads `E_CONTACT_ANNIVERSARY` only from `X-EVOLUTION-ANNIVERSARY` and ignores `ANNIVERSARY`. Conversely, EDS 3.60+ reads `E_CONTACT_ANNIVERSARY` only from standard `ANNIVERSARY` and ignores `X-EVOLUTION-ANNIVERSARY`.
+  - **Dual Emission**: Outbound serialization emits **both** `X-EVOLUTION-ANNIVERSARY` and `ANNIVERSARY` lines for each wedding anniversary (carrying the same `X-JMAP-KEY`). Each EDS version consumes the line it understands and preserves the other as an unrecognised extension, ensuring zero wedding anniversary loss across both EDS generations without runtime version coupling.
+  - **Inbound Deduplication**: `vcard_to_card` deduplicates dual-emitted wedding anniversary lines (matching key or identical kind and date), parsing them into a single `Anniversary` object in `card.anniversaries` to guarantee multi-stage round-trip fixpoint stability ($vcard_1 \equiv vcard_2 \equiv vcard_3$, $card_1 \equiv card_2 \equiv card_3$).
 - **Clamping Protection & Evolution Contact Editor Lifecycle**:
   - `e_contact_date_to_string` in `libebook-contacts` enforces `CLAMP` on all 3 date components: `year` to `1000..=9999`, `month` to `1..=12`, and `day` to `1..=31`.
   - When `e_contact_date_from_string` encounters an incomplete date string (bare 4-digit year `1984`, year-month `1984-05`, or year-less `--05-20`), it fails to parse and returns an empty `EContactDate` with `year: 0, month: 0, day: 0`.
@@ -594,10 +597,10 @@ Modern contact exporters (Google Contacts, iOS Share Sheet, Nextcloud, macOS Con
    - Other relations or unannotated `RELATED:<name>` map to `relation: { "<type>": true }` or `relation: { "contact": true }` when `names_a_person` holds.
    - Outbound serialization maps spouse, manager, and assistant to `X-EVOLUTION-SPOUSE`, `X-EVOLUTION-MANAGER`, `X-EVOLUTION-ASSISTANT`.
 
-3. **Anniversaries (`ANNIVERSARY`)**:
-   - RFC 6350 §6.4.3 standard anniversary property.
-   - Inbound `ANNIVERSARY:<date>` maps to `card.anniversaries` with `kind: "wedding"`.
-   - Outbound serialization maps wedding anniversaries to `X-EVOLUTION-ANNIVERSARY`.
+3. **Anniversaries (`ANNIVERSARY`, `X-EVOLUTION-ANNIVERSARY`)**:
+   - RFC 6350 §6.4.3 standard anniversary property and EDS vendor extension.
+   - Inbound `ANNIVERSARY:<date>` and `X-EVOLUTION-ANNIVERSARY:<date>` map to `card.anniversaries` with `kind: "wedding"`.
+   - Outbound serialization emits both `X-EVOLUTION-ANNIVERSARY` (for EDS 3.52) and `ANNIVERSARY` (for EDS 3.60+). Dual lines on input are deduplicated.
 
 4. **Photos (`PHOTO`)**:
    - Direct RFC 2397 `data:` URIs (e.g. `PHOTO:data:image/jpeg;base64,...`) are imported without requiring `VALUE=uri` and without double-base64 wrapping.

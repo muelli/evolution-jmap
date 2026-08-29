@@ -21265,3 +21265,249 @@ fn empty_org_name_multiple_organizations_matrix() {
     assert_eq!(orgs["o3"].name, None);
     assert!(!orgs.contains_key("o4"));
 }
+
+#[test]
+fn eds_360_wedding_anniversary_dual_emission_both_spellings() {
+    // MAINTAINER DECIDED 2026-08-28 (B'):
+    // Emit both X-EVOLUTION-ANNIVERSARY (read by EDS 3.52) and ANNIVERSARY
+    // (read by EDS 3.60+) for a wedding anniversary.
+    let card = one_anniversary(
+        "wedding",
+        json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}),
+    );
+
+    let vcard = card_to_vcard(&card);
+
+    // 1. Must emit both lines with the X-JMAP-KEY parameter
+    assert_eq!(
+        line(&vcard, "X-EVOLUTION-ANNIVERSARY"),
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03"
+    );
+    assert_eq!(
+        line(&vcard, "ANNIVERSARY"),
+        "ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03"
+    );
+
+    // 2. Inbound parse must deduplicate the dual representation into a single Anniversary
+    let parsed = vcard_to_card(&vcard).expect("parse dual-emitted anniversary");
+    let anniversaries = parsed.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(
+        anniversaries.len(),
+        1,
+        "dual emission must not create a duplicate anniversary entry"
+    );
+    assert_eq!(anniversaries["y1"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniversaries["y1"]),
+        Some("1996-08-03".to_owned())
+    );
+
+    // 3. Multi-stage fixed-point stability
+    let vcard2 = card_to_vcard(&parsed);
+    let parsed2 = vcard_to_card(&vcard2).expect("pass 2 parse");
+    let vcard3 = card_to_vcard(&parsed2);
+
+    assert_eq!(
+        vcard, vcard2,
+        "Pass 1 and Pass 2 vCards must be byte-identical fixed points"
+    );
+    assert_eq!(
+        vcard2, vcard3,
+        "Pass 2 and Pass 3 vCards must be byte-identical fixed points"
+    );
+    assert_eq!(
+        parsed, parsed2,
+        "Pass 1 and Pass 2 ContactCards must be structurally identical fixed points"
+    );
+}
+
+#[test]
+fn eds_360_wedding_anniversary_inbound_either_spelling_or_both_matrix() {
+    // 1. EDS 3.52 native input: only X-EVOLUTION-ANNIVERSARY
+    let vcard_352 = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Smith\r\n",
+        "X-EVOLUTION-ANNIVERSARY:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_352 = vcard_to_card(vcard_352).expect("parse EDS 3.52 native");
+    let anniv_352 = card_352.anniversaries.as_ref().expect("anniversaries 352");
+    assert_eq!(anniv_352.len(), 1);
+    assert_eq!(anniv_352["y1"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniv_352["y1"]),
+        Some("1996-08-03".to_owned())
+    );
+    let emitted_352 = card_to_vcard(&card_352);
+    assert!(emitted_352.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03\r\n"));
+    assert!(emitted_352.contains("ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03\r\n"));
+
+    // 2. EDS 3.60+ / standard vCard 4.0 native input: only ANNIVERSARY
+    let vcard_360 = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Smith\r\n",
+        "ANNIVERSARY:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_360 = vcard_to_card(vcard_360).expect("parse EDS 3.60 native");
+    let anniv_360 = card_360.anniversaries.as_ref().expect("anniversaries 360");
+    assert_eq!(anniv_360.len(), 1);
+    assert_eq!(anniv_360["y1"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniv_360["y1"]),
+        Some("1996-08-03".to_owned())
+    );
+    let emitted_360 = card_to_vcard(&card_360);
+    assert!(emitted_360.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03\r\n"));
+    assert!(emitted_360.contains("ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03\r\n"));
+
+    // 3. Unkeyed dual input (both lines present without X-JMAP-KEY)
+    let vcard_both_unkeyed = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Smith\r\n",
+        "X-EVOLUTION-ANNIVERSARY:1996-08-03\r\n",
+        "ANNIVERSARY:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_both = vcard_to_card(vcard_both_unkeyed).expect("parse unkeyed dual");
+    let anniv_both = card_both
+        .anniversaries
+        .as_ref()
+        .expect("anniversaries both");
+    assert_eq!(
+        anniv_both.len(),
+        1,
+        "unkeyed dual lines must be deduplicated to 1 anniversary"
+    );
+    assert_eq!(anniv_both["y1"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniv_both["y1"]),
+        Some("1996-08-03".to_owned())
+    );
+
+    // 4. Reverse-order unkeyed dual input (ANNIVERSARY preceding X-EVOLUTION-ANNIVERSARY)
+    let vcard_reverse = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Smith\r\n",
+        "ANNIVERSARY:1996-08-03\r\n",
+        "X-EVOLUTION-ANNIVERSARY:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_rev = vcard_to_card(vcard_reverse).expect("parse reverse dual");
+    let anniv_rev = card_rev
+        .anniversaries
+        .as_ref()
+        .expect("anniversaries reverse");
+    assert_eq!(
+        anniv_rev.len(),
+        1,
+        "reverse dual lines must be deduplicated to 1 anniversary"
+    );
+    assert_eq!(anniv_rev["y1"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniv_rev["y1"]),
+        Some("1996-08-03".to_owned())
+    );
+
+    // 5. Coexistence with birthday (BDAY + dual wedding lines)
+    let vcard_bday_wedding = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Smith\r\n",
+        "BDAY;X-JMAP-KEY=y1:1980-01-01\r\n",
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y2:1996-08-03\r\n",
+        "ANNIVERSARY;X-JMAP-KEY=y2:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_bday_wedding = vcard_to_card(vcard_bday_wedding).expect("parse bday + wedding");
+    let annivs = card_bday_wedding
+        .anniversaries
+        .as_ref()
+        .expect("anniversaries bday+wedding");
+    assert_eq!(
+        annivs.len(),
+        2,
+        "birthday and wedding anniversary must coexist as 2 entries"
+    );
+    assert_eq!(annivs["y1"].kind, "birth");
+    assert_eq!(
+        anniversary_date(&annivs["y1"]),
+        Some("1980-01-01".to_owned())
+    );
+    assert_eq!(annivs["y2"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&annivs["y2"]),
+        Some("1996-08-03".to_owned())
+    );
+
+    let emitted_bday_wedding = card_to_vcard(&card_bday_wedding);
+    assert!(emitted_bday_wedding.contains("BDAY;X-JMAP-KEY=y1:1980-01-01\r\n"));
+    assert!(emitted_bday_wedding.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y2:1996-08-03\r\n"));
+    assert!(emitted_bday_wedding.contains("ANNIVERSARY;X-JMAP-KEY=y2:1996-08-03\r\n"));
+}
+
+#[test]
+fn eds_360_chat_handles_and_sort_order_measured_non_issue_characterization() {
+    // MAINTAINER DECIDED 2026-08-28 (B'):
+    // 1. Chat handles: we only ever emit and read the X-JABBER-style text lines;
+    //    nothing touches E_CONTACT_IM_* field ids. Which internal field EDS files
+    //    that line into (attribute list on 3.52, _HOME_1 slot on 3.60) is EDS's own
+    //    business and never reaches our mapping.
+    let im_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Test User\r\n",
+        "X-AIM;X-JMAP-KEY=s1;TYPE=HOME:test_aim\r\n",
+        "X-GADUGADU;X-JMAP-KEY=s2;TYPE=WORK:123456\r\n",
+        "X-GOOGLE-TALK;X-JMAP-KEY=s3;TYPE=WORK:test@gmail.com\r\n",
+        "X-GROUPWISE;X-JMAP-KEY=s4;TYPE=WORK:test_gw\r\n",
+        "X-ICQ;X-JMAP-KEY=s5;TYPE=HOME:654321\r\n",
+        "X-JABBER;X-JMAP-KEY=s6;TYPE=HOME:test@jabber.org\r\n",
+        "X-MSN;X-JMAP-KEY=s7;TYPE=HOME:test@msn.com\r\n",
+        "X-MATRIX;X-JMAP-KEY=s8;TYPE=WORK:@test:matrix.org\r\n",
+        "X-SKYPE;X-JMAP-KEY=s9;TYPE=WORK:test_skype\r\n",
+        "X-YAHOO;X-JMAP-KEY=s10;TYPE=HOME:test_yahoo\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(im_vcard).expect("parse IM vcard");
+    let services = card.online_services.as_ref().expect("online_services");
+    assert_eq!(services.len(), 10);
+    let emitted = card_to_vcard(&card);
+    for line in [
+        "X-AIM;X-JMAP-KEY=s1;TYPE=HOME:test_aim\r\n",
+        "X-GADUGADU;X-JMAP-KEY=s2;TYPE=HOME:123456\r\n",
+        "X-GOOGLE-TALK;X-JMAP-KEY=s3;TYPE=HOME:test@gmail.com\r\n",
+        "X-GROUPWISE;X-JMAP-KEY=s4;TYPE=HOME:test_gw\r\n",
+        "X-ICQ;X-JMAP-KEY=s5;TYPE=HOME:654321\r\n",
+        "X-JABBER;X-JMAP-KEY=s6;TYPE=HOME:test@jabber.org\r\n",
+        "X-MSN;X-JMAP-KEY=s7;TYPE=HOME:test@msn.com\r\n",
+        "X-MATRIX;X-JMAP-KEY=s8;TYPE=HOME:@test:matrix.org\r\n",
+        "X-SKYPE;X-JMAP-KEY=s9;TYPE=HOME:test_skype\r\n",
+        "X-YAHOO;X-JMAP-KEY=s10;TYPE=HOME:test_yahoo\r\n",
+    ] {
+        assert!(emitted.contains(line), "emitted must contain {line}");
+    }
+
+    // 2. E_CONTACT_NAME_OR_ORG sort order: EDS only derives it when FILE_AS is absent,
+    //    the derivation feeds Evolution's own list sorting, and we never read the field.
+    //    We write X-EVOLUTION-FILE-AS whenever the card states one, pre-empting derivation.
+    let card_with_file_as = ContactCard {
+        name: Some(Name {
+            full: Some("Albert Einstein".to_owned()),
+            extra: [("fileAs".to_owned(), json!("Einstein, Albert"))].into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let emitted_file_as = card_to_vcard(&card_with_file_as);
+    assert!(emitted_file_as.contains("X-EVOLUTION-FILE-AS:Einstein\\, Albert\r\n"));
+
+    let card_without_file_as = ContactCard {
+        name: Some(Name {
+            full: Some("Albert Einstein".to_owned()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let emitted_no_file_as = card_to_vcard(&card_without_file_as);
+    assert!(!emitted_no_file_as.contains("X-EVOLUTION-FILE-AS"));
+    assert!(emitted_no_file_as.contains("FN:Albert Einstein\r\n"));
+}
