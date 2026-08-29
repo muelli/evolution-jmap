@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-26 23:07+0000\n"
+"POT-Creation-Date: 2026-08-29 03:00+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -56,37 +56,48 @@ msgstr ""
 
 #. TRANSLATORS: shown when an account configured with a user
 #. name has no password stored for it yet.
-#: rust/crates/jmap-backend-core/src/connect.rs:130
+#: rust/crates/jmap-backend-core/src/connect.rs:144
 msgid "the account has no password yet"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar"; %2$s is
 #. the identifier this account is configured to use for it,
 #. which the server does not have.
-#: rust/crates/jmap-backend-core/src/connect.rs:139
+#: rust/crates/jmap-backend-core/src/connect.rs:154
 #, c-format
 msgid "the account names %1$s \"%2$s\", which the server does not have"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar".
-#: rust/crates/jmap-backend-core/src/connect.rs:144
+#: rust/crates/jmap-backend-core/src/connect.rs:159
 #, c-format
 msgid "the server offers no default %1$s for this account"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar".
-#: rust/crates/jmap-backend-core/src/connect.rs:527
+#: rust/crates/jmap-backend-core/src/connect.rs:570
 #, c-format
 msgid "the %1$s backend has no account to connect to"
 msgstr ""
 
-#: rust/crates/jmap-backend-core/src/oauth2.rs:380
+#: rust/crates/jmap-backend-core/src/oauth2.rs:523
+#: rust/crates/jmap-backend-core/src/oauth2.rs:633
 msgid "no further detail was given"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the message bus's own text naming which service
+#. has no owner, e.g. "The name :1.4 was not provided by any .service
+#. files".
+#: rust/crates/jmap-backend-core/src/oauth2.rs:522
+#, c-format
+msgid ""
+"a service this account's sign-in needs is not running, so no access token "
+"could be fetched: %1$s"
 msgstr ""
 
 #. TRANSLATORS: %1$s is EDS's own message for why the
 #. account's secret store (keyring) could not be reached.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:379
+#: rust/crates/jmap-backend-core/src/oauth2.rs:632
 #, c-format
 msgid "the account's secret store (keyring) could not be reached: %1$s"
 msgstr ""
@@ -95,7 +106,7 @@ msgstr ""
 #. the account's stored token cannot be read because the
 #. system keyring is locked, which signing in again cannot
 #. fix.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:409
+#: rust/crates/jmap-backend-core/src/oauth2.rs:664
 msgid ""
 "the login keyring is locked, so this account's OAuth 2.0 token can be "
 "neither read nor stored; unlock the keyring and try again"
@@ -103,13 +114,13 @@ msgstr ""
 
 #. TRANSLATORS: shown when EDS refused an OAuth 2.0 account's
 #. access token but did not say why.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:420
+#: rust/crates/jmap-backend-core/src/oauth2.rs:675
 msgid "the account has no OAuth 2.0 access token"
 msgstr ""
 
 #. TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
 #. token that was empty rather than absent.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:446
+#: rust/crates/jmap-backend-core/src/oauth2.rs:706
 msgid "the OAuth 2.0 service returned an empty access token"
 msgstr ""
 
@@ -231,7 +242,7 @@ msgstr ""
 #. TRANSLATORS: the name of an account type, in the list of account types
 #. Evolution offers when adding an account. A protocol name — leave it as it is
 #. unless your language writes it in another script.
-#: rust/crates/jmap-config/src/oauth2_service.rs:383
+#: rust/crates/jmap-config/src/oauth2_service.rs:385
 #: rust/crates/jmap-mail/src/provider.rs:58
 msgid "JMAP"
 msgstr ""
