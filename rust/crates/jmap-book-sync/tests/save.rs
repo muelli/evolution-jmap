@@ -4890,3 +4890,162 @@ fn no_op_save_mints_no_patch_across_all_contact_mapped_surfaces_matrix() {
         );
     }
 }
+
+#[test]
+fn no_op_save_mints_no_patch_on_empty_container_collections() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let id = fixture.seed(&fixture.ours, "Seed Name", "seed@example.com");
+
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "full": "Empty Collections Contact",
+                "components": []
+            },
+            "organizations": {
+                "o1": {
+                    "name": "Acme Corp",
+                    "units": []
+                }
+            },
+            "addresses": {
+                "a1": {
+                    "full": "Test Street 1",
+                    "components": [],
+                    "contexts": {}
+                }
+            },
+            "emails": {
+                "e1": {
+                    "address": "empty@example.com",
+                    "contexts": {}
+                }
+            },
+            "phones": {
+                "p1": {
+                    "number": "+123456",
+                    "contexts": {},
+                    "features": {}
+                }
+            }
+        }),
+    );
+
+    let initial_card = fixture.card(&id);
+    let loaded = sync.load_contact(id.as_str()).unwrap();
+    let parsed_card = jmap_vcard::vcard_to_card(&loaded.vcard).unwrap();
+
+    let patch_diff = jmap_book_sync::patch::diff(&initial_card, &parsed_card);
+    assert!(
+        patch_diff.is_empty(),
+        "first save must mint no patch for empty container collections, found: {patch_diff:?}"
+    );
+
+    let initial_revision = initial_card.extra.get("revision").cloned();
+    let saved1 = sync.save_contact(&loaded.vcard, Some(id.as_str())).unwrap();
+    assert_eq!(
+        saved1.revision,
+        initial_revision
+            .and_then(|r| r.as_str().map(str::to_owned))
+            .unwrap_or(saved1.revision.clone()),
+        "first save must not increment revision for no-op change"
+    );
+
+    // Load 2 and Save 2
+    let loaded2 = sync.load_contact(id.as_str()).unwrap();
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .unwrap();
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must preserve identical revision"
+    );
+}
+
+#[test]
+fn no_op_save_mints_no_patch_on_mixed_populated_and_empty_container_collections() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let id = fixture.seed(&fixture.ours, "Seed Name", "seed@example.com");
+
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "full": "Mixed Collections Contact",
+                "components": [
+                    {"kind": "given", "value": "Mixed"},
+                    {"kind": "surname", "value": "Contact"}
+                ]
+            },
+            "organizations": {
+                "o1": {
+                    "name": "Acme Corp",
+                    "units": [{"name": "Engineering"}]
+                },
+                "o2": {
+                    "name": "Subsidiary Inc",
+                    "units": []
+                }
+            },
+            "addresses": {
+                "a1": {
+                    "full": "Main St 10",
+                    "components": [{"kind": "name", "value": "Main St 10"}],
+                    "contexts": {"work": true}
+                },
+                "a2": {
+                    "full": "Branch Box 20",
+                    "components": [],
+                    "contexts": {}
+                }
+            },
+            "emails": {
+                "e1": {
+                    "address": "work@example.com",
+                    "contexts": {"work": true}
+                },
+                "e2": {
+                    "address": "other@example.com",
+                    "contexts": {}
+                }
+            },
+            "phones": {
+                "p1": {
+                    "number": "+111111",
+                    "contexts": {"work": true},
+                    "features": {"voice": true}
+                },
+                "p2": {
+                    "number": "+222222",
+                    "contexts": {},
+                    "features": {}
+                }
+            }
+        }),
+    );
+
+    let initial_card = fixture.card(&id);
+    let loaded1 = sync.load_contact(id.as_str()).unwrap();
+    let parsed_card1 = jmap_vcard::vcard_to_card(&loaded1.vcard).unwrap();
+
+    let patch_diff1 = jmap_book_sync::patch::diff(&initial_card, &parsed_card1);
+    assert!(
+        patch_diff1.is_empty(),
+        "first save must mint no patch for mixed container collections, found: {patch_diff1:?}"
+    );
+
+    let saved1 = sync
+        .save_contact(&loaded1.vcard, Some(id.as_str()))
+        .unwrap();
+    let loaded2 = sync.load_contact(id.as_str()).unwrap();
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .unwrap();
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must preserve identical revision"
+    );
+}
