@@ -563,6 +563,16 @@ impl MockServer {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.api_requests
     }
+
+    /// How many requests this server has refused with a 401 — see
+    /// [`ServerState::unauthorized_responses`].
+    pub fn unauthorized_responses(&self) -> usize {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.unauthorized_responses
+    }
 }
 
 impl Drop for MockServer {
@@ -728,6 +738,10 @@ fn handle_request(
         .expect("mock auth lock")
         .authorized(authorization.as_deref())
     {
+        state
+            .lock()
+            .expect("mock state lock")
+            .unauthorized_responses += 1;
         respond_json(
             request,
             401,

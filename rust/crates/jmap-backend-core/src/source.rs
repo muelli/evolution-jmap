@@ -85,6 +85,7 @@ use eds_sys::{
     e_source_resource_get_identity, e_source_resource_get_type, e_source_security_get_secure,
     e_source_security_get_type,
 };
+use eds_sys::{EBackend, e_backend_get_source, e_backend_get_type};
 use glib_sys::GError;
 
 use crate::error::cstring_lossy;
@@ -393,6 +394,37 @@ pub unsafe fn destination_address(source: *mut ESource) -> Option<(String, u16)>
     // SAFETY: as above.
     let port = unsafe { e_source_authentication_get_port(auth) };
     Some((host, if port == 0 { 443 } else { port }))
+}
+
+/// The `ESource` a backend was constructed for, or NULL if `backend` is not an
+/// `EBackend`.
+///
+/// `e_backend_get_source` is a `g_return_val_if_fail (E_IS_BACKEND (backend))`
+/// away from answering that already — GLib's type check reports FALSE for a
+/// NULL instance or one with no class rather than dereferencing it — but it
+/// logs a critical on the way, which is right for a genuine bug and wrong for
+/// the callers that legitimately ask: a vfunc reached on an instance EDS has
+/// not finished constructing, and the backend crates' `detached()` test
+/// instances, which are deliberately not GObjects at all. Asking GObject
+/// first turns "is there a source to work from" into an ordinary NULL check.
+///
+/// # Safety
+///
+/// `backend` must be NULL, a valid `GTypeInstance`, or a pointer to memory
+/// whose leading `GTypeInstance` field is NULL — which a zeroed instance
+/// struct satisfies. The `ESource` that comes back is borrowed, not owned.
+pub unsafe fn backend_source(backend: *mut EBackend) -> *mut ESource {
+    // SAFETY: `g_type_check_instance_is_a` checks for a NULL instance and a
+    // NULL class itself, which is what makes this legal for the callers
+    // above; the type function takes no arguments.
+    let is_backend = unsafe {
+        gobject_sys::g_type_check_instance_is_a(backend.cast(), e_backend_get_type()) != 0
+    };
+    if !is_backend {
+        return std::ptr::null_mut();
+    }
+    // SAFETY: GObject has just confirmed this is an `EBackend`.
+    unsafe { e_backend_get_source(backend) }
 }
 
 /// Assembles the origin string [`connect_target`] would connect to, for a
