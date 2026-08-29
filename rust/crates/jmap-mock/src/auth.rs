@@ -22,6 +22,15 @@ impl AuthConfig {
         self.accepted.push(format!("Bearer {token}"));
     }
 
+    /// Stop accepting whichever bearer token(s) were configured before and
+    /// accept only `token` from now on, as a real server does once a client's
+    /// access token has expired and been refreshed. Any Basic credentials
+    /// configured separately are left untouched.
+    pub fn replace_bearer(&mut self, token: &str) {
+        self.accepted.retain(|value| !value.starts_with("Bearer "));
+        self.allow_bearer(token);
+    }
+
     /// Check an `Authorization` header value (or its absence).
     pub fn authorized(&self, authorization: Option<&str>) -> bool {
         if self.accepted.is_empty() {
