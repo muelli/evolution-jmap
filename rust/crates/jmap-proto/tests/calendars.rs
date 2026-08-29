@@ -422,3 +422,13 @@ fn calendar_and_event_advanced_properties_cover_draft_spec() {
         Some(&serde_json::json!({"imip": "mailto:board@example.com"}))
     );
 }
+
+#[test]
+fn jscalendar_constants_cover_alert_action_and_relative_to() {
+    use jmap_proto::calendars::*;
+    assert_eq!(alert_action::DISPLAY, "display");
+    assert_eq!(alert_action::EMAIL, "email");
+
+    assert_eq!(relative_to::START, "start");
+    assert_eq!(relative_to::END, "end");
+}

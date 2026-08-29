@@ -282,3 +282,32 @@ fn contact_constants_cover_rfc9553_kinds() {
     assert_eq!(address_component_kind::POSTCODE, "postcode");
     assert_eq!(address_component_kind::COUNTRY, "country");
 }
+
+#[test]
+fn address_book_rights_roundtrip_covers_rfc9610() {
+    let book: AddressBook = serde_json::from_value(serde_json::json!({
+        "name": "Shared Book",
+        "myRights": {
+            "mayReadItems": true,
+            "mayAddItems": true,
+            "mayModifyItems": false,
+            "mayRemoveItems": false,
+            "mayDelete": false,
+            "mayRename": false,
+            "mayAdmin": false
+        }
+    }))
+    .unwrap();
+
+    assert_eq!(book.name, "Shared Book");
+    let rights_val = book.extra.get("myRights").unwrap();
+    let rights: jmap_proto::contacts::AddressBookRights =
+        serde_json::from_value(rights_val.clone()).unwrap();
+    assert!(rights.may_read_items);
+    assert!(rights.may_add_items);
+    assert!(!rights.may_modify_items);
+    assert!(!rights.may_remove_items);
+    assert!(!rights.may_delete);
+    assert!(!rights.may_rename);
+    assert!(!rights.may_admin);
+}

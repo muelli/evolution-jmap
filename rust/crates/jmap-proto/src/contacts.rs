@@ -34,6 +34,28 @@ pub struct AddressBook {
     pub extra: BTreeMap<String, Value>,
 }
 
+/// The permissions the user has for an address book (RFC 9610 §2.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressBookRights {
+    #[serde(default)]
+    pub may_read_items: bool,
+    #[serde(default)]
+    pub may_add_items: bool,
+    #[serde(default)]
+    pub may_modify_items: bool,
+    #[serde(default)]
+    pub may_remove_items: bool,
+    #[serde(default)]
+    pub may_delete: bool,
+    #[serde(default)]
+    pub may_rename: bool,
+    #[serde(default)]
+    pub may_admin: bool,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
 /// A contact card (RFC 9610 §3): JSContact Card plus JMAP `id` and
 /// `addressBookIds`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

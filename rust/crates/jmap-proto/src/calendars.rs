@@ -523,3 +523,15 @@ pub mod participant_kind {
     pub const RESOURCE: &str = "resource";
     pub const LOCATION: &str = "location";
 }
+
+/// Standard JSCalendar (RFC 8984 §4.5.2) alert action types.
+pub mod alert_action {
+    pub const DISPLAY: &str = "display";
+    pub const EMAIL: &str = "email";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.5.2) offset trigger relation.
+pub mod relative_to {
+    pub const START: &str = "start";
+    pub const END: &str = "end";
+}
