@@ -50,6 +50,13 @@ const PROBE: &str = "JMAP_SECRET_STORE_PROBE";
 /// What [`probe`] prints and every parent looks for.
 const ANSWER: &str = "default-collection-is-locked=";
 
+/// The same, for [`secret_store::service_is_available`]. Printed by the same
+/// child on the same run rather than by a probe of its own: both questions
+/// are asked of one bus, and asking them together is what makes their
+/// answers comparable — the "absent from the bus but startable" scenario
+/// below is *defined* by the two disagreeing.
+const ANSWER_AVAILABLE: &str = "service-is-available=";
+
 /// The child half of every test below: report what the module says about the
 /// bus this process was started on, and nothing else.
 ///
@@ -65,6 +72,10 @@ fn probe() {
     println!(
         "{ANSWER}{:?}",
         jmap_backend_core::secret_store::default_collection_is_locked()
+    );
+    println!(
+        "{ANSWER_AVAILABLE}{:?}",
+        jmap_backend_core::secret_store::service_is_available()
     );
 }
 
@@ -91,6 +102,40 @@ fn scratch(name: &str) -> PathBuf {
 /// `/bin/sh` fragment that starts whatever secret service the scenario wants
 /// — and answer what it said.
 fn probe_in(root: &Path, setup: &str) -> String {
+    extract(&run_probe(root, setup, None), ANSWER)
+}
+
+/// What [`secret_store::service_is_available`] says on the same bus.
+///
+/// `servicedir`, when given, becomes the *only* directory the private bus
+/// will look in for activatable services, and that is the whole point of the
+/// parameter.
+///
+/// `XDG_DATA_DIRS` cannot do this job, which is worth recording because it
+/// was the first attempt and it silently passed for the wrong reason:
+/// `<standard_session_servicedirs/>` expands to the XDG directories **plus
+/// dbus's own compile-time datadir**, unconditionally, so
+/// `/usr/share/dbus-1/services/org.freedesktop.secrets.service` stays
+/// activatable on any machine with gnome-keyring installed no matter what
+/// the environment says. A bus with no secret service therefore has to be
+/// built from a config file, which `dbus-run-session --config-file` takes.
+/// [`None`] keeps the stock session config, and so the system's real
+/// services.
+fn availability_in(root: &Path, setup: &str, servicedir: Option<&Path>) -> String {
+    extract(&run_probe(root, setup, servicedir), ANSWER_AVAILABLE)
+}
+
+/// The line `prefix` introduces, or a panic naming what was printed instead.
+fn extract(stdout: &str, prefix: &str) -> String {
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix))
+        .unwrap_or_else(|| panic!("the probe printed no {prefix:?} line\n--- stdout ---\n{stdout}"))
+        .to_owned()
+}
+
+/// Run [`probe`] on a private session bus and answer its whole stdout.
+fn run_probe(root: &Path, setup: &str, servicedir: Option<&Path>) -> String {
     let binary = env::current_exe().expect("this test binary's own path");
     // `sh -c SCRIPT ARG0 ARG1…`: ARG0 becomes `$0`, so the binary's path
     // never has to survive being interpolated into the script text — the
@@ -113,7 +158,13 @@ fn probe_in(root: &Path, setup: &str) -> String {
     // actually means, and it cannot hang on a stray daemon.
     let stdout_path = root.join("probe.out");
     let stderr_path = root.join("probe.err");
-    let status = Command::new("dbus-run-session")
+    let mut command = Command::new("dbus-run-session");
+    if let Some(servicedir) = servicedir {
+        let config = root.join("bus.conf");
+        fs::write(&config, bus_config(servicedir)).expect("write the private bus config");
+        command.arg(format!("--config-file={}", config.display()));
+    }
+    let status = command
         .arg("--")
         .arg("sh")
         .arg("-c")
@@ -145,15 +196,37 @@ fn probe_in(root: &Path, setup: &str) -> String {
 
     let stdout = fs::read_to_string(&stdout_path).expect("read the probe's stdout");
     let stderr = fs::read_to_string(&stderr_path).expect("read the probe's stderr");
+    assert!(
+        stdout.contains(ANSWER),
+        "the probe printed no answer (exit {status})\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    );
     stdout
-        .lines()
-        .find_map(|line| line.strip_prefix(ANSWER))
-        .unwrap_or_else(|| {
-            panic!(
-                "the probe printed no answer (exit {status})\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
-            )
-        })
-        .to_owned()
+}
+
+/// A session bus that can activate exactly what is in `servicedir` and
+/// nothing else.
+///
+/// Deliberately *not* `<standard_session_servicedirs/>`: including it is what
+/// would put the system's own services back, which is the thing being
+/// excluded. The policy is the stock session policy — this bus is private to
+/// one test process and owns nothing worth restricting.
+fn bus_config(servicedir: &Path) -> String {
+    format!(
+        r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir=/tmp</listen>
+  <servicedir>{}</servicedir>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+"#,
+        servicedir.display()
+    )
 }
 
 /// Terminate the `gnome-keyring-daemon` this scenario started, identified by
@@ -310,4 +383,75 @@ fn a_locked_login_keyring_reports_itself_locked() {
 fn no_secret_service_at_all_is_not_a_locked_store() {
     let root = scratch("absent");
     assert_eq!(probe_in(&root, ""), "None");
+}
+
+/// A machine with no secret service *at all* — none running, and none the
+/// bus could start. This is the state `secret_store::service_is_available`
+/// exists to name, and the one where offering a sign-in window is a trap:
+/// the consent would succeed and the token would have nowhere to go, so the
+/// next fetch would ask again, forever.
+///
+/// The private bus config is the whole scenario. Without it the bus finds
+/// `/usr/share/dbus-1/services/org.freedesktop.secrets.service` on any
+/// machine with gnome-keyring installed, and correctly answers "startable" —
+/// which is what the next test pins.
+#[test]
+#[ignore = "needs dbus-run-session; see the module docs"]
+fn a_bus_that_could_not_start_a_secret_service_reports_none_available() {
+    let root = scratch("no-service-files");
+    let empty = root.join("empty-servicedir");
+    fs::create_dir_all(&empty).expect("create a servicedir with no service files");
+
+    assert_eq!(availability_in(&root, "", Some(&empty)), "Some(false)");
+}
+
+/// The distinction the whole function turns on: **not running is not the
+/// same as not there.** An ordinary desktop that simply has not needed its
+/// keyring yet must keep behaving exactly as it did before this probe
+/// existed, so a service the bus could start counts as available even though
+/// nothing owns the name.
+///
+/// And it must stay unstarted. `secret_store` promises never to activate
+/// anything (`docs/ROADMAP.md` item 18: activating `org.freedesktop.secrets`
+/// from `evolution-source-registry` is a 25-second timeout when it cannot
+/// start, on the connect path). The stub service here would touch a marker
+/// file if the bus ever ran it, so the absence of that file is the promise
+/// under test — an assertion, not a comment.
+#[test]
+#[ignore = "needs dbus-run-session; see the module docs"]
+fn a_startable_secret_service_counts_as_available_and_is_not_started() {
+    let root = scratch("startable");
+    let services = root.join("servicedir");
+    fs::create_dir_all(&services).expect("create the service directory");
+    let marker = root.join("it-was-activated");
+    fs::write(
+        services.join("org.freedesktop.secrets.service"),
+        format!(
+            "[D-BUS Service]\nName=org.freedesktop.secrets\nExec=/bin/sh -c \"touch '{}'\"\n",
+            marker.display()
+        ),
+    )
+    .expect("write the stub service file");
+
+    assert_eq!(
+        availability_in(&root, "", Some(&services)),
+        "Some(true)"
+    );
+    assert!(
+        !marker.exists(),
+        "the probe activated the secret service; `service_is_available` must \
+         only ever ask the bus questions that start nothing"
+    );
+}
+
+/// A secret service that is actually running is available whatever state its
+/// collections are in — a *locked* keyring is still somewhere a token can be
+/// stored, which is why this answer and
+/// [`a_locked_login_keyring_reports_itself_locked`]'s differ on the same bus.
+#[test]
+#[ignore = "needs dbus-run-session and gnome-keyring-daemon; see the module docs"]
+fn a_running_secret_service_reports_available() {
+    let root = scratch("running-available");
+    assert_eq!(availability_in(&root, UNLOCK, None), "Some(true)");
+    assert_eq!(keyring_daemons(&root.join("run")), Vec::<i32>::new());
 }
