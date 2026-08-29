@@ -1,17 +1,27 @@
-# `gnome-keyring-daemon --replace` at session start strands every client that already connected
+# `gnome-keyring-daemon --replace` strands every client that already connected
 
-**Status:** draft, not filed. Captured live 2026-08-29 on the operator's
-Evolution test VM (Ubuntu, GNOME session, autologin).
-**Candidate owners:** gnome-keyring, libsecret, gnome-session. Probably all
-three; see "Who owns this" below.
+**Status:** draft, NOT filed, and **scope corrected 2026-08-29 — read this
+first.** The `--replace` in the capture below is *self-inflicted*: a test-VM
+autostart the maintainer added on 2026-08-23
+(`~/bin/unlock-keyring.sh`, `echo -n "password" | gnome-keyring-daemon
+--replace --unlock --components=secrets,pkcs11`) to unlock the login keyring on
+an autologin session. Stock GNOME does not do this. An earlier revision of this
+document blamed `gnome-session` for launching the replacement; that was wrong
+and is retracted.
+
+What survives the correction, and is the only thing worth filing, is what
+happens *when* a replacement occurs: `--replace` is a documented, supported
+option, and using it strands already-connected clients for the life of their
+processes, with libsecret logging GLib's own detection of an unreturned
+`GTask`.
+
+**Candidate owners:** libsecret (primary), gnome-keyring (secondary).
 
 ## Summary
 
-On a session where the login keyring is not unlocked by PAM (autologin is the
-common case), `gnome-session` launches `gnome-unlock-keyring`, which runs
-`gnome-keyring-daemon --replace --unlock`. That **replaces** the keyring daemon
-that started with the session, a few seconds after other session services have
-already connected to it.
+`gnome-keyring-daemon --replace` **replaces** the running keyring daemon.
+Clients that connected before the replacement are not migrated and have no way
+to notice.
 
 Every client that connected in those few seconds keeps a D-Bus proxy bound to
 the replaced daemon's *unique* name. Because unique names cannot be
@@ -48,7 +58,7 @@ proven by the bus's own activation record:
 | 20:43:34 | registry reports the store locked, declines to escalate |
 | 20:43:36 | `gcr-prompter: caller vanished for callback /org/gnome/keyring/Prompt/p3@:1.4` |
 | 20:43:36 | `evolution-sourc[1496]: GTask secret_service_real_prompt_async (...) finalized without ever returning (using g_task_return_*()). This potentially indicates a bug in the program.` |
-| 20:43:36 | `Started app-gnome-unlock\x2dkeyring-1983.scope` |
+| 20:43:36 | `Started app-gnome-unlock\x2dkeyring-1983.scope` (the test VM's own autostart, see the status note) |
 | 20:43:36 | `gnome-keyring-daemon[2004]: Replacing daemon, using directory: /run/user/1000/keyring` |
 | 20:43:58 | calendar factory: `failed to obtain OAuth 2.0 access token` (**25 s** after its 20:43:33 call) |
 
@@ -115,14 +125,26 @@ would make the symptom much less severe.
    either a well-known-name handoff clients can follow, or a signal that tells
    them to re-resolve.
 
-3. **gnome-session** — launching `gnome-unlock-keyring` *after* session
-   services have started makes the race reachable at every boot of an
-   autologin session. Unlocking before dependent services start, or ordering
-   the secret-consuming services after it, removes the window.
+**Not** gnome-session, and **not** evolution-data-server. An earlier revision
+of this document blamed the former; the replacement was the test VM's own
+autostart. EDS is simply a client that connected first.
 
-The wider blast radius is not Evolution-specific: any client that resolves
-`org.freedesktop.secrets` during those few seconds is affected for its whole
+The blast radius is not Evolution-specific: any client that resolves
+`org.freedesktop.secrets` before a replacement is affected for its whole
 lifetime.
+
+## Is this worth filing at all?
+
+Honestly assessed: the libsecret half is. `GTask ... finalized without ever
+returning` is GLib telling us about a defect in so many words, it is
+reproducible, and it converts a recoverable disconnect into a hang. The
+gnome-keyring half is weaker — "don't use `--replace` while clients are
+connected" is a defensible answer, though the option's documentation says
+nothing about it.
+
+Before filing, check whether the login keyring can simply be given an empty
+password on the affected machine, which removes the need for any replacement
+and is the correct fix for this VM.
 
 ## What clients can do meanwhile
 
@@ -135,13 +157,15 @@ inability to reach the keyring.
 
 ## Reproduction
 
-1. Configure a GNOME session with autologin so PAM does not unlock the login
-   keyring, and a login keyring that has a non-empty password.
-2. Configure any account whose secret lives in the login keyring.
-3. Reboot. Observe in `journalctl --user -b`: services connect, then
-   `Replacing daemon`, then secret lookups that fail with a `:N.M` unique name
-   or stall for 25 seconds.
-4. Restart the affected client and observe the lookups succeed immediately.
+1. Start a session and let a secret-service client connect (any OAuth 2.0
+   account in Evolution will do).
+2. Run `gnome-keyring-daemon --replace --unlock --components=secrets,pkcs11`,
+   feeding the keyring password on stdin.
+3. Drive the client to read a secret. Observe in `journalctl --user -b`: a
+   lookup that fails naming a `:N.M` unique name, or stalls for 25 seconds,
+   plus libsecret's `GTask ... finalized without ever returning` in the
+   client's own log.
+4. Restart the client and observe the same lookup succeed immediately.
 
 ## Version information
 
