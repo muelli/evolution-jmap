@@ -8,9 +8,11 @@
 //! touching protocol logic — but a push connection is the opposite shape: one
 //! request whose response body never ends. So this reads the wire itself,
 //! on a dedicated thread per subscription, rather than going through
-//! `Transport`. It only speaks plain `http://`; the mock (and every URL this
-//! codebase builds today) is plain HTTP, and `https://` is left for whichever
-//! session wires this into a real, TLS-terminated deployment.
+//! `Transport`. It speaks both plain `http://` (the mock, and every URL this
+//! codebase builds today) and `https://` (`rustls` over the same raw
+//! `TcpStream`, since `ureq`'s own TLS backend is exactly that already — one
+//! layer below the unary request/response API this module deliberately
+//! bypasses, not a second implementation of it).
 //!
 //! [`EventSourceSubscription::start`] connects, reads chunked-transfer SSE
 //! frames, and forwards every `event: state` block's `data:` as a parsed
@@ -26,9 +28,12 @@
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
 use jmap_proto::push::StateChange;
 
@@ -143,16 +148,34 @@ fn connect_and_stream(
     socket_slot: &Arc<Mutex<Option<TcpStream>>>,
     sender: &Sender<StateChange>,
 ) -> io::Result<()> {
-    let (authority, path_and_query) = split_http_url(url)
-        .ok_or_else(|| io::Error::other(format!("eventsource url is not http://: {url}")))?;
-    let stream = TcpStream::connect(&authority)?;
+    let parts = parse_url(url)
+        .ok_or_else(|| io::Error::other(format!("eventsource url is not http(s)://: {url}")))?;
+    let stream = TcpStream::connect(&parts.authority)?;
+    // Stored before the TLS handshake (if any): `shutdown()` on this clone
+    // aborts the handshake or any in-flight read/write on the *other* clone
+    // `Conn` goes on to own, since both are handles onto the same socket.
     *socket_slot.lock().expect("socket lock poisoned") = Some(stream.try_clone()?);
     if cancel.is_cancelled() {
         return Ok(());
     }
 
+    let mut conn = if parts.tls {
+        let server_name = ServerName::try_from(parts.host.clone()).map_err(|error| {
+            io::Error::other(format!(
+                "not a valid TLS server name: {:?}: {error}",
+                parts.host
+            ))
+        })?;
+        let client = ClientConnection::new(Arc::clone(tls_config()), server_name)
+            .map_err(|error| io::Error::other(format!("tls setup failed: {error}")))?;
+        Conn::Tls(Box::new(StreamOwned::new(client, stream)))
+    } else {
+        Conn::Plain(stream)
+    };
+
     let mut request = format!(
-        "GET {path_and_query} HTTP/1.1\r\nHost: {authority}\r\nAccept: text/event-stream\r\n"
+        "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: text/event-stream\r\n",
+        parts.path_and_query, parts.authority
     );
     for (name, value) in headers {
         request.push_str(name);
@@ -161,19 +184,94 @@ fn connect_and_stream(
         request.push_str("\r\n");
     }
     request.push_str("\r\n");
-    (&stream).write_all(request.as_bytes())?;
+    conn.write_all(request.as_bytes())?;
 
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(conn);
     read_response_head(&mut reader)?;
     let mut body = BufReader::new(ChunkedBody::new(reader));
     stream_events(&mut body, cancel, sender)
 }
 
-/// Split an `http://host:port/path?query` URL into `("host:port",
-/// "/path?query")`. `None` for anything else (a different scheme, or one
-/// this module cannot make sense of) — see the module doc on `https://`.
-fn split_http_url(url: &str) -> Option<(String, String)> {
-    let rest = url.strip_prefix("http://")?;
+/// The two shapes a connection can take once a scheme is known — `Read`/
+/// `Write` just dispatch to whichever one this attempt picked, so everything
+/// downstream (`ChunkedBody`, the SSE line reader) stays scheme-agnostic.
+enum Conn {
+    Plain(TcpStream),
+    Tls(Box<StreamOwned<ClientConnection, TcpStream>>),
+}
+
+impl Read for Conn {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Conn::Plain(stream) => stream.read(buf),
+            Conn::Tls(stream) => stream.read(buf),
+        }
+    }
+}
+
+impl Write for Conn {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Conn::Plain(stream) => stream.write(buf),
+            Conn::Tls(stream) => stream.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Conn::Plain(stream) => stream.flush(),
+            Conn::Tls(stream) => stream.flush(),
+        }
+    }
+}
+
+/// The process-wide TLS client config: the real webpki CA roots, plus (test
+/// builds only) the one self-signed root this crate's own `tests/fixtures`
+/// TLS test server uses — never compiled into a shipped binary, since it is
+/// behind `#[cfg(test)]`. Installing a default crypto provider a second time
+/// (another `rustls` user in the same process already did) returns `Err`
+/// rather than panicking, so it is ignored rather than unwrapped — the same
+/// "tolerant of being called again" idiom `jmap_backend_core::logging::init`
+/// and `i18n::bind` already use for their own once-per-process setup.
+fn tls_config() -> &'static Arc<ClientConfig> {
+    static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        #[cfg(test)]
+        {
+            let fixture = include_bytes!("../tests/fixtures/tls-test-cert.der");
+            roots
+                .add(rustls::pki_types::CertificateDer::from(fixture.as_slice()).into_owned())
+                .expect("test fixture cert parses as a valid trust anchor");
+        }
+        Arc::new(
+            ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        )
+    })
+}
+
+/// A URL this module can act on: which scheme (`tls`), the authority to
+/// dial and put in the `Host:` header (`host:port`), the bare host for TLS
+/// SNI/certificate-name checking, and the request target.
+struct UrlParts {
+    tls: bool,
+    authority: String,
+    host: String,
+    path_and_query: String,
+}
+
+/// Split an `http(s)://host:port/path?query` URL into its parts. `None` for
+/// any other scheme, or one this module cannot make sense of.
+fn parse_url(url: &str) -> Option<UrlParts> {
+    let (tls, rest) = if let Some(rest) = url.strip_prefix("https://") {
+        (true, rest)
+    } else {
+        (false, url.strip_prefix("http://")?)
+    };
     let slash = rest.find('/').unwrap_or(rest.len());
     let authority = rest[..slash].to_owned();
     let path_and_query = if slash < rest.len() {
@@ -181,7 +279,20 @@ fn split_http_url(url: &str) -> Option<(String, String)> {
     } else {
         "/".to_owned()
     };
-    Some((authority, path_and_query))
+    // Every `eventSourceUrl` this codebase produces (see the module doc)
+    // includes an explicit port, so a plain `rsplit_once` is enough — no
+    // IPv6 literal (`[::1]:port`) support is needed or attempted here.
+    let host = authority
+        .rsplit_once(':')
+        .map(|(host, _port)| host)
+        .unwrap_or(&authority)
+        .to_owned();
+    Some(UrlParts {
+        tls,
+        authority,
+        host,
+        path_and_query,
+    })
 }
 
 /// Read the status line and headers, checking the response is chunked —
@@ -351,27 +462,32 @@ mod tests {
     }
 
     #[test]
-    fn split_http_url_separates_authority_from_path_and_query() {
-        assert_eq!(
-            split_http_url("http://127.0.0.1:4242/eventsource?types=*"),
-            Some((
-                "127.0.0.1:4242".to_owned(),
-                "/eventsource?types=*".to_owned()
-            ))
-        );
+    fn parse_url_separates_authority_host_and_path_and_query() {
+        let parts = parse_url("http://127.0.0.1:4242/eventsource?types=*").expect("parses");
+        assert!(!parts.tls);
+        assert_eq!(parts.authority, "127.0.0.1:4242");
+        assert_eq!(parts.host, "127.0.0.1");
+        assert_eq!(parts.path_and_query, "/eventsource?types=*");
     }
 
     #[test]
-    fn split_http_url_defaults_a_missing_path_to_root() {
-        assert_eq!(
-            split_http_url("http://127.0.0.1:4242"),
-            Some(("127.0.0.1:4242".to_owned(), "/".to_owned()))
-        );
+    fn parse_url_defaults_a_missing_path_to_root() {
+        let parts = parse_url("http://127.0.0.1:4242").expect("parses");
+        assert_eq!(parts.authority, "127.0.0.1:4242");
+        assert_eq!(parts.path_and_query, "/");
     }
 
     #[test]
-    fn split_http_url_rejects_a_non_http_scheme() {
-        assert_eq!(split_http_url("https://example.com/eventsource"), None);
+    fn parse_url_recognizes_the_https_scheme() {
+        let parts = parse_url("https://example.com:443/eventsource").expect("parses");
+        assert!(parts.tls);
+        assert_eq!(parts.host, "example.com");
+        assert_eq!(parts.path_and_query, "/eventsource");
+    }
+
+    #[test]
+    fn parse_url_rejects_an_unknown_scheme() {
+        assert!(parse_url("ftp://example.com/eventsource").is_none());
     }
 
     #[test]
@@ -497,5 +613,72 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "dropping a live subscription must not wait out a reconnect backoff"
         );
+    }
+
+    /// A minimal one-shot TLS server: accepts one connection, discards
+    /// whatever the client sends (only this module's own `GET` request is
+    /// ever expected), and writes back one chunked `event: state` frame
+    /// using the same key/cert pair `tls_config`'s `#[cfg(test)]` half
+    /// trusts. Proves the real handshake and chunked-SSE decode work
+    /// together over TLS, not just that each is independently correct.
+    fn start_tls_test_server(state_change_frame: &'static str) -> std::net::SocketAddr {
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+        use rustls::{ServerConfig, ServerConnection};
+
+        let cert =
+            CertificateDer::from(include_bytes!("../tests/fixtures/tls-test-cert.der").as_slice());
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(
+            include_bytes!("../tests/fixtures/tls-test-key.der").as_slice(),
+        ));
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let config = Arc::new(
+            ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .expect("test cert/key pair is valid"),
+        );
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        thread::spawn(move || {
+            let (stream, _peer) = listener.accept().expect("accept");
+            let server_conn = ServerConnection::new(config).expect("server tls session");
+            let mut tls = StreamOwned::new(server_conn, stream);
+
+            // Read (and discard) the request up to its terminating blank
+            // line — enough to know the client is done sending, without a
+            // full HTTP parser this one-shot server doesn't need.
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                if tls.read(&mut byte).expect("read request") == 0 {
+                    break;
+                }
+                request.push(byte[0]);
+            }
+
+            let body = format!(
+                "{:x}\r\n{state_change_frame}\r\n0\r\n\r\n",
+                state_change_frame.len()
+            );
+            let response = format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{body}");
+            tls.write_all(response.as_bytes()).expect("write response");
+            tls.conn.send_close_notify();
+            let _ = tls.flush();
+        });
+        addr
+    }
+
+    #[test]
+    fn subscribing_over_https_completes_a_real_tls_handshake() {
+        let frame = "event: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}\n\n";
+        let addr = start_tls_test_server(frame);
+        let url = format!("https://{addr}/eventsource?types=*");
+
+        let subscription = EventSourceSubscription::start(url, Vec::new(), CancelFlag::new());
+        let received = subscription
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the pushed StateChange arrives over TLS");
+        assert_eq!(received, changed("a1", "Mailbox", "1"));
     }
 }

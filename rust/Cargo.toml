@@ -69,6 +69,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Writes the journal's native protocol directly (no libsystemd FFI).
 tracing-journald = "0.3"
+# `jmap-client`'s EventSource reader (item 28): both already in the tree
+# transitively via `ureq`'s own TLS backend, depended on directly here for
+# the raw-socket `https://` handshake a unary request/response transport
+# (ureq itself) cannot do for an indefinite stream.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
 
 eds-sys = { path = "crates/eds-sys" }
 evo-sys = { path = "crates/evo-sys" }
