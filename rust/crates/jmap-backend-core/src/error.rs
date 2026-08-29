@@ -104,6 +104,34 @@ pub unsafe fn set_raw_gerror(dest: *mut *mut GError, error: *mut GError) {
     }
 }
 
+/// Whether `error` is the one a stale access token produces — the readback
+/// half of [`crate::retry::retry_on_authentication_failure`].
+///
+/// An EDS vfunc reports failure as `FALSE` plus a `GError`, so by the time a
+/// shared retry wrapper sees it the [`Error`] that caused it is gone. What
+/// survives is the domain and code, and [`client_error_code`] gives
+/// `E_CLIENT_ERROR_AUTHENTICATION_FAILED` to `Error::Http { status: 401, .. }`
+/// and to nothing else — so this pair *is* "the server refused these
+/// credentials", faithfully and without parsing message text.
+///
+/// The domain is compared as well as the code, which is not belt-and-braces:
+/// `E_CLIENT_ERROR` and `G_IO_ERROR` are different enumerations that both
+/// start at zero, so a code alone would classify some unrelated GLib I/O
+/// failure as a rejected token and re-fetch a perfectly good one.
+///
+/// # Safety
+///
+/// `error` must be NULL or a valid `GError` that outlives the call.
+pub unsafe fn is_authentication_failed(error: *const GError) -> bool {
+    // SAFETY: the caller's contract, plus the NULL check; the quark function
+    // takes no arguments.
+    unsafe {
+        !error.is_null()
+            && (*error).domain == eds_sys::e_client_error_quark()
+            && (*error).code == E_CLIENT_ERROR_AUTHENTICATION_FAILED as c_int
+    }
+}
+
 /// A `GError` for an argument EDS itself passed us that was invalid — a
 /// vCard/iCalendar Evolution asked us to save that the mapping cannot read,
 /// or an operation with nothing to act on. Shared by call sites across the
@@ -192,6 +220,57 @@ mod tests {
     #[test]
     fn a_message_with_an_interior_nul_is_truncated_not_panicked_on() {
         assert_eq!(cstring_lossy("before\0after").to_bytes(), b"before");
+    }
+
+    #[test]
+    fn only_a_401_reads_back_as_an_authentication_failure() {
+        // The readback `crate::retry::retry_on_authentication_failure` makes
+        // is only as good as this: a vfunc hands its caller a `GError`, not a
+        // `jmap_client::Error`, so "may this be retried on a fresh token"
+        // has to survive the round trip through `to_gerror`.
+        let cases = [
+            (
+                Error::Http {
+                    status: 401,
+                    problem: None,
+                },
+                true,
+            ),
+            (
+                Error::Http {
+                    status: 403,
+                    problem: None,
+                },
+                false,
+            ),
+            (
+                Error::Http {
+                    status: 500,
+                    problem: None,
+                },
+                false,
+            ),
+            (Error::Transport("no route to host".into()), false),
+            // A different domain entirely, which a code comparison alone
+            // would get wrong: G_IO_ERROR_CANCELLED is 19 and
+            // E_CLIENT_ERROR_AUTHENTICATION_FAILED is not, but nothing
+            // guarantees that across EDS versions.
+            (Error::Cancelled, false),
+        ];
+
+        for (err, expected) in cases {
+            let error = to_gerror(&err);
+            assert!(!error.is_null());
+            // SAFETY: a freshly allocated GError this test owns.
+            unsafe {
+                assert_eq!(
+                    is_authentication_failed(error),
+                    expected,
+                    "{err} classified wrongly"
+                );
+                glib_sys::g_error_free(error);
+            }
+        }
     }
 
     #[test]
