@@ -930,3 +930,31 @@ fn query_request_and_changes_request_calculate_total_builder() {
     let qc_val = serde_json::to_value(&qc).unwrap();
     assert_eq!(qc_val["calculateTotal"], true);
 }
+
+#[test]
+fn query_request_and_changes_request_collapse_threads_builder() {
+    use jmap_proto::methods::{QueryChangesRequest, QueryRequest};
+
+    let q: QueryRequest<()> = QueryRequest::new("A1").collapse_threads();
+    assert!(q.collapse_threads);
+    let q_val = serde_json::to_value(&q).unwrap();
+    assert_eq!(q_val["collapseThreads"], true);
+
+    let qc: QueryChangesRequest<()> = QueryChangesRequest::new("A1", "s1").collapse_threads();
+    assert!(qc.collapse_threads);
+    let qc_val = serde_json::to_value(&qc).unwrap();
+    assert_eq!(qc_val["collapseThreads"], true);
+}
+
+#[test]
+fn response_deserializes_missing_session_state_with_default() {
+    use jmap_proto::response::Response;
+
+    let value = serde_json::json!({
+        "methodResponses": []
+    });
+
+    let resp: Response = serde_json::from_value(value).unwrap();
+    assert_eq!(resp.session_state.as_str(), "");
+}
+

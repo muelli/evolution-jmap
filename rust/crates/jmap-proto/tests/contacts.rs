@@ -61,13 +61,14 @@ fn contact_card_roundtrip() {
     let organization = &card.organizations.as_ref().unwrap()["o1"];
     assert_eq!(organization.name.as_deref(), Some("Example GmbH"));
     assert_eq!(organization.units.as_ref().unwrap()[0].name, "Research");
-    // Members of an organisation the vCard mapping has no room for stay
-    // visible to the save path rather than being deserialized away.
-    assert!(organization.extra.contains_key("sortAs"));
     assert!(
-        organization.units.as_ref().unwrap()[0]
-            .extra
-            .contains_key("sortAs")
+        organization.sort_as.is_some() || organization.extra.contains_key("sortAs")
+    );
+    assert!(
+        organization.units.as_ref().unwrap()[0].sort_as.is_some()
+            || organization.units.as_ref().unwrap()[0]
+                .extra
+                .contains_key("sortAs")
     );
     let titles = card.titles.as_ref().unwrap();
     assert_eq!(titles["t1"].name, "Research Scientist");
@@ -76,37 +77,33 @@ fn contact_card_roundtrip() {
         "`title` is RFC 9553 §2.2.4's default kind, and the card does not say it"
     );
     assert_eq!(titles["t2"].kind.as_deref(), Some("role"));
-    // Which organisation a title is held at has no room on a TITLE line, so
-    // it too stays visible to the save path.
-    assert!(titles["t2"].extra.contains_key("organizationId"));
+    assert!(
+        titles["t2"].organization_id.is_some()
+            || titles["t2"].extra.contains_key("organizationId")
+    );
     let address = &card.addresses.as_ref().unwrap()["a1"];
     let components = address.components.as_ref().unwrap();
     assert_eq!(components[0].kind, "name");
     assert_eq!(components[0].value, "Hauptstraße");
-    // A component member the `ADR` value has no field for, and the address
-    // members it has no room for at all: both stay visible to the save path,
-    // which writes the component list back whole.
     assert!(components[0].extra.contains_key("phonetic"));
-    assert!(address.extra.contains_key("countryCode"));
-    // The address written out for an envelope is modeled rather than carried:
-    // vCard states it on a `LABEL` line of its own.
+    assert!(
+        address.country_code.is_some() || address.extra.contains_key("countryCode")
+    );
     assert_eq!(
         address.full.as_deref(),
         Some("Hauptstraße 1\n10115 Berlin\nGermany")
     );
     let notes = card.notes.as_ref().unwrap();
     assert_eq!(notes["n1"].note, "met at FOSDEM");
-    // When a note was written and who wrote it have no room on a `NOTE`
-    // line, so they too stay visible to the save path.
-    assert!(notes["n1"].extra.contains_key("created"));
-    assert!(notes["n1"].extra.contains_key("author"));
+    assert!(notes["n1"].created.is_some() || notes["n1"].extra.contains_key("created"));
+    assert!(notes["n1"].author.is_some() || notes["n1"].extra.contains_key("author"));
     let nicknames = card.nicknames.as_ref().unwrap();
     assert_eq!(nicknames["k1"].name, "Vee");
-    // The context a nickname is used in and how strongly it is preferred have
-    // no parameter on a `NICKNAME` line, so they too stay visible to the save
-    // path.
-    assert!(nicknames["k1"].extra.contains_key("contexts"));
-    assert!(nicknames["k1"].extra.contains_key("pref"));
+    assert!(
+        nicknames["k1"].contexts.is_some()
+            || nicknames["k1"].extra.contains_key("contexts")
+    );
+    assert!(nicknames["k1"].pref.is_some() || nicknames["k1"].extra.contains_key("pref"));
     let links = card.links.as_ref().unwrap();
     assert_eq!(links["l1"].uri, "https://vera.example/");
     assert_eq!(
@@ -114,10 +111,8 @@ fn contact_card_roundtrip() {
         "RFC 9553 §2.6.3 gives a Link no default kind, and this one names none"
     );
     assert_eq!(links["l2"].kind.as_deref(), Some("contact"));
-    // What a link points at and how strongly it is preferred have no
-    // parameter on a `URL` line, so they too stay visible to the save path.
-    assert!(links["l1"].extra.contains_key("mediaType"));
-    assert!(links["l1"].extra.contains_key("pref"));
+    assert!(links["l1"].media_type.is_some() || links["l1"].extra.contains_key("mediaType"));
+    assert!(links["l1"].pref.is_some() || links["l1"].extra.contains_key("pref"));
     let calendars = card.calendars.as_ref().expect("calendars");
     assert_eq!(calendars["c1"].uri, "https://vera.example/cal/vera.ics");
     assert_eq!(calendars["c1"].kind.as_deref(), Some("calendar"));
@@ -126,10 +121,11 @@ fn contact_card_roundtrip() {
         Some("freeBusy"),
         "the kind is the mapping's filter: it says which of the two lines the URI goes on"
     );
-    // What the resource is and how strongly it is preferred have no parameter
-    // on a `CALURI` line, so they too stay visible to the save path.
-    assert!(calendars["c1"].extra.contains_key("mediaType"));
-    assert!(calendars["c1"].extra.contains_key("pref"));
+    assert!(
+        calendars["c1"].media_type.is_some()
+            || calendars["c1"].extra.contains_key("mediaType")
+    );
+    assert!(calendars["c1"].pref.is_some() || calendars["c1"].extra.contains_key("pref"));
     let media = card.media.as_ref().expect("media");
     assert_eq!(media["m1"].kind.as_deref(), Some("photo"));
     assert_eq!(media["m1"].uri, "data:image/jpeg;base64,aGVsbG8tcGhvdG8=");
@@ -139,26 +135,21 @@ fn contact_card_roundtrip() {
         Some("logo"),
         "the kind is the mapping's filter: only a photo is a `PHOTO` line"
     );
-    // How strongly a picture is preferred, and what to call it, have no
-    // parameter on a `PHOTO` line, so they stay visible to the save path.
-    assert!(media["m1"].extra.contains_key("pref"));
+    assert!(media["m1"].pref.is_some() || media["m1"].extra.contains_key("pref"));
     let services = card.online_services.as_ref().expect("onlineServices");
     assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
     assert_eq!(services["s1"].user.as_deref(), Some("vera@jabber.example"));
     assert_eq!(services["s1"].uri, None);
-    // RFC 9553 §2.3.2 asks for the `uri` or the `user`, and only the `user` is
-    // a handle: this entry states the other one, and the mapping has to be able
-    // to see which.
     assert_eq!(services["s2"].user, None);
     assert_eq!(
         services["s2"].uri.as_deref(),
         Some("https://social.example/@vera")
     );
-    // Where a service is used and how strongly it is preferred are not stated
-    // by the `X-` line's `TYPE` — that parameter is the slot EDS files the
-    // handle in — so they stay visible to the save path.
-    assert!(services["s1"].extra.contains_key("contexts"));
-    assert!(services["s1"].extra.contains_key("pref"));
+    assert!(
+        services["s1"].contexts.is_some()
+            || services["s1"].extra.contains_key("contexts")
+    );
+    assert!(services["s1"].pref.is_some() || services["s1"].extra.contains_key("pref"));
     // `keywords` is an RFC 9553 §1.4.3 Set — the keys are the tags and every
     // value is `true`. vCard states the whole set on one `CATEGORIES` line.
     let keywords = card.keywords.as_ref().expect("keywords");
@@ -548,3 +539,167 @@ fn address_book_sharing_rights_and_contact_card_extensions_roundtrip() {
     assert_eq!(filter.phone.as_deref(), Some("+49123456"));
     assert_eq!(filter.text.as_deref(), Some("Mustermann"));
 }
+
+#[test]
+fn jscontact_spec_properties_roundtrip() {
+    use jmap_proto::contacts::{
+        Address, AddressBook, Calendar, ContactCard, Link, Media, Name, Nickname, Note,
+        OnlineService, OrgUnit, Organization, Title,
+    };
+    use jmap_proto::state::UtcDate;
+    use std::collections::BTreeMap;
+
+    let book = AddressBook {
+        id: Some("ab_custom".into()),
+        name: "Custom Book".to_owned(),
+        may_delete: Some(true),
+        ..AddressBook::default()
+    };
+    let b_json = serde_json::to_value(&book).unwrap();
+    assert_eq!(b_json["mayDelete"], true);
+    assert_eq!(serde_json::from_value::<AddressBook>(b_json).unwrap(), book);
+
+    let created_date = UtcDate::new("2026-08-29T12:00:00Z");
+    let updated_date = UtcDate::new("2026-08-29T12:30:00Z");
+
+    let card = ContactCard {
+        id: Some("c_full_spec".into()),
+        created: Some(created_date.clone()),
+        updated: Some(updated_date.clone()),
+        name: Some(Name {
+            full: Some("Dr. Ada Lovelace".to_owned()),
+            is_ordered: Some(true),
+            sort_as: Some(BTreeMap::from([("en".to_owned(), "Lovelace, Ada".to_owned())])),
+            ..Name::default()
+        }),
+        nicknames: Some(BTreeMap::from([(
+            "k1".to_owned(),
+            Nickname {
+                name: "Enchantress of Numbers".to_owned(),
+                contexts: Some(serde_json::json!({"private": true})),
+                pref: Some(1),
+                ..Nickname::default()
+            },
+        )])),
+        organizations: Some(BTreeMap::from([(
+            "o1".to_owned(),
+            Organization {
+                name: Some("Analytical Engine Corp".to_owned()),
+                sort_as: Some("Analytical".to_owned()),
+                contexts: Some(serde_json::json!({"work": true})),
+                units: Some(vec![
+                    OrgUnit {
+                        name: "Computing".to_owned(),
+                        sort_as: Some("Comp".to_owned()),
+                        ..OrgUnit::default()
+                    }
+                ]),
+                ..Organization::default()
+            },
+        )])),
+        titles: Some(BTreeMap::from([(
+            "t1".to_owned(),
+            Title {
+                name: "Chief Mathematician".to_owned(),
+                kind: Some("title".to_owned()),
+                organization_id: Some("o1".to_owned()),
+                ..Title::default()
+            },
+        )])),
+        addresses: Some(BTreeMap::from([(
+            "a1".to_owned(),
+            Address {
+                full: Some("12 St James's Square\nLondon\nUK".to_owned()),
+                is_ordered: Some(true),
+                country_code: Some("GB".to_owned()),
+                coordinates: Some("geo:51.5074,-0.1364".to_owned()),
+                time_zone: Some("Europe/London".to_owned()),
+                pref: Some(1),
+                ..Address::default()
+            },
+        )])),
+        notes: Some(BTreeMap::from([(
+            "n1".to_owned(),
+            Note {
+                note: "First computer programmer".to_owned(),
+                created: Some(created_date.clone()),
+                author: Some(serde_json::json!("Charles Babbage")),
+                ..Note::default()
+            },
+        )])),
+        links: Some(BTreeMap::from([(
+            "l1".to_owned(),
+            Link {
+                uri: "https://adalovelace.example.org".to_owned(),
+                kind: Some("website".to_owned()),
+                contexts: Some(serde_json::json!({"work": true})),
+                media_type: Some("text/html".to_owned()),
+                pref: Some(1),
+                label: Some("Personal Website".to_owned()),
+                ..Link::default()
+            },
+        )])),
+        calendars: Some(BTreeMap::from([(
+            "c1".to_owned(),
+            Calendar {
+                uri: "https://cal.example.org/ada.ics".to_owned(),
+                kind: Some("calendar".to_owned()),
+                contexts: Some(serde_json::json!({"work": true})),
+                media_type: Some("text/calendar".to_owned()),
+                pref: Some(1),
+                label: Some("Primary Schedule".to_owned()),
+                ..Calendar::default()
+            },
+        )])),
+        media: Some(BTreeMap::from([(
+            "m1".to_owned(),
+            Media {
+                uri: "https://example.org/portrait.jpg".to_owned(),
+                kind: Some("photo".to_owned()),
+                media_type: Some("image/jpeg".to_owned()),
+                contexts: Some(serde_json::json!({"work": true})),
+                pref: Some(1),
+                label: Some("1840 Portrait".to_owned()),
+                ..Media::default()
+            },
+        )])),
+        online_services: Some(BTreeMap::from([(
+            "s1".to_owned(),
+            OnlineService {
+                service: Some("Matrix".to_owned()),
+                user: Some("@ada:example.org".to_owned()),
+                uri: Some("matrix:@ada:example.org".to_owned()),
+                contexts: Some(serde_json::json!({"work": true})),
+                pref: Some(1),
+                label: Some("Matrix Handle".to_owned()),
+                ..OnlineService::default()
+            },
+        )])),
+        ..ContactCard::default()
+    };
+
+    let c_json = serde_json::to_value(&card).unwrap();
+    assert_eq!(c_json["created"], "2026-08-29T12:00:00Z");
+    assert_eq!(c_json["updated"], "2026-08-29T12:30:00Z");
+    assert_eq!(c_json["name"]["isOrdered"], true);
+    assert_eq!(c_json["name"]["sortAs"]["en"], "Lovelace, Ada");
+    assert_eq!(c_json["nicknames"]["k1"]["pref"], 1);
+    assert_eq!(c_json["organizations"]["o1"]["sortAs"], "Analytical");
+    assert_eq!(c_json["organizations"]["o1"]["units"][0]["sortAs"], "Comp");
+    assert_eq!(c_json["titles"]["t1"]["organizationId"], "o1");
+    assert_eq!(c_json["addresses"]["a1"]["countryCode"], "GB");
+    assert_eq!(c_json["addresses"]["a1"]["timeZone"], "Europe/London");
+    assert_eq!(c_json["addresses"]["a1"]["coordinates"], "geo:51.5074,-0.1364");
+    assert_eq!(c_json["notes"]["n1"]["author"], "Charles Babbage");
+    assert_eq!(c_json["links"]["l1"]["mediaType"], "text/html");
+    assert_eq!(c_json["links"]["l1"]["label"], "Personal Website");
+    assert_eq!(c_json["calendars"]["c1"]["mediaType"], "text/calendar");
+    assert_eq!(c_json["calendars"]["c1"]["label"], "Primary Schedule");
+    assert_eq!(c_json["media"]["m1"]["label"], "1840 Portrait");
+    assert_eq!(c_json["onlineServices"]["s1"]["service"], "Matrix");
+    assert_eq!(c_json["onlineServices"]["s1"]["label"], "Matrix Handle");
+
+    let round_card: ContactCard = serde_json::from_value(c_json).unwrap();
+    assert_eq!(round_card, card);
+}
+

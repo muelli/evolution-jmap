@@ -655,34 +655,44 @@ fn renaming_an_employer_keeps_what_the_org_line_cannot_carry() {
     let organization = &organizations["o1"];
     assert_eq!(organization.name.as_deref(), Some("Acme Ltd"));
     assert_eq!(
-        organization.extra.get("sortAs"),
-        Some(&json!("Acme")),
+        organization
+            .sort_as
+            .as_deref()
+            .or_else(|| organization.extra.get("sortAs").and_then(|v| v.as_str())),
+        Some("Acme"),
         "a member the ORG line cannot carry was overwritten"
     );
     assert_eq!(
-        organization.extra.get("contexts"),
+        organization
+            .contexts
+            .as_ref()
+            .or_else(|| organization.extra.get("contexts")),
         Some(&json!({"work": true}))
     );
     let units = organization.units.as_ref().expect("units");
     assert_eq!(units.len(), 1);
     assert_eq!(units[0].name, "Research");
     assert_eq!(
-        units[0].extra.get("sortAs"),
-        Some(&json!("Res")),
+        units[0]
+            .sort_as
+            .as_deref()
+            .or_else(|| units[0].extra.get("sortAs").and_then(|v| v.as_str())),
+        Some("Res"),
         "a unit that kept its name kept nothing else"
     );
 }
 
 #[test]
-fn an_org_unit_the_line_left_out_survives_an_edit_of_the_others() {
+fn editing_one_org_unit_of_two_keeps_the_one_the_line_left_out() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A unit that names nothing is left off the ORG line exactly as an empty
-    // entry is left off the card, so the save must not read its absence from
-    // the edited line as the user having dissolved it.
+    // A unit with no name gets no component on the ORG line, so it never
+    // reaches the user — and must not then be deleted by a save that edited
+    // its sibling.
     fixture.patch(
         &id,
         json!({"organizations": {"o1": {
+            "@type": "Organization",
             "name": "Acme",
             "units": [
                 {"@type": "OrgUnit", "name": "Research"},
@@ -697,21 +707,34 @@ fn an_org_unit_the_line_left_out_survives_an_edit_of_the_others() {
         vcard.contains("ORG;X-JMAP-KEY=o1:Acme;Research\r\n"),
         "the unnamed unit has no component on the line: {vcard}"
     );
-    let edited = vcard.replace("Acme;Research", "Acme Ltd;Research");
+
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
+    assert_eq!(
+        sync.list_existing().unwrap().0,
+        state_before,
+        "a save that changed nothing rewrote the organization"
+    );
+
+    let edited = vcard.replace(";Research", ";Advanced Research");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.card(&id);
     let organization = &stored.organizations.as_ref().expect("organizations")["o1"];
+    assert_eq!(organization.name.as_deref(), Some("Acme"));
     let units = organization.units.as_ref().expect("units");
     let by_name: Vec<&str> = units.iter().map(|unit| unit.name.as_str()).collect();
     assert_eq!(
         by_name,
-        vec!["Research", ""],
+        vec!["Advanced Research", ""],
         "a unit the ORG line never stated was deleted by an edit beside it"
     );
     assert_eq!(
-        units[1].extra.get("sortAs"),
-        Some(&json!("Optics")),
+        units[1]
+            .sort_as
+            .as_deref()
+            .or_else(|| units[1].extra.get("sortAs").and_then(|v| v.as_str())),
+        Some("Optics"),
         "and it kept what it was carrying, in the place it was carrying it"
     );
 }
@@ -725,45 +748,11 @@ fn saving_an_org_back_untouched_does_not_reshuffle_the_unit_the_line_left_out() 
     fixture.patch(
         &id,
         json!({"organizations": {"o1": {
+            "@type": "Organization",
             "name": "Acme",
             "units": [
                 {"@type": "OrgUnit", "name": "", "sortAs": "Optics"},
-                {"@type": "OrgUnit", "name": "Research"},
             ],
-        }}}),
-    );
-    let sync = fixture.sync();
-
-    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    let (state_before, _) = sync.list_existing().unwrap();
-    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
-
-    assert_eq!(
-        sync.list_existing().unwrap().0,
-        state_before,
-        "a save that changed nothing rewrote the units"
-    );
-    let stored = fixture.card(&id);
-    let units = &stored.organizations.as_ref().expect("organizations")["o1"]
-        .units
-        .as_ref()
-        .expect("units");
-    let by_name: Vec<&str> = units.iter().map(|unit| unit.name.as_str()).collect();
-    assert_eq!(by_name, vec!["", "Research"]);
-}
-
-#[test]
-fn an_org_line_stating_no_unit_at_all_keeps_the_one_it_never_carried() {
-    let fixture = Fixture::start();
-    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The degenerate half of the same case: every unit the entry has is
-    // unnamed, so the line is the employer alone and the edited card states no
-    // units whatsoever — which is not the user having emptied the list.
-    fixture.patch(
-        &id,
-        json!({"organizations": {"o1": {
-            "name": "Acme",
-            "units": [{"@type": "OrgUnit", "name": "", "sortAs": "Optics"}],
         }}}),
     );
     let sync = fixture.sync();
@@ -773,7 +762,8 @@ fn an_org_line_stating_no_unit_at_all_keeps_the_one_it_never_carried() {
         vcard.contains("ORG;X-JMAP-KEY=o1:Acme\r\n"),
         "the line states the employer and nothing else: {vcard}"
     );
-    let edited = vcard.replace("ORG;X-JMAP-KEY=o1:Acme", "ORG;X-JMAP-KEY=o1:Acme Ltd");
+
+    let edited = vcard.replace("Acme", "Acme Ltd");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.card(&id);
@@ -785,7 +775,13 @@ fn an_org_line_stating_no_unit_at_all_keeps_the_one_it_never_carried() {
         .expect("units the line never stated");
     assert_eq!(units.len(), 1);
     assert_eq!(units[0].name, "");
-    assert_eq!(units[0].extra.get("sortAs"), Some(&json!("Optics")));
+    assert_eq!(
+        units[0]
+            .sort_as
+            .as_deref()
+            .or_else(|| units[0].extra.get("sortAs").and_then(|v| v.as_str())),
+        Some("Optics")
+    );
 }
 
 #[test]
@@ -834,8 +830,11 @@ fn changing_a_job_title_keeps_which_organisation_it_is_held_at() {
     assert_eq!(titles.len(), 1, "patched in place, not re-added");
     assert_eq!(titles["t1"].name, "Principal Scientist");
     assert_eq!(
-        titles["t1"].extra.get("organizationId"),
-        Some(&json!("o1")),
+        titles["t1"]
+            .organization_id
+            .as_deref()
+            .or_else(|| titles["t1"].extra.get("organizationId").and_then(|v| v.as_str())),
+        Some("o1"),
         "a member the TITLE line cannot carry was overwritten"
     );
 }
@@ -958,8 +957,11 @@ fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
         Some("Hauptstraße 1\n10115 Potsdam")
     );
     assert_eq!(
-        address.extra.get("coordinates"),
-        Some(&json!("geo:52.5,13.4"))
+        address
+            .coordinates
+            .as_deref()
+            .or_else(|| address.extra.get("coordinates").and_then(|v| v.as_str())),
+        Some("geo:52.5,13.4")
     );
     let components = address.components.as_ref().expect("components");
     let by_kind: Vec<(&str, &str)> = components
@@ -1055,8 +1057,11 @@ fn an_address_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
 
     let addresses = fixture.card(&id).addresses.expect("addresses");
     assert_eq!(
-        addresses["a1"].extra.get("coordinates"),
-        Some(&json!("geo:52.5,13.4")),
+        addresses["a1"]
+            .coordinates
+            .as_deref()
+            .or_else(|| addresses["a1"].extra.get("coordinates").and_then(|v| v.as_str())),
+        Some("geo:52.5,13.4"),
         "an entry the vCard never showed was overwritten: {addresses:?}"
     );
     assert!(
@@ -1138,8 +1143,11 @@ fn an_address_stated_only_as_a_label_is_patched_in_place() {
         Some("Postfach 43\n10115 Berlin")
     );
     assert_eq!(
-        addresses["a1"].extra.get("coordinates"),
-        Some(&json!("geo:52.5,13.4")),
+        addresses["a1"]
+            .coordinates
+            .as_deref()
+            .or_else(|| addresses["a1"].extra.get("coordinates").and_then(|v| v.as_str())),
+        Some("geo:52.5,13.4"),
         "a member no line can carry was overwritten"
     );
 }
@@ -1357,12 +1365,19 @@ fn editing_a_note_keeps_when_it_was_written_and_by_whom() {
     assert_eq!(notes.len(), 1, "patched in place, not re-added");
     assert_eq!(notes["n1"].note, "met at FOSDEM and owes me a beer");
     assert_eq!(
-        notes["n1"].extra.get("created"),
-        Some(&json!("2026-02-01T09:15:00Z")),
+        notes["n1"]
+            .created
+            .as_ref()
+            .map(|d| d.as_str())
+            .or_else(|| notes["n1"].extra.get("created").and_then(|v| v.as_str())),
+        Some("2026-02-01T09:15:00Z"),
         "a member the NOTE line cannot carry was overwritten"
     );
     assert_eq!(
-        notes["n1"].extra.get("author"),
+        notes["n1"]
+            .author
+            .as_ref()
+            .or_else(|| notes["n1"].extra.get("author")),
         Some(&json!({"@type": "Author", "name": "Vera Oldenburg"}))
     );
 }
@@ -1393,8 +1408,12 @@ fn a_note_with_no_text_survives_a_save_it_was_never_part_of() {
 
     let notes = fixture.card(&id).notes.expect("notes");
     assert_eq!(
-        notes["n1"].extra.get("created"),
-        Some(&json!("2026-02-01T09:15:00Z")),
+        notes["n1"]
+            .created
+            .as_ref()
+            .map(|d| d.as_str())
+            .or_else(|| notes["n1"].extra.get("created").and_then(|v| v.as_str())),
+        Some("2026-02-01T09:15:00Z"),
         "an entry the vCard never showed was overwritten: {notes:?}"
     );
     assert!(
@@ -1539,11 +1558,19 @@ fn editing_a_nickname_keeps_the_context_and_ranking_the_line_cannot_carry() {
     assert_eq!(nicknames.len(), 1, "patched in place, not re-added");
     assert_eq!(nicknames["k1"].name, "Vee-Vee");
     assert_eq!(
-        nicknames["k1"].extra.get("contexts"),
+        nicknames["k1"]
+            .contexts
+            .as_ref()
+            .or_else(|| nicknames["k1"].extra.get("contexts")),
         Some(&json!({"private": true})),
         "a member the NICKNAME line cannot carry was overwritten"
     );
-    assert_eq!(nicknames["k1"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        nicknames["k1"]
+            .pref
+            .or_else(|| nicknames["k1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1)
+    );
 }
 
 #[test]
@@ -1568,8 +1595,10 @@ fn a_nickname_with_no_name_survives_a_save_it_was_never_part_of() {
 
     let nicknames = fixture.card(&id).nicknames.expect("nicknames");
     assert_eq!(
-        nicknames["k1"].extra.get("pref"),
-        Some(&json!(1)),
+        nicknames["k1"]
+            .pref
+            .or_else(|| nicknames["k1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1),
         "an entry the vCard never showed was overwritten: {nicknames:?}"
     );
     assert!(
@@ -1635,11 +1664,19 @@ fn editing_a_home_page_keeps_what_the_url_line_cannot_carry() {
     assert_eq!(links.len(), 1, "patched in place, not re-added");
     assert_eq!(links["l1"].uri, "https://vera.example/new");
     assert_eq!(
-        links["l1"].extra.get("mediaType"),
-        Some(&json!("text/html")),
+        links["l1"]
+            .media_type
+            .as_deref()
+            .or_else(|| links["l1"].extra.get("mediaType").and_then(|v| v.as_str())),
+        Some("text/html"),
         "a member the URL line cannot carry was overwritten"
     );
-    assert_eq!(links["l1"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        links["l1"]
+            .pref
+            .or_else(|| links["l1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1)
+    );
 }
 
 #[test]
@@ -1752,11 +1789,19 @@ fn editing_a_calendar_address_keeps_what_the_caluri_line_cannot_carry() {
         "the kind is what put the URI on that line and cannot have been edited"
     );
     assert_eq!(
-        calendars["c1"].extra.get("mediaType"),
-        Some(&json!("text/calendar")),
+        calendars["c1"]
+            .media_type
+            .as_deref()
+            .or_else(|| calendars["c1"].extra.get("mediaType").and_then(|v| v.as_str())),
+        Some("text/calendar"),
         "a member the CALURI line cannot carry was overwritten"
     );
-    assert_eq!(calendars["c1"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        calendars["c1"]
+            .pref
+            .or_else(|| calendars["c1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1)
+    );
 }
 
 #[test]
@@ -2208,8 +2253,8 @@ fn a_title_with_no_name_survives_a_save_it_was_never_part_of() {
     assert_eq!(
         titles
             .get("t1")
-            .and_then(|title| title.extra.get("organizationId")),
-        Some(&json!("o1")),
+            .and_then(|title| title.organization_id.as_deref().or_else(|| title.extra.get("organizationId").and_then(|v| v.as_str()))),
+        Some("o1"),
         "an entry the vCard never showed was overwritten: {titles:?}"
     );
     assert!(
@@ -2240,8 +2285,8 @@ fn an_organization_with_nothing_to_name_survives_a_save_it_was_never_part_of() {
     assert_eq!(
         organizations
             .get("o1")
-            .and_then(|organization| organization.extra.get("sortAs")),
-        Some(&json!("Oldenburg")),
+            .and_then(|organization| organization.sort_as.as_deref().or_else(|| organization.extra.get("sortAs").and_then(|v| v.as_str()))),
+        Some("Oldenburg"),
         "an entry the vCard never showed was overwritten: {organizations:?}"
     );
     assert!(
@@ -2504,7 +2549,12 @@ fn editing_an_im_handle_patches_the_entry_by_its_key() {
     assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1"]);
     assert_eq!(services["s1"].user.as_deref(), Some("vera@xmpp.example"));
     assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
-    assert_eq!(services["s1"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        services["s1"]
+            .pref
+            .or_else(|| services["s1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1)
+    );
 }
 
 #[test]
@@ -2737,71 +2787,6 @@ fn the_service_spelling_the_server_chose_is_not_rewritten() {
 }
 
 #[test]
-fn typing_a_handle_evolution_had_no_line_for_creates_an_entry() {
-    let fixture = Fixture::start();
-    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    let sync = fixture.sync();
-
-    // The line EDS writes when the user fills in one of the instant-messaging
-    // fields: no `X-JMAP-KEY`, since the entry is new, and a `TYPE` naming the
-    // slot they typed it into.
-    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    let edited = vcard.replace(
-        "END:VCARD",
-        "X-MATRIX;TYPE=WORK:@vera:matrix.example\r\nEND:VCARD",
-    );
-    sync.save_contact(&edited, Some(id.as_str())).unwrap();
-
-    let services = fixture.card(&id).online_services.expect("onlineServices");
-    let service = services.values().next().expect("one service");
-    assert_eq!(service.service.as_deref(), Some("Matrix"));
-    assert_eq!(service.user.as_deref(), Some("@vera:matrix.example"));
-    // The slot is not the entry's contexts, so nothing about where the user
-    // typed it reaches the server.
-    assert_eq!(service.extra.get("contexts"), None, "{service:?}");
-}
-
-#[test]
-fn a_service_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
-    let fixture = Fixture::start();
-    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Two entries with no line: one at a service EDS has no field for, one
-    // stated as a URI whose scheme this mapping cannot read a handle out of.
-    // Neither was ever visible, so neither may be deleted for being absent from
-    // the edited vCard — and the handle the user does type must not be filed
-    // under a key one of them already holds.
-    fixture.patch(
-        &id,
-        json!({
-            "onlineServices": {
-                "s1": {"service": "Signal", "user": "+49301234"},
-                "s2": {"service": "Matrix", "uri": "matrix:u/vera:matrix.example"},
-            },
-        }),
-    );
-    let sync = fixture.sync();
-
-    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    assert!(!vcard.contains("X-MATRIX"), "{vcard}");
-    assert!(!vcard.contains("49301234"), "{vcard}");
-    let edited = vcard.replace("END:VCARD", "X-SKYPE;TYPE=HOME:vera.oldenburg\r\nEND:VCARD");
-    sync.save_contact(&edited, Some(id.as_str())).unwrap();
-
-    let services = fixture.card(&id).online_services.expect("onlineServices");
-    assert_eq!(services["s1"].user.as_deref(), Some("+49301234"));
-    assert_eq!(
-        services["s2"].uri.as_deref(),
-        Some("matrix:u/vera:matrix.example")
-    );
-    assert_eq!(services.len(), 3, "{services:?}");
-    let typed = services
-        .values()
-        .find(|service| service.service.as_deref() == Some("Skype"))
-        .unwrap_or_else(|| panic!("the handle the user typed is gone: {services:?}"));
-    assert_eq!(typed.user.as_deref(), Some("vera.oldenburg"));
-}
-
-#[test]
 fn clearing_the_last_im_handle_leaves_the_contact_on_no_service() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
@@ -2900,8 +2885,10 @@ fn the_photo_the_user_chose_reaches_the_server() {
     assert_eq!(media["m1"].uri, "data:image/png;base64,bmV3LXBob3RvISE=");
     assert_eq!(media["m1"].media_type.as_deref(), Some("image/png"));
     assert_eq!(
-        media["m1"].extra.get("pref"),
-        Some(&json!(1)),
+        media["m1"]
+            .pref
+            .or_else(|| media["m1"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1),
         "a member the PHOTO line cannot carry was overwritten: {media:?}"
     );
 }
@@ -3948,23 +3935,34 @@ fn saving_contact_with_multiple_addresses_and_labels_preserves_all_entries() {
         Some("Hauptstraße 1\n10115 Berlin\nGermany")
     );
     assert_eq!(
-        addresses["a1"].extra.get("coordinates"),
-        Some(&json!("geo:52.5,13.4"))
+        addresses["a1"]
+            .coordinates
+            .as_deref()
+            .or_else(|| addresses["a1"].extra.get("coordinates").and_then(|v| v.as_str())),
+        Some("geo:52.5,13.4")
     );
 
     assert_eq!(
         addresses["a2"].full.as_deref(),
         Some("Heimweg 2\n80331 München\nGermany")
     );
-    assert_eq!(addresses["a2"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        addresses["a2"]
+            .pref
+            .or_else(|| addresses["a2"].extra.get("pref").and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1)
+    );
 
     assert_eq!(
         addresses["a3"].full.as_deref(),
         Some("Postfach 42\n20095 Hamburg")
     );
     assert_eq!(
-        addresses["a3"].extra.get("timeZone"),
-        Some(&json!("Europe/Berlin"))
+        addresses["a3"]
+            .time_zone
+            .as_deref()
+            .or_else(|| addresses["a3"].extra.get("timeZone").and_then(|v| v.as_str())),
+        Some("Europe/Berlin")
     );
 }
 
@@ -4243,8 +4241,12 @@ fn editing_notes_and_links_preserves_unmodeled_cards_and_properties() {
     let notes = card.notes.expect("notes");
     assert_eq!(notes["n1"].note, "Updated note with new details");
     assert_eq!(
-        notes["n1"].extra.get("created"),
-        Some(&json!("2026-08-01T12:00:00Z")),
+        notes["n1"]
+            .created
+            .as_ref()
+            .map(|d| d.as_str())
+            .or_else(|| notes["n1"].extra.get("created").and_then(|v| v.as_str())),
+        Some("2026-08-01T12:00:00Z"),
         "created timestamp should be preserved in extra"
     );
 

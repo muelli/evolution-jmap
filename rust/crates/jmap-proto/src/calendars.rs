@@ -45,6 +45,8 @@ pub struct Calendar {
     pub share_with: Option<BTreeMap<Id, Option<CalendarRights>>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_rights: Option<CalendarRights>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_delete: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -283,6 +285,14 @@ pub struct CalendarEvent {
     /// `CalendarEvent/get`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_zones: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_default_alerts: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localizations: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

@@ -66,6 +66,7 @@ prop_compose! {
             components,
             full,
             extra,
+            ..Name::default()
         }
     }
 }
@@ -88,6 +89,7 @@ prop_compose! {
         Nickname {
             name,
             extra: BTreeMap::new(),
+            ..Nickname::default()
         }
     }
 }
@@ -187,6 +189,7 @@ prop_compose! {
             name,
             units,
             extra: BTreeMap::new(),
+            ..Organization::default()
         }
     }
 }
@@ -205,6 +208,7 @@ prop_compose! {
             name,
             kind,
             extra: BTreeMap::new(),
+            ..Title::default()
         }
     }
 }
@@ -258,6 +262,7 @@ prop_compose! {
             contexts,
             full,
             extra,
+            ..Address::default()
         }
     }
 }
@@ -267,6 +272,7 @@ prop_compose! {
         Note {
             note,
             extra: BTreeMap::new(),
+            ..Note::default()
         }
     }
 }
@@ -333,6 +339,7 @@ prop_compose! {
             uri,
             kind,
             extra,
+            ..Link::default()
         }
     }
 }
@@ -350,6 +357,7 @@ prop_compose! {
             kind,
             uri,
             extra: BTreeMap::new(),
+            ..Calendar::default()
         }
     }
 }
@@ -380,6 +388,7 @@ prop_compose! {
             uri,
             media_type,
             extra: BTreeMap::new(),
+            ..Media::default()
         }
     }
 }
@@ -431,6 +440,7 @@ prop_compose! {
             user,
             uri,
             extra: BTreeMap::new(),
+            ..OnlineService::default()
         }
     }
 }
@@ -1152,6 +1162,7 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
             components: Some(vec![NameComponent::new("given", "A")]),
             full: Some(String::new()),
             extra: BTreeMap::new(),
+            ..Name::default()
         }),
         ..Default::default()
     };
@@ -1180,6 +1191,7 @@ fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first
             name: Some(String::new()),
             units: Some(vec![OrgUnit::new("Engineering")]),
             extra: BTreeMap::new(),
+            ..Organization::default()
         },
     );
     let card = ContactCard {
@@ -1216,6 +1228,7 @@ fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
             name: Some(String::new()),
             units: None,
             extra: BTreeMap::new(),
+            ..Organization::default()
         },
     );
     let card = ContactCard {
@@ -1254,6 +1267,7 @@ fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
             contexts: None,
             full: None,
             extra: BTreeMap::new(),
+            ..Address::default()
         },
     );
     let card = ContactCard {
@@ -1370,6 +1384,7 @@ proptest! {
             Note {
                 note: text.clone(),
                 extra: BTreeMap::new(),
+                ..Note::default()
             },
         );
         let card = ContactCard {
@@ -1438,12 +1453,14 @@ proptest! {
                     NameComponent::new("surname", &surname),
                 ]),
                 extra: BTreeMap::new(),
+                ..Name::default()
             }),
             notes: Some([(
                 "n1".to_owned(),
                 Note {
                     note: note_text.clone(),
                     extra: BTreeMap::new(),
+                    ..Note::default()
                 },
             )].into()),
             ..ContactCard::default()
@@ -1506,6 +1523,7 @@ proptest! {
                     uri: uri.clone(),
                     media_type: media_type.clone(),
                     extra: BTreeMap::new(),
+                    ..Media::default()
                 },
             )].into()),
             ..ContactCard::default()

@@ -1150,8 +1150,9 @@ fn normalised_service(name: &str) -> String {
 fn service_slot(service: &OnlineService) -> &'static str {
     let context = |name: &str| {
         service
-            .extra
-            .get("contexts")
+            .contexts
+            .as_ref()
+            .or_else(|| service.extra.get("contexts"))
             .and_then(|contexts| contexts.get(name))
             == Some(&Value::Bool(true))
     };
@@ -2136,6 +2137,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 let nickname = Nickname {
                     name: entry_text_list(entry),
                     extra: BTreeMap::new(),
+                    ..Nickname::default()
                 };
                 if !states_nickname(&nickname) {
                     continue;
@@ -2295,6 +2297,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                 let note = Note {
                     note: entry_text(entry),
                     extra: BTreeMap::new(),
+                    ..Note::default()
                 };
                 if !states_note(&note) {
                     continue;
@@ -2345,6 +2348,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     uri: entry_text(entry),
                     kind,
                     extra,
+                    ..Link::default()
                 };
                 if !states_link(&link) {
                     continue;
@@ -2363,6 +2367,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     kind: calendar_kind(&name_upper).map(str::to_owned),
                     uri,
                     extra: BTreeMap::new(),
+                    ..Calendar::default()
                 };
                 calendars.insert(entry_key(entry, "c", &calendars), calendar);
             }
@@ -2520,6 +2525,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                             user: Some(handle.to_owned()),
                             uri: None,
                             extra: BTreeMap::new(),
+                            ..OnlineService::default()
                         };
                         online_services.insert(entry_key(entry, "s", &online_services), entry_obj);
                     }
@@ -2542,6 +2548,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
                     user: Some(handle),
                     uri: None,
                     extra: BTreeMap::new(),
+                    ..OnlineService::default()
                 };
                 online_services.insert(entry_key(entry, "s", &online_services), entry_obj);
             }
@@ -2610,6 +2617,7 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
         localizations: None,
         kind: None,
         extra: BTreeMap::new(),
+        ..ContactCard::default()
     })
 }
 
@@ -2719,6 +2727,7 @@ fn photo_entry(uri: String, media_type: Option<String>) -> Media {
         uri,
         media_type,
         extra: BTreeMap::new(),
+        ..Media::default()
     }
 }
 
@@ -2742,6 +2751,7 @@ fn read_title(entry: &VCardEntry) -> Option<Title> {
         name,
         kind: kind.map(str::to_owned),
         extra: BTreeMap::new(),
+        ..Title::default()
     })
 }
 
@@ -2946,6 +2956,7 @@ fn read_address(entry: &VCardEntry, group_label: Option<&str>) -> Option<Address
         contexts,
         full,
         extra,
+        ..Address::default()
     })
 }
 
@@ -2990,6 +3001,7 @@ fn read_organization(entry: &VCardEntry) -> Option<Organization> {
         name,
         units: (!units.is_empty()).then_some(units),
         extra: BTreeMap::new(),
+        ..Organization::default()
     })
 }
 
@@ -3121,6 +3133,7 @@ fn read_name(entries: &[VCardEntry]) -> Option<Name> {
         components: (!components.is_empty()).then_some(components),
         full,
         extra,
+        ..Name::default()
     })
 }
 
