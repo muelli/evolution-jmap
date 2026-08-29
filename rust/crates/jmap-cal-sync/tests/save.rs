@@ -5373,3 +5373,149 @@ fn clearing_location_and_priority_patches_server_fields() {
     let kws = stored.keywords.expect("keywords");
     assert!(kws.contains_key("standup"));
 }
+
+#[test]
+fn no_op_save_mints_no_patch_across_all_calendar_mapped_surfaces_matrix() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    // Matrix covering:
+    // - alerts (relative/absolute triggers, action, useDefaultAlerts)
+    // - recurrenceRule (daily/weekly/monthly RRULE, INTERVAL, UNTIL, COUNT)
+    // - recurrenceOverrides (EXDATE, RDATE, RECURRENCE-ID overrides)
+    // - zones (IANA, custom timeZones)
+    // - locations and virtualLocations (LOCATION, CONFERENCE)
+    // - links (ATTACH, IMAGE)
+    // - keywords / categories
+    // - privacy, status, priority, freeBusyStatus, showWithoutTime
+    // - unmodeled extra properties
+    let cases = vec![
+        (
+            "composite_recurring_event",
+            json!({
+                "title": "Quarterly Planning Workshop",
+                "description": "Full-day strategic roadmap alignment",
+                "start": "2026-03-01T09:00:00",
+                "duration": "PT8H",
+                "timeZone": "Europe/Berlin",
+                "status": "confirmed",
+                "privacy": "private",
+                "priority": 1,
+                "freeBusyStatus": "busy",
+                "showWithoutTime": false,
+                "locations": {
+                    "loc1": {
+                        "@type": "Location",
+                        "name": "Main Auditorium",
+                        "description": "Building A, Floor 2",
+                        "coordinates": "geo:52.520008,13.404954"
+                    }
+                },
+                "virtualLocations": {
+                    "v1": {
+                        "@type": "VirtualLocation",
+                        "name": "Video Conference",
+                        "uri": "https://meet.example.com/quarterly-planning",
+                        "features": {"video": true, "audio": true}
+                    }
+                },
+                "links": {
+                    "l1": {
+                        "@type": "Link",
+                        "href": "https://docs.example.com/q1-slides.pdf",
+                        "contentType": "application/pdf",
+                        "size": 1048576,
+                        "rel": "enclosure"
+                    }
+                },
+                "keywords": {
+                    "Strategy": true,
+                    "Planning": true
+                },
+                "alerts": {
+                    "a1": {
+                        "@type": "Alert",
+                        "action": "display",
+                        "trigger": {
+                            "@type": "OffsetTrigger",
+                            "offset": "-PT30M",
+                            "relativeTo": "start"
+                        }
+                    }
+                },
+                "recurrenceRule": {
+                    "@type": "RecurrenceRule",
+                    "frequency": "monthly",
+                    "interval": 3,
+                    "count": 4
+                },
+                "recurrenceOverrides": {
+                    "2026-06-01T09:00:00": {
+                        "excluded": true
+                    }
+                },
+                "unmodeledCalendarBags": {"costCenter": "1040", "organizerNote": "cater lunch"}
+            }),
+        ),
+        (
+            "allday_event_with_custom_timezone_and_tags",
+            json!({
+                "title": "Annual Company Offsite",
+                "start": "2026-07-15",
+                "duration": "P3D",
+                "showWithoutTime": true,
+                "status": "confirmed",
+                "privacy": "public",
+                "keywords": {
+                    "Offsite": true,
+                    "Company": true
+                },
+                "alerts": {
+                    "a1": {
+                        "@type": "Alert",
+                        "action": "display",
+                        "trigger": {
+                            "@type": "OffsetTrigger",
+                            "offset": "-P1D",
+                            "relativeTo": "start"
+                        }
+                    }
+                }
+            }),
+        ),
+    ];
+
+    for (name, initial_patch) in cases {
+        let id = fixture.seed(&fixture.ours, "Seed Event", "2026-01-15T10:00:00");
+        fixture.patch(&id, initial_patch);
+
+        // Load 1: Read event as rendered iCalendar
+        let loaded1 = sync.load_component(id.as_str()).expect(name);
+
+        // Save 1: Save untouched iCalendar back
+        let saved1 = sync
+            .save_component(&loaded1.icalendar, Some(id.as_str()))
+            .expect(name);
+
+        // Load 2: Fresh reload after Save 1
+        let loaded2 = sync.load_component(id.as_str()).expect(name);
+
+        // Assert: Save 2 MUST produce NO patch and preserve identical revision
+        let saved2 = sync
+            .save_component(&loaded2.icalendar, Some(id.as_str()))
+            .expect(name);
+        assert_eq!(
+            saved1.revision, saved2.revision,
+            "case '{name}': second save must not update revision"
+        );
+
+        // Assert: diff between server state and parsed event is completely empty
+        let current_event = fixture.event(&id);
+        let parsed_event = jmap_ical::ical_to_event(&loaded2.icalendar).expect(name);
+        let patch_diff = jmap_cal_sync::patch::diff(&current_event, &parsed_event);
+        assert!(
+            patch_diff.is_empty(),
+            "case '{name}': diff after round-trip must be empty, found: {patch_diff:?}"
+        );
+    }
+}

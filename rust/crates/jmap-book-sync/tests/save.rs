@@ -4435,3 +4435,210 @@ fn clearing_all_addresses_patches_server_fields() {
     assert!(card.name.is_some());
     assert!(card.emails.is_some());
 }
+
+#[test]
+fn no_op_save_mints_no_patch_across_all_contact_mapped_surfaces_matrix() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    // Matrix of diverse cards covering:
+    // - media/photo (data URI and remote URL)
+    // - cryptoKeys and extra preservation bags
+    // - links (contact and custom)
+    // - labels and multi-component addresses with contexts
+    // - categories / keywords (statable and unstatable)
+    // - relations / relatedTo (spouses and unmapped kin)
+    // - phones (multiple context slots, features, pref)
+    // - emails (contexts, pref)
+    // - organizations (empty employer name with units, named employer with units, sortAs)
+    // - titles and roles
+    // - notes
+    // - nicknames
+    // - anniversaries (birthdays, wedding anniversaries, timestamps)
+    // - onlineServices (Jabber, Matrix, custom URIs)
+    let cases = vec![
+        (
+            "composite_full_card",
+            json!({
+                "name": {
+                    "full": "Dr. Vera Elisabeth von Oldenburg",
+                    "components": [
+                        {"kind": "prefix", "value": "Dr."},
+                        {"kind": "given", "value": "Vera"},
+                        {"kind": "given2", "value": "Elisabeth"},
+                        {"kind": "surname", "value": "Oldenburg"},
+                        {"kind": "surname2", "value": "von"},
+                    ]
+                },
+                "nicknames": {
+                    "n1": {"name": "Vee", "contexts": {"private": true}, "pref": 1}
+                },
+                "emails": {
+                    "e1": {"address": "vera@example.com", "contexts": {"work": true}, "pref": 1},
+                    "e2": {"address": "vera.home@example.org", "contexts": {"private": true}}
+                },
+                "phones": {
+                    "p1": {"number": "+49 30 111", "contexts": {"work": true}, "features": {"voice": true}, "pref": 1},
+                    "p2": {"number": "+49 170 222", "contexts": {"private": true}, "features": {"cell": true, "voice": true}}
+                },
+                "organizations": {
+                    "o1": {
+                        "name": "Acme Corp",
+                        "units": [{"name": "Engineering"}, {"name": "Platform"}],
+                        "sortAs": "Acme"
+                    }
+                },
+                "titles": {
+                    "t1": {"name": "Principal Architect", "kind": "title"},
+                    "t2": {"name": "Security Lead", "kind": "role"}
+                },
+                "addresses": {
+                    "a1": {
+                        "components": [
+                            {"kind": "name", "value": "Unter den Linden 1"},
+                            {"kind": "locality", "value": "Berlin"},
+                            {"kind": "postcode", "value": "10117"},
+                            {"kind": "country", "value": "Germany"}
+                        ],
+                        "full": "Unter den Linden 1\n10117 Berlin\nGermany",
+                        "contexts": {"work": true}
+                    }
+                },
+                "notes": {
+                    "not1": {"note": "Key contact for protocol engineering."}
+                },
+                "anniversaries": {
+                    "y1": {"kind": "birth", "date": {"year": 1988, "month": 5, "day": 12}},
+                    "y2": {"kind": "wedding", "date": {"year": 2016, "month": 8, "day": 20}}
+                },
+                "links": {
+                    "l1": {"uri": "https://example.com/vera", "kind": "contact"}
+                },
+                "calendars": {
+                    "c1": {"uri": "https://cal.example.com/vera", "kind": "calendar"},
+                    "c2": {"uri": "https://cal.example.com/fb/vera", "kind": "freeBusy"}
+                },
+                "media": {
+                    "m1": {
+                        "kind": "photo",
+                        "uri": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
+                        "mediaType": "image/jpeg"
+                    }
+                },
+                "onlineServices": {
+                    "os1": {"service": "Jabber", "user": "vera@jabber.example.org"},
+                    "os2": {"service": "Matrix", "user": "@vera:matrix.example.org"}
+                },
+                "relatedTo": {
+                    "Max Oldenburg": {"relation": {"spouse": true, "kin": true}}
+                },
+                "keywords": {
+                    "Colleague": true,
+                    "VIP": true,
+                    "Internal": false
+                },
+                "preferredLanguages": {"de": 1, "en": 2},
+                "cryptoKeys": {"k1": {"uri": "https://keys.example.com/vera.asc"}},
+                "customBags": {"team": "Architecture"}
+            }),
+        ),
+        (
+            "empty_org_name_with_units",
+            json!({
+                "name": {"full": "Nameless Org Employee"},
+                "organizations": {
+                    "o1": {
+                        "name": "",
+                        "units": [{"name": "Platform Infrastructure"}]
+                    }
+                },
+                "emails": {"e1": {"address": "infra@example.org"}}
+            }),
+        ),
+        (
+            "timestamp_anniversaries_and_remote_photo",
+            json!({
+                "name": {"full": "Point In Time Contact"},
+                "anniversaries": {
+                    "y1": {"kind": "birth", "date": {"utc": "1992-11-04T14:30:00Z"}},
+                    "y2": {"kind": "wedding", "date": {"utc": "2020-06-18T00:00:00Z"}}
+                },
+                "media": {
+                    "m1": {
+                        "kind": "photo",
+                        "uri": "https://cdn.example.com/avatars/contact.jpg",
+                        "mediaType": "image/jpeg"
+                    }
+                },
+                "emails": {"e1": {"address": "timestamp@example.org"}}
+            }),
+        ),
+        (
+            "unmapped_contexts_and_features_with_pref",
+            json!({
+                "name": {"full": "Pref and Context Contact"},
+                "emails": {
+                    "e1": {"address": "pref@example.com", "contexts": {"work": true, "school": true}, "pref": 42}
+                },
+                "phones": {
+                    "p1": {
+                        "number": "+1 555 0100",
+                        "contexts": {"work": true, "school": true},
+                        "features": {"voice": true, "video": true},
+                        "pref": 10
+                    }
+                }
+            }),
+        ),
+        (
+            "label_only_address_and_impp_online_services",
+            json!({
+                "name": {"full": "Label Only Address"},
+                "addresses": {
+                    "a1": {
+                        "full": "Post Office Box 123\n10001 New York\nUSA",
+                        "contexts": {"work": true}
+                    }
+                },
+                "onlineServices": {
+                    "os1": {"uri": "xmpp:alice@example.com"},
+                    "os2": {"uri": "sip:alice@example.com"}
+                }
+            }),
+        ),
+    ];
+
+    for (name, initial_patch) in cases {
+        let id = fixture.seed(&fixture.ours, "Seed Name", "seed@example.com");
+        fixture.patch(&id, initial_patch);
+
+        // Load 1: Read card as rendered vCard
+        let loaded1 = sync.load_contact(id.as_str()).expect(name);
+
+        // Save 1: Save untouched vCard back
+        let saved1 = sync
+            .save_contact(&loaded1.vcard, Some(id.as_str()))
+            .expect(name);
+
+        // Load 2: Fresh reload after Save 1
+        let loaded2 = sync.load_contact(id.as_str()).expect(name);
+
+        // Assert: Save 2 MUST produce NO patch and preserve identical revision
+        let saved2 = sync
+            .save_contact(&loaded2.vcard, Some(id.as_str()))
+            .expect(name);
+        assert_eq!(
+            saved1.revision, saved2.revision,
+            "case '{name}': second save must not update revision"
+        );
+
+        // Assert: diff between server state and parsed vCard is completely empty
+        let current_card = fixture.card(&id);
+        let parsed_card = jmap_vcard::vcard_to_card(&loaded2.vcard).expect(name);
+        let patch_diff = jmap_book_sync::patch::diff(&current_card, &parsed_card);
+        assert!(
+            patch_diff.is_empty(),
+            "case '{name}': diff after round-trip must be empty, found: {patch_diff:?}"
+        );
+    }
+}

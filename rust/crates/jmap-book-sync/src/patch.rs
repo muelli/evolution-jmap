@@ -356,7 +356,9 @@ fn diff_name(patch: &mut Map<String, Value>, current: Option<&Name>, edited: Opt
         return;
     };
 
-    if current.full != edited.full {
+    let current_full = current.full.as_deref().filter(|full| !full.is_empty());
+    let edited_full = edited.full.as_deref().filter(|full| !full.is_empty());
+    if current_full != edited_full {
         patch.insert("name/full".to_owned(), value_or_null(edited.full.as_ref()));
     }
 
@@ -492,7 +494,9 @@ fn diff_organizations(
         edited,
         states_organization,
         |patch, path, old, new| {
-            if old.name != new.name {
+            let old_name = old.name.as_deref().filter(|name| !name.is_empty());
+            let new_name = new.name.as_deref().filter(|name| !name.is_empty());
+            if old_name != new_name {
                 patch.insert(format!("{path}/name"), value_or_null(new.name.as_ref()));
             }
             let units = merge_units(old.units.as_deref(), new.units.as_deref());
