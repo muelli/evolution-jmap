@@ -580,11 +580,21 @@ pub struct ContactCardQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_address_book: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online_service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 impl ContactCardQueryFilter {
@@ -599,4 +609,59 @@ impl ContactCardQueryFilter {
 /// The `SetError` type RFC 9610 §2.4 adds for `AddressBook/set`.
 pub mod address_book_set_error {
     pub const HAS_CARD: &str = "addressBookHasCard";
+}
+
+/// Standard RFC 9553 §2.8.1 anniversary kinds.
+pub mod anniversary_kind {
+    pub const BIRTH: &str = "birth";
+    pub const DEATH: &str = "death";
+    pub const WEDDING: &str = "wedding";
+}
+
+/// Standard RFC 9553 §2.2.4 job title kinds.
+pub mod title_kind {
+    pub const TITLE: &str = "title";
+    pub const ROLE: &str = "role";
+}
+
+/// Standard RFC 9553 §2.4.1 calendar resource kinds.
+pub mod calendar_kind {
+    pub const CALENDAR: &str = "calendar";
+    pub const FREE_BUSY: &str = "freeBusy";
+}
+
+/// Standard RFC 9553 §2.6.4 media resource kinds.
+pub mod media_kind {
+    pub const PHOTO: &str = "photo";
+    pub const SOUND: &str = "sound";
+    pub const LOGO: &str = "logo";
+}
+
+/// Standard RFC 9553 §2.6.3 link kinds.
+pub mod link_kind {
+    pub const CONTACT: &str = "contact";
+}
+
+/// Standard RFC 9553 §2.2.1 name component kinds.
+pub mod name_component_kind {
+    pub const PREFIX: &str = "prefix";
+    pub const GIVEN: &str = "given";
+    pub const MIDDLE: &str = "middle";
+    pub const SURNAME: &str = "surname";
+    pub const SUFFIX: &str = "suffix";
+}
+
+/// Standard RFC 9553 §2.5.1 address component kinds.
+pub mod address_component_kind {
+    pub const NAME: &str = "name";
+    pub const UNIT: &str = "unit";
+    pub const FLOOR: &str = "floor";
+    pub const STREET: &str = "street";
+    pub const APPARTMENT: &str = "appartment";
+    pub const ROOM: &str = "room";
+    pub const BUILDING: &str = "building";
+    pub const LOCALITY: &str = "locality";
+    pub const REGION: &str = "region";
+    pub const POSTCODE: &str = "postcode";
+    pub const COUNTRY: &str = "country";
 }

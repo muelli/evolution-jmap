@@ -124,3 +124,41 @@ fn email_submission_set_errors_cover_rfc8621() {
     assert_eq!(FORBIDDEN_MAIL_FROM, "forbiddenMailFrom");
     assert_eq!(FORBIDDEN_FROM, "forbiddenFrom");
 }
+
+#[test]
+fn email_query_filter_properties_cover_rfc8621() {
+    let filter: EmailQueryFilter = serde_json::from_value(serde_json::json!({
+        "inMailboxOtherThan": ["M2", "M3"],
+        "minSize": 1024,
+        "maxSize": 20480,
+        "hasAttachment": true,
+        "body": "search text",
+        "cc": "cc@example.com",
+        "bcc": "bcc@example.com"
+    }))
+    .unwrap();
+
+    assert_eq!(filter.in_mailbox_other_than.unwrap().len(), 2);
+    assert_eq!(filter.min_size, Some(1024));
+    assert_eq!(filter.max_size, Some(20480));
+    assert_eq!(filter.has_attachment, Some(true));
+    assert_eq!(filter.body.as_deref(), Some("search text"));
+    assert_eq!(filter.cc.as_deref(), Some("cc@example.com"));
+    assert_eq!(filter.bcc.as_deref(), Some("bcc@example.com"));
+}
+
+#[test]
+fn email_address_and_submission_deserialize_with_missing_optional_fields() {
+    let addr: jmap_proto::mail::EmailAddress = serde_json::from_value(serde_json::json!({
+        "email": "user@example.com"
+    }))
+    .expect("EmailAddress without name must deserialize cleanly");
+    assert_eq!(addr.email, "user@example.com");
+    assert_eq!(addr.name, None);
+
+    let sub: EmailSubmission = serde_json::from_value(serde_json::json!({
+        "id": "S1"
+    }))
+    .expect("Partial EmailSubmission must deserialize cleanly");
+    assert_eq!(sub.id.as_ref().unwrap().as_str(), "S1");
+}

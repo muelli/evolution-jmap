@@ -300,3 +300,73 @@ fn calendar_set_error_has_event_code() {
         "calendarHasEvent"
     );
 }
+
+#[test]
+fn calendar_properties_and_constants_cover_jmap_calendars_draft() {
+    use jmap_proto::calendars::*;
+
+    let cal: Calendar = serde_json::from_value(serde_json::json!({
+        "name": "Work",
+        "isVisible": true,
+        "includeInAvailability": "allExceptDeclined"
+    }))
+    .unwrap();
+
+    assert_eq!(cal.name, "Work");
+    assert_eq!(cal.is_visible, Some(true));
+    assert_eq!(
+        cal.include_in_availability.as_deref(),
+        Some("allExceptDeclined")
+    );
+
+    assert_eq!(include_in_availability::ALL, "all");
+    assert_eq!(
+        include_in_availability::ALL_EXCEPT_DECLINED,
+        "allExceptDeclined"
+    );
+    assert_eq!(include_in_availability::NONE, "none");
+
+    assert_eq!(event_status::CONFIRMED, "confirmed");
+    assert_eq!(event_status::TENTATIVE, "tentative");
+    assert_eq!(event_status::CANCELLED, "cancelled");
+
+    assert_eq!(free_busy_status::FREE, "free");
+    assert_eq!(free_busy_status::BUSY, "busy");
+
+    assert_eq!(privacy::PUBLIC, "public");
+    assert_eq!(privacy::PRIVATE, "private");
+    assert_eq!(privacy::SECRET, "secret");
+
+    assert_eq!(participant_role::OWNER, "owner");
+    assert_eq!(participant_role::ADMIN, "admin");
+    assert_eq!(participant_role::ATTENDEE, "attendee");
+    assert_eq!(participant_role::OPTIONAL, "optional");
+    assert_eq!(participant_role::INFORMATIONAL, "informational");
+
+    assert_eq!(participation_status::NEEDS_ACTION, "needs-action");
+    assert_eq!(participation_status::ACCEPTED, "accepted");
+    assert_eq!(participation_status::DECLINED, "declined");
+    assert_eq!(participation_status::TENTATIVE, "tentative");
+    assert_eq!(participation_status::DELEGATED, "delegated");
+
+    assert_eq!(participant_kind::INDIVIDUAL, "individual");
+    assert_eq!(participant_kind::GROUP, "group");
+    assert_eq!(participant_kind::RESOURCE, "resource");
+    assert_eq!(participant_kind::LOCATION, "location");
+}
+
+#[test]
+fn calendar_event_query_filter_properties_cover_draft_spec() {
+    let filter: CalendarEventQueryFilter = serde_json::from_value(serde_json::json!({
+        "inCalendar": "C1",
+        "description": "Sprint planning",
+        "location": "Room 101",
+        "uid": "evt-1234"
+    }))
+    .unwrap();
+
+    assert_eq!(filter.in_calendar.as_ref().unwrap().as_str(), "C1");
+    assert_eq!(filter.description.as_deref(), Some("Sprint planning"));
+    assert_eq!(filter.location.as_deref(), Some("Room 101"));
+    assert_eq!(filter.uid.as_deref(), Some("evt-1234"));
+}

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Kept as a string — JMAP ids are only ever compared and echoed back, never
 /// interpreted.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 #[serde(transparent)]
 pub struct Id(String);
 

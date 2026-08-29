@@ -55,6 +55,7 @@ impl GetRequest {
 pub struct GetResponse<T> {
     pub account_id: Id,
     pub state: State,
+    #[serde(default)]
     pub list: Vec<T>,
     #[serde(default)]
     pub not_found: Vec<Id>,

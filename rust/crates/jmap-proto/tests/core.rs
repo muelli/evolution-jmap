@@ -512,3 +512,101 @@ fn query_response_deserializes_with_omitted_defaults() {
     assert_eq!(resp.position, 0);
     assert!(resp.ids.is_empty());
 }
+
+/// RFC 8620 §2 mandates: "eventSourceUrl: String ... A server that does not support this MUST omit this property."
+/// Deserializing such a session document must succeed without error.
+#[test]
+fn session_deserializes_when_event_source_url_is_omitted_by_server() {
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {"urn:ietf:params:jmap:core": {}},
+        "accounts": {
+            "A1": {
+                "name": "a@example.com",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {"urn:ietf:params:jmap:core": {}}
+            }
+        },
+        "username": "a@example.com",
+        "apiUrl": "https://jmap.example.com/api/",
+        "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?accept={type}",
+        "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+        "state": "s1"
+    }))
+    .expect("session without eventSourceUrl must deserialize cleanly");
+
+    assert_eq!(session.event_source_url, "");
+}
+
+/// A `/get` response omitting the `list` array deserializes cleanly with an empty list.
+#[test]
+fn get_response_deserializes_when_list_is_omitted_by_server() {
+    let value = serde_json::json!({
+        "accountId": "A1",
+        "state": "s1",
+        "notFound": ["id1"]
+    });
+    let resp: jmap_proto::methods::GetResponse<serde_json::Value> =
+        serde_json::from_value(value).expect("GetResponse without list must deserialize cleanly");
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.state.as_str(), "s1");
+    assert!(resp.list.is_empty());
+    assert_eq!(resp.not_found.len(), 1);
+}
+
+/// A response envelope omitting `methodResponses` deserializes cleanly with an empty list.
+#[test]
+fn response_envelope_deserializes_when_method_responses_is_omitted_by_server() {
+    let value = serde_json::json!({
+        "sessionState": "s1"
+    });
+    let resp: jmap_proto::response::Response = serde_json::from_value(value)
+        .expect("Response without methodResponses must deserialize cleanly");
+    assert_eq!(resp.session_state.as_str(), "s1");
+    assert!(resp.method_responses.is_empty());
+}
+
+/// Error codes and problem types in `jmap_proto::error` cover RFC 8620 specifications.
+#[test]
+fn core_error_constants_cover_rfc8620() {
+    assert_eq!(
+        jmap_proto::error::method::SERVER_UNAVAILABLE,
+        "serverUnavailable"
+    );
+    assert_eq!(
+        jmap_proto::error::method::SERVER_PARTIAL_FAIL,
+        "serverPartialFail"
+    );
+    assert_eq!(
+        jmap_proto::error::method::UNKNOWN_CAPABILITY,
+        "unknownCapability"
+    );
+
+    assert_eq!(jmap_proto::error::set::RATE_LIMIT, "rateLimit");
+    assert_eq!(jmap_proto::error::set::STATE_MISMATCH, "stateMismatch");
+    assert_eq!(jmap_proto::error::set::REQUEST_TOO_LARGE, "requestTooLarge");
+
+    assert_eq!(
+        jmap_proto::error::request::UNKNOWN_CAPABILITY,
+        "urn:ietf:params:jmap:error:unknownCapability"
+    );
+    assert_eq!(
+        jmap_proto::error::request::NOT_JSON,
+        "urn:ietf:params:jmap:error:notJSON"
+    );
+    assert_eq!(
+        jmap_proto::error::request::NOT_REQUEST,
+        "urn:ietf:params:jmap:error:notRequest"
+    );
+    assert_eq!(
+        jmap_proto::error::request::LIMIT,
+        "urn:ietf:params:jmap:error:limit"
+    );
+}
+
+/// `Id` implements `Default`.
+#[test]
+fn id_implements_default_trait() {
+    let id = Id::default();
+    assert_eq!(id.as_str(), "");
+}

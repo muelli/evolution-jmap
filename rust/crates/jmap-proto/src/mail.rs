@@ -267,6 +267,7 @@ pub mod keyword {
 /// present on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EmailAddress {
+    #[serde(default)]
     pub name: Option<String>,
     pub email: String,
 }
@@ -337,15 +338,29 @@ pub struct EmailQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_mailbox: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_mailbox_other_than: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub has_keyword: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_keyword: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_attachment: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub from: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bcc: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -388,12 +403,14 @@ pub struct Identity {
 }
 
 /// A submission of an email for delivery (RFC 8621 §7).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailSubmission {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<Id>,
+    #[serde(default)]
     pub identity_id: Id,
+    #[serde(default)]
     pub email_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<Id>,
@@ -422,18 +439,20 @@ pub struct EmailSubmissionSetRequest {
 }
 
 /// SMTP envelope (RFC 8621 §7).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Envelope {
     pub mail_from: EnvelopeAddress,
+    #[serde(default)]
     pub rcpt_to: Vec<EnvelopeAddress>,
 }
 
 /// One envelope address; `parameters` (SMTP extensions) is nullable and
 /// always present on the wire.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct EnvelopeAddress {
     pub email: String,
+    #[serde(default)]
     pub parameters: Option<Value>,
 }
 

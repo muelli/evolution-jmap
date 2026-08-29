@@ -34,6 +34,10 @@ pub struct Calendar {
     pub is_default: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_subscribed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_in_availability: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -415,6 +419,12 @@ pub struct CalendarEventQueryFilter {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
 }
 
 impl CalendarEventQueryFilter {
@@ -437,4 +447,57 @@ impl CalendarEventQueryFilter {
 /// The `SetError` type draft-ietf-jmap-calendars §4.4 adds for `Calendar/set`.
 pub mod calendar_set_error {
     pub const HAS_EVENT: &str = "calendarHasEvent";
+}
+
+/// Well-known values for `Calendar.includeInAvailability` (draft-ietf-jmap-calendars §4.1).
+pub mod include_in_availability {
+    pub const ALL: &str = "all";
+    pub const ALL_EXCEPT_DECLINED: &str = "allExceptDeclined";
+    pub const NONE: &str = "none";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.4) / jscalendarbis event status values.
+pub mod event_status {
+    pub const CONFIRMED: &str = "confirmed";
+    pub const TENTATIVE: &str = "tentative";
+    pub const CANCELLED: &str = "cancelled";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.2) / jscalendarbis free/busy status values.
+pub mod free_busy_status {
+    pub const FREE: &str = "free";
+    pub const BUSY: &str = "busy";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.3) / jscalendarbis privacy classification values.
+pub mod privacy {
+    pub const PUBLIC: &str = "public";
+    pub const PRIVATE: &str = "private";
+    pub const SECRET: &str = "secret";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) participant roles.
+pub mod participant_role {
+    pub const OWNER: &str = "owner";
+    pub const ADMIN: &str = "admin";
+    pub const ATTENDEE: &str = "attendee";
+    pub const OPTIONAL: &str = "optional";
+    pub const INFORMATIONAL: &str = "informational";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) participation status values.
+pub mod participation_status {
+    pub const NEEDS_ACTION: &str = "needs-action";
+    pub const ACCEPTED: &str = "accepted";
+    pub const DECLINED: &str = "declined";
+    pub const TENTATIVE: &str = "tentative";
+    pub const DELEGATED: &str = "delegated";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) participant kinds.
+pub mod participant_kind {
+    pub const INDIVIDUAL: &str = "individual";
+    pub const GROUP: &str = "group";
+    pub const RESOURCE: &str = "resource";
+    pub const LOCATION: &str = "location";
 }
