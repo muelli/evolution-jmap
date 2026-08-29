@@ -14,6 +14,8 @@
 //! layer below the unary request/response API this module deliberately
 //! bypasses, not a second implementation of it).
 //!
+//! [`expand_url`] turns the session object's `eventSourceUrl` — an RFC 6570
+//! URI template, per RFC 8620 §7.3 — into the URL to open.
 //! [`EventSourceSubscription::start`] connects, reads chunked-transfer SSE
 //! frames, and forwards every `event: state` block's `data:` as a parsed
 //! [`StateChange`]. A `ping` (or any other) event is read and discarded — it
@@ -43,6 +45,10 @@ const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+/// RFC 8620 §7.3's `types` value meaning "push every type", as opposed to a
+/// comma-separated list of the ones the subscriber cares about.
+pub const ALL_TYPES: &str = "*";
+
 /// A live subscription to one account's `eventSourceUrl`, kept alive on its
 /// own thread; see the module doc.
 pub struct EventSourceSubscription {
@@ -53,14 +59,20 @@ pub struct EventSourceSubscription {
 }
 
 impl EventSourceSubscription {
-    /// Start listening on `url` — a full `GET` target, e.g. the session's
-    /// `eventSourceUrl` with `types`/`closeafter`/`ping` already appended by
-    /// the caller; this module does not itself build that query string, or
-    /// do the RFC 6570 template substitution `eventSourceUrl` is specified
-    /// as, since nothing in this codebase emits a templated one yet.
+    /// Start listening on `url` — a full `GET` target, i.e. the session's
+    /// `eventSourceUrl` already put through [`expand_url`]. A missing port is
+    /// defaulted from the scheme, since a real server's `eventSourceUrl`
+    /// names none.
+    ///
     /// `headers` (typically `Authorization`) are sent on every connection
-    /// attempt. `url` must include an explicit port — every `eventSourceUrl`
-    /// this codebase produces does.
+    /// attempt, and are fixed for the life of the subscription: a
+    /// [`Client::set_credentials`](crate::Client::set_credentials) that
+    /// installs a fresh OAuth 2.0 access token does not reach a subscription
+    /// already running, so one whose token expires will keep being refused
+    /// and keep reconnecting until the backend reconnects too. That is a
+    /// degradation, not a correctness problem — push is an accelerator and
+    /// EDS's periodic refresh is what actually keeps the cache honest — but
+    /// it is the next thing to fix here.
     pub fn start(url: String, headers: Vec<(String, String)>, cancel: CancelFlag) -> Self {
         let (sender, receiver) = mpsc::channel();
         let socket = Arc::new(Mutex::new(None));
@@ -150,7 +162,7 @@ fn connect_and_stream(
 ) -> io::Result<()> {
     let parts = parse_url(url)
         .ok_or_else(|| io::Error::other(format!("eventsource url is not http(s)://: {url}")))?;
-    let stream = TcpStream::connect(&parts.authority)?;
+    let stream = TcpStream::connect(&parts.dial)?;
     // Stored before the TLS handshake (if any): `shutdown()` on this clone
     // aborts the handshake or any in-flight read/write on the *other* clone
     // `Conn` goes on to own, since both are handles onto the same socket.
@@ -254,17 +266,19 @@ fn tls_config() -> &'static Arc<ClientConfig> {
     })
 }
 
-/// A URL this module can act on: which scheme (`tls`), the authority to
-/// dial and put in the `Host:` header (`host:port`), the bare host for TLS
-/// SNI/certificate-name checking, and the request target.
+/// A URL this module can act on: which scheme (`tls`), the authority as the
+/// URL wrote it (what goes in the `Host:` header), the `host:port` to dial,
+/// the bare host for TLS SNI/certificate-name checking, and the request
+/// target.
 struct UrlParts {
     tls: bool,
     authority: String,
+    dial: String,
     host: String,
     path_and_query: String,
 }
 
-/// Split an `http(s)://host:port/path?query` URL into its parts. `None` for
+/// Split an `http(s)://host[:port]/path?query` URL into its parts. `None` for
 /// any other scheme, or one this module cannot make sense of.
 fn parse_url(url: &str) -> Option<UrlParts> {
     let (tls, rest) = if let Some(rest) = url.strip_prefix("https://") {
@@ -279,20 +293,98 @@ fn parse_url(url: &str) -> Option<UrlParts> {
     } else {
         "/".to_owned()
     };
-    // Every `eventSourceUrl` this codebase produces (see the module doc)
-    // includes an explicit port, so a plain `rsplit_once` is enough — no
-    // IPv6 literal (`[::1]:port`) support is needed or attempted here.
-    let host = authority
-        .rsplit_once(':')
-        .map(|(host, _port)| host)
-        .unwrap_or(&authority)
-        .to_owned();
+    // A plain `rsplit_once` is enough: no IPv6 literal (`[::1]:port`) support
+    // is needed or attempted here, since the URLs this reaches are a mock's
+    // `127.0.0.1:port` and a real server's `eventSourceUrl`, which names a
+    // DNS host.
+    let (host, dial) = match authority.rsplit_once(':') {
+        Some((host, _port)) => (host.to_owned(), authority.clone()),
+        // A real server's `eventSourceUrl` names no port — RFC 3986 leaves
+        // it to the scheme — and `TcpStream::connect` has no scheme to
+        // consult, so fill the default in here rather than fail to dial.
+        // Only for dialling: `Host:` keeps the authority the URL wrote, so
+        // a server that routes on it sees what it advertised.
+        None => (
+            authority.clone(),
+            format!("{authority}:{}", if tls { 443 } else { 80 }),
+        ),
+    };
     Some(UrlParts {
         tls,
         authority,
+        dial,
         host,
         path_and_query,
     })
+}
+
+/// Expand a session object's `eventSourceUrl`, which RFC 8620 §7.3 specifies
+/// as a level-1 URI template (RFC 6570) that MUST contain the variables
+/// `types`, `closeafter` and `ping`.
+///
+/// An empty `types` asks for every type, which is the `*` §7.3 defines for
+/// exactly that. `close_after_state` picks between the `state` and `no`
+/// values §7.3 allows; `ping_seconds` is the interval the server should send
+/// a `ping` event on, `0` meaning "do not".
+///
+/// A server that advertises a URL naming *none* of the three variables has
+/// not followed §7.3 — `jmap-mock` is one such, deliberately, since its
+/// session document predates this — so rather than send a request with no
+/// parameters at all, they are appended as an ordinary query string. That is
+/// a guess, but the only one available, and it is what the template would
+/// have produced.
+///
+/// Values are percent-encoded, so nothing substituted here can smuggle in a
+/// further query parameter. Two characters are deliberately left literal:
+/// `,`, which is §7.3's own separator inside `types`, and `*`, its
+/// "every type" value. Both are `sub-delims` and so legal unencoded in a
+/// query (RFC 3986 §3.4); encoding them would be equally correct for a server
+/// that percent-decodes and silently wrong for one that does not.
+pub fn expand_url(
+    template: &str,
+    types: &[&str],
+    close_after_state: bool,
+    ping_seconds: u32,
+) -> String {
+    /// Everything outside RFC 3986's `unreserved` set, less the two
+    /// characters documented above.
+    const KEEP: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~')
+        .remove(b',')
+        .remove(b'*');
+
+    let types = if types.is_empty() {
+        ALL_TYPES.to_owned()
+    } else {
+        types.join(",")
+    };
+    let types = percent_encoding::utf8_percent_encode(&types, KEEP).to_string();
+    let closeafter = if close_after_state { "state" } else { "no" };
+    let ping = ping_seconds.to_string();
+
+    let mut expanded = template.to_owned();
+    let mut substituted = false;
+    for (variable, value) in [
+        ("{types}", types.as_str()),
+        ("{closeafter}", closeafter),
+        ("{ping}", ping.as_str()),
+    ] {
+        if expanded.contains(variable) {
+            expanded = expanded.replace(variable, value);
+            substituted = true;
+        }
+    }
+    if !substituted {
+        let separator = if expanded.contains('?') { '&' } else { '?' };
+        expanded.push(separator);
+        expanded.push_str(&format!(
+            "types={types}&closeafter={closeafter}&ping={ping}"
+        ));
+    }
+    expanded
 }
 
 /// Read the status line and headers, checking the response is chunked —
@@ -488,6 +580,82 @@ mod tests {
     #[test]
     fn parse_url_rejects_an_unknown_scheme() {
         assert!(parse_url("ftp://example.com/eventsource").is_none());
+    }
+
+    #[test]
+    fn parse_url_dials_the_scheme_default_port_when_the_url_names_none() {
+        let plain = parse_url("http://example.com/eventsource").expect("parses");
+        assert_eq!(plain.dial, "example.com:80");
+        // The `Host:` header must stay what the URL said, without the port
+        // this only added in order to have something to connect to.
+        assert_eq!(plain.authority, "example.com");
+        assert_eq!(plain.host, "example.com");
+
+        let tls = parse_url("https://api.example.com/jmap/eventsource").expect("parses");
+        assert_eq!(tls.dial, "api.example.com:443");
+        assert_eq!(tls.authority, "api.example.com");
+    }
+
+    #[test]
+    fn parse_url_keeps_an_explicit_port_to_dial() {
+        let parts = parse_url("https://example.com:8443/eventsource").expect("parses");
+        assert_eq!(parts.dial, "example.com:8443");
+        assert_eq!(parts.authority, "example.com:8443");
+    }
+
+    #[test]
+    fn expand_url_substitutes_the_three_required_template_variables() {
+        let expanded = expand_url(
+            "https://jmap.example.com/eventsource/\
+             ?types={types}&closeafter={closeafter}&ping={ping}",
+            &["Mailbox", "Email"],
+            false,
+            30,
+        );
+        assert_eq!(
+            expanded,
+            "https://jmap.example.com/eventsource/\
+             ?types=Mailbox,Email&closeafter=no&ping=30"
+        );
+    }
+
+    #[test]
+    fn expand_url_asks_for_every_type_when_given_none() {
+        let expanded = expand_url("http://h/es?types={types}", &[], false, 0);
+        assert_eq!(expanded, "http://h/es?types=*");
+    }
+
+    #[test]
+    fn expand_url_says_state_when_the_caller_wants_the_stream_closed() {
+        let expanded = expand_url("http://h/es?closeafter={closeafter}", &[], true, 0);
+        assert_eq!(expanded, "http://h/es?closeafter=state");
+    }
+
+    #[test]
+    fn expand_url_percent_encodes_a_value_that_needs_it() {
+        // Not a type name any server would send, but the substitution must
+        // not be able to smuggle a second query parameter in either way.
+        let expanded = expand_url("http://h/es?types={types}", &["a b&ping=9"], false, 0);
+        assert_eq!(expanded, "http://h/es?types=a%20b%26ping%3D9");
+    }
+
+    #[test]
+    fn expand_url_appends_the_parameters_a_server_left_out_of_its_template() {
+        // `jmap-mock` advertises exactly this: a bare path, no variables.
+        let expanded = expand_url("http://127.0.0.1:4242/eventsource", &["Email"], true, 0);
+        assert_eq!(
+            expanded,
+            "http://127.0.0.1:4242/eventsource?types=Email&closeafter=state&ping=0"
+        );
+    }
+
+    #[test]
+    fn expand_url_appends_with_an_ampersand_to_an_existing_query() {
+        let expanded = expand_url("http://h/es?tenant=7", &[], false, 0);
+        assert_eq!(
+            expanded,
+            "http://h/es?tenant=7&types=*&closeafter=no&ping=0"
+        );
     }
 
     #[test]
