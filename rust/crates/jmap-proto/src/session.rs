@@ -14,10 +14,14 @@ use crate::state::State;
 pub const CAPABILITY_CORE: &str = "urn:ietf:params:jmap:core";
 pub const CAPABILITY_MAIL: &str = "urn:ietf:params:jmap:mail";
 pub const CAPABILITY_SUBMISSION: &str = "urn:ietf:params:jmap:submission";
+pub const CAPABILITY_VACATION_RESPONSE: &str = "urn:ietf:params:jmap:vacationresponse";
+pub const CAPABILITY_MDN: &str = "urn:ietf:params:jmap:mdn";
 pub const CAPABILITY_CONTACTS: &str = "urn:ietf:params:jmap:contacts";
 pub const CAPABILITY_CALENDARS: &str = "urn:ietf:params:jmap:calendars";
+pub const CAPABILITY_CALENDAR_PREFERENCES: &str = "urn:ietf:params:jmap:calendars:preferences";
 pub const CAPABILITY_PRINCIPALS: &str = "urn:ietf:params:jmap:principals";
 pub const CAPABILITY_PRINCIPALS_OWNER: &str = "urn:ietf:params:jmap:principals:owner";
+pub const CAPABILITY_WEBSOCKET: &str = "urn:ietf:params:jmap:websocket";
 
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -211,6 +215,53 @@ impl Session {
         let val = self.capabilities.get(CAPABILITY_CORE)?;
         serde_json::from_value(val.clone()).ok()
     }
+
+    /// Typed mail capability struct, if present (RFC 8621 §1.3).
+    pub fn mail_capability(&self) -> Option<crate::mail::MailCapability> {
+        let val = self.capabilities.get(CAPABILITY_MAIL)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed submission capability struct, if present (RFC 8621 §1.4).
+    pub fn submission_capability(&self) -> Option<crate::mail::SubmissionCapability> {
+        let val = self.capabilities.get(CAPABILITY_SUBMISSION)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed contacts capability struct, if present (RFC 9610 §1.3).
+    pub fn contacts_capability(&self) -> Option<crate::contacts::ContactsCapability> {
+        let val = self.capabilities.get(CAPABILITY_CONTACTS)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed calendars capability struct, if present (draft-ietf-jmap-calendars-28 §1.3).
+    pub fn calendars_capability(&self) -> Option<crate::calendars::CalendarsCapability> {
+        let val = self.capabilities.get(CAPABILITY_CALENDARS)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed principals capability struct, if present (RFC 9670 §1.3).
+    pub fn principals_capability(&self) -> Option<crate::principals::PrincipalsCapability> {
+        let val = self.capabilities.get(CAPABILITY_PRINCIPALS)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed WebSocket capability struct, if present (RFC 8887 §2).
+    pub fn websocket_capability(&self) -> Option<WebSocketCapability> {
+        let val = self.capabilities.get(CAPABILITY_WEBSOCKET)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+}
+
+/// WebSocket capability properties (RFC 8887 §2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSocketCapability {
+    pub url: String,
+    #[serde(default)]
+    pub supports_push: bool,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 /// Core capability properties (RFC 8620 §2).
