@@ -8,6 +8,7 @@
 use jmap_proto::error::{MethodError, RequestError};
 use jmap_proto::id::Id;
 use jmap_proto::methods::{Comparator, GetRequest, QueryRequest};
+use jmap_proto::push::StateChange;
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::response::Response;
 use jmap_proto::session::Session;
@@ -211,6 +212,25 @@ fn an_account_with_no_delayed_send_limit_says_so() {
     let session: Session = serde_json::from_value(value).unwrap();
     let account = &session.accounts[&Id::new("A13824")];
     assert_eq!(account.max_delayed_send(), None);
+}
+
+/// RFC 8620 §7.1.1's own example: two accounts, each naming the types that
+/// changed and their new state tokens.
+#[test]
+fn state_change_roundtrip() {
+    let value = fixture("core/state_change.json");
+    assert_eq!(roundtrip::<StateChange>(&value), value);
+
+    let change: StateChange = serde_json::from_value(value).unwrap();
+    assert_eq!(change.kind, "StateChange");
+    assert_eq!(
+        change.changed[&Id::new("a3123")]["Email"],
+        State::new("d35ecb040aab")
+    );
+    assert_eq!(
+        change.changed[&Id::new("a43461d")]["CalendarEvent"],
+        State::new("7a4297cecd76")
+    );
 }
 
 /// `Response::responses_for` groups a call id's (possibly several)

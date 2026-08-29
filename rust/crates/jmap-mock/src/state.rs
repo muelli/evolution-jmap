@@ -5,6 +5,7 @@
 //! allocation, per-type state counters, and an append-only changes log.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::mpsc::Sender;
 
 use jmap_proto::{Id, State};
 
@@ -184,6 +185,9 @@ pub struct ServerState {
     /// every other test and every deployment that does not support SMTP
     /// FUTURERELEASE.
     pub max_delayed_send: Option<u64>,
+    /// Every currently connected `/eventsource` client (RFC 8620 §7.3), so
+    /// [`crate::MockServer::push_state_change`] has someone to push to.
+    pub event_source: EventSourceHub,
 }
 
 impl ServerState {
@@ -211,6 +215,7 @@ impl ServerState {
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
             max_delayed_send: None,
+            event_source: EventSourceHub::new(),
         }
     }
 
@@ -244,6 +249,47 @@ impl ServerState {
 impl Default for ServerState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The `/eventsource` clients currently connected (RFC 8620 §7.3), each as a
+/// channel of pre-formatted SSE bytes.
+///
+/// Formatting happens once at broadcast time
+/// ([`crate::eventsource::format_state_event`]), not per subscriber: every
+/// connected client gets the same `StateChange`, unfiltered by its `types`
+/// URI Template parameter — narrowing to what each subscriber actually asked
+/// for is follow-up work, not yet needed by anything that reads this hub.
+#[derive(Default)]
+pub struct EventSourceHub {
+    subscribers: Vec<Sender<Vec<u8>>>,
+}
+
+impl EventSourceHub {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a new subscriber, returning the receiving end it reads
+    /// pushed bytes from until this hub (or its own disconnect) drops the
+    /// sending end.
+    pub fn subscribe(&mut self) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.subscribers.push(sender);
+        receiver
+    }
+
+    /// Send `bytes` to every currently connected subscriber, dropping any
+    /// whose receiving end has gone away (the client disconnected).
+    pub fn broadcast(&mut self, bytes: Vec<u8>) {
+        self.subscribers
+            .retain(|sender| sender.send(bytes.clone()).is_ok());
+    }
+
+    /// How many `/eventsource` clients are connected right now — what
+    /// [`crate::MockServer::wait_for_event_source_subscriber`] polls.
+    pub fn subscriber_count(&self) -> usize {
+        self.subscribers.len()
     }
 }
 

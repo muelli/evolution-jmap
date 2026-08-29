@@ -587,6 +587,48 @@ impl MockServer {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.unauthorized_responses
     }
+
+    /// Push `change` to every `/eventsource` client connected right now
+    /// (RFC 8620 §7.3) — the "test hook to push one on demand" that stands
+    /// in for a real server's own automatic emission on a state transition
+    /// (`docs/ROADMAP.md` item 28), until something in this mock's dispatch
+    /// path calls this itself.
+    pub fn push_state_change(&self, change: &jmap_proto::push::StateChange) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .event_source
+            .broadcast(crate::eventsource::format_state_event(change));
+    }
+
+    /// Block until at least one `/eventsource` client is connected, or panic
+    /// after `timeout`.
+    ///
+    /// A test that pushes a `StateChange` right after opening the connection
+    /// would otherwise race the background thread that registers it — this
+    /// is what makes "push after the client is listening" deterministic
+    /// instead of a sleep.
+    pub fn wait_for_event_source_subscriber(&self, timeout: Duration) {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let connected = {
+                let state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.event_source.subscriber_count() > 0
+            };
+            if connected {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("no /eventsource subscriber connected within {timeout:?}");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 }
 
 impl Drop for MockServer {
@@ -781,6 +823,10 @@ fn handle_request(
                 200,
                 &serde_json::to_value(&session).expect("session serializes"),
             );
+        }
+        (tiny_http::Method::Get, "/eventsource") => {
+            let query = url.split_once('?').map(|(_, query)| query).unwrap_or("");
+            crate::eventsource::spawn_and_respond(request, query, state);
         }
         (tiny_http::Method::Post, "/jmap") => {
             let mut body = Vec::new();
