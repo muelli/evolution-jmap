@@ -595,3 +595,8 @@ impl ContactCardQueryFilter {
         }
     }
 }
+
+/// The `SetError` type RFC 9610 §2.4 adds for `AddressBook/set`.
+pub mod address_book_set_error {
+    pub const HAS_CARD: &str = "addressBookHasCard";
+}

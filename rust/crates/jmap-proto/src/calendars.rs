@@ -433,3 +433,8 @@ impl CalendarEventQueryFilter {
         }
     }
 }
+
+/// The `SetError` type draft-ietf-jmap-calendars §4.4 adds for `Calendar/set`.
+pub mod calendar_set_error {
+    pub const HAS_EVENT: &str = "calendarHasEvent";
+}

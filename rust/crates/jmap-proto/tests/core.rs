@@ -410,3 +410,105 @@ fn resolve_primary_account_fallback_excludes_a_non_personal_account() {
         None
     );
 }
+
+/// RFC 8620 §2 explicitly permits a server to omit `primaryAccounts` outright
+/// ("a server that does not support this concept MUST omit this property").
+/// Deserializing such a session document must succeed with empty primary_accounts.
+#[test]
+fn session_deserializes_when_primary_accounts_is_omitted_by_server() {
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {"urn:ietf:params:jmap:core": {}},
+        "accounts": {
+            "A1": {
+                "name": "a@example.com",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {"urn:ietf:params:jmap:core": {}}
+            }
+        },
+        "username": "a@example.com",
+        "apiUrl": "https://jmap.example.com/api/",
+        "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?accept={type}",
+        "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+        "eventSourceUrl": "https://jmap.example.com/eventsource/",
+        "state": "s1"
+    }))
+    .expect("session without primaryAccounts must deserialize cleanly");
+
+    assert!(session.primary_accounts.is_empty());
+}
+
+/// RFC 8620 §5.5 defines `collation` on `Comparator` as an optional string.
+#[test]
+fn comparator_roundtrips_collation_when_specified() {
+    let value = serde_json::json!({
+        "property": "receivedAt",
+        "isAscending": false,
+        "collation": "i;unicode-casemap"
+    });
+    let comparator: Comparator = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(comparator.property, "receivedAt");
+    assert!(!comparator.is_ascending);
+    assert_eq!(comparator.collation.as_deref(), Some("i;unicode-casemap"));
+
+    let round_tripped = serde_json::to_value(&comparator).unwrap();
+    assert_eq!(round_tripped, value);
+}
+
+/// RFC 8620 §5.3 defines well-known `tooLarge` set error code.
+#[test]
+fn set_error_has_too_large_code() {
+    assert_eq!(jmap_proto::error::set::TOO_LARGE, "tooLarge");
+}
+
+/// A `/get` response carrying unknown server extensions deserializes without error.
+#[test]
+fn get_response_ignores_unknown_server_properties() {
+    let value = serde_json::json!({
+        "accountId": "A1",
+        "state": "s1",
+        "list": [{"id": "1"}],
+        "notFound": [],
+        "customExtension": "ignored_cleanly"
+    });
+    let resp: jmap_proto::methods::GetResponse<serde_json::Value> =
+        serde_json::from_value(value).expect("GetResponse must deserialize unknown fields cleanly");
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.state.as_str(), "s1");
+    assert_eq!(resp.list.len(), 1);
+}
+
+/// A `/changes` response omitting optional empty arrays and false hasMoreChanges deserializes cleanly.
+#[test]
+fn changes_response_deserializes_with_omitted_empty_lists_and_defaults() {
+    let value = serde_json::json!({
+        "accountId": "A1",
+        "oldState": "s1",
+        "newState": "s2",
+        "futureMember": 123
+    });
+    let resp: jmap_proto::methods::ChangesResponse = serde_json::from_value(value).unwrap();
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.old_state.as_str(), "s1");
+    assert_eq!(resp.new_state.as_str(), "s2");
+    assert!(!resp.has_more_changes);
+    assert!(resp.created.is_empty());
+    assert!(resp.updated.is_empty());
+    assert!(resp.destroyed.is_empty());
+}
+
+/// A `/query` response omitting optional position/canCalculateChanges defaults cleanly.
+#[test]
+fn query_response_deserializes_with_omitted_defaults() {
+    let value = serde_json::json!({
+        "accountId": "A1",
+        "queryState": "qs1",
+        "extraMetric": "abc"
+    });
+    let resp: jmap_proto::methods::QueryResponse = serde_json::from_value(value).unwrap();
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.query_state.as_str(), "qs1");
+    assert!(!resp.can_calculate_changes);
+    assert_eq!(resp.position, 0);
+    assert!(resp.ids.is_empty());
+}

@@ -112,6 +112,7 @@ pub mod method {
 pub mod set {
     pub const FORBIDDEN: &str = "forbidden";
     pub const OVER_QUOTA: &str = "overQuota";
+    pub const TOO_LARGE: &str = "tooLarge";
     pub const NOT_FOUND: &str = "notFound";
     pub const INVALID_PATCH: &str = "invalidPatch";
     pub const INVALID_PROPERTIES: &str = "invalidProperties";

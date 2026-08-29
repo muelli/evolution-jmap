@@ -116,11 +116,28 @@ impl GetAvailabilityRequest {
     }
 }
 
+/// Well-known principal types (RFC 9670 §2).
+pub mod principal_type {
+    pub const INDIVIDUAL: &str = "individual";
+    pub const GROUP: &str = "group";
+    pub const RESOURCE: &str = "resource";
+    pub const LOCATION: &str = "location";
+    pub const OTHER: &str = "other";
+}
+
+/// Well-known busy status values (draft-ietf-jmap-calendars §2.2).
+pub mod busy_status {
+    pub const CONFIRMED: &str = "confirmed";
+    pub const TENTATIVE: &str = "tentative";
+    pub const UNAVAILABLE: &str = "unavailable";
+}
+
 /// `Principal/getAvailability` response: the merged `BusyPeriod`s in the
 /// requested window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAvailabilityResponse {
+    #[serde(default)]
     pub list: Vec<BusyPeriod>,
 }
 
@@ -135,6 +152,26 @@ pub struct BusyPeriod {
     pub busy_status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<CalendarEvent>,
+}
+
+impl BusyPeriod {
+    pub fn new(
+        utc_start: impl Into<UtcDate>,
+        utc_end: impl Into<UtcDate>,
+        busy_status: impl Into<String>,
+    ) -> Self {
+        Self {
+            utc_start: utc_start.into(),
+            utc_end: utc_end.into(),
+            busy_status: busy_status.into(),
+            event: None,
+        }
+    }
+
+    pub fn with_event(mut self, event: CalendarEvent) -> Self {
+        self.event = Some(event);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -206,12 +243,11 @@ mod tests {
 
     #[test]
     fn busy_period_round_trips_with_and_without_an_event() {
-        let without_event = BusyPeriod {
-            utc_start: UtcDate::new("2026-09-01T13:00:00Z"),
-            utc_end: UtcDate::new("2026-09-01T14:00:00Z"),
-            busy_status: "confirmed".to_owned(),
-            event: None,
-        };
+        let without_event = BusyPeriod::new(
+            UtcDate::new("2026-09-01T13:00:00Z"),
+            UtcDate::new("2026-09-01T14:00:00Z"),
+            "confirmed",
+        );
         let json = serde_json::to_value(&without_event).unwrap();
         assert!(json.get("event").is_none());
         assert_eq!(
@@ -219,13 +255,15 @@ mod tests {
             without_event
         );
 
-        let with_event = BusyPeriod {
-            event: Some(CalendarEvent {
-                title: Some("Dentist".to_owned()),
-                ..CalendarEvent::default()
-            }),
-            ..without_event
-        };
+        let with_event = BusyPeriod::new(
+            UtcDate::new("2026-09-01T13:00:00Z"),
+            UtcDate::new("2026-09-01T14:00:00Z"),
+            "confirmed",
+        )
+        .with_event(CalendarEvent {
+            title: Some("Dentist".to_owned()),
+            ..CalendarEvent::default()
+        });
         let json = serde_json::to_value(&with_event).unwrap();
         assert_eq!(json["event"]["title"], "Dentist");
         assert_eq!(
@@ -237,12 +275,11 @@ mod tests {
     #[test]
     fn get_availability_response_round_trips_a_list_of_busy_periods() {
         let response = GetAvailabilityResponse {
-            list: vec![BusyPeriod {
-                utc_start: UtcDate::new("2026-09-01T13:00:00Z"),
-                utc_end: UtcDate::new("2026-09-01T14:00:00Z"),
-                busy_status: "tentative".to_owned(),
-                event: None,
-            }],
+            list: vec![BusyPeriod::new(
+                UtcDate::new("2026-09-01T13:00:00Z"),
+                UtcDate::new("2026-09-01T14:00:00Z"),
+                "tentative",
+            )],
         };
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["list"][0]["busyStatus"], "tentative");

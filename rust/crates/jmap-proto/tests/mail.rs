@@ -98,3 +98,29 @@ fn email_query_filter_in_mailbox_sets_only_that_field() {
     assert_eq!(filter.before, None);
     assert_eq!(filter.after, None);
 }
+
+#[test]
+fn mailbox_roles_cover_rfc8621_and_registry() {
+    use jmap_proto::mail::role::*;
+    assert_eq!(ALL, "all");
+    assert_eq!(ARCHIVE, "archive");
+    assert_eq!(DRAFTS, "drafts");
+    assert_eq!(FLAGGED, "flagged");
+    assert_eq!(IMPORTANT, "important");
+    assert_eq!(INBOX, "inbox");
+    assert_eq!(JUNK, "junk");
+    assert_eq!(SENT, "sent");
+    assert_eq!(SUBSCRIBED, "subscribed");
+    assert_eq!(TRASH, "trash");
+}
+
+#[test]
+fn email_submission_set_errors_cover_rfc8621() {
+    use jmap_proto::mail::email_submission_set_error::*;
+    assert_eq!(CANNOT_UNSEND, "cannotUnsend");
+    assert_eq!(TOO_MANY_RECIPIENTS, "tooManyRecipients");
+    assert_eq!(NO_RECIPIENTS, "noRecipients");
+    assert_eq!(INVALID_RECIPIENTS, "invalidRecipients");
+    assert_eq!(FORBIDDEN_MAIL_FROM, "forbiddenMailFrom");
+    assert_eq!(FORBIDDEN_FROM, "forbiddenFrom");
+}

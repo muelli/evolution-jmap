@@ -57,12 +57,16 @@ pub mod mailbox_set_error {
 
 /// Well-known mailbox roles (RFC 8457 registry, referenced by RFC 8621).
 pub mod role {
-    pub const INBOX: &str = "inbox";
-    pub const DRAFTS: &str = "drafts";
-    pub const SENT: &str = "sent";
-    pub const TRASH: &str = "trash";
-    pub const JUNK: &str = "junk";
+    pub const ALL: &str = "all";
     pub const ARCHIVE: &str = "archive";
+    pub const DRAFTS: &str = "drafts";
+    pub const FLAGGED: &str = "flagged";
+    pub const IMPORTANT: &str = "important";
+    pub const INBOX: &str = "inbox";
+    pub const JUNK: &str = "junk";
+    pub const SENT: &str = "sent";
+    pub const SUBSCRIBED: &str = "subscribed";
+    pub const TRASH: &str = "trash";
 }
 
 /// An email message, RFC 8621 §4. All properties are optional because
@@ -440,4 +444,14 @@ impl EnvelopeAddress {
             parameters: None,
         }
     }
+}
+
+/// The `SetError` types RFC 8621 §7.5 adds for `EmailSubmission/set`.
+pub mod email_submission_set_error {
+    pub const CANNOT_UNSEND: &str = "cannotUnsend";
+    pub const TOO_MANY_RECIPIENTS: &str = "tooManyRecipients";
+    pub const NO_RECIPIENTS: &str = "noRecipients";
+    pub const INVALID_RECIPIENTS: &str = "invalidRecipients";
+    pub const FORBIDDEN_MAIL_FROM: &str = "forbiddenMailFrom";
+    pub const FORBIDDEN_FROM: &str = "forbiddenFrom";
 }
