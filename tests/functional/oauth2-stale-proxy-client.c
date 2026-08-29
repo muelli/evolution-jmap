@@ -1,340 +1,305 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Headless reproduction client for Roadmap item 22:
- * "A stale client OAuth2Support proxy in the registry turns every token fetch
- * into a consent window."
+ * The client half of `docs/ROADMAP.md` item 22's Do(1): the headless
+ * reproduction of the stale `Source.OAuth2Support` interface proxy that turns
+ * a silent token fetch into `G_DBUS_ERROR_SERVICE_UNKNOWN` — the failure the
+ * item-20 tracing captured live on 2026-08-28 ("The name :1.4 was not
+ * provided by any .service files"), which then escalated to a consent window.
  *
- * Reproduction sequence:
- * 1. A mock Evolution shell subprocess (Shell 1) connects to the private session
- *    D-Bus bus, acquires a unique name (e.g. :1.X), and exports the
- *    `org.gnome.evolution.dataserver.Source.OAuth2Support` interface.
- * 2. The client queries the OAuth2 token for the source via the proxy to Shell 1,
- *    verifying that it returns a valid token ("mock-token-shell-1").
- * 3. Shell 1 is terminated via SIGTERM (`kill -TERM`). Its unique name (:1.X)
- *    disappears from the D-Bus bus.
- * 4. When a token is requested via the stale proxy pointing to the dead unique
- *    name (:1.X), the call fails immediately with G_DBUS_ERROR_SERVICE_UNKNOWN
- *    ("The name :1.X was not provided by any .service files").
- * 5. A second shell (Shell 2) starts with a new unique name (:1.Y) and exports
- *    the OAuth2Support interface, but because EDS registry does not rebind or
- *    clear the stale proxy on existing sources, calls to the stale proxy continue
- *    to fail with G_DBUS_ERROR_SERVICE_UNKNOWN.
+ * This program is an ordinary `libedataserver` consumer standing in for a
+ * calendar or address-book *factory* process: it holds an `ESource` across a
+ * registry restart, exactly as a long-lived factory does, and asks it for an
+ * OAuth 2.0 access token afterwards. It knows nothing about JMAP beyond the
+ * account uid it is given, and asserts nothing — every judgement belongs to
+ * `rust/crates/jmap-functional/tests/oauth2-stale-proxy.rs`, which runs this
+ * program and reads the `key=value` observations it writes to stdout.
  *
- * usage: functional-oauth2-stale-proxy-client <account-uid>
+ * WHY THIS REPRODUCES THE REAL THING, and not merely D-Bus's own semantics
+ * (EDS 3.52.3 / Evolution 3.52.4 source, read 2026-08-29):
+ *
+ *   1. It is the *registry* that exports the interface, not Evolution's
+ *      shell. `grep -rn OAuth2Support` over all of evolution-3.52.4 finds one
+ *      file, a mail-config summary widget; the shell exports no such object.
+ *      `e_server_side_source_set_oauth2_support`'s own doc says who does:
+ *      "If @oauth2_support is non-NULL, the OAuth2Support D-Bus interface is
+ *      exported at the object path for @source."
+ *   2. Our accounts reach that setter through EDS's own registry module
+ *      `module-oauth2-services.c:139`, whose `EOAuth2SourceMonitor` calls it
+ *      for every server-side source whose `[Authentication] Method` is an
+ *      OAuth2 alias — i.e. names a registered `EOAuth2Service`. Ours is
+ *      `jmap_config::oauth2_service::NAME`, the string "JMAP". That module
+ *      must therefore be staged beside `module-jmap-backend.so`, because
+ *      `EDS_REGISTRY_MODULES` *replaces* EDS's module directory rather than
+ *      adding to it (`e-source-registry-server.c:1073`).
+ *   3. Client-side, `e-source.c::source_get_oauth2_access_token_sync` takes
+ *      its in-process `e_oauth2_services_find` fallback only when the D-Bus
+ *      interface is ABSENT. When it is present the call goes over the bus,
+ *      through a proxy `GDBusObjectManagerClient` addressed to the manager's
+ *      *unique* name (`gdbusobjectmanagerclient.c` sets "g-name" to
+ *      `name_owner`, asserted `g_dbus_is_unique_name`).
+ *   4. The staleness is deterministic, not a race. When the registry dies,
+ *      `source_registry_object_removed_cb` sees a NULL name-owner and takes
+ *      `source_registry_object_removed_no_owner`, which only forgets the
+ *      object path — it does NOT call `__e_source_private_replace_dbus_object
+ *      (source, NULL)`. That happens only in the *by_owner* branch, i.e. when
+ *      a source is genuinely deleted while the service is alive. So an
+ *      `ESource` a factory already holds keeps its dead proxy indefinitely,
+ *      and no amount of main-loop iteration clears it while the name has no
+ *      owner.
+ *
+ * Steps 1 and 3 are what this program observes directly, and step 1 is the
+ * load-bearing one: `oauth2-support-exported` is the fact an earlier session
+ * doubted (it concluded the whole token path was D-Bus-free), and every other
+ * observation here is worthless without it.
+ *
+ *   usage: functional-oauth2-stale-proxy-client <account-uid>
  */
 
 #include <libedataserver/libedataserver.h>
-#include <gio/gio.h>
-#include <glib.h>
-#include <glib/gstdio.h>
 #include <signal.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <unistd.h>
 
-#define OAUTH2_SUPPORT_OBJECT_PATH "/org/gnome/evolution/dataserver/Source/OAuth2Support"
+/* The interface `e_server_side_source_set_oauth2_support` exports, named as a
+ * string rather than reached through EDS's generated `EDBusSourceOAuth2Support`
+ * accessors: those live in `src/private/e-dbus-source.h`, which EDS does not
+ * install. `e_source_ref_dbus_object` is public and returns a plain
+ * `GDBusObject`, so `g_dbus_object_get_interface` asks the same question of it
+ * without a private header. From `src/private/
+ * org.gnome.evolution.dataserver.Source.xml:210`. */
 #define OAUTH2_SUPPORT_INTERFACE "org.gnome.evolution.dataserver.Source.OAuth2Support"
 
-static const gchar introspection_xml[] =
-	"<node>"
-	"  <interface name='org.gnome.evolution.dataserver.Source.OAuth2Support'>"
-	"    <method name='GetAccessToken'>"
-	"      <arg type='s' name='access_token' direction='out'/>"
-	"      <arg type='i' name='expires_in' direction='out'/>"
-	"    </method>"
-	"  </interface>"
-	"</node>";
+/* How long to wait for the killed registry's unique name to actually leave
+ * the bus. SIGKILL is immediate but the daemon's disconnection reaches the
+ * bus asynchronously; a limit at all is so that a registry which somehow
+ * survives fails the run instead of hanging it. */
+#define NAME_GONE_TIMEOUT_SECONDS 10
 
+/* One `key=value` observation on stdout, the format `jmap_functional::
+ * observations` parses. */
 static void
-handle_method_call (GDBusConnection *connection,
-                    const gchar *sender,
-                    const gchar *object_path,
-                    const gchar *interface_name,
-                    const gchar *method_name,
-                    GVariant *parameters,
-                    GDBusMethodInvocation *invocation,
-                    gpointer user_data)
+observe (const gchar *key,
+         const gchar *value)
 {
-	const gchar *token = (const gchar *) user_data;
-
-	if (g_strcmp0 (method_name, "GetAccessToken") == 0) {
-		g_dbus_method_invocation_return_value (
-			invocation,
-			g_variant_new ("(si)", token, 3600));
-	}
+	g_print ("%s=%s\n", key, value);
 }
 
-static const GDBusInterfaceVTable interface_vtable = {
-	handle_method_call,
-	NULL,
-	NULL
-};
-
 static void
-run_mock_shell (const gchar *token_value,
-                const gchar *ready_file)
+observe_boolean (const gchar *key,
+                 gboolean value)
 {
-	GDBusConnection *connection;
-	GDBusNodeInfo *introspection_data;
-	GError *error = NULL;
-	GMainLoop *loop;
-	guint reg_id;
-
-	connection = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &error);
-	if (!connection) {
-		g_printerr ("mock shell: failed to connect to session bus: %s\n", error->message);
-		exit (1);
-	}
-
-	introspection_data = g_dbus_node_info_new_for_xml (introspection_xml, NULL);
-	reg_id = g_dbus_connection_register_object (
-		connection,
-		OAUTH2_SUPPORT_OBJECT_PATH,
-		introspection_data->interfaces[0],
-		&interface_vtable,
-		g_strdup (token_value),
-		g_free,
-		&error);
-
-	if (reg_id == 0) {
-		g_printerr ("mock shell: failed to register D-Bus object: %s\n", error->message);
-		exit (1);
-	}
-
-	if (ready_file != NULL) {
-		const gchar *unique_name = g_dbus_connection_get_unique_name (connection);
-		g_file_set_contents (ready_file, unique_name, -1, NULL);
-	}
-
-	loop = g_main_loop_new (NULL, FALSE);
-	g_main_loop_run (loop);
+	observe (key, value ? "1" : "0");
 }
 
-static pid_t
-spawn_shell (const gchar *prog,
-             const gchar *token_value,
-             const gchar *ready_file,
-             gchar **out_unique_name)
+/* Fail the run, naming what broke. Used only for things that are this
+ * program's own preconditions rather than the behaviour under test — the
+ * behaviour under test is always *reported*, never judged here. */
+static void G_GNUC_NORETURN
+fatal (const gchar *what,
+       const GError *error)
 {
-	GPid pid;
-	gchar *argv[] = {
-		(gchar *) prog,
-		"--mock-shell",
-		(gchar *) token_value,
-		(gchar *) ready_file,
-		NULL
-	};
-	GError *error = NULL;
-	gint i;
-
-	g_remove (ready_file);
-
-	if (!g_spawn_async (NULL, argv, NULL, G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD, NULL, NULL, &pid, &error)) {
-		g_printerr ("g_spawn_async failed: %s\n", error->message);
-		exit (1);
-	}
-
-	/* Wait for ready_file to be populated */
-	for (i = 0; i < 100; i++) {
-		gchar *contents = NULL;
-		if (g_file_get_contents (ready_file, &contents, NULL, NULL) && contents && strlen (contents) > 0) {
-			*out_unique_name = g_strstrip (contents);
-			return pid;
-		}
-		g_free (contents);
-		g_usleep (20000);
-	}
-
-	g_printerr ("timed out waiting for mock shell to register on D-Bus\n");
+	g_printerr ("%s: %s\n", what, error ? error->message : "(no error set)");
 	exit (1);
 }
 
-static void
-wait_for_name_to_disappear (GDBusConnection *connection,
-                            const gchar *unique_name)
+/* Ask the bus daemon itself a question about `unique_name`. Returns the
+ * reply, or NULL with `error` set — notably `NameHasNoOwner` once the peer
+ * is gone, which is what this program waits for.
+ *
+ * Deliberately a direct `g_dbus_connection_call_sync` on the bus daemon
+ * rather than anything on the registry's own well-known name: asking for
+ * `org.gnome.evolution.dataserver.Sources5` would D-Bus-ACTIVATE a fresh
+ * registry, which is precisely what must not happen between the kill and the
+ * token fetch. A unique name can never be activated. */
+static GVariant *
+ask_bus_about (GDBusConnection *connection,
+               const gchar *method,
+               const gchar *unique_name,
+               GError **error)
 {
-	gint i;
-
-	for (i = 0; i < 100; i++) {
-		GVariant *result;
-		GError *error = NULL;
-
-		result = g_dbus_connection_call_sync (
-			connection,
-			"org.freedesktop.DBus",
-			"/org/freedesktop/DBus",
-			"org.freedesktop.DBus",
-			"GetNameOwner",
-			g_variant_new ("(s)", unique_name),
-			G_VARIANT_TYPE ("(s)"),
-			G_DBUS_CALL_FLAGS_NONE,
-			100,
-			NULL,
-			&error);
-
-		if (result != NULL) {
-			g_variant_unref (result);
-		} else {
-			/* Name owner no longer exists on the bus */
-			g_clear_error (&error);
-			return;
-		}
-
-		g_usleep (20000);
-	}
+	return g_dbus_connection_call_sync (
+		connection,
+		"org.freedesktop.DBus",
+		"/org/freedesktop/DBus",
+		"org.freedesktop.DBus",
+		method,
+		g_variant_new ("(s)", unique_name),
+		NULL, G_DBUS_CALL_FLAGS_NO_AUTO_START, -1, NULL, error);
 }
 
-gint
-main (gint argc,
-      gchar **argv)
+/* TRUE once `unique_name` has no owner on the bus. */
+static gboolean
+name_is_gone (GDBusConnection *connection,
+              const gchar *unique_name)
 {
-	const gchar *account_uid;
-	GDBusConnection *session_bus;
-	GDBusProxy *shell_1_proxy;
-	GVariant *result;
 	GError *error = NULL;
-	gchar *shell_1_name = NULL;
-	gchar *shell_2_name = NULL;
-	gchar *ready_file_1;
-	gchar *ready_file_2;
-	GPid pid_1, pid_2;
-	const gchar *token = NULL;
-	gint expires_in = 0;
+	GVariant *reply;
 
-	if (argc >= 4 && g_strcmp0 (argv[1], "--mock-shell") == 0) {
-		run_mock_shell (argv[2], argv[3]);
+	reply = ask_bus_about (connection, "GetNameOwner", unique_name, &error);
+
+	if (reply != NULL) {
+		g_variant_unref (reply);
+
+		return FALSE;
+	}
+
+	g_clear_error (&error);
+
+	return TRUE;
+}
+
+int
+main (int argc,
+      char **argv)
+{
+	ESourceRegistry *registry;
+	ESource *source;
+	GDBusObject *dbus_object;
+	GDBusInterface *dbus_interface;
+	GDBusConnection *connection;
+	GVariant *reply;
+	GError *error = NULL;
+	const gchar *account_uid;
+	gchar *peer = NULL;
+	gchar *access_token = NULL;
+	gint expires_in = 0;
+	guint32 registry_pid = 0;
+	gint64 deadline;
+	gboolean fetched;
+
+	if (argc != 2) {
+		g_printerr ("usage: %s <account-uid>\n", argv[0]);
+
+		return 2;
+	}
+
+	account_uid = argv[1];
+
+	/* Activates evolution-source-registry on this session's private bus,
+	 * which loads every module in EDS_REGISTRY_MODULES — for this test,
+	 * module-jmap-backend.so (our EOAuth2Service "JMAP") and EDS's own
+	 * module-oauth2-services.so (the monitor that exports the interface). */
+	registry = e_source_registry_new_sync (NULL, &error);
+	if (registry == NULL)
+		fatal ("e_source_registry_new_sync", error);
+
+	source = e_source_registry_ref_source (registry, account_uid);
+	observe_boolean ("source-found", source != NULL);
+	if (source == NULL) {
+		g_printerr ("the registry does not know the account %s\n", account_uid);
+
+		return 1;
+	}
+
+	/* THE load-bearing observation. Non-NULL means the registry really did
+	 * export Source.OAuth2Support for this account, so a token fetch from
+	 * this process goes over the bus rather than through e-source.c's
+	 * in-process EOAuth2Services fallback. */
+	dbus_object = e_source_ref_dbus_object (source);
+	dbus_interface = dbus_object != NULL
+		? g_dbus_object_get_interface (dbus_object, OAUTH2_SUPPORT_INTERFACE)
+		: NULL;
+	g_clear_object (&dbus_object);
+
+	observe_boolean ("oauth2-support-exported", dbus_interface != NULL);
+
+	if (dbus_interface == NULL) {
+		/* Not this program's business to judge, but there is nothing
+		 * further it can measure either: with no interface there is no
+		 * proxy to go stale. The Rust side reports why this matters. */
 		return 0;
 	}
 
-	if (argc < 2) {
-		g_printerr ("usage: %s <account-uid>\n", argv[0]);
-		return 1;
-	}
-	account_uid = argv[1];
+	/* The proxy's peer: the registry's *unique* name, per
+	 * gdbusobjectmanagerclient.c's own "use a unique name" assertion. This
+	 * is the string the captured live failure called ":1.4". */
+	if (!G_IS_DBUS_PROXY (dbus_interface)) {
+		g_printerr ("the OAuth2Support interface is not a proxy; "
+			"this program is meant to run as a registry *client*\n");
 
-	ready_file_1 = g_strdup_printf ("/tmp/mock-shell-1-%d.ready", getpid ());
-	ready_file_2 = g_strdup_printf ("/tmp/mock-shell-2-%d.ready", getpid ());
-
-	/* Step 1: Start Shell 1 exporting OAuth2Support on its unique bus name */
-	pid_1 = spawn_shell (argv[0], "mock-token-shell-1", ready_file_1, &shell_1_name);
-	g_print ("shell-1-pid=%d\n", (gint) pid_1);
-	g_print ("shell-1-unique-name=%s\n", shell_1_name);
-
-	session_bus = g_bus_get_sync (G_BUS_TYPE_SESSION, NULL, &error);
-	if (!session_bus) {
-		g_printerr ("failed to connect to session bus: %s\n", error->message);
-		kill (pid_1, SIGKILL);
-		waitpid (pid_1, NULL, 0);
 		return 1;
 	}
 
-	/* Step 2: Create a proxy to Shell 1's OAuth2Support object and verify token fetch succeeds */
-	shell_1_proxy = g_dbus_proxy_new_sync (
-		session_bus,
-		G_DBUS_PROXY_FLAGS_NONE,
-		NULL,
-		shell_1_name,
-		OAUTH2_SUPPORT_OBJECT_PATH,
-		OAUTH2_SUPPORT_INTERFACE,
-		NULL,
-		&error);
+	peer = g_strdup (g_dbus_proxy_get_name (G_DBUS_PROXY (dbus_interface)));
+	observe ("oauth2-support-peer", peer);
+	observe_boolean ("oauth2-support-peer-is-unique-name", g_dbus_is_unique_name (peer));
 
-	if (!shell_1_proxy) {
-		g_printerr ("failed to create proxy to Shell 1: %s\n", error->message);
-		kill (pid_1, SIGKILL);
-		waitpid (pid_1, NULL, 0);
+	connection = g_dbus_proxy_get_connection (G_DBUS_PROXY (dbus_interface));
+
+	/* A token fetch BEFORE the restart, to prove the proxy is live to begin
+	 * with and that what follows is the restart's doing rather than a token
+	 * path that never worked. It is expected to FAIL — there is no stored
+	 * refresh token in this scratch session — but with a failure from our
+	 * own EOAuth2Service reached through a live registry, not with a bus
+	 * error. So what is reported is the error's domain, and the Rust side
+	 * holds it to "not a D-Bus transport failure". */
+	fetched = e_source_get_oauth2_access_token_sync (
+		source, NULL, &access_token, &expires_in, &error);
+	observe_boolean ("token-before-kill-succeeded", fetched);
+	observe ("token-before-kill-error-domain",
+		error != NULL ? g_quark_to_string (error->domain) : "");
+	observe_boolean ("token-before-kill-was-bus-error",
+		error != NULL && error->domain == G_DBUS_ERROR);
+	g_clear_pointer (&access_token, g_free);
+	g_clear_error (&error);
+
+	reply = ask_bus_about (connection, "GetConnectionUnixProcessID", peer, &error);
+	if (reply == NULL)
+		fatal ("GetConnectionUnixProcessID for the registry", error);
+	g_variant_get (reply, "(u)", &registry_pid);
+	g_variant_unref (reply);
+
+	/* SIGKILL rather than SIGTERM: a registry given the chance to shut down
+	 * cleanly unexports its objects first, and a client that saw the
+	 * unexport would drop the interface — which is the one path that does
+	 * NOT reproduce the bug. The live capture was a replaced/crashed
+	 * instance, so an abrupt death is the faithful reproduction. */
+	if (kill ((pid_t) registry_pid, SIGKILL) != 0) {
+		g_printerr ("kill(%u, SIGKILL): %s\n", registry_pid, g_strerror (errno));
+
 		return 1;
 	}
 
-	result = g_dbus_proxy_call_sync (
-		shell_1_proxy,
-		"GetAccessToken",
-		NULL,
-		G_DBUS_CALL_FLAGS_NONE,
-		2000,
-		NULL,
-		&error);
+	deadline = g_get_monotonic_time () + NAME_GONE_TIMEOUT_SECONDS * G_TIME_SPAN_SECOND;
+	while (!name_is_gone (connection, peer) && g_get_monotonic_time () < deadline)
+		g_usleep (10 * 1000);
 
-	if (result != NULL) {
-		g_variant_get (result, "(&si)", &token, &expires_in);
-		g_print ("initial-token-success=1\n");
-		g_print ("initial-token=%s\n", token);
-		g_print ("initial-expires-in=%d\n", expires_in);
-		g_variant_unref (result);
-	} else {
-		g_print ("initial-token-success=0\n");
-		g_print ("initial-token-error=%s\n", error->message);
-		g_clear_error (&error);
+	observe_boolean ("registry-name-gone", name_is_gone (connection, peer));
+
+	/* The reproduction itself: the very same ESource, still held, still
+	 * carrying the interface proxy addressed to a name nothing owns. */
+	access_token = NULL;
+	expires_in = 0;
+	fetched = e_source_get_oauth2_access_token_sync (
+		source, NULL, &access_token, &expires_in, &error);
+
+	observe_boolean ("token-after-kill-succeeded", fetched);
+	observe_boolean ("oauth2-support-still-exported", dbus_interface != NULL);
+
+	if (error != NULL) {
+		gchar *code = g_strdup_printf ("%d", error->code);
+
+		observe ("token-after-kill-error-domain", g_quark_to_string (error->domain));
+		observe ("token-after-kill-error-code", code);
+		/* e-source.c already applied g_dbus_error_strip_remote_error to
+		 * this message before propagating it, so what is reported here is
+		 * exactly what jmap_backend_core::oauth2 classifies and what the
+		 * user would be shown. */
+		observe ("token-after-kill-error-message", error->message);
+		observe_boolean ("token-after-kill-is-service-unknown",
+			g_error_matches (error, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN));
+		observe_boolean ("token-after-kill-names-dead-peer",
+			strstr (error->message, peer) != NULL);
+
+		g_free (code);
 	}
 
-	/* Step 3: Terminate Shell 1 with SIGTERM */
-	kill (pid_1, SIGTERM);
-	waitpid (pid_1, NULL, 0);
-	g_spawn_close_pid (pid_1);
-	wait_for_name_to_disappear (session_bus, shell_1_name);
-	g_print ("shell-1-killed=1\n");
-
-	/* Step 4: Request token via the stale proxy pointing to dead unique name (:1.X) */
-	result = g_dbus_proxy_call_sync (
-		shell_1_proxy,
-		"GetAccessToken",
-		NULL,
-		G_DBUS_CALL_FLAGS_NONE,
-		2000,
-		NULL,
-		&error);
-
-	if (result != NULL) {
-		g_print ("token-after-kill-success=1\n");
-		g_variant_unref (result);
-	} else {
-		g_print ("token-after-kill-success=0\n");
-		g_print ("token-after-kill-error-domain=%s\n", g_quark_to_string (error->domain));
-		g_print ("token-after-kill-error-code=%d\n", error->code);
-		g_print ("token-after-kill-error-message=%s\n", error->message);
-		g_clear_error (&error);
-	}
-
-	/* Step 5: Start Shell 2 (new unique name). Demonstrates that the stale proxy does not auto-rebind. */
-	pid_2 = spawn_shell (argv[0], "mock-token-shell-2", ready_file_2, &shell_2_name);
-	g_print ("shell-2-pid=%d\n", (gint) pid_2);
-	g_print ("shell-2-unique-name=%s\n", shell_2_name);
-
-	/* Call to stale proxy still fails because the binding in the proxy still names the dead peer */
-	result = g_dbus_proxy_call_sync (
-		shell_1_proxy,
-		"GetAccessToken",
-		NULL,
-		G_DBUS_CALL_FLAGS_NONE,
-		2000,
-		NULL,
-		&error);
-
-	if (result != NULL) {
-		g_print ("stale-proxy-still-fails=0\n");
-		g_variant_unref (result);
-	} else {
-		g_print ("stale-proxy-still-fails=1\n");
-		g_print ("stale-proxy-error-message=%s\n", error->message);
-		g_clear_error (&error);
-	}
-
-	/* Clean up */
-	kill (pid_2, SIGTERM);
-	waitpid (pid_2, NULL, 0);
-	g_spawn_close_pid (pid_2);
-
-	g_remove (ready_file_1);
-	g_remove (ready_file_2);
-	g_free (ready_file_1);
-	g_free (ready_file_2);
-	g_free (shell_1_name);
-	g_free (shell_2_name);
-	g_object_unref (shell_1_proxy);
-	g_object_unref (session_bus);
+	g_clear_pointer (&access_token, g_free);
+	g_clear_error (&error);
+	g_free (peer);
+	g_object_unref (dbus_interface);
+	g_object_unref (source);
+	g_object_unref (registry);
 
 	return 0;
 }
