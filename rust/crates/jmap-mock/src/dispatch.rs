@@ -106,9 +106,7 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
     }
 
     if let Some(change) = state_change_since(&type_states_before, &state.type_state_snapshot()) {
-        state
-            .event_source
-            .broadcast(crate::eventsource::format_state_event(&change));
+        state.event_source.broadcast(&change);
     }
 
     let response = Response {
@@ -401,7 +399,7 @@ mod tests {
     fn a_mailbox_set_create_pushes_a_state_change_automatically() {
         let mut state = ServerState::new();
         state.add_account("A1", "test");
-        let receiver = state.event_source.subscribe();
+        let receiver = state.event_source.subscribe(None);
 
         let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
             .call(
@@ -432,7 +430,7 @@ mod tests {
     fn a_request_that_mutates_nothing_pushes_nothing() {
         let mut state = ServerState::new();
         state.add_account("A1", "test");
-        let receiver = state.event_source.subscribe();
+        let receiver = state.event_source.subscribe(None);
 
         let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
             .call("Mailbox/get", &json!({"accountId": "A1"}), "c1")
@@ -446,5 +444,67 @@ mod tests {
             receiver.recv_timeout(std::time::Duration::from_millis(50)),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout)
         ));
+    }
+
+    /// `docs/ROADMAP.md` item 28's `types`-filtering: a subscriber whose
+    /// `types` filter names none of what actually changed is sent nothing at
+    /// all, same as a request that mutated nothing.
+    #[test]
+    fn a_subscriber_filtered_to_an_unrelated_type_receives_nothing() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+        let receiver = state
+            .event_source
+            .subscribe(Some(std::collections::BTreeSet::from([
+                "ContactCard".to_owned()
+            ])));
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call(
+                "Mailbox/set",
+                &json!({"accountId": "A1", "create": {"m1": {"name": "Inbox"}}}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, _response) = super::handle_api(&mut state, &body);
+        assert_eq!(status, 200);
+
+        assert!(matches!(
+            receiver.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+    }
+
+    /// The other half: a subscriber filtered to a type that DID change still
+    /// receives the push.
+    #[test]
+    fn a_subscriber_filtered_to_the_changed_type_receives_it() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+        let receiver = state
+            .event_source
+            .subscribe(Some(std::collections::BTreeSet::from([
+                "Mailbox".to_owned()
+            ])));
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call(
+                "Mailbox/set",
+                &json!({"accountId": "A1", "create": {"m1": {"name": "Inbox"}}}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, _response) = super::handle_api(&mut state, &body);
+        assert_eq!(status, 200);
+
+        let pushed = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("a StateChange was pushed to the matching subscriber");
+        let text = String::from_utf8(pushed).expect("utf8 SSE frame");
+        assert!(text.contains("\"Mailbox\":\"2\""), "{text}");
     }
 }

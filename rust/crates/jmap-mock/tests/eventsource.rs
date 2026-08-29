@@ -72,6 +72,51 @@ fn a_pushed_state_change_arrives_as_an_sse_state_event() {
 }
 
 #[test]
+fn a_subscriber_filtered_by_types_only_receives_matching_pushes() {
+    let server = MockServer::builder().start();
+    let stream = open_eventsource(&server, "types=ContactCard&closeafter=no&ping=0");
+    let mut reader = BufReader::new(stream);
+
+    server.wait_for_event_source_subscriber(Duration::from_secs(5));
+
+    // A `Mailbox` change does not match this subscriber's `types=ContactCard`
+    // filter, so it must be sent nothing at all — not an empty `StateChange`,
+    // which nothing distinguishes from a match with no surviving types.
+    server.push_state_change(&StateChange::new(BTreeMap::from([(
+        Id::new("a1"),
+        BTreeMap::from([("Mailbox".to_owned(), State::new("1"))]),
+    )])));
+
+    // A `ContactCard` change does match, and must still arrive.
+    let mut changed = BTreeMap::new();
+    changed.insert(
+        Id::new("a1"),
+        BTreeMap::from([
+            ("Mailbox".to_owned(), State::new("2")),
+            ("ContactCard".to_owned(), State::new("1")),
+        ]),
+    );
+    server.push_state_change(&StateChange::new(changed));
+
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).expect("read a line");
+        assert!(n > 0, "connection closed before the matching push arrived");
+        if line.trim_end() == "event: state" {
+            break;
+        }
+    }
+    let mut data = String::new();
+    reader.read_line(&mut data).expect("read the data line");
+    assert!(data.contains("ContactCard"), "{data}");
+    assert!(
+        !data.contains("\"Mailbox\""),
+        "the unmatched type leaked through: {data}"
+    );
+}
+
+#[test]
 fn a_second_subscriber_also_receives_the_push() {
     let server = MockServer::builder().start();
     let mut first = open_eventsource(&server, "types=*&closeafter=state&ping=0");

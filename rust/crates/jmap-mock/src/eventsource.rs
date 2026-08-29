@@ -20,13 +20,14 @@
 //! persistent connection (`closeafter=no`, RFC 8620 §7.3's normal case) that
 //! is "never" — so every chunk here is written and flushed by hand instead.
 //!
-//! `types` (RFC 8620 §7.3's per-connection type filter) is not implemented:
-//! every subscriber receives every pushed `StateChange` unfiltered. Nothing
-//! that uses this yet needs the filter, and it can be added at the
-//! [`crate::state::EventSourceHub::broadcast`] call site without changing
-//! this module's shape.
+//! `types` (RFC 8620 §7.3's per-connection type filter) is parsed here and
+//! applied at [`crate::state::EventSourceHub::broadcast`]: this module only
+//! reads the query string and hands the parsed filter to
+//! [`crate::state::EventSourceHub::subscribe`], narrowing itself to no more
+//! than "what did the URL say" — this file's own shape (format, frame,
+//! flush) is unchanged either way.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -37,9 +38,12 @@ use jmap_proto::push::StateChange;
 use crate::state::ServerState;
 
 /// Parsed `/eventsource` query parameters this mock acts on (RFC 8620
-/// §7.3). `types` is accepted (so a real client's URL is not itself a 404)
-/// but not otherwise read — see the module doc.
+/// §7.3).
 struct EventSourceParams {
+    /// `None` means "every type" — an absent `types` parameter, or the
+    /// literal `*` (RFC 8620 §7.3's own wildcard), are both that; a
+    /// comma-separated list narrows to exactly those type names.
+    types: Option<BTreeSet<String>>,
     close_after_state: bool,
     ping_interval: Option<Duration>,
 }
@@ -52,6 +56,15 @@ fn parse_params(query: &str) -> EventSourceParams {
         .map(|(key, value)| (key.to_owned(), value.to_owned()))
         .collect();
     EventSourceParams {
+        types: fields.get("types").and_then(|value| {
+            (value != "*").then(|| {
+                value
+                    .split(',')
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+        }),
         close_after_state: fields.get("closeafter").map(String::as_str) == Some("state"),
         ping_interval: fields
             .get("ping")
@@ -71,7 +84,7 @@ pub fn spawn_and_respond(request: tiny_http::Request, query: &str, state: &Mutex
         .lock()
         .expect("mock state lock")
         .event_source
-        .subscribe();
+        .subscribe(params.types.clone());
     std::thread::spawn(move || {
         let mut writer = request.into_writer();
         let head = "HTTP/1.1 200 OK\r\n\
@@ -205,5 +218,34 @@ mod tests {
         let params = parse_params("");
         assert!(!params.close_after_state);
         assert_eq!(params.ping_interval, None);
+    }
+
+    #[test]
+    fn a_wildcard_types_is_no_filter() {
+        assert_eq!(parse_params("types=*").types, None);
+    }
+
+    #[test]
+    fn an_absent_types_is_no_filter() {
+        assert_eq!(parse_params("closeafter=no").types, None);
+    }
+
+    #[test]
+    fn a_single_type_is_a_one_element_filter() {
+        assert_eq!(
+            parse_params("types=Mailbox").types,
+            Some(std::collections::BTreeSet::from(["Mailbox".to_owned()]))
+        );
+    }
+
+    #[test]
+    fn a_comma_separated_list_is_a_multi_element_filter() {
+        assert_eq!(
+            parse_params("types=Mailbox,Email").types,
+            Some(std::collections::BTreeSet::from([
+                "Mailbox".to_owned(),
+                "Email".to_owned()
+            ]))
+        );
     }
 }

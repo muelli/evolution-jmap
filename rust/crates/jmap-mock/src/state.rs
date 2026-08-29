@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc::Sender;
 
+use jmap_proto::push::StateChange;
 use jmap_proto::{Id, State};
 
 /// One [`ServerState::type_state_snapshot`] — every account's state counter
@@ -280,17 +281,26 @@ impl Default for ServerState {
     }
 }
 
-/// The `/eventsource` clients currently connected (RFC 8620 §7.3), each as a
-/// channel of pre-formatted SSE bytes.
+/// One `/eventsource` client: the channel its pushed SSE bytes go out on,
+/// and the `types` URI Template parameter (RFC 8620 §7.3) it registered
+/// with — `None` for "no filter, subscribed to everything" (an absent
+/// parameter, or the literal `*`).
+struct Subscriber {
+    sender: Sender<Vec<u8>>,
+    types: Option<BTreeSet<String>>,
+}
+
+/// The `/eventsource` clients currently connected (RFC 8620 §7.3).
 ///
-/// Formatting happens once at broadcast time
-/// ([`crate::eventsource::format_state_event`]), not per subscriber: every
-/// connected client gets the same `StateChange`, unfiltered by its `types`
-/// URI Template parameter — narrowing to what each subscriber actually asked
-/// for is follow-up work, not yet needed by anything that reads this hub.
+/// [`Self::broadcast`] takes the structured `StateChange` rather than
+/// pre-formatted bytes so it can narrow `changed` to each subscriber's own
+/// `types` filter before formatting — a subscriber whose filter matches
+/// none of a change's types is sent nothing at all, rather than an empty
+/// `StateChange` it would have no way to tell apart from a real one naming
+/// zero types.
 #[derive(Default)]
 pub struct EventSourceHub {
-    subscribers: Vec<Sender<Vec<u8>>>,
+    subscribers: Vec<Subscriber>,
 }
 
 impl EventSourceHub {
@@ -298,20 +308,35 @@ impl EventSourceHub {
         Self::default()
     }
 
-    /// Register a new subscriber, returning the receiving end it reads
-    /// pushed bytes from until this hub (or its own disconnect) drops the
-    /// sending end.
-    pub fn subscribe(&mut self) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    /// Register a new subscriber with the `types` filter it connected with
+    /// (`None` = every type), returning the receiving end it reads pushed
+    /// bytes from until this hub (or its own disconnect) drops the sending
+    /// end.
+    pub fn subscribe(
+        &mut self,
+        types: Option<BTreeSet<String>>,
+    ) -> std::sync::mpsc::Receiver<Vec<u8>> {
         let (sender, receiver) = std::sync::mpsc::channel();
-        self.subscribers.push(sender);
+        self.subscribers.push(Subscriber { sender, types });
         receiver
     }
 
-    /// Send `bytes` to every currently connected subscriber, dropping any
-    /// whose receiving end has gone away (the client disconnected).
-    pub fn broadcast(&mut self, bytes: Vec<u8>) {
-        self.subscribers
-            .retain(|sender| sender.send(bytes.clone()).is_ok());
+    /// Send `change`, narrowed to each subscriber's own `types` filter, to
+    /// every currently connected subscriber whose filter matches at least
+    /// one of its changed types — dropping any subscriber whose receiving
+    /// end has gone away (the client disconnected). A subscriber whose
+    /// filter matches nothing in `change` is left connected but sent
+    /// nothing, same as a request that mutated nothing at all.
+    pub fn broadcast(&mut self, change: &StateChange) {
+        self.subscribers.retain(
+            |subscriber| match filter_for(change, subscriber.types.as_ref()) {
+                Some(filtered) => subscriber
+                    .sender
+                    .send(crate::eventsource::format_state_event(&filtered))
+                    .is_ok(),
+                None => true,
+            },
+        );
     }
 
     /// How many `/eventsource` clients are connected right now — what
@@ -319,6 +344,29 @@ impl EventSourceHub {
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.len()
     }
+}
+
+/// Narrow `change`'s `changed` map to the type names in `types` (`None` =
+/// every type, so `change` passes through unchanged); an account whose
+/// entry has no matching type is dropped entirely, and `None` is returned
+/// when nothing survives — the signal to send this subscriber nothing.
+fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<StateChange> {
+    let Some(types) = types else {
+        return Some(change.clone());
+    };
+    let changed: BTreeMap<Id, BTreeMap<String, State>> = change
+        .changed
+        .iter()
+        .filter_map(|(id, type_state)| {
+            let narrowed: BTreeMap<String, State> = type_state
+                .iter()
+                .filter(|(type_name, _)| types.contains(*type_name))
+                .map(|(type_name, state)| (type_name.clone(), state.clone()))
+                .collect();
+            (!narrowed.is_empty()).then(|| (id.clone(), narrowed))
+        })
+        .collect();
+    (!changed.is_empty()).then(|| StateChange::new(changed))
 }
 
 /// One account's data.
