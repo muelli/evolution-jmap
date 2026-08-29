@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-29 03:00+0000\n"
+"POT-Creation-Date: 2026-08-29 21:35+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -80,15 +80,15 @@ msgstr ""
 msgid "the %1$s backend has no account to connect to"
 msgstr ""
 
-#: rust/crates/jmap-backend-core/src/oauth2.rs:523
-#: rust/crates/jmap-backend-core/src/oauth2.rs:633
+#: rust/crates/jmap-backend-core/src/oauth2.rs:536
+#: rust/crates/jmap-backend-core/src/oauth2.rs:646
 msgid "no further detail was given"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the message bus's own text naming which service
 #. has no owner, e.g. "The name :1.4 was not provided by any .service
 #. files".
-#: rust/crates/jmap-backend-core/src/oauth2.rs:522
+#: rust/crates/jmap-backend-core/src/oauth2.rs:535
 #, c-format
 msgid ""
 "a service this account's sign-in needs is not running, so no access token "
@@ -97,7 +97,7 @@ msgstr ""
 
 #. TRANSLATORS: %1$s is EDS's own message for why the
 #. account's secret store (keyring) could not be reached.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:632
+#: rust/crates/jmap-backend-core/src/oauth2.rs:645
 #, c-format
 msgid "the account's secret store (keyring) could not be reached: %1$s"
 msgstr ""
@@ -106,21 +106,31 @@ msgstr ""
 #. the account's stored token cannot be read because the
 #. system keyring is locked, which signing in again cannot
 #. fix.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:664
+#: rust/crates/jmap-backend-core/src/oauth2.rs:677
 msgid ""
 "the login keyring is locked, so this account's OAuth 2.0 token can be "
 "neither read nor stored; unlock the keyring and try again"
 msgstr ""
 
+#. TRANSLATORS: shown instead of a fresh sign-in window when
+#. the system has no keyring service at all, so a token
+#. obtained by signing in could not be saved anywhere.
+#: rust/crates/jmap-backend-core/src/oauth2.rs:705
+msgid ""
+"this system has no keyring service to store an OAuth 2.0 token in, so "
+"signing in again would not keep this account signed in; enable a keyring "
+"service and try again"
+msgstr ""
+
 #. TRANSLATORS: shown when EDS refused an OAuth 2.0 account's
 #. access token but did not say why.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:675
+#: rust/crates/jmap-backend-core/src/oauth2.rs:716
 msgid "the account has no OAuth 2.0 access token"
 msgstr ""
 
 #. TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
 #. token that was empty rather than absent.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:706
+#: rust/crates/jmap-backend-core/src/oauth2.rs:747
 msgid "the OAuth 2.0 service returned an empty access token"
 msgstr ""
 
