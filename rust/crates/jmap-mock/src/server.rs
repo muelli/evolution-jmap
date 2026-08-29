@@ -450,6 +450,8 @@ impl MockServerBuilder {
             .port();
         let origin = format!("http://127.0.0.1:{port}");
 
+        let auth = Arc::new(Mutex::new(self.auth));
+
         let stop = Arc::new(AtomicBool::new(false));
         let oauth = OAuthHandlers {
             metadata: self.oauth_metadata.clone(),
@@ -458,14 +460,16 @@ impl MockServerBuilder {
         };
         let handle = std::thread::spawn({
             let state = Arc::clone(&state);
+            let auth = Arc::clone(&auth);
             let stop = Arc::clone(&stop);
             let origin = origin.clone();
-            move || serve(server, state, self.auth, oauth, origin, stop)
+            move || serve(server, state, auth, oauth, origin, stop)
         });
 
         MockServer {
             origin,
             state,
+            auth,
             stop,
             handle: Some(handle),
         }
@@ -476,6 +480,7 @@ impl MockServerBuilder {
 pub struct MockServer {
     origin: String,
     state: Arc<Mutex<ServerState>>,
+    auth: Arc<Mutex<AuthConfig>>,
     stop: Arc<AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
@@ -522,6 +527,19 @@ impl MockServer {
         Arc::clone(&self.state)
     }
 
+    /// Stop accepting whichever bearer token(s) this server started with —
+    /// or was most recently switched to — and accept only `token` from now
+    /// on. Simulates a real deployment where the client's access token has
+    /// expired and been refreshed: a request already in flight or reusing
+    /// the old token now gets a genuine 401, not a client-side stand-in for
+    /// one.
+    pub fn set_bearer_token(&self, token: &str) {
+        self.auth
+            .lock()
+            .expect("mock auth lock")
+            .replace_bearer(token);
+    }
+
     /// The names of the method calls this server has answered so far, in
     /// order — see [`ServerState::method_calls`].
     ///
@@ -545,6 +563,16 @@ impl MockServer {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.api_requests
     }
+
+    /// How many requests this server has refused with a 401 — see
+    /// [`ServerState::unauthorized_responses`].
+    pub fn unauthorized_responses(&self) -> usize {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.unauthorized_responses
+    }
 }
 
 impl Drop for MockServer {
@@ -559,7 +587,7 @@ impl Drop for MockServer {
 fn serve(
     server: tiny_http::Server,
     state: Arc<Mutex<ServerState>>,
-    auth: AuthConfig,
+    auth: Arc<Mutex<AuthConfig>>,
     oauth: OAuthHandlers,
     origin: String,
     stop: Arc<AtomicBool>,
@@ -576,7 +604,7 @@ fn serve(
 fn handle_request(
     mut request: tiny_http::Request,
     state: &Mutex<ServerState>,
-    auth: &AuthConfig,
+    auth: &Mutex<AuthConfig>,
     oauth: &OAuthHandlers,
     origin: &str,
 ) {
@@ -685,7 +713,10 @@ fn handle_request(
                 .iter()
                 .find(|header| header.field.equiv("Authorization"))
                 .map(|header| header.value.as_str().to_owned());
-            let authorized = auth.authorized(authorization.as_deref());
+            let authorized = auth
+                .lock()
+                .expect("mock auth lock")
+                .authorized(authorization.as_deref());
             let state = state.lock().expect("mock state lock");
             let session = session_document(&state, origin, authorized);
             respond_json(
@@ -702,7 +733,15 @@ fn handle_request(
         .iter()
         .find(|header| header.field.equiv("Authorization"))
         .map(|header| header.value.as_str().to_owned());
-    if !auth.authorized(authorization.as_deref()) {
+    if !auth
+        .lock()
+        .expect("mock auth lock")
+        .authorized(authorization.as_deref())
+    {
+        state
+            .lock()
+            .expect("mock state lock")
+            .unauthorized_responses += 1;
         respond_json(
             request,
             401,

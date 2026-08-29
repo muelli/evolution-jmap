@@ -51,22 +51,31 @@
 //! [`MailSync::send_message`]: jmap_mail_sync::MailSync::send_message
 
 use std::ffi::CStr;
+use std::ptr;
 use std::sync::RwLock;
 
-use eds_sys::{CamelServiceClass, CamelTransport, CamelTransportClass, camel_transport_get_type};
+use eds_sys::{
+    CamelService, CamelServiceClass, CamelTransport, CamelTransportClass, camel_service_get_type,
+    camel_service_ref_session, camel_service_ref_settings, camel_transport_get_type,
+};
 use glib_sys::GType;
+use gobject_sys::g_type_check_instance_is_a;
 use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::dispatched_borrow;
+use jmap_backend_core::owned::Owned;
+use jmap_backend_core::retry::retry_once_after;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
-use jmap_mail_sync::MailSync;
+use jmap_client::Credentials;
+use jmap_mail_sync::{MailSync, SyncError};
 
 use jmap_mail_sync::Outgoing;
 use jmap_proto::Id;
 use jmap_proto::mail::Envelope;
 
 use crate::connect::StoreError;
+use crate::oauth2;
 use crate::service::Connected;
 use crate::settings::settings_type;
 use crate::store::{read, write};
@@ -168,27 +177,45 @@ impl JmapTransport {
 
         tracing::debug!(size = source.len(), "sending message");
 
-        let identity = match sync.identity_for(&envelope.mail_from.email) {
+        let identity = match retry_once_after(
+            || sync.identity_for(&envelope.mail_from.email),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(identity) => identity,
             Err(failure) => {
                 tracing::debug!(?failure, "looking up sender identity failed");
                 return Err(failure.into());
             }
         };
-        let mailboxes = match sync.outgoing_mailboxes() {
+        let mailboxes = match retry_once_after(
+            || sync.outgoing_mailboxes(),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(mailboxes) => mailboxes,
             Err(failure) => {
                 tracing::debug!(?failure, "looking up outgoing mailboxes failed");
                 return Err(failure.into());
             }
         };
-        let uid = match sync.send_message(Outgoing {
-            source,
-            identity,
-            envelope: Some(envelope),
-            staging: mailboxes.staging,
-            destination: mailboxes.destination,
-        }) {
+        // `retry_once_after`'s `attempt` must be safe to run twice, so the
+        // upload bytes are cloned into the closure rather than moved: a retry
+        // after a refreshed token sends the same message again, not whatever
+        // `source` was left as by a first, unauthorized attempt.
+        let uid = match retry_once_after(
+            || {
+                sync.send_message(Outgoing {
+                    source: source.clone(),
+                    identity: identity.clone(),
+                    envelope: Some(envelope.clone()),
+                    staging: mailboxes.staging.clone(),
+                    destination: mailboxes.destination.clone(),
+                })
+            },
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(uid) => uid,
             Err(failure) => {
                 tracing::debug!(?failure, "sending message failed");
@@ -208,6 +235,84 @@ impl JmapTransport {
     pub fn is_connected(&self) -> bool {
         self.connection()
             .is_some_and(|connection| read(connection).is_some())
+    }
+
+    /// This transport, as the `CamelService` Camel gave Evolution, or `None`
+    /// on a [`JmapTransport::detached`] test instance, which is not one.
+    ///
+    /// The mail-side counterpart of [`JmapStore::service`], one hop shorter:
+    /// `Self` leads with `CamelTransport` itself, from `CamelService`, so
+    /// `self` and this pointer name the same object, just typed as its C
+    /// ancestor. The type check is what makes this sound on a detached
+    /// instance too, the same guarantee `JmapStore::service` relies on.
+    ///
+    /// [`JmapStore::service`]: crate::store::JmapStore::service
+    fn service(&self) -> Option<*mut CamelService> {
+        let ptr = ptr::from_ref(self).cast::<CamelService>().cast_mut();
+        // SAFETY: `ptr` is `self` reinterpreted as its leading `GTypeInstance`
+        // field, checked against the target type before it is read any
+        // further, per the doc comment above.
+        let is_service =
+            unsafe { g_type_check_instance_is_a(ptr.cast(), camel_service_get_type()) };
+        (is_service != 0).then_some(ptr)
+    }
+
+    /// Fetches a fresh OAuth 2.0 access token for the account and installs it
+    /// on the live connection, reporting whether an operation is now worth
+    /// retrying.
+    ///
+    /// The transport-side twin of [`JmapStore::refresh_credentials`]
+    /// (`docs/ROADMAP.md` item 23) — same two "nothing to refresh" cases: not
+    /// an OAuth 2.0 account, or no `CamelService` to ask.
+    ///
+    /// [`JmapStore::refresh_credentials`]: crate::store::JmapStore::refresh_credentials
+    fn refresh_credentials(&self, sync: &MailSync) -> bool {
+        let Some(service) = self.service() else {
+            return false;
+        };
+        // SAFETY: `service` is a live `CamelService` by the check in
+        // `Self::service`; the settings reference is released when it drops.
+        let settings = unsafe { Owned::from_raw(camel_service_ref_settings(service)) };
+        // SAFETY: `settings` is NULL or the `CamelSettings` just referenced.
+        let uses_oauth2 = settings
+            .as_ref()
+            .is_some_and(|settings| unsafe { oauth2::uses_oauth2(settings.as_ptr()) });
+        if !uses_oauth2 {
+            return false;
+        }
+
+        // SAFETY: `service` is a valid, registered `CamelService` by the
+        // check above; the session reference is released when it drops.
+        let Some(session) = (unsafe { Owned::from_raw(camel_service_ref_session(service)) }) else {
+            return false;
+        };
+        // SAFETY: a valid session and a valid, registered service; no
+        // cancellable — this refresh is not the operation the user asked to
+        // stop, and `access_token` accepts NULL for "not cancellable".
+        match unsafe { oauth2::access_token(session.as_ptr(), service, ptr::null_mut()) } {
+            Ok(token) => {
+                tracing::debug!("refreshed the transport connection's OAuth 2.0 access token");
+                sync.client().set_credentials(Credentials::bearer(token));
+                true
+            }
+            Err(failure) => {
+                tracing::debug!(
+                    ?failure,
+                    "refreshing the transport connection's access token failed"
+                );
+                false
+            }
+        }
+    }
+
+    /// For the tests only, mirroring [`JmapStore::inspect_connection`].
+    ///
+    /// [`JmapStore::inspect_connection`]: crate::store::JmapStore::inspect_connection
+    #[cfg(feature = "testing")]
+    pub fn inspect_connection<R>(&self, f: impl FnOnce(&MailSync) -> R) -> Option<R> {
+        let connection = self.connection()?;
+        let guard = read(connection);
+        guard.as_ref().map(f)
     }
 
     /// An instance outside the GObject type system: zeroed parent bytes and an
