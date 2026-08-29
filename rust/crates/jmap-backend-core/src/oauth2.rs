@@ -680,16 +680,16 @@ pub unsafe fn access_token(
 
         // The other way a store can be no use to us: not there at all. A
         // sign-in window offered here would complete and then have nowhere to
-        // put the token, so the very next fetch would ask again — the user
+        // put the token, so the very next fetch would ask again. The user
         // does the whole dance and nothing keeps it. Erroring out is the
         // honest outcome (maintainer, 2026-08-29).
         //
         // `Some(false)` and nothing else, the same discipline the locked
         // check above uses and for the same reason. A desktop whose keyring
-        // simply has not been started yet answers `Some(true)` — the bus can
-        // activate it — and a machine that cannot be asked answers `None`;
-        // both must keep behaving exactly as they did before this check
-        // existed. Only "the bus knows of no such service, running or
+        // simply has not been started yet answers `Some(true)`, because the
+        // bus can activate it, and a machine that cannot be asked answers
+        // `None`. Both must keep behaving exactly as they did before this
+        // check existed. Only "the bus knows of no such service, running or
         // startable" is a machine where consent cannot lead anywhere.
         if secret_not_found && crate::secret_store::service_is_available() == Some(false) {
             tracing::debug!(

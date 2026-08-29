@@ -53,7 +53,7 @@ const ANSWER: &str = "default-collection-is-locked=";
 /// The same, for [`secret_store::service_is_available`]. Printed by the same
 /// child on the same run rather than by a probe of its own: both questions
 /// are asked of one bus, and asking them together is what makes their
-/// answers comparable — the "absent from the bus but startable" scenario
+/// answers comparable. The "absent from the bus but startable" scenario
 /// below is *defined* by the two disagreeing.
 const ANSWER_AVAILABLE: &str = "service-is-available=";
 
@@ -208,8 +208,8 @@ fn run_probe(root: &Path, setup: &str, servicedir: Option<&Path>) -> String {
 ///
 /// Deliberately *not* `<standard_session_servicedirs/>`: including it is what
 /// would put the system's own services back, which is the thing being
-/// excluded. The policy is the stock session policy — this bus is private to
-/// one test process and owns nothing worth restricting.
+/// excluded. The policy is the stock session policy, since this bus is
+/// private to one test process and owns nothing worth restricting.
 fn bus_config(servicedir: &Path) -> String {
     format!(
         r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
@@ -385,7 +385,7 @@ fn no_secret_service_at_all_is_not_a_locked_store() {
     assert_eq!(probe_in(&root, ""), "None");
 }
 
-/// A machine with no secret service *at all* — none running, and none the
+/// A machine with no secret service *at all*: none running, and none the
 /// bus could start. This is the state `secret_store::service_is_available`
 /// exists to name, and the one where offering a sign-in window is a trap:
 /// the consent would succeed and the token would have nowhere to go, so the
@@ -393,7 +393,7 @@ fn no_secret_service_at_all_is_not_a_locked_store() {
 ///
 /// The private bus config is the whole scenario. Without it the bus finds
 /// `/usr/share/dbus-1/services/org.freedesktop.secrets.service` on any
-/// machine with gnome-keyring installed, and correctly answers "startable" —
+/// machine with gnome-keyring installed, and correctly answers "startable",
 /// which is what the next test pins.
 #[test]
 #[ignore = "needs dbus-run-session; see the module docs"]
@@ -416,7 +416,7 @@ fn a_bus_that_could_not_start_a_secret_service_reports_none_available() {
 /// from `evolution-source-registry` is a 25-second timeout when it cannot
 /// start, on the connect path). The stub service here would touch a marker
 /// file if the bus ever ran it, so the absence of that file is the promise
-/// under test — an assertion, not a comment.
+/// under test. An assertion, not a comment.
 #[test]
 #[ignore = "needs dbus-run-session; see the module docs"]
 fn a_startable_secret_service_counts_as_available_and_is_not_started() {
@@ -445,7 +445,7 @@ fn a_startable_secret_service_counts_as_available_and_is_not_started() {
 }
 
 /// A secret service that is actually running is available whatever state its
-/// collections are in — a *locked* keyring is still somewhere a token can be
+/// collections are in. A *locked* keyring is still somewhere a token can be
 /// stored, which is why this answer and
 /// [`a_locked_login_keyring_reports_itself_locked`]'s differ on the same bus.
 #[test]
