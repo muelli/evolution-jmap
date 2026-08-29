@@ -131,7 +131,17 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
                 .inspect_err(|error| {
                     tracing::warn!(account_id, ?kind, %error, "collection create failed");
                 })?;
-            created_resource(created.id, &created.name, created.is_default, None)
+            let writable = created
+                .my_rights
+                .as_ref()
+                .map(|rights| rights.is_writable());
+            created_resource(
+                created.id,
+                &created.name,
+                created.is_default,
+                None,
+                writable,
+            )
         }
         ChildKind::Calendar => {
             let created = client
@@ -147,7 +157,17 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
                     tracing::warn!(account_id, ?kind, %error, "collection create failed");
                 })?;
             let color = created.color.clone();
-            created_resource(created.id, &created.name, created.is_default, color)
+            let writable = created
+                .my_rights
+                .as_ref()
+                .map(|rights| rights.is_writable());
+            created_resource(
+                created.id,
+                &created.name,
+                created.is_default,
+                color,
+                writable,
+            )
         }
     }
     .ok_or_else(|| CreateFailure::Client(missing_id(requested.kind)))?;
@@ -168,12 +188,14 @@ fn created_resource(
     name: &str,
     is_default: Option<bool>,
     color: Option<String>,
+    writable: Option<bool>,
 ) -> Option<Resource> {
     let id = id?;
     Some(Resource {
         name: shown_name(name, &id),
         is_default: is_default == Some(true),
         color,
+        writable,
         id,
     })
 }
@@ -198,7 +220,7 @@ mod tests {
         // The server answers a create with the object it created; a server that
         // normalised the name is telling the client what the collection is
         // actually called.
-        let resource = created_resource(Some(Id::new("AB9")), "Work Contacts", None, None)
+        let resource = created_resource(Some(Id::new("AB9")), "Work Contacts", None, None, None)
             .expect("the server named an id");
         assert_eq!(resource.name, "Work Contacts");
         assert_eq!(resource.id, Id::new("AB9"));
@@ -209,7 +231,7 @@ mod tests {
     fn a_created_collection_the_server_named_nothing_shows_its_id() {
         // The same never-blank rule a listing applies — a blank row in the
         // sidebar is one the user cannot tell from another blank row.
-        let resource = created_resource(Some(Id::new("Cal9")), "   ", None, None)
+        let resource = created_resource(Some(Id::new("Cal9")), "   ", None, None, None)
             .expect("the server named an id");
         assert_eq!(resource.name, "Cal9");
     }
@@ -218,7 +240,7 @@ mod tests {
     fn a_create_the_server_reported_no_id_for_is_no_resource() {
         // `[Resource] Identity` is what this becomes, and a child written
         // without one is a child EDS deletes the cache file of.
-        assert!(created_resource(None, "Work", None, None).is_none());
+        assert!(created_resource(None, "Work", None, None, None).is_none());
     }
 
     #[test]
@@ -228,9 +250,28 @@ mod tests {
             "Work",
             Some(true),
             Some("#ff8800".to_owned()),
+            None,
         )
         .expect("the server named an id");
         assert!(resource.is_default);
         assert_eq!(resource.color, Some("#ff8800".to_owned()));
+    }
+
+    #[test]
+    fn the_servers_my_rights_reach_the_resource_as_writable() {
+        // A create's response can carry `myRights` right away (RFC 8620 §5.3
+        // confirms whichever properties the server chooses in a create's
+        // response), and the same reading `resources()` gives a discovered
+        // collection has to apply here too, or a freshly created read-only
+        // share would show as writable until the next populate corrected it.
+        let resource = created_resource(
+            Some(Id::new("AB9")),
+            "Read-only share",
+            None,
+            None,
+            Some(false),
+        )
+        .expect("the server named an id");
+        assert_eq!(resource.writable, Some(false));
     }
 }

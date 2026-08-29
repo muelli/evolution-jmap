@@ -30,8 +30,44 @@ pub struct AddressBook {
     pub is_default: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_subscribed: Option<bool>,
+    /// Server-computed permissions on this address book (RFC 9610 §2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_rights: Option<AddressBookRights>,
+    /// Rights granted to other principals (RFC 9610 §2), keyed by principal
+    /// id. Modeled but unread today — writing shares is Phase C, deliberately
+    /// separate from reading `myRights`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_with: Option<BTreeMap<Id, AddressBookRights>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+/// `AddressBook.myRights`/a `shareWith` entry, RFC 9610 §2.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressBookRights {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_read: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_write: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_share: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_delete: Option<bool>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl AddressBookRights {
+    /// Whether these rights let the holder write to the address book — the
+    /// one bit [`crate::calendars::Calendar`]'s sibling collection-sync layer
+    /// narrows a writable account down to. Absent `mayWrite` reads as `false`
+    /// (fail closed): a `myRights` object the server bothered to send but left
+    /// this field out of is not grounds to assume write access it never
+    /// stated.
+    pub fn is_writable(&self) -> bool {
+        self.may_write.unwrap_or(false)
+    }
 }
 
 /// A contact card (RFC 9610 §3): JSContact Card plus JMAP `id` and

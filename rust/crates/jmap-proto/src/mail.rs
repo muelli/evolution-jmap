@@ -38,6 +38,37 @@ pub struct Mailbox {
     pub unread_threads: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_subscribed: Option<bool>,
+    /// Server-computed permissions on this mailbox (RFC 8621 §2). RFC 8621
+    /// defines no `shareWith` for `Mailbox` — there is no standard JMAP way to
+    /// grant another principal rights on one — so this has no counterpart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_rights: Option<MailboxRights>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// `Mailbox.myRights`, RFC 8621 §2.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MailboxRights {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_read_items: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_add_items: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_remove_items: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_set_seen: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_set_keywords: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_create_child: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_rename: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_delete: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_submit: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }

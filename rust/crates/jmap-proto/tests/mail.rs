@@ -5,7 +5,9 @@
 
 #![cfg(feature = "mail")]
 
-use jmap_proto::mail::{Email, EmailImport, EmailQueryFilter, EmailSubmission, Mailbox};
+use jmap_proto::mail::{
+    Email, EmailImport, EmailQueryFilter, EmailSubmission, Mailbox, MailboxRights,
+};
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -32,6 +34,18 @@ fn mailbox_roundtrip() {
     assert_eq!(mailbox.role.as_deref(), Some("inbox"));
     assert_eq!(mailbox.total_emails, Some(2));
     assert_eq!(mailbox.unread_emails, Some(1));
+}
+
+#[test]
+fn mailbox_my_rights_roundtrip() {
+    let value = fixture("mail/mailbox_with_rights.json");
+    assert_eq!(roundtrip::<Mailbox>(&value), value);
+
+    let mailbox: Mailbox = serde_json::from_value(value).unwrap();
+    let rights: MailboxRights = mailbox.my_rights.expect("myRights");
+    assert_eq!(rights.may_read_items, Some(true));
+    assert_eq!(rights.may_remove_items, Some(false));
+    assert_eq!(rights.may_submit, Some(true));
 }
 
 #[test]

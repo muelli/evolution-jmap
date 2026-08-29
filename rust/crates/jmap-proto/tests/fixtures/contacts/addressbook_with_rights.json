@@ -1,0 +1,19 @@
+{
+  "id": "AB1",
+  "name": "Team contacts",
+  "isSubscribed": true,
+  "myRights": {
+    "mayRead": true,
+    "mayWrite": false,
+    "mayShare": false,
+    "mayDelete": false
+  },
+  "shareWith": {
+    "P1": {
+      "mayRead": true,
+      "mayWrite": true,
+      "mayShare": false,
+      "mayDelete": false
+    }
+  }
+}

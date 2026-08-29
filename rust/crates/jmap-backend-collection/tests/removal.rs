@@ -116,6 +116,7 @@ fn resource(id: &str) -> Resource {
         name: format!("Collection {id}"),
         is_default: false,
         color: None,
+        writable: None,
     }
 }
 

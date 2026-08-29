@@ -6,7 +6,10 @@
 
 #![cfg(feature = "calendars")]
 
-use jmap_proto::calendars::{CalendarEvent, CalendarEventQueryFilter, NDay, RecurrenceRule};
+use jmap_proto::Id;
+use jmap_proto::calendars::{
+    Calendar, CalendarEvent, CalendarEventQueryFilter, NDay, RecurrenceRule,
+};
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -97,6 +100,26 @@ fn calendar_event_roundtrip() {
     );
     // An unmodeled JSCalendar property (sequence) survives.
     assert!(event.extra.contains_key("sequence"));
+}
+
+#[test]
+fn calendar_my_rights_and_share_with_roundtrip() {
+    let value = fixture("calendars/calendar_with_rights.json");
+    assert_eq!(roundtrip::<Calendar>(&value), value);
+
+    let calendar: Calendar = serde_json::from_value(value).unwrap();
+    let rights = calendar.my_rights.expect("myRights");
+    assert_eq!(rights.may_write_all, Some(false));
+    assert_eq!(rights.may_write_own, Some(true));
+    assert_eq!(rights.may_rsvp, Some(true));
+    // Neither field alone would be writable; together (own items, not all) the
+    // calendar as a whole counts as writable — EDS has no shade between the two.
+    assert!(rights.is_writable());
+
+    let share_with = calendar.share_with.expect("shareWith");
+    let shared_rights = &share_with[&Id::new("P1")];
+    assert_eq!(shared_rights.may_write_all, Some(true));
+    assert!(shared_rights.is_writable());
 }
 
 #[test]
