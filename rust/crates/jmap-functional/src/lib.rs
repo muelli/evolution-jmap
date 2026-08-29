@@ -173,6 +173,44 @@ impl Session {
         );
     }
 
+    /// Stage one of EDS's OWN already-installed registry modules beside the
+    /// one [`Self::stage_collection_backend`] staged.
+    ///
+    /// Needed because `EDS_REGISTRY_MODULES` *replaces* EDS's module directory
+    /// rather than adding to it (`e-source-registry-server.c:1073` assigns it
+    /// over `MODULE_DIRECTORY`), so a session that stages only our own module
+    /// runs a registry with none of EDS's. That is the right default — every
+    /// other functional test here wants exactly one backend in play — but it
+    /// silently removes behaviour a test may be *about*: `tests/oauth2-stale-
+    /// proxy.rs` needs `module-oauth2-services.so`, whose `EOAuth2SourceMonitor`
+    /// is what exports the `Source.OAuth2Support` D-Bus interface for an
+    /// account whose `[Authentication] Method` names a registered
+    /// `EOAuth2Service`.
+    ///
+    /// Takes the *installed* module's path rather than a built one: this is
+    /// EDS's module, not ours, and a copy of it in this repository would be a
+    /// copy of the thing under test. CMake finds it (see `cmake/Functional.cmake`)
+    /// so that a machine without it fails the configure step by name instead of
+    /// producing a test that quietly measures nothing.
+    pub fn stage_installed_registry_module(&mut self, installed_module: &Path) {
+        let name = installed_module
+            .file_name()
+            .expect("the installed module path names a file");
+        // Not `stage_backend`: that would reset EDS_REGISTRY_MODULES to a
+        // fresh directory and drop whatever was staged before it. This adds
+        // to the directory the collection backend already went into.
+        let directory = self.root.join("registry-modules");
+        fs::create_dir_all(&directory).expect("create the registry module directory");
+        fs::copy(installed_module, directory.join(name)).unwrap_or_else(|error| {
+            panic!(
+                "copy {} into the session's registry module directory: {error}",
+                installed_module.display()
+            )
+        });
+        self.environment
+            .insert("EDS_REGISTRY_MODULES".into(), directory.into_os_string());
+    }
+
     /// Stage a built cdylib as the one Camel mail provider this session can
     /// see, together with the `.urls` file that is what makes Camel open it.
     ///
