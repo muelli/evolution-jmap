@@ -1006,3 +1006,181 @@ pub struct SubmissionCapability {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
+
+/// A Message Disposition Notification (RFC 9007 §2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MDN {
+    pub for_email_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_original_message: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reporting_ua: Option<String>,
+    pub disposition: MDNDisposition,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mdn_gateway: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_recipient: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_recipient: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_message_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension_fields: Option<BTreeMap<String, String>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl MDN {
+    pub fn new(for_email_id: impl Into<Id>, disposition: MDNDisposition) -> Self {
+        Self {
+            for_email_id: for_email_id.into(),
+            subject: None,
+            text_body: None,
+            include_original_message: None,
+            reporting_ua: None,
+            disposition,
+            mdn_gateway: None,
+            original_recipient: None,
+            final_recipient: None,
+            original_message_id: None,
+            error: None,
+            extension_fields: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
+
+    pub fn with_text_body(mut self, text_body: impl Into<String>) -> Self {
+        self.text_body = Some(text_body.into());
+        self
+    }
+
+    pub fn with_include_original_message(mut self, include_original_message: bool) -> Self {
+        self.include_original_message = Some(include_original_message);
+        self
+    }
+
+    pub fn with_reporting_ua(mut self, reporting_ua: impl Into<String>) -> Self {
+        self.reporting_ua = Some(reporting_ua.into());
+        self
+    }
+
+    pub fn with_final_recipient(mut self, final_recipient: impl Into<String>) -> Self {
+        self.final_recipient = Some(final_recipient.into());
+        self
+    }
+
+    pub fn with_original_message_id(mut self, original_message_id: impl Into<String>) -> Self {
+        self.original_message_id = Some(original_message_id.into());
+        self
+    }
+}
+
+/// The disposition information of an MDN (RFC 9007 §2.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MDNDisposition {
+    pub action_mode: String,
+    pub sending_mode: String,
+    #[serde(rename = "type")]
+    pub disposition_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modifiers: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl MDNDisposition {
+    pub fn new(
+        action_mode: impl Into<String>,
+        sending_mode: impl Into<String>,
+        disposition_type: impl Into<String>,
+    ) -> Self {
+        Self {
+            action_mode: action_mode.into(),
+            sending_mode: sending_mode.into(),
+            disposition_type: disposition_type.into(),
+            error: None,
+            modifiers: None,
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+/// `MDN/send` arguments (RFC 9007 §3.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MDNSendRequest {
+    pub account_id: Id,
+    pub send: BTreeMap<String, MDN>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_success_update_email: Option<BTreeMap<Id, Value>>,
+}
+
+impl MDNSendRequest {
+    pub fn new(account_id: impl Into<Id>, send: BTreeMap<String, MDN>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            send,
+            on_success_update_email: None,
+        }
+    }
+
+    pub fn with_on_success_update_email(
+        mut self,
+        on_success_update_email: BTreeMap<Id, Value>,
+    ) -> Self {
+        self.on_success_update_email = Some(on_success_update_email);
+        self
+    }
+}
+
+/// `MDN/send` response (RFC 9007 §3.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MDNSendResponse {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent: Option<BTreeMap<String, MDN>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_sent: Option<BTreeMap<String, crate::error::SetError>>,
+}
+
+/// Standard MDN action mode values (RFC 9007 §2.1, RFC 8098).
+pub mod mdn_action_mode {
+    pub const MANUAL_ACTION: &str = "manual-action";
+    pub const AUTOMATIC_ACTION: &str = "automatic-action";
+}
+
+/// Standard MDN sending mode values (RFC 9007 §2.1, RFC 8098).
+pub mod mdn_sending_mode {
+    pub const MDN_SENT_MANUALLY: &str = "mdn-sent-manually";
+    pub const MDN_SENT_AUTOMATICALLY: &str = "mdn-sent-automatically";
+}
+
+/// Standard MDN disposition type values (RFC 9007 §2.1, RFC 8098).
+pub mod mdn_disposition_type {
+    pub const DISPLAYED: &str = "displayed";
+    pub const DELETED: &str = "deleted";
+    pub const DISPATCHED: &str = "dispatched";
+    pub const PROCESSED: &str = "processed";
+}
+
+/// The `SetError` types RFC 9007 §3.2 adds for `MDN/send`.
+pub mod mdn_set_error {
+    pub const MDN_ALREADY_SENT: &str = "mdnAlreadySent";
+    pub const FORBIDDEN_FROM: &str = "forbiddenFrom";
+}

@@ -726,3 +726,88 @@ fn mailbox_identity_and_submission_builders_roundtrip() {
         sub
     );
 }
+
+#[test]
+fn mdn_send_request_response_and_disposition_roundtrip_covers_rfc9007() {
+    use jmap_proto::error::SetError;
+    use jmap_proto::mail::{
+        MDN, MDNDisposition, MDNSendRequest, MDNSendResponse, mdn_action_mode,
+        mdn_disposition_type, mdn_sending_mode, mdn_set_error,
+    };
+    use std::collections::BTreeMap;
+
+    assert_eq!(mdn_action_mode::MANUAL_ACTION, "manual-action");
+    assert_eq!(mdn_action_mode::AUTOMATIC_ACTION, "automatic-action");
+    assert_eq!(mdn_sending_mode::MDN_SENT_MANUALLY, "mdn-sent-manually");
+    assert_eq!(
+        mdn_sending_mode::MDN_SENT_AUTOMATICALLY,
+        "mdn-sent-automatically"
+    );
+    assert_eq!(mdn_disposition_type::DISPLAYED, "displayed");
+    assert_eq!(mdn_disposition_type::DELETED, "deleted");
+    assert_eq!(mdn_disposition_type::DISPATCHED, "dispatched");
+    assert_eq!(mdn_disposition_type::PROCESSED, "processed");
+    assert_eq!(mdn_set_error::MDN_ALREADY_SENT, "mdnAlreadySent");
+    assert_eq!(mdn_set_error::FORBIDDEN_FROM, "forbiddenFrom");
+
+    let disp = MDNDisposition::new(
+        mdn_action_mode::MANUAL_ACTION,
+        mdn_sending_mode::MDN_SENT_MANUALLY,
+        mdn_disposition_type::DISPLAYED,
+    );
+    assert_eq!(disp.action_mode, "manual-action");
+    assert_eq!(disp.sending_mode, "mdn-sent-manually");
+    assert_eq!(disp.disposition_type, "displayed");
+
+    let mdn = MDN::new("email_42", disp)
+        .with_subject("Read: Project Proposal")
+        .with_text_body("The message was displayed on 2026-08-29.")
+        .with_reporting_ua("Evolution-JMAP/0.2.0")
+        .with_final_recipient("user@example.com")
+        .with_original_message_id("<msg-123@example.org>");
+
+    assert_eq!(mdn.for_email_id.as_str(), "email_42");
+    assert_eq!(mdn.subject.as_deref(), Some("Read: Project Proposal"));
+    assert_eq!(mdn.reporting_ua.as_deref(), Some("Evolution-JMAP/0.2.0"));
+    assert_eq!(mdn.final_recipient.as_deref(), Some("user@example.com"));
+
+    let req = MDNSendRequest::new("acc1", BTreeMap::from([("k1".to_string(), mdn.clone())]))
+        .with_on_success_update_email(BTreeMap::from([(
+            "email_42".into(),
+            serde_json::json!({"keywords/$mdnsent": true}),
+        )]));
+
+    assert_eq!(req.account_id.as_str(), "acc1");
+    assert_eq!(req.send.len(), 1);
+    assert_eq!(req.send["k1"].for_email_id.as_str(), "email_42");
+
+    let req_val = serde_json::to_value(&req).unwrap();
+    assert_eq!(req_val["accountId"], "acc1");
+    assert_eq!(req_val["send"]["k1"]["forEmailId"], "email_42");
+    assert_eq!(
+        req_val["send"]["k1"]["disposition"]["actionMode"],
+        "manual-action"
+    );
+    assert_eq!(
+        req_val["onSuccessUpdateEmail"]["email_42"]["keywords/$mdnsent"],
+        true
+    );
+
+    let resp = MDNSendResponse {
+        account_id: "acc1".into(),
+        sent: Some(BTreeMap::from([("k1".to_string(), mdn)])),
+        not_sent: Some(BTreeMap::from([(
+            "k2".to_string(),
+            SetError::new(mdn_set_error::MDN_ALREADY_SENT),
+        )])),
+    };
+
+    let resp_val = serde_json::to_value(&resp).unwrap();
+    assert_eq!(resp_val["accountId"], "acc1");
+    assert_eq!(resp_val["sent"]["k1"]["forEmailId"], "email_42");
+    assert_eq!(resp_val["notSent"]["k2"]["type"], "mdnAlreadySent");
+    assert_eq!(
+        serde_json::from_value::<MDNSendResponse>(resp_val).unwrap(),
+        resp
+    );
+}

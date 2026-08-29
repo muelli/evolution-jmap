@@ -1069,3 +1069,114 @@ fn core_echo_and_builder_methods_roundtrip() {
         "id1"
     );
 }
+
+#[test]
+fn session_typed_capability_accessors_and_websocket_roundtrip() {
+    use jmap_proto::session::{
+        CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
+        CAPABILITY_MDN, CAPABILITY_PRINCIPALS, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
+        CAPABILITY_WEBSOCKET, WebSocketCapability,
+    };
+
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {
+            CAPABILITY_CORE: {
+                "maxSizeUpload": 10000000,
+                "maxConcurrentUpload": 4,
+                "maxSizeRequest": 5000000,
+                "maxConcurrentRequests": 8,
+                "maxCallsInRequest": 16,
+                "maxObjectsInGet": 500,
+                "maxObjectsInSet": 500,
+                "collationAlgorithms": ["i;ascii-casemap", "i;unicode-casemap"]
+            },
+            CAPABILITY_MAIL: {
+                "maxSizeAttachmentsPerEmail": 50000000,
+                "maxSizeEmailInBytes": 100000000,
+                "mayCreateTopLevelMailbox": true
+            },
+            CAPABILITY_SUBMISSION: {
+                "maxDelayedSend": 86400,
+                "submissionExtensions": {"futurerelease": []}
+            },
+            CAPABILITY_CONTACTS: {
+                "maxSizeAttachmentsPerCard": 5000000,
+                "maxNumberOfCardsInSet": 100
+            },
+            CAPABILITY_CALENDARS: {
+                "maxSizeAttachmentsPerEvent": 20000000,
+                "maxConcurrentAvailabilities": 10
+            },
+            CAPABILITY_PRINCIPALS: {
+                "maxPrincipalsPerGet": 50
+            },
+            CAPABILITY_WEBSOCKET: {
+                "url": "wss://jmap.example.com/ws",
+                "supportsPush": true
+            },
+            CAPABILITY_VACATION_RESPONSE: {},
+            CAPABILITY_MDN: {}
+        },
+        "accounts": {
+            "A1": {
+                "name": "john@example.com",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {
+                    CAPABILITY_CORE: {},
+                    CAPABILITY_MAIL: {}
+                }
+            }
+        },
+        "primaryAccounts": {
+            CAPABILITY_MAIL: "A1"
+        },
+        "username": "john@example.com",
+        "apiUrl": "https://jmap.example.com/api",
+        "downloadUrl": "https://jmap.example.com/download/{blobId}",
+        "uploadUrl": "https://jmap.example.com/upload/{accountId}",
+        "eventSourceUrl": "https://jmap.example.com/events",
+        "state": "s1234"
+    }))
+    .unwrap();
+
+    let core_cap = session.core_capability().expect("core capability");
+    assert_eq!(core_cap.max_size_upload, 10000000);
+    assert_eq!(core_cap.max_calls_in_request, 16);
+
+    let mail_cap = session.mail_capability().expect("mail capability");
+    assert_eq!(mail_cap.max_size_attachments_per_email, 50000000);
+    assert!(mail_cap.may_create_top_level_mailbox);
+
+    let sub_cap = session
+        .submission_capability()
+        .expect("submission capability");
+    assert_eq!(sub_cap.max_delayed_send, 86400);
+
+    let contacts_cap = session.contacts_capability().expect("contacts capability");
+    assert_eq!(contacts_cap.max_number_of_cards_in_set, 100);
+
+    let cal_cap = session
+        .calendars_capability()
+        .expect("calendars capability");
+    assert_eq!(cal_cap.max_concurrent_availabilities, 10);
+
+    let princ_cap = session
+        .principals_capability()
+        .expect("principals capability");
+    assert_eq!(princ_cap.max_principals_per_get, Some(50));
+
+    let ws_cap = session
+        .websocket_capability()
+        .expect("websocket capability");
+    assert_eq!(ws_cap.url, "wss://jmap.example.com/ws");
+    assert!(ws_cap.supports_push);
+
+    let ws_val = serde_json::to_value(&ws_cap).unwrap();
+    assert_eq!(ws_val["url"], "wss://jmap.example.com/ws");
+    assert!(ws_val["supportsPush"].as_bool().unwrap());
+    assert_eq!(
+        serde_json::from_value::<WebSocketCapability>(ws_val).unwrap(),
+        ws_cap
+    );
+}
