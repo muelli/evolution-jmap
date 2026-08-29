@@ -123,7 +123,7 @@ impl Drop for ChangeOuts {
             g_free(self.tag.cast());
             g_slist_free_full(self.created, Some(e_book_meta_backend_info_free));
             g_slist_free_full(self.modified, Some(e_book_meta_backend_info_free));
-            g_slist_free_full(self.removed, Some(g_free));
+            g_slist_free_full(self.removed, Some(e_book_meta_backend_info_free));
         }
     }
 }
@@ -134,20 +134,20 @@ unsafe fn nth_info(list: *mut GSList, n: u32) -> (String, String, String) {
     unsafe {
         let node = g_slist_nth_data(list, n).cast::<EBookMetaBackendInfo>();
         assert!(!node.is_null(), "no node {n}");
-        let text = |p: *mut gchar| CStr::from_ptr(p).to_string_lossy().into_owned();
+        // Empty for a NULL field rather than a dereference: `revision` and
+        // `object` are documented nullable, and a removal leaves both unset.
+        let text = |p: *mut gchar| {
+            if p.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(p).to_string_lossy().into_owned()
+            }
+        };
         (
             text((*node).uid),
             text((*node).revision),
             text((*node).object),
         )
-    }
-}
-
-unsafe fn nth_uid(list: *mut GSList, n: u32) -> String {
-    unsafe {
-        let node = g_slist_nth_data(list, n).cast::<gchar>();
-        assert!(!node.is_null(), "no node {n}");
-        CStr::from_ptr(node).to_string_lossy().into_owned()
     }
 }
 
@@ -524,7 +524,12 @@ fn get_changes_reports_changed_cards_and_the_ones_that_are_gone() {
         assert_eq!(g_slist_length(outs.modified), 1);
         assert_eq!(nth_info(outs.modified, 0).0, created.to_string());
         assert_eq!(g_slist_length(outs.removed), 1);
-        assert_eq!(nth_uid(outs.removed, 0), doomed.to_string());
+        // Read as an `EBookMetaBackendInfo`, which is what
+        // `e_book_meta_backend_process_changes_sync` does with this list —
+        // reading it as a bare string instead is the shape that crashed the
+        // address book factory in `sqlite3_vmprintf` (see docs/NIGHT-LOG.md,
+        // session N+106).
+        assert_eq!(nth_info(outs.removed, 0).0, doomed.to_string());
     }
 }
 

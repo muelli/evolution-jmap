@@ -12,7 +12,7 @@ use eds_sys::{
     E_CONTACT_EMAIL_1, E_CONTACT_FULL_NAME, E_CONTACT_UID, EBookMetaBackendInfo,
     e_book_meta_backend_info_free, e_contact_get_const,
 };
-use glib_sys::{GSList, g_free, g_slist_free_full, g_slist_length, g_slist_nth_data};
+use glib_sys::{GSList, g_slist_free_full, g_slist_length, g_slist_nth_data};
 use jmap_backend_book::marshal;
 use jmap_book_sync::ContactInfo;
 
@@ -68,22 +68,38 @@ fn an_info_list_carries_one_node_per_contact_in_order() {
 #[test]
 fn an_empty_info_list_is_null() {
     assert!(marshal::info_list(&[]).is_null());
-    assert!(marshal::uid_list(&[]).is_null());
+    assert!(marshal::removed_info_list(&[]).is_null());
 }
 
+/// `out_removed_objects` is a list of `EBookMetaBackendInfo`, exactly like
+/// the created and modified lists — `e-book-meta-backend.h` says so on the
+/// vfunc, `e_book_meta_backend_process_changes_sync` reads `nfo->uid` off
+/// each node, and `ebmb_refresh_thread_func` frees them with
+/// `e_book_meta_backend_info_free`. A list of bare `gchar *` here is read as
+/// structs: the first eight bytes of the uid text become the `uid` pointer,
+/// which EDS then hands to sqlite. That crashed the address book factory in
+/// `sqlite3_vmprintf` the moment a refresh followed a removal — see
+/// docs/NIGHT-LOG.md, session N+106.
 #[test]
-fn a_uid_list_copies_the_strings_so_the_caller_can_free_them() {
+fn removals_are_infos_and_not_bare_strings() {
     let uids = ["K1".to_owned(), "K2".to_owned()];
-    let list = marshal::uid_list(&uids);
+    let list = marshal::removed_info_list(&uids);
 
     unsafe {
         assert_eq!(g_slist_length(list), 2);
-        let first = g_slist_nth_data(list, 0).cast::<i8>();
-        assert_eq!(CStr::from_ptr(first).to_str().unwrap(), "K1");
-        // Frees each node's payload with g_free, which is only valid if the
-        // marshalling allocated them rather than pointing into the Rust
-        // strings above.
-        g_slist_free_full(list, Some(g_free));
+        for (index, expected) in ["K1", "K2"].into_iter().enumerate() {
+            let node = g_slist_nth_data(list, index as u32).cast::<EBookMetaBackendInfo>();
+            assert!(!node.is_null(), "no node {index}");
+            assert_eq!(CStr::from_ptr((*node).uid).to_str().unwrap(), expected);
+            // The other three are the nullable ones, and a removal has
+            // nothing to put in them; EDS's own removals leave them empty
+            // too.
+            assert!((*node).object.is_null(), "a removal described an object");
+            assert!((*node).extra.is_null(), "a removal invented extra state");
+        }
+        // Frees each node with the function EDS itself uses on this list,
+        // which is only valid if the nodes really are infos.
+        g_slist_free_full(list, Some(e_book_meta_backend_info_free));
     }
 }
 
