@@ -35,13 +35,13 @@
 //! [`observe`]: jmap_backend_core::cancel::observe
 
 use std::ffi::CStr;
-use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBookMetaBackend, EBookMetaBackendClass,
     EConflictResolution, EContact, ENamedParameters, ESourceAuthenticationResult,
     GTlsCertificateFlags, e_backend_get_source, e_book_backend_set_writable,
-    e_book_meta_backend_get_type, e_client_error_create,
+    e_book_meta_backend_get_type, e_book_meta_backend_schedule_refresh, e_client_error_create,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar, guint32};
@@ -52,6 +52,7 @@ use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
+use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_on_authentication_failure;
 use jmap_backend_core::source::backend_source;
 use jmap_backend_core::subclass::ObjectSubclass;
@@ -81,6 +82,14 @@ pub struct JmapBookBackend {
     /// behind it. Only connect and disconnect, which replace the value, need
     /// exclusive access.
     session: Slot<RwLock<Option<BookSync>>>,
+    /// The JMAP Push subscription, for the same span as `session`: a server
+    /// that advertises an `eventSourceUrl` gets to say "something changed"
+    /// instead of being asked every few minutes.
+    ///
+    /// A plain `Mutex` — unlike `session`, nothing reads this on the hot
+    /// path; it is only installed, taken and dropped, all of which are
+    /// exclusive anyway.
+    push: Slot<Mutex<Option<PushRefresh>>>,
 }
 
 /// The class struct. Nothing of ours lives in it yet; it exists because
@@ -111,6 +120,32 @@ impl JmapBookBackend {
         }
     }
 
+    /// Installs `push` as the live push subscription, stopping and dropping
+    /// whatever was there — which is what a reconnect wants, since the old
+    /// subscription is authenticated with the connection that was just
+    /// replaced.
+    pub fn store_push(&self, push: PushRefresh) {
+        if let Some(slot) = self.push.get() {
+            *lock(slot) = Some(push);
+        }
+    }
+
+    /// Stops the push subscription and waits for its thread, reporting
+    /// whether there was one. Once this returns, no refresh can still be
+    /// scheduled from it.
+    pub fn stop_push(&self) -> bool {
+        match self.push.get() {
+            Some(slot) => lock(slot).take().is_some(),
+            None => false,
+        }
+    }
+
+    /// Whether a push subscription is live.
+    #[cfg(feature = "testing")]
+    pub fn is_pushing(&self) -> bool {
+        self.push.get().is_some_and(|slot| lock(slot).is_some())
+    }
+
     /// Whether an operation would find a connection.
     pub fn is_connected(&self) -> bool {
         self.session()
@@ -135,6 +170,7 @@ impl JmapBookBackend {
         // documented empty state.
         let backend: Box<Self> = unsafe { zeroed_box() };
         backend.session.init(RwLock::new(None));
+        backend.push.init(Mutex::new(None));
         backend
     }
 
@@ -189,12 +225,23 @@ unsafe impl ObjectSubclass for JmapBookBackend {
         // SAFETY: `instance` points at a zeroed instance struct of ours, and a
         // zeroed `Slot` is an empty one.
         unsafe { (*instance).session.init(RwLock::new(None)) };
+        // SAFETY: as above.
+        unsafe { (*instance).push.init(Mutex::new(None)) };
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
+        // Before the session, and before anything else here: the push slot
+        // holds a thread that can call back into this instance, and clearing
+        // it stops and joins that thread. EDS does not promise a
+        // `disconnect_sync` before it drops a backend — `ebmb_dispose` does
+        // not call one — so this, not that, is what guarantees the thread is
+        // gone.
+        //
         // SAFETY: the instance is being finalized, so nothing can still reach
-        // it and no borrow handed out by `get` is alive. Without this the
-        // connection — and its socket — outlives the address book.
+        // it and no borrow handed out by `get` is alive.
+        unsafe { (*instance).push.clear() };
+        // SAFETY: as above. Without this the connection — and its socket —
+        // outlives the address book.
         unsafe { (*instance).session.clear() };
     }
 }
@@ -262,7 +309,15 @@ unsafe extern "C" fn connect_sync(
                 address_book_id = sync.address_book_id().as_str(),
                 "address book backend connected"
             );
+            // Push starts only after the connection is installed. The other
+            // order has a window in which a pushed refresh reaches
+            // `get_changes_sync` before `store_connection` ran, which reports
+            // the account offline for a change that had in fact arrived.
+            let push = start_push(meta_backend, &sync);
             backend.store_connection(sync);
+            if let Some(push) = push {
+                backend.store_push(push);
+            }
             // Without this the address book is read-only: every write comes
             // back as "Permission denied" and Evolution greys the book out.
             // JMAP has no per-book "may I write" flag, so the answer is the
@@ -294,8 +349,13 @@ unsafe extern "C" fn disconnect_sync(
             // shutdown after a failed connect, so it is a success, not a
             // failure: there is nothing left to do and nothing went wrong.
             if let Some(backend) = instance(meta_backend) {
+                // Stopped first, and before the connection it authenticates
+                // with goes: a push arriving after this point would schedule
+                // a refresh against a backend that has nothing to refresh
+                // with.
+                let unsubscribed = backend.stop_push();
                 let dropped = backend.drop_connection();
-                tracing::debug!(dropped, "address book backend disconnected");
+                tracing::debug!(dropped, unsubscribed, "address book backend disconnected");
             }
             GTRUE
         })
@@ -532,6 +592,57 @@ unsafe fn with_connection(
     }
 }
 
+/// The JMAP data types an address book has to hear about: the cards
+/// themselves, and the book they live in — a rename or a share revocation
+/// changes what `list_existing_sync`/`get_changes_sync` would answer just as
+/// a new card does.
+const PUSHED_TYPES: &[&str] = &["ContactCard", "AddressBook"];
+
+/// Asks the server to push changes at this backend, if it offers to.
+///
+/// `None` — and no error, and nothing logged above debug — whenever push is
+/// simply not available: a server with no `eventSourceUrl` is a server where
+/// EDS's own periodic refresh stays the only trigger, which is the arrangement
+/// every JMAP account had until this existed.
+///
+/// # Safety
+///
+/// `meta_backend` must be a valid instance of this type — a *real* one. This
+/// is the one thing on this backend that a detached test instance may not be
+/// passed to: it takes a `GWeakRef` on the pointer, and a detached instance
+/// is not a GObject.
+unsafe fn start_push(meta_backend: *mut EBookMetaBackend, sync: &BookSync) -> Option<PushRefresh> {
+    // SAFETY: a valid instance of a type derived from `GObject`, referenced
+    // by EDS for the length of the vfunc this runs inside; the trampoline
+    // below is handed the same pointer back and only casts it to the type it
+    // came from.
+    unsafe {
+        push::start_for(
+            meta_backend.cast(),
+            sync.client(),
+            sync.account_id(),
+            PUSHED_TYPES,
+            schedule_refresh,
+        )
+    }
+}
+
+/// The EDS half of a push: hand the change straight to the refresh EDS
+/// already knows how to run, which is what reaches `get_changes_sync` with
+/// the stored sync tag. Nothing here decides *what* changed — that is
+/// `get_changes` against `ContactCard/changes`, unchanged.
+///
+/// # Safety
+///
+/// `object` must be a live `EBookMetaBackend`, which is what
+/// [`jmap_backend_core::push::start_for`] guarantees: it only calls this
+/// under a strong reference taken from a `GWeakRef` on the instance
+/// [`start_push`] passed it.
+unsafe extern "C" fn schedule_refresh(object: *mut gobject_sys::GObject) {
+    // SAFETY: forwarded to the caller by this function's own contract.
+    unsafe { e_book_meta_backend_schedule_refresh(object.cast()) };
+}
+
 /// Fetches a fresh OAuth 2.0 access token for the account and installs it on
 /// the live connection, reporting whether an operation is now worth retrying.
 /// The calendar backend's `refresh_credentials` is the same function on the
@@ -623,4 +734,8 @@ fn read(session: &RwLock<Option<BookSync>>) -> RwLockReadGuard<'_, Option<BookSy
 
 fn write(session: &RwLock<Option<BookSync>>) -> RwLockWriteGuard<'_, Option<BookSync>> {
     session.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn lock(push: &Mutex<Option<PushRefresh>>) -> MutexGuard<'_, Option<PushRefresh>> {
+    push.lock().unwrap_or_else(PoisonError::into_inner)
 }
