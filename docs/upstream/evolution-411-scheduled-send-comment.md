@@ -3,15 +3,15 @@ SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# DRAFT comment for GNOME/evolution#411 — "Schedule sending an email to a later date and time"
+# DRAFT comment for GNOME/evolution#411, "Schedule sending an email to a later date and time"
 
 **Status: draft, not filed.** Review before posting. This is a *comment on the
-existing issue*, deliberately not a new report — #411 is open and already notes
-that JMAP could schedule server-side; a duplicate would only add noise.
+existing issue*, deliberately not a new report: #411 is open and already notes
+that JMAP could schedule server-side, so a duplicate would only add noise.
 
 **Revision note (2026-08-29):** an earlier draft proposed carrying the send
 time as an X-header on the `CamelMimeMessage`. That was a workaround chosen to
-avoid an ABI break, and it is the wrong thing to propose: it smuggles control
+avoid an ABI break, and it is the wrong thing to propose. It smuggles control
 data through the payload, and it delivers scheduling while still leaving the
 user unable to see or cancel what is pending. Rewritten around the shape the
 problem actually has.
@@ -29,10 +29,10 @@ For these, Evolution would not need to stay running, hold the message in a
 local Outbox, or run a timer:
 
 - **JMAP** (RFC 8621 §7): `EmailSubmission` carries `sendAt`, and `undoStatus`
-  lets a still-pending send be cancelled. It is conditional — the server
+  lets a still-pending send be cancelled. It is conditional. The server
   advertises `maxDelayedSend` in seconds in its
-  `urn:ietf:params:jmap:submission` capability, 0 meaning unsupported — and is
-  backed by the SMTP FUTURERELEASE extension (RFC 4865).
+  `urn:ietf:params:jmap:submission` capability, where 0 means unsupported, and
+  it is backed by the SMTP FUTURERELEASE extension (RFC 4865).
 - **EWS**: Exchange supports deferred delivery by setting the
   `PR_DEFERRED_SEND_TIME` / `PR_DEFERRED_DELIVERY_TIME` MAPI properties as
   extended properties on the send request. `evolution-ews` does not do this
@@ -52,21 +52,21 @@ gboolean (*send_to_sync) (CamelTransport *transport,
 
 This encodes the assumption that sending is instantaneous and final: you call
 it, you get `TRUE`, it is over. That stops being true the moment a message can
-rest in a server-side queue. Then sending has a lifecycle — pending, then sent
-or failed or cancelled — and the queue is owned by something other than
+rest in a server-side queue. Then sending has a lifecycle (pending, then sent
+or failed or cancelled), and the queue is owned by something other than
 Evolution.
 
 So the shape that seems right is that **submitting returns a submission
 object** rather than a boolean, and a transport gains operations over it:
-enumerate pending submissions, query one's state, cancel one. Alongside it, a
-capability — "I can defer up to N seconds", 0 meaning never — so the composer
-can enable *Send later* per account and explain why it is unavailable, rather
-than the current all-or-nothing.
+enumerate pending submissions, query one's state, cancel one. Alongside it
+there would be a capability, "I can defer up to N seconds", with 0 meaning
+never, so the composer can enable *Send later* per account and explain why it
+is unavailable rather than offering it all-or-nothing.
 
 Three things suggest this is the right shape rather than merely a larger one.
 
 **The protocols already are that object.** JMAP's `EmailSubmission` has an id,
-a `sendAt`, an `undoStatus`, and is queryable — it is precisely this, and the
+a `sendAt`, an `undoStatus`, and is queryable. It is precisely this, and the
 current API flattens it into a boolean. Exchange's deferred message sits in the
 server Outbox and can be deleted. FUTURERELEASE yields a queue entry. Camel is
 the only layer in the stack pretending the queue is not there.
@@ -74,20 +74,20 @@ the only layer in the stack pretending the queue is not there.
 **The existing signature is already straining.** The
 `gboolean *out_sent_message_saved` out-parameter exists because "did the server
 keep its own copy?" could not be expressed by the return value. That is the
-same pressure — a send has richer outcomes than success/failure — being
-answered one out-parameter at a time.
+same pressure, namely that a send has richer outcomes than success or failure,
+being answered one out-parameter at a time.
 
 **It would subsume undo-send.** The "send through the Outbox after N minutes"
-mechanism (#122, and #1461 about which folder it uses) exists *because* there is
-no cancellable submission. With one, undo-send is `sendAt = now + 30s` plus a
-cancel — and unlike the present version it survives closing the laptop, because
-the server holds the message rather than Evolution. One change answers three
-open requests.
+mechanism (#122, and #1461 about which folder it uses) exists *because* there
+is no cancellable submission. With one, undo-send is `sendAt = now + 30s` plus
+a cancel, and unlike the present version it survives closing the laptop,
+because the server holds the message rather than Evolution. One change answers
+three open requests.
 
 There may also be a structural reason there is no natural home for this today:
 a Camel store and a Camel transport are two services with no pointer between
 them, which is Camel's shape rather than JMAP's. A submission is exactly the
-missing link — it refers to a message and to an identity.
+missing link, since it refers to a message and to an identity.
 
 ## Cost, stated plainly
 
@@ -100,6 +100,6 @@ or both.
 
 I am an outsider proposing changes to your ABI, so please read this as "here is
 what the protocols underneath can do and where they currently hit a wall"
-rather than a design demand — you will have context I do not. If there is
+rather than as a design demand; you will have context I do not. If there is
 interest in the Camel-side shape, I am happy to do the JMAP-side work against
 whatever it ends up being.
