@@ -18,6 +18,7 @@
 
 use std::ffi::{CStr, CString};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_AUTHENTICATION,
@@ -28,8 +29,8 @@ use eds_sys::{
     e_source_has_extension, e_source_new_with_uid, e_source_security_get_type,
     e_source_security_set_secure,
 };
-use glib_sys::{GFALSE, GTRUE};
-use gobject_sys::g_object_unref;
+use glib_sys::{GFALSE, GTRUE, gpointer};
+use gobject_sys::{g_object_unref, g_object_weak_ref};
 use jmap_backend_collection::child_added::{BOUND, follow_collection};
 use jmap_backend_collection::child_source::apply;
 use jmap_backend_core::marshal::read_string;
@@ -589,6 +590,188 @@ fn an_account_without_the_oauth2_group_leaves_the_child_without_it() {
         assert!(
             !child.has(jmap_config::oauth2::EXTENSION_NAME),
             "an account with no registration has nothing to carry to a child"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// `GBinding` lifetime — what a live binding does when one of the two
+// `ESource`s it joins is finalized.
+//
+// `e_binding_bind_property` is `camel_binding_bind_property`
+// (EDS 3.52.3's `src/camel/camel.c`): a `GRecMutex` around plain
+// `g_object_bind_property`. GLib 2.80's own `GBinding` (`gobject/gbinding.c`)
+// installs a `g_object_weak_ref` on both endpoints at construction and drops
+// its own sole reference exactly once, the first time either fires — so the
+// binding never outlives the shorter-lived of the two extensions it joins,
+// and never touches the one that is already gone. That is GLib's contract,
+// not this module's — `follow_collection`'s and `follow_server`'s own Safety
+// comments both assert it, correctly, but neither was pinned by a test that
+// actually finalizes one side of a live binding and keeps using the other,
+// which is the thing a future change here (e.g. holding onto a raw extension
+// pointer past the call) could get wrong without GLib's guarantee helping at
+// all.
+//
+// Finalizing an `ESource` is *not* one plain `g_object_unref` away, which the
+// first test below exists to establish before the rest rely on it: every
+// `E_SOURCE_PARAM_SETTING` property write (which is what an account edit, and
+// this module's own `bind()` with `G_BINDING_SYNC_CREATE`, both are) calls
+// `e_source_changed()`, which schedules a debounced idle callback holding its
+// own `g_object_ref` on the source — released only when that idle fires in
+// whatever `GMainContext` the source uses (the default one here, since these
+// tests build sources with no explicit context). A production process has a
+// `GMainLoop` permanently iterating that context, so the idle fires within
+// one turn and the extra ref is gone almost as soon as it was taken; a bare
+// unit test does not run one at all, so without pumping the context by hand
+// the source this file's tests drop never actually finalizes — every
+// assertion after it would then be true for the wrong reason (nothing was
+// ever freed) rather than for the reason each test names.
+fn pump_pending_idle_changed() {
+    // SAFETY: `NULL` is the documented way to name the default `GMainContext`
+    // (the one these tests' sources use); `FALSE` never blocks, so a source
+    // with no more idle callbacks pending simply stops early.
+    for _ in 0..16 {
+        if unsafe { glib_sys::g_main_context_iteration(ptr::null_mut(), GFALSE) } == GFALSE {
+            break;
+        }
+    }
+}
+
+unsafe extern "C" fn mark_finalized(user_data: gpointer, _object: *mut gobject_sys::GObject) {
+    // SAFETY: `user_data` is the `&'static AtomicBool` the test below passed
+    // to `g_object_weak_ref`, which hands it back unchanged.
+    let flag = unsafe { &*(user_data as *const AtomicBool) };
+    flag.store(true, Ordering::SeqCst);
+}
+
+#[test]
+fn dropping_a_source_finalizes_its_extension_once_the_pending_idle_runs() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let source = Source::account();
+        let auth: *mut ESourceAuthentication = source.authentication();
+        let finalized: &'static AtomicBool = Box::leak(Box::new(AtomicBool::new(false)));
+        // SAFETY: `auth` is a live GObject; `finalized` outlives the weak
+        // ref, which never outlives this test's `source`.
+        unsafe {
+            g_object_weak_ref(
+                auth.cast(),
+                Some(mark_finalized),
+                finalized as *const AtomicBool as gpointer,
+            );
+        }
+
+        drop(source);
+        assert!(
+            !finalized.load(Ordering::SeqCst),
+            "the extension was finalized before the pending idle ran — the \
+             premise this module comment states is wrong, or already fixed"
+        );
+
+        pump_pending_idle_changed();
+        assert!(
+            finalized.load(Ordering::SeqCst),
+            "the extension outlived the source that owned it, even once the \
+             pending idle had a chance to run"
+        );
+    });
+}
+
+#[test]
+fn dropping_the_child_disconnects_the_binding_and_the_account_stays_usable() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (account, child) = bound();
+
+        drop(child);
+        pump_pending_idle_changed();
+
+        // If the binding's weak-unref on the child (the target) had not
+        // disconnected the notify handler it installed on the account (the
+        // source), this write would run the binding's transform into a
+        // freed extension instead of doing nothing.
+        account.set_host("moved.example.com");
+
+        assert_eq!(
+            account.host().as_deref(),
+            Some("moved.example.com"),
+            "the account itself must still work once its bound child is gone"
+        );
+    });
+}
+
+#[test]
+fn dropping_the_account_leaves_the_childs_last_values_in_place() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (account, child) = bound();
+        let before = child.config();
+
+        drop(account);
+        pump_pending_idle_changed();
+
+        assert_eq!(
+            child.config(),
+            before,
+            "a child must keep the values it was bound with once the account is gone"
+        );
+    });
+}
+
+#[test]
+fn dropping_the_child_does_not_break_a_later_oauth2_reregistration() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let account = Source::account();
+        // SAFETY: a live source and a config of literals.
+        unsafe { jmap_config::oauth2::apply(account.0, &oauth2_config()) };
+        let child = Source::child_of(&connection());
+        // SAFETY: two live sources.
+        unsafe { follow_collection(account.0, child.0) };
+
+        drop(child);
+        pump_pending_idle_changed();
+
+        let renewed = jmap_config::oauth2::Config {
+            client_id: Some("client-def456".to_owned()),
+            ..oauth2_config()
+        };
+        // If `follow_oauth2`'s binding onto the (now-freed) child's extension
+        // had survived, this apply's `notify` would run the binding into it
+        // instead of doing nothing.
+        // SAFETY: a live source.
+        unsafe { jmap_config::oauth2::apply(account.0, &renewed) };
+
+        // SAFETY: a live source.
+        let read_back = unsafe { jmap_config::oauth2::read(account.0) };
+        assert_eq!(
+            read_back.client_id.as_deref(),
+            Some("client-def456"),
+            "the account must still take a re-registration once its bound child is gone"
+        );
+    });
+}
+
+#[test]
+fn dropping_the_account_leaves_the_childs_oauth2_group_in_place() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let account = Source::account();
+        // SAFETY: a live source and a config of literals.
+        unsafe { jmap_config::oauth2::apply(account.0, &oauth2_config()) };
+        let child = Source::child_of(&connection());
+        // SAFETY: two live sources.
+        unsafe { follow_collection(account.0, child.0) };
+
+        drop(account);
+        pump_pending_idle_changed();
+
+        // SAFETY: a live source.
+        let carried = unsafe { jmap_config::oauth2::read(child.0) };
+        assert_eq!(
+            carried,
+            oauth2_config(),
+            "a child must keep the registration it was bound with once the account is gone"
         );
     });
 }
