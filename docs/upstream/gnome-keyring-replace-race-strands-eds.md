@@ -1,21 +1,16 @@
-# `gnome-keyring-daemon --replace` strands every client that already connected
+# INTERNAL NOTES — the keyring-replacement investigation
 
-**Status:** draft, NOT filed, and **scope corrected 2026-08-29 — read this
-first.** The `--replace` in the capture below is *self-inflicted*: a test-VM
-autostart the maintainer added on 2026-08-23
-(`~/bin/unlock-keyring.sh`, `echo -n "password" | gnome-keyring-daemon
---replace --unlock --components=secrets,pkcs11`) to unlock the login keyring on
-an autologin session. Stock GNOME does not do this. An earlier revision of this
-document blamed `gnome-session` for launching the replacement; that was wrong
-and is retracted.
+**Not for filing.** This is the working record of how the problem was found,
+including two attributions that were made and then retracted. The filable
+result of this investigation is
+`docs/upstream/libsecret-prompt-dismissed-task-never-returns.md`, which is
+submit-ready and self-contained.
 
-What survives the correction, and is the only thing worth filing, is what
-happens *when* a replacement occurs: `--replace` is a documented, supported
-option, and using it strands already-connected clients for the life of their
-processes, with libsecret logging GLib's own detection of an unreturned
-`GTask`.
-
-**Candidate owners:** libsecret (primary), gnome-keyring (secondary).
+Kept because the timeline, the proof-by-restart and the version table are the
+evidence behind that report, and because the `gnome-keyring --replace` angle
+below is a separate and much weaker candidate that was deliberately not filed:
+"do not use `--replace` while clients are connected" is a defensible answer,
+and the libsecret defect is the one with a named faulty call behind it.
 
 ## Summary
 
