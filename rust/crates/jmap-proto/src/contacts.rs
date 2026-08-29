@@ -41,6 +41,35 @@ pub struct AddressBook {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl AddressBook {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_sort_order(mut self, sort_order: u32) -> Self {
+        self.sort_order = Some(sort_order);
+        self
+    }
+
+    pub fn is_default(mut self, is_default: bool) -> Self {
+        self.is_default = Some(is_default);
+        self
+    }
+
+    pub fn is_subscribed(mut self, is_subscribed: bool) -> Self {
+        self.is_subscribed = Some(is_subscribed);
+        self
+    }
+}
+
 /// The permissions the user has for an address book (RFC 9610 §2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]

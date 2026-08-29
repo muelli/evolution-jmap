@@ -80,6 +80,13 @@ proptest! {
         let _ = serde_json::from_str::<jmap_proto::methods::QueryResponse>(&text);
     }
 
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_echo(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::methods::Echo>(&text);
+    }
+
+
     #[cfg(feature = "contacts")]
     #[test]
     fn arbitrary_json_never_panics_deserializing_contact_card(value in json_value()) {

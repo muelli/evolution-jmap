@@ -633,3 +633,96 @@ fn email_set_errors_cover_rfc8621() {
     assert_eq!(email_set_error::TOO_MANY_KEYWORDS, "tooManyKeywords");
     assert_eq!(email_set_error::TOO_MANY_MAILBOXES, "tooManyMailboxes");
 }
+
+#[test]
+fn mailbox_identity_and_submission_builders_roundtrip() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::mail::{
+        EmailAddress, EmailSubmission, Envelope, EnvelopeAddress, Identity, Mailbox,
+    };
+
+    let mb = Mailbox::new("Projects")
+        .with_parent_id("mb_work")
+        .with_role("inbox")
+        .with_sort_order(10)
+        .is_subscribed(true);
+
+    assert_eq!(mb.name, "Projects");
+    assert_eq!(mb.parent_id.as_ref().unwrap().as_str(), "mb_work");
+    assert_eq!(mb.role.as_deref(), Some("inbox"));
+    assert_eq!(mb.sort_order, Some(10));
+    assert_eq!(mb.is_subscribed, Some(true));
+
+    let mb_val = serde_json::to_value(&mb).unwrap();
+    assert_eq!(mb_val["name"], "Projects");
+    assert_eq!(mb_val["parentId"], "mb_work");
+    assert_eq!(mb_val["role"], "inbox");
+    assert_eq!(mb_val["sortOrder"], 10);
+    assert_eq!(mb_val["isSubscribed"], true);
+    assert_eq!(serde_json::from_value::<Mailbox>(mb_val).unwrap(), mb);
+
+    let ident = Identity::new("Engineering", "eng@example.com")
+        .with_reply_to([EmailAddress::new(Some("Lead"), "lead@example.com")])
+        .with_bcc([EmailAddress::new(None, "archive@example.com")])
+        .with_text_signature("-- \nEng Team")
+        .with_html_signature("<p>-- <br>Eng Team</p>")
+        .with_draft_mailbox_id("mb_drafts")
+        .may_send(true);
+
+    assert_eq!(ident.name, "Engineering");
+    assert_eq!(ident.email, "eng@example.com");
+    assert_eq!(ident.reply_to.as_ref().unwrap().len(), 1);
+    assert_eq!(ident.bcc.as_ref().unwrap().len(), 1);
+    assert_eq!(ident.text_signature.as_deref(), Some("-- \nEng Team"));
+    assert_eq!(
+        ident.html_signature.as_deref(),
+        Some("<p>-- <br>Eng Team</p>")
+    );
+    assert_eq!(
+        ident.draft_mailbox_id.as_ref().unwrap().as_str(),
+        "mb_drafts"
+    );
+    assert_eq!(ident.may_send, Some(true));
+
+    let ident_val = serde_json::to_value(&ident).unwrap();
+    assert_eq!(ident_val["name"], "Engineering");
+    assert_eq!(ident_val["email"], "eng@example.com");
+    assert_eq!(ident_val["draftMailboxId"], "mb_drafts");
+    assert_eq!(ident_val["maySend"], true);
+    assert_eq!(
+        serde_json::from_value::<Identity>(ident_val).unwrap(),
+        ident
+    );
+
+    let sub = EmailSubmission::new("ident_1", "email_1")
+        .with_thread_id("th_1")
+        .with_envelope(Envelope {
+            mail_from: EnvelopeAddress::new("eng@example.com"),
+            rcpt_to: vec![EnvelopeAddress::new("customer@example.com")],
+        })
+        .with_send_at(UtcDate::new("2026-09-01T12:00:00Z"))
+        .with_undo_status("pending");
+
+    assert_eq!(sub.identity_id.as_str(), "ident_1");
+    assert_eq!(sub.email_id.as_str(), "email_1");
+    assert_eq!(sub.thread_id.as_ref().unwrap().as_str(), "th_1");
+    assert_eq!(
+        sub.envelope.as_ref().unwrap().mail_from.email,
+        "eng@example.com"
+    );
+    assert_eq!(
+        sub.send_at.as_ref().unwrap().as_str(),
+        "2026-09-01T12:00:00Z"
+    );
+    assert_eq!(sub.undo_status.as_deref(), Some("pending"));
+
+    let sub_val = serde_json::to_value(&sub).unwrap();
+    assert_eq!(sub_val["identityId"], "ident_1");
+    assert_eq!(sub_val["emailId"], "email_1");
+    assert_eq!(sub_val["threadId"], "th_1");
+    assert_eq!(sub_val["undoStatus"], "pending");
+    assert_eq!(
+        serde_json::from_value::<EmailSubmission>(sub_val).unwrap(),
+        sub
+    );
+}

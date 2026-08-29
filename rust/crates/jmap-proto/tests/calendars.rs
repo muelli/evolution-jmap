@@ -868,3 +868,61 @@ fn calendar_event_get_free_busy_and_set_error_roundtrip_covers_draft_spec() {
         resp
     );
 }
+
+#[test]
+fn calendar_and_preferences_builders_roundtrip() {
+    use jmap_proto::calendars::{Calendar, CalendarPreferences};
+
+    let cal = Calendar::new("Team Events")
+        .with_description("Shared team planning and milestones")
+        .with_color("#336699")
+        .with_sort_order(2)
+        .is_default(true)
+        .is_subscribed(true)
+        .is_visible(true)
+        .with_time_zone("Europe/Berlin");
+
+    assert_eq!(cal.name, "Team Events");
+    assert_eq!(
+        cal.description.as_deref(),
+        Some("Shared team planning and milestones")
+    );
+    assert_eq!(cal.color.as_deref(), Some("#336699"));
+    assert_eq!(cal.sort_order, Some(2));
+    assert_eq!(cal.is_default, Some(true));
+    assert_eq!(cal.is_subscribed, Some(true));
+    assert_eq!(cal.is_visible, Some(true));
+    assert_eq!(cal.time_zone.as_deref(), Some("Europe/Berlin"));
+
+    let cal_val = serde_json::to_value(&cal).unwrap();
+    assert_eq!(cal_val["name"], "Team Events");
+    assert_eq!(
+        cal_val["description"],
+        "Shared team planning and milestones"
+    );
+    assert_eq!(cal_val["color"], "#336699");
+    assert_eq!(cal_val["sortOrder"], 2);
+    assert_eq!(cal_val["isDefault"], true);
+    assert_eq!(cal_val["isSubscribed"], true);
+    assert_eq!(cal_val["isVisible"], true);
+    assert_eq!(cal_val["timeZone"], "Europe/Berlin");
+    assert_eq!(serde_json::from_value::<Calendar>(cal_val).unwrap(), cal);
+
+    let prefs = CalendarPreferences::new()
+        .with_id("singleton")
+        .with_time_zone("America/New_York")
+        .with_first_day_of_week("su");
+
+    assert_eq!(prefs.id.as_ref().unwrap().as_str(), "singleton");
+    assert_eq!(prefs.time_zone.as_deref(), Some("America/New_York"));
+    assert_eq!(prefs.first_day_of_week.as_deref(), Some("su"));
+
+    let prefs_val = serde_json::to_value(&prefs).unwrap();
+    assert_eq!(prefs_val["id"], "singleton");
+    assert_eq!(prefs_val["timeZone"], "America/New_York");
+    assert_eq!(prefs_val["firstDayOfWeek"], "su");
+    assert_eq!(
+        serde_json::from_value::<CalendarPreferences>(prefs_val).unwrap(),
+        prefs
+    );
+}

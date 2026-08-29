@@ -740,3 +740,34 @@ fn contact_card_parse_and_set_error_roundtrip_covers_rfc9610() {
         parse_resp
     );
 }
+
+#[test]
+fn address_book_builders_roundtrip() {
+    use jmap_proto::contacts::AddressBook;
+
+    let ab = AddressBook::new("Work Contacts")
+        .with_description("Primary work colleagues and partners")
+        .with_sort_order(5)
+        .is_default(true)
+        .is_subscribed(true);
+
+    assert_eq!(ab.name, "Work Contacts");
+    assert_eq!(
+        ab.description.as_deref(),
+        Some("Primary work colleagues and partners")
+    );
+    assert_eq!(ab.sort_order, Some(5));
+    assert_eq!(ab.is_default, Some(true));
+    assert_eq!(ab.is_subscribed, Some(true));
+
+    let ab_val = serde_json::to_value(&ab).unwrap();
+    assert_eq!(ab_val["name"], "Work Contacts");
+    assert_eq!(
+        ab_val["description"],
+        "Primary work colleagues and partners"
+    );
+    assert_eq!(ab_val["sortOrder"], 5);
+    assert_eq!(ab_val["isDefault"], true);
+    assert_eq!(ab_val["isSubscribed"], true);
+    assert_eq!(serde_json::from_value::<AddressBook>(ab_val).unwrap(), ab);
+}
