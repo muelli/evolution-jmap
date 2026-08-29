@@ -516,6 +516,26 @@ pub fn states_name_component(component: &NameComponent) -> bool {
     !component.value.is_empty() && name_field(&component.kind).is_some()
 }
 
+/// Whether a JSContact [`Name`] states any mapped property on a vCard (full name,
+/// structured N components, or file-as string).
+///
+/// A name that states none of these has no vCard lines and is invisible to the
+/// save path.
+pub fn states_name(name: &Name) -> bool {
+    name.full
+        .as_deref()
+        .filter(|full| !full.is_empty())
+        .is_some()
+        || derive_full(name).is_some()
+        || name
+            .components
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(states_name_component)
+        || states_file_as(Some(name))
+}
+
 /// Whether a name states an Evolution file-as string.
 ///
 /// Evolution's `E_CONTACT_FILE_AS` is written as `X-EVOLUTION-FILE-AS` on
