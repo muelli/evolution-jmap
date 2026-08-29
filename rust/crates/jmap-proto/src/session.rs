@@ -178,3 +178,23 @@ pub struct Account {
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
+
+impl Account {
+    /// The furthest into the future an `EmailSubmission`'s `sendAt` may be set
+    /// (RFC 8621 §7.1, the submission account capability's `maxDelayedSend`,
+    /// in seconds), backed server-side by SMTP FUTURERELEASE (RFC 4865).
+    ///
+    /// `None` means the server did not name a limit for this account — which
+    /// covers two different server shapes a caller cannot tell apart from
+    /// this alone: no delayed send at all (`maxDelayedSend` absent, or `0`
+    /// per RFC 8621's own "MUST be 0 if this feature is not supported"), and
+    /// an account that does not offer the submission capability in the first
+    /// place. Either way, the answer for `docs/ROADMAP.md` item 29's "detect
+    /// server support" is the same: do not offer scheduled send.
+    pub fn max_delayed_send(&self) -> Option<u64> {
+        self.account_capabilities
+            .get(CAPABILITY_SUBMISSION)?
+            .get("maxDelayedSend")?
+            .as_u64()
+    }
+}

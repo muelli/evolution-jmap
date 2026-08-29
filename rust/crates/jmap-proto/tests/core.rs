@@ -190,6 +190,29 @@ fn a_session_that_names_no_get_limit_says_so() {
     assert_eq!(session.max_objects_in_get(), None);
 }
 
+/// RFC 8620 §2's own example account carries a real `maxDelayedSend`
+/// (docs/ROADMAP.md item 29's "detect server support").
+#[test]
+fn the_account_names_its_delayed_send_limit() {
+    let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
+    let account = &session.accounts[&Id::new("A13824")];
+    assert_eq!(account.max_delayed_send(), Some(44236800));
+}
+
+/// An account whose submission capability names no `maxDelayedSend` (the
+/// ordinary case today — most deployments do not support SMTP
+/// FUTURERELEASE) answers `None`, not an invented number: a caller must
+/// not offer scheduled send it has no evidence the server honours.
+#[test]
+fn an_account_with_no_delayed_send_limit_says_so() {
+    let mut value = fixture("core/session.json");
+    value["accounts"]["A13824"]["accountCapabilities"]
+        [jmap_proto::session::CAPABILITY_SUBMISSION] = serde_json::json!({});
+    let session: Session = serde_json::from_value(value).unwrap();
+    let account = &session.accounts[&Id::new("A13824")];
+    assert_eq!(account.max_delayed_send(), None);
+}
+
 /// `Response::responses_for` groups a call id's (possibly several)
 /// responses, in wire order, and nothing else's.
 #[test]

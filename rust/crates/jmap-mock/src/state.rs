@@ -178,6 +178,12 @@ pub struct ServerState {
     /// matching every other test and this project's own prior assumption
     /// before that finding.
     pub terse_calendar_event_create: bool,
+    /// `maxDelayedSend` to advertise on the submission account capability, as
+    /// [`crate::MockServerBuilder::max_delayed_send`] asked (RFC 8621 §7.1).
+    /// `None` advertises an empty submission capability object, matching
+    /// every other test and every deployment that does not support SMTP
+    /// FUTURERELEASE.
+    pub max_delayed_send: Option<u64>,
 }
 
 impl ServerState {
@@ -204,6 +210,7 @@ impl ServerState {
             terse_contact_create: false,
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
+            max_delayed_send: None,
         }
     }
 
