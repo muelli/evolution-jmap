@@ -1032,3 +1032,61 @@ fn calendar_event_parse_response_free_busy_response_and_entity_builders() {
     assert_eq!(rrule.rscale.as_deref(), Some("gregorian"));
     assert_eq!(rrule.skip.as_deref(), Some("omit"));
 }
+
+#[test]
+fn calendar_event_and_capability_builders() {
+    use jmap_proto::Id;
+    use jmap_proto::calendars::{CalendarEvent, CalendarsCapability, RecurrenceRule};
+
+    let cap = CalendarsCapability::new()
+        .with_max_size_attachments_per_event(50_000_000)
+        .with_max_concurrent_availabilities(10);
+    assert_eq!(cap.max_size_attachments_per_event, 50_000_000);
+    assert_eq!(cap.max_concurrent_availabilities, 10);
+
+    let event = CalendarEvent::default()
+        .with_id("evt_100")
+        .with_calendar_id("cal_work")
+        .with_uid("urn:uuid:event-9876")
+        .with_title("Team Planning")
+        .with_description("Quarterly planning session")
+        .with_start("2026-09-01T09:00:00")
+        .with_time_zone("Europe/Berlin")
+        .with_duration("PT2H")
+        .with_status("confirmed")
+        .with_free_busy_status("busy")
+        .with_priority(1)
+        .with_privacy("private")
+        .show_without_time(false)
+        .use_default_alerts(true)
+        .with_color("#336699")
+        .with_locale("en")
+        .with_recurrence_rule(RecurrenceRule::new("weekly"));
+
+    assert_eq!(event.id.as_ref().unwrap().as_str(), "evt_100");
+    assert!(
+        event
+            .calendar_ids
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::new("cal_work"))
+    );
+    assert_eq!(event.uid.as_deref(), Some("urn:uuid:event-9876"));
+    assert_eq!(event.title.as_deref(), Some("Team Planning"));
+    assert_eq!(
+        event.description.as_deref(),
+        Some("Quarterly planning session")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-09-01T09:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(event.duration.as_deref(), Some("PT2H"));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(event.priority, Some(1));
+    assert_eq!(event.privacy.as_deref(), Some("private"));
+    assert_eq!(event.show_without_time, Some(false));
+    assert_eq!(event.use_default_alerts, Some(true));
+    assert_eq!(event.color.as_deref(), Some("#336699"));
+    assert_eq!(event.locale.as_deref(), Some("en"));
+    assert!(event.recurrence_rule.is_some());
+}

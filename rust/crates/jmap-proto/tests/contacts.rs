@@ -941,3 +941,70 @@ fn contact_card_parse_response_and_domain_builders() {
         .with_pref(1);
     assert_eq!(lang.language, "en-US");
 }
+
+#[test]
+fn contact_card_and_capability_builders() {
+    use jmap_proto::contacts::{
+        Address, ContactCard, ContactEmail, ContactPhone, ContactsCapability, Name, Note,
+        Organization, SpeakToAs, Title,
+    };
+    use jmap_proto::{Id, UtcDate};
+
+    let cap = ContactsCapability::new()
+        .with_max_size_attachments_per_card(25_000_000)
+        .with_max_number_of_cards_in_set(500);
+    assert_eq!(cap.max_size_attachments_per_card, 25_000_000);
+    assert_eq!(cap.max_number_of_cards_in_set, 500);
+
+    let card = ContactCard::default()
+        .with_id("card_100")
+        .with_address_book_id("ab_main")
+        .with_uid("urn:uuid:1234-5678")
+        .with_name(Name::new("Alice Smith"))
+        .with_kind("individual")
+        .with_email("e1", ContactEmail::new("alice@example.com"))
+        .with_phone("p1", ContactPhone::new("+15551234567"))
+        .with_address("a1", Address::new().with_full("123 Main St, Springfield"))
+        .with_organization("o1", Organization::new("Acme Corp"))
+        .with_title("t1", Title::new("Lead Engineer"))
+        .with_note("n1", Note::new("Met at conference"))
+        .with_created(UtcDate::new("2026-08-20T09:00:00Z"))
+        .with_updated(UtcDate::new("2026-08-29T11:00:00Z"))
+        .with_speak_to_as(
+            SpeakToAs::new()
+                .with_grammatical_gender("feminine")
+                .with_pronouns("she/her"),
+        );
+
+    assert_eq!(card.id.as_ref().unwrap().as_str(), "card_100");
+    assert!(
+        card.address_book_ids
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::new("ab_main"))
+    );
+    assert_eq!(card.uid.as_deref(), Some("urn:uuid:1234-5678"));
+    assert_eq!(
+        card.name.as_ref().unwrap().full.as_deref(),
+        Some("Alice Smith")
+    );
+    assert_eq!(card.kind.as_deref(), Some("individual"));
+    assert_eq!(card.emails.as_ref().unwrap().len(), 1);
+    assert_eq!(card.phones.as_ref().unwrap().len(), 1);
+    assert_eq!(card.addresses.as_ref().unwrap().len(), 1);
+    assert_eq!(card.organizations.as_ref().unwrap().len(), 1);
+    assert_eq!(card.titles.as_ref().unwrap().len(), 1);
+    assert_eq!(card.notes.as_ref().unwrap().len(), 1);
+    assert_eq!(
+        card.created.as_ref().unwrap().as_str(),
+        "2026-08-20T09:00:00Z"
+    );
+    assert_eq!(
+        card.updated.as_ref().unwrap().as_str(),
+        "2026-08-29T11:00:00Z"
+    );
+    assert_eq!(
+        card.speak_to_as.as_ref().unwrap().pronouns.as_deref(),
+        Some("she/her")
+    );
+}

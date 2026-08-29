@@ -237,6 +237,94 @@ pub struct ContactCard {
 }
 
 impl ContactCard {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_address_book_id(mut self, id: impl Into<Id>) -> Self {
+        let mut map = self.address_book_ids.unwrap_or_default();
+        map.insert(id.into(), true);
+        self.address_book_ids = Some(map);
+        self
+    }
+
+    pub fn with_uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+
+    pub fn with_name(mut self, name: Name) -> Self {
+        self.name = Some(name);
+        self
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_email(mut self, key: impl Into<String>, email: ContactEmail) -> Self {
+        let mut map = self.emails.unwrap_or_default();
+        map.insert(key.into(), email);
+        self.emails = Some(map);
+        self
+    }
+
+    pub fn with_phone(mut self, key: impl Into<String>, phone: ContactPhone) -> Self {
+        let mut map = self.phones.unwrap_or_default();
+        map.insert(key.into(), phone);
+        self.phones = Some(map);
+        self
+    }
+
+    pub fn with_address(mut self, key: impl Into<String>, address: Address) -> Self {
+        let mut map = self.addresses.unwrap_or_default();
+        map.insert(key.into(), address);
+        self.addresses = Some(map);
+        self
+    }
+
+    pub fn with_organization(mut self, key: impl Into<String>, org: Organization) -> Self {
+        let mut map = self.organizations.unwrap_or_default();
+        map.insert(key.into(), org);
+        self.organizations = Some(map);
+        self
+    }
+
+    pub fn with_title(mut self, key: impl Into<String>, title: Title) -> Self {
+        let mut map = self.titles.unwrap_or_default();
+        map.insert(key.into(), title);
+        self.titles = Some(map);
+        self
+    }
+
+    pub fn with_note(mut self, key: impl Into<String>, note: Note) -> Self {
+        let mut map = self.notes.unwrap_or_default();
+        map.insert(key.into(), note);
+        self.notes = Some(map);
+        self
+    }
+
+    pub fn with_created(mut self, created: impl Into<UtcDate>) -> Self {
+        self.created = Some(created.into());
+        self
+    }
+
+    pub fn with_updated(mut self, updated: impl Into<UtcDate>) -> Self {
+        self.updated = Some(updated.into());
+        self
+    }
+
+    pub fn with_speak_to_as(mut self, speak_to_as: SpeakToAs) -> Self {
+        self.speak_to_as = Some(speak_to_as);
+        self
+    }
+
     /// A minimal card with a full name and one email address, ready for
     /// `ContactCard/set` create.
     pub fn simple(address_book_id: impl Into<Id>, full_name: &str, email: &str) -> Self {
@@ -1252,6 +1340,22 @@ pub struct ContactsCapability {
     pub max_number_of_cards_in_set: u64,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl ContactsCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_size_attachments_per_card(mut self, max: u64) -> Self {
+        self.max_size_attachments_per_card = max;
+        self
+    }
+
+    pub fn with_max_number_of_cards_in_set(mut self, max: u64) -> Self {
+        self.max_number_of_cards_in_set = max;
+        self
+    }
 }
 
 /// Standard RFC 9553 §2.1.1 JSContact card kinds.

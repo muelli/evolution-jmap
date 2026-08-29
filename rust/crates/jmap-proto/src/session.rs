@@ -43,6 +43,56 @@ pub struct Session {
 }
 
 impl Session {
+    pub fn new(
+        username: impl Into<String>,
+        api_url: impl Into<String>,
+        download_url: impl Into<String>,
+        upload_url: impl Into<String>,
+        state: impl Into<State>,
+    ) -> Self {
+        Self {
+            capabilities: BTreeMap::new(),
+            accounts: BTreeMap::new(),
+            primary_accounts: BTreeMap::new(),
+            username: username.into(),
+            api_url: api_url.into(),
+            download_url: download_url.into(),
+            upload_url: upload_url.into(),
+            event_source_url: String::new(),
+            state: state.into(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_event_source_url(mut self, url: impl Into<String>) -> Self {
+        self.event_source_url = url.into();
+        self
+    }
+
+    pub fn with_capability(mut self, uri: impl Into<String>, value: Value) -> Self {
+        self.capabilities.insert(uri.into(), value);
+        self
+    }
+
+    pub fn with_capabilities(mut self, capabilities: BTreeMap<String, Value>) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    pub fn with_account(mut self, id: impl Into<Id>, account: Account) -> Self {
+        self.accounts.insert(id.into(), account);
+        self
+    }
+
+    pub fn with_primary_account(
+        mut self,
+        capability: impl Into<String>,
+        id: impl Into<Id>,
+    ) -> Self {
+        self.primary_accounts.insert(capability.into(), id.into());
+        self
+    }
+
     /// The primary account id for a capability URN, if the server has one.
     pub fn primary_account(&self, capability: &str) -> Option<&Id> {
         self.primary_accounts.get(capability)
@@ -264,6 +314,21 @@ pub struct WebSocketCapability {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl WebSocketCapability {
+    pub fn new(url: impl Into<String>) -> Self {
+        Self {
+            url: url.into(),
+            supports_push: false,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn supports_push(mut self, supports: bool) -> Self {
+        self.supports_push = supports;
+        self
+    }
+}
+
 /// Core capability properties (RFC 8620 §2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -288,6 +353,55 @@ pub struct CoreCapability {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl CoreCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_size_upload(mut self, max: u64) -> Self {
+        self.max_size_upload = max;
+        self
+    }
+
+    pub fn with_max_concurrent_upload(mut self, max: u64) -> Self {
+        self.max_concurrent_upload = max;
+        self
+    }
+
+    pub fn with_max_size_request(mut self, max: u64) -> Self {
+        self.max_size_request = max;
+        self
+    }
+
+    pub fn with_max_concurrent_requests(mut self, max: u64) -> Self {
+        self.max_concurrent_requests = max;
+        self
+    }
+
+    pub fn with_max_calls_in_request(mut self, max: u64) -> Self {
+        self.max_calls_in_request = max;
+        self
+    }
+
+    pub fn with_max_objects_in_get(mut self, max: u64) -> Self {
+        self.max_objects_in_get = max;
+        self
+    }
+
+    pub fn with_max_objects_in_set(mut self, max: u64) -> Self {
+        self.max_objects_in_set = max;
+        self
+    }
+
+    pub fn with_collation_algorithms(
+        mut self,
+        algorithms: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.collation_algorithms = algorithms.into_iter().map(Into::into).collect();
+        self
+    }
+}
+
 /// One account the user has access to (RFC 8620 §1.6.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -300,4 +414,36 @@ pub struct Account {
     pub account_capabilities: BTreeMap<String, Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Account {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            is_personal: false,
+            is_read_only: false,
+            account_capabilities: BTreeMap::new(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn is_personal(mut self, is_personal: bool) -> Self {
+        self.is_personal = is_personal;
+        self
+    }
+
+    pub fn is_read_only(mut self, is_read_only: bool) -> Self {
+        self.is_read_only = is_read_only;
+        self
+    }
+
+    pub fn with_capability(mut self, uri: impl Into<String>, value: Value) -> Self {
+        self.account_capabilities.insert(uri.into(), value);
+        self
+    }
+
+    pub fn with_capabilities(mut self, capabilities: BTreeMap<String, Value>) -> Self {
+        self.account_capabilities = capabilities;
+        self
+    }
 }
