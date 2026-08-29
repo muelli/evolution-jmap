@@ -162,6 +162,43 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-collection-create-calendar-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
 	target_link_directories(functional-collection-create-calendar-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# Item 22's reproduction client. Another registry-only consumer like the
+	# three above, but standing in for a long-lived backend *factory*: it
+	# holds an ESource across a registry restart and asks it for an OAuth 2.0
+	# access token afterwards. libedataserver alone, plus the platform's
+	# kill(2) — see the file's own header for the EDS source it rests on.
+	add_executable(functional-oauth2-stale-proxy-client tests/functional/oauth2-stale-proxy-client.c)
+	target_include_directories(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
+
+	# EDS's OWN registry module, not one this project builds. `EDS_REGISTRY_
+	# MODULES` replaces EDS's module directory rather than adding to it
+	# (`e-source-registry-server.c:1073`), so a functional session sees only
+	# what it stages — and the stale-proxy test needs this one, whose
+	# `EOAuth2SourceMonitor` is what exports the `Source.OAuth2Support` D-Bus
+	# interface for an account whose `[Authentication] Method` names a
+	# registered `EOAuth2Service`. Found rather than assumed, and fatal when
+	# missing, for the reason the whole file is built that way: without it the
+	# test still runs and still exercises a registry, but the interface it is
+	# about is never exported, so it would measure nothing.
+	find_file(MODULE_OAUTH2_SERVICES_LIBRARY module-oauth2-services.so
+		PATHS /usr/lib/evolution-data-server/registry-modules
+		      /usr/lib64/evolution-data-server/registry-modules
+		      /usr/local/lib/evolution-data-server/registry-modules
+		PATH_SUFFIXES ""
+		NO_DEFAULT_PATH)
+	if(NOT MODULE_OAUTH2_SERVICES_LIBRARY)
+		message(FATAL_ERROR
+			"ENABLE_FUNCTIONAL_TESTS is ON but EDS's own "
+			"module-oauth2-services.so was not found. It ships with the "
+			"evolution-data-server runtime package; docs/ROADMAP.md item 22's "
+			"reproduction stages it beside module-jmap-backend.so because "
+			"EDS_REGISTRY_MODULES replaces the module directory rather than "
+			"extending it.")
+	endif()
+
 	add_executable(functional-config-lookup-client tests/functional/config-lookup-client.c)
 	target_include_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_INCLUDE_DIRS})
 	target_compile_options(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_CFLAGS_OTHER})
@@ -404,6 +441,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_TRANSPORT_CLIENT=$<TARGET_FILE:functional-transport-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+	)
+
+	# docs/ROADMAP.md item 22 Do(1): the stale Source.OAuth2Support proxy that
+	# turns a silent token fetch into G_DBUS_ERROR_SERVICE_UNKNOWN and then a
+	# consent window. Reuses the collection backend's module (it is what
+	# registers the "JMAP" EOAuth2Service the account's `[Authentication]
+	# Method` names) and adds EDS's own oauth2-services module beside it.
+	add_test(
+		NAME functional-oauth2-stale-proxy
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test oauth2-stale-proxy
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-oauth2-stale-proxy PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_OAUTH2_STALE_PROXY_CLIENT=$<TARGET_FILE:functional-oauth2-stale-proxy-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
 	)
 
 	# `gnome-keyring-daemon` is what `Session::run` (rust/crates/jmap-functional/

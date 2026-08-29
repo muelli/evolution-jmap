@@ -450,6 +450,19 @@ unsafe fn is_secret_store_failure(error: *const GError) -> bool {
 /// is the whole of what this crate can do about it, which is item 22's Do(3)
 /// second branch: report it, never consent over it.
 ///
+/// **The interface is present for our accounts, which is what makes any of
+/// this reachable.** EDS's own registry module `module-oauth2-services.c`
+/// calls `e_server_side_source_set_oauth2_support` for every server-side
+/// source whose `[Authentication] Method` names a registered
+/// `EOAuth2Service` — ours is `jmap_config::oauth2_service::NAME` — and that
+/// setter exports the `Source.OAuth2Support` D-Bus interface at the source's
+/// object path. The tests below build the resulting `GError` by hand;
+/// `jmap-functional/tests/oauth2-stale-proxy.rs` is item 22's Do(1) and
+/// proves real daemons produce exactly it, by holding an `ESource` across a
+/// registry `SIGKILL`. If that test ever stops reporting
+/// `oauth2-support-exported=1`, this classification has become unreachable
+/// and the tests below would keep passing without it.
+///
 /// **Both codes, because a bus can answer either.** `SERVICE_UNKNOWN` is what
 /// a method call on an unowned, unactivatable name gets; `NAME_HAS_NO_OWNER`
 /// is the sibling other bus operations answer with. Neither is a password
