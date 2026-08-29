@@ -598,9 +598,7 @@ impl MockServer {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state
-            .event_source
-            .broadcast(crate::eventsource::format_state_event(change));
+        state.event_source.broadcast(change);
     }
 
     /// Block until at least one `/eventsource` client is connected, or panic
