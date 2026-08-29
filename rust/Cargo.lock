@@ -331,12 +331,14 @@ dependencies = [
  "getrandom 0.3.4",
  "percent-encoding",
  "proptest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
  "tiny_http",
  "tracing",
  "ureq",
+ "webpki-roots",
 ]
 
 [[package]]
