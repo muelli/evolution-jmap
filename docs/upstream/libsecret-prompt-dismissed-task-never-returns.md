@@ -36,13 +36,15 @@ The application then hangs rather than reporting a failure.
 
 ## Analysis
 
-`libsecret/secret-service.c`, `on_real_prompt_completed()` — lines 317-336 in
-0.21.4, lines 320-339 on `main` — branches solely on whether the returned
+`libsecret/secret-service.c`,
+[`on_real_prompt_completed()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/0.21.4/libsecret/secret-service.c#L317-L336)
+— lines 317-336 in 0.21.4, lines 320-339 on `main` — branches solely on whether the returned
 variant is `NULL`. In the `NULL` branch it calls `g_task_return_error()` with
 whatever the local `error` holds, without checking that anything was set.
 
-`libsecret/secret-prompt.c`, `secret_prompt_perform_finish()` has three
-`return NULL` paths, and **two of them leave `*error` untouched**:
+`libsecret/secret-prompt.c`,
+[`secret_prompt_perform_finish()`](https://gitlab.gnome.org/GNOME/libsecret/-/blob/0.21.4/libsecret/secret-prompt.c#L507-L536)
+has three `return NULL` paths, and **two of them leave `*error` untouched**:
 
 - the dismissed case, where the closure's result is `NULL`
   (0.21.4, secret-prompt.c:526-527);
@@ -59,11 +61,30 @@ the same wording appears on `secret_prompt_perform_sync()`.
 So "`NULL` with no error set" is a normal, expected, documented outcome, and
 `on_real_prompt_completed()` treats it as impossible.
 
-The consequence follows mechanically: `g_task_return_error()` fails its
-`error != NULL` precondition and returns **without completing the task**. The
-task is later finalized having never returned. Every caller waiting on that
-operation waits forever, and `secret_service_prompt_sync()` and its callers
-block.
+The consequence then follows from GLib's own code. All references are to
+GLib 2.80.0, the version this was observed on:
+
+1. `g_task_return_error()` guards `g_return_if_fail (error != NULL)` at
+   [gio/gtask.c:2045](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L2039-L2050),
+   *above* `task->error = error` (2047) and `g_task_return()` (2049).
+2. `g_return_if_fail()` logs and then returns from the enclosing function
+   ([glib/gmessages.h:649-660](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/glib/gmessages.h#L649-L660)),
+   so neither of those two statements is reached.
+3. `task->ever_returned` is assigned in exactly one place in the file, inside
+   `g_task_return()`
+   ([gio/gtask.c:1393](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L1387-L1393)),
+   so it stays unset.
+4. At finalization, `if (!task->ever_returned)` emits the second critical
+   ([gio/gtask.c:732-745](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gtask.c#L726-L745)).
+
+That accounts for both observed messages and their order. The first is
+generated at gtask.c:2045 specifically: `g_return_if_fail()` passes
+`G_STRFUNC` and the stringified expression to `g_return_if_fail_warning()`,
+which is why the logged text names `g_task_return_error` and
+`'error != NULL'`.
+
+The task is therefore never completed. Every caller waiting on that operation
+waits forever, and `secret_service_prompt_sync()` and its callers block.
 
 ## How a prompt gets dismissed without an error
 
