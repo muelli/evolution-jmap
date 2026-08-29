@@ -129,6 +129,46 @@ proptest! {
         let _ = serde_json::from_str::<jmap_proto::mail::EmailSubmission>(&text);
     }
 
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_delivery_status(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::DeliveryStatus>(&text);
+    }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_email_submission_query_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::EmailSubmissionQueryFilter>(&text);
+    }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_search_snippet(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::SearchSnippet>(&text);
+    }
+
+    #[cfg(feature = "contacts")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_address_book_rights(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::contacts::AddressBookRights>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_query_changes_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::methods::QueryChangesResponse>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_copy_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::methods::CopyResponse<serde_json::Value>>(&text);
+    }
+
     #[cfg(feature = "principals")]
     #[test]
     fn arbitrary_json_never_panics_deserializing_principal(value in json_value()) {

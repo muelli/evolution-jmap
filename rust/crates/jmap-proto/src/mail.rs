@@ -480,6 +480,86 @@ pub struct EmailSubmission {
     pub send_at: Option<UtcDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undo_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_status: Option<BTreeMap<String, DeliveryStatus>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// The delivery status of an email submission to one recipient (RFC 8621 §7.1.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryStatus {
+    #[serde(default)]
+    pub smtp_reply: String,
+    #[serde(default = "default_delivered")]
+    pub delivered: String,
+    #[serde(default = "default_displayed")]
+    pub displayed: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+fn default_delivered() -> String {
+    delivered::UNKNOWN.to_owned()
+}
+
+fn default_displayed() -> String {
+    displayed::UNKNOWN.to_owned()
+}
+
+impl Default for DeliveryStatus {
+    fn default() -> Self {
+        Self {
+            smtp_reply: String::new(),
+            delivered: default_delivered(),
+            displayed: default_displayed(),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+/// Delivered status values for `DeliveryStatus` (RFC 8621 §7.1.1).
+pub mod delivered {
+    pub const QUEUED: &str = "queued";
+    pub const YES: &str = "yes";
+    pub const NO: &str = "no";
+    pub const UNKNOWN: &str = "unknown";
+}
+
+/// Displayed status values for `DeliveryStatus` (RFC 8621 §7.1.1).
+pub mod displayed {
+    pub const UNKNOWN: &str = "unknown";
+    pub const YES: &str = "yes";
+}
+
+/// `EmailSubmission/query` filter conditions (RFC 8621 §7.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailSubmissionQueryFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_ids: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email_ids: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_ids: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<UtcDate>,
+}
+
+/// Snippet of matching text in an email search (RFC 8621 §5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSnippet {
+    pub email_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -523,6 +603,12 @@ impl EnvelopeAddress {
             parameters: None,
         }
     }
+}
+
+/// The `SetError` types RFC 8621 §6.4 adds for `Identity/set`.
+pub mod identity_set_error {
+    pub const FORBIDDEN_FROM: &str = "forbiddenFrom";
+    pub const CANNOT_DESTROY_DEFAULT: &str = "cannotDestroyDefault";
 }
 
 /// The `SetError` types RFC 8621 §7.5 adds for `EmailSubmission/set`.

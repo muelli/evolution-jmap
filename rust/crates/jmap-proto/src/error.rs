@@ -101,6 +101,7 @@ pub mod method {
     pub const SERVER_PARTIAL_FAIL: &str = "serverPartialFail";
     pub const UNKNOWN_CAPABILITY: &str = "unknownCapability";
     pub const STATE_MISMATCH: &str = "stateMismatch";
+    pub const FROM_STATE_MISMATCH: &str = "fromStateMismatch";
     /// The `since_state` of a `/changes` call is too old for the server to
     /// answer from its log; the client must resynchronise in full.
     pub const CANNOT_CALCULATE_CHANGES: &str = "cannotCalculateChanges";
@@ -111,7 +112,7 @@ pub mod method {
     pub const REQUEST_TOO_LARGE: &str = "requestTooLarge";
 }
 
-/// Well-known set-level error types (RFC 8620 §5.3).
+/// Well-known set-level error types (RFC 8620 §5.3, §5.4).
 pub mod set {
     pub const FORBIDDEN: &str = "forbidden";
     pub const OVER_QUOTA: &str = "overQuota";
@@ -124,6 +125,8 @@ pub mod set {
     pub const WILL_DESTROY: &str = "willDestroy";
     pub const STATE_MISMATCH: &str = "stateMismatch";
     pub const REQUEST_TOO_LARGE: &str = "requestTooLarge";
+    pub const ALREADY_EXISTS: &str = "alreadyExists";
+    pub const CANNOT_DESTROY_ORIGINAL: &str = "cannotDestroyOriginal";
 }
 
 /// Standard RFC 8620 §3.6.1 request-level problem types (RFC 7807 URI format).

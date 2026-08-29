@@ -137,6 +137,7 @@ fn submission_request(
                 envelope,
                 send_at: None,
                 undo_status: None,
+                delivery_status: None,
                 extra: Default::default(),
             },
         ),

@@ -659,3 +659,102 @@ fn query_request_anchor_and_anchor_offset_cover_rfc8620() {
     assert_eq!(roundtrip.anchor.as_ref().unwrap().as_str(), "msg_123");
     assert_eq!(roundtrip.anchor_offset, Some(-5));
 }
+
+/// `QueryChangesRequest` and `QueryChangesResponse` support RFC 8620 §5.6.
+#[test]
+fn query_changes_request_and_response_roundtrip_covers_rfc8620() {
+    use jmap_proto::methods::{AddedItem, QueryChangesRequest, QueryChangesResponse};
+
+    let req = QueryChangesRequest::<serde_json::Value>::new("A1", "qs_old")
+        .filter(serde_json::json!({"hasKeyword": "$seen"}))
+        .max_changes(50)
+        .up_to_id("msg_99")
+        .calculate_total();
+
+    let json = serde_json::to_value(&req).unwrap();
+    assert_eq!(json["accountId"], "A1");
+    assert_eq!(json["sinceQueryState"], "qs_old");
+    assert_eq!(json["maxChanges"], 50);
+    assert_eq!(json["upToId"], "msg_99");
+    assert_eq!(json["calculateTotal"], true);
+
+    let resp_val = serde_json::json!({
+        "accountId": "A1",
+        "oldQueryState": "qs_old",
+        "newQueryState": "qs_new",
+        "total": 12,
+        "removed": ["id1", "id2"],
+        "added": [
+            {"id": "id3", "index": 0},
+            {"id": "id4", "index": 5}
+        ]
+    });
+    let resp: QueryChangesResponse = serde_json::from_value(resp_val.clone()).unwrap();
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.old_query_state.as_str(), "qs_old");
+    assert_eq!(resp.new_query_state.as_str(), "qs_new");
+    assert_eq!(resp.total, Some(12));
+    assert_eq!(resp.removed.len(), 2);
+    assert_eq!(resp.added.len(), 2);
+    assert_eq!(resp.added[0], AddedItem::new("id3", 0));
+    assert_eq!(resp.added[1], AddedItem::new("id4", 5));
+
+    let round_tripped = serde_json::to_value(&resp).unwrap();
+    assert_eq!(round_tripped, resp_val);
+}
+
+/// `CopyRequest` and `CopyResponse` support RFC 8620 §5.4.
+#[test]
+fn copy_request_and_response_roundtrip_covers_rfc8620() {
+    use jmap_proto::methods::{CopyRequest, CopyResponse};
+
+    let req = CopyRequest::<serde_json::Value>::new("SrcAccount", "DstAccount")
+        .if_from_in_state("src_state_1")
+        .if_in_state("dst_state_1")
+        .copy_object("c1", serde_json::json!({"name": "Item 1"}))
+        .on_success_destroy_original()
+        .destroy_from_if_in_state("src_state_1");
+
+    let json = serde_json::to_value(&req).unwrap();
+    assert_eq!(json["fromAccountId"], "SrcAccount");
+    assert_eq!(json["ifFromInState"], "src_state_1");
+    assert_eq!(json["accountId"], "DstAccount");
+    assert_eq!(json["ifInState"], "dst_state_1");
+    assert_eq!(json["onSuccessDestroyOriginal"], true);
+    assert_eq!(json["destroyFromIfInState"], "src_state_1");
+    assert_eq!(json["create"]["c1"]["name"], "Item 1");
+
+    let resp_val = serde_json::json!({
+        "fromAccountId": "SrcAccount",
+        "accountId": "DstAccount",
+        "oldState": "s1",
+        "newState": "s2",
+        "created": {
+            "c1": {"id": "dst_id_1"}
+        }
+    });
+    let resp: CopyResponse<serde_json::Value> = serde_json::from_value(resp_val.clone()).unwrap();
+    assert_eq!(resp.from_account_id.as_str(), "SrcAccount");
+    assert_eq!(resp.account_id.as_str(), "DstAccount");
+    assert_eq!(resp.old_state.as_ref().unwrap().as_str(), "s1");
+    assert_eq!(resp.new_state.as_str(), "s2");
+    assert!(resp.created.unwrap().contains_key("c1"));
+}
+
+/// Standard filter operators and error codes in RFC 8620 are defined.
+#[test]
+fn standard_filter_operators_and_error_codes_cover_rfc8620() {
+    assert_eq!(jmap_proto::methods::filter_operator::AND, "AND");
+    assert_eq!(jmap_proto::methods::filter_operator::OR, "OR");
+    assert_eq!(jmap_proto::methods::filter_operator::NOT, "NOT");
+
+    assert_eq!(jmap_proto::error::set::ALREADY_EXISTS, "alreadyExists");
+    assert_eq!(
+        jmap_proto::error::method::FROM_STATE_MISMATCH,
+        "fromStateMismatch"
+    );
+    assert_eq!(
+        jmap_proto::error::set::CANNOT_DESTROY_ORIGINAL,
+        "cannotDestroyOriginal"
+    );
+}

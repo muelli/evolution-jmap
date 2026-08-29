@@ -187,7 +187,12 @@ fn email_submission_delivery_status_and_undo_status_cover_rfc8621() {
     .unwrap();
 
     assert_eq!(sub.undo_status.as_deref(), Some("pending"));
-    assert!(sub.extra.contains_key("deliveryStatus"));
+    assert!(
+        sub.delivery_status
+            .as_ref()
+            .unwrap()
+            .contains_key("bob@example.com")
+    );
     assert_eq!(
         sub.extra.get("dsnBlobIds"),
         Some(&serde_json::json!(["B1", "B2"]))
@@ -248,4 +253,93 @@ fn vacation_response_roundtrip_covers_rfc8621() {
     );
     assert_eq!(vacation.subject.as_deref(), Some("Out of office"));
     assert_eq!(vacation.text_body.as_deref(), Some("I am on annual leave."));
+}
+
+#[test]
+fn delivery_status_and_submission_query_filter_roundtrip_cover_rfc8621() {
+    use jmap_proto::mail::{
+        DeliveryStatus, EmailSubmissionQueryFilter, delivered, displayed, identity_set_error,
+    };
+    use std::collections::BTreeMap;
+
+    assert_eq!(delivered::QUEUED, "queued");
+    assert_eq!(delivered::YES, "yes");
+    assert_eq!(delivered::NO, "no");
+    assert_eq!(delivered::UNKNOWN, "unknown");
+
+    assert_eq!(displayed::UNKNOWN, "unknown");
+    assert_eq!(displayed::YES, "yes");
+
+    assert_eq!(identity_set_error::FORBIDDEN_FROM, "forbiddenFrom");
+    assert_eq!(
+        identity_set_error::CANNOT_DESTROY_DEFAULT,
+        "cannotDestroyDefault"
+    );
+
+    let status = DeliveryStatus {
+        smtp_reply: "250 2.1.5 Ok".to_owned(),
+        delivered: delivered::YES.to_owned(),
+        displayed: displayed::YES.to_owned(),
+        extra: BTreeMap::new(),
+    };
+    let json = serde_json::to_value(&status).unwrap();
+    assert_eq!(json["smtpReply"], "250 2.1.5 Ok");
+    assert_eq!(json["delivered"], "yes");
+    assert_eq!(json["displayed"], "yes");
+
+    let round_tripped: DeliveryStatus = serde_json::from_value(json).unwrap();
+    assert_eq!(round_tripped, status);
+
+    let sub = EmailSubmission {
+        id: Some("S1".into()),
+        identity_id: "I1".into(),
+        email_id: "M1".into(),
+        delivery_status: Some(BTreeMap::from([(
+            "bob@example.com".to_owned(),
+            status.clone(),
+        )])),
+        ..EmailSubmission::default()
+    };
+    let sub_json = serde_json::to_value(&sub).unwrap();
+    assert_eq!(
+        sub_json["deliveryStatus"]["bob@example.com"]["delivered"],
+        "yes"
+    );
+
+    let filter: EmailSubmissionQueryFilter = serde_json::from_value(serde_json::json!({
+        "identityIds": ["I1"],
+        "emailIds": ["M1", "M2"],
+        "threadIds": ["T1"],
+        "undoStatus": "pending",
+        "before": "2026-09-01T00:00:00Z"
+    }))
+    .unwrap();
+
+    assert_eq!(filter.identity_ids.unwrap().len(), 1);
+    assert_eq!(filter.email_ids.unwrap().len(), 2);
+    assert_eq!(filter.thread_ids.unwrap().len(), 1);
+    assert_eq!(filter.undo_status.as_deref(), Some("pending"));
+    assert_eq!(
+        filter.before.as_ref().unwrap().as_str(),
+        "2026-09-01T00:00:00Z"
+    );
+}
+
+#[test]
+fn search_snippet_roundtrip_covers_rfc8621() {
+    use jmap_proto::mail::SearchSnippet;
+
+    let snippet: SearchSnippet = serde_json::from_value(serde_json::json!({
+        "emailId": "M1",
+        "subject": "Hello <b>world</b>",
+        "preview": "This is <b>important</b> message"
+    }))
+    .unwrap();
+
+    assert_eq!(snippet.email_id.as_str(), "M1");
+    assert_eq!(snippet.subject.as_deref(), Some("Hello <b>world</b>"));
+    assert_eq!(
+        snippet.preview.as_deref(),
+        Some("This is <b>important</b> message")
+    );
 }
