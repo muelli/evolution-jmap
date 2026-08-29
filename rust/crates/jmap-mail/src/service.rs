@@ -287,6 +287,71 @@ unsafe fn name_of(service: *mut CamelService, brief: bool) -> String {
     describe(host.as_deref(), port, user.as_deref(), brief)
 }
 
+/// What `connect_sync` does after `camel_service_authenticate_sync`'s OAuth
+/// 2.0 first attempt answers, once its verdict has been turned into an
+/// action by [`resolve_oauth2_attempt`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum FirstAttempt {
+    /// A final answer: `connect_sync` returns this to its own caller.
+    Done(gboolean),
+    /// The token itself was refused (not a connection failure) — fall
+    /// through to the session's interactive recovery loop.
+    Refused,
+}
+
+/// Turns the OAuth 2.0 first attempt's [`CamelAuthenticationResult`] and the
+/// private `attempt_error` `camel_service_authenticate_sync` wrote into it
+/// into what `connect_sync` does next.
+///
+/// The one rule this function exists to hold: `attempt_error`'s ownership
+/// moves exactly once along every path — to `*error` on `ACCEPTED`'s sibling
+/// `ERROR` verdict (or freed there and then, if the caller passed no `error`
+/// to move it into), or freed here on `REJECTED`, never both and never
+/// neither. `ACCEPTED` has nothing to free: Camel's own contract for the
+/// call this answers guarantees `attempt_error` is untouched on success.
+///
+/// Split out from `connect_sync` so the three outcomes can each be driven
+/// with a synthetic `GError` and no `CamelService`/`CamelSession` at all —
+/// the same reason [`report_authentication`] exists.
+///
+/// # Safety
+///
+/// `attempt_error` must be NULL or an owned `GError` this call may free or
+/// move. `error` must be NULL or point at a writable, currently-NULL
+/// `GError *`.
+pub unsafe fn resolve_oauth2_attempt(
+    result: CamelAuthenticationResult,
+    attempt_error: *mut GError,
+    error: *mut *mut GError,
+) -> FirstAttempt {
+    if result == CAMEL_AUTHENTICATION_ACCEPTED {
+        return FirstAttempt::Done(GTRUE);
+    }
+    if result == CAMEL_AUTHENTICATION_ERROR {
+        // A token fetch that failed outright (dead keyring, no network to the
+        // token endpoint): a message the user can read, never a consent loop
+        // that cannot help.
+        if !error.is_null() {
+            // SAFETY: `error` meets this function's contract.
+            unsafe { *error = attempt_error };
+        } else if !attempt_error.is_null() {
+            // SAFETY: an owned `GError` this function was handed.
+            unsafe { g_error_free(attempt_error) };
+        }
+        return FirstAttempt::Done(GFALSE);
+    }
+    // REJECTED: the server refused the token itself — re-consent through the
+    // session's loop below is the correct recovery.
+    if !attempt_error.is_null() {
+        // SAFETY: as above.
+        unsafe { g_error_free(attempt_error) };
+    }
+    tracing::debug!(
+        "server rejected the OAuth 2.0 token; deferring to the session's interactive recovery"
+    );
+    FirstAttempt::Refused
+}
+
 /// Asks the session to authenticate this service, unless it already did.
 ///
 /// No connection is opened here — see the module docs. The short-circuit is the
@@ -348,28 +413,10 @@ unsafe extern "C" fn connect_sync<T: Connected>(
                     cancellable,
                     &mut attempt_error,
                 );
-                if result == CAMEL_AUTHENTICATION_ACCEPTED {
-                    return GTRUE;
+                match resolve_oauth2_attempt(result, attempt_error, error) {
+                    FirstAttempt::Done(outcome) => return outcome,
+                    FirstAttempt::Refused => {}
                 }
-                if result == CAMEL_AUTHENTICATION_ERROR {
-                    // A token fetch that failed outright (dead keyring, no
-                    // network to the token endpoint): a message the user can
-                    // read, never a consent loop that cannot help.
-                    if !error.is_null() {
-                        *error = attempt_error;
-                    } else if !attempt_error.is_null() {
-                        g_error_free(attempt_error);
-                    }
-                    return GFALSE;
-                }
-                // REJECTED: the server refused the token itself — re-consent
-                // through the session's loop below is the correct recovery.
-                if !attempt_error.is_null() {
-                    g_error_free(attempt_error);
-                }
-                tracing::debug!(
-                    "server rejected the OAuth 2.0 token; deferring to the session's interactive recovery"
-                );
             }
 
             // NULL mechanism: JMAP authenticates over HTTP and offers no SASL

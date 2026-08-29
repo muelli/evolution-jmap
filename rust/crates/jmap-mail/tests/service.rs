@@ -29,17 +29,19 @@ use std::sync::Arc;
 use common::Account;
 use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
-    CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_STORE_FOLDER_INFO_REFRESH, CamelNetworkSettings,
-    CamelService, camel_network_settings_set_host, camel_network_settings_set_port,
-    camel_network_settings_set_user, camel_service_error_quark, camel_service_get_name,
-    camel_service_ref_settings,
+    CAMEL_SERVICE_ERROR_INVALID, CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_STORE_FOLDER_INFO_REFRESH,
+    CamelNetworkSettings, CamelService, camel_network_settings_set_host,
+    camel_network_settings_set_port, camel_network_settings_set_user, camel_service_error_quark,
+    camel_service_get_name, camel_service_ref_settings,
 };
-use glib_sys::GError;
+use glib_sys::{GError, GFALSE, GTRUE, g_error_free, g_error_new_literal};
 use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_client::{Client, Credentials, Error};
 use jmap_mail::connect::{StoreError, password_credentials};
 use jmap_mail::server::ServerConfig;
-use jmap_mail::service::{authenticate, describe, report_authentication};
+use jmap_mail::service::{
+    FirstAttempt, authenticate, describe, report_authentication, resolve_oauth2_attempt,
+};
 use jmap_mail::store::JmapStore;
 use jmap_mail_sync::MailSync;
 use jmap_mock::MockServer;
@@ -292,6 +294,140 @@ fn the_installed_connection_is_the_one_the_attempt_opened() {
         store.folders(CACHED).expect("listed").iter().count(),
         direct.folder_tree().expect("listed").1.iter().count()
     );
+}
+
+// ---------------------------------------------------------------------------
+// the OAuth 2.0 first attempt's `GError` handoff (`connect_sync`, item 21
+// area (4))
+//
+// `resolve_oauth2_attempt` is what `connect_sync` calls after
+// `camel_service_authenticate_sync`'s OAuth 2.0 first attempt answers, and it
+// is the one place that attempt's private `attempt_error` changes ownership.
+// A wrong answer here is either a leak (an error nobody ever frees) or a
+// double free (an error freed here *and* later by whoever the vfunc's own
+// `error` out-parameter belongs to) — neither is something the existing
+// `Reported` tests above exercise, since those drive `report_authentication`
+// on the *session's* verdict, never this earlier, OAuth-only attempt.
+
+/// A `GError` this test owns, standing in for what
+/// `camel_service_authenticate_sync` would have written into `attempt_error`.
+fn synthetic_error() -> *mut GError {
+    let message = std::ffi::CString::new("synthetic").unwrap();
+    // SAFETY: a literal, NUL-terminated message; the domain/code are
+    // arbitrary, since nothing under test reads them.
+    unsafe {
+        g_error_new_literal(
+            camel_service_error_quark(),
+            CAMEL_SERVICE_ERROR_INVALID as i32,
+            message.as_ptr(),
+        )
+    }
+}
+
+/// `ACCEPTED` is the one verdict Camel's own contract guarantees carries no
+/// error, so there is nothing to move — the outcome is a final answer and the
+/// caller's `error` out-parameter is left exactly as it was.
+#[test]
+fn an_accepted_attempt_is_done_and_touches_no_error() {
+    let mut error: *mut GError = ptr::null_mut();
+
+    // SAFETY: `attempt_error` is NULL, matching `ACCEPTED`'s own contract;
+    // `error` is a writable, currently-NULL `GError **`.
+    let outcome = unsafe {
+        resolve_oauth2_attempt(CAMEL_AUTHENTICATION_ACCEPTED, ptr::null_mut(), &mut error)
+    };
+
+    assert_eq!(outcome, FirstAttempt::Done(GTRUE));
+    assert!(
+        error.is_null(),
+        "an accepted attempt touched the caller's error"
+    );
+}
+
+/// The path a real bug here would show up as a message the user never sees:
+/// an `ERROR` verdict's `GError` must reach the caller's own out-parameter,
+/// not merely disappear (which is what "no leak" alone would also permit,
+/// via a stray free).
+#[test]
+fn an_error_first_attempt_moves_its_gerror_to_the_callers_out_parameter() {
+    let attempt_error = synthetic_error();
+    let mut error: *mut GError = ptr::null_mut();
+
+    // SAFETY: `attempt_error` is an owned `GError` this call may move;
+    // `error` is a writable, currently-NULL `GError **`.
+    let outcome =
+        unsafe { resolve_oauth2_attempt(CAMEL_AUTHENTICATION_ERROR, attempt_error, &mut error) };
+
+    assert_eq!(outcome, FirstAttempt::Done(GFALSE));
+    assert_eq!(
+        error, attempt_error,
+        "the caller's out-parameter did not receive the attempt's own GError"
+    );
+    // The caller is now the owner, exactly as `report_authentication`'s own
+    // callers are — freeing it here is this test discharging that, not the
+    // function under test.
+    // SAFETY: ownership was handed to `error` above, and nothing else holds
+    // a reference to it.
+    unsafe { g_error_free(error) };
+}
+
+/// A caller that passed no `error` (Camel's contract allows it — the vfunc's
+/// own `error` may itself be NULL) does not want to *know* about a failure,
+/// but the `GError` still must not leak. Freeing it here, rather than moving
+/// it nowhere, is the whole of what this test pins: a regression that instead
+/// frees it a second time later (double free) or leaves both this call and a
+/// later one thinking they own it aborts the process outright, which is a
+/// stronger net than any assertion this test could write.
+#[test]
+fn an_error_first_attempt_with_no_out_parameter_frees_its_gerror_rather_than_leaking_it() {
+    let attempt_error = synthetic_error();
+
+    // SAFETY: `attempt_error` is an owned `GError`; a NULL `error` is exactly
+    // the "caller wants no error" case this function's contract allows.
+    let outcome = unsafe {
+        resolve_oauth2_attempt(CAMEL_AUTHENTICATION_ERROR, attempt_error, ptr::null_mut())
+    };
+
+    assert_eq!(outcome, FirstAttempt::Done(GFALSE));
+}
+
+/// `REJECTED` means the server refused the token, not that the connection
+/// failed — the session's own interactive loop below is where that recovers,
+/// so the private attempt's `GError` is not this verdict's to report and must
+/// be freed, and the caller's own `error` slot must stay exactly as it was
+/// (still NULL) for that loop to write into.
+#[test]
+fn a_rejected_attempt_frees_its_gerror_and_leaves_the_callers_error_untouched() {
+    let attempt_error = synthetic_error();
+    let mut error: *mut GError = ptr::null_mut();
+
+    // SAFETY: as the `ERROR` tests above.
+    let outcome =
+        unsafe { resolve_oauth2_attempt(CAMEL_AUTHENTICATION_REJECTED, attempt_error, &mut error) };
+
+    assert_eq!(outcome, FirstAttempt::Refused);
+    assert!(
+        error.is_null(),
+        "a rejected attempt wrote into the caller's error, stealing the session loop's slot"
+    );
+}
+
+/// The same free-not-leak obligation as the `ERROR` case, for the verdict
+/// whose own `GError` is never supposed to reach anyone.
+#[test]
+fn a_rejected_attempt_with_no_out_parameter_still_frees_its_gerror() {
+    let attempt_error = synthetic_error();
+
+    // SAFETY: as above, with the "caller wants no error" NULL out-parameter.
+    let outcome = unsafe {
+        resolve_oauth2_attempt(
+            CAMEL_AUTHENTICATION_REJECTED,
+            attempt_error,
+            ptr::null_mut(),
+        )
+    };
+
+    assert_eq!(outcome, FirstAttempt::Refused);
 }
 
 // ---------------------------------------------------------------------------
