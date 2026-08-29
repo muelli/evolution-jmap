@@ -1008,3 +1008,64 @@ fn result_reference_and_push_builders_roundtrip() {
         "state_123"
     );
 }
+
+#[test]
+fn core_echo_and_builder_methods_roundtrip() {
+    use jmap_proto::methods::{ChangesRequest, Echo, GetRequest, UploadResponse};
+    use jmap_proto::request::{Invocation, Request, ResultReference};
+    use jmap_proto::response::Response;
+    use std::collections::BTreeMap;
+
+    // Core/echo
+    let echo = Echo::new(serde_json::json!({"testKey": "testVal", "num": 42}));
+    let echo_val = serde_json::to_value(&echo).unwrap();
+    assert_eq!(echo_val["testKey"], "testVal");
+    assert_eq!(echo_val["num"], 42);
+    let round_echo: Echo<serde_json::Value> = serde_json::from_value(echo_val).unwrap();
+    assert_eq!(round_echo, echo);
+
+    // GetRequest builders
+    let rr = ResultReference::new("call0", "Email/query", "/ids");
+    let get_req = GetRequest::all("acc1")
+        .properties(["id", "blobId", "threadId"])
+        .ids_ref(rr);
+    assert_eq!(
+        get_req.properties.as_ref().unwrap(),
+        &["id", "blobId", "threadId"]
+    );
+    assert_eq!(get_req.ids_ref.as_ref().unwrap().result_of, "call0");
+
+    // ChangesRequest builders
+    let chg_req = ChangesRequest::new("acc1", "s1").max_changes(50);
+    assert_eq!(chg_req.account_id.as_str(), "acc1");
+    assert_eq!(chg_req.since_state.as_str(), "s1");
+    assert_eq!(chg_req.max_changes, Some(50));
+
+    // UploadResponse builders
+    let upload = UploadResponse::new("acc1", "blob_99", 2048).with_content_type("text/plain");
+    assert_eq!(upload.account_id.as_str(), "acc1");
+    assert_eq!(upload.blob_id.as_str(), "blob_99");
+    assert_eq!(upload.size, 2048);
+    assert_eq!(upload.content_type.as_deref(), Some("text/plain"));
+
+    // Request with_created_ids
+    let req = Request::new(["urn:ietf:params:jmap:core"])
+        .with_created_ids(BTreeMap::from([("c1".into(), "id1".into())]));
+    assert_eq!(
+        req.created_ids.as_ref().unwrap()[&"c1".into()].as_str(),
+        "id1"
+    );
+
+    // Response builders and Invocation from_value
+    let inv = Invocation::from_value("Core/echo", serde_json::json!({"ack": true}), "c0");
+    let resp = Response::new("s_final")
+        .with_method_response(inv)
+        .with_created_ids(BTreeMap::from([("c1".into(), "id1".into())]));
+    assert_eq!(resp.session_state.as_str(), "s_final");
+    assert_eq!(resp.method_responses.len(), 1);
+    assert_eq!(resp.method_responses[0].name, "Core/echo");
+    assert_eq!(
+        resp.created_ids.as_ref().unwrap()[&"c1".into()].as_str(),
+        "id1"
+    );
+}

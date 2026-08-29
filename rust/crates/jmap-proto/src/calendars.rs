@@ -51,6 +51,50 @@ pub struct Calendar {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Calendar {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
+    }
+
+    pub fn with_sort_order(mut self, sort_order: u32) -> Self {
+        self.sort_order = Some(sort_order);
+        self
+    }
+
+    pub fn is_default(mut self, is_default: bool) -> Self {
+        self.is_default = Some(is_default);
+        self
+    }
+
+    pub fn is_subscribed(mut self, is_subscribed: bool) -> Self {
+        self.is_subscribed = Some(is_subscribed);
+        self
+    }
+
+    pub fn is_visible(mut self, is_visible: bool) -> Self {
+        self.is_visible = Some(is_visible);
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+}
+
 /// The permissions the user has for a calendar (draft-ietf-jmap-calendars-28 §4.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -780,6 +824,27 @@ pub struct CalendarPreferences {
     pub first_day_of_week: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarPreferences {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_first_day_of_week(mut self, first_day: impl Into<String>) -> Self {
+        self.first_day_of_week = Some(first_day.into());
+        self
+    }
 }
 
 /// `CalendarEvent/parse` arguments (draft-ietf-jmap-calendars-28 §5.7).

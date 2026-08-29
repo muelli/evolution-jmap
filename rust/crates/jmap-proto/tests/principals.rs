@@ -185,3 +185,47 @@ fn principal_is_personal_spec_roundtrip() {
     let round: Principal = serde_json::from_value(p_val).unwrap();
     assert_eq!(round.is_personal, Some(true));
 }
+
+#[test]
+fn share_notification_builders_roundtrip() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::principals::{Principal, ShareNotification, share_notification_object_type};
+
+    let changer = Principal {
+        id: Some("p_admin".into()),
+        name: "Admin User".to_owned(),
+        ..Principal::default()
+    };
+
+    let notif = ShareNotification::new(
+        UtcDate::new("2026-09-01T15:00:00Z"),
+        share_notification_object_type::CALENDAR,
+        "cal_team",
+        "acc_alice",
+    )
+    .with_id("notif_1")
+    .with_changed_by(changer.clone())
+    .with_old_rights(serde_json::json!({"mayRead": true}))
+    .with_new_rights(serde_json::json!({"mayRead": true, "mayWrite": true}));
+
+    assert_eq!(notif.id.as_ref().unwrap().as_str(), "notif_1");
+    assert_eq!(notif.created.as_str(), "2026-09-01T15:00:00Z");
+    assert_eq!(notif.object_type, "Calendar");
+    assert_eq!(notif.object_id.as_str(), "cal_team");
+    assert_eq!(notif.account_id.as_str(), "acc_alice");
+    assert_eq!(notif.changed_by.as_ref().unwrap().name, "Admin User");
+
+    let notif_val = serde_json::to_value(&notif).unwrap();
+    assert_eq!(notif_val["id"], "notif_1");
+    assert_eq!(notif_val["created"], "2026-09-01T15:00:00Z");
+    assert_eq!(notif_val["objectType"], "Calendar");
+    assert_eq!(notif_val["objectId"], "cal_team");
+    assert_eq!(notif_val["accountId"], "acc_alice");
+    assert_eq!(notif_val["changedBy"]["name"], "Admin User");
+    assert_eq!(notif_val["oldRights"]["mayRead"], true);
+    assert_eq!(notif_val["newRights"]["mayWrite"], true);
+    assert_eq!(
+        serde_json::from_value::<ShareNotification>(notif_val).unwrap(),
+        notif
+    );
+}

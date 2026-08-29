@@ -42,6 +42,11 @@ impl Request {
             .push(Invocation::new(name, arguments, call_id)?);
         Ok(self)
     }
+
+    pub fn with_created_ids(mut self, created_ids: BTreeMap<Id, Id>) -> Self {
+        self.created_ids = Some(created_ids);
+        self
+    }
 }
 
 /// One method call or response: on the wire a three-element array of
@@ -64,6 +69,18 @@ impl Invocation {
             arguments: serde_json::to_value(arguments)?,
             call_id: call_id.into(),
         })
+    }
+
+    pub fn from_value(
+        name: impl Into<String>,
+        arguments: Value,
+        call_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            arguments,
+            call_id: call_id.into(),
+        }
     }
 
     /// Parse the arguments into a typed structure.

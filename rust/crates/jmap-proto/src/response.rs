@@ -24,6 +24,24 @@ pub struct Response {
 }
 
 impl Response {
+    pub fn new(session_state: impl Into<State>) -> Self {
+        Self {
+            method_responses: Vec::new(),
+            created_ids: None,
+            session_state: session_state.into(),
+        }
+    }
+
+    pub fn with_method_response(mut self, invocation: Invocation) -> Self {
+        self.method_responses.push(invocation);
+        self
+    }
+
+    pub fn with_created_ids(mut self, created_ids: BTreeMap<Id, Id>) -> Self {
+        self.created_ids = Some(created_ids);
+        self
+    }
+
     /// All responses belonging to the method call with the given call id (a
     /// single call may produce several responses).
     pub fn responses_for<'a>(&'a self, call_id: &'a str) -> impl Iterator<Item = &'a Invocation> {

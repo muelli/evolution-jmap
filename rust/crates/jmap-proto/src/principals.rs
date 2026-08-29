@@ -212,8 +212,50 @@ pub struct ShareNotification {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl ShareNotification {
+    pub fn new(
+        created: impl Into<UtcDate>,
+        object_type: impl Into<String>,
+        object_id: impl Into<Id>,
+        account_id: impl Into<Id>,
+    ) -> Self {
+        Self {
+            id: None,
+            created: created.into(),
+            changed_by: None,
+            object_type: object_type.into(),
+            object_id: object_id.into(),
+            account_id: account_id.into(),
+            old_rights: None,
+            new_rights: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_changed_by(mut self, changed_by: Principal) -> Self {
+        self.changed_by = Some(changed_by);
+        self
+    }
+
+    pub fn with_old_rights(mut self, old_rights: Value) -> Self {
+        self.old_rights = Some(old_rights);
+        self
+    }
+
+    pub fn with_new_rights(mut self, new_rights: Value) -> Self {
+        self.new_rights = Some(new_rights);
+        self
+    }
+}
+
 /// Standard RFC 9670 §4 share notification object types.
 pub mod share_notification_object_type {
+
     pub const ADDRESS_BOOK: &str = "AddressBook";
     pub const CALENDAR: &str = "Calendar";
     pub const MAILBOX: &str = "Mailbox";

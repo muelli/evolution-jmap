@@ -46,6 +46,35 @@ pub struct Mailbox {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Mailbox {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_parent_id(mut self, parent_id: impl Into<Id>) -> Self {
+        self.parent_id = Some(parent_id.into());
+        self
+    }
+
+    pub fn with_role(mut self, role: impl Into<String>) -> Self {
+        self.role = Some(role.into());
+        self
+    }
+
+    pub fn with_sort_order(mut self, sort_order: u32) -> Self {
+        self.sort_order = Some(sort_order);
+        self
+    }
+
+    pub fn is_subscribed(mut self, subscribed: bool) -> Self {
+        self.is_subscribed = Some(subscribed);
+        self
+    }
+}
+
 /// The permissions the user has for a mailbox (RFC 8621 §2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -703,6 +732,46 @@ pub struct Identity {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Identity {
+    pub fn new(name: impl Into<String>, email: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            email: email.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_reply_to(mut self, reply_to: impl IntoIterator<Item = EmailAddress>) -> Self {
+        self.reply_to = Some(reply_to.into_iter().collect());
+        self
+    }
+
+    pub fn with_bcc(mut self, bcc: impl IntoIterator<Item = EmailAddress>) -> Self {
+        self.bcc = Some(bcc.into_iter().collect());
+        self
+    }
+
+    pub fn with_text_signature(mut self, sig: impl Into<String>) -> Self {
+        self.text_signature = Some(sig.into());
+        self
+    }
+
+    pub fn with_html_signature(mut self, sig: impl Into<String>) -> Self {
+        self.html_signature = Some(sig.into());
+        self
+    }
+
+    pub fn with_draft_mailbox_id(mut self, draft_mailbox_id: impl Into<Id>) -> Self {
+        self.draft_mailbox_id = Some(draft_mailbox_id.into());
+        self
+    }
+
+    pub fn may_send(mut self, may_send: bool) -> Self {
+        self.may_send = Some(may_send);
+        self
+    }
+}
+
 /// A submission of an email for delivery (RFC 8621 §7).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -725,6 +794,36 @@ pub struct EmailSubmission {
     pub delivery_status: Option<BTreeMap<String, DeliveryStatus>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl EmailSubmission {
+    pub fn new(identity_id: impl Into<Id>, email_id: impl Into<Id>) -> Self {
+        Self {
+            identity_id: identity_id.into(),
+            email_id: email_id.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_thread_id(mut self, thread_id: impl Into<Id>) -> Self {
+        self.thread_id = Some(thread_id.into());
+        self
+    }
+
+    pub fn with_envelope(mut self, envelope: Envelope) -> Self {
+        self.envelope = Some(envelope);
+        self
+    }
+
+    pub fn with_send_at(mut self, send_at: impl Into<UtcDate>) -> Self {
+        self.send_at = Some(send_at.into());
+        self
+    }
+
+    pub fn with_undo_status(mut self, undo_status: impl Into<String>) -> Self {
+        self.undo_status = Some(undo_status.into());
+        self
+    }
 }
 
 /// The delivery status of an email submission to one recipient (RFC 8621 §7.1.1).

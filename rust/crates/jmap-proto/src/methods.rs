@@ -47,6 +47,16 @@ impl GetRequest {
             ..Self::all(account_id)
         }
     }
+
+    pub fn properties(mut self, properties: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.properties = Some(properties.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn ids_ref(mut self, ids_ref: impl Into<ResultReference>) -> Self {
+        self.ids_ref = Some(ids_ref.into());
+        self
+    }
 }
 
 /// `Foo/get` response (RFC 8620 §5.1).
@@ -289,6 +299,21 @@ pub struct ChangesRequest {
     pub max_changes: Option<u64>,
 }
 
+impl ChangesRequest {
+    pub fn new(account_id: impl Into<Id>, since_state: impl Into<State>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            since_state: since_state.into(),
+            max_changes: None,
+        }
+    }
+
+    pub fn max_changes(mut self, max_changes: u64) -> Self {
+        self.max_changes = Some(max_changes);
+        self
+    }
+}
+
 /// Response of a binary upload (RFC 8620 §6.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -298,6 +323,35 @@ pub struct UploadResponse {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
     pub size: u64,
+}
+
+impl UploadResponse {
+    pub fn new(account_id: impl Into<Id>, blob_id: impl Into<Id>, size: u64) -> Self {
+        Self {
+            account_id: account_id.into(),
+            blob_id: blob_id.into(),
+            content_type: None,
+            size,
+        }
+    }
+
+    pub fn with_content_type(mut self, content_type: impl Into<String>) -> Self {
+        self.content_type = Some(content_type.into());
+        self
+    }
+}
+
+/// `Core/echo` method arguments and response (RFC 8620 §5.8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct Echo<T = Value> {
+    pub payload: T,
+}
+
+impl<T> Echo<T> {
+    pub fn new(payload: T) -> Self {
+        Self { payload }
+    }
 }
 
 /// `Foo/changes` response (RFC 8620 §5.2).
