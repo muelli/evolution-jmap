@@ -113,6 +113,19 @@ impl Error {
                 if error.error_type == jmap_proto::error::method::CANNOT_CALCULATE_CHANGES
         )
     }
+
+    /// Whether the server rejected the request with HTTP 401.
+    ///
+    /// On a long-lived connection this is what a stale bearer token — an
+    /// access token that expired while the connection sat idle — looks like,
+    /// as opposed to every other failure a caller cannot fix by refreshing
+    /// credentials and trying again. The single source of truth for that
+    /// question: `jmap_backend_core::connect::is_wrong_password` and every
+    /// per-backend `SyncError`/`StoreError` equivalent delegate here rather
+    /// than repeating the same `Http { status: 401, .. }` match.
+    pub fn is_unauthorized(&self) -> bool {
+        matches!(self, Self::Http { status: 401, .. })
+    }
 }
 
 impl std::fmt::Display for Error {
@@ -235,5 +248,24 @@ mod tests {
             extra: Default::default(),
         });
         assert_eq!(error.to_string(), "set error: forbidden (nope)");
+    }
+
+    #[test]
+    fn only_http_401_is_unauthorized() {
+        assert!(
+            Error::Http {
+                status: 401,
+                problem: None,
+            }
+            .is_unauthorized()
+        );
+        assert!(
+            !Error::Http {
+                status: 403,
+                problem: None,
+            }
+            .is_unauthorized()
+        );
+        assert!(!Error::Transport("connection refused".into()).is_unauthorized());
     }
 }

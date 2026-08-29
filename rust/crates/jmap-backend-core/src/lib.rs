@@ -26,6 +26,8 @@
 //!   out-parameters carry, which every backend does identically.
 //! - [`resolver`] performs the `_jmap._tcp` SRV lookup RFC 8620 §2.2 wants,
 //!   which the client crate defines a seam for but deliberately cannot do.
+//! - [`retry`] is the one "refresh a stale OAuth 2.0 token and retry once"
+//!   control flow, generic over which backend and which error type calls it.
 //! - [`i18n`] binds this project's gettext domain, so that the strings a user
 //!   reads can be translated at all.
 //!
@@ -46,6 +48,7 @@ pub mod marshal;
 pub mod oauth2;
 pub mod owned;
 pub mod resolver;
+pub mod retry;
 pub mod secret_store;
 pub mod source;
 pub mod subclass;
