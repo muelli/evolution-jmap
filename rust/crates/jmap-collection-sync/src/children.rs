@@ -93,10 +93,12 @@ pub struct Child {
     /// [`Resource::color`], carried straight through — `None` for every
     /// address book child, and for a calendar the server named none.
     pub color: Option<String>,
-    /// The *account* is read-only, so nothing in this child may be created,
-    /// changed or removed. Per-collection rights (`myRights` on the collection
-    /// object) are a second, finer question that is not read yet, so a
-    /// writable-account child is not thereby known to be writable.
+    /// Whether nothing in this child may be created, changed or removed:
+    /// the account-wide bit, narrowed (never widened) by the collection's own
+    /// `myRights` when the server sent one. A writable account with a
+    /// collection whose `myRights` says not writable is read-only; a
+    /// read-only account is read-only regardless of what any one
+    /// collection's `myRights` claims — see [`Child::for_resource`].
     pub read_only: bool,
 }
 
@@ -160,7 +162,13 @@ impl Child {
             collection_id: resource.id.clone(),
             is_default: resource.is_default,
             color: resource.color.clone(),
-            read_only: account.read_only,
+            // Narrows, never widens: `resource.writable == Some(false)` can
+            // only turn a writable account's child read-only, never turn a
+            // read-only account's child writable. Absent `myRights`
+            // (`resource.writable` is `None`) leaves this exactly the
+            // account-wide bit, unchanged from before per-collection rights
+            // were read at all.
+            read_only: account.read_only || resource.writable == Some(false),
         }
     }
 }
@@ -216,6 +224,7 @@ mod tests {
             name: name.to_owned(),
             is_default: false,
             color: None,
+            writable: None,
         }
     }
 
@@ -360,6 +369,46 @@ mod tests {
             "the read-only account is the contacts one; the calendar is in \
              another account and says nothing about it"
         );
+    }
+
+    #[test]
+    fn a_collections_own_my_rights_narrows_a_writable_account_to_read_only() {
+        // The known-wrong heuristic `Child`'s doc used to name, made correct:
+        // a writable account with one collection whose `myRights` says not
+        // writable produces a read-only child for that collection alone.
+        let mut locked = resource("AB1", "Locked share");
+        locked.writable = Some(false);
+        let fanout = fanout(vec![locked, resource("AB2", "Personal")], Vec::new());
+
+        let children = fanout.children();
+        assert!(children[0].read_only, "myRights said not writable");
+        assert!(
+            !children[1].read_only,
+            "absent myRights falls back to the writable account, unchanged"
+        );
+    }
+
+    #[test]
+    fn a_collections_own_my_rights_never_widens_a_read_only_account() {
+        // The other half of "narrows, never widens": a collection whose
+        // `myRights` says writable does not override a read-only account —
+        // the account bit stays the ceiling.
+        let mut read_only_account = account("A1");
+        read_only_account.read_only = true;
+        let mut writable_looking = resource("AB1", "Says writable");
+        writable_looking.writable = Some(true);
+        let fanout = Fanout {
+            parts: Parts::ALL,
+            layout: CollectionLayout {
+                mail: None,
+                contacts: Some(read_only_account),
+                calendars: None,
+            },
+            address_books: vec![writable_looking],
+            calendars: Vec::new(),
+        };
+
+        assert!(fanout.children()[0].read_only);
     }
 
     #[test]

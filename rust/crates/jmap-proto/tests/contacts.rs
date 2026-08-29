@@ -5,6 +5,7 @@
 
 #![cfg(feature = "contacts")]
 
+use jmap_proto::Id;
 use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
 use serde_json::Value;
 
@@ -30,6 +31,23 @@ fn addressbook_roundtrip() {
     let address_book: AddressBook = serde_json::from_value(value).unwrap();
     assert_eq!(address_book.name, "Personal");
     assert_eq!(address_book.is_default, Some(true));
+}
+
+#[test]
+fn addressbook_my_rights_and_share_with_roundtrip() {
+    let value = fixture("contacts/addressbook_with_rights.json");
+    assert_eq!(roundtrip::<AddressBook>(&value), value);
+
+    let address_book: AddressBook = serde_json::from_value(value).unwrap();
+    let rights = address_book.my_rights.expect("myRights");
+    assert_eq!(rights.may_read, Some(true));
+    assert_eq!(rights.may_write, Some(false));
+    assert!(!rights.is_writable());
+
+    let share_with = address_book.share_with.expect("shareWith");
+    let shared_rights = &share_with[&Id::new("P1")];
+    assert_eq!(shared_rights.may_write, Some(true));
+    assert!(shared_rights.is_writable());
 }
 
 #[test]
