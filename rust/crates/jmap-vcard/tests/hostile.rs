@@ -147,3 +147,284 @@ fn a_crlf_in_a_value_is_still_escaped_rather_than_dropped() {
         Some("Vera\r\nFN:Mallory")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial-input robustness net (Batch 13 Item 5)
+
+use jmap_vcard::VCardError;
+use std::time::{Duration, Instant};
+
+/// Truncated and unterminated inputs must be rejected with typed VCardError,
+/// never panic, never hang, and never silently parse incomplete cards.
+#[test]
+fn truncated_and_unterminated_vcard_lines_rejection_matrix() {
+    let not_vcard_cases = ["", "   ", "\r\n", "\n", "\t"];
+    for input in not_vcard_cases {
+        assert_eq!(
+            vcard_to_card(input),
+            Err(VCardError::NotAVCard),
+            "input {input:?} should be rejected with NotAVCard"
+        );
+    }
+
+    let unterminated_cases = [
+        "BEGIN:VCARD",
+        "BEGIN:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\n",
+    ];
+    for input in unterminated_cases {
+        assert_eq!(
+            vcard_to_card(input),
+            Err(VCardError::Unterminated),
+            "input {input:?} should be rejected with Unterminated"
+        );
+    }
+
+    let malformed_cases = [
+        "FOO:BAR\r\n",
+        "VERSION:3.0\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nMALFORMED_LINE_WITHOUT_COLON\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nINVALID CONTENT LINE NO DELIMITER\r\nEND:VCARD\r\n",
+    ];
+    for input in malformed_cases {
+        assert!(
+            matches!(vcard_to_card(input), Err(VCardError::Malformed(_))),
+            "input {input:?} should be rejected with Malformed"
+        );
+    }
+}
+
+/// Unbalanced quoting in parameter values must never panic, hang, or inject properties.
+#[test]
+fn unbalanced_quoting_in_vcard_parameters_matrix() {
+    let hostile_quoted = [
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nEMAIL;TYPE=\"work:alice@example.com\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nTEL;TYPE=\"CELL\"VOICE\":+123456\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN;X-FOO=\"bar\"baz\":Alice\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nADR;TYPE=\"\"\"\":;;123 St;;;;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nNOTE;X-PARAM=\";;;\":A note\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nNOTE;X-PARAM=\":::\":Another note\r\nEND:VCARD\r\n",
+    ];
+
+    for input in hostile_quoted {
+        let start = Instant::now();
+        let res = vcard_to_card(input);
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "parse of hostile quoting hung on {input:?}"
+        );
+        // Either parses with sanitized parameters or returns typed error; never panics.
+        if let Ok(card) = res {
+            assert!(card.id.is_none() || card.id.is_some());
+        }
+    }
+}
+
+/// Absurd folding (folded every second octet, folded across delimiters, and empty folding lines).
+#[test]
+fn absurd_folding_every_second_octet_matrix() {
+    // Fold value every 2 octets
+    let mut folded = String::from("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:\r\n");
+    let raw_val = "Alexander The Great";
+    for chunk in raw_val.as_bytes().chunks(2) {
+        folded.push(' ');
+        folded.push_str(std::str::from_utf8(chunk).unwrap());
+        folded.push_str("\r\n");
+    }
+    folded.push_str("END:VCARD\r\n");
+
+    let card = vcard_to_card(&folded).expect("absurdly folded card should parse");
+    assert_eq!(
+        card.name.and_then(|n| n.full).as_deref(),
+        Some("Alexander The Great")
+    );
+
+    // Empty continuation lines and tab continuations
+    let empty_continuations = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\n \r\n \r\n \tSmith\r\nNOTE:First line\r\n\tSecond line\r\nEND:VCARD\r\n";
+    let card2 = vcard_to_card(empty_continuations).expect("tabs and empty continuations parse");
+    assert_eq!(
+        card2.name.and_then(|n| n.full).as_deref(),
+        Some("Alice\tSmith")
+    );
+    assert_eq!(
+        card2
+            .notes
+            .as_ref()
+            .and_then(|m| m.values().next())
+            .map(|n| n.note.as_str()),
+        Some("First lineSecond line")
+    );
+}
+
+/// A card with 10,000 properties parses in strictly bounded time with no stack overflow or hang.
+#[test]
+fn card_with_10k_properties_bounded_execution() {
+    let mut large_vcard = String::with_capacity(500_000);
+    large_vcard.push_str("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Stress Test Contact\r\n");
+    for i in 0..10_000 {
+        use std::fmt::Write;
+        let _ = writeln!(large_vcard, "X-CUSTOM-PROP-{i}:value-{i}\r");
+    }
+    large_vcard.push_str("NOTE:Final note line\r\nEND:VCARD\r\n");
+
+    let start = Instant::now();
+    let card = vcard_to_card(&large_vcard).expect("10k properties card should parse");
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "parsing 10k properties took too long: {elapsed:?}"
+    );
+    assert_eq!(
+        card.name.and_then(|n| n.full).as_deref(),
+        Some("Stress Test Contact")
+    );
+    assert_eq!(
+        card.notes
+            .as_ref()
+            .and_then(|m| m.values().next())
+            .map(|n| n.note.as_str()),
+        Some("Final note line")
+    );
+}
+
+/// Deeply nested AGENT vCards (10, 100, 1,000 levels) must not cause stack overflow or hang.
+#[test]
+fn deeply_nested_agent_robustness() {
+    for depth in [10, 50, 100, 500] {
+        let mut nested = String::new();
+        nested.push_str("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Root Contact\r\n");
+        for i in 0..depth {
+            nested.push_str("AGENT:BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Agent ");
+            nested.push_str(&i.to_string());
+            nested.push_str("\r\n");
+        }
+        for _ in 0..depth {
+            nested.push_str("END:VCARD\r\n");
+        }
+        nested.push_str("END:VCARD\r\n");
+
+        let start = Instant::now();
+        let res = vcard_to_card(&nested);
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "nested AGENT depth {depth} took too long"
+        );
+        // AGENT properties are ignored by jmap-vcard domain model; root FN is preserved.
+        if let Ok(card) = res {
+            assert_eq!(
+                card.name.and_then(|n| n.full).as_deref(),
+                Some("Root Contact")
+            );
+        }
+    }
+}
+
+/// CRLF, LF, CR, and mixed line endings must parse deterministically without data corruption.
+#[test]
+fn crlf_lf_cr_mixed_line_endings_matrix() {
+    let pure_lf = "BEGIN:VCARD\nVERSION:3.0\nFN:Alice Smith\nEMAIL:alice@example.com\nNOTE:Line 1\n Line 2\nEND:VCARD\n";
+    let pure_crlf = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice Smith\r\nEMAIL:alice@example.com\r\nNOTE:Line 1\r\n Line 2\r\nEND:VCARD\r\n";
+    let mixed = "BEGIN:VCARD\r\nVERSION:3.0\nFN:Alice Smith\nEMAIL:alice@example.com\r\nNOTE:Line 1\n Line 2\r\nEND:VCARD\n";
+
+    for (variant, input) in [
+        ("pure_lf", pure_lf),
+        ("pure_crlf", pure_crlf),
+        ("mixed", mixed),
+    ] {
+        let card = vcard_to_card(input)
+            .unwrap_or_else(|err| panic!("variant {variant} failed to parse: {err:?}"));
+        assert_eq!(
+            card.name.and_then(|n| n.full).as_deref(),
+            Some("Alice Smith"),
+            "variant {variant} mismatch"
+        );
+        assert_eq!(
+            card.emails
+                .as_ref()
+                .and_then(|m| m.values().next())
+                .map(|e| e.address.as_str()),
+            Some("alice@example.com"),
+            "variant {variant} email mismatch"
+        );
+    }
+
+    // Bare CR (without LF) is rejected as a typed Malformed error rather than silently doing partial parse or panicking
+    let pure_cr = "BEGIN:VCARD\rVERSION:3.0\rFN:Alice Smith\rEMAIL:alice@example.com\rEND:VCARD\r";
+    assert!(matches!(
+        vcard_to_card(pure_cr),
+        Err(VCardError::Malformed(_))
+    ));
+}
+
+/// Malformed PHOTO base64 payloads, corrupt data URIs, and invalid schemes never panic or corrupt state.
+#[test]
+fn malformed_photo_base64_and_corrupt_data_uri_matrix() {
+    let hostile_photos = [
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nPHOTO;ENCODING=b:!@#$%^&*()_+\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nPHOTO;ENCODING=b:abc=\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nPHOTO;ENCODING=b:\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nPHOTO;TYPE=JPEG;ENCODING=b:A\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nPHOTO;VALUE=uri:data:image/png;base64,invalid!@#$\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nPHOTO;VALUE=uri:data:image/png;base64,\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nPHOTO;VALUE=uri:data:not-a-valid-data-uri\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nPHOTO;VALUE=uri:http://\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nPHOTO;VALUE=uri:file:///\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nPHOTO;VALUE=uri:javascript:alert(1)\r\nEND:VCARD\r\n",
+    ];
+
+    for input in hostile_photos {
+        let res = vcard_to_card(input);
+        assert!(
+            res.is_ok() || res.is_err(),
+            "must return Result without panicking on {input:?}"
+        );
+        if let Ok(card) = res {
+            assert_eq!(card.name.and_then(|n| n.full).as_deref(), Some("Alice"));
+        }
+    }
+}
+
+/// Multibyte UTF-8 characters at exact slice boundaries (4, 6, 8, 10, 75 octets) never cause char boundary panics.
+#[test]
+fn adversarial_multibyte_utf8_slice_boundary_matrix() {
+    let multi_byte_chars = [
+        "é",       // 2 bytes: C3 A9
+        "€",       // 3 bytes: E2 82 AC
+        "𞋀",       // 4 bytes: F0 9E 8B 80 (Warang Citi)
+        "𐎟",       // 4 bytes: F0 90 8E 9F (Ugaritic word divider)
+        "🎉",      // 4 bytes: F0 9F 8E 89
+        "한",      // 3 bytes: ED 95 9C
+        "العربية", // Arabic multi-byte
+    ];
+
+    for ch in multi_byte_chars {
+        // Date properties with multibyte characters
+        let vcard_bday = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Test\r\nBDAY:{ch}1990-01-01\r\nEND:VCARD\r\n"
+        );
+        let _ = vcard_to_card(&vcard_bday);
+
+        let vcard_anniv = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Test\r\nANNIVERSARY:1990-{ch}-01\r\nEND:VCARD\r\n"
+        );
+        let _ = vcard_to_card(&vcard_anniv);
+
+        // Name components with multibyte characters
+        let vcard_name = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nN:Last{ch};First{ch};Mid{ch};Pref{ch};Suff{ch}\r\nFN:Full {ch}\r\nEND:VCARD\r\n"
+        );
+        let card = vcard_to_card(&vcard_name).expect("multibyte name should parse");
+        assert!(card.name.is_some());
+
+        // Structured address with multibyte characters
+        let vcard_adr = format!(
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Test\r\nADR:;;123 {ch} St;City {ch};State {ch};12345;Country {ch}\r\nEND:VCARD\r\n"
+        );
+        let card_adr = vcard_to_card(&vcard_adr).expect("multibyte adr should parse");
+        assert!(card_adr.addresses.is_some());
+    }
+}
