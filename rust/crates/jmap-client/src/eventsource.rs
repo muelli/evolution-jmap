@@ -1,0 +1,501 @@
+// SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! JMAP Push: a long-lived `EventSource` (SSE) reader (RFC 8620 §7.1, §7.3).
+//!
+//! [`crate::transport::Transport`] is a unary request/response abstraction —
+//! deliberately, so a libsoup-backed transport can drop in later without
+//! touching protocol logic — but a push connection is the opposite shape: one
+//! request whose response body never ends. So this reads the wire itself,
+//! on a dedicated thread per subscription, rather than going through
+//! `Transport`. It only speaks plain `http://`; the mock (and every URL this
+//! codebase builds today) is plain HTTP, and `https://` is left for whichever
+//! session wires this into a real, TLS-terminated deployment.
+//!
+//! [`EventSourceSubscription::start`] connects, reads chunked-transfer SSE
+//! frames, and forwards every `event: state` block's `data:` as a parsed
+//! [`StateChange`]. A `ping` (or any other) event is read and discarded — it
+//! exists only to prove the connection is still alive. Both a clean end (the
+//! server closed the stream, as `closeafter=state` does) and a broken one
+//! (a network error, a non-200 status) are just reasons to reconnect, with
+//! exponential backoff, until [`CancelFlag::cancel`] is called — [`Drop`]
+//! calls it too, and also shuts down whatever socket the background thread
+//! currently holds, so tearing a subscription down can never block on a dead
+//! or merely idle push connection.
+
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{Shutdown, TcpStream};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+
+use jmap_proto::push::StateChange;
+
+use crate::transport::CancelFlag;
+
+const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
+const MAX_BACKOFF: Duration = Duration::from_secs(30);
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// A live subscription to one account's `eventSourceUrl`, kept alive on its
+/// own thread; see the module doc.
+pub struct EventSourceSubscription {
+    receiver: Receiver<StateChange>,
+    cancel: CancelFlag,
+    socket: Arc<Mutex<Option<TcpStream>>>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl EventSourceSubscription {
+    /// Start listening on `url` — a full `GET` target, e.g. the session's
+    /// `eventSourceUrl` with `types`/`closeafter`/`ping` already appended by
+    /// the caller; this module does not itself build that query string, or
+    /// do the RFC 6570 template substitution `eventSourceUrl` is specified
+    /// as, since nothing in this codebase emits a templated one yet.
+    /// `headers` (typically `Authorization`) are sent on every connection
+    /// attempt. `url` must include an explicit port — every `eventSourceUrl`
+    /// this codebase produces does.
+    pub fn start(url: String, headers: Vec<(String, String)>, cancel: CancelFlag) -> Self {
+        let (sender, receiver) = mpsc::channel();
+        let socket = Arc::new(Mutex::new(None));
+        let handle = {
+            let cancel = cancel.clone();
+            let socket = Arc::clone(&socket);
+            thread::spawn(move || run(url, headers, cancel, socket, sender))
+        };
+        Self {
+            receiver,
+            cancel,
+            socket,
+            handle: Some(handle),
+        }
+    }
+
+    /// Block until a [`StateChange`] arrives or `timeout` elapses.
+    pub fn recv_timeout(&self, timeout: Duration) -> Option<StateChange> {
+        self.receiver.recv_timeout(timeout).ok()
+    }
+
+    /// Stop listening: cancel, shut down the current socket (if any) so a
+    /// blocking read on it returns immediately, and join the background
+    /// thread. Idempotent; also runs on [`Drop`] — calling it explicitly is
+    /// only useful to observe completion at a chosen point.
+    pub fn stop(&mut self) {
+        self.cancel.cancel();
+        if let Some(stream) = self.socket.lock().expect("socket lock poisoned").take() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for EventSourceSubscription {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// Reconnect loop: keep opening `url` until `cancel` fires.
+fn run(
+    url: String,
+    headers: Vec<(String, String)>,
+    cancel: CancelFlag,
+    socket: Arc<Mutex<Option<TcpStream>>>,
+    sender: Sender<StateChange>,
+) {
+    let mut backoff = INITIAL_BACKOFF;
+    while !cancel.is_cancelled() {
+        match connect_and_stream(&url, &headers, &cancel, &socket, &sender) {
+            Ok(()) => backoff = INITIAL_BACKOFF,
+            Err(error) => tracing::debug!(%error, url, "eventsource connection ended"),
+        }
+        *socket.lock().expect("socket lock poisoned") = None;
+        if cancel.is_cancelled() {
+            break;
+        }
+        sleep_cancellable(backoff, &cancel);
+        backoff = (backoff * 2).min(MAX_BACKOFF);
+    }
+}
+
+/// Sleep up to `duration`, checking `cancel` every [`CANCEL_POLL_INTERVAL`]
+/// so a cancellation during backoff is noticed promptly rather than only
+/// after the full backoff elapses.
+fn sleep_cancellable(duration: Duration, cancel: &CancelFlag) {
+    let deadline = Instant::now() + duration;
+    while Instant::now() < deadline {
+        if cancel.is_cancelled() {
+            return;
+        }
+        thread::sleep(CANCEL_POLL_INTERVAL.min(duration));
+    }
+}
+
+/// One connection attempt: connect, send the request, read the response
+/// head, then stream events off a chunked body until it ends or fails.
+fn connect_and_stream(
+    url: &str,
+    headers: &[(String, String)],
+    cancel: &CancelFlag,
+    socket_slot: &Arc<Mutex<Option<TcpStream>>>,
+    sender: &Sender<StateChange>,
+) -> io::Result<()> {
+    let (authority, path_and_query) = split_http_url(url)
+        .ok_or_else(|| io::Error::other(format!("eventsource url is not http://: {url}")))?;
+    let stream = TcpStream::connect(&authority)?;
+    *socket_slot.lock().expect("socket lock poisoned") = Some(stream.try_clone()?);
+    if cancel.is_cancelled() {
+        return Ok(());
+    }
+
+    let mut request = format!(
+        "GET {path_and_query} HTTP/1.1\r\nHost: {authority}\r\nAccept: text/event-stream\r\n"
+    );
+    for (name, value) in headers {
+        request.push_str(name);
+        request.push_str(": ");
+        request.push_str(value);
+        request.push_str("\r\n");
+    }
+    request.push_str("\r\n");
+    (&stream).write_all(request.as_bytes())?;
+
+    let mut reader = BufReader::new(stream);
+    read_response_head(&mut reader)?;
+    let mut body = BufReader::new(ChunkedBody::new(reader));
+    stream_events(&mut body, cancel, sender)
+}
+
+/// Split an `http://host:port/path?query` URL into `("host:port",
+/// "/path?query")`. `None` for anything else (a different scheme, or one
+/// this module cannot make sense of) — see the module doc on `https://`.
+fn split_http_url(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("http://")?;
+    let slash = rest.find('/').unwrap_or(rest.len());
+    let authority = rest[..slash].to_owned();
+    let path_and_query = if slash < rest.len() {
+        rest[slash..].to_owned()
+    } else {
+        "/".to_owned()
+    };
+    Some((authority, path_and_query))
+}
+
+/// Read the status line and headers, checking the response is chunked —
+/// the only framing this reader knows how to consume, and the only one an
+/// indefinite stream (no `Content-Length` is possible) can arrive as.
+fn read_response_head(reader: &mut impl BufRead) -> io::Result<()> {
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line)?;
+    if !status_line.contains(" 200 ") {
+        return Err(io::Error::other(format!(
+            "eventsource request failed: {}",
+            status_line.trim_end()
+        )));
+    }
+    let mut chunked = false;
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 || line.trim_end_matches(['\r', '\n']).is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("transfer-encoding")
+            && value.to_ascii_lowercase().contains("chunked")
+        {
+            chunked = true;
+        }
+    }
+    if chunked {
+        Ok(())
+    } else {
+        Err(io::Error::other(
+            "eventsource response is not chunked transfer-encoding",
+        ))
+    }
+}
+
+/// Read SSE frames (RFC 8620 §7.3 example: `event: state` / `data: {…}`,
+/// blank-line terminated) off `reader`, forwarding a `state` event's `data`
+/// — parsed as a [`StateChange`] — to `sender`. Returns `Ok(())` on a clean
+/// end (terminal chunk / EOF) as readily as on cancellation: both just mean
+/// "stop reading", and [`run`] treats every `Ok`/`Err` return alike, as a
+/// reason to reconnect.
+fn stream_events(
+    reader: &mut impl BufRead,
+    cancel: &CancelFlag,
+    sender: &Sender<StateChange>,
+) -> io::Result<()> {
+    let mut event = String::new();
+    let mut data = String::new();
+    let mut line = String::new();
+    loop {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            return Ok(());
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            if event == "state"
+                && let Ok(change) = serde_json::from_str::<StateChange>(&data)
+                && sender.send(change).is_err()
+            {
+                return Ok(());
+            }
+            event.clear();
+            data.clear();
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("event:") {
+            event = value.trim().to_owned();
+        } else if let Some(value) = trimmed.strip_prefix("data:") {
+            data = value.trim().to_owned();
+        }
+    }
+}
+
+/// Decodes an HTTP/1.1 chunked-transfer body (RFC 9112 §7.1) on the fly, so
+/// the SSE parser above can just read lines without knowing chunk
+/// boundaries exist. Deliberately does not assume one SSE frame is one
+/// chunk — true of `jmap-mock`'s own writer, not guaranteed by the spec.
+struct ChunkedBody<R> {
+    inner: R,
+    remaining_in_chunk: usize,
+    finished: bool,
+}
+
+impl<R: BufRead> ChunkedBody<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            remaining_in_chunk: 0,
+            finished: false,
+        }
+    }
+}
+
+impl<R: BufRead> Read for ChunkedBody<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.finished || buf.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining_in_chunk == 0 {
+            let mut size_line = String::new();
+            if self.inner.read_line(&mut size_line)? == 0 {
+                self.finished = true;
+                return Ok(0);
+            }
+            let size_str = size_line.trim_end_matches(['\r', '\n']);
+            // A chunk-extension (`;name=value`) can follow the size; RFC
+            // 9112 §7.1.1 says a recipient MAY ignore it, so this does.
+            let size_str = size_str.split(';').next().unwrap_or(size_str).trim();
+            let size = usize::from_str_radix(size_str, 16)
+                .map_err(|_| io::Error::other(format!("malformed chunk size: {size_str:?}")))?;
+            if size == 0 {
+                // The terminal chunk: consume the trailer section up to its
+                // blank line, then this body is over.
+                loop {
+                    let mut trailer = String::new();
+                    let n = self.inner.read_line(&mut trailer)?;
+                    if n == 0 || trailer.trim_end_matches(['\r', '\n']).is_empty() {
+                        break;
+                    }
+                }
+                self.finished = true;
+                return Ok(0);
+            }
+            self.remaining_in_chunk = size;
+        }
+        let want = buf.len().min(self.remaining_in_chunk);
+        let n = self.inner.read(&mut buf[..want])?;
+        if n == 0 {
+            // The connection closed mid-chunk: an incomplete body, not a
+            // graceful end, but the caller treats every non-`Err` return
+            // from `stream_events` alike, so surfacing it as EOF here is
+            // enough for the reconnect loop to act on.
+            self.finished = true;
+            return Ok(0);
+        }
+        self.remaining_in_chunk -= n;
+        if self.remaining_in_chunk == 0 {
+            let mut crlf = [0u8; 2];
+            self.inner.read_exact(&mut crlf)?;
+        }
+        Ok(n)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::io::Cursor;
+    use std::time::Duration;
+
+    use jmap_proto::{Id, State};
+
+    use super::*;
+
+    fn changed(account: &str, kind: &str, state: &str) -> StateChange {
+        let mut types = BTreeMap::new();
+        types.insert(kind.to_owned(), State::new(state));
+        let mut changed = BTreeMap::new();
+        changed.insert(Id::new(account), types);
+        StateChange::new(changed)
+    }
+
+    #[test]
+    fn split_http_url_separates_authority_from_path_and_query() {
+        assert_eq!(
+            split_http_url("http://127.0.0.1:4242/eventsource?types=*"),
+            Some((
+                "127.0.0.1:4242".to_owned(),
+                "/eventsource?types=*".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn split_http_url_defaults_a_missing_path_to_root() {
+        assert_eq!(
+            split_http_url("http://127.0.0.1:4242"),
+            Some(("127.0.0.1:4242".to_owned(), "/".to_owned()))
+        );
+    }
+
+    #[test]
+    fn split_http_url_rejects_a_non_http_scheme() {
+        assert_eq!(split_http_url("https://example.com/eventsource"), None);
+    }
+
+    #[test]
+    fn chunked_body_decodes_one_chunk() {
+        let raw = b"5\r\nhello\r\n0\r\n\r\n";
+        let mut body = ChunkedBody::new(BufReader::new(Cursor::new(raw)));
+        let mut out = String::new();
+        body.read_to_string(&mut out).expect("decode");
+        assert_eq!(out, "hello");
+    }
+
+    #[test]
+    fn chunked_body_reassembles_a_line_split_across_two_chunks() {
+        // The SSE parser reads lines; this proves it still gets a whole
+        // one even when the chunk boundary falls inside it: "event:" (6
+        // bytes) in the first chunk, " state\n" (7 bytes) in the second.
+        let raw = b"6\r\nevent:\r\n7\r\n state\n\r\n0\r\n\r\n";
+        let mut reader = BufReader::new(ChunkedBody::new(BufReader::new(Cursor::new(raw))));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read a line");
+        assert_eq!(line, "event: state\n");
+    }
+
+    #[test]
+    fn stream_events_forwards_a_state_event_and_ignores_a_ping() {
+        let raw = b"event: ping\ndata: {\"interval\":60}\n\nevent: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}\n\n";
+        let mut reader = BufReader::new(Cursor::new(&raw[..]));
+        let (sender, receiver) = mpsc::channel();
+        stream_events(&mut reader, &CancelFlag::new(), &sender).expect("no I/O error");
+        let received = receiver.try_recv().expect("one state event forwarded");
+        assert_eq!(received, changed("a1", "Mailbox", "1"));
+        assert!(
+            receiver.try_recv().is_err(),
+            "the ping must not be forwarded"
+        );
+    }
+
+    #[test]
+    fn subscribing_receives_a_pushed_state_change() {
+        let server = jmap_mock::MockServer::builder().start();
+        let url = format!(
+            "{}/eventsource?types=*&closeafter=no&ping=0",
+            server.origin()
+        );
+        let subscription = EventSourceSubscription::start(url, Vec::new(), CancelFlag::new());
+
+        server.wait_for_event_source_subscriber(Duration::from_secs(5));
+        let expected = changed("a3123", "Email", "d35ecb040aab");
+        server.push_state_change(&expected);
+
+        let received = subscription
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the pushed StateChange arrives");
+        assert_eq!(received, expected);
+    }
+
+    #[test]
+    fn it_reconnects_after_the_server_ends_the_connection_cleanly() {
+        let server = jmap_mock::MockServer::builder().start();
+        // `closeafter=state` ends the chunked body right after one push
+        // (RFC 8620 §7.3), so the first push forces exactly the clean
+        // reconnect this test is after.
+        let url = format!(
+            "{}/eventsource?types=*&closeafter=state&ping=0",
+            server.origin()
+        );
+        let subscription = EventSourceSubscription::start(url, Vec::new(), CancelFlag::new());
+
+        server.wait_for_event_source_subscriber(Duration::from_secs(5));
+        let first = changed("a1", "Mailbox", "1");
+        server.push_state_change(&first);
+        assert_eq!(
+            subscription
+                .recv_timeout(Duration::from_secs(5))
+                .expect("first push arrives"),
+            first
+        );
+
+        // The connection above just closed, but its dead subscriber is
+        // only pruned lazily, on the next failed broadcast (see
+        // `EventSourceHub::broadcast`) — so `wait_for_event_source_
+        // subscriber` (count > 0) would see the stale entry and return
+        // immediately, racing ahead of the actual reconnect. Wait for a
+        // *second* registered subscriber instead, as
+        // `jmap-mock/tests/eventsource.rs`'s own multi-subscriber test does.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let count = server
+                .state()
+                .lock()
+                .unwrap()
+                .event_source
+                .subscriber_count();
+            if count >= 2 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "no reconnect within 5s");
+            thread::sleep(Duration::from_millis(5));
+        }
+        let second = changed("a1", "Mailbox", "2");
+        server.push_state_change(&second);
+        assert_eq!(
+            subscription
+                .recv_timeout(Duration::from_secs(5))
+                .expect("second push arrives after reconnecting"),
+            second
+        );
+    }
+
+    #[test]
+    fn dropping_the_subscription_does_not_block_on_a_live_connection() {
+        let server = jmap_mock::MockServer::builder().start();
+        let url = format!(
+            "{}/eventsource?types=*&closeafter=no&ping=0",
+            server.origin()
+        );
+        let subscription = EventSourceSubscription::start(url, Vec::new(), CancelFlag::new());
+        server.wait_for_event_source_subscriber(Duration::from_secs(5));
+
+        let started = Instant::now();
+        drop(subscription);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "dropping a live subscription must not wait out a reconnect backoff"
+        );
+    }
+}
