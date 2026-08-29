@@ -77,7 +77,8 @@ use gio_sys::{
 use glib_sys::{
     GError, GFALSE, GVariant, g_error_free, g_variant_get_boolean, g_variant_get_child_value,
     g_variant_get_string, g_variant_get_variant, g_variant_is_of_type, g_variant_new_string,
-    g_variant_new_tuple, g_variant_type_free, g_variant_type_new, g_variant_unref,
+    g_variant_n_children, g_variant_new_tuple, g_variant_type_free, g_variant_type_new,
+    g_variant_unref,
 };
 use gobject_sys::g_object_unref;
 
@@ -89,6 +90,14 @@ const SERVICE_PATH: &CStr = c"/org/freedesktop/secrets";
 const SERVICE_INTERFACE: &CStr = c"org.freedesktop.Secret.Service";
 const COLLECTION_INTERFACE: &CStr = c"org.freedesktop.Secret.Collection";
 const PROPERTIES_INTERFACE: &CStr = c"org.freedesktop.DBus.Properties";
+
+/// The message bus itself. Unlike everything else this module talks to, this
+/// peer is unconditionally present: a process that has a session bus has the
+/// bus daemon, so asking it a question can neither activate anything nor
+/// fail for want of a service.
+const BUS_NAME: &CStr = c"org.freedesktop.DBus";
+const BUS_PATH: &CStr = c"/org/freedesktop/DBus";
+const BUS_INTERFACE: &CStr = c"org.freedesktop.DBus";
 
 /// The alias `SECRET_COLLECTION_DEFAULT` is spelled with on the wire — the
 /// login keyring on an ordinary GNOME session, and the collection
@@ -154,6 +163,7 @@ unsafe fn session_bus() -> Option<*mut GDBusConnection> {
 /// sinks a floating reference, which is what every caller here hands it.
 unsafe fn call(
     connection: *mut GDBusConnection,
+    destination: &CStr,
     object_path: &CStr,
     interface: &CStr,
     method: &CStr,
@@ -170,7 +180,7 @@ unsafe fn call(
     let reply = unsafe {
         g_dbus_connection_call_sync(
             connection,
-            SERVICE_NAME.as_ptr(),
+            destination.as_ptr(),
             object_path.as_ptr(),
             interface.as_ptr(),
             method.as_ptr(),
@@ -225,6 +235,7 @@ unsafe fn default_alias_path(connection: *mut GDBusConnection) -> Option<String>
         let parameters = g_variant_new_tuple(arguments.as_ptr(), arguments.len());
         let reply = call(
             connection,
+            SERVICE_NAME,
             SERVICE_PATH,
             SERVICE_INTERFACE,
             c"ReadAlias",
@@ -266,6 +277,7 @@ unsafe fn collection_is_locked(
         let parameters = g_variant_new_tuple(arguments.as_ptr(), arguments.len());
         let reply = call(
             connection,
+            SERVICE_NAME,
             &object_path,
             PROPERTIES_INTERFACE,
             c"Get",
@@ -284,5 +296,119 @@ unsafe fn collection_is_locked(
         g_variant_unref(boxed);
         g_variant_unref(reply);
         locked
+    }
+}
+
+/// Whether this machine has a secret service *at all* — running now, or
+/// startable on demand — or [`None`] where that could not be determined.
+///
+/// This is a different question from [`default_collection_is_locked`], and it
+/// exists for a different caller. A *locked* store is one that holds the
+/// account's token and will hand it over once unlocked, so the right answer
+/// is to say so and wait. A store that is not there is one that could not
+/// hold a token even if the user signed in again, which makes offering them
+/// a sign-in window an invitation to do work that cannot be saved — the
+/// consent completes, the token has nowhere to go, and the next fetch asks
+/// again. Erroring out is the honest outcome; see [`crate::oauth2`] for where
+/// that decision is taken.
+///
+/// Both questions go to the **message bus**, never to the secret service, so
+/// this keeps the module's "never activate anything" promise (see the module
+/// docs) while still distinguishing "not running" from "not installed":
+///
+/// - `NameHasOwner` answers whether it is running *now*. A store that is up
+///   is available, whatever state its collections are in.
+/// - `ListActivatableNames` answers whether the bus *could* start one. A
+///   session where the keyring simply has not been needed yet must keep
+///   behaving exactly as it did before this function existed, and this is
+///   what keeps it doing so — the alternative, treating "not running" as
+///   "not there", would refuse sign-in on a perfectly ordinary desktop.
+///
+/// Only `Some(false)` — both questions answered, and both negative — means
+/// no store. Anything unclear is [`None`], which callers must treat as
+/// "carry on as before".
+pub fn service_is_available() -> Option<bool> {
+    // SAFETY: the connection is a reference this scope owns and releases, and
+    // every helper it is passed to only makes calls on it.
+    unsafe {
+        let connection = session_bus()?;
+        let available = bus_name_has_owner(connection, SERVICE_NAME).and_then(|running| {
+            if running {
+                Some(true)
+            } else {
+                bus_can_activate(connection, SERVICE_NAME)
+            }
+        });
+        g_object_unref(connection.cast());
+        available
+    }
+}
+
+/// Whether `name` currently has an owner on the bus.
+///
+/// # Safety
+///
+/// `connection` must be a live `GDBusConnection`.
+unsafe fn bus_name_has_owner(connection: *mut GDBusConnection, name: &CStr) -> Option<bool> {
+    // SAFETY: a NUL-terminated bus name; the floating `GVariant` is sunk by
+    // `g_variant_new_tuple` and the tuple by the call.
+    unsafe {
+        let arguments = [g_variant_new_string(name.as_ptr())];
+        let parameters = g_variant_new_tuple(arguments.as_ptr(), arguments.len());
+        let reply = call(
+            connection,
+            BUS_NAME,
+            BUS_PATH,
+            BUS_INTERFACE,
+            c"NameHasOwner",
+            parameters,
+            c"(b)",
+        )?;
+        // The reply type GDBus checked for is `(b)`, so child 0 exists and is
+        // a boolean.
+        let child = g_variant_get_child_value(reply, 0);
+        let owned = g_variant_get_boolean(child) != GFALSE;
+        g_variant_unref(child);
+        g_variant_unref(reply);
+        Some(owned)
+    }
+}
+
+/// Whether the bus could start `name` on demand.
+///
+/// # Safety
+///
+/// `connection` must be a live `GDBusConnection`.
+unsafe fn bus_can_activate(connection: *mut GDBusConnection, name: &CStr) -> Option<bool> {
+    let wanted = name.to_str().ok()?;
+    // SAFETY: no arguments to sink; the reply is `(as)` per the type GDBus
+    // checked, so child 0 is an array of strings and each of its children is
+    // a string.
+    unsafe {
+        let parameters = g_variant_new_tuple(ptr::null(), 0);
+        let reply = call(
+            connection,
+            BUS_NAME,
+            BUS_PATH,
+            BUS_INTERFACE,
+            c"ListActivatableNames",
+            parameters,
+            c"(as)",
+        )?;
+        let names = g_variant_get_child_value(reply, 0);
+        let mut found = false;
+        for index in 0..g_variant_n_children(names) {
+            let entry = g_variant_get_child_value(names, index);
+            if read_string(g_variant_get_string(entry, ptr::null_mut())).as_deref() == Some(wanted) {
+                found = true;
+            }
+            g_variant_unref(entry);
+            if found {
+                break;
+            }
+        }
+        g_variant_unref(names);
+        g_variant_unref(reply);
+        Some(found)
     }
 }
