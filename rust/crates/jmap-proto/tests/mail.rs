@@ -811,3 +811,196 @@ fn mdn_send_request_response_and_disposition_roundtrip_covers_rfc9007() {
         resp
     );
 }
+
+#[test]
+fn search_snippet_get_request_and_response_roundtrip_and_builders() {
+    use jmap_proto::mail::{SearchSnippet, SearchSnippetGetRequest, SearchSnippetGetResponse};
+
+    let snippet = SearchSnippet::new("email_101")
+        .with_subject("Re: Roadmap Discussion")
+        .with_preview("Here is the latest draft of the plan...");
+
+    assert_eq!(snippet.email_id.as_str(), "email_101");
+    assert_eq!(snippet.subject.as_deref(), Some("Re: Roadmap Discussion"));
+    assert_eq!(
+        snippet.preview.as_deref(),
+        Some("Here is the latest draft of the plan...")
+    );
+
+    let snippet_val = serde_json::to_value(&snippet).unwrap();
+    assert_eq!(snippet_val["emailId"], "email_101");
+    assert_eq!(snippet_val["subject"], "Re: Roadmap Discussion");
+    assert_eq!(
+        snippet_val["preview"],
+        "Here is the latest draft of the plan..."
+    );
+    assert_eq!(
+        serde_json::from_value::<SearchSnippet>(snippet_val).unwrap(),
+        snippet
+    );
+
+    let req = SearchSnippetGetRequest::new("acc1", ["email_101", "email_102"])
+        .with_filter(EmailQueryFilter::in_mailbox("inbox"));
+
+    assert_eq!(req.account_id.as_str(), "acc1");
+    assert_eq!(req.email_ids.len(), 2);
+    assert_eq!(
+        req.filter
+            .as_ref()
+            .unwrap()
+            .in_mailbox
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "inbox"
+    );
+
+    let req_val = serde_json::to_value(&req).unwrap();
+    assert_eq!(req_val["accountId"], "acc1");
+    assert_eq!(req_val["emailIds"][0], "email_101");
+    assert_eq!(req_val["emailIds"][1], "email_102");
+    assert_eq!(req_val["filter"]["inMailbox"], "inbox");
+    assert_eq!(
+        serde_json::from_value::<SearchSnippetGetRequest>(req_val).unwrap(),
+        req
+    );
+
+    let resp =
+        SearchSnippetGetResponse::new("acc1", [snippet.clone()]).with_not_found(["email_102"]);
+
+    assert_eq!(resp.account_id.as_str(), "acc1");
+    assert_eq!(resp.list.len(), 1);
+    assert_eq!(resp.not_found.as_ref().unwrap().len(), 1);
+    assert_eq!(resp.not_found.as_ref().unwrap()[0].as_str(), "email_102");
+
+    let resp_val = serde_json::to_value(&resp).unwrap();
+    assert_eq!(resp_val["accountId"], "acc1");
+    assert_eq!(resp_val["list"][0]["emailId"], "email_101");
+    assert_eq!(resp_val["notFound"][0], "email_102");
+    assert_eq!(
+        serde_json::from_value::<SearchSnippetGetResponse>(resp_val).unwrap(),
+        resp
+    );
+}
+
+#[test]
+fn email_responses_and_entities_builders_roundtrip() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::error::SetError;
+    use jmap_proto::mail::{
+        EmailAddress, EmailAddressGroup, EmailImportResponse, EmailParseResponse,
+        EmailSubmissionSetRequest, MailboxRights, Thread, VacationResponse,
+    };
+    use jmap_proto::methods::SetRequest;
+    use std::collections::BTreeMap;
+
+    let grp = EmailAddressGroup::new([
+        EmailAddress::new(Some("Alice"), "alice@example.com"),
+        EmailAddress::new(Some("Bob"), "bob@example.com"),
+    ])
+    .with_name("Core Team");
+
+    assert_eq!(grp.name.as_deref(), Some("Core Team"));
+    assert_eq!(grp.addresses.len(), 2);
+    let grp_val = serde_json::to_value(&grp).unwrap();
+    assert_eq!(grp_val["name"], "Core Team");
+    assert_eq!(grp_val["addresses"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        serde_json::from_value::<EmailAddressGroup>(grp_val).unwrap(),
+        grp
+    );
+
+    let thread = Thread::new("th_1", ["e_1", "e_2"]);
+    assert_eq!(thread.id.as_ref().unwrap().as_str(), "th_1");
+    assert_eq!(thread.email_ids.len(), 2);
+    let thread_val = serde_json::to_value(&thread).unwrap();
+    assert_eq!(thread_val["id"], "th_1");
+    assert_eq!(
+        serde_json::from_value::<Thread>(thread_val).unwrap(),
+        thread
+    );
+
+    let rights_all = MailboxRights::all();
+    assert!(rights_all.may_read_items);
+    assert!(rights_all.may_add_items);
+    assert!(rights_all.may_remove_items);
+    assert!(rights_all.may_set_seen);
+    assert!(rights_all.may_set_keywords);
+    assert!(rights_all.may_create_child);
+    assert!(rights_all.may_rename);
+    assert!(rights_all.may_delete);
+    assert!(rights_all.may_submit);
+
+    let rights_ro = MailboxRights::read_only();
+    assert!(rights_ro.may_read_items);
+    assert!(!rights_ro.may_add_items);
+    assert!(!rights_ro.may_delete);
+
+    let vac = VacationResponse::new(true)
+        .with_id("vac_1")
+        .with_from_date(UtcDate::new("2026-07-01T00:00:00Z"))
+        .with_to_date(UtcDate::new("2026-07-15T00:00:00Z"))
+        .with_subject("Out of office")
+        .with_text_body("I am currently away.")
+        .with_html_body("<p>I am currently away.</p>");
+
+    assert!(vac.is_enabled);
+    assert_eq!(vac.id.as_ref().unwrap().as_str(), "vac_1");
+    assert_eq!(
+        vac.from_date.as_ref().unwrap().as_str(),
+        "2026-07-01T00:00:00Z"
+    );
+    assert_eq!(
+        vac.to_date.as_ref().unwrap().as_str(),
+        "2026-07-15T00:00:00Z"
+    );
+    assert_eq!(vac.subject.as_deref(), Some("Out of office"));
+    assert_eq!(vac.text_body.as_deref(), Some("I am currently away."));
+    assert_eq!(
+        vac.html_body.as_deref(),
+        Some("<p>I am currently away.</p>")
+    );
+
+    let vac_val = serde_json::to_value(&vac).unwrap();
+    assert_eq!(vac_val["isEnabled"], true);
+    assert_eq!(vac_val["subject"], "Out of office");
+    assert_eq!(
+        serde_json::from_value::<VacationResponse>(vac_val).unwrap(),
+        vac
+    );
+
+    let sub_req = EmailSubmissionSetRequest::new(SetRequest::new("acc1"))
+        .with_on_success_update_email(BTreeMap::from([(
+            "e_sub_1".to_string(),
+            serde_json::json!({"keywords/$seen": true}),
+        )]))
+        .with_on_success_destroy_email(["e_draft_1"]);
+
+    assert_eq!(sub_req.set.account_id.as_str(), "acc1");
+    assert!(sub_req.on_success_update_email.is_some());
+    assert_eq!(sub_req.on_success_destroy_email.as_ref().unwrap().len(), 1);
+
+    let import_resp = EmailImportResponse::new("acc1", "s2")
+        .with_old_state("s1")
+        .with_created(BTreeMap::from([("k1".to_string(), Email::default())]))
+        .with_not_created(BTreeMap::from([(
+            "k2".to_string(),
+            SetError::new("invalidEmail"),
+        )]));
+
+    assert_eq!(import_resp.account_id.as_str(), "acc1");
+    assert_eq!(import_resp.old_state.as_ref().unwrap().as_str(), "s1");
+    assert_eq!(import_resp.new_state.as_str(), "s2");
+    assert_eq!(import_resp.created.as_ref().unwrap().len(), 1);
+    assert_eq!(import_resp.not_created.as_ref().unwrap().len(), 1);
+
+    let parse_resp = EmailParseResponse::new("acc1")
+        .with_parsed(BTreeMap::from([("b1".into(), Email::default())]))
+        .with_not_parsable(["b2"])
+        .with_not_found(["b3"]);
+
+    assert_eq!(parse_resp.account_id.as_str(), "acc1");
+    assert_eq!(parse_resp.parsed.as_ref().unwrap().len(), 1);
+    assert_eq!(parse_resp.not_parsable.as_ref().unwrap().len(), 1);
+    assert_eq!(parse_resp.not_found.as_ref().unwrap().len(), 1);
+}

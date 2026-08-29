@@ -24,6 +24,27 @@ pub struct RequestError {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl RequestError {
+    pub fn new(error_type: impl Into<String>) -> Self {
+        Self {
+            error_type: error_type.into(),
+            status: None,
+            detail: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_status(mut self, status: u16) -> Self {
+        self.status = Some(status);
+        self
+    }
+
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+}
+
 /// Arguments of a method-level `error` response (RFC 8620 §3.6.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MethodError {

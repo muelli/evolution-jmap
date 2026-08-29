@@ -229,3 +229,65 @@ fn share_notification_builders_roundtrip() {
         notif
     );
 }
+
+#[test]
+fn principal_and_availability_builders() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::calendars::CalendarEvent;
+    use jmap_proto::principals::{BusyPeriod, GetAvailabilityResponse, Principal, principal_type};
+    use std::collections::BTreeMap;
+
+    let p = Principal::new("Conference Room 1")
+        .with_id("p_conf1")
+        .with_type(principal_type::RESOURCE)
+        .with_email("room1@example.com")
+        .with_description("Projector equipped")
+        .with_time_zone("UTC")
+        .with_secret("secret123")
+        .with_send_to(BTreeMap::from([(
+            "imip".to_string(),
+            "mailto:room1@example.com".to_string(),
+        )]))
+        .with_capabilities(BTreeMap::from([(
+            "urn:ietf:params:jmap:principals:owner".to_string(),
+            serde_json::json!({}),
+        )]))
+        .is_personal(false);
+
+    assert_eq!(p.name, "Conference Room 1");
+    assert_eq!(p.id.as_ref().unwrap().as_str(), "p_conf1");
+    assert_eq!(p.principal_type.as_deref(), Some("resource"));
+    assert_eq!(p.email.as_deref(), Some("room1@example.com"));
+    assert_eq!(p.description.as_deref(), Some("Projector equipped"));
+    assert_eq!(p.time_zone.as_deref(), Some("UTC"));
+    assert_eq!(p.secret.as_deref(), Some("secret123"));
+    assert_eq!(p.is_personal, Some(false));
+    assert!(
+        p.capabilities
+            .contains_key("urn:ietf:params:jmap:principals:owner")
+    );
+
+    let p_val = serde_json::to_value(&p).unwrap();
+    assert_eq!(p_val["name"], "Conference Room 1");
+    assert_eq!(p_val["id"], "p_conf1");
+    assert_eq!(p_val["type"], "resource");
+    assert_eq!(p_val["isPersonal"], false);
+    assert_eq!(serde_json::from_value::<Principal>(p_val).unwrap(), p);
+
+    let avail = GetAvailabilityResponse::new([BusyPeriod::new(
+        UtcDate::new("2026-09-01T10:00:00Z"),
+        UtcDate::new("2026-09-01T11:00:00Z"),
+        "busy",
+    )
+    .with_event(CalendarEvent::default())]);
+
+    assert_eq!(avail.list.len(), 1);
+    assert_eq!(avail.list[0].busy_status, "busy");
+    assert!(avail.list[0].event.is_some());
+    let avail_val = serde_json::to_value(&avail).unwrap();
+    assert_eq!(avail_val["list"][0]["busyStatus"], "busy");
+    assert_eq!(
+        serde_json::from_value::<GetAvailabilityResponse>(avail_val).unwrap(),
+        avail
+    );
+}

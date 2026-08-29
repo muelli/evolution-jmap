@@ -92,6 +92,28 @@ pub struct AddressBookRights {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl AddressBookRights {
+    pub fn all() -> Self {
+        Self {
+            may_read_items: true,
+            may_add_items: true,
+            may_modify_items: true,
+            may_remove_items: true,
+            may_delete: true,
+            may_rename: true,
+            may_admin: true,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn read_only() -> Self {
+        Self {
+            may_read_items: true,
+            ..Self::default()
+        }
+    }
+}
+
 /// A contact card (RFC 9610 §3): JSContact Card plus JMAP `id` and
 /// `addressBookIds`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -257,6 +279,30 @@ pub struct Name {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Name {
+    pub fn new(full: impl Into<String>) -> Self {
+        Self {
+            full: Some(full.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_components(mut self, components: impl IntoIterator<Item = NameComponent>) -> Self {
+        self.components = Some(components.into_iter().collect());
+        self
+    }
+
+    pub fn is_ordered(mut self, is_ordered: bool) -> Self {
+        self.is_ordered = Some(is_ordered);
+        self
+    }
+
+    pub fn with_sort_as(mut self, sort_as: BTreeMap<String, String>) -> Self {
+        self.sort_as = Some(sort_as);
+        self
+    }
+}
+
 /// One name component: kind is `given`, `surname`, `title`, …
 ///
 /// Like [`AddressComponent`] this keeps what it does not model — a component
@@ -273,10 +319,10 @@ pub struct NameComponent {
 }
 
 impl NameComponent {
-    pub fn new(kind: &str, value: &str) -> Self {
+    pub fn new(kind: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
-            kind: kind.to_owned(),
-            value: value.to_owned(),
+            kind: kind.into(),
+            value: value.into(),
             extra: BTreeMap::new(),
         }
     }
@@ -313,6 +359,31 @@ pub struct ContactEmail {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl ContactEmail {
+    pub fn new(address: impl Into<String>) -> Self {
+        Self {
+            address: address.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.extra
+            .insert("label".to_owned(), Value::String(label.into()));
+        self
+    }
+}
+
 /// JSContact Phone (RFC 9553 §2.3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -327,6 +398,36 @@ pub struct ContactPhone {
     pub pref: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl ContactPhone {
+    pub fn new(number: impl Into<String>) -> Self {
+        Self {
+            number: number.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+
+    pub fn with_features(mut self, features: Value) -> Self {
+        self.features = Some(features);
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.extra
+            .insert("label".to_owned(), Value::String(label.into()));
+        self
+    }
 }
 
 /// JSContact Organization (RFC 9553 §2.2.3).
@@ -346,6 +447,25 @@ pub struct Organization {
     pub contexts: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Organization {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_units(mut self, units: impl IntoIterator<Item = OrgUnit>) -> Self {
+        self.units = Some(units.into_iter().collect());
+        self
+    }
+
+    pub fn with_sort_as(mut self, sort_as: impl Into<String>) -> Self {
+        self.sort_as = Some(sort_as.into());
+        self
+    }
 }
 
 /// JSContact OrgUnit (RFC 9553 §2.2.3): one unit of an [`Organization`].
@@ -368,6 +488,11 @@ impl OrgUnit {
             extra: BTreeMap::new(),
         }
     }
+
+    pub fn with_sort_as(mut self, sort_as: impl Into<String>) -> Self {
+        self.sort_as = Some(sort_as.into());
+        self
+    }
 }
 
 /// JSContact Title (RFC 9553 §2.2.4): a job title the contact holds, or a
@@ -387,6 +512,25 @@ pub struct Title {
     pub organization_id: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Title {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_organization_id(mut self, organization_id: impl Into<String>) -> Self {
+        self.organization_id = Some(organization_id.into());
+        self
+    }
 }
 
 /// JSContact Address (RFC 9553 §2.5.1): one postal address.
@@ -415,6 +559,55 @@ pub struct Address {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Address {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_components(
+        mut self,
+        components: impl IntoIterator<Item = AddressComponent>,
+    ) -> Self {
+        self.components = Some(components.into_iter().collect());
+        self
+    }
+
+    pub fn with_full(mut self, full: impl Into<String>) -> Self {
+        self.full = Some(full.into());
+        self
+    }
+
+    pub fn is_ordered(mut self, is_ordered: bool) -> Self {
+        self.is_ordered = Some(is_ordered);
+        self
+    }
+
+    pub fn with_country_code(mut self, country_code: impl Into<String>) -> Self {
+        self.country_code = Some(country_code.into());
+        self
+    }
+
+    pub fn with_coordinates(mut self, coordinates: impl Into<String>) -> Self {
+        self.coordinates = Some(coordinates.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+}
+
 /// One part of an [`Address`]: `kind` is `name` (the street), `locality`,
 /// `postcode`, `floor`, …
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -429,10 +622,10 @@ pub struct AddressComponent {
 }
 
 impl AddressComponent {
-    pub fn new(kind: &str, value: &str) -> Self {
+    pub fn new(kind: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
-            kind: kind.to_owned(),
-            value: value.to_owned(),
+            kind: kind.into(),
+            value: value.into(),
             extra: BTreeMap::new(),
         }
     }
@@ -454,6 +647,20 @@ pub struct Note {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Note {
+    pub fn new(note: impl Into<String>) -> Self {
+        Self {
+            note: note.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_created(mut self, created: impl Into<UtcDate>) -> Self {
+        self.created = Some(created.into());
+        self
+    }
+}
+
 /// JSContact Anniversary (RFC 9553 §2.8.1): one memorable date.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -470,6 +677,28 @@ pub struct Anniversary {
     pub date: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Anniversary {
+    pub fn new(kind: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_date(mut self, date: Value) -> Self {
+        self.date = Some(date);
+        self
+    }
+
+    pub fn with_place(mut self, place: Address) -> Self {
+        self.extra.insert(
+            "place".to_owned(),
+            serde_json::to_value(place).unwrap_or(Value::Null),
+        );
+        self
+    }
 }
 
 /// JSContact Link (RFC 9553 §2.6.3): one resource the contact points at.
@@ -496,6 +725,30 @@ pub struct Link {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Link {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
 /// JSContact Calendar (RFC 9553 §2.4.1): one calendaring resource of the
 /// contact — a calendar of theirs, or the free/busy data drawn from one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -518,6 +771,30 @@ pub struct Calendar {
     pub label: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Calendar {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
 }
 
 /// JSContact Media (RFC 9553 §2.6.4): one media resource the card carries.
@@ -543,6 +820,35 @@ pub struct Media {
     pub label: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Media {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
+        self.media_type = Some(media_type.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
 }
 
 /// JSContact OnlineService (RFC 9553 §2.3.2): the contact as one online
@@ -571,6 +877,37 @@ pub struct OnlineService {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl OnlineService {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_service(mut self, service: impl Into<String>) -> Self {
+        self.service = Some(service.into());
+        self
+    }
+
+    pub fn with_user(mut self, user: impl Into<String>) -> Self {
+        self.user = Some(user.into());
+        self
+    }
+
+    pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
+        self.uri = Some(uri.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
 /// JSContact Relation (RFC 9553 §2.1.8): how one related entity relates to
 /// the contact.
 ///
@@ -596,6 +933,22 @@ pub struct Relation {
     pub relation: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Relation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_relation(mut self, relation: BTreeMap<String, bool>) -> Self {
+        self.relation = Some(
+            relation
+                .into_iter()
+                .map(|(k, v)| (k, Value::Bool(v)))
+                .collect(),
+        );
+        self
+    }
 }
 
 /// `ContactCard/query` filter conditions (RFC 9610 §3.3). Flat conditions
@@ -748,6 +1101,28 @@ pub struct CryptoKey {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl CryptoKey {
+    pub fn new(kind: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self {
+            kind: Some(kind.into()),
+            uri: uri.into(),
+            media_type: None,
+            pref: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
+        self.media_type = Some(media_type.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+}
+
 /// Standard RFC 9553 §2.6.1 crypto key kinds.
 pub mod crypto_key_kind {
     pub const KEY: &str = "key";
@@ -770,6 +1145,28 @@ pub struct Directory {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Directory {
+    pub fn new(kind: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self {
+            kind: Some(kind.into()),
+            uri: uri.into(),
+            media_type: None,
+            pref: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
+        self.media_type = Some(media_type.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+}
+
 /// Standard RFC 9553 §2.6.2 directory kinds.
 pub mod directory_kind {
     pub const DIRECTORY: &str = "directory";
@@ -787,6 +1184,22 @@ pub struct PersonalInfo {
     pub list_as: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl PersonalInfo {
+    pub fn new(kind: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            value: Some(value.into()),
+            list_as: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_list_as(mut self, list_as: impl Into<String>) -> Self {
+        self.list_as = Some(list_as.into());
+        self
+    }
 }
 
 /// Standard RFC 9553 §2.8.4 personal info kinds.
@@ -811,6 +1224,22 @@ pub struct CardGroup {
     pub members: Option<BTreeMap<String, bool>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl CardGroup {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            card_type: Some("Group".to_owned()),
+            name: Some(name.into()),
+            members: None,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_members(mut self, members: BTreeMap<String, bool>) -> Self {
+        self.members = Some(members);
+        self
+    }
 }
 
 /// Contacts capability properties (RFC 9610 §1.3).
@@ -857,6 +1286,22 @@ pub struct SpeakToAs {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl SpeakToAs {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_grammatical_gender(mut self, gender: impl Into<String>) -> Self {
+        self.grammatical_gender = Some(gender.into());
+        self
+    }
+
+    pub fn with_pronouns(mut self, pronouns: impl Into<String>) -> Self {
+        self.pronouns = Some(pronouns.into());
+        self
+    }
+}
+
 /// JSContact LanguagePref (RFC 9553 §2.8.5): preferred language for communication.
 #[derive(Debug, Clone, PartialEq, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -869,6 +1314,25 @@ pub struct LanguagePref {
     pub pref: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl LanguagePref {
+    pub fn new(language: impl Into<String>) -> Self {
+        Self {
+            language: language.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
 }
 
 impl<'de> serde::Deserialize<'de> for LanguagePref {
@@ -987,6 +1451,35 @@ pub struct ContactCardParseResponse {
     pub not_parsable: Option<Vec<Id>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_found: Option<Vec<Id>>,
+}
+
+impl ContactCardParseResponse {
+    pub fn new(account_id: impl Into<Id>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            parsed: None,
+            not_parsable: None,
+            not_found: None,
+        }
+    }
+
+    pub fn with_parsed(mut self, parsed: BTreeMap<Id, ContactCard>) -> Self {
+        self.parsed = Some(parsed);
+        self
+    }
+
+    pub fn with_not_parsable(
+        mut self,
+        not_parsable: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        self.not_parsable = Some(not_parsable.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_not_found(mut self, not_found: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.not_found = Some(not_found.into_iter().map(Into::into).collect());
+        self
+    }
 }
 
 /// The `SetError` types RFC 9610 §3.2 adds for `ContactCard/set`.

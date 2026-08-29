@@ -101,6 +101,30 @@ pub struct MailboxRights {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl MailboxRights {
+    pub fn all() -> Self {
+        Self {
+            may_read_items: true,
+            may_add_items: true,
+            may_remove_items: true,
+            may_set_seen: true,
+            may_set_keywords: true,
+            may_create_child: true,
+            may_rename: true,
+            may_delete: true,
+            may_submit: true,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn read_only() -> Self {
+        Self {
+            may_read_items: true,
+            ..Self::default()
+        }
+    }
+}
+
 /// A thread of emails (RFC 8621 §3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -111,6 +135,16 @@ pub struct Thread {
     pub email_ids: Vec<Id>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Thread {
+    pub fn new(id: impl Into<Id>, email_ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        Self {
+            id: Some(id.into()),
+            email_ids: email_ids.into_iter().map(Into::into).collect(),
+            extra: BTreeMap::new(),
+        }
+    }
 }
 
 /// Vacation response auto-responder settings (RFC 8621 §8).
@@ -133,6 +167,51 @@ pub struct VacationResponse {
     pub html_body: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl VacationResponse {
+    pub fn new(is_enabled: bool) -> Self {
+        Self {
+            id: None,
+            is_enabled,
+            from_date: None,
+            to_date: None,
+            subject: None,
+            text_body: None,
+            html_body: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_from_date(mut self, from_date: impl Into<UtcDate>) -> Self {
+        self.from_date = Some(from_date.into());
+        self
+    }
+
+    pub fn with_to_date(mut self, to_date: impl Into<UtcDate>) -> Self {
+        self.to_date = Some(to_date.into());
+        self
+    }
+
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
+
+    pub fn with_text_body(mut self, text_body: impl Into<String>) -> Self {
+        self.text_body = Some(text_body.into());
+        self
+    }
+
+    pub fn with_html_body(mut self, html_body: impl Into<String>) -> Self {
+        self.html_body = Some(html_body.into());
+        self
+    }
 }
 
 /// The two `SetError` types RFC 8621 §2.5 adds for `Mailbox/set`.
@@ -331,6 +410,36 @@ pub struct EmailImportResponse {
     pub not_created: Option<BTreeMap<String, crate::error::SetError>>,
 }
 
+impl EmailImportResponse {
+    pub fn new(account_id: impl Into<Id>, new_state: impl Into<crate::state::State>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            old_state: None,
+            new_state: new_state.into(),
+            created: None,
+            not_created: None,
+        }
+    }
+
+    pub fn with_old_state(mut self, old_state: impl Into<crate::state::State>) -> Self {
+        self.old_state = Some(old_state.into());
+        self
+    }
+
+    pub fn with_created(mut self, created: BTreeMap<String, Email>) -> Self {
+        self.created = Some(created);
+        self
+    }
+
+    pub fn with_not_created(
+        mut self,
+        not_created: BTreeMap<String, crate::error::SetError>,
+    ) -> Self {
+        self.not_created = Some(not_created);
+        self
+    }
+}
+
 /// `Email/parse` arguments (RFC 8621 §4.7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -423,6 +532,35 @@ pub struct EmailParseResponse {
     pub not_found: Option<Vec<Id>>,
 }
 
+impl EmailParseResponse {
+    pub fn new(account_id: impl Into<Id>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            parsed: None,
+            not_parsable: None,
+            not_found: None,
+        }
+    }
+
+    pub fn with_parsed(mut self, parsed: BTreeMap<Id, Email>) -> Self {
+        self.parsed = Some(parsed);
+        self
+    }
+
+    pub fn with_not_parsable(
+        mut self,
+        not_parsable: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        self.not_parsable = Some(not_parsable.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_not_found(mut self, not_found: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.not_found = Some(not_found.into_iter().map(Into::into).collect());
+        self
+    }
+}
+
 /// The `SetError` type RFC 8621 §4.8 adds for `Email/import`.
 ///
 /// The generic types of RFC 8620 §5.3 cannot say this one: the properties of
@@ -491,6 +629,20 @@ pub struct EmailAddressGroup {
     pub name: Option<String>,
     #[serde(default)]
     pub addresses: Vec<EmailAddress>,
+}
+
+impl EmailAddressGroup {
+    pub fn new(addresses: impl IntoIterator<Item = EmailAddress>) -> Self {
+        Self {
+            name: None,
+            addresses: addresses.into_iter().collect(),
+        }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
 }
 
 /// A node in the MIME tree (RFC 8621 §4.1.4).
@@ -904,6 +1056,81 @@ pub struct SearchSnippet {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl SearchSnippet {
+    pub fn new(email_id: impl Into<Id>) -> Self {
+        Self {
+            email_id: email_id.into(),
+            subject: None,
+            preview: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
+        self.subject = Some(subject.into());
+        self
+    }
+
+    pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
+        self.preview = Some(preview.into());
+        self
+    }
+}
+
+/// `SearchSnippet/get` arguments (RFC 8621 §5.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSnippetGetRequest {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<EmailQueryFilter>,
+    pub email_ids: Vec<Id>,
+}
+
+impl SearchSnippetGetRequest {
+    pub fn new(
+        account_id: impl Into<Id>,
+        email_ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            filter: None,
+            email_ids: email_ids.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    pub fn with_filter(mut self, filter: EmailQueryFilter) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+}
+
+/// `SearchSnippet/get` response (RFC 8621 §5.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchSnippetGetResponse {
+    pub account_id: Id,
+    #[serde(default)]
+    pub list: Vec<SearchSnippet>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_found: Option<Vec<Id>>,
+}
+
+impl SearchSnippetGetResponse {
+    pub fn new(account_id: impl Into<Id>, list: impl IntoIterator<Item = SearchSnippet>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            list: list.into_iter().collect(),
+            not_found: None,
+        }
+    }
+
+    pub fn with_not_found(mut self, not_found: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.not_found = Some(not_found.into_iter().map(Into::into).collect());
+        self
+    }
+}
+
 /// `EmailSubmission/set` arguments: the standard `/set` shape plus the
 /// `onSuccess*` extensions (RFC 8621 §7.5). Keys of `onSuccessUpdateEmail`
 /// are submission ids or `#`-prefixed creation ids from the same call.
@@ -916,6 +1143,37 @@ pub struct EmailSubmissionSetRequest {
     pub on_success_update_email: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_success_destroy_email: Option<Vec<String>>,
+}
+
+impl EmailSubmissionSetRequest {
+    pub fn new(set: crate::methods::SetRequest<EmailSubmission>) -> Self {
+        Self {
+            set,
+            on_success_update_email: None,
+            on_success_destroy_email: None,
+        }
+    }
+
+    pub fn with_on_success_update_email(
+        mut self,
+        on_success_update_email: BTreeMap<String, Value>,
+    ) -> Self {
+        self.on_success_update_email = Some(on_success_update_email);
+        self
+    }
+
+    pub fn with_on_success_destroy_email(
+        mut self,
+        on_success_destroy_email: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.on_success_destroy_email = Some(
+            on_success_destroy_email
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        );
+        self
+    }
 }
 
 /// SMTP envelope (RFC 8621 §7).
@@ -1157,6 +1415,26 @@ pub struct MDNSendResponse {
     pub sent: Option<BTreeMap<String, MDN>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_sent: Option<BTreeMap<String, crate::error::SetError>>,
+}
+
+impl MDNSendResponse {
+    pub fn new(account_id: impl Into<Id>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            sent: None,
+            not_sent: None,
+        }
+    }
+
+    pub fn with_sent(mut self, sent: BTreeMap<String, MDN>) -> Self {
+        self.sent = Some(sent);
+        self
+    }
+
+    pub fn with_not_sent(mut self, not_sent: BTreeMap<String, crate::error::SetError>) -> Self {
+        self.not_sent = Some(not_sent);
+        self
+    }
 }
 
 /// Standard MDN action mode values (RFC 9007 §2.1, RFC 8098).

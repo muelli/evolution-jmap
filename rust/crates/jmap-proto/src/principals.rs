@@ -60,6 +60,60 @@ pub struct Principal {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Principal {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_type(mut self, principal_type: impl Into<String>) -> Self {
+        self.principal_type = Some(principal_type.into());
+        self
+    }
+
+    pub fn with_email(mut self, email: impl Into<String>) -> Self {
+        self.email = Some(email.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_secret(mut self, secret: impl Into<String>) -> Self {
+        self.secret = Some(secret.into());
+        self
+    }
+
+    pub fn with_send_to(mut self, send_to: BTreeMap<String, String>) -> Self {
+        self.send_to = Some(send_to);
+        self
+    }
+
+    pub fn with_capabilities(mut self, capabilities: BTreeMap<String, Value>) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    pub fn is_personal(mut self, is_personal: bool) -> Self {
+        self.is_personal = Some(is_personal);
+        self
+    }
+}
+
 /// `Principal/query` filter (RFC 9670 §2): resolve a person by name, email,
 /// or free text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -157,6 +211,14 @@ pub mod busy_status {
 pub struct GetAvailabilityResponse {
     #[serde(default)]
     pub list: Vec<BusyPeriod>,
+}
+
+impl GetAvailabilityResponse {
+    pub fn new(list: impl IntoIterator<Item = BusyPeriod>) -> Self {
+        Self {
+            list: list.into_iter().collect(),
+        }
+    }
 }
 
 /// One busy interval (draft-ietf-jmap-calendars §2.2). `busy_status` is one

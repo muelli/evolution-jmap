@@ -771,3 +771,173 @@ fn address_book_builders_roundtrip() {
     assert_eq!(ab_val["isSubscribed"], true);
     assert_eq!(serde_json::from_value::<AddressBook>(ab_val).unwrap(), ab);
 }
+
+#[test]
+fn contact_card_parse_response_and_domain_builders() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::contacts::{
+        Address, AddressBookRights, AddressComponent, Anniversary, Calendar, CardGroup,
+        ContactCard, ContactCardParseResponse, ContactEmail, ContactPhone, CryptoKey, Directory,
+        LanguagePref, Link, Media, Name, NameComponent, Note, OnlineService, OrgUnit, Organization,
+        PersonalInfo, Relation, SpeakToAs, Title,
+    };
+    use std::collections::BTreeMap;
+
+    let parse_resp = ContactCardParseResponse::new("acc1")
+        .with_parsed(BTreeMap::from([(
+            "b1".into(),
+            ContactCard::simple("ab1", "Alice", "alice@example.com"),
+        )]))
+        .with_not_parsable(["b2"])
+        .with_not_found(["b3"]);
+
+    assert_eq!(parse_resp.account_id.as_str(), "acc1");
+    assert_eq!(parse_resp.parsed.as_ref().unwrap().len(), 1);
+    assert_eq!(parse_resp.not_parsable.as_ref().unwrap().len(), 1);
+    assert_eq!(parse_resp.not_found.as_ref().unwrap().len(), 1);
+
+    let rights_all = AddressBookRights::all();
+    assert!(rights_all.may_read_items);
+    assert!(rights_all.may_add_items);
+    assert!(rights_all.may_modify_items);
+    assert!(rights_all.may_remove_items);
+    assert!(rights_all.may_delete);
+    assert!(rights_all.may_rename);
+    assert!(rights_all.may_admin);
+
+    let rights_ro = AddressBookRights::read_only();
+    assert!(rights_ro.may_read_items);
+    assert!(!rights_ro.may_add_items);
+
+    let name = Name::new("Alice Smith")
+        .with_components([
+            NameComponent::new("given", "Alice"),
+            NameComponent::new("surname", "Smith"),
+        ])
+        .is_ordered(true)
+        .with_sort_as(BTreeMap::from([(
+            "surname".to_string(),
+            "Smith".to_string(),
+        )]));
+    assert_eq!(name.full.as_deref(), Some("Alice Smith"));
+    assert_eq!(name.components.as_ref().unwrap().len(), 2);
+    assert_eq!(name.is_ordered, Some(true));
+
+    let addr = Address::new()
+        .with_full("123 Main St")
+        .with_components([AddressComponent::new("street", "123 Main St")])
+        .with_country_code("US")
+        .with_time_zone("America/New_York")
+        .with_coordinates("geo:40.7128,-74.0060")
+        .with_pref(1)
+        .with_contexts(serde_json::json!({"work": true}));
+    assert_eq!(addr.full.as_deref(), Some("123 Main St"));
+    assert_eq!(addr.country_code.as_deref(), Some("US"));
+    assert_eq!(addr.pref, Some(1));
+
+    let email = ContactEmail::new("alice@example.com")
+        .with_contexts(serde_json::json!({"work": true}))
+        .with_pref(1)
+        .with_label("Direct");
+    assert_eq!(email.address, "alice@example.com");
+    assert_eq!(email.pref, Some(1));
+    assert_eq!(
+        email.extra.get("label").and_then(|v| v.as_str()),
+        Some("Direct")
+    );
+
+    let phone = ContactPhone::new("+123456789")
+        .with_contexts(serde_json::json!({"work": true}))
+        .with_features(serde_json::json!({"voice": true}))
+        .with_pref(1)
+        .with_label("Mobile");
+    assert_eq!(phone.number, "+123456789");
+    assert_eq!(phone.pref, Some(1));
+    assert_eq!(
+        phone.extra.get("label").and_then(|v| v.as_str()),
+        Some("Mobile")
+    );
+
+    let org = Organization::new("Acme Corp")
+        .with_units([OrgUnit::new("Engineering").with_sort_as("Eng")])
+        .with_sort_as("Acme");
+    assert_eq!(org.name.as_deref(), Some("Acme Corp"));
+    assert_eq!(org.units.as_ref().unwrap().len(), 1);
+
+    let title = Title::new("Software Engineer")
+        .with_kind("title")
+        .with_organization_id("org1");
+    assert_eq!(title.name, "Software Engineer");
+    assert_eq!(title.kind.as_deref(), Some("title"));
+
+    let note = Note::new("Met at conference").with_created(UtcDate::new("2026-08-01T10:00:00Z"));
+    assert_eq!(note.note, "Met at conference");
+    assert_eq!(
+        note.created.as_ref().unwrap().as_str(),
+        "2026-08-01T10:00:00Z"
+    );
+
+    let ann = Anniversary::new("birth")
+        .with_date(serde_json::json!({"year": 1990, "month": 5, "day": 12}))
+        .with_place(Address::new().with_full("Boston, MA"));
+    assert_eq!(ann.kind, "birth");
+    assert_eq!(ann.extra.get("place").unwrap()["full"], "Boston, MA");
+
+    let link = Link::new("https://example.com")
+        .with_kind("profile")
+        .with_pref(1)
+        .with_label("Homepage");
+    assert_eq!(link.uri, "https://example.com");
+    assert_eq!(link.pref, Some(1));
+
+    let cal = Calendar::new("https://cal.example.com")
+        .with_kind("calendar")
+        .with_pref(1)
+        .with_label("Calendar");
+    assert_eq!(cal.uri, "https://cal.example.com");
+
+    let media = Media::new("https://img.example.com/avatar.jpg")
+        .with_kind("photo")
+        .with_media_type("image/jpeg")
+        .with_pref(1)
+        .with_label("Avatar");
+    assert_eq!(media.uri, "https://img.example.com/avatar.jpg");
+
+    let online = OnlineService::new()
+        .with_service("matrix")
+        .with_uri("matrix:u/alice:example.com")
+        .with_user("@alice:example.com")
+        .with_pref(1)
+        .with_label("Chat");
+    assert_eq!(online.service.as_deref(), Some("matrix"));
+
+    let rel = Relation::new().with_relation(BTreeMap::from([("spouse".to_string(), true)]));
+    assert!(rel.relation.as_ref().unwrap().contains_key("spouse"));
+
+    let crypto = CryptoKey::new("key", "https://example.com/key.asc")
+        .with_media_type("application/pgp-keys")
+        .with_pref(1);
+    assert_eq!(crypto.kind.as_deref(), Some("key"));
+
+    let dir = Directory::new("directory", "https://ldap.example.com")
+        .with_media_type("text/directory")
+        .with_pref(1);
+    assert_eq!(dir.kind.as_deref(), Some("directory"));
+
+    let info = PersonalInfo::new("hobby", "Photography").with_list_as("Photo");
+    assert_eq!(info.kind, "hobby");
+
+    let group =
+        CardGroup::new("Team Alpha").with_members(BTreeMap::from([("c1".to_string(), true)]));
+    assert_eq!(group.name.as_deref(), Some("Team Alpha"));
+
+    let speak = SpeakToAs::new()
+        .with_grammatical_gender("feminine")
+        .with_pronouns("she/her");
+    assert_eq!(speak.grammatical_gender.as_deref(), Some("feminine"));
+
+    let lang = LanguagePref::new("en-US")
+        .with_contexts(serde_json::json!({"work": true}))
+        .with_pref(1);
+    assert_eq!(lang.language, "en-US");
+}
