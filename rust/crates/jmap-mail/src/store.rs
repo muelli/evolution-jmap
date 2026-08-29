@@ -19,27 +19,34 @@
 //! interface's vtable is filled through GObject rather than through our class.
 
 use std::ffi::CStr;
+use std::ptr;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_VJUNK, CAMEL_STORE_VTRASH, CamelOfflineStore,
-    CamelOfflineStoreClass, CamelServiceClass, CamelStore, CamelStoreClass,
-    CamelStoreGetFolderInfoFlags, camel_offline_store_get_type, camel_store_get_flags,
+    CamelOfflineStoreClass, CamelService, CamelServiceClass, CamelStore, CamelStoreClass,
+    CamelStoreGetFolderInfoFlags, camel_offline_store_get_type, camel_service_get_type,
+    camel_service_ref_session, camel_service_ref_settings, camel_store_get_flags,
     camel_store_set_flags,
 };
 use glib_sys::GType;
+use gobject_sys::g_type_check_instance_is_a;
 use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::dispatched_borrow;
+use jmap_backend_core::owned::Owned;
+use jmap_backend_core::retry::retry_once_after;
 use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
+use jmap_client::Credentials;
 use jmap_mail_sync::{
     Filing, FolderInfo, FolderTree, FolderUpdate, KeywordChange, Keywords, MailSync,
-    MessageSummary, MessageUpdate,
+    MessageSummary, MessageUpdate, SyncError,
 };
 use jmap_proto::{Id, State};
 
 use crate::connect::StoreError;
+use crate::oauth2;
 use crate::service::Connected;
 use crate::settings::settings_type;
 use crate::subscribe::Subscribable;
@@ -133,6 +140,92 @@ impl JmapStore {
             .is_some_and(|connection| read(connection).is_some())
     }
 
+    /// This store, as the `CamelService` Camel gave Evolution — the same
+    /// instance [`JmapStore::borrow`] reaches by casting the other way — or
+    /// `None` on a [`JmapStore::detached`] test instance, which is not one.
+    ///
+    /// `Self` leads with `CamelOfflineStore`, from `CamelStore`, from
+    /// `CamelService`, so `self` and this pointer name the same object, just
+    /// typed as its C ancestor — exactly the cast [`JmapStore::borrow`] makes
+    /// in the other direction. The type check is what makes this sound on a
+    /// detached instance too: its leading `GTypeInstance` field is `NULL`
+    /// (all-zero), which `g_type_check_instance_is_a` reads as "not this
+    /// type" without dereferencing further, the same guarantee
+    /// `jmap_backend_core::source::backend_source` relies on for `ESource`.
+    fn service(&self) -> Option<*mut CamelService> {
+        let ptr = ptr::from_ref(self).cast::<CamelService>().cast_mut();
+        // SAFETY: `ptr` is `self` reinterpreted as its leading `GTypeInstance`
+        // field, checked against the target type before it is read any
+        // further, per the doc comment above.
+        let is_service =
+            unsafe { g_type_check_instance_is_a(ptr.cast(), camel_service_get_type()) };
+        (is_service != 0).then_some(ptr)
+    }
+
+    /// Fetches a fresh OAuth 2.0 access token for the account and installs it
+    /// on the live connection, reporting whether an operation is now worth
+    /// retrying.
+    ///
+    /// The mail-side counterpart of the calendar and address book backends'
+    /// own `refresh_credentials` (`docs/ROADMAP.md` item 23): a 401 on a
+    /// pooled connection is answered by refreshing rather than escalating
+    /// straight to a consent window, since the stored refresh token is
+    /// usually still good.
+    ///
+    /// Two reasons this reports "nothing to refresh": not an OAuth 2.0
+    /// account (a Basic-password or API-token 401 means the stored secret is
+    /// wrong, which a re-fetch only reproduces), or no `CamelService` to ask
+    /// — a [`JmapStore::detached`] test instance, or a vfunc reached before
+    /// Camel finished constructing one.
+    fn refresh_credentials(&self, sync: &MailSync) -> bool {
+        let Some(service) = self.service() else {
+            return false;
+        };
+        // SAFETY: `service` is a live `CamelService` by the check in
+        // `Self::service`; the settings reference is released when it drops.
+        let settings = unsafe { Owned::from_raw(camel_service_ref_settings(service)) };
+        // SAFETY: `settings` is NULL or the `CamelSettings` just referenced.
+        let uses_oauth2 = settings
+            .as_ref()
+            .is_some_and(|settings| unsafe { oauth2::uses_oauth2(settings.as_ptr()) });
+        if !uses_oauth2 {
+            return false;
+        }
+
+        // SAFETY: `service` is a valid, registered `CamelService` by the
+        // check above; the session reference is released when it drops.
+        let Some(session) = (unsafe { Owned::from_raw(camel_service_ref_session(service)) }) else {
+            return false;
+        };
+        // SAFETY: a valid session and a valid, registered service; no
+        // cancellable — this refresh is not the operation the user asked to
+        // stop, and `access_token` accepts NULL for "not cancellable".
+        match unsafe { oauth2::access_token(session.as_ptr(), service, ptr::null_mut()) } {
+            Ok(token) => {
+                tracing::debug!("refreshed the mail connection's OAuth 2.0 access token");
+                sync.client().set_credentials(Credentials::bearer(token));
+                true
+            }
+            Err(failure) => {
+                tracing::debug!(
+                    ?failure,
+                    "refreshing the mail connection's access token failed"
+                );
+                false
+            }
+        }
+    }
+
+    /// For the tests only, and specifically for the one thing
+    /// [`JmapStore::refresh_credentials`] does that a test can reach without a
+    /// `CamelService`: installing fresh credentials on the pooled connection.
+    #[cfg(feature = "testing")]
+    pub fn inspect_connection<R>(&self, f: impl FnOnce(&MailSync) -> R) -> Option<R> {
+        let connection = self.connection()?;
+        let guard = read(connection);
+        guard.as_ref().map(f)
+    }
+
     /// The account's folder tree — what `get_folder_info_sync` answers with.
     ///
     /// `flags` is Camel's word verbatim, and the bit that matters here is
@@ -175,7 +268,11 @@ impl JmapStore {
 
         let listing = match held {
             Some((_, tree)) if flags & CAMEL_STORE_FOLDER_INFO_REFRESH == 0 => return Ok(tree),
-            Some((state, tree)) => match sync.folder_tree_since(&state) {
+            Some((state, tree)) => match retry_once_after(
+                || sync.folder_tree_since(&state),
+                SyncError::is_unauthorized,
+                || self.refresh_credentials(sync),
+            ) {
                 // The tree is kept, not rebuilt from an equal one: Camel diffs
                 // the forests it is handed to decide which folders to announce
                 // as created or deleted, and every caller above holds the same
@@ -190,7 +287,11 @@ impl JmapStore {
                     return Err(failure.into());
                 }
             },
-            None => match sync.folder_tree() {
+            None => match retry_once_after(
+                || sync.folder_tree(),
+                SyncError::is_unauthorized,
+                || self.refresh_credentials(sync),
+            ) {
                 Ok((state, tree)) => Listing {
                     state,
                     tree: Arc::new(tree),
@@ -239,7 +340,11 @@ impl JmapStore {
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
         tracing::debug!(mailbox_id = mailbox.as_str(), "listing messages in mailbox");
-        match sync.messages(mailbox) {
+        match retry_once_after(
+            || sync.messages(mailbox),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok((state, list)) => {
                 tracing::debug!(
                     mailbox_id = mailbox.as_str(),
@@ -292,7 +397,11 @@ impl JmapStore {
             held,
             "fetching message changes"
         );
-        match sync.messages_since(mailbox, since, held) {
+        match retry_once_after(
+            || sync.messages_since(mailbox, since, held),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(update) => {
                 tracing::debug!(
                     mailbox_id = mailbox.as_str(),
@@ -325,7 +434,11 @@ impl JmapStore {
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
         tracing::debug!(uid = uid.as_str(), "fetching message source");
-        match sync.message_source(uid) {
+        match retry_once_after(
+            || sync.message_source(uid),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(source) => {
                 tracing::debug!(
                     uid = uid.as_str(),
@@ -362,7 +475,11 @@ impl JmapStore {
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
         tracing::debug!(uid = uid.as_str(), "setting message keywords");
-        match sync.set_keywords(uid, change) {
+        match retry_once_after(
+            || sync.set_keywords(uid, change),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(()) => {
                 tracing::debug!(uid = uid.as_str(), "set message keywords");
                 Ok(())
@@ -390,7 +507,11 @@ impl JmapStore {
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
         tracing::debug!(uid = uid.as_str(), "filing message");
-        match sync.file_message(uid, filing) {
+        match retry_once_after(
+            || sync.file_message(uid, filing),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(()) => {
                 tracing::debug!(uid = uid.as_str(), "filed message");
                 Ok(())
@@ -424,7 +545,11 @@ impl JmapStore {
             mailbox_id = mailbox.as_str(),
             "expunging message"
         );
-        match sync.expunge_message(uid, mailbox) {
+        match retry_once_after(
+            || sync.expunge_message(uid, mailbox),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(()) => {
                 tracing::debug!(
                     uid = uid.as_str(),
@@ -471,7 +596,16 @@ impl JmapStore {
             size = source.len(),
             "importing message"
         );
-        match sync.import_message(mailbox, source, keywords, received_at) {
+        // Cloned into the closure because `import_message` takes the bytes by
+        // value (it uploads them as a blob) and a retry needs to send the same
+        // ones again — `retry_once_after`'s `attempt` must be safe to run
+        // twice, the same requirement every other retried call here meets by
+        // taking its arguments as references instead.
+        match retry_once_after(
+            || sync.import_message(mailbox, source.clone(), keywords, received_at),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(id) => {
                 tracing::debug!(
                     mailbox_id = mailbox.as_str(),
@@ -527,7 +661,11 @@ impl JmapStore {
             subscribed,
             "setting folder subscription"
         );
-        if let Err(failure) = sync.set_subscribed(mailbox, subscribed) {
+        if let Err(failure) = retry_once_after(
+            || sync.set_subscribed(mailbox, subscribed),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             tracing::debug!(
                 mailbox_id = mailbox.as_str(),
                 subscribed,
@@ -581,7 +719,11 @@ impl JmapStore {
             name,
             "creating mail folder"
         );
-        let created = match sync.create_folder(parent, name) {
+        let created = match retry_once_after(
+            || sync.create_folder(parent, name),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(created) => created,
             Err(failure) => {
                 tracing::debug!(
@@ -619,7 +761,11 @@ impl JmapStore {
         let connection = read(connection);
         let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
         tracing::debug!(mailbox_id = mailbox.as_str(), "deleting mail folder");
-        if let Err(failure) = sync.delete_folder(mailbox) {
+        if let Err(failure) = retry_once_after(
+            || sync.delete_folder(mailbox),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             tracing::debug!(
                 mailbox_id = mailbox.as_str(),
                 ?failure,
@@ -676,7 +822,11 @@ impl JmapStore {
             name,
             "renaming mail folder"
         );
-        let path = match sync.rename_folder(&folder.id, parent, name) {
+        let path = match retry_once_after(
+            || sync.rename_folder(&folder.id, parent, name),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
             Ok(path) => path,
             Err(failure) => {
                 tracing::debug!(
