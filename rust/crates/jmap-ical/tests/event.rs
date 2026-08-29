@@ -6352,6 +6352,7 @@ fn a_zone_is_sendable_when_something_says_what_it_is() {
         json!({"example.com/Europe-Berlin": custom_zone()}),
     )));
     assert!(maps_time_zone(&defining("Europe/Berlin", json!(null))));
+    assert!(maps_time_zone(&defining("", json!(null))));
     assert!(maps_time_zone(&CalendarEvent::default()));
 
     assert!(!maps_time_zone(&defining(CUSTOM_TZID, json!(null))));

@@ -113,8 +113,10 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     };
 
     // `start` is the one property whose absence cannot be expressed.
-    if edited.start.is_some() && edited.start != baseline.start {
-        set(&mut patch, "start", edited.start.as_deref());
+    let baseline_start = baseline.start.as_deref().filter(|s| !s.is_empty());
+    let edited_start = edited.start.as_deref().filter(|s| !s.is_empty());
+    if edited_start.is_some() && edited_start != baseline_start {
+        set(&mut patch, "start", edited_start);
     }
     // `timeZone` is the one property whose *new* value may be unsendable. A
     // component states its zone with a `TZID`, which is an iCalendar identifier
@@ -131,8 +133,10 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     // defines — a Windows zone off an Exchange invitation, or a solidus-prefixed
     // one with no `VTIMEZONE` beside it — which is left alone rather than sent as
     // it came or cleared.
-    if maps_time_zone(edited) && baseline.time_zone != edited.time_zone {
-        set(&mut patch, "timeZone", edited.time_zone.as_deref());
+    let baseline_tz = baseline.time_zone.as_deref().filter(|s| !s.is_empty());
+    let edited_tz = edited.time_zone.as_deref().filter(|s| !s.is_empty());
+    if maps_time_zone(edited) && baseline_tz != edited_tz {
+        set(&mut patch, "timeZone", edited_tz);
     }
     for (property, was, now) in [
         ("title", &baseline.title, &edited.title),

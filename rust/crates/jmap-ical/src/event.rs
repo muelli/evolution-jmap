@@ -1783,7 +1783,7 @@ pub fn time_zone_definition<'a>(event: &'a CalendarEvent, tzid: &str) -> Option<
 /// good as undefined. Callers: `jmap_cal_sync`'s create path, which files the
 /// appointment floating rather than sending a zone a server cannot resolve.
 pub fn maps_time_zone(event: &CalendarEvent) -> bool {
-    let Some(tzid) = event.time_zone.as_deref() else {
+    let Some(tzid) = event.time_zone.as_deref().filter(|s| !s.is_empty()) else {
         return true;
     };
     names_time_zone(tzid) || defines_time_zone(event, tzid)

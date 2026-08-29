@@ -5623,3 +5623,43 @@ fn no_op_save_mints_no_patch_on_empty_container_collections_and_empty_strings() 
         "diff with empty containers must be empty, found: {direct_diff:?}"
     );
 }
+
+#[test]
+fn diff_normalizes_empty_timezone_and_start_against_absent_baseline() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Planning", "2026-01-15T13:00:00");
+    let mut current = fixture.event(&id);
+    current.time_zone = None;
+
+    let mut edited = current.clone();
+    edited.time_zone = Some("".to_owned());
+
+    let patch = jmap_cal_sync::patch::diff(&current, &edited);
+    assert!(
+        patch.is_empty(),
+        "diff with empty timeZone against None must be empty, found: {patch:?}"
+    );
+
+    let mut current_empty_tz = current.clone();
+    current_empty_tz.time_zone = Some("".to_owned());
+    let mut edited_none_tz = current.clone();
+    edited_none_tz.time_zone = None;
+
+    let patch2 = jmap_cal_sync::patch::diff(&current_empty_tz, &edited_none_tz);
+    assert!(
+        patch2.is_empty(),
+        "diff with None timeZone against empty timeZone must be empty, found: {patch2:?}"
+    );
+
+    // Clearing timeZone via empty string from an event with a timeZone patches null:
+    let mut current_with_tz = current.clone();
+    current_with_tz.time_zone = Some("Europe/Berlin".to_owned());
+    let mut edited_cleared_tz = current_with_tz.clone();
+    edited_cleared_tz.time_zone = Some("".to_owned());
+    let patch3 = jmap_cal_sync::patch::diff(&current_with_tz, &edited_cleared_tz);
+    assert_eq!(
+        patch3.get("timeZone"),
+        Some(&serde_json::Value::Null),
+        "clearing timeZone via empty string must patch timeZone to null"
+    );
+}
