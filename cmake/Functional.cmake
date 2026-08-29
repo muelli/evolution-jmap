@@ -199,6 +199,26 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"extending it.")
 	endif()
 
+	# docs/ROADMAP.md item 25's calendar leg. Another libecal consumer, but
+	# with two things the five above do not need: it seeds the secret store
+	# (`e_secret_store_store_sync`) before it connects, and it asks whether the
+	# registry exported `Source.OAuth2Support` for its source
+	# (`e_source_ref_dbus_object`). Both are libedataserver, which is therefore
+	# named here rather than relied on as a transitive of libecal — and which
+	# is why this target sits below `pkg_check_modules(LIBEDATASERVER ...)`
+	# rather than beside the other calendar clients.
+	add_executable(functional-cal-stale-token-client
+		tests/functional/cal-stale-token-client.c
+		tests/functional/connection-status.c)
+	target_include_directories(functional-cal-stale-token-client PRIVATE
+		${LIBECAL_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-cal-stale-token-client PRIVATE
+		${LIBECAL_CFLAGS_OTHER} ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-cal-stale-token-client PRIVATE
+		${LIBECAL_LIBRARIES} ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-cal-stale-token-client PRIVATE
+		${LIBECAL_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	add_executable(functional-config-lookup-client tests/functional/config-lookup-client.c)
 	target_include_directories(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_INCLUDE_DIRS})
 	target_compile_options(functional-config-lookup-client PRIVATE ${EVOLUTION_SHELL_CFLAGS_OTHER})
@@ -463,6 +483,29 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-mail-stale-token-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+	)
+
+	# docs/ROADMAP.md item 25's calendar leg: the same acceptance test as
+	# `functional-mail-stale-token`, for the backend whose refresh goes through
+	# an `ESource` rather than a `CamelSession`. Needs three modules where
+	# every other calendar test needs one — the calendar backend in the
+	# factory, and, in the registry, `module-jmap-backend.so` (the "JMAP"
+	# EOAuth2Service and the `[JMAP OAuth2]` extension type) beside EDS's own
+	# oauth2-services module (which exports `Source.OAuth2Support`). See the
+	# test's own header for why none of the three is optional.
+	# `--test-threads=1`: the two tests each stand up a registry, a factory and
+	# a keyring daemon of their own.
+	add_test(
+		NAME functional-cal-stale-token
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test cal-stale-token -- --test-threads=1
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-stale-token PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-cal-stale-token-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
 	)
 
 	# docs/ROADMAP.md item 22 Do(1): the stale Source.OAuth2Support proxy that
