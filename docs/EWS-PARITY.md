@@ -1,13 +1,13 @@
 # EWS parity audit
 
-Roadmap item 11 (`docs/ROADMAP.md` CURRENT PRIORITY): a systematic,
-surface-by-surface diff between this project's Evolution-facing integration
-layer and evolution-ews's, the mature reference implementation of the same
-kind of plugin. Motivation: three of the five bugs found in the first live
-OAuth run were exactly the kind of divergence-from-the-template a diff like
-this would have caught proactively (missing `auto_configure`, a lookup-result
-priority tie, per-process `EOAuth2Service` registration). This document is
-that diff, done once broadly rather than bug-by-bug.
+A systematic, surface-by-surface diff between this project's
+Evolution-facing integration layer and evolution-ews's, the mature reference
+implementation of the same kind of plugin. Motivation: three of the five
+bugs found in the first live OAuth run were exactly the kind of
+divergence-from-the-template a diff like this would have caught proactively
+(missing `auto_configure`, a lookup-result priority tie, per-process
+`EOAuth2Service` registration). This document is that diff, done once
+broadly rather than bug-by-bug.
 
 evolution-ews source is read from `gitlab.gnome.org/GNOME/evolution-ews`,
 `master` branch (no `gnome-3-52` branch exists on that repo; `master` is the
@@ -153,8 +153,8 @@ bug.
 | `child_added` | Binds `[Authentication]` fields via live `GBinding`s, chains up **last** | `backend.rs:274-324`, chains up **first** | DIVERGENCE — justified | Order reversed deliberately (`backend.rs:262-268`): `offer_deletion` needs the parent's binding to already exist. |
 | `child_removed` | Removes folder from EWS's own private id→source cache (delta-sync bookkeeping) | absent (`tests/backend.rs:369-371` pins the inherited/NULL slot) | DIVERGENCE — plausibly justified | This crate re-derives the full child set from EDS's own listing functions every fan-out pass rather than maintaining a private cache (`backend.rs:954-965`), so nothing obviously needs feeding on removal — not independently verified against `Fanout`'s internals in this pass. |
 | `create_resource_sync`/`delete_resource_sync` | Server create/delete with foreign/public-folder special-casing, no chain-up | `backend.rs:422-549`, `571-660`, same non-chaining shape | MATCH | |
-| `authenticate_sync` (grandparent `EBackendClass` slot) | Resolves credentials, on success calls `e_collection_backend_authenticate_children()` to push them into already-running address-book/calendar child backends immediately, then syncs | **FIXED 2026-08-24 (session N+58)** — `authenticate_with` (`authenticate.rs`) takes a `push_credentials` closure, called once a fan-out succeeds; `backend.rs`'s `authenticate_sync` wires it to `e_collection_backend_authenticate_children(collection.0, credentials)` | MATCH | Was a **GAP**; closed as item 11's own follow-up (1) — see `docs/ROADMAP.md` item 11 and `docs/NIGHT-LOG.md`. |
-| `EBackendClass::get_destination_address` | Parses the account's host into host/port, feeding EDS's own host-specific network-reachability monitor (rather than only generic network-up/down) | **FIXED 2026-08-24 (session N+57)** — `backend.rs`'s new `get_destination_address`, reading `jmap_backend_core::source::destination_address` (mirrors `ews_backend_get_destination_address`'s own `[Authentication] Host`/`Port` fallback branch) | MATCH | Was a **GAP**; closed as item 11's own follow-up (2) — see `docs/ROADMAP.md` item 11 and `docs/NIGHT-LOG.md`. |
+| `authenticate_sync` (grandparent `EBackendClass` slot) | Resolves credentials, on success calls `e_collection_backend_authenticate_children()` to push them into already-running address-book/calendar child backends immediately, then syncs | **FIXED 2026-08-24 (session N+58)** — `authenticate_with` (`authenticate.rs`) takes a `push_credentials` closure, called once a fan-out succeeds; `backend.rs`'s `authenticate_sync` wires it to `e_collection_backend_authenticate_children(collection.0, credentials)` | MATCH | Was a **GAP**; closed as item 11's own follow-up (1). |
+| `EBackendClass::get_destination_address` | Parses the account's host into host/port, feeding EDS's own host-specific network-reachability monitor (rather than only generic network-up/down) | **FIXED 2026-08-24 (session N+57)** — `backend.rs`'s new `get_destination_address`, reading `jmap_backend_core::source::destination_address` (mirrors `ews_backend_get_destination_address`'s own `[Authentication] Host`/`Port` fallback branch) | MATCH | Was a **GAP**; closed as item 11's own follow-up (2). |
 | `constructed` (sets `remote-creatable`, forces NTLM fallback, `allow-sources-rename=TRUE`, etc.) | absent | DIVERGENCE — mostly justified | `backend.rs:893-921`'s `offer_creation` comment explicitly discusses and rejects a `constructed` override for `remote-creatable` specifically (an already-considered, reasoned decision). `allow-sources-rename` has no equivalent discussion anywhere — a minor, low-severity omission (renaming a JMAP account may not cascade to children's display names) rather than a structural gap. |
 | Module registration (`module-ews-backend.c`) | Backend, factory, OAuth2 service, plus a custom `ESourceEwsFolder` extension type | `module.rs`: backend, factory, OAuth2 service — no custom resource-id extension type | MATCH on ordering/rationale; unexplained asymmetry, not confirmed as a gap | See Surface 1. This crate's resource identity presumably rides on a built-in EDS extension rather than a bespoke one; not confirmed in this pass. |
 
@@ -165,8 +165,7 @@ bug.
    this fix, each child backend (book/cal/mail) independently fetched its own
    credentials via `connect_with`'s three-branch resolution when *it* needed
    them, rather than being handed what the collection backend just resolved.
-   **Fixed 2026-08-24 (session N+58)** — see the table row above and
-   `docs/NIGHT-LOG.md`.
+   **Fixed 2026-08-24 (session N+58)** — see the table row above.
 2. **`EBackendClass::get_destination_address` is not implemented**, leaving
    EDS's host-reachability monitor unable to watch this account's actual
    JMAP host specifically, only generic network-up/down. Low severity (the
@@ -174,7 +173,7 @@ bug.
    it's fully down; the gap is narrower "host X is down but the network
    generally isn't" detection), concretely scoped, and a reasonable
    next-increment candidate. **Fixed 2026-08-24 (session N+57)** — see the
-   table row above and `docs/NIGHT-LOG.md`.
+   table row above.
 
 Both were filed as follow-up items in `docs/ROADMAP.md`'s item 11 entry rather
 than fixed in the same session that found them, per the item's own "each its
