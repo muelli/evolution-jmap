@@ -128,6 +128,11 @@ impl<T> SetRequest<T> {
         self
     }
 
+    pub fn with_create(mut self, create: BTreeMap<String, T>) -> Self {
+        self.create = Some(create);
+        self
+    }
+
     pub fn update(mut self, id: impl Into<Id>, patch: Value) -> Self {
         self.update
             .get_or_insert_with(BTreeMap::new)
@@ -135,8 +140,18 @@ impl<T> SetRequest<T> {
         self
     }
 
+    pub fn with_update(mut self, update: BTreeMap<Id, Value>) -> Self {
+        self.update = Some(update);
+        self
+    }
+
     pub fn destroy(mut self, id: impl Into<Id>) -> Self {
         self.destroy.get_or_insert_with(Vec::new).push(id.into());
+        self
+    }
+
+    pub fn with_destroy(mut self, destroy: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.destroy = Some(destroy.into_iter().map(Into::into).collect());
         self
     }
 
@@ -168,6 +183,57 @@ pub struct SetResponse<T> {
     pub not_updated: Option<BTreeMap<Id, SetError>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_destroyed: Option<BTreeMap<Id, SetError>>,
+}
+
+impl<T> SetResponse<T> {
+    pub fn new(account_id: impl Into<Id>, new_state: impl Into<State>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            old_state: None,
+            new_state: new_state.into(),
+            created: None,
+            updated: None,
+            destroyed: None,
+            not_created: None,
+            not_updated: None,
+            not_destroyed: None,
+        }
+    }
+
+    pub fn with_old_state(mut self, old_state: impl Into<State>) -> Self {
+        self.old_state = Some(old_state.into());
+        self
+    }
+
+    pub fn with_created(mut self, created: BTreeMap<String, T>) -> Self {
+        self.created = Some(created);
+        self
+    }
+
+    pub fn with_updated(mut self, updated: BTreeMap<Id, Option<T>>) -> Self {
+        self.updated = Some(updated);
+        self
+    }
+
+    pub fn with_destroyed(mut self, destroyed: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.destroyed = Some(destroyed.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_not_created(mut self, not_created: BTreeMap<String, SetError>) -> Self {
+        self.not_created = Some(not_created);
+        self
+    }
+
+    pub fn with_not_updated(mut self, not_updated: BTreeMap<Id, SetError>) -> Self {
+        self.not_updated = Some(not_updated);
+        self
+    }
+
+    pub fn with_not_destroyed(mut self, not_destroyed: BTreeMap<Id, SetError>) -> Self {
+        self.not_destroyed = Some(not_destroyed);
+        self
+    }
 }
 
 /// `Foo/query` arguments (RFC 8620 §5.5).
@@ -216,6 +282,11 @@ impl<F> QueryRequest<F> {
 
     pub fn sort(mut self, sort: impl IntoIterator<Item = Comparator>) -> Self {
         self.sort = Some(sort.into_iter().collect());
+        self
+    }
+
+    pub fn position(mut self, position: i64) -> Self {
+        self.position = position;
         self
     }
 

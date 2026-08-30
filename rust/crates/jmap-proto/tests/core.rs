@@ -1390,3 +1390,101 @@ fn session_account_core_capability_and_state_builders() {
         Some(&Id::new("A1"))
     );
 }
+
+#[test]
+fn set_response_and_set_request_builders_and_roundtrip() {
+    use jmap_proto::error::SetError;
+    use jmap_proto::methods::{SetRequest, SetResponse};
+    use std::collections::BTreeMap;
+
+    let mut create_map = BTreeMap::new();
+    create_map.insert("c1".to_string(), serde_json::json!({"name": "Item 1"}));
+
+    let mut update_map = BTreeMap::new();
+    update_map.insert(Id::new("u1"), serde_json::json!({"name": "Item 2"}));
+
+    let req = SetRequest::<serde_json::Value>::new("A1")
+        .if_in_state("s_req")
+        .with_create(create_map)
+        .with_update(update_map)
+        .with_destroy(vec![Id::new("d1")]);
+
+    assert_eq!(req.account_id.as_str(), "A1");
+    assert_eq!(req.if_in_state.as_ref().unwrap().as_str(), "s_req");
+    assert!(req.create.as_ref().unwrap().contains_key("c1"));
+    assert!(req.update.as_ref().unwrap().contains_key(&Id::new("u1")));
+    assert_eq!(req.destroy.as_ref().unwrap(), &vec![Id::new("d1")]);
+
+    let req_val = serde_json::to_value(&req).unwrap();
+    assert_eq!(req_val["accountId"], "A1");
+    assert_eq!(req_val["ifInState"], "s_req");
+    assert_eq!(req_val["create"]["c1"]["name"], "Item 1");
+    assert_eq!(req_val["update"]["u1"]["name"], "Item 2");
+    assert_eq!(req_val["destroy"][0], "d1");
+
+    let mut created = BTreeMap::new();
+    created.insert("c1".to_string(), serde_json::json!({"id": "i1"}));
+
+    let mut updated = BTreeMap::new();
+    updated.insert(Id::new("u1"), Some(serde_json::json!({"id": "u1"})));
+
+    let mut not_created = BTreeMap::new();
+    not_created.insert("c2".to_string(), SetError::new("invalidProperties"));
+
+    let mut not_updated = BTreeMap::new();
+    not_updated.insert(Id::new("u2"), SetError::new("notFound"));
+
+    let mut not_destroyed = BTreeMap::new();
+    not_destroyed.insert(Id::new("d2"), SetError::new("forbidden"));
+
+    let resp = SetResponse::<serde_json::Value>::new("A1", "s_new")
+        .with_old_state("s_old")
+        .with_created(created)
+        .with_updated(updated)
+        .with_destroyed(vec![Id::new("d1")])
+        .with_not_created(not_created)
+        .with_not_updated(not_updated)
+        .with_not_destroyed(not_destroyed);
+
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.old_state.as_ref().unwrap().as_str(), "s_old");
+    assert_eq!(resp.new_state.as_str(), "s_new");
+    assert!(resp.created.as_ref().unwrap().contains_key("c1"));
+    assert!(resp.updated.as_ref().unwrap().contains_key(&Id::new("u1")));
+    assert_eq!(resp.destroyed.as_ref().unwrap(), &vec![Id::new("d1")]);
+    assert!(resp.not_created.as_ref().unwrap().contains_key("c2"));
+    assert!(
+        resp.not_updated
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::new("u2"))
+    );
+    assert!(
+        resp.not_destroyed
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::new("d2"))
+    );
+
+    let resp_val = serde_json::to_value(&resp).unwrap();
+    assert_eq!(resp_val["accountId"], "A1");
+    assert_eq!(resp_val["oldState"], "s_old");
+    assert_eq!(resp_val["newState"], "s_new");
+    assert_eq!(resp_val["created"]["c1"]["id"], "i1");
+    assert_eq!(resp_val["notCreated"]["c2"]["type"], "invalidProperties");
+
+    let round_resp: SetResponse<serde_json::Value> = serde_json::from_value(resp_val).unwrap();
+    assert_eq!(round_resp, resp);
+}
+
+#[test]
+fn query_request_position_builder() {
+    let req = QueryRequest::<serde_json::Value>::new("A1")
+        .position(42)
+        .limit(10);
+    assert_eq!(req.position, 42);
+    assert_eq!(req.limit, Some(10));
+    let json = serde_json::to_value(&req).unwrap();
+    assert_eq!(json["position"], 42);
+    assert_eq!(json["limit"], 10);
+}
