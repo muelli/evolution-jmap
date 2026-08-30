@@ -237,6 +237,186 @@ fn send_email_invalid_identity_rejected() {
     );
 }
 
+/// `docs/ROADMAP.md` item 29: a server advertising `maxDelayedSend`
+/// (RFC 8621 §7.1) is detectable through the session document before a
+/// caller offers scheduled send at all.
+#[test]
+fn the_session_names_the_accounts_delayed_send_limit() {
+    let server = MockServer::builder().max_delayed_send(3600).start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let account = client.session().accounts.get(&account_id).unwrap();
+    assert_eq!(account.max_delayed_send(), Some(3600));
+}
+
+/// A server that never advertised `maxDelayedSend` answers `None`, not an
+/// invented number — the ordinary case, since most deployments have no SMTP
+/// FUTURERELEASE.
+#[test]
+fn a_server_with_no_delayed_send_support_says_so() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let account = client.session().accounts.get(&account_id).unwrap();
+    assert_eq!(account.max_delayed_send(), None);
+}
+
+/// `submit_email_at` with a future `sendAt`: the mock holds the message
+/// rather than delivering it — `undoStatus: "pending"`, nothing in the
+/// outbox — proving the client's scheduled-send path end to end even though
+/// nothing in Evolution calls it yet (item 29's "ready and proven").
+#[test]
+fn submit_email_at_a_future_time_is_held_pending() {
+    let server = MockServer::builder().max_delayed_send(3600).start();
+    let account_id = server.account_id();
+
+    let inbox = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.seed_identity("Alice", "alice@example.com");
+        account.seed_mailbox("Inbox", Some(role::INBOX))
+    };
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let identity_id = client.identities(&account_id).unwrap()[0]
+        .id
+        .clone()
+        .unwrap();
+
+    let message = b"From: alice@example.com\r\nTo: bob@example.com\r\nSubject: Ping\r\n\r\nHi\r\n";
+    let upload = client
+        .upload_blob(&account_id, "message/rfc822", message.to_vec())
+        .unwrap();
+    let imported = client
+        .email_import(&account_id, &EmailImport::new(upload.blob_id, inbox))
+        .unwrap();
+    let email_id = imported.id.expect("server assigned an email id");
+
+    let future = jmap_proto::UtcDate::new("2027-01-01T00:00:00Z");
+    let submission = client
+        .submit_email_at(
+            &account_id,
+            &email_id,
+            &identity_id,
+            None,
+            Some(future.clone()),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(submission.send_at, Some(future));
+    assert_eq!(submission.undo_status.as_deref(), Some("pending"));
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let account = state.account(&account_id).unwrap();
+    assert!(
+        account.outbox.is_empty(),
+        "a pending submission must not have been delivered yet"
+    );
+}
+
+/// A pending submission can be canceled (RFC 8621 §7.4): `undoStatus` moves
+/// to `"canceled"` and the message never reaches the outbox.
+#[test]
+fn a_pending_submission_can_be_canceled() {
+    let server = MockServer::builder().max_delayed_send(3600).start();
+    let account_id = server.account_id();
+
+    let inbox = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.seed_identity("Alice", "alice@example.com");
+        account.seed_mailbox("Inbox", Some(role::INBOX))
+    };
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let identity_id = client.identities(&account_id).unwrap()[0]
+        .id
+        .clone()
+        .unwrap();
+
+    let message = b"From: alice@example.com\r\nTo: bob@example.com\r\nSubject: Ping\r\n\r\nHi\r\n";
+    let upload = client
+        .upload_blob(&account_id, "message/rfc822", message.to_vec())
+        .unwrap();
+    let imported = client
+        .email_import(&account_id, &EmailImport::new(upload.blob_id, inbox))
+        .unwrap();
+    let email_id = imported.id.expect("server assigned an email id");
+
+    let future = jmap_proto::UtcDate::new("2027-01-01T00:00:00Z");
+    let submission = client
+        .submit_email_at(
+            &account_id,
+            &email_id,
+            &identity_id,
+            None,
+            Some(future),
+            None,
+        )
+        .unwrap();
+    let submission_id = submission.id.expect("server assigned a submission id");
+
+    client
+        .cancel_email_submission(&account_id, &submission_id)
+        .unwrap();
+
+    let state = server.state();
+    let state = state.lock().unwrap();
+    let account = state.account(&account_id).unwrap();
+    assert!(
+        account.outbox.is_empty(),
+        "a canceled submission must not send"
+    );
+}
+
+/// Canceling a submission the mock already delivered (no future `sendAt`,
+/// so it went out immediately with `undoStatus: "final"`) is refused —
+/// undoing an already-sent message is not on offer.
+#[test]
+fn canceling_an_already_final_submission_is_refused() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+
+    let inbox = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.seed_identity("Alice", "alice@example.com");
+        account.seed_mailbox("Inbox", Some(role::INBOX))
+    };
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let identity_id = client.identities(&account_id).unwrap()[0]
+        .id
+        .clone()
+        .unwrap();
+
+    let message = b"From: alice@example.com\r\nTo: bob@example.com\r\nSubject: Ping\r\n\r\nHi\r\n";
+    let upload = client
+        .upload_blob(&account_id, "message/rfc822", message.to_vec())
+        .unwrap();
+    let imported = client
+        .email_import(&account_id, &EmailImport::new(upload.blob_id, inbox))
+        .unwrap();
+    let email_id = imported.id.expect("server assigned an email id");
+
+    let submission = client
+        .submit_email(&account_id, &email_id, &identity_id, None, None)
+        .unwrap();
+    let submission_id = submission.id.expect("server assigned a submission id");
+
+    match client.cancel_email_submission(&account_id, &submission_id) {
+        Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "forbidden"),
+        other => panic!("expected SetError, got {other:?}"),
+    }
+}
+
 #[test]
 fn upload_download_blob_roundtrip() {
     let server = MockServer::builder().start();

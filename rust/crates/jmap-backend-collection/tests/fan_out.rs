@@ -215,6 +215,7 @@ fn resource(id: &str) -> Resource {
         name: format!("Collection {id}"),
         is_default: false,
         color: None,
+        writable: None,
     }
 }
 
@@ -270,6 +271,7 @@ fn login(origin: &str, parts: Parts) -> Login {
         server: Server {
             target: ConnectTarget::Origin(origin.to_owned()),
             connection: connection(),
+            rebase_urls: false,
         },
         parts,
         credentials: Credentials::none(),

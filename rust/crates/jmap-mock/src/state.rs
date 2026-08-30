@@ -5,8 +5,14 @@
 //! allocation, per-type state counters, and an append-only changes log.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::mpsc::Sender;
 
+use jmap_proto::push::StateChange;
 use jmap_proto::{Id, State};
+
+/// One [`ServerState::type_state_snapshot`] — every account's state counter
+/// per tracked type name, at one point in time.
+pub type TypeStateSnapshot = BTreeMap<Id, BTreeMap<&'static str, u64>>;
 
 /// Everything the mock server knows. Tests hold this behind
 /// `Arc<Mutex<..>>` (via `MockServer::state()`) to seed data and make
@@ -178,6 +184,15 @@ pub struct ServerState {
     /// matching every other test and this project's own prior assumption
     /// before that finding.
     pub terse_calendar_event_create: bool,
+    /// `maxDelayedSend` to advertise on the submission account capability, as
+    /// [`crate::MockServerBuilder::max_delayed_send`] asked (RFC 8621 §7.1).
+    /// `None` advertises an empty submission capability object, matching
+    /// every other test and every deployment that does not support SMTP
+    /// FUTURERELEASE.
+    pub max_delayed_send: Option<u64>,
+    /// Every currently connected `/eventsource` client (RFC 8620 §7.3), so
+    /// [`crate::MockServer::push_state_change`] has someone to push to.
+    pub event_source: EventSourceHub,
 }
 
 impl ServerState {
@@ -204,6 +219,8 @@ impl ServerState {
             terse_contact_create: false,
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
+            max_delayed_send: None,
+            event_source: EventSourceHub::new(),
         }
     }
 
@@ -225,6 +242,30 @@ impl ServerState {
         State::new(self.session_state.to_string())
     }
 
+    /// Every account's state counter for the six types RFC 8620 push (and
+    /// this mock's own `/changes` methods) track, as of right now.
+    ///
+    /// [`crate::dispatch::handle_api`] takes one of these before and one
+    /// after running a request's method calls, and diffs them to find out
+    /// what actually changed — the automatic half of `docs/ROADMAP.md` item
+    /// 28's push, which no individual `*/set` handler has to know about.
+    pub fn type_state_snapshot(&self) -> TypeStateSnapshot {
+        self.accounts
+            .iter()
+            .map(|(id, account)| {
+                let types = BTreeMap::from([
+                    ("Mailbox", account.mailboxes.state_counter()),
+                    ("Email", account.emails.state_counter()),
+                    ("ContactCard", account.contact_cards.state_counter()),
+                    ("AddressBook", account.address_books.state_counter()),
+                    ("Calendar", account.calendars.state_counter()),
+                    ("CalendarEvent", account.calendar_events.state_counter()),
+                ]);
+                (id.clone(), types)
+            })
+            .collect()
+    }
+
     /// The `maxObjectsInGet` this server advertises, which is also the one it
     /// enforces. The two being one number is the point: a mock that advertised
     /// a limit it did not apply would let a client that ignores the session
@@ -238,6 +279,94 @@ impl Default for ServerState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// One `/eventsource` client: the channel its pushed SSE bytes go out on,
+/// and the `types` URI Template parameter (RFC 8620 §7.3) it registered
+/// with — `None` for "no filter, subscribed to everything" (an absent
+/// parameter, or the literal `*`).
+struct Subscriber {
+    sender: Sender<Vec<u8>>,
+    types: Option<BTreeSet<String>>,
+}
+
+/// The `/eventsource` clients currently connected (RFC 8620 §7.3).
+///
+/// [`Self::broadcast`] takes the structured `StateChange` rather than
+/// pre-formatted bytes so it can narrow `changed` to each subscriber's own
+/// `types` filter before formatting — a subscriber whose filter matches
+/// none of a change's types is sent nothing at all, rather than an empty
+/// `StateChange` it would have no way to tell apart from a real one naming
+/// zero types.
+#[derive(Default)]
+pub struct EventSourceHub {
+    subscribers: Vec<Subscriber>,
+}
+
+impl EventSourceHub {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a new subscriber with the `types` filter it connected with
+    /// (`None` = every type), returning the receiving end it reads pushed
+    /// bytes from until this hub (or its own disconnect) drops the sending
+    /// end.
+    pub fn subscribe(
+        &mut self,
+        types: Option<BTreeSet<String>>,
+    ) -> std::sync::mpsc::Receiver<Vec<u8>> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.subscribers.push(Subscriber { sender, types });
+        receiver
+    }
+
+    /// Send `change`, narrowed to each subscriber's own `types` filter, to
+    /// every currently connected subscriber whose filter matches at least
+    /// one of its changed types — dropping any subscriber whose receiving
+    /// end has gone away (the client disconnected). A subscriber whose
+    /// filter matches nothing in `change` is left connected but sent
+    /// nothing, same as a request that mutated nothing at all.
+    pub fn broadcast(&mut self, change: &StateChange) {
+        self.subscribers.retain(
+            |subscriber| match filter_for(change, subscriber.types.as_ref()) {
+                Some(filtered) => subscriber
+                    .sender
+                    .send(crate::eventsource::format_state_event(&filtered))
+                    .is_ok(),
+                None => true,
+            },
+        );
+    }
+
+    /// How many `/eventsource` clients are connected right now — what
+    /// [`crate::MockServer::wait_for_event_source_subscriber`] polls.
+    pub fn subscriber_count(&self) -> usize {
+        self.subscribers.len()
+    }
+}
+
+/// Narrow `change`'s `changed` map to the type names in `types` (`None` =
+/// every type, so `change` passes through unchanged); an account whose
+/// entry has no matching type is dropped entirely, and `None` is returned
+/// when nothing survives — the signal to send this subscriber nothing.
+fn filter_for(change: &StateChange, types: Option<&BTreeSet<String>>) -> Option<StateChange> {
+    let Some(types) = types else {
+        return Some(change.clone());
+    };
+    let changed: BTreeMap<Id, BTreeMap<String, State>> = change
+        .changed
+        .iter()
+        .filter_map(|(id, type_state)| {
+            let narrowed: BTreeMap<String, State> = type_state
+                .iter()
+                .filter(|(type_name, _)| types.contains(*type_name))
+                .map(|(type_name, state)| (type_name.clone(), state.clone()))
+                .collect();
+            (!narrowed.is_empty()).then(|| (id.clone(), narrowed))
+        })
+        .collect();
+    (!changed.is_empty()).then(|| StateChange::new(changed))
 }
 
 /// One account's data.

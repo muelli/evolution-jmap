@@ -9,7 +9,7 @@ use jmap_proto::request::{Invocation, Request, ResultReference};
 use jmap_proto::response::Response;
 use serde_json::{Map, Value};
 
-use crate::state::ServerState;
+use crate::state::{ServerState, TypeStateSnapshot};
 
 /// Handle a POST to the API endpoint. Returns (HTTP status, JSON body).
 pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
@@ -76,6 +76,13 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
     // can reference earlier creations as `#creationId` (RFC 8620 §5.3).
     let mut created_ids: std::collections::BTreeMap<String, jmap_proto::Id> =
         std::collections::BTreeMap::new();
+    // Snapshotted before any call runs, and diffed against the same
+    // snapshot taken after (below), so this request can push one
+    // `StateChange` (RFC 8620 §7.1) for whatever it actually mutated —
+    // `docs/ROADMAP.md` item 28's "wire a real mutation to
+    // `push_state_change` automatically", without every `*/set` handler
+    // having to say so itself.
+    let type_states_before = state.type_state_snapshot();
     for call in &request.method_calls {
         // Recorded before the call is answered, and whatever the answer is: a
         // request that failed is still a round trip the client spent, which is
@@ -96,6 +103,10 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
             Err(method_error) => error_invocation(method_error, &call.call_id),
         };
         responses.push(invocation);
+    }
+
+    if let Some(change) = state_change_since(&type_states_before, &state.type_state_snapshot()) {
+        state.event_source.broadcast(&change);
     }
 
     let response = Response {
@@ -198,6 +209,35 @@ fn eval_pointer(path: &str, value: &Value) -> Option<Value> {
     }
     let tokens: Vec<&str> = trimmed.split('/').collect();
     walk(&tokens, value)
+}
+
+/// Diff two [`ServerState::type_state_snapshot`] snapshots into a
+/// `StateChange` naming only the accounts/types whose counter actually
+/// moved between them — `None` when nothing did, so a request that mutated
+/// nothing (a `/get`, a failed `/set`) pushes nothing.
+fn state_change_since(
+    before: &TypeStateSnapshot,
+    after: &TypeStateSnapshot,
+) -> Option<jmap_proto::push::StateChange> {
+    let mut changed: std::collections::BTreeMap<jmap_proto::Id, jmap_proto::push::TypeState> =
+        std::collections::BTreeMap::new();
+    for (account_id, after_types) in after {
+        let before_types = before.get(account_id);
+        let mut types = jmap_proto::push::TypeState::new();
+        for (&type_name, &counter) in after_types {
+            let prior = before_types.and_then(|before_types| before_types.get(type_name));
+            if prior != Some(&counter) {
+                types.insert(
+                    type_name.to_owned(),
+                    jmap_proto::State::new(counter.to_string()),
+                );
+            }
+        }
+        if !types.is_empty() {
+            changed.insert(account_id.clone(), types);
+        }
+    }
+    (!changed.is_empty()).then(|| jmap_proto::push::StateChange::new(changed))
 }
 
 /// Collect `{creationId: {id: ...}}` pairs from a successful `/set` result.
@@ -336,6 +376,8 @@ pub(crate) fn project_properties(
 #[cfg(test)]
 mod tests {
     use super::eval_pointer;
+    use crate::state::ServerState;
+    use jmap_proto::request::Request;
     use serde_json::json;
 
     #[test]
@@ -345,5 +387,124 @@ mod tests {
         assert_eq!(eval_pointer("/ids/1", &value), Some(json!("b")));
         assert_eq!(eval_pointer("/list/*/id", &value), Some(json!(["x", "y"])));
         assert_eq!(eval_pointer("/missing", &value), None);
+    }
+
+    /// `docs/ROADMAP.md` item 28: a real mutation should push a
+    /// `StateChange` on its own, not only through the
+    /// `MockServer::push_state_change` test hook. A subscriber registered
+    /// directly against the state's own hub (no socket needed — that plumbing
+    /// is `eventsource`'s own concern, already tested there) proves
+    /// `handle_api` itself is the one broadcasting.
+    #[test]
+    fn a_mailbox_set_create_pushes_a_state_change_automatically() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+        let receiver = state.event_source.subscribe(None);
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call(
+                "Mailbox/set",
+                &json!({"accountId": "A1", "create": {"m1": {"name": "Inbox"}}}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, _response) = super::handle_api(&mut state, &body);
+        assert_eq!(status, 200);
+
+        let pushed = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("a StateChange was pushed automatically");
+        let text = String::from_utf8(pushed).expect("utf8 SSE frame");
+        assert!(text.starts_with("event: state\n"), "{text}");
+        assert!(text.contains("\"A1\""), "{text}");
+        assert!(text.contains("\"Mailbox\":\"2\""), "{text}");
+    }
+
+    /// The other half of the same guarantee: a request that mutates nothing
+    /// (here, a `Mailbox/get` on an account with none) must push nothing —
+    /// a subscriber has no way to distinguish "no change" from "a slow
+    /// server", so a false push would train a client to distrust real ones.
+    #[test]
+    fn a_request_that_mutates_nothing_pushes_nothing() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+        let receiver = state.event_source.subscribe(None);
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call("Mailbox/get", &json!({"accountId": "A1"}), "c1")
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, _response) = super::handle_api(&mut state, &body);
+        assert_eq!(status, 200);
+
+        assert!(matches!(
+            receiver.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+    }
+
+    /// `docs/ROADMAP.md` item 28's `types`-filtering: a subscriber whose
+    /// `types` filter names none of what actually changed is sent nothing at
+    /// all, same as a request that mutated nothing.
+    #[test]
+    fn a_subscriber_filtered_to_an_unrelated_type_receives_nothing() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+        let receiver = state
+            .event_source
+            .subscribe(Some(std::collections::BTreeSet::from([
+                "ContactCard".to_owned()
+            ])));
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call(
+                "Mailbox/set",
+                &json!({"accountId": "A1", "create": {"m1": {"name": "Inbox"}}}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, _response) = super::handle_api(&mut state, &body);
+        assert_eq!(status, 200);
+
+        assert!(matches!(
+            receiver.recv_timeout(std::time::Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+    }
+
+    /// The other half: a subscriber filtered to a type that DID change still
+    /// receives the push.
+    #[test]
+    fn a_subscriber_filtered_to_the_changed_type_receives_it() {
+        let mut state = ServerState::new();
+        state.add_account("A1", "test");
+        let receiver = state
+            .event_source
+            .subscribe(Some(std::collections::BTreeSet::from([
+                "Mailbox".to_owned()
+            ])));
+
+        let request = Request::new(["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"])
+            .call(
+                "Mailbox/set",
+                &json!({"accountId": "A1", "create": {"m1": {"name": "Inbox"}}}),
+                "c1",
+            )
+            .expect("build request");
+        let body = serde_json::to_vec(&request).expect("serialize request");
+
+        let (status, _response) = super::handle_api(&mut state, &body);
+        assert_eq!(status, 200);
+
+        let pushed = receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("a StateChange was pushed to the matching subscriber");
+        let text = String::from_utf8(pushed).expect("utf8 SSE frame");
+        assert!(text.contains("\"Mailbox\":\"2\""), "{text}");
     }
 }

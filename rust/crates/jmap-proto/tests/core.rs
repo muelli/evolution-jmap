@@ -8,6 +8,7 @@
 use jmap_proto::error::{MethodError, RequestError};
 use jmap_proto::id::Id;
 use jmap_proto::methods::{Comparator, GetRequest, QueryRequest};
+use jmap_proto::push::StateChange;
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::response::Response;
 use jmap_proto::session::Session;
@@ -188,6 +189,48 @@ fn a_session_that_names_no_get_limit_says_so() {
         .remove("maxObjectsInGet");
     let session: Session = serde_json::from_value(value).unwrap();
     assert_eq!(session.max_objects_in_get(), None);
+}
+
+/// RFC 8620 §2's own example account carries a real `maxDelayedSend`
+/// (docs/ROADMAP.md item 29's "detect server support").
+#[test]
+fn the_account_names_its_delayed_send_limit() {
+    let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();
+    let account = &session.accounts[&Id::new("A13824")];
+    assert_eq!(account.max_delayed_send(), Some(44236800));
+}
+
+/// An account whose submission capability names no `maxDelayedSend` (the
+/// ordinary case today — most deployments do not support SMTP
+/// FUTURERELEASE) answers `None`, not an invented number: a caller must
+/// not offer scheduled send it has no evidence the server honours.
+#[test]
+fn an_account_with_no_delayed_send_limit_says_so() {
+    let mut value = fixture("core/session.json");
+    value["accounts"]["A13824"]["accountCapabilities"]
+        [jmap_proto::session::CAPABILITY_SUBMISSION] = serde_json::json!({});
+    let session: Session = serde_json::from_value(value).unwrap();
+    let account = &session.accounts[&Id::new("A13824")];
+    assert_eq!(account.max_delayed_send(), None);
+}
+
+/// RFC 8620 §7.1.1's own example: two accounts, each naming the types that
+/// changed and their new state tokens.
+#[test]
+fn state_change_roundtrip() {
+    let value = fixture("core/state_change.json");
+    assert_eq!(roundtrip::<StateChange>(&value), value);
+
+    let change: StateChange = serde_json::from_value(value).unwrap();
+    assert_eq!(change.kind, "StateChange");
+    assert_eq!(
+        change.changed[&Id::new("a3123")]["Email"],
+        State::new("d35ecb040aab")
+    );
+    assert_eq!(
+        change.changed[&Id::new("a43461d")]["CalendarEvent"],
+        State::new("7a4297cecd76")
+    );
 }
 
 /// `Response::responses_for` groups a call id's (possibly several)
@@ -816,7 +859,7 @@ fn push_and_state_change_roundtrip_covers_rfc8620() {
     assert_eq!(ver_round_tripped, verification);
 
     let state_change = StateChange {
-        object_type: "StateChange".to_owned(),
+        kind: "StateChange".to_owned(),
         changed: BTreeMap::from([(
             Id::new("A1"),
             BTreeMap::from([
@@ -1002,7 +1045,7 @@ fn result_reference_and_push_builders_roundtrip() {
         "acc1".into(),
         BTreeMap::from([("Email".to_owned(), "state_123".into())]),
     )]));
-    assert_eq!(change.object_type, "StateChange");
+    assert_eq!(change.kind, "StateChange");
     assert_eq!(
         change.changed[&"acc1".into()]["Email"].as_str(),
         "state_123"

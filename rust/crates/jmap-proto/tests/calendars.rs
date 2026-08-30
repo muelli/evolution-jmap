@@ -9,6 +9,7 @@
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventQueryFilter, NDay, RecurrenceRule,
 };
+use jmap_proto::Id;
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -99,6 +100,26 @@ fn calendar_event_roundtrip() {
     );
     // An unmodeled JSCalendar property (sequence) survives.
     assert!(event.extra.contains_key("sequence"));
+}
+
+#[test]
+fn calendar_my_rights_and_share_with_roundtrip() {
+    let value = fixture("calendars/calendar_with_rights.json");
+    assert_eq!(roundtrip::<Calendar>(&value), value);
+
+    let calendar: Calendar = serde_json::from_value(value).unwrap();
+    let rights = calendar.my_rights.expect("myRights");
+    assert_eq!(rights.may_write_all, Some(false));
+    assert_eq!(rights.may_write_own, Some(true));
+    assert_eq!(rights.may_rsvp, Some(true));
+    // Neither field alone would be writable; together (own items, not all) the
+    // calendar as a whole counts as writable — EDS has no shade between the two.
+    assert!(rights.is_writable());
+
+    let share_with = calendar.share_with.expect("shareWith");
+    let shared_rights = &share_with[&Id::new("P1")];
+    assert_eq!(shared_rights.may_write_all, Some(true));
+    assert!(shared_rights.is_writable());
 }
 
 #[test]
@@ -380,9 +401,8 @@ fn calendar_and_event_advanced_properties_cover_draft_spec() {
         "timeZone": "Europe/Berlin",
         "myRights": {
             "mayReadItems": true,
-            "mayAddItems": true,
-            "mayModifyItems": true,
-            "mayRemoveItems": false,
+            "mayWriteAll": true,
+            "mayWriteOwn": true,
             "mayDelete": false
         }
     }))
@@ -390,10 +410,10 @@ fn calendar_and_event_advanced_properties_cover_draft_spec() {
 
     assert_eq!(cal.time_zone.as_deref(), Some("Europe/Berlin"));
     let rights = cal.my_rights.as_ref().unwrap();
-    assert!(rights.may_read_items);
-    assert!(rights.may_add_items);
-    assert!(rights.may_modify_items);
-    assert!(!rights.may_remove_items);
+    assert_eq!(rights.may_read_items, Some(true));
+    assert_eq!(rights.may_write_all, Some(true));
+    assert_eq!(rights.may_write_own, Some(true));
+    assert_eq!(rights.may_delete, Some(false));
 
     let event: CalendarEvent = serde_json::from_value(serde_json::json!({
         "title": "Board Meeting",
@@ -691,21 +711,20 @@ fn calendar_sharing_timezone_and_recurrence_rule_extensions_roundtrip() {
     assert_eq!(weekday::SU, "su");
 
     let rights = CalendarRights {
-        may_read_items: true,
-        may_add_items: true,
-        may_modify_items: true,
-        may_remove_items: false,
-        may_delete: false,
-        may_rename: false,
-        may_admin: false,
-        extra: BTreeMap::new(),
+        may_read_items: Some(true),
+        may_write_all: Some(true),
+        may_write_own: Some(true),
+        may_rsvp: Some(true),
+        may_share: Some(false),
+        may_delete: Some(false),
+        ..CalendarRights::default()
     };
 
     let cal = Calendar {
         id: Some("cal1".into()),
         name: "Shared Team Calendar".to_owned(),
         time_zone: Some("Europe/Berlin".to_owned()),
-        share_with: Some(BTreeMap::from([("usr_bob".into(), Some(rights.clone()))])),
+        share_with: Some(BTreeMap::from([("usr_bob".into(), rights.clone())])),
         my_rights: Some(rights.clone()),
         ..Calendar::default()
     };
@@ -713,7 +732,7 @@ fn calendar_sharing_timezone_and_recurrence_rule_extensions_roundtrip() {
     let c_val = serde_json::to_value(&cal).unwrap();
     assert_eq!(c_val["timeZone"], "Europe/Berlin");
     assert_eq!(c_val["shareWith"]["usr_bob"]["mayReadItems"], true);
-    assert_eq!(c_val["myRights"]["mayModifyItems"], true);
+    assert_eq!(c_val["myRights"]["mayWriteAll"], true);
 
     let round_cal: Calendar = serde_json::from_value(c_val).unwrap();
     assert_eq!(round_cal, cal);
@@ -961,17 +980,16 @@ fn calendar_event_parse_response_free_busy_response_and_entity_builders() {
     assert_eq!(fb_resp.list.len(), 1);
 
     let rights_all = CalendarRights::all();
-    assert!(rights_all.may_read_items);
-    assert!(rights_all.may_add_items);
-    assert!(rights_all.may_modify_items);
-    assert!(rights_all.may_remove_items);
-    assert!(rights_all.may_delete);
-    assert!(rights_all.may_rename);
-    assert!(rights_all.may_admin);
+    assert_eq!(rights_all.may_read_items, Some(true));
+    assert_eq!(rights_all.may_write_all, Some(true));
+    assert_eq!(rights_all.may_write_own, Some(true));
+    assert_eq!(rights_all.may_delete, Some(true));
+    assert!(rights_all.is_writable());
 
     let rights_ro = CalendarRights::read_only();
-    assert!(rights_ro.may_read_items);
-    assert!(!rights_ro.may_add_items);
+    assert_eq!(rights_ro.may_read_items, Some(true));
+    assert_eq!(rights_ro.may_write_all, None);
+    assert!(!rights_ro.is_writable());
 
     let loc = Location::new("Meeting Room A")
         .with_description("Room 101")

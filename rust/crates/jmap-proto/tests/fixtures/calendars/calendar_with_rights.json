@@ -1,0 +1,27 @@
+{
+  "id": "Cal1",
+  "name": "Team calendar",
+  "isSubscribed": true,
+  "myRights": {
+    "mayReadFreeBusy": true,
+    "mayReadItems": true,
+    "mayWriteAll": false,
+    "mayWriteOwn": true,
+    "mayUpdatePrivate": true,
+    "mayRSVP": true,
+    "mayShare": false,
+    "mayDelete": false
+  },
+  "shareWith": {
+    "P1": {
+      "mayReadFreeBusy": true,
+      "mayReadItems": true,
+      "mayWriteAll": true,
+      "mayWriteOwn": true,
+      "mayUpdatePrivate": true,
+      "mayRSVP": true,
+      "mayShare": false,
+      "mayDelete": true
+    }
+  }
+}

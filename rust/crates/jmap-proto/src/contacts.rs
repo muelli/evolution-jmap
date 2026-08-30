@@ -31,10 +31,14 @@ pub struct AddressBook {
     pub is_default: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_subscribed: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub share_with: Option<BTreeMap<Id, Option<AddressBookRights>>>,
+    /// Server-computed permissions on this address book (RFC 9610 §2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_rights: Option<AddressBookRights>,
+    /// Rights granted to other principals (RFC 9610 §2), keyed by principal
+    /// id. Modeled but unread today — writing shares is Phase C, deliberately
+    /// separate from reading `myRights`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_with: Option<BTreeMap<Id, AddressBookRights>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_delete: Option<bool>,
     #[serde(flatten)]
@@ -70,24 +74,18 @@ impl AddressBook {
     }
 }
 
-/// The permissions the user has for an address book (RFC 9610 §2.1).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// `AddressBook.myRights`/a `shareWith` entry, RFC 9610 §2.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AddressBookRights {
-    #[serde(default)]
-    pub may_read_items: bool,
-    #[serde(default)]
-    pub may_add_items: bool,
-    #[serde(default)]
-    pub may_modify_items: bool,
-    #[serde(default)]
-    pub may_remove_items: bool,
-    #[serde(default)]
-    pub may_delete: bool,
-    #[serde(default)]
-    pub may_rename: bool,
-    #[serde(default)]
-    pub may_admin: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_read: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_write: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_share: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_delete: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -95,22 +93,29 @@ pub struct AddressBookRights {
 impl AddressBookRights {
     pub fn all() -> Self {
         Self {
-            may_read_items: true,
-            may_add_items: true,
-            may_modify_items: true,
-            may_remove_items: true,
-            may_delete: true,
-            may_rename: true,
-            may_admin: true,
+            may_read: Some(true),
+            may_write: Some(true),
+            may_share: Some(true),
+            may_delete: Some(true),
             extra: BTreeMap::new(),
         }
     }
 
     pub fn read_only() -> Self {
         Self {
-            may_read_items: true,
+            may_read: Some(true),
             ..Self::default()
         }
+    }
+
+    /// Whether these rights let the holder write to the address book — the
+    /// one bit [`crate::calendars::Calendar`]'s sibling collection-sync layer
+    /// narrows a writable account down to. Absent `mayWrite` reads as `false`
+    /// (fail closed): a `myRights` object the server bothered to send but left
+    /// this field out of is not grounds to assume write access it never
+    /// stated.
+    pub fn is_writable(&self) -> bool {
+        self.may_write.unwrap_or(false)
     }
 }
 

@@ -296,6 +296,25 @@ impl Client {
             .unwrap_or_else(PoisonError::into_inner) = credentials.authorization_header();
     }
 
+    /// The `Authorization` header value every request currently carries, or
+    /// `None` for an unauthenticated connection.
+    ///
+    /// For the one caller that has to authenticate *outside* this client's
+    /// own request path: [`crate::eventsource`] reads a long-lived stream on
+    /// its own socket, so it needs the same header rather than the same
+    /// transport. It takes a copy, so a later [`set_credentials`] does not
+    /// reach a subscription already running — see that module on why a push
+    /// connection outliving its access token is a degradation and not a
+    /// correctness problem.
+    ///
+    /// [`set_credentials`]: Self::set_credentials
+    pub fn authorization_header(&self) -> Option<String> {
+        self.authorization
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// The account id serving a capability URN — `primaryAccounts` where the
     /// server states one, else the sole personal account offering it (see
     /// [`jmap_proto::session::Session::resolve_primary_account`]).

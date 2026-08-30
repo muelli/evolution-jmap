@@ -5,7 +5,9 @@
 
 #![cfg(feature = "mail")]
 
-use jmap_proto::mail::{Email, EmailImport, EmailQueryFilter, EmailSubmission, Mailbox};
+use jmap_proto::mail::{
+    Email, EmailImport, EmailQueryFilter, EmailSubmission, Mailbox, MailboxRights,
+};
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -32,6 +34,18 @@ fn mailbox_roundtrip() {
     assert_eq!(mailbox.role.as_deref(), Some("inbox"));
     assert_eq!(mailbox.total_emails, Some(2));
     assert_eq!(mailbox.unread_emails, Some(1));
+}
+
+#[test]
+fn mailbox_my_rights_roundtrip() {
+    let value = fixture("mail/mailbox_with_rights.json");
+    assert_eq!(roundtrip::<Mailbox>(&value), value);
+
+    let mailbox: Mailbox = serde_json::from_value(value).unwrap();
+    let rights: MailboxRights = mailbox.my_rights.expect("myRights");
+    assert_eq!(rights.may_read_items, Some(true));
+    assert_eq!(rights.may_remove_items, Some(false));
+    assert_eq!(rights.may_submit, Some(true));
 }
 
 #[test]
@@ -217,9 +231,9 @@ fn mailbox_rights_and_thread_roundtrip_cover_rfc8621() {
 
     assert_eq!(mailbox.name, "Shared Archive");
     let rights = mailbox.my_rights.as_ref().unwrap();
-    assert!(rights.may_read_items);
-    assert!(!rights.may_add_items);
-    assert!(rights.may_set_seen);
+    assert_eq!(rights.may_read_items, Some(true));
+    assert_eq!(rights.may_add_items, Some(false));
+    assert_eq!(rights.may_set_seen, Some(true));
 
     let thread: jmap_proto::mail::Thread = serde_json::from_value(serde_json::json!({
         "id": "T1",
@@ -476,28 +490,26 @@ fn mailbox_sharing_identity_draft_and_email_filter_builders_roundtrip() {
     use std::collections::BTreeMap;
 
     let rights = MailboxRights {
-        may_read_items: true,
-        may_add_items: true,
-        may_remove_items: false,
-        may_set_seen: true,
-        may_set_keywords: true,
-        may_create_child: false,
-        may_rename: false,
-        may_delete: false,
-        may_submit: false,
+        may_read_items: Some(true),
+        may_add_items: Some(true),
+        may_remove_items: Some(false),
+        may_set_seen: Some(true),
+        may_set_keywords: Some(true),
+        may_create_child: Some(false),
+        may_rename: Some(false),
+        may_delete: Some(false),
+        may_submit: Some(false),
         extra: BTreeMap::new(),
     };
 
     let mailbox = Mailbox {
         id: Some("mb1".into()),
         name: "Shared Support Inbox".to_owned(),
-        share_with: Some(BTreeMap::from([("usr_carol".into(), Some(rights.clone()))])),
         my_rights: Some(rights.clone()),
         ..Mailbox::default()
     };
 
     let mb_val = serde_json::to_value(&mailbox).unwrap();
-    assert_eq!(mb_val["shareWith"]["usr_carol"]["maySetSeen"], true);
     assert_eq!(mb_val["myRights"]["maySetKeywords"], true);
 
     let round_mb: Mailbox = serde_json::from_value(mb_val).unwrap();
@@ -921,20 +933,20 @@ fn email_responses_and_entities_builders_roundtrip() {
     );
 
     let rights_all = MailboxRights::all();
-    assert!(rights_all.may_read_items);
-    assert!(rights_all.may_add_items);
-    assert!(rights_all.may_remove_items);
-    assert!(rights_all.may_set_seen);
-    assert!(rights_all.may_set_keywords);
-    assert!(rights_all.may_create_child);
-    assert!(rights_all.may_rename);
-    assert!(rights_all.may_delete);
-    assert!(rights_all.may_submit);
+    assert_eq!(rights_all.may_read_items, Some(true));
+    assert_eq!(rights_all.may_add_items, Some(true));
+    assert_eq!(rights_all.may_remove_items, Some(true));
+    assert_eq!(rights_all.may_set_seen, Some(true));
+    assert_eq!(rights_all.may_set_keywords, Some(true));
+    assert_eq!(rights_all.may_create_child, Some(true));
+    assert_eq!(rights_all.may_rename, Some(true));
+    assert_eq!(rights_all.may_delete, Some(true));
+    assert_eq!(rights_all.may_submit, Some(true));
 
     let rights_ro = MailboxRights::read_only();
-    assert!(rights_ro.may_read_items);
-    assert!(!rights_ro.may_add_items);
-    assert!(!rights_ro.may_delete);
+    assert_eq!(rights_ro.may_read_items, Some(true));
+    assert_eq!(rights_ro.may_add_items, None);
+    assert_eq!(rights_ro.may_delete, None);
 
     let vac = VacationResponse::new(true)
         .with_id("vac_1")

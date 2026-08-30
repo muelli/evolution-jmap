@@ -10,12 +10,16 @@
 //! recorded `EmailSubmission` outbox).
 //!
 //! Not a real server: single-threaded per connection via `tiny_http`,
-//! plaintext HTTP on `127.0.0.1`, everything held in memory.
+//! plaintext HTTP on `127.0.0.1`, everything held in memory. The one
+//! exception is `/eventsource` (RFC 8620 §7.3): a long-lived connection is
+//! handed to its own thread rather than answered inline — see the
+//! `eventsource` module doc.
 
 mod auth;
 mod calendars;
 mod contacts;
 mod dispatch;
+mod eventsource;
 mod mail;
 mod message;
 mod patch;
@@ -29,4 +33,6 @@ pub use server::{
     DEFAULT_ACCOUNT_ID, DEFAULT_ACCOUNT_NAME, DEFAULT_CALLS_IN_REQUEST, DEFAULT_OBJECTS_IN_GET,
     DEFAULT_SIZE_REQUEST, DEFAULT_SIZE_UPLOAD, MockServer, MockServerBuilder,
 };
-pub use state::{AccountState, Blob, Change, ChangeKind, RecordedSubmission, ServerState, Store};
+pub use state::{
+    AccountState, Blob, Change, ChangeKind, EventSourceHub, RecordedSubmission, ServerState, Store,
+};

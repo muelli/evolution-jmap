@@ -42,8 +42,8 @@
 
 use jmap_client::Client;
 use jmap_proto::Id;
-use jmap_proto::calendars::Calendar;
-use jmap_proto::contacts::AddressBook;
+use jmap_proto::calendars::{Calendar, CalendarRights};
+use jmap_proto::contacts::{AddressBook, AddressBookRights};
 
 use crate::layout::CollectionLayout;
 use crate::parts::Parts;
@@ -65,6 +65,12 @@ pub struct Resource {
     /// book (JMAP defines no such property on `AddressBook`) and for a
     /// calendar the server named none.
     pub color: Option<String>,
+    /// Whether `myRights` says this collection may be written to
+    /// (`AddressBookRights`/`CalendarRights::is_writable`). `None` when the
+    /// server sent no `myRights` at all, which is what keeps
+    /// [`crate::children::Child::for_resource`] on the account-wide
+    /// `read_only` fallback exactly as before this field existed.
+    pub writable: Option<bool>,
 }
 
 /// Everything one JMAP login fans out into.
@@ -150,6 +156,7 @@ fn resources<C: Collection>(listing: Vec<C>) -> Vec<Resource> {
                     name,
                     is_default: collection.is_default() == Some(true),
                     color: collection.color(),
+                    writable: collection.writable(),
                 },
             ))
         })
@@ -190,6 +197,10 @@ trait Collection {
     /// `Calendar.color`. `None` for every `AddressBook`, which has no such
     /// property to begin with.
     fn color(&self) -> Option<String>;
+    /// `myRights.is_writable()`, or `None` when the server sent no `myRights`
+    /// for this collection at all — the case [`Resource::writable`]'s own doc
+    /// says falls back to the account-wide bit unchanged.
+    fn writable(&self) -> Option<bool>;
 }
 
 impl Collection for AddressBook {
@@ -211,6 +222,9 @@ impl Collection for AddressBook {
     fn color(&self) -> Option<String> {
         None
     }
+    fn writable(&self) -> Option<bool> {
+        self.my_rights.as_ref().map(AddressBookRights::is_writable)
+    }
 }
 
 impl Collection for Calendar {
@@ -231,6 +245,9 @@ impl Collection for Calendar {
     }
     fn color(&self) -> Option<String> {
         self.color.clone()
+    }
+    fn writable(&self) -> Option<bool> {
+        self.my_rights.as_ref().map(CalendarRights::is_writable)
     }
 }
 
@@ -313,6 +330,36 @@ mod tests {
             !resources[1].is_default,
             "an absent isDefault is not the default"
         );
+    }
+
+    #[test]
+    fn my_rights_absent_leaves_writable_none_and_present_is_read_through() {
+        // Absent `myRights` is the case `Resource::writable`'s doc points at:
+        // `None` here is what keeps `Child::for_resource` on the account-wide
+        // fallback rather than concluding anything about this one collection.
+        assert_eq!(
+            resources(vec![book(Some("AB1"), "Personal")])[0].writable,
+            None
+        );
+
+        let mut locked = book(Some("AB2"), "Read-only share");
+        locked.my_rights = Some(AddressBookRights {
+            may_write: Some(false),
+            ..AddressBookRights::default()
+        });
+        assert_eq!(resources(vec![locked])[0].writable, Some(false));
+
+        let calendar_own_only = Calendar {
+            id: Some(Id::new("Cal1")),
+            name: "Work".to_owned(),
+            my_rights: Some(CalendarRights {
+                may_write_all: Some(false),
+                may_write_own: Some(true),
+                ..CalendarRights::default()
+            }),
+            ..Calendar::default()
+        };
+        assert_eq!(resources(vec![calendar_own_only])[0].writable, Some(true));
     }
 
     #[test]

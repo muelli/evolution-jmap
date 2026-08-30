@@ -348,6 +348,7 @@ fn deleting_a_child_takes_its_collection_off_the_server() {
         let target = ConnectTarget::Origin(server.origin().to_owned());
         let created = create_on_server(
             &target,
+            false,
             Credentials::none(),
             &Requested {
                 kind: ChildKind::AddressBook,
@@ -359,7 +360,7 @@ fn deleting_a_child_takes_its_collection_off_the_server() {
         let source = Source::child_of(ChildKind::AddressBook, created.collection_id.as_str());
         let doomed = source.doomed().expect("a child this backend wrote");
 
-        delete_on_server(&target, Credentials::none(), &doomed)
+        delete_on_server(&target, false, Credentials::none(), &doomed)
             .expect("the mock destroys them too");
 
         let client = Client::connect(server.origin(), Credentials::none())

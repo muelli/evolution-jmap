@@ -1,0 +1,16 @@
+{
+  "id": "M1",
+  "name": "Urgent",
+  "isSubscribed": true,
+  "myRights": {
+    "mayReadItems": true,
+    "mayAddItems": true,
+    "mayRemoveItems": false,
+    "maySetSeen": true,
+    "maySetKeywords": true,
+    "mayCreateChild": false,
+    "mayRename": false,
+    "mayDelete": false,
+    "maySubmit": true
+  }
+}

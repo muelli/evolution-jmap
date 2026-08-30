@@ -678,6 +678,34 @@ pub unsafe fn access_token(
             )));
         }
 
+        // The other way a store can be no use to us: not there at all. A
+        // sign-in window offered here would complete and then have nowhere to
+        // put the token, so the very next fetch would ask again. The user
+        // does the whole dance and nothing keeps it. Erroring out is the
+        // honest outcome (maintainer, 2026-08-29).
+        //
+        // `Some(false)` and nothing else, the same discipline the locked
+        // check above uses and for the same reason. A desktop whose keyring
+        // simply has not been started yet answers `Some(true)`, because the
+        // bus can activate it, and a machine that cannot be asked answers
+        // `None`. Both must keep behaving exactly as they did before this
+        // check existed. Only "the bus knows of no such service, running or
+        // startable" is a machine where consent cannot lead anywhere.
+        if secret_not_found && crate::secret_store::service_is_available() == Some(false) {
+            tracing::debug!(
+                ?account_id,
+                reason = "no_secret_store",
+                escalates_to_consent = false,
+                "no secret store to keep a token in; not asking for consent"
+            );
+            return Err(ConnectError::SecretStore(translate(
+                // TRANSLATORS: shown instead of a fresh sign-in window when
+                // the system has no keyring service at all, so a token
+                // obtained by signing in could not be saved anywhere.
+                c"this system has no keyring service to store an OAuth 2.0 token in, so signing in again would not keep this account signed in; enable a keyring service and try again",
+            )));
+        }
+
         // A failure with no GError should not happen — EDS sets one on every
         // path — but a NULL message is not worth turning into a panic in a
         // backend, so it becomes a sentence that says exactly what is known.

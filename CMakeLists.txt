@@ -18,7 +18,7 @@ set(PACKAGE_NAME "evolution-jmap")
 # Keep in step with rust/Cargo.toml's workspace version and the release tag —
 # this feeds CPACK_PACKAGE_VERSION, so a stale value ships a .deb whose
 # version disagrees with the tag (v0.1.0 shipped a 0.0.1 .deb once).
-set(VERSION "0.2.0")
+set(VERSION "0.3.0")
 set(VERSION_INFO "Release")
 set(LANGUAGE_SUPPORT_DIRECTORY ${CMAKE_INSTALL_PREFIX}/share/locale)
 

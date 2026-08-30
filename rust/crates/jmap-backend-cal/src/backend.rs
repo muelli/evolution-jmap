@@ -54,13 +54,14 @@
 //! [`observe`]: jmap_backend_core::cancel::observe
 
 use std::ffi::CStr;
-use std::sync::{PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalBackendSync, ECalMetaBackend, ECalMetaBackendClass,
     ECalOperationFlags, EConflictResolution, EDataCal, ENamedParameters,
     ESourceAuthenticationResult, GTlsCertificateFlags, ICalComponent, e_backend_get_source,
-    e_cal_backend_set_writable, e_cal_meta_backend_get_type, e_client_error_create, time_t,
+    e_cal_backend_set_writable, e_cal_meta_backend_get_type, e_cal_meta_backend_schedule_refresh,
+    e_client_error_create, time_t,
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar};
@@ -71,6 +72,7 @@ use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
+use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_on_authentication_failure;
 use jmap_backend_core::source::backend_source;
 use jmap_backend_core::subclass::ObjectSubclass;
@@ -107,6 +109,15 @@ pub struct JmapCalBackend {
     /// `RwLock` (not contended, but matching `session`'s discipline rather than
     /// introducing a second one) is enough.
     last_known_color: Slot<RwLock<Option<String>>>,
+    /// The JMAP Push subscription, for the same span as `session`: a server
+    /// that advertises an `eventSourceUrl` gets to say "something changed"
+    /// instead of being asked every few minutes.
+    ///
+    /// A plain `Mutex` — unlike `session`, nothing reads this on the hot
+    /// path; it is only installed, taken and dropped, all of which are
+    /// exclusive anyway. The address book backend's `push` field is the same
+    /// field on the same reasoning.
+    push: Slot<Mutex<Option<PushRefresh>>>,
 }
 
 /// The class struct. Nothing of ours lives in it yet; it exists because
@@ -143,6 +154,47 @@ impl JmapCalBackend {
             .is_some_and(|session| read(session).is_some())
     }
 
+    /// Installs `push` as the live push subscription, stopping and dropping
+    /// whatever was there — which is what a reconnect wants, since the old
+    /// subscription is authenticated with the connection that was just
+    /// replaced.
+    pub fn store_push(&self, push: PushRefresh) {
+        if let Some(slot) = self.push.get() {
+            *lock(slot) = Some(push);
+        }
+    }
+
+    /// Stops the push subscription and waits for its thread, reporting
+    /// whether there was one. Once this returns, no refresh can still be
+    /// scheduled from it.
+    pub fn stop_push(&self) -> bool {
+        match self.push.get() {
+            Some(slot) => lock(slot).take().is_some(),
+            None => false,
+        }
+    }
+
+    /// Whether a push subscription is live.
+    #[cfg(feature = "testing")]
+    pub fn is_pushing(&self) -> bool {
+        self.push.get().is_some_and(|slot| lock(slot).is_some())
+    }
+
+    /// Replaces the `Authorization` header the live push subscription sends
+    /// on its future reconnect attempts, if there is a subscription — a
+    /// no-op otherwise, which is what a server with no `eventSourceUrl`
+    /// leaves. Called from [`refresh_credentials`] right after it installs a
+    /// fresh OAuth 2.0 token on the connection, so a subscription refused
+    /// with the stale one picks the new one up rather than looping on the
+    /// same failure until the backend itself reconnects.
+    pub fn refresh_push_headers(&self, headers: Vec<(String, String)>) {
+        if let Some(slot) = self.push.get()
+            && let Some(push) = lock(slot).as_ref()
+        {
+            push.set_headers(headers);
+        }
+    }
+
     /// An instance outside the GObject type system: zeroed parent bytes and an
     /// initialised session slot, which is what `instance_init` leaves behind
     /// minus the GObject.
@@ -162,6 +214,7 @@ impl JmapCalBackend {
         let backend: Box<Self> = unsafe { zeroed_box() };
         backend.session.init(RwLock::new(None));
         backend.last_known_color.init(RwLock::new(None));
+        backend.push.init(Mutex::new(None));
         backend
     }
 
@@ -232,13 +285,24 @@ unsafe impl ObjectSubclass for JmapCalBackend {
         unsafe {
             (*instance).session.init(RwLock::new(None));
             (*instance).last_known_color.init(RwLock::new(None));
+            (*instance).push.init(Mutex::new(None));
         }
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
+        // Before the session, and before anything else here: the push slot
+        // holds a thread that can call back into this instance, and clearing
+        // it stops and joins that thread. EDS does not promise a
+        // `disconnect_sync` before it drops a backend — `ecmb_dispose` does
+        // not call one — so this, not that, is what guarantees the thread is
+        // gone. The address book backend's `finalize` does this in the same
+        // order for the same reason.
+        //
         // SAFETY: the instance is being finalized, so nothing can still reach
-        // it and no borrow handed out by `get` is alive. Without this the
-        // connection — and its socket — outlives the calendar.
+        // it and no borrow handed out by `get` is alive.
+        unsafe { (*instance).push.clear() };
+        // SAFETY: as above. Without this the connection — and its socket —
+        // outlives the calendar.
         unsafe {
             (*instance).session.clear();
             (*instance).last_known_color.clear();
@@ -309,7 +373,17 @@ unsafe extern "C" fn connect_sync(
                 calendar_id = sync.calendar_id().as_str(),
                 "calendar backend connected"
             );
+            // Push starts only after the connection is installed. The other
+            // order has a window in which a pushed refresh reaches
+            // `get_changes_sync` before `store_connection` ran, which reports
+            // the account offline for a change that had in fact arrived. The
+            // address book's `connect_sync` follows the same order for the
+            // same reason.
+            let push = start_push(meta_backend, &sync);
             backend.store_connection(sync);
+            if let Some(push) = push {
+                backend.store_push(push);
+            }
             // Without this the calendar is read-only: every write comes back
             // as "Permission denied" and Evolution greys the calendar out.
             // JMAP has no per-calendar "may I write" flag, so the answer is
@@ -344,8 +418,14 @@ unsafe extern "C" fn disconnect_sync(
             // shutdown after a failed connect, so it is a success, not a
             // failure: there is nothing left to do and nothing went wrong.
             if let Some(backend) = instance(meta_backend) {
+                // Stopped first, and before the connection it authenticates
+                // with goes: a push arriving after this point would schedule
+                // a refresh against a backend that has nothing to refresh
+                // with. The address book's `disconnect_sync` follows the
+                // same order for the same reason.
+                let unsubscribed = backend.stop_push();
                 let dropped = backend.drop_connection();
-                tracing::debug!(dropped, "calendar backend disconnected");
+                tracing::debug!(dropped, unsubscribed, "calendar backend disconnected");
             }
             GTRUE
         })
@@ -722,6 +802,58 @@ unsafe fn with_connection(
     }
 }
 
+/// The JMAP data types a calendar has to hear about: the events themselves,
+/// and the calendar they live in — a rename or a share revocation changes
+/// what `list_existing_sync`/`get_changes_sync` would answer just as a new
+/// event does. The address book's `PUSHED_TYPES` is the same idea against
+/// `ContactCard`/`AddressBook`.
+const PUSHED_TYPES: &[&str] = &["CalendarEvent", "Calendar"];
+
+/// Asks the server to push changes at this backend, if it offers to.
+///
+/// `None` — and no error, and nothing logged above debug — whenever push is
+/// simply not available: a server with no `eventSourceUrl` is a server where
+/// EDS's own periodic refresh stays the only trigger, which is the arrangement
+/// every JMAP account had until this existed.
+///
+/// # Safety
+///
+/// `meta_backend` must be a valid instance of this type — a *real* one. This
+/// is the one thing on this backend that a detached test instance may not be
+/// passed to: it takes a `GWeakRef` on the pointer, and a detached instance
+/// is not a GObject.
+unsafe fn start_push(meta_backend: *mut ECalMetaBackend, sync: &CalSync) -> Option<PushRefresh> {
+    // SAFETY: a valid instance of a type derived from `GObject`, referenced
+    // by EDS for the length of the vfunc this runs inside; the trampoline
+    // below is handed the same pointer back and only casts it to the type it
+    // came from.
+    unsafe {
+        push::start_for(
+            meta_backend.cast(),
+            sync.client(),
+            sync.account_id(),
+            PUSHED_TYPES,
+            schedule_refresh,
+        )
+    }
+}
+
+/// The EDS half of a push: hand the change straight to the refresh EDS
+/// already knows how to run, which is what reaches `get_changes_sync` with
+/// the stored sync tag. Nothing here decides *what* changed — that is
+/// `get_changes` against `CalendarEvent/changes`, unchanged.
+///
+/// # Safety
+///
+/// `object` must be a live `ECalMetaBackend`, which is what
+/// [`jmap_backend_core::push::start_for`] guarantees: it only calls this
+/// under a strong reference taken from a `GWeakRef` on the instance
+/// [`start_push`] passed it.
+unsafe extern "C" fn schedule_refresh(object: *mut gobject_sys::GObject) {
+    // SAFETY: forwarded to the caller by this function's own contract.
+    unsafe { e_cal_meta_backend_schedule_refresh(object.cast()) };
+}
+
 /// Fetches a fresh OAuth 2.0 access token for the account and installs it on
 /// the live connection, reporting whether an operation is now worth retrying.
 ///
@@ -763,6 +895,12 @@ unsafe fn refresh_credentials(
         Ok(token) => {
             tracing::debug!("refreshed the calendar connection's OAuth 2.0 access token");
             sync.client().set_credentials(Credentials::bearer(token));
+            if let Some(header) = sync.client().authorization_header()
+                // SAFETY: forwarded from this function's own contract.
+                && let Some(backend) = unsafe { instance(meta_backend) }
+            {
+                backend.refresh_push_headers(vec![("Authorization".to_owned(), header)]);
+            }
             true
         }
         Err(failure) => {
@@ -827,4 +965,8 @@ fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
 
 fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     lock.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn lock(push: &Mutex<Option<PushRefresh>>) -> MutexGuard<'_, Option<PushRefresh>> {
+    push.lock().unwrap_or_else(PoisonError::into_inner)
 }

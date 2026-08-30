@@ -20,6 +20,8 @@
 use std::ffi::{CStr, CString};
 use std::mem::{MaybeUninit, size_of};
 use std::ptr;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use eds_sys::{
     E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBookMetaBackend, EBookMetaBackendClass,
@@ -35,8 +37,10 @@ use gobject_sys::{
 };
 use jmap_backend_book::backend::{JmapBookBackend, JmapBookBackendClass, parent_class};
 use jmap_backend_book::marshal;
+use jmap_backend_core::push::PushRefresh;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 use jmap_book_sync::BookSync;
+use jmap_client::eventsource::expand_url;
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
@@ -455,4 +459,123 @@ fn finalize_drops_the_connection_the_instance_still_holds() {
     unsafe { JmapBookBackend::finalize(ptr::from_mut(&mut *backend.0)) };
 
     assert!(!backend.0.is_connected(), "finalize kept the connection");
+}
+
+// ---------------------------------------------------------------------------
+// JMAP Push (docs/ROADMAP.md item 28)
+
+/// A live push subscription against the fixture's own mock, which needs no
+/// GObject — `PushRefresh` is deliberately given its refresh action rather
+/// than deriving it from a backend, so a detached instance can hold one.
+fn subscription(fixture: &Fixture) -> PushRefresh {
+    let url = expand_url(
+        &format!("{}/eventsource", fixture.server.origin()),
+        &["ContactCard"],
+        false,
+        0,
+    );
+    PushRefresh::start(
+        url,
+        Vec::new(),
+        fixture.account_id.clone(),
+        vec!["ContactCard".to_owned()],
+        |_types: &[String]| {},
+    )
+}
+
+/// `disconnect_sync` has to end the push subscription as well as the
+/// connection. A subscription that outlived its connection would keep
+/// scheduling refreshes on a backend with nothing to refresh with — and, once
+/// EDS dropped the backend, on nothing at all.
+#[test]
+fn disconnect_stops_the_push_subscription_with_the_connection() {
+    let fixture = Fixture::start();
+    let class = Class::get();
+    let mut backend = Detached::new();
+    backend.0.store_connection(fixture.sync());
+    backend.0.store_push(subscription(&fixture));
+    assert!(backend.0.is_pushing());
+
+    unsafe {
+        let disconnect = class.vfuncs().disconnect_sync.unwrap();
+        let mut error: *mut GError = ptr::null_mut();
+        assert_eq!(
+            disconnect(backend.as_ptr(), ptr::null_mut(), &mut error),
+            GTRUE
+        );
+        assert!(error.is_null());
+    }
+
+    assert!(
+        !backend.0.is_pushing(),
+        "disconnect left the push subscription running"
+    );
+    assert!(!backend.0.is_connected());
+}
+
+/// And `finalize` has to do it too, because EDS does not promise a
+/// `disconnect_sync` first: `ebmb_dispose` cancels its own refreshes and
+/// drops its own cache, but never asks the subclass to disconnect. A push
+/// thread that survived here would be holding a `GWeakRef` to freed instance
+/// memory.
+#[test]
+fn finalize_stops_a_push_subscription_no_disconnect_ever_reached() {
+    let fixture = Fixture::start();
+    let mut backend = Detached::new();
+    backend.0.store_connection(fixture.sync());
+    backend.0.store_push(subscription(&fixture));
+    assert!(backend.0.is_pushing());
+
+    // SAFETY: nothing else can reach this instance, which is what GObject
+    // guarantees the real finalize.
+    unsafe { JmapBookBackend::finalize(ptr::from_mut(&mut *backend.0)) };
+
+    assert!(
+        !backend.0.is_pushing(),
+        "finalize kept the push subscription, and its thread"
+    );
+    assert!(!backend.0.is_connected());
+}
+
+/// The header-refresh piece of item 28: a push subscription's `Authorization`
+/// header can go stale for the same reason the pooled connection's does — an
+/// OAuth 2.0 access token rotates. `refresh_credentials` cannot be driven
+/// end-to-end here since it needs a real `ESource`'s token exchange (see
+/// `tests/stale_token.rs`), but `JmapBookBackend::refresh_push_headers` is the
+/// half it hands off to, and is directly testable: a subscription started
+/// with a stale header is refused, reconnects, and resumes listening once the
+/// fresh header replaces it.
+#[test]
+fn refresh_push_headers_lets_a_stalled_subscription_reconnect() {
+    let server = MockServer::builder().bearer_token("fresh-token").start();
+    let backend = Detached::new();
+    let url = expand_url(
+        &format!("{}/eventsource", server.origin()),
+        &["ContactCard"],
+        false,
+        0,
+    );
+    backend.0.store_push(PushRefresh::start(
+        url,
+        vec![("Authorization".to_owned(), "Bearer stale-token".to_owned())],
+        server.account_id(),
+        vec!["ContactCard".to_owned()],
+        |_types: &[String]| {},
+    ));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.unauthorized_responses() == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the stale token was never refused"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    backend.0.refresh_push_headers(vec![(
+        "Authorization".to_owned(),
+        "Bearer fresh-token".to_owned(),
+    )]);
+
+    server.wait_for_event_source_subscriber(Duration::from_secs(5));
 }

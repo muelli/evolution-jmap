@@ -5,6 +5,7 @@
 
 #![cfg(feature = "contacts")]
 
+use jmap_proto::Id;
 use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
 use serde_json::Value;
 
@@ -30,6 +31,23 @@ fn addressbook_roundtrip() {
     let address_book: AddressBook = serde_json::from_value(value).unwrap();
     assert_eq!(address_book.name, "Personal");
     assert_eq!(address_book.is_default, Some(true));
+}
+
+#[test]
+fn addressbook_my_rights_and_share_with_roundtrip() {
+    let value = fixture("contacts/addressbook_with_rights.json");
+    assert_eq!(roundtrip::<AddressBook>(&value), value);
+
+    let address_book: AddressBook = serde_json::from_value(value).unwrap();
+    let rights = address_book.my_rights.expect("myRights");
+    assert_eq!(rights.may_read, Some(true));
+    assert_eq!(rights.may_write, Some(false));
+    assert!(!rights.is_writable());
+
+    let share_with = address_book.share_with.expect("shareWith");
+    let shared_rights = &share_with[&Id::new("P1")];
+    assert_eq!(shared_rights.may_write, Some(true));
+    assert!(shared_rights.is_writable());
 }
 
 #[test]
@@ -267,26 +285,21 @@ fn address_book_rights_roundtrip_covers_rfc9610() {
     let book: AddressBook = serde_json::from_value(serde_json::json!({
         "name": "Shared Book",
         "myRights": {
-            "mayReadItems": true,
-            "mayAddItems": true,
-            "mayModifyItems": false,
-            "mayRemoveItems": false,
-            "mayDelete": false,
-            "mayRename": false,
-            "mayAdmin": false
+            "mayRead": true,
+            "mayWrite": true,
+            "mayShare": false,
+            "mayDelete": false
         }
     }))
     .unwrap();
 
     assert_eq!(book.name, "Shared Book");
     let rights = book.my_rights.as_ref().unwrap();
-    assert!(rights.may_read_items);
-    assert!(rights.may_add_items);
-    assert!(!rights.may_modify_items);
-    assert!(!rights.may_remove_items);
-    assert!(!rights.may_delete);
-    assert!(!rights.may_rename);
-    assert!(!rights.may_admin);
+    assert_eq!(rights.may_read, Some(true));
+    assert_eq!(rights.may_write, Some(true));
+    assert_eq!(rights.may_share, Some(false));
+    assert_eq!(rights.may_delete, Some(false));
+    assert!(rights.is_writable());
 }
 
 #[test]
@@ -454,27 +467,24 @@ fn address_book_sharing_rights_and_contact_card_extensions_roundtrip() {
     use std::collections::BTreeMap;
 
     let rights = AddressBookRights {
-        may_read_items: true,
-        may_add_items: true,
-        may_modify_items: true,
-        may_remove_items: false,
-        may_delete: false,
-        may_rename: false,
-        may_admin: false,
+        may_read: Some(true),
+        may_write: Some(true),
+        may_share: Some(true),
+        may_delete: Some(false),
         extra: BTreeMap::new(),
     };
 
     let book = AddressBook {
         id: Some("ab1".into()),
         name: "Shared Team Contacts".to_owned(),
-        share_with: Some(BTreeMap::from([("usr_alice".into(), Some(rights.clone()))])),
+        share_with: Some(BTreeMap::from([("usr_alice".into(), rights.clone())])),
         my_rights: Some(rights.clone()),
         ..AddressBook::default()
     };
 
     let b_val = serde_json::to_value(&book).unwrap();
-    assert_eq!(b_val["shareWith"]["usr_alice"]["mayReadItems"], true);
-    assert_eq!(b_val["myRights"]["mayModifyItems"], true);
+    assert_eq!(b_val["shareWith"]["usr_alice"]["mayRead"], true);
+    assert_eq!(b_val["myRights"]["mayWrite"], true);
 
     let round_book: AddressBook = serde_json::from_value(b_val).unwrap();
     assert_eq!(round_book, book);
@@ -797,17 +807,16 @@ fn contact_card_parse_response_and_domain_builders() {
     assert_eq!(parse_resp.not_found.as_ref().unwrap().len(), 1);
 
     let rights_all = AddressBookRights::all();
-    assert!(rights_all.may_read_items);
-    assert!(rights_all.may_add_items);
-    assert!(rights_all.may_modify_items);
-    assert!(rights_all.may_remove_items);
-    assert!(rights_all.may_delete);
-    assert!(rights_all.may_rename);
-    assert!(rights_all.may_admin);
+    assert_eq!(rights_all.may_read, Some(true));
+    assert_eq!(rights_all.may_write, Some(true));
+    assert_eq!(rights_all.may_share, Some(true));
+    assert_eq!(rights_all.may_delete, Some(true));
+    assert!(rights_all.is_writable());
 
     let rights_ro = AddressBookRights::read_only();
-    assert!(rights_ro.may_read_items);
-    assert!(!rights_ro.may_add_items);
+    assert_eq!(rights_ro.may_read, Some(true));
+    assert_eq!(rights_ro.may_write, None);
+    assert!(!rights_ro.is_writable());
 
     let name = Name::new("Alice Smith")
         .with_components([
