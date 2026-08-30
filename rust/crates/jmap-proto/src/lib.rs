@@ -16,6 +16,8 @@
 //!   (feature `calendars`).
 //! - [RFC 9670] JMAP Sharing: the `Principal` object and its `/get`/`/query`
 //!   methods (feature `principals`).
+//! - [RFC 9425] JMAP for Quotas: the `Quota` object and `/query` filter.
+//! - [RFC 9404] JMAP Blob Management: `Blob/get` and `Blob/upload`.
 //!
 //! [RFC 8620]: https://www.rfc-editor.org/rfc/rfc8620
 //! [RFC 8621]: https://www.rfc-editor.org/rfc/rfc8621
@@ -24,7 +26,10 @@
 //! [RFC 8984]: https://www.rfc-editor.org/rfc/rfc8984
 //! [draft-ietf-jmap-calendars]: https://datatracker.ietf.org/doc/draft-ietf-jmap-calendars/
 //! [RFC 9670]: https://www.rfc-editor.org/rfc/rfc9670
+//! [RFC 9425]: https://www.rfc-editor.org/rfc/rfc9425
+//! [RFC 9404]: https://www.rfc-editor.org/rfc/rfc9404
 
+pub mod blob;
 #[cfg(feature = "calendars")]
 pub mod calendars;
 #[cfg(feature = "contacts")]
@@ -37,6 +42,7 @@ pub mod methods;
 #[cfg(feature = "principals")]
 pub mod principals;
 pub mod push;
+pub mod quota;
 pub mod request;
 pub mod response;
 pub mod session;
