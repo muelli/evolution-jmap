@@ -268,8 +268,7 @@ natural, smaller follow-up once the type exists.
   **`jmap-backend-collection` DONE 2026-08-19** — its six manual-unref sites
   (`create_resource.rs::stored_password_of`, `backend.rs::login_for`/
   `Live::export`, `fan_out.rs::apply_fanout`/`adopt`, `populate.rs`'s
-  claimed-resources loop) are migrated too; see `docs/NIGHT-LOG.md`'s
-  "jmap-backend-collection half DONE 2026-08-19" for the one case
+  claimed-resources loop) are migrated too, except for the one case
   (`adopt`'s three-way match) that needed a new refcount test rather than
   relying on the existing behavioural suite.
   **`jmap-mail` DONE 2026-08-19** — all ~19 sites the crate turned out to
