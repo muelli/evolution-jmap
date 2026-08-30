@@ -108,10 +108,10 @@ pub enum ConnectError {
     /// stop.
     SecretStore(String),
     /// An OAuth 2.0 token fetch was addressed at a D-Bus peer that no longer
-    /// exists — `docs/ROADMAP.md` item 22: the account's `ESource` still holds
-    /// the interface proxy of an `evolution-source-registry` that has since
-    /// restarted, and the bus answers `SERVICE_UNKNOWN` naming the dead unique
-    /// name. See [`crate::oauth2::is_service_gone`] for the mechanism and for
+    /// exists — the account's `ESource` still holds the interface proxy of
+    /// an `evolution-source-registry` that has since restarted, and the bus
+    /// answers `SERVICE_UNKNOWN` naming the dead unique name. See
+    /// [`crate::oauth2::is_service_gone`] for the mechanism and for
     /// why EDS 3.52 does not recover from it by itself.
     ///
     /// Distinct from [`Self::SecretStore`] rather than folded into it, even
@@ -181,7 +181,7 @@ impl ConnectError {
             // deliberately not `REQUIRED` for those two — a dead secret store
             // or a dead D-Bus peer is not fixed by asking the user to consent
             // again, only by asking again and again, which is the loop
-            // `docs/ROADMAP.md` items 17 and 22 exist to stop.
+            // these two variants exist to stop.
             _ => E_SOURCE_AUTHENTICATION_ERROR,
         }
     }
