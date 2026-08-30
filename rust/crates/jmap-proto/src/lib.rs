@@ -47,6 +47,8 @@ pub mod request;
 pub mod response;
 pub mod session;
 pub mod state;
+#[cfg(feature = "calendars")]
+pub mod tasks;
 
 pub use id::Id;
 pub use state::{State, UtcDate};

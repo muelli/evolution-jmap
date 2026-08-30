@@ -24,6 +24,7 @@ pub const CAPABILITY_PRINCIPALS_OWNER: &str = "urn:ietf:params:jmap:principals:o
 pub const CAPABILITY_WEBSOCKET: &str = "urn:ietf:params:jmap:websocket";
 pub const CAPABILITY_QUOTA: &str = "urn:ietf:params:jmap:quota";
 pub const CAPABILITY_BLOB: &str = "urn:ietf:params:jmap:blob";
+pub const CAPABILITY_TASKS: &str = "urn:ietf:params:jmap:tasks";
 
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -313,6 +314,13 @@ impl Session {
     /// Typed blob capability struct, if present (RFC 9404 §1.1).
     pub fn blob_capability(&self) -> Option<crate::blob::BlobCapability> {
         let val = self.capabilities.get(CAPABILITY_BLOB)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed tasks capability struct, if present (draft-ietf-jmap-tasks §1.1).
+    #[cfg(feature = "calendars")]
+    pub fn tasks_capability(&self) -> Option<crate::tasks::TasksCapability> {
+        let val = self.capabilities.get(CAPABILITY_TASKS)?;
         serde_json::from_value(val.clone()).ok()
     }
 }
