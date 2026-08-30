@@ -6,12 +6,12 @@
 // `jmap-client` ships only the seam and a `NoSrvResolver` that never finds
 // anything, so until something implements `Resolver` for real, a plain
 // email+password account still fetches `https://<email domain>/.well-known/
-// jmap` and still 404s for a provider that publishes JMAP via SRV (Fastmail —
-// see `docs/NIGHT-LOG.md`, "JMAP SRV autodiscovery"). These tests cover the
-// half of that which is deterministic without a network: that a domain with no
-// record answers "none" — the answer that preserves the bare-domain fallback
-// and therefore every self-hosted deployment — and that neither the FFI call
-// nor the input conversion can panic or misbehave on repetition.
+// jmap` and still 404s for a provider that publishes JMAP via SRV (Fastmail).
+// These tests cover the half of that which is deterministic without a
+// network: that a domain with no record answers "none" — the answer that
+// preserves the bare-domain fallback and therefore every self-hosted
+// deployment — and that neither the FFI call nor the input conversion can
+// panic or misbehave on repetition.
 //
 // The success path needs a domain that really publishes a `_jmap._tcp` record,
 // so its test is `#[ignore]`d rather than pretended to be hermetic; run it
