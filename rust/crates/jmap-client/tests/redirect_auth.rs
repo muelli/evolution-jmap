@@ -3,8 +3,7 @@
 
 //! Session discovery through a same-host redirect, as a real server that
 //! serves `/.well-known/jmap` via a `307` to a separate path does (Stalwart
-//! among them — see `docs/NIGHT-LOG.md`, "session-discovery redirect strips
-//! auth"). The first live test against such a server failed with "no
+//! among them). The first live test against such a server failed with "no
 //! primary account": `ureq`'s default redirect policy drops the
 //! `Authorization` header even on a same-host hop, so the redirect target
 //! was fetched anonymously and answered with an empty account list.
@@ -167,8 +166,7 @@ fn a_cross_host_redirect_on_download_is_not_trusted_as_the_blob() {
 /// cross-origin-redirect refusal must name
 /// `JMAP_LIVE_SERVER_REBASE_URLS` in the error — otherwise a poisoned
 /// account's rebase looks like an ordinary client bug, which is exactly what
-/// cost a full debugging session before the env var was found by hand (see
-/// `docs/NIGHT-LOG.md`, "leftover `JMAP_LIVE_SERVER_REBASE_URLS=1`").
+/// cost a full debugging session before the env var was found by hand.
 #[test]
 fn a_rebased_then_refused_download_names_the_rebase_env_var() {
     let foreign = ForeignHost::start();
