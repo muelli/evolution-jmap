@@ -793,6 +793,7 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-core",
  "jmap-mail",
+ "serde_json",
  "tracing",
 ]
 
