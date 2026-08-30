@@ -39,8 +39,8 @@
 //!
 //! ## The redirect URI, and a wrong guess corrected before it shipped
 //!
-//! A previous session's plan (`docs/NIGHT-LOG.md`, three-hundred-and-fourth
-//! session) was to fix `redirect_uri` to the RFC 8252 out-of-band URN,
+//! An earlier session's plan (the three-hundred-and-fourth) was to fix
+//! `redirect_uri` to the RFC 8252 out-of-band URN,
 //! `"urn:ietf:wg:oauth:2.0:oob"`. Checking that against EDS's actual
 //! `libedataserverui`/`libedataserver` source (fetched from
 //! `gitlab.gnome.org/GNOME/evolution-data-server`, `master` — this VM has no
@@ -73,8 +73,7 @@
 //! coverage `evo-sys/tests/config_lookup.rs` names as the next increment when
 //! it was written, since landed.
 //!
-//! The 307th session (`docs/NIGHT-LOG.md`) hand-drove this dispatch once,
-//! outside the test suite: a scratch C program linking `evolution-shell-3.0`
+//! The 307th session hand-drove this dispatch once, outside the test suite: a scratch C program linking `evolution-shell-3.0`
 //! (which is where `EConfigLookup` actually lives — `e-util`, not any EDS
 //! library), loading this module via `e_module_load_all_in_directory`,
 //! constructing a real `ESourceRegistry`/`EConfigLookup` under
@@ -147,9 +146,8 @@ pub const REDIRECT_URI: &str = "org.gnome.evolution.jmap:/redirect";
 /// SRV record (see `jmap_client::resolver`) before returning the bare domain
 /// — the same seam and the same fallback order
 /// `jmap_client::ClientBuilder::connect_domain` uses, so a deployment
-/// published only via SRV (Fastmail; see `docs/NIGHT-LOG.md`, "JMAP SRV
-/// autodiscovery") is discovered here too, not just once a `jmap_client`
-/// session is already being fetched.
+/// published only via SRV (Fastmail) is discovered here too, not just once a
+/// `jmap_client` session is already being fetched.
 ///
 /// What this returns is not yet a host `discover_and_register` can use as-is
 /// — a `servers` entry or an SRV target may carry a scheme and a port, which
@@ -563,8 +561,7 @@ unsafe extern "C" fn run(
         // this worker is where that matters most — it is what decides whether
         // Evolution offers a JMAP account at all, so a provider missed here
         // loses to the generic ISPDB autoconfig (which is how the operator's
-        // Fastmail setup ended up being offered imapx; see `docs/NIGHT-LOG.md`,
-        // "JMAP SRV autodiscovery").
+        // Fastmail setup ended up being offered imapx).
         let resolver = jmap_backend_core::resolver::SystemResolver;
         let Some(host) = probe_host(&email, servers.as_deref(), &resolver) else {
             return;

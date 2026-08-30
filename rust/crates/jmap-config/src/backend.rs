@@ -68,8 +68,7 @@
 //! - **Verification in a real Evolution.** GTK 3 will not construct a widget
 //!   without a display connection, so nothing on this machine has run
 //!   `insert_widgets` and looked at the result — see its own docs for exactly
-//!   what a human still has to confirm, and `docs/NIGHT-LOG.md` for the
-//!   session that wrote it saying so.
+//!   what a human still has to confirm.
 //! - **The consent browser round trip.** The authentication combo lets a
 //!   user *say* an account is OAuth 2.0; it does not by itself prove EDS's
 //!   `ECredentialsPrompterImplOAuth2` reaches a real provider and back for
@@ -459,8 +458,7 @@ const STATUS_COLLECTION_KEY: &CStr = c"jmap-config-status-collection";
 /// any of them toggles *Next* — M9's Xvfb tier launches Evolution but seeds a
 /// pre-built `.source` file rather than driving this page, so only a human
 /// running the account assistant exercises it. Two operator rounds in real
-/// Evolution have now confirmed exactly that (`docs/NIGHT-LOG.md`,
-/// `docs/MILESTONES.md`'s `M7 COMPLETE`).
+/// Evolution have now confirmed exactly that.
 ///
 /// ## Failure
 ///
