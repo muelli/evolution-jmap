@@ -1064,4 +1064,34 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::mail::SmimeVerifyCapability>(&text);
     }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_websocket_request(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::websocket::WebSocketRequest>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_websocket_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::websocket::WebSocketResponse>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_websocket_request_error(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::websocket::WebSocketRequestError>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_websocket_push_enable(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::websocket::WebSocketPushEnable>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_websocket_push_disable(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::websocket::WebSocketPushDisable>(&text);
+    }
 }
