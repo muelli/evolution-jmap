@@ -6,10 +6,10 @@
 
 #![cfg(feature = "calendars")]
 
+use jmap_proto::Id;
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventQueryFilter, NDay, RecurrenceRule,
 };
-use jmap_proto::Id;
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
