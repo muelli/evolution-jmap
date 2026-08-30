@@ -237,7 +237,7 @@ fn send_email_invalid_identity_rejected() {
     );
 }
 
-/// `docs/ROADMAP.md` item 29: a server advertising `maxDelayedSend`
+/// A server advertising `maxDelayedSend`
 /// (RFC 8621 §7.1) is detectable through the session document before a
 /// caller offers scheduled send at all.
 #[test]

@@ -211,8 +211,8 @@ fn a_rebased_then_refused_download_names_the_rebase_env_var() {
     }
 }
 
-/// The `Accept` smell named in `docs/ROADMAP.md` CURRENT PRIORITY item 9: a
-/// blob is never JSON, so a download declaring `Accept: application/json`
+/// The `Accept` smell: a blob is never JSON, so a download declaring
+/// `Accept: application/json`
 /// (as every other request this client makes correctly does) gives a server
 /// doing RFC 7231 §5.3.2 content negotiation a legitimate reason to refuse
 /// or redirect it. `download_blob` must declare something else instead.

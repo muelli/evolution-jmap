@@ -283,9 +283,10 @@ impl Client {
     /// with, without fetching a new session or touching the transport.
     ///
     /// For an OAuth 2.0 bearer token this is the primitive a live connection
-    /// needs to survive its access token expiring: `docs/ROADMAP.md` item 23
-    /// is a backend that keeps using a cached, now-expired bearer forever
-    /// because nothing ever calls this. A caller that gets `Error::Http {
+    /// needs to survive its access token expiring: the failure mode this
+    /// guards against is a backend that keeps using a cached, now-expired
+    /// bearer forever because nothing ever calls this. A caller that gets
+    /// `Error::Http {
     /// status: 401, .. }` from an OAuth 2.0 attempt should refresh the token
     /// through EDS/Camel's own credential store, call this, and retry the
     /// operation once — never reconnect just to change a header.

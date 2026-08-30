@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Driving a real JMAP server end to end — the recipe `docs/ROADMAP.md`'s
-//! "Integration testing (parallel track)" asks for, and the real-server half
-//! of the current priority's "real-server readiness" item.
+//! Driving a real JMAP server end to end — the recipe this project's own
+//! "Integration testing (parallel track)" plan asks for, and the
+//! real-server half of the "real-server readiness" priority.
 //!
 //! Every other test in this crate is against `jmap-mockd`, which answers
 //! exactly what the fixture told it to and nothing a real deployment's own
@@ -403,7 +403,7 @@ fn mailbox_create_rename_then_destroy_round_trips_through_the_real_api() {
 
 /// `AddressBook/set` create then destroy — the JMAP calls the collection
 /// backend's `create_resource_sync`/`delete_resource_sync` vfuncs
-/// (`docs/ROADMAP.md` Track D1) issue when a user does "New Address Book" or
+/// issue when a user does "New Address Book" or
 /// deletes one, as opposed to [`contact_card_create_update_then_destroy_round_trips_through_the_real_api`]
 /// below, which creates a *card inside* the account's existing default
 /// address book. `Client::address_book_create`/`address_book_destroy` are
