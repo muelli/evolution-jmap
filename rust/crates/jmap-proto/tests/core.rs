@@ -1021,11 +1021,15 @@ fn result_reference_and_push_builders_roundtrip() {
         rr
     );
 
-    let sub = PushSubscription::new("dev_1", "https://push.example.com/sub")
+    let sub = PushSubscription::new("dev_0", "https://push.example.com/initial")
+        .with_id("sub_1")
+        .with_device_client_id("dev_1")
+        .with_url("https://push.example.com/sub")
         .with_keys("key_p256", "auth_secret")
         .with_expires(UtcDate::new("2026-10-01T00:00:00Z"))
         .with_types(["Email", "ContactCard", "CalendarEvent"]);
 
+    assert_eq!(sub.id.as_ref().unwrap().as_str(), "sub_1");
     assert_eq!(sub.device_client_id, "dev_1");
     assert_eq!(sub.url, "https://push.example.com/sub");
     assert_eq!(sub.keys.as_ref().unwrap().p256dh, "key_p256");
@@ -1036,19 +1040,32 @@ fn result_reference_and_push_builders_roundtrip() {
     );
     assert_eq!(sub.types.as_ref().unwrap().len(), 3);
 
-    let ver = PushVerification::new("sub_42", "challenge_xyz");
+    let ver = PushVerification::new("sub_0", "initial_code")
+        .with_push_subscription_id("sub_42")
+        .with_verification_code("challenge_xyz");
     assert_eq!(ver.object_type, "PushVerification");
     assert_eq!(ver.push_subscription_id.as_str(), "sub_42");
     assert_eq!(ver.verification_code, "challenge_xyz");
 
-    let change = StateChange::new(BTreeMap::from([(
-        "acc1".into(),
-        BTreeMap::from([("Email".to_owned(), "state_123".into())]),
-    )]));
+    let change = StateChange::new(BTreeMap::new())
+        .with_changed(BTreeMap::from([(
+            "acc1".into(),
+            BTreeMap::from([("Email".to_owned(), "state_123".into())]),
+        )]))
+        .with_account_change("acc1", "Mailbox", "state_mbx_1")
+        .with_account_change("acc2", "CalendarEvent", "state_cal_1");
     assert_eq!(change.kind, "StateChange");
     assert_eq!(
         change.changed[&"acc1".into()]["Email"].as_str(),
         "state_123"
+    );
+    assert_eq!(
+        change.changed[&"acc1".into()]["Mailbox"].as_str(),
+        "state_mbx_1"
+    );
+    assert_eq!(
+        change.changed[&"acc2".into()]["CalendarEvent"].as_str(),
+        "state_cal_1"
     );
 }
 
