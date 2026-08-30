@@ -743,7 +743,7 @@ unsafe extern "C" fn get_free_busy_sync(
 ///
 /// ## The stale access token, and why the retry lives here
 ///
-/// `docs/ROADMAP.md` item 23: this connection is pooled from `connect_sync`
+/// This connection is pooled from `connect_sync`
 /// to `disconnect_sync`, and it carries the bearer token it was *built* with.
 /// An OAuth 2.0 access token lives about an hour, so every long-lived
 /// calendar outlives its own credentials; the 401 that follows used to travel

@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A pooled connection whose bearer token went stale — `docs/ROADMAP.md`
-//! item 23.
+//! A pooled connection whose bearer token went stale.
 //!
 //! `with_connection` now runs every vfunc body against a private `GError`
 //! slot so that a 401 can be answered with a refreshed token and one retry
