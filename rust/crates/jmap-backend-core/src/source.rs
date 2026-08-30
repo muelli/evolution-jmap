@@ -106,6 +106,11 @@ pub struct SourceConfig {
     /// than after either meaning. Absent means "the account's default", which
     /// the backend resolves at connect time.
     pub resource_id: Option<String>,
+    /// Whether this account opts into rebasing the session's advertised URLs
+    /// onto the origin actually connected through — see
+    /// [`crate::rebase::rebase_urls`]. `false` for every account written
+    /// before that setting existed.
+    pub rebase_urls: bool,
 }
 
 /// A source that cannot be turned into a connection.
@@ -239,10 +244,15 @@ impl SourceConfig {
 
         let target = connect_target(host.as_deref(), port, secure)?;
 
+        // SAFETY: `source` is valid for the whole call, by this function's
+        // own contract.
+        let rebase_urls = unsafe { crate::rebase::rebase_urls(source) };
+
         Ok(Self {
             target,
             user,
             resource_id,
+            rebase_urls,
         })
     }
 }
@@ -283,19 +293,34 @@ pub enum ConnectTarget {
 /// A [`ConnectTarget::Origin`] is dialled as stated and never resolved — SRV
 /// autodiscovery answers "where is this domain's JMAP server", a question an
 /// explicit endpoint has already answered.
+///
+/// `rebase_urls` is the account's own opt-in (see
+/// [`crate::rebase::rebase_urls`]); either it or
+/// `JMAP_LIVE_SERVER_REBASE_URLS` being set turns rebasing on for this
+/// connection, so the environment variable stays a process-wide override for
+/// the `--features live-server` harness and the committed probes while an
+/// account can opt in — or stay out — on its own.
 pub fn connect(
     target: &ConnectTarget,
+    rebase_urls: bool,
     credentials: jmap_client::Credentials,
 ) -> Result<jmap_client::Client, jmap_client::Error> {
+    let rebase = rebase_urls || jmap_client::rebase_urls_from_env();
     match target {
         ConnectTarget::Origin(origin) => {
-            tracing::debug!(origin, "connecting to JMAP origin");
-            jmap_client::Client::connect(origin, credentials)
+            tracing::debug!(origin, rebase, "connecting to JMAP origin");
+            jmap_client::Client::builder()
+                .rebase_urls_to_origin(rebase)
+                .connect(origin, credentials)
         }
         ConnectTarget::Domain(domain) => {
-            tracing::debug!(domain, "connecting to JMAP domain via SRV autodiscovery");
+            tracing::debug!(
+                domain,
+                rebase,
+                "connecting to JMAP domain via SRV autodiscovery"
+            );
             jmap_client::Client::builder()
-                .rebase_urls_to_origin(jmap_client::rebase_urls_from_env())
+                .rebase_urls_to_origin(rebase)
                 .resolver(crate::resolver::SystemResolver)
                 .connect_domain(domain, credentials)
         }
@@ -678,7 +703,7 @@ mod tests {
 
         let target = ConnectTarget::Origin("http://127.0.0.1:1".to_owned());
         let _ = tracing::subscriber::with_default(subscriber, || {
-            connect(&target, jmap_client::Credentials::none())
+            connect(&target, false, jmap_client::Credentials::none())
         });
 
         let entries = captured.lock().unwrap();
@@ -697,13 +722,58 @@ mod tests {
 
         let target = ConnectTarget::Domain("invalid.domain.invalid".to_owned());
         let _ = tracing::subscriber::with_default(subscriber, || {
-            connect(&target, jmap_client::Credentials::none())
+            connect(&target, false, jmap_client::Credentials::none())
         });
 
         let entries = captured.lock().unwrap();
         assert!(
             entries.contains(&("domain".to_owned(), "invalid.domain.invalid".to_owned())),
             "expected domain field, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn connect_traces_rebase_true_when_the_source_opts_in_even_with_no_env_var() {
+        // SAFETY: no other test in this process reads or writes this
+        // variable.
+        unsafe { std::env::remove_var("JMAP_LIVE_SERVER_REBASE_URLS") };
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        let target = ConnectTarget::Origin("http://127.0.0.1:1".to_owned());
+        let _ = tracing::subscriber::with_default(subscriber, || {
+            connect(&target, true, jmap_client::Credentials::none())
+        });
+
+        let entries = captured.lock().unwrap();
+        assert!(
+            entries.contains(&("rebase".to_owned(), "true".to_owned())),
+            "expected the per-source opt-in to turn rebasing on, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn connect_traces_rebase_false_when_the_source_does_not_opt_in() {
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("JMAP_LIVE_SERVER_REBASE_URLS") };
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+
+        let target = ConnectTarget::Origin("http://127.0.0.1:1".to_owned());
+        let _ = tracing::subscriber::with_default(subscriber, || {
+            connect(&target, false, jmap_client::Credentials::none())
+        });
+
+        let entries = captured.lock().unwrap();
+        assert!(
+            entries.contains(&("rebase".to_owned(), "false".to_owned())),
+            "expected no opt-in and no env var to leave rebasing off, got {entries:?}"
         );
     }
 }

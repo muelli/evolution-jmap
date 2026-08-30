@@ -41,10 +41,14 @@ pub struct Calendar {
     pub include_in_availability: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_zone: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub share_with: Option<BTreeMap<Id, Option<CalendarRights>>>,
+    /// Server-computed permissions on this calendar (calendars draft §4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_rights: Option<CalendarRights>,
+    /// Rights granted to other principals (calendars draft §4), keyed by
+    /// principal id. Modeled but unread today — writing shares is Phase C,
+    /// deliberately separate from reading `myRights`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_with: Option<BTreeMap<Id, CalendarRights>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_delete: Option<bool>,
     #[serde(flatten)]
@@ -95,24 +99,28 @@ impl Calendar {
     }
 }
 
-/// The permissions the user has for a calendar (draft-ietf-jmap-calendars-28 §4.1).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// `Calendar.myRights`/a `shareWith` entry (calendars draft §4, draft-27 field
+/// names — no plain `mayWrite`, unlike [`crate::contacts::AddressBookRights`]:
+/// the draft splits it into "all items" and "just my own").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarRights {
-    #[serde(default)]
-    pub may_read_items: bool,
-    #[serde(default)]
-    pub may_add_items: bool,
-    #[serde(default)]
-    pub may_modify_items: bool,
-    #[serde(default)]
-    pub may_remove_items: bool,
-    #[serde(default)]
-    pub may_delete: bool,
-    #[serde(default)]
-    pub may_rename: bool,
-    #[serde(default)]
-    pub may_admin: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_read_free_busy: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_read_items: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_write_all: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_write_own: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_update_private: Option<bool>,
+    #[serde(rename = "mayRSVP", default, skip_serializing_if = "Option::is_none")]
+    pub may_rsvp: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_share: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_delete: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -120,22 +128,36 @@ pub struct CalendarRights {
 impl CalendarRights {
     pub fn all() -> Self {
         Self {
-            may_read_items: true,
-            may_add_items: true,
-            may_modify_items: true,
-            may_remove_items: true,
-            may_delete: true,
-            may_rename: true,
-            may_admin: true,
+            may_read_free_busy: Some(true),
+            may_read_items: Some(true),
+            may_write_all: Some(true),
+            may_write_own: Some(true),
+            may_update_private: Some(true),
+            may_rsvp: Some(true),
+            may_share: Some(true),
+            may_delete: Some(true),
             extra: BTreeMap::new(),
         }
     }
 
     pub fn read_only() -> Self {
         Self {
-            may_read_items: true,
+            may_read_items: Some(true),
+            may_read_free_busy: Some(true),
             ..Self::default()
         }
+    }
+
+    /// Whether these rights let the holder write *something* to the
+    /// calendar. EDS's read-only flag is a single bit per source, with no
+    /// "read-only except your own items" shade to represent — marking the
+    /// whole calendar read-only for a holder who may still create and edit
+    /// their own events (`mayWriteOwn`) would block ordinary use of it, so
+    /// either write right counts. Absent fields read as `false` (fail
+    /// closed), same reasoning as
+    /// [`crate::contacts::AddressBookRights::is_writable`].
+    pub fn is_writable(&self) -> bool {
+        self.may_write_all.unwrap_or(false) || self.may_write_own.unwrap_or(false)
     }
 }
 

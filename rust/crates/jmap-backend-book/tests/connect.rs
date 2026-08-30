@@ -68,6 +68,7 @@ impl Fixture {
             target: ConnectTarget::Origin(self.server.origin().to_owned()),
             user: None,
             resource_id: None,
+            rebase_urls: false,
         }
     }
 }
@@ -153,6 +154,7 @@ fn an_account_that_offers_no_contacts_is_refused() {
         target: ConnectTarget::Origin(server.origin().to_owned()),
         user: None,
         resource_id: None,
+        rebase_urls: false,
     };
 
     let error = expect_error(open(&config, None));
@@ -259,6 +261,7 @@ fn an_unreachable_server_is_an_error_not_a_credentials_problem() {
         target: ConnectTarget::Origin("http://127.0.0.1:1".to_owned()),
         user: None,
         resource_id: None,
+        rebase_urls: false,
     };
     let error = expect_error(open(&config, None));
     assert_eq!(error.auth_result(), E_SOURCE_AUTHENTICATION_ERROR);

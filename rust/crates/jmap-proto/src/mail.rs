@@ -38,8 +38,9 @@ pub struct Mailbox {
     pub unread_threads: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_subscribed: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub share_with: Option<BTreeMap<Id, Option<MailboxRights>>>,
+    /// Server-computed permissions on this mailbox (RFC 8621 §2). RFC 8621
+    /// defines no `shareWith` for `Mailbox` — there is no standard JMAP way to
+    /// grant another principal rights on one — so this has no counterpart.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_rights: Option<MailboxRights>,
     #[serde(flatten)]
@@ -75,28 +76,28 @@ impl Mailbox {
     }
 }
 
-/// The permissions the user has for a mailbox (RFC 8621 §2).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// `Mailbox.myRights`, RFC 8621 §2.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct MailboxRights {
-    #[serde(default)]
-    pub may_read_items: bool,
-    #[serde(default)]
-    pub may_add_items: bool,
-    #[serde(default)]
-    pub may_remove_items: bool,
-    #[serde(default)]
-    pub may_set_seen: bool,
-    #[serde(default)]
-    pub may_set_keywords: bool,
-    #[serde(default)]
-    pub may_create_child: bool,
-    #[serde(default)]
-    pub may_rename: bool,
-    #[serde(default)]
-    pub may_delete: bool,
-    #[serde(default)]
-    pub may_submit: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_read_items: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_add_items: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_remove_items: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_set_seen: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_set_keywords: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_create_child: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_rename: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_delete: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_submit: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -104,22 +105,22 @@ pub struct MailboxRights {
 impl MailboxRights {
     pub fn all() -> Self {
         Self {
-            may_read_items: true,
-            may_add_items: true,
-            may_remove_items: true,
-            may_set_seen: true,
-            may_set_keywords: true,
-            may_create_child: true,
-            may_rename: true,
-            may_delete: true,
-            may_submit: true,
+            may_read_items: Some(true),
+            may_add_items: Some(true),
+            may_remove_items: Some(true),
+            may_set_seen: Some(true),
+            may_set_keywords: Some(true),
+            may_create_child: Some(true),
+            may_rename: Some(true),
+            may_delete: Some(true),
+            may_submit: Some(true),
             extra: BTreeMap::new(),
         }
     }
 
     pub fn read_only() -> Self {
         Self {
-            may_read_items: true,
+            may_read_items: Some(true),
             ..Self::default()
         }
     }

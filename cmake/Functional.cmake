@@ -626,8 +626,13 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	)
 
 	# The other half of the secret-store story: not the harness's own unlock
-	# step but the PRODUCT reading a real keyring's lock state
-	# (`docs/ROADMAP.md` item 17(a)). Registered here rather than left to
+	# step but the PRODUCT reading a real secret service, both what it asks
+	# of one. Its lock state (`docs/ROADMAP.md` item 17(a)), and whether there
+	# is a service to be had at all (item 31), which is a different question
+	# with a different consequence: a locked store still holds the token, so
+	# the user is told to unlock it, while an absent one cannot hold a token
+	# at all, so no sign-in window is offered. Registered here rather than
+	# left to
 	# `rust-test-eds` because it needs `gnome-keyring-daemon` and
 	# `dbus-run-session`, which only ci/install-deps-functional.sh installs —
 	# hence the `#[ignore]` on every test in the file and the `--ignored`

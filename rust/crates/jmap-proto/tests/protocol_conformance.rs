@@ -316,7 +316,6 @@ fn mailbox_conformance_required_vs_optional_fields_and_defaults() {
     assert!(mbx.total_threads.is_none());
     assert!(mbx.unread_threads.is_none());
     assert!(mbx.is_subscribed.is_none());
-    assert!(mbx.share_with.is_none());
     assert!(mbx.my_rights.is_none());
     assert!(mbx.extra.is_empty());
 }

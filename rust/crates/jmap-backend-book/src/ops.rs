@@ -195,7 +195,9 @@ pub unsafe fn get_changes(
         set_out_list(out_modified_objects, || {
             marshal::info_list(&changes.changed)
         });
-        set_out_list(out_removed_objects, || marshal::uid_list(&changes.removed));
+        set_out_list(out_removed_objects, || {
+            marshal::removed_info_list(&changes.removed)
+        });
     }
     Outcome::Reported
 }

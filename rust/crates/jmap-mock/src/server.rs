@@ -102,6 +102,7 @@ pub struct MockServerBuilder {
     terse_contact_create: bool,
     new_collections_default_unsubscribed: bool,
     terse_calendar_event_create: bool,
+    max_delayed_send: Option<u64>,
 }
 
 impl MockServerBuilder {
@@ -418,6 +419,17 @@ impl MockServerBuilder {
         self
     }
 
+    /// Advertise `maxDelayedSend` (in seconds) on the submission account
+    /// capability (RFC 8621 §7.1), so a client can detect support for
+    /// `EmailSubmission.sendAt` before offering scheduled send
+    /// (`jmap_proto::session::Account::max_delayed_send`). `None` (the
+    /// default) advertises an empty submission capability object, matching
+    /// every other test and every deployment without SMTP FUTURERELEASE.
+    pub fn max_delayed_send(mut self, seconds: u64) -> Self {
+        self.max_delayed_send = Some(seconds);
+        self
+    }
+
     /// Bind to localhost and start serving on a background thread. The
     /// server stops when the returned handle is dropped.
     pub fn start(self) -> MockServer {
@@ -439,6 +451,7 @@ impl MockServerBuilder {
         state.terse_contact_create = self.terse_contact_create;
         state.new_collections_default_unsubscribed = self.new_collections_default_unsubscribed;
         state.terse_calendar_event_create = self.terse_calendar_event_create;
+        state.max_delayed_send = self.max_delayed_send;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -509,6 +522,7 @@ impl MockServer {
             terse_contact_create: false,
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
+            max_delayed_send: None,
         }
     }
 
@@ -572,6 +586,46 @@ impl MockServer {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.unauthorized_responses
+    }
+
+    /// Push `change` to every `/eventsource` client connected right now
+    /// (RFC 8620 §7.3) — the "test hook to push one on demand" that stands
+    /// in for a real server's own automatic emission on a state transition
+    /// (`docs/ROADMAP.md` item 28), until something in this mock's dispatch
+    /// path calls this itself.
+    pub fn push_state_change(&self, change: &jmap_proto::push::StateChange) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.event_source.broadcast(change);
+    }
+
+    /// Block until at least one `/eventsource` client is connected, or panic
+    /// after `timeout`.
+    ///
+    /// A test that pushes a `StateChange` right after opening the connection
+    /// would otherwise race the background thread that registers it — this
+    /// is what makes "push after the client is listening" deterministic
+    /// instead of a sleep.
+    pub fn wait_for_event_source_subscriber(&self, timeout: Duration) {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let connected = {
+                let state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.event_source.subscriber_count() > 0
+            };
+            if connected {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                panic!("no /eventsource subscriber connected within {timeout:?}");
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }
 
@@ -767,6 +821,10 @@ fn handle_request(
                 200,
                 &serde_json::to_value(&session).expect("session serializes"),
             );
+        }
+        (tiny_http::Method::Get, "/eventsource") => {
+            let query = url.split_once('?').map(|(_, query)| query).unwrap_or("");
+            crate::eventsource::spawn_and_respond(request, query, state);
         }
         (tiny_http::Method::Post, "/jmap") => {
             let mut body = Vec::new();
@@ -1017,6 +1075,18 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
             // capability objects carry real content (RFC 9670 §2.5), not an
             // empty placeholder — so they are built here rather than folded
             // into `ACCOUNT_CAPABILITIES`'s uniform `json!({})` map.
+            // Like `principals` below, `submission`'s content is real (RFC
+            // 8621 §7.1's `maxDelayedSend`) only when a test asked for it —
+            // every other test keeps the uniform empty-object placeholder
+            // above, matching a deployment with no SMTP FUTURERELEASE.
+            if let Some(seconds) = state.max_delayed_send
+                && !state.omitted_capabilities.contains(CAPABILITY_SUBMISSION)
+            {
+                account_capabilities.insert(
+                    CAPABILITY_SUBMISSION.to_owned(),
+                    json!({"maxDelayedSend": seconds, "submissionExtensions": {}}),
+                );
+            }
             if !state.omitted_capabilities.contains(CAPABILITY_PRINCIPALS) {
                 account_capabilities.insert(
                     CAPABILITY_PRINCIPALS.to_owned(),

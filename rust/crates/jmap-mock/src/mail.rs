@@ -939,24 +939,70 @@ pub fn email_submission_set(
         submission.id = Some(id.clone());
         submission.thread_id = email.thread_id.clone();
         submission.envelope = Some(envelope.clone());
-        submission.send_at = Some(UtcDate::new(MOCK_NOW));
-        submission.undo_status = Some("final".to_owned());
 
-        account.outbox.push(RecordedSubmission {
-            id: id.clone(),
-            email_id: submission.email_id.clone(),
-            identity_id: submission.identity_id.clone(),
-            envelope,
-        });
+        // RFC 8621 §7.1's `sendAt`: a client-requested time in the future
+        // (SMTP FUTURERELEASE, gated on the submission capability's
+        // `maxDelayedSend` — see `jmap_proto::session::Account::
+        // max_delayed_send`) holds the message rather than delivering it
+        // immediately. Absent, or not in the future, behaves exactly as
+        // before this existed: delivered now, `undoStatus: "final"`.
+        let delayed = submission
+            .send_at
+            .as_ref()
+            .is_some_and(|send_at| send_at.as_str() > MOCK_NOW);
+        if delayed {
+            submission.undo_status = Some("pending".to_owned());
+        } else {
+            submission.send_at = Some(UtcDate::new(MOCK_NOW));
+            submission.undo_status = Some("final".to_owned());
+            account.outbox.push(RecordedSubmission {
+                id: id.clone(),
+                email_id: submission.email_id.clone(),
+                identity_id: submission.identity_id.clone(),
+                envelope,
+            });
+        }
 
         created_here.insert(creation_id.clone(), id.clone());
         created.insert(creation_id, submission.clone());
         to_create.push((id, submission));
     }
 
+    // RFC 8621 §7.4: the only change a client may ask for on an existing
+    // submission is `undoStatus` moving from `pending` to `canceled` — an
+    // attempt to cancel a submission the mock already treated as `final`
+    // (no `sendAt` in the future), or to touch any other property, is
+    // `forbidden`, the same refusal a real server gives once a message has
+    // gone out. Canceling never removes anything from `outbox`: a `pending`
+    // submission was never pushed there in the first place.
+    let mut updated: BTreeMap<Id, Option<EmailSubmission>> = BTreeMap::new();
+    let mut not_updated: BTreeMap<Id, SetError> = BTreeMap::new();
+    let mut to_update: Vec<(Id, EmailSubmission)> = Vec::new();
+    for (id, patch) in request.set.update.clone().unwrap_or_default() {
+        let Some(existing) = account.submissions.get(&id) else {
+            not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
+            continue;
+        };
+        let wants_cancel = patch.as_object().is_some_and(|patch_map| {
+            patch_map.len() == 1
+                && patch_map.get("undoStatus").and_then(Value::as_str) == Some("canceled")
+        });
+        if !wants_cancel || existing.undo_status.as_deref() != Some("pending") {
+            not_updated.insert(id, SetError::new(error::set::FORBIDDEN));
+            continue;
+        }
+        let mut patched = existing.clone();
+        patched.undo_status = Some("canceled".to_owned());
+        to_update.push((id, patched));
+    }
+
     account.submissions.transaction(|transaction| {
         for (id, submission) in to_create {
             transaction.create(id, submission);
+        }
+        for (id, submission) in to_update {
+            transaction.update(&id, submission);
+            updated.insert(id, None);
         }
     });
 
@@ -1008,10 +1054,10 @@ pub fn email_submission_set(
         old_state: Some(old_state),
         new_state: account.submissions.state(),
         created: (!created.is_empty()).then_some(created),
-        updated: None,
+        updated: (!updated.is_empty()).then_some(updated),
         destroyed: None,
         not_created: (!not_created.is_empty()).then_some(not_created),
-        not_updated: None,
+        not_updated: (!not_updated.is_empty()).then_some(not_updated),
         not_destroyed: None,
     })?;
 
