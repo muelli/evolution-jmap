@@ -49,6 +49,32 @@ const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// comma-separated list of the ones the subscriber cares about.
 pub const ALL_TYPES: &str = "*";
 
+/// A subscription's request headers (typically `Authorization`), shared
+/// between the [`EventSourceSubscription`] the caller holds and whatever
+/// runs its reconnect loop, so a [`set`](Self::set) after a credential
+/// refresh is read fresh by the very next reconnect attempt instead of
+/// requiring the subscription to be torn down and restarted.
+#[derive(Clone)]
+pub struct SharedHeaders(Arc<Mutex<Vec<(String, String)>>>);
+
+impl SharedHeaders {
+    /// Start out sending `headers` on every connection attempt.
+    pub fn new(headers: Vec<(String, String)>) -> Self {
+        Self(Arc::new(Mutex::new(headers)))
+    }
+
+    /// Replace every header sent on future connection attempts. Takes effect
+    /// on the next reconnect; a connection already in flight keeps whatever
+    /// it was sent with.
+    pub fn set(&self, headers: Vec<(String, String)>) {
+        *self.0.lock().expect("shared headers lock poisoned") = headers;
+    }
+
+    fn snapshot(&self) -> Vec<(String, String)> {
+        self.0.lock().expect("shared headers lock poisoned").clone()
+    }
+}
+
 /// A live subscription to one account's `eventSourceUrl`, kept alive on its
 /// own thread; see the module doc.
 pub struct EventSourceSubscription {
@@ -56,6 +82,7 @@ pub struct EventSourceSubscription {
     cancel: CancelFlag,
     socket: Arc<Mutex<Option<TcpStream>>>,
     handle: Option<JoinHandle<()>>,
+    headers: SharedHeaders,
 }
 
 impl EventSourceSubscription {
@@ -64,21 +91,16 @@ impl EventSourceSubscription {
     /// defaulted from the scheme, since a real server's `eventSourceUrl`
     /// names none.
     ///
-    /// `headers` (typically `Authorization`) are sent on every connection
-    /// attempt, and are fixed for the life of the subscription: a
-    /// [`Client::set_credentials`](crate::Client::set_credentials) that
-    /// installs a fresh OAuth 2.0 access token does not reach a subscription
-    /// already running, so one whose token expires will keep being refused
-    /// and keep reconnecting until the backend reconnects too. That is a
-    /// degradation, not a correctness problem — push is an accelerator and
-    /// EDS's periodic refresh is what actually keeps the cache honest — but
-    /// it is the next thing to fix here.
-    pub fn start(url: String, headers: Vec<(String, String)>, cancel: CancelFlag) -> Self {
+    /// `headers` are sent on every connection attempt, read fresh each time
+    /// rather than fixed for the life of the subscription — see
+    /// [`set_headers`](Self::set_headers).
+    pub fn start(url: String, headers: SharedHeaders, cancel: CancelFlag) -> Self {
         let (sender, receiver) = mpsc::channel();
         let socket = Arc::new(Mutex::new(None));
         let handle = {
             let cancel = cancel.clone();
             let socket = Arc::clone(&socket);
+            let headers = headers.clone();
             thread::spawn(move || run(url, headers, cancel, socket, sender))
         };
         Self {
@@ -86,12 +108,24 @@ impl EventSourceSubscription {
             cancel,
             socket,
             handle: Some(handle),
+            headers,
         }
     }
 
     /// Block until a [`StateChange`] arrives or `timeout` elapses.
     pub fn recv_timeout(&self, timeout: Duration) -> Option<StateChange> {
         self.receiver.recv_timeout(timeout).ok()
+    }
+
+    /// Replace the headers (typically `Authorization`) sent on future
+    /// reconnect attempts — e.g. after a
+    /// [`Client::set_credentials`](crate::Client::set_credentials) installs
+    /// a fresh OAuth 2.0 access token on the backend's connection, so a
+    /// subscription refused with a stale token picks up the new one on its
+    /// next reconnect rather than looping on the same failure until the
+    /// backend itself reconnects.
+    pub fn set_headers(&self, headers: Vec<(String, String)>) {
+        self.headers.set(headers);
     }
 
     /// Stop listening: cancel, shut down the current socket (if any) so a
@@ -115,17 +149,19 @@ impl Drop for EventSourceSubscription {
     }
 }
 
-/// Reconnect loop: keep opening `url` until `cancel` fires.
+/// Reconnect loop: keep opening `url` until `cancel` fires. Reads `headers`
+/// fresh on every attempt, so a [`SharedHeaders::set`] reaches the very next
+/// one.
 fn run(
     url: String,
-    headers: Vec<(String, String)>,
+    headers: SharedHeaders,
     cancel: CancelFlag,
     socket: Arc<Mutex<Option<TcpStream>>>,
     sender: Sender<StateChange>,
 ) {
     let mut backoff = INITIAL_BACKOFF;
     while !cancel.is_cancelled() {
-        match connect_and_stream(&url, &headers, &cancel, &socket, &sender) {
+        match connect_and_stream(&url, &headers.snapshot(), &cancel, &socket, &sender) {
             Ok(()) => backoff = INITIAL_BACKOFF,
             Err(error) => tracing::debug!(%error, url, "eventsource connection ended"),
         }
@@ -700,7 +736,8 @@ mod tests {
             "{}/eventsource?types=*&closeafter=no&ping=0",
             server.origin()
         );
-        let subscription = EventSourceSubscription::start(url, Vec::new(), CancelFlag::new());
+        let subscription =
+            EventSourceSubscription::start(url, SharedHeaders::new(Vec::new()), CancelFlag::new());
 
         server.wait_for_event_source_subscriber(Duration::from_secs(5));
         let expected = changed("a3123", "Email", "d35ecb040aab");
@@ -722,7 +759,8 @@ mod tests {
             "{}/eventsource?types=*&closeafter=state&ping=0",
             server.origin()
         );
-        let subscription = EventSourceSubscription::start(url, Vec::new(), CancelFlag::new());
+        let subscription =
+            EventSourceSubscription::start(url, SharedHeaders::new(Vec::new()), CancelFlag::new());
 
         server.wait_for_event_source_subscriber(Duration::from_secs(5));
         let first = changed("a1", "Mailbox", "1");
@@ -772,7 +810,8 @@ mod tests {
             "{}/eventsource?types=*&closeafter=no&ping=0",
             server.origin()
         );
-        let subscription = EventSourceSubscription::start(url, Vec::new(), CancelFlag::new());
+        let subscription =
+            EventSourceSubscription::start(url, SharedHeaders::new(Vec::new()), CancelFlag::new());
         server.wait_for_event_source_subscriber(Duration::from_secs(5));
 
         let started = Instant::now();
@@ -781,6 +820,51 @@ mod tests {
             started.elapsed() < Duration::from_secs(2),
             "dropping a live subscription must not wait out a reconnect backoff"
         );
+    }
+
+    #[test]
+    fn set_headers_lets_a_stalled_reconnect_succeed_with_a_refreshed_token() {
+        let server = jmap_mock::MockServer::builder()
+            .bearer_token("fresh-token")
+            .start();
+        let url = format!(
+            "{}/eventsource?types=*&closeafter=no&ping=0",
+            server.origin()
+        );
+        let headers = SharedHeaders::new(vec![(
+            "Authorization".to_owned(),
+            "Bearer stale-token".to_owned(),
+        )]);
+        let subscription = EventSourceSubscription::start(url, headers, CancelFlag::new());
+
+        // The stale token is refused, so no subscriber connects — proving
+        // the reconnect loop is actually retrying with the header this
+        // subscription started with, not by some other route.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while server.unauthorized_responses() == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the stale token was never refused"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(
+            server
+                .state()
+                .lock()
+                .unwrap()
+                .event_source
+                .subscriber_count(),
+            0,
+            "a refused connection attempt must not count as a subscriber"
+        );
+
+        subscription.set_headers(vec![(
+            "Authorization".to_owned(),
+            "Bearer fresh-token".to_owned(),
+        )]);
+
+        server.wait_for_event_source_subscriber(Duration::from_secs(5));
     }
 
     /// A minimal one-shot TLS server: accepts one connection, discards
@@ -843,7 +927,8 @@ mod tests {
         let addr = start_tls_test_server(frame);
         let url = format!("https://{addr}/eventsource?types=*");
 
-        let subscription = EventSourceSubscription::start(url, Vec::new(), CancelFlag::new());
+        let subscription =
+            EventSourceSubscription::start(url, SharedHeaders::new(Vec::new()), CancelFlag::new());
         let received = subscription
             .recv_timeout(Duration::from_secs(5))
             .expect("the pushed StateChange arrives over TLS");

@@ -45,7 +45,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use gobject_sys::GObject;
-use jmap_client::eventsource::expand_url;
+use jmap_client::eventsource::{SharedHeaders, expand_url};
 use jmap_client::transport::CancelFlag;
 use jmap_client::{Client, EventSourceSubscription};
 use jmap_proto::Id;
@@ -123,6 +123,7 @@ pub unsafe fn start_for(
 pub struct PushRefresh {
     cancel: CancelFlag,
     pump: Option<JoinHandle<()>>,
+    headers: SharedHeaders,
 }
 
 impl PushRefresh {
@@ -148,8 +149,10 @@ impl PushRefresh {
         refresh: impl Fn() + Send + 'static,
     ) -> Self {
         let cancel = CancelFlag::new();
+        let headers = SharedHeaders::new(headers);
         let pump = {
             let cancel = cancel.clone();
+            let headers = headers.clone();
             thread::spawn(move || {
                 let subscription = EventSourceSubscription::start(url, headers, cancel.clone());
                 while !cancel.is_cancelled() {
@@ -169,7 +172,20 @@ impl PushRefresh {
         Self {
             cancel,
             pump: Some(pump),
+            headers,
         }
+    }
+
+    /// Replace the `Authorization` header this subscription sends on future
+    /// reconnect attempts — called right after a backend's own
+    /// `refresh_credentials` installs a fresh OAuth 2.0 access token on the
+    /// connection, so a subscription a stale token got refused on picks up
+    /// the new one on its next reconnect instead of looping on the same
+    /// failure until the backend itself reconnects (see
+    /// [`jmap_client::eventsource`]'s own module doc, and
+    /// `docs/ROADMAP.md` item 28).
+    pub fn set_headers(&self, headers: Vec<(String, String)>) {
+        self.headers.set(headers);
     }
 
     /// Stop listening and wait for the pump to finish, so that no further
@@ -341,6 +357,58 @@ mod tests {
             1,
             "only the push naming this backend's account may refresh it"
         );
+    }
+
+    /// The header-refresh piece of item 28: a `PushRefresh` started with a
+    /// stale `Authorization` header keeps being refused until
+    /// [`PushRefresh::set_headers`] installs the fresh one, at which point
+    /// the pump's own reconnect loop — already retrying with backoff — picks
+    /// it up on its next attempt and the refresh action starts running.
+    #[test]
+    fn set_headers_lets_a_stalled_subscription_reconnect_and_resume_refreshing() {
+        let server = jmap_mock::MockServer::builder()
+            .bearer_token("fresh-token")
+            .start();
+        let url = expand_url(
+            &format!("{}/eventsource", server.origin()),
+            &["ContactCard"],
+            false,
+            0,
+        );
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&refreshes);
+        let push = PushRefresh::start(
+            url,
+            vec![("Authorization".to_owned(), "Bearer stale-token".to_owned())],
+            Id::new("a1"),
+            names(&["ContactCard"]),
+            move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while server.unauthorized_responses() == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the stale token was never refused"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        push.set_headers(vec![(
+            "Authorization".to_owned(),
+            "Bearer fresh-token".to_owned(),
+        )]);
+
+        server.wait_for_event_source_subscriber(Duration::from_secs(5));
+        server.push_state_change(&change("a1", "ContactCard"));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while refreshes.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "the refresh action never ran");
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
