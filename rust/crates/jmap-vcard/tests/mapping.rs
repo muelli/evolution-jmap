@@ -21667,3 +21667,51 @@ fn eds_360_chat_handles_and_sort_order_measured_non_issue_characterization() {
     assert!(!emitted_no_file_as.contains("X-EVOLUTION-FILE-AS"));
     assert!(emitted_no_file_as.contains("FN:Albert Einstein\r\n"));
 }
+
+#[test]
+fn photo_non_image_mediatype_and_data_uri_roundtrip_fixpoint_matrix() {
+    let cases = [
+        // 1. Non-image audio/ogg data URI with invalid VALUE parameter (minimal repro from backlog)
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=date:data:audio/ogg;base64,T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\nEND:VCARD\r\n",
+        // 2. Explicit non-image MEDIATYPE parameter with audio data URI
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;MEDIATYPE=audio/ogg:data:audio/ogg;base64,T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\nEND:VCARD\r\n",
+        // 3. Explicit non-image TYPE parameter on binary photo
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;TYPE=audio/ogg;ENCODING=b:T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\nEND:VCARD\r\n",
+        // 4. Explicit non-image MEDIATYPE parameter on remote URI
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=uri;MEDIATYPE=audio/ogg:https://example.com/sound.ogg\r\nEND:VCARD\r\n",
+        // 5. Data URI with explicit VALUE=uri parameter
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=uri:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\nEND:VCARD\r\n",
+        // 6. Unknown type parameter
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;TYPE=UNKNOWN;ENCODING=b:AQIDBA==\r\nEND:VCARD\r\n",
+        // 7. Standard vCard 4.0 data URI
+        "BEGIN:VCARD\r\nVERSION:4.0\r\nPHOTO:data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=\r\nEND:VCARD\r\n",
+        // 8. Remote URI with valid image MEDIATYPE
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=uri;MEDIATYPE=image/jpeg:https://example.com/photo.jpg\r\nEND:VCARD\r\n",
+    ];
+
+    for (idx, raw_vcard) in cases.iter().enumerate() {
+        let card1 = vcard_to_card(raw_vcard)
+            .unwrap_or_else(|e| panic!("case {idx} pass 1 parse failed: {e:?}"));
+        let vcard1 = card_to_vcard(&card1);
+        let card2 = vcard_to_card(&vcard1)
+            .unwrap_or_else(|e| panic!("case {idx} pass 2 parse failed: {e:?}"));
+        let vcard2 = card_to_vcard(&card2);
+        let card3 = vcard_to_card(&vcard2)
+            .unwrap_or_else(|e| panic!("case {idx} pass 3 parse failed: {e:?}"));
+
+        assert_eq!(
+            vcard1, vcard2,
+            "case {idx} vcard1 and vcard2 must reach fixed point"
+        );
+        assert_eq!(
+            card2, card3,
+            "case {idx} card2 and card3 must reach fixed point"
+        );
+        if idx < 7 {
+            assert_eq!(
+                card1, card2,
+                "case {idx} card1 and card2 must reach immediate fixed point"
+            );
+        }
+    }
+}

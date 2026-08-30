@@ -2667,8 +2667,9 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 /// names no format, so it reads back as none.
 fn read_photo(entry: &VCardEntry) -> Option<Media> {
     let raw_text = entry_text(entry);
-    let states_a_reference = entry_param(entry, "VALUE")
+    let states_a_reference = (entry_param(entry, "VALUE")
         .is_some_and(|value| value.eq_ignore_ascii_case(URI_VALUE))
+        && !raw_text.starts_with("data:"))
         || raw_text.starts_with("http://")
         || raw_text.starts_with("https://")
         || raw_text.starts_with("ftp://")
@@ -2700,18 +2701,41 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
         })
         .or_else(|| entry_binary_content_type(entry).map(str::to_owned));
 
+    // A PHOTO property can only represent an image format. Non-image types (such as
+    // audio/ogg or application/pdf) cannot be stated on vCard 3.0 PHOTO lines, and
+    // keeping them on parse would cause roundtrip asymmetry against card_to_vcard.
+    let media_type = media_type_param.filter(|mt| image_subtype(mt).is_some());
+
     if states_a_reference {
-        return (!raw_text.is_empty()).then(|| photo_entry(raw_text, media_type_param));
+        return (!raw_text.is_empty()).then(|| photo_entry(raw_text, media_type));
     }
 
-    let bytes = match entry_binary(entry) {
-        Some(bytes) => bytes.to_vec(),
-        None => raw_text.into_bytes(),
+    let (bytes, stated_media_type) = if let Some(rest) = strip_prefix_ci(&raw_text, DATA_SCHEME) {
+        if let Some((metadata, payload)) = rest.split_once(',') {
+            let stated = strip_suffix_ci(metadata, BASE64_MARKER)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned);
+            let bytes = decoded(payload).or_else(|| entry_binary(entry).map(<[u8]>::to_vec))?;
+            (bytes, stated)
+        } else {
+            let bytes = entry_binary(entry)?.to_vec();
+            (bytes, None)
+        }
+    } else if let Some(bytes) = entry_binary(entry) {
+        (bytes.to_vec(), None)
+    } else if let Some(bytes) = decoded(&raw_text) {
+        (bytes, None)
+    } else {
+        let bytes = raw_text.into_bytes();
+        (bytes, None)
     };
+
     if bytes.is_empty() {
         return None;
     }
-    let media_type = media_type_param;
+
+    let media_type =
+        media_type.or_else(|| stated_media_type.filter(|mt| image_subtype(mt).is_some()));
     let uri = format!(
         "{DATA_SCHEME}{}{BASE64_MARKER},{}",
         media_type.as_deref().unwrap_or_default(),
