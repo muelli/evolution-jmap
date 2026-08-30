@@ -986,3 +986,241 @@ fn rfc8984_calendar_group_and_capabilities_forward_compatibility() {
     assert_eq!(mdn_cap.extra["maxMdnsPerRequest"], 50);
     assert_eq!(mdn_cap.extra["signingMethodsSupported"][0], "pgp");
 }
+
+// ===========================================================================
+// draft-ietf-jmap-calendars-28 §7, §8, §10: Scheduling, Notifications & Replies
+// ===========================================================================
+
+#[test]
+fn calendar_scheduling_and_notifications_forward_compatibility() {
+    use jmap_proto::calendars::{
+        CalendarEventNotification, CalendarEventSendRequest, CalendarEventSendResponse,
+        ParticipantReply, calendar_event_notification_type, calendar_send_error,
+        participant_participation_status, participant_problem_kind,
+    };
+    use jmap_proto::principals::ShareNotificationQueryFilter;
+
+    // Constants check
+    assert_eq!(calendar_event_notification_type::CREATED, "created");
+    assert_eq!(calendar_event_notification_type::UPDATED, "updated");
+    assert_eq!(calendar_event_notification_type::DESTROYED, "destroyed");
+    assert_eq!(calendar_event_notification_type::REPLY, "reply");
+
+    assert_eq!(
+        participant_problem_kind::CANNOT_SEND_TO_SELF,
+        "cannotSendToSelf"
+    );
+    assert_eq!(
+        participant_problem_kind::CALENDAR_NOT_FOUND,
+        "calendarNotFound"
+    );
+    assert_eq!(
+        participant_problem_kind::PARTICIPANT_NOT_FOUND,
+        "participantNotFound"
+    );
+    assert_eq!(participant_problem_kind::INVALID_EMAIL, "invalidEmail");
+    assert_eq!(
+        participant_problem_kind::CANNOT_SEND_TO_RESOURCE,
+        "cannotSendToResource"
+    );
+    assert_eq!(participant_problem_kind::NOT_AUTHORIZED, "notAuthorized");
+
+    assert_eq!(calendar_send_error::FORBIDDEN_FROM, "forbiddenFrom");
+    assert_eq!(
+        calendar_send_error::PARTICIPANT_NOT_FOUND,
+        "participantNotFound"
+    );
+    assert_eq!(
+        calendar_send_error::INVALID_PARTICIPANTS,
+        "invalidParticipants"
+    );
+    assert_eq!(
+        calendar_send_error::CANNOT_SEND_FOR_CALENDAR,
+        "cannotSendForCalendar"
+    );
+    assert_eq!(calendar_send_error::EVENT_NOT_FOUND, "eventNotFound");
+
+    assert_eq!(
+        participant_participation_status::NEEDS_ACTION,
+        "needs-action"
+    );
+    assert_eq!(participant_participation_status::ACCEPTED, "accepted");
+    assert_eq!(participant_participation_status::DECLINED, "declined");
+    assert_eq!(participant_participation_status::TENTATIVE, "tentative");
+    assert_eq!(participant_participation_status::DELEGATED, "delegated");
+
+    // 1. CalendarEventNotification with unknown fields and unknown type variant
+    let notif_payload = json!({
+        "@type": "CalendarEventNotification",
+        "id": "notif_fut_1",
+        "created": "2026-09-01T12:00:00Z",
+        "type": "delegated-proxy-update",
+        "eventId": "evt_999",
+        "recurrenceId": "2026-09-01T14:00:00",
+        "comment": "Delegated to assistant",
+        "changedBy": {
+            "name": "VP Alice",
+            "email": "alice@example.com"
+        },
+        "event": {
+            "title": "Quarterly Planning"
+        },
+        "customUrgencyLevel": "high",
+        "auditLogSequence": 1042
+    });
+
+    let notif: CalendarEventNotification = serde_json::from_value(notif_payload)
+        .expect("CalendarEventNotification deserializes with extensions");
+    assert_eq!(notif.id.as_ref().unwrap().as_str(), "notif_fut_1");
+    assert_eq!(notif.kind, "CalendarEventNotification");
+    assert_eq!(notif.created.as_str(), "2026-09-01T12:00:00Z");
+    assert_eq!(
+        notif.notification_type.as_deref(),
+        Some("delegated-proxy-update")
+    );
+    assert_eq!(notif.event_id.as_str(), "evt_999");
+    assert_eq!(notif.recurrence_id.as_deref(), Some("2026-09-01T14:00:00"));
+    assert_eq!(notif.comment.as_deref(), Some("Delegated to assistant"));
+    assert_eq!(notif.changed_by.as_ref().unwrap().name, "VP Alice");
+    assert_eq!(
+        notif.event.as_ref().unwrap().title.as_deref(),
+        Some("Quarterly Planning")
+    );
+    assert_eq!(notif.extra["customUrgencyLevel"], "high");
+    assert_eq!(notif.extra["auditLogSequence"], 1042);
+
+    // 2. CalendarEventSendRequest & Response with unknown fields
+    let send_req_payload = json!({
+        "accountId": "acc_main",
+        "identityId": "ident_primary",
+        "send": {
+            "k1": {
+                "recipient": "mailto:colleague@example.com",
+                "calendarEvent": {
+                    "title": "Strategy Session"
+                },
+                "includeOldProperties": false,
+                "transportRouting": "direct-smtp"
+            }
+        },
+        "onSuccessUpdateCalendarEvent": {
+            "evt_999": {
+                "status": "confirmed"
+            }
+        },
+        "onSuccessDestroyCalendarEventIds": ["evt_stale"],
+        "futureSendFlags": {
+            "retryPolicy": "exponential-backoff"
+        }
+    });
+
+    let send_req: CalendarEventSendRequest = serde_json::from_value(send_req_payload)
+        .expect("CalendarEventSendRequest deserializes with extensions");
+    assert_eq!(send_req.account_id.as_str(), "acc_main");
+    assert_eq!(
+        send_req.identity_id.as_ref().unwrap().as_str(),
+        "ident_primary"
+    );
+    assert_eq!(
+        send_req.send.as_ref().unwrap()[&Id::new("k1")]
+            .recipient
+            .as_deref(),
+        Some("mailto:colleague@example.com")
+    );
+    assert_eq!(
+        send_req.send.as_ref().unwrap()[&Id::new("k1")].extra["transportRouting"],
+        "direct-smtp"
+    );
+    assert_eq!(
+        send_req.extra["futureSendFlags"]["retryPolicy"],
+        "exponential-backoff"
+    );
+
+    let send_resp_payload = json!({
+        "accountId": "acc_main",
+        "sent": {
+            "k1": {
+                "sendStatus": "delivered",
+                "participantProblems": {
+                    "mailto:external@example.org": {
+                        "type": "customSpamBlockFilter",
+                        "description": "External server rejected attachment",
+                        "rejectCode": 554
+                    }
+                },
+                "deliveryTimestamp": "2026-09-01T12:00:05Z"
+            }
+        },
+        "notSent": {
+            "k2": {
+                "type": "cannotSendForCalendar",
+                "description": "Calendar is read-only"
+            }
+        }
+    });
+
+    let send_resp: CalendarEventSendResponse = serde_json::from_value(send_resp_payload)
+        .expect("CalendarEventSendResponse deserializes with extensions");
+    assert_eq!(send_resp.account_id.as_str(), "acc_main");
+    let sent_k1 = &send_resp.sent.as_ref().unwrap()[&Id::new("k1")];
+    assert_eq!(sent_k1.send_status.as_deref(), Some("delivered"));
+    assert_eq!(
+        sent_k1.participant_problems.as_ref().unwrap()["mailto:external@example.org"]
+            .kind
+            .as_deref(),
+        Some("customSpamBlockFilter")
+    );
+    assert_eq!(
+        sent_k1.participant_problems.as_ref().unwrap()["mailto:external@example.org"].extra["rejectCode"],
+        554
+    );
+    assert_eq!(
+        send_resp.not_sent.as_ref().unwrap()[&Id::new("k2")].error_type,
+        "cannotSendForCalendar"
+    );
+
+    // 3. ParticipantReply with unknown fields
+    let reply_payload = json!({
+        "calendarEventId": "evt_999",
+        "recurrenceId": "2026-09-01T14:00:00",
+        "participationStatus": "accepted",
+        "comment": "Joining in person",
+        "sendTo": {
+            "imip": "mailto:organizer@example.com"
+        },
+        "clientAgent": "Evolution-JMAP/0.3.0"
+    });
+
+    let reply: ParticipantReply = serde_json::from_value(reply_payload)
+        .expect("ParticipantReply deserializes with extensions");
+    assert_eq!(reply.calendar_event_id.as_str(), "evt_999");
+    assert_eq!(reply.recurrence_id.as_deref(), Some("2026-09-01T14:00:00"));
+    assert_eq!(reply.participation_status, "accepted");
+    assert_eq!(reply.comment.as_deref(), Some("Joining in person"));
+    assert_eq!(
+        reply.send_to.as_ref().unwrap()["imip"],
+        "mailto:organizer@example.com"
+    );
+    assert_eq!(reply.extra["clientAgent"], "Evolution-JMAP/0.3.0");
+
+    // 4. ShareNotificationQueryFilter with unknown fields
+    let share_filter_payload = json!({
+        "after": "2026-09-01T00:00:00Z",
+        "before": "2026-09-02T00:00:00Z",
+        "objectType": "Calendar",
+        "includeSubscribed": true
+    });
+
+    let share_filter: ShareNotificationQueryFilter = serde_json::from_value(share_filter_payload)
+        .expect("ShareNotificationQueryFilter deserializes with extensions");
+    assert_eq!(
+        share_filter.after.as_ref().unwrap().as_str(),
+        "2026-09-01T00:00:00Z"
+    );
+    assert_eq!(
+        share_filter.before.as_ref().unwrap().as_str(),
+        "2026-09-02T00:00:00Z"
+    );
+    assert_eq!(share_filter.object_type.as_deref(), Some("Calendar"));
+    assert_eq!(share_filter.extra["includeSubscribed"], true);
+}

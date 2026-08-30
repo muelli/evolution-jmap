@@ -305,3 +305,32 @@ fn principals_capability_builder() {
         cap
     );
 }
+
+#[test]
+fn share_notification_query_filter_roundtrip_and_builders() {
+    use jmap_proto::principals::ShareNotificationQueryFilter;
+    use jmap_proto::state::UtcDate;
+
+    let filter = ShareNotificationQueryFilter::new()
+        .with_after(UtcDate::new("2026-09-01T00:00:00Z"))
+        .with_before(UtcDate::new("2026-09-02T00:00:00Z"))
+        .with_object_type("Calendar");
+
+    assert_eq!(
+        filter.after.as_ref().unwrap().as_str(),
+        "2026-09-01T00:00:00Z"
+    );
+    assert_eq!(
+        filter.before.as_ref().unwrap().as_str(),
+        "2026-09-02T00:00:00Z"
+    );
+    assert_eq!(filter.object_type.as_deref(), Some("Calendar"));
+
+    let json = serde_json::to_value(&filter).unwrap();
+    assert_eq!(json["after"], "2026-09-01T00:00:00Z");
+    assert_eq!(json["before"], "2026-09-02T00:00:00Z");
+    assert_eq!(json["objectType"], "Calendar");
+
+    let deserialized: ShareNotificationQueryFilter = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized, filter);
+}

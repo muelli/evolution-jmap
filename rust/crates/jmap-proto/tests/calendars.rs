@@ -1208,3 +1208,210 @@ fn calendar_preferences_capability_accessor() {
             .with_extra(serde_json::json!({"customPrefExtension": true}))
     );
 }
+
+#[test]
+fn calendar_event_notification_roundtrip_and_builders() {
+    use jmap_proto::calendars::{
+        CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
+        calendar_event_notification_type,
+    };
+    use jmap_proto::principals::Principal;
+    use jmap_proto::state::UtcDate;
+
+    assert_eq!(calendar_event_notification_type::CREATED, "created");
+    assert_eq!(calendar_event_notification_type::UPDATED, "updated");
+    assert_eq!(calendar_event_notification_type::DESTROYED, "destroyed");
+    assert_eq!(calendar_event_notification_type::REPLY, "reply");
+
+    let notif =
+        CalendarEventNotification::new(UtcDate::new("2026-09-01T15:00:00Z"), Id::new("evt_123"))
+            .with_id(Id::new("notif_1"))
+            .with_changed_by(Principal::new("Bob Builder").with_email("bob@example.com"))
+            .with_comment("Moved meeting by 30 mins")
+            .with_notification_type(calendar_event_notification_type::UPDATED)
+            .with_recurrence_id("2026-09-02T10:00:00")
+            .with_event(CalendarEvent::new().with_title("Sprint Retro"));
+
+    let json = serde_json::to_value(&notif).unwrap();
+    assert_eq!(json["@type"], "CalendarEventNotification");
+    assert_eq!(json["id"], "notif_1");
+    assert_eq!(json["created"], "2026-09-01T15:00:00Z");
+    assert_eq!(json["eventId"], "evt_123");
+    assert_eq!(json["comment"], "Moved meeting by 30 mins");
+    assert_eq!(json["type"], "updated");
+    assert_eq!(json["recurrenceId"], "2026-09-02T10:00:00");
+    assert_eq!(json["event"]["title"], "Sprint Retro");
+    assert_eq!(json["changedBy"]["name"], "Bob Builder");
+
+    let deserialized: CalendarEventNotification = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized, notif);
+
+    let filter = CalendarEventNotificationQueryFilter::new()
+        .with_after(UtcDate::new("2026-09-01T00:00:00Z"))
+        .with_before(UtcDate::new("2026-09-02T00:00:00Z"))
+        .with_types(vec!["created".to_owned(), "updated".to_owned()]);
+
+    let filter_json = serde_json::to_value(&filter).unwrap();
+    assert_eq!(filter_json["after"], "2026-09-01T00:00:00Z");
+    assert_eq!(filter_json["before"], "2026-09-02T00:00:00Z");
+    assert_eq!(filter_json["types"][0], "created");
+    assert_eq!(filter_json["types"][1], "updated");
+
+    let filter_deserialized: CalendarEventNotificationQueryFilter =
+        serde_json::from_value(filter_json).unwrap();
+    assert_eq!(filter_deserialized, filter);
+}
+
+#[test]
+fn calendar_event_send_request_and_response_roundtrip() {
+    use jmap_proto::calendars::{
+        CalendarEvent, CalendarEventSendRequest, CalendarEventSendResponse, ParticipantProblem,
+        SendCalendarEvent, SendCalendarEventResult, calendar_send_error, participant_problem_kind,
+    };
+    use jmap_proto::error::SetError;
+    use std::collections::BTreeMap;
+
+    assert_eq!(
+        participant_problem_kind::CANNOT_SEND_TO_SELF,
+        "cannotSendToSelf"
+    );
+    assert_eq!(
+        participant_problem_kind::CALENDAR_NOT_FOUND,
+        "calendarNotFound"
+    );
+    assert_eq!(
+        participant_problem_kind::PARTICIPANT_NOT_FOUND,
+        "participantNotFound"
+    );
+    assert_eq!(participant_problem_kind::INVALID_EMAIL, "invalidEmail");
+    assert_eq!(
+        participant_problem_kind::CANNOT_SEND_TO_RESOURCE,
+        "cannotSendToResource"
+    );
+    assert_eq!(participant_problem_kind::NOT_AUTHORIZED, "notAuthorized");
+
+    assert_eq!(calendar_send_error::FORBIDDEN_FROM, "forbiddenFrom");
+    assert_eq!(
+        calendar_send_error::PARTICIPANT_NOT_FOUND,
+        "participantNotFound"
+    );
+    assert_eq!(
+        calendar_send_error::INVALID_PARTICIPANTS,
+        "invalidParticipants"
+    );
+    assert_eq!(
+        calendar_send_error::CANNOT_SEND_FOR_CALENDAR,
+        "cannotSendForCalendar"
+    );
+    assert_eq!(calendar_send_error::EVENT_NOT_FOUND, "eventNotFound");
+
+    let req = CalendarEventSendRequest::new(Id::new("acc_1"))
+        .with_identity_id(Id::new("ident_1"))
+        .with_send(BTreeMap::from([(
+            Id::new("k1"),
+            SendCalendarEvent::new()
+                .with_recipient("mailto:alice@example.com")
+                .with_send_to(BTreeMap::from([(
+                    "imip".to_owned(),
+                    "mailto:alice@example.com".to_owned(),
+                )]))
+                .with_calendar_event(CalendarEvent::new().with_title("Planning"))
+                .with_include_old_properties(true),
+        )]))
+        .with_on_success_update_calendar_event(BTreeMap::from([(
+            Id::new("evt_1"),
+            serde_json::json!({"status": "confirmed"}),
+        )]))
+        .with_on_success_destroy_calendar_event_ids(vec![Id::new("evt_old")]);
+
+    let req_json = serde_json::to_value(&req).unwrap();
+    assert_eq!(req_json["accountId"], "acc_1");
+    assert_eq!(req_json["identityId"], "ident_1");
+    assert_eq!(
+        req_json["send"]["k1"]["recipient"],
+        "mailto:alice@example.com"
+    );
+    assert_eq!(
+        req_json["send"]["k1"]["sendTo"]["imip"],
+        "mailto:alice@example.com"
+    );
+    assert_eq!(req_json["send"]["k1"]["calendarEvent"]["title"], "Planning");
+    assert_eq!(req_json["send"]["k1"]["includeOldProperties"], true);
+    assert_eq!(
+        req_json["onSuccessUpdateCalendarEvent"]["evt_1"]["status"],
+        "confirmed"
+    );
+    assert_eq!(req_json["onSuccessDestroyCalendarEventIds"][0], "evt_old");
+
+    let req_deserialized: CalendarEventSendRequest = serde_json::from_value(req_json).unwrap();
+    assert_eq!(req_deserialized, req);
+
+    let prob =
+        ParticipantProblem::new("invalidEmail").with_description("The domain does not exist");
+    let prob_json = serde_json::to_value(&prob).unwrap();
+    assert_eq!(prob_json["type"], "invalidEmail");
+    assert_eq!(prob_json["description"], "The domain does not exist");
+
+    let resp = CalendarEventSendResponse::new(Id::new("acc_1"))
+        .with_sent(BTreeMap::from([(
+            Id::new("k1"),
+            SendCalendarEventResult::new()
+                .with_send_status("sent")
+                .with_participant_problems(BTreeMap::from([(
+                    "mailto:bad@example.com".to_owned(),
+                    prob,
+                )])),
+        )]))
+        .with_not_sent(BTreeMap::from([(
+            Id::new("k2"),
+            SetError::new("forbiddenFrom").with_description("Cannot send on behalf of this user"),
+        )]));
+
+    let resp_json = serde_json::to_value(&resp).unwrap();
+    assert_eq!(resp_json["accountId"], "acc_1");
+    assert_eq!(resp_json["sent"]["k1"]["sendStatus"], "sent");
+    assert_eq!(
+        resp_json["sent"]["k1"]["participantProblems"]["mailto:bad@example.com"]["type"],
+        "invalidEmail"
+    );
+    assert_eq!(resp_json["notSent"]["k2"]["type"], "forbiddenFrom");
+
+    let resp_deserialized: CalendarEventSendResponse = serde_json::from_value(resp_json).unwrap();
+    assert_eq!(resp_deserialized, resp);
+}
+
+#[test]
+fn participant_reply_roundtrip_and_builders() {
+    use jmap_proto::calendars::{ParticipantReply, participant_participation_status};
+    use std::collections::BTreeMap;
+
+    assert_eq!(
+        participant_participation_status::NEEDS_ACTION,
+        "needs-action"
+    );
+    assert_eq!(participant_participation_status::ACCEPTED, "accepted");
+    assert_eq!(participant_participation_status::DECLINED, "declined");
+    assert_eq!(participant_participation_status::TENTATIVE, "tentative");
+    assert_eq!(participant_participation_status::DELEGATED, "delegated");
+
+    let reply = ParticipantReply::new(
+        Id::new("evt_100"),
+        participant_participation_status::ACCEPTED,
+    )
+    .with_recurrence_id("2026-09-05T10:00:00")
+    .with_comment("I will attend remotely")
+    .with_send_to(BTreeMap::from([(
+        "imip".to_owned(),
+        "mailto:organizer@example.com".to_owned(),
+    )]));
+
+    let json = serde_json::to_value(&reply).unwrap();
+    assert_eq!(json["calendarEventId"], "evt_100");
+    assert_eq!(json["participationStatus"], "accepted");
+    assert_eq!(json["recurrenceId"], "2026-09-05T10:00:00");
+    assert_eq!(json["comment"], "I will attend remotely");
+    assert_eq!(json["sendTo"]["imip"], "mailto:organizer@example.com");
+
+    let deserialized: ParticipantReply = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized, reply);
+}

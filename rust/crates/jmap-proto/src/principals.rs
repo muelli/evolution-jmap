@@ -323,6 +323,41 @@ pub mod share_notification_object_type {
     pub const MAILBOX: &str = "Mailbox";
 }
 
+/// Filter for `ShareNotification/query` (RFC 9670 §4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareNotificationQueryFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_type: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl ShareNotificationQueryFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_after(mut self, after: impl Into<UtcDate>) -> Self {
+        self.after = Some(after.into());
+        self
+    }
+
+    pub fn with_before(mut self, before: impl Into<UtcDate>) -> Self {
+        self.before = Some(before.into());
+        self
+    }
+
+    pub fn with_object_type(mut self, object_type: impl Into<String>) -> Self {
+        self.object_type = Some(object_type.into());
+        self
+    }
+}
+
 /// Principals capability properties (RFC 9670 §1.3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
