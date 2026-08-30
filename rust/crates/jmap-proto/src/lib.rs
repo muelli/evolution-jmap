@@ -19,6 +19,8 @@
 //! - [RFC 9425] JMAP for Quotas: the `Quota` object and `/query` filter.
 //! - [RFC 9404] JMAP Blob Management: `Blob/get` and `Blob/upload`.
 //! - [RFC 9265] JMAP for Sieve Scripts: `SieveScript`, `SieveScript/validate`.
+//! - [RFC 8887] JMAP Subprotocol for WebSocket: `Request`, `Response`,
+//!   `RequestError`, `WebSocketPushEnable`, `WebSocketPushDisable`.
 //!
 //! [RFC 8620]: https://www.rfc-editor.org/rfc/rfc8620
 //! [RFC 8621]: https://www.rfc-editor.org/rfc/rfc8621
@@ -30,6 +32,7 @@
 //! [RFC 9425]: https://www.rfc-editor.org/rfc/rfc9425
 //! [RFC 9404]: https://www.rfc-editor.org/rfc/rfc9404
 //! [RFC 9265]: https://www.rfc-editor.org/rfc/rfc9265
+//! [RFC 8887]: https://www.rfc-editor.org/rfc/rfc8887
 
 pub mod blob;
 #[cfg(feature = "calendars")]
@@ -52,6 +55,7 @@ pub mod sieve;
 pub mod state;
 #[cfg(feature = "calendars")]
 pub mod tasks;
+pub mod websocket;
 
 pub use id::Id;
 pub use state::{State, UtcDate};

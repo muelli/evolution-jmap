@@ -1687,3 +1687,185 @@ fn rfc9219_smime_signature_verification_forward_compatibility() {
     assert_eq!(smime_status::SIGNED_VERIFIED, "signed/verified");
     assert_eq!(smime_status::SIGNED_FAILED, "signed/failed");
 }
+
+#[test]
+fn rfc8887_websocket_forward_compatibility_and_conformance() {
+    use jmap_proto::session::{CAPABILITY_WEBSOCKET, Session};
+    use jmap_proto::websocket::{
+        SUBPROTOCOL, WebSocketPushDisable, WebSocketPushEnable, WebSocketRequest,
+        WebSocketRequestError, WebSocketResponse, message_type,
+    };
+
+    // 1. Session with websocket capability and vendor options
+    let session_json = json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {
+                "maxSizeUpload": 10000000,
+                "maxConcurrentUpload": 4,
+                "maxSizeRequest": 10000000,
+                "maxConcurrentRequests": 4,
+                "maxCallsInRequest": 16,
+                "maxObjectsInGet": 500,
+                "maxObjectsInSet": 500,
+                "collationAlgorithms": ["i;ascii-casemap", "i;unicode-casemap"]
+            },
+            "urn:ietf:params:jmap:websocket": {
+                "url": "wss://mail.example.com/jmap/ws",
+                "supportsPush": true,
+                "pingIntervalSeconds": 30,
+                "maxFrameSize": 65536
+            }
+        },
+        "accounts": {
+            "acc_ws_1": {
+                "name": "WebSocket Account",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {
+                    "urn:ietf:params:jmap:mail": {}
+                }
+            }
+        },
+        "primaryAccounts": {},
+        "username": "alice@example.com",
+        "apiUrl": "https://mail.example.com/jmap/api",
+        "downloadUrl": "https://mail.example.com/jmap/download/{blobId}",
+        "uploadUrl": "https://mail.example.com/jmap/upload/{accountId}",
+        "state": "stat_ws_01"
+    });
+
+    let session: Session = serde_json::from_value(session_json).expect("Session with websocket");
+    assert!(session.capabilities.contains_key(CAPABILITY_WEBSOCKET));
+    let ws_cap = session
+        .websocket_capability()
+        .expect("typed websocket capability");
+    assert_eq!(ws_cap.url, "wss://mail.example.com/jmap/ws");
+    assert!(ws_cap.supports_push);
+    assert_eq!(ws_cap.extra["pingIntervalSeconds"], 30);
+    assert_eq!(ws_cap.extra["maxFrameSize"], 65536);
+
+    // 2. WebSocket Request frame with forward extension members
+    let request_json = json!({
+        "@type": "Request",
+        "id": "ws-req-001",
+        "using": ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+        "methodCalls": [
+            ["Mailbox/get", {"accountId": "acc_ws_1", "ids": ["mb_inbox"]}, "call_01"]
+        ],
+        "createdIds": {
+            "tmp_k1": "real_id_1"
+        },
+        "clientTimestamp": 1756540000,
+        "compression": "deflate"
+    });
+
+    let req: WebSocketRequest =
+        serde_json::from_value(request_json).expect("WebSocketRequest deserialize");
+    assert_eq!(req.message_type, "Request");
+    assert_eq!(req.id.as_deref(), Some("ws-req-001"));
+    assert_eq!(req.using.len(), 2);
+    assert_eq!(req.method_calls.len(), 1);
+    assert_eq!(req.method_calls[0].name, "Mailbox/get");
+    assert_eq!(req.method_calls[0].call_id, "call_01");
+    assert_eq!(
+        req.created_ids
+            .as_ref()
+            .unwrap()
+            .get(&jmap_proto::id::Id::from("tmp_k1")),
+        Some(&jmap_proto::id::Id::from("real_id_1"))
+    );
+    assert_eq!(req.extra["clientTimestamp"], 1756540000);
+    assert_eq!(req.extra["compression"], "deflate");
+
+    // 3. WebSocket Response frame with forward extension members
+    let response_json = json!({
+        "@type": "Response",
+        "id": "ws-req-001",
+        "methodResponses": [
+            ["Mailbox/get", {
+                "accountId": "acc_ws_1",
+                "state": "state_mb_01",
+                "list": [{"id": "mb_inbox", "name": "Inbox"}]
+            }, "call_01"]
+        ],
+        "sessionState": "session_state_updated",
+        "createdIds": {
+            "tmp_k1": "real_id_1"
+        },
+        "serverLatencyMs": 5,
+        "workerNode": "worker-eu-central-1"
+    });
+
+    let resp: WebSocketResponse =
+        serde_json::from_value(response_json).expect("WebSocketResponse deserialize");
+    assert_eq!(resp.message_type, "Response");
+    assert_eq!(resp.id.as_deref(), Some("ws-req-001"));
+    assert_eq!(resp.method_responses.len(), 1);
+    assert_eq!(
+        resp.session_state.as_ref().map(|s| s.as_str()),
+        Some("session_state_updated")
+    );
+    assert_eq!(resp.extra["serverLatencyMs"], 5);
+    assert_eq!(resp.extra["workerNode"], "worker-eu-central-1");
+
+    // 4. WebSocket RequestError frame with forward extension members
+    let error_json = json!({
+        "@type": "RequestError",
+        "id": "ws-req-failed",
+        "type": "urn:ietf:params:jmap:error:limit",
+        "status": 400,
+        "detail": "Rate limit exceeded for client",
+        "retryAfterSeconds": 15,
+        "vendorQuotaGroup": "tier-standard"
+    });
+
+    let err: WebSocketRequestError =
+        serde_json::from_value(error_json).expect("WebSocketRequestError deserialize");
+    assert_eq!(err.message_type, "RequestError");
+    assert_eq!(err.id.as_deref(), Some("ws-req-failed"));
+    assert_eq!(err.error_type, "urn:ietf:params:jmap:error:limit");
+    assert_eq!(err.status, Some(400));
+    assert_eq!(
+        err.detail.as_deref(),
+        Some("Rate limit exceeded for client")
+    );
+    assert_eq!(err.extra["retryAfterSeconds"], 15);
+    assert_eq!(err.extra["vendorQuotaGroup"], "tier-standard");
+
+    // 5. WebSocketPushEnable & WebSocketPushDisable frames
+    let push_enable_json = json!({
+        "@type": "WebSocketPushEnable",
+        "dataTypes": ["Email", "Mailbox", "Thread"],
+        "clientSubscriptionId": "sub_push_001"
+    });
+    let push_enable: WebSocketPushEnable =
+        serde_json::from_value(push_enable_json).expect("WebSocketPushEnable deserialize");
+    assert_eq!(push_enable.message_type, "WebSocketPushEnable");
+    assert_eq!(
+        push_enable.data_types.as_ref().unwrap(),
+        &vec![
+            "Email".to_string(),
+            "Mailbox".to_string(),
+            "Thread".to_string()
+        ]
+    );
+    assert_eq!(push_enable.extra["clientSubscriptionId"], "sub_push_001");
+
+    let push_disable_json = json!({
+        "@type": "WebSocketPushDisable",
+        "reason": "user_logout"
+    });
+    let push_disable: WebSocketPushDisable =
+        serde_json::from_value(push_disable_json).expect("WebSocketPushDisable deserialize");
+    assert_eq!(push_disable.message_type, "WebSocketPushDisable");
+    assert_eq!(push_disable.extra["reason"], "user_logout");
+
+    // 6. Exact wire constants
+    assert_eq!(SUBPROTOCOL, "jmap");
+    assert_eq!(message_type::REQUEST, "Request");
+    assert_eq!(message_type::RESPONSE, "Response");
+    assert_eq!(message_type::REQUEST_ERROR, "RequestError");
+    assert_eq!(message_type::PUSH_ENABLE, "WebSocketPushEnable");
+    assert_eq!(message_type::PUSH_DISABLE, "WebSocketPushDisable");
+    assert_eq!(message_type::STATE_CHANGE, "StateChange");
+}
