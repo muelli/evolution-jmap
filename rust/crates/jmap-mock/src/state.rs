@@ -46,8 +46,8 @@ pub struct ServerState {
     /// A refused request never reaches the dispatcher, so it leaves no trace
     /// in [`Self::api_requests`] or [`Self::method_calls`] — which makes "how
     /// many times did the client try, before it gave up or found a token that
-    /// worked" unanswerable without this. `docs/ROADMAP.md` item 23's
-    /// refresh-and-retry is exactly a question of that count: a backend that
+    /// worked" unanswerable without this. Token refresh-and-retry is
+    /// exactly a question of that count: a backend that
     /// retried a 401 it had no fresher credentials for would double every
     /// rejection the user's own wrong password caused, and nothing else the
     /// server records would show it.
@@ -247,8 +247,8 @@ impl ServerState {
     ///
     /// [`crate::dispatch::handle_api`] takes one of these before and one
     /// after running a request's method calls, and diffs them to find out
-    /// what actually changed — the automatic half of `docs/ROADMAP.md` item
-    /// 28's push, which no individual `*/set` handler has to know about.
+    /// what actually changed — the automatic half of JMAP Push, which no
+    /// individual `*/set` handler has to know about.
     pub fn type_state_snapshot(&self) -> TypeStateSnapshot {
         self.accounts
             .iter()
