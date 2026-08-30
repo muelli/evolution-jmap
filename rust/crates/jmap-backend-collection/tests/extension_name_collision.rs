@@ -24,9 +24,9 @@
 //
 // So this file is one binary on purpose. The collision only bites once both
 // types are registered, and a test that shares a process with others is a test
-// whose answer depends on which of them ran first — which is exactly how this
-// reached `docs/BACKLOG.md` as an eight-in-twenty flake in `tests/recipe.rs`
-// rather than as the deterministic failure it is.
+// whose answer depends on which of them ran first — which is exactly why this
+// showed up as an eight-in-twenty flake in `tests/recipe.rs` rather than as the
+// deterministic failure it is.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -76,8 +76,8 @@ impl Drop for Source {
 /// the rebase extension is the later insert and wins the name; register it after
 /// and the generated subtype does. So a test that leaves the order to whichever
 /// of its siblings happened to run first is a test that reports a collision
-/// half the time — which is how this one reached `docs/BACKLOG.md`. Every test
-/// below goes through here, and this fixes the order once for the binary.
+/// half the time. Every test below goes through here, and this fixes the
+/// order once for the binary.
 ///
 /// The `OnceLock` is also what `tests/recipe.rs` and `tests/mail_child.rs` need
 /// it for: `e_source_camel_generate_subtype` looks the type name up and
