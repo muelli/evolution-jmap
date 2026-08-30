@@ -241,8 +241,8 @@ and Drafts under it, and clicking the Inbox should list two messages.
   is worth reading rather than dismissing, because the account it was sent from
   is fine.
 
-Anything short of that is a bug in this repository, not in the recipe;
-`docs/NIGHT-LOG.md` is where the ones found this way get written down.
+Anything short of that is a bug in this repository, not in the recipe —
+report it as you would any other bug in this project.
 
 What is left to you rather than to the test suite is that whole list: the tests
 in `rust/crates/jmap-mail/tests/recipe.rs` prove the keyfiles say what this

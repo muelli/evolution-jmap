@@ -192,8 +192,8 @@ book under it in the Contacts view and a calendar in the Calendar view.
   to prevent, and is the one thing here whose absence is invisible in Evolution
   until the old server stops answering.
 
-Anything short of that is a bug in this repository, not in the recipe;
-`docs/NIGHT-LOG.md` is where the ones found this way get written down.
+Anything short of that is a bug in this repository, not in the recipe —
+report it as you would any other bug in this project.
 
 ## A second run: the mail sources
 

@@ -174,8 +174,9 @@ pub unsafe fn follow_collection(collection: *mut ESource, child: *mut ESource) {
 /// no client id, no token endpoint and no scope — so the first expired access
 /// token became a full re-consent (observed live 2026-08-26: the registry
 /// prepared a refresh form for a memory-only calendar child's uid, and mail's
-/// connect escalated to the consent window; roadmap item 15's send-time
-/// consent is the same mechanism through the transport).
+/// connect escalated to the consent window; that same send-time re-consent
+/// (`jmap-mail`'s `connect_sync` not authenticating before the shell's
+/// prompt-first path) is the mechanism seen here, through the transport).
 ///
 /// The account's side is never invented: an account without the group has no
 /// registration to carry, and its `.source` file is the user's — the same

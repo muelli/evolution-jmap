@@ -551,7 +551,7 @@ fn finalize_drops_the_connection_the_instance_still_holds() {
 }
 
 // ---------------------------------------------------------------------------
-// JMAP Push (docs/ROADMAP.md item 28)
+// push subscriptions: teardown and stale-header reconnect
 
 /// A live push subscription against the fixture's own mock, which needs no
 /// GObject — `PushRefresh` is deliberately given its refresh action rather
