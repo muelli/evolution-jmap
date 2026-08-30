@@ -66,6 +66,7 @@ prop_compose! {
             components,
             full,
             extra,
+            ..Name::default()
         }
     }
 }
@@ -88,6 +89,7 @@ prop_compose! {
         Nickname {
             name,
             extra: BTreeMap::new(),
+            ..Nickname::default()
         }
     }
 }
@@ -187,6 +189,7 @@ prop_compose! {
             name,
             units,
             extra: BTreeMap::new(),
+            ..Organization::default()
         }
     }
 }
@@ -205,6 +208,7 @@ prop_compose! {
             name,
             kind,
             extra: BTreeMap::new(),
+            ..Title::default()
         }
     }
 }
@@ -258,6 +262,7 @@ prop_compose! {
             contexts,
             full,
             extra,
+            ..Address::default()
         }
     }
 }
@@ -267,6 +272,7 @@ prop_compose! {
         Note {
             note,
             extra: BTreeMap::new(),
+            ..Note::default()
         }
     }
 }
@@ -333,6 +339,7 @@ prop_compose! {
             uri,
             kind,
             extra,
+            ..Link::default()
         }
     }
 }
@@ -350,6 +357,7 @@ prop_compose! {
             kind,
             uri,
             extra: BTreeMap::new(),
+            ..Calendar::default()
         }
     }
 }
@@ -380,6 +388,7 @@ prop_compose! {
             uri,
             media_type,
             extra: BTreeMap::new(),
+            ..Media::default()
         }
     }
 }
@@ -431,6 +440,7 @@ prop_compose! {
             user,
             uri,
             extra: BTreeMap::new(),
+            ..OnlineService::default()
         }
     }
 }
@@ -1152,6 +1162,7 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
             components: Some(vec![NameComponent::new("given", "A")]),
             full: Some(String::new()),
             extra: BTreeMap::new(),
+            ..Name::default()
         }),
         ..Default::default()
     };
@@ -1165,6 +1176,74 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
         parsed1.name, parsed2.name,
         "name field oscillated between the first and second roundtrip"
     );
+}
+
+// Regression for empty organisation name normalization (Batch 13 Item 8 / docs/BACKLOG.md):
+// An organisation whose name is `Some("")` and has units must normalize to `name: None` on the
+// first parse, emit the leading semicolon to preserve the unit's department slot, and reach
+// immediate fixed-point stability.
+#[test]
+fn an_organization_with_an_empty_name_and_units_reaches_fixed_point_on_the_first_emit() {
+    let mut organizations = BTreeMap::new();
+    organizations.insert(
+        "o1".to_owned(),
+        Organization {
+            name: Some(String::new()),
+            units: Some(vec![OrgUnit::new("Engineering")]),
+            extra: BTreeMap::new(),
+            ..Organization::default()
+        },
+    );
+    let card = ContactCard {
+        organizations: Some(organizations),
+        ..Default::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    assert!(
+        vcard1.contains("ORG;X-JMAP-KEY=o1:;Engineering"),
+        "must emit leading semicolon for unit slot: {vcard1}"
+    );
+
+    let parsed1 = vcard_to_card(&vcard1).expect("first roundtrip must parse cleanly");
+    assert_eq!(
+        parsed1.organizations.as_ref().unwrap()["o1"].name,
+        None,
+        "empty organisation name must normalize to None (absent)"
+    );
+
+    let vcard2 = card_to_vcard(&parsed1);
+    let parsed2 = vcard_to_card(&vcard2).expect("second roundtrip must parse cleanly");
+
+    assert_eq!(vcard1, vcard2, "vCard pass 1 == pass 2");
+    assert_eq!(parsed1, parsed2, "ContactCard pass 1 == pass 2");
+}
+
+#[test]
+fn an_organization_with_an_empty_name_and_no_units_emits_no_org_line() {
+    let mut organizations = BTreeMap::new();
+    organizations.insert(
+        "o1".to_owned(),
+        Organization {
+            name: Some(String::new()),
+            units: None,
+            extra: BTreeMap::new(),
+            ..Organization::default()
+        },
+    );
+    let card = ContactCard {
+        organizations: Some(organizations),
+        ..Default::default()
+    };
+
+    let vcard1 = card_to_vcard(&card);
+    assert!(
+        !vcard1.contains("ORG"),
+        "must emit no ORG line when organization has empty name and no units: {vcard1}"
+    );
+
+    let parsed1 = vcard_to_card(&vcard1).expect("first roundtrip must parse cleanly");
+    assert_eq!(parsed1.organizations, None);
 }
 
 // Regression for `prop_emitted_vcard_lines_target_75_octets_and_are_valid_utf8`
@@ -1188,6 +1267,7 @@ fn an_adr_that_folds_to_exactly_the_limit_keeps_its_empty_slots_within_it() {
             contexts: None,
             full: None,
             extra: BTreeMap::new(),
+            ..Address::default()
         },
     );
     let card = ContactCard {
@@ -1304,6 +1384,7 @@ proptest! {
             Note {
                 note: text.clone(),
                 extra: BTreeMap::new(),
+                ..Note::default()
             },
         );
         let card = ContactCard {
@@ -1372,12 +1453,14 @@ proptest! {
                     NameComponent::new("surname", &surname),
                 ]),
                 extra: BTreeMap::new(),
+                ..Name::default()
             }),
             notes: Some([(
                 "n1".to_owned(),
                 Note {
                     note: note_text.clone(),
                     extra: BTreeMap::new(),
+                    ..Note::default()
                 },
             )].into()),
             ..ContactCard::default()
@@ -1440,6 +1523,7 @@ proptest! {
                     uri: uri.clone(),
                     media_type: media_type.clone(),
                     extra: BTreeMap::new(),
+                    ..Media::default()
                 },
             )].into()),
             ..ContactCard::default()

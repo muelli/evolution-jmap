@@ -42,6 +42,11 @@ impl Request {
             .push(Invocation::new(name, arguments, call_id)?);
         Ok(self)
     }
+
+    pub fn with_created_ids(mut self, created_ids: BTreeMap<Id, Id>) -> Self {
+        self.created_ids = Some(created_ids);
+        self
+    }
 }
 
 /// One method call or response: on the wire a three-element array of
@@ -64,6 +69,18 @@ impl Invocation {
             arguments: serde_json::to_value(arguments)?,
             call_id: call_id.into(),
         })
+    }
+
+    pub fn from_value(
+        name: impl Into<String>,
+        arguments: Value,
+        call_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            arguments,
+            call_id: call_id.into(),
+        }
     }
 
     /// Parse the arguments into a typed structure.
@@ -95,11 +112,25 @@ impl<'de> Deserialize<'de> for Invocation {
 }
 
 /// A reference to the result of a previous method call in the same request;
-/// appears under a `#`-prefixed argument name (RFC 8620 §3.7).
+/// appears under a `#`-prefixed argument name (RFC 8620 §3.7, draft-ietf-jmap-refplus).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultReference {
     pub result_of: String,
     pub name: String,
     pub path: String,
+}
+
+impl ResultReference {
+    pub fn new(
+        result_of: impl Into<String>,
+        name: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
+        Self {
+            result_of: result_of.into(),
+            name: name.into(),
+            path: path.into(),
+        }
+    }
 }

@@ -113,8 +113,10 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     };
 
     // `start` is the one property whose absence cannot be expressed.
-    if edited.start.is_some() && edited.start != baseline.start {
-        set(&mut patch, "start", edited.start.as_deref());
+    let baseline_start = baseline.start.as_deref().filter(|s| !s.is_empty());
+    let edited_start = edited.start.as_deref().filter(|s| !s.is_empty());
+    if edited_start.is_some() && edited_start != baseline_start {
+        set(&mut patch, "start", edited_start);
     }
     // `timeZone` is the one property whose *new* value may be unsendable. A
     // component states its zone with a `TZID`, which is an iCalendar identifier
@@ -131,8 +133,10 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
     // defines — a Windows zone off an Exchange invitation, or a solidus-prefixed
     // one with no `VTIMEZONE` beside it — which is left alone rather than sent as
     // it came or cleared.
-    if maps_time_zone(edited) && baseline.time_zone != edited.time_zone {
-        set(&mut patch, "timeZone", edited.time_zone.as_deref());
+    let baseline_tz = baseline.time_zone.as_deref().filter(|s| !s.is_empty());
+    let edited_tz = edited.time_zone.as_deref().filter(|s| !s.is_empty());
+    if maps_time_zone(edited) && baseline_tz != edited_tz {
+        set(&mut patch, "timeZone", edited_tz);
     }
     for (property, was, now) in [
         ("title", &baseline.title, &edited.title),
@@ -159,8 +163,10 @@ pub fn diff(current: &CalendarEvent, edited: &CalendarEvent) -> Map<String, Valu
         // renders the line too, so every later save diffs clean.
         ("privacy", &baseline.privacy, &edited.privacy),
     ] {
-        if was != now {
-            set(&mut patch, property, now.as_deref());
+        let was_norm = was.as_deref().filter(|s| !s.is_empty());
+        let now_norm = now.as_deref().filter(|s| !s.is_empty());
+        if was_norm != now_norm {
+            set(&mut patch, property, now_norm);
         }
     }
 
@@ -390,7 +396,7 @@ fn drawn_name(event: &CalendarEvent) -> Option<&str> {
         .locations
         .iter()
         .flatten()
-        .find_map(|(_, place)| place.get("name")?.as_str())
+        .find_map(|(_, place)| place.get("name")?.as_str().filter(|name| !name.is_empty()))
 }
 
 /// The patch path of one place's name.
@@ -464,10 +470,22 @@ fn diff_virtual_locations(
             continue;
         };
         for member in ["uri", "name", "features"] {
-            if before.get(member) == after.get(member) {
+            let before_val = before.get(member);
+            let after_val = after.get(member);
+            let before_norm = match before_val {
+                Some(Value::String(s)) if s.is_empty() => None,
+                Some(Value::Object(m)) if m.is_empty() => None,
+                _ => before_val,
+            };
+            let after_norm = match after_val {
+                Some(Value::String(s)) if s.is_empty() => None,
+                Some(Value::Object(m)) if m.is_empty() => None,
+                _ => after_val,
+            };
+            if before_norm == after_norm {
                 continue;
             }
-            match after.get(member) {
+            match after_norm {
                 Some(value) => {
                     patch.insert(member_of(key, member), value.clone());
                 }
@@ -616,13 +634,17 @@ fn the_servers_own_entry(held: &BTreeMap<String, Value>, key: &str, before: &Val
 /// [`maps_recurrence_override`] of every restated tag, and an override holding
 /// one it refuses is left alone whole rather than carried back: an override is
 /// itself an entry of a keyed map, so there the patch has a key to leave unnamed.
+fn non_empty_map(map: Option<&BTreeMap<String, Value>>) -> Option<&BTreeMap<String, Value>> {
+    map.filter(|m| !m.is_empty())
+}
+
 fn diff_keywords(
     patch: &mut Map<String, Value>,
     current: &CalendarEvent,
     baseline: &CalendarEvent,
     edited: &CalendarEvent,
 ) {
-    if baseline.keywords == edited.keywords {
+    if non_empty_map(baseline.keywords.as_ref()) == non_empty_map(edited.keywords.as_ref()) {
         return;
     }
     let empty = BTreeMap::new();
@@ -634,7 +656,14 @@ fn diff_keywords(
         .filter(|(tag, set)| !maps_keyword(tag, set))
         .map(|(tag, set)| (tag.clone(), set.clone()))
         .collect();
-    wanted.extend(edited.keywords.clone().unwrap_or_default());
+    wanted.extend(
+        edited
+            .keywords
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(tag, _)| !tag.is_empty()),
+    );
     patch.insert(
         "keywords".to_owned(),
         if wanted.is_empty() {
@@ -679,12 +708,12 @@ fn diff_alerts(
     if !maps_alerts(current) {
         return;
     }
-    if baseline.alerts == edited.alerts {
+    if non_empty_map(baseline.alerts.as_ref()) == non_empty_map(edited.alerts.as_ref()) {
         return;
     }
     patch.insert(
         "alerts".to_owned(),
-        match &edited.alerts {
+        match non_empty_map(edited.alerts.as_ref()) {
             // Serialising a map this crate's own reader built cannot fail: it
             // holds two objects of strings.
             Some(alerts) => serde_json::to_value(alerts).unwrap_or(Value::Null),
@@ -768,12 +797,14 @@ fn diff_overrides(
     }) {
         return;
     }
-    if baseline.recurrence_overrides == edited.recurrence_overrides {
+    if non_empty_map(baseline.recurrence_overrides.as_ref())
+        == non_empty_map(edited.recurrence_overrides.as_ref())
+    {
         return;
     }
     patch.insert(
         "recurrenceOverrides".to_owned(),
-        match &edited.recurrence_overrides {
+        match non_empty_map(edited.recurrence_overrides.as_ref()) {
             // Serialising a map of the two patches this mapping reads cannot
             // fail: they hold one boolean between them.
             Some(overrides) => serde_json::to_value(overrides).unwrap_or(Value::Null),

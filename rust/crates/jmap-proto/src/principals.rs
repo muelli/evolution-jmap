@@ -38,6 +38,12 @@ pub struct Principal {
     pub email: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_zone: Option<String>,
+    /// An alphanumeric secret string to authorize access to this principal (RFC 9670 §2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Valid methods for sending scheduling messages to this principal (RFC 9670 §2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_to: Option<BTreeMap<String, String>>,
     /// Server-set, per-*principal* capability bag — distinct from the
     /// account/server capability maps in `session.rs`. This is where the
     /// calendars draft hangs `mayGetAvailability` (draft-ietf-jmap-calendars
@@ -48,8 +54,69 @@ pub struct Principal {
     pub capabilities: BTreeMap<String, Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accounts: Option<BTreeMap<Id, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_personal: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Principal {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_type(mut self, principal_type: impl Into<String>) -> Self {
+        self.principal_type = Some(principal_type.into());
+        self
+    }
+
+    pub fn with_email(mut self, email: impl Into<String>) -> Self {
+        self.email = Some(email.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_secret(mut self, secret: impl Into<String>) -> Self {
+        self.secret = Some(secret.into());
+        self
+    }
+
+    pub fn with_send_to(mut self, send_to: BTreeMap<String, String>) -> Self {
+        self.send_to = Some(send_to);
+        self
+    }
+
+    pub fn with_capabilities(mut self, capabilities: BTreeMap<String, Value>) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    pub fn is_personal(mut self, is_personal: bool) -> Self {
+        self.is_personal = Some(is_personal);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `Principal/query` filter (RFC 9670 §2): resolve a person by name, email,
@@ -71,6 +138,16 @@ impl PrincipalQueryFilter {
             email: Some(email.into()),
             ..Self::default()
         }
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
     }
 }
 
@@ -116,12 +193,37 @@ impl GetAvailabilityRequest {
     }
 }
 
+/// Well-known principal types (RFC 9670 §2).
+pub mod principal_type {
+    pub const INDIVIDUAL: &str = "individual";
+    pub const GROUP: &str = "group";
+    pub const RESOURCE: &str = "resource";
+    pub const LOCATION: &str = "location";
+    pub const OTHER: &str = "other";
+}
+
+/// Well-known busy status values (draft-ietf-jmap-calendars §2.2).
+pub mod busy_status {
+    pub const CONFIRMED: &str = "confirmed";
+    pub const TENTATIVE: &str = "tentative";
+    pub const UNAVAILABLE: &str = "unavailable";
+}
+
 /// `Principal/getAvailability` response: the merged `BusyPeriod`s in the
 /// requested window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAvailabilityResponse {
+    #[serde(default)]
     pub list: Vec<BusyPeriod>,
+}
+
+impl GetAvailabilityResponse {
+    pub fn new(list: impl IntoIterator<Item = BusyPeriod>) -> Self {
+        Self {
+            list: list.into_iter().collect(),
+        }
+    }
 }
 
 /// One busy interval (draft-ietf-jmap-calendars §2.2). `busy_status` is one
@@ -137,8 +239,245 @@ pub struct BusyPeriod {
     pub event: Option<CalendarEvent>,
 }
 
+impl BusyPeriod {
+    pub fn new(
+        utc_start: impl Into<UtcDate>,
+        utc_end: impl Into<UtcDate>,
+        busy_status: impl Into<String>,
+    ) -> Self {
+        Self {
+            utc_start: utc_start.into(),
+            utc_end: utc_end.into(),
+            busy_status: busy_status.into(),
+            event: None,
+        }
+    }
+
+    pub fn with_event(mut self, event: CalendarEvent) -> Self {
+        self.event = Some(event);
+        self
+    }
+}
+
+/// A notification that a share was created, updated, or removed (RFC 9670 §4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareNotification {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    pub created: UtcDate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Principal>,
+    pub object_type: String,
+    pub object_id: Id,
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_rights: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_rights: Option<Value>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl ShareNotification {
+    pub fn new(
+        created: impl Into<UtcDate>,
+        object_type: impl Into<String>,
+        object_id: impl Into<Id>,
+        account_id: impl Into<Id>,
+    ) -> Self {
+        Self {
+            id: None,
+            created: created.into(),
+            changed_by: None,
+            object_type: object_type.into(),
+            object_id: object_id.into(),
+            account_id: account_id.into(),
+            name: None,
+            old_rights: None,
+            new_rights: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_changed_by(mut self, changed_by: Principal) -> Self {
+        self.changed_by = Some(changed_by);
+        self
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn with_old_rights(mut self, old_rights: Value) -> Self {
+        self.old_rights = Some(old_rights);
+        self
+    }
+
+    pub fn with_new_rights(mut self, new_rights: Value) -> Self {
+        self.new_rights = Some(new_rights);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// Standard RFC 9670 §4 share notification object types.
+pub mod share_notification_object_type {
+
+    pub const ADDRESS_BOOK: &str = "AddressBook";
+    pub const CALENDAR: &str = "Calendar";
+    pub const MAILBOX: &str = "Mailbox";
+}
+
+/// Filter for `ShareNotification/query` (RFC 9670 §4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareNotificationQueryFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object_type: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl ShareNotificationQueryFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_after(mut self, after: impl Into<UtcDate>) -> Self {
+        self.after = Some(after.into());
+        self
+    }
+
+    pub fn with_before(mut self, before: impl Into<UtcDate>) -> Self {
+        self.before = Some(before.into());
+        self
+    }
+
+    pub fn with_object_type(mut self, object_type: impl Into<String>) -> Self {
+        self.object_type = Some(object_type.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// Principals capability properties (RFC 9670 §1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrincipalsCapability {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_principals_per_get: Option<u64>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl PrincipalsCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_principals_per_get(mut self, max: u64) -> Self {
+        self.max_principals_per_get = Some(max);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// Principals owner capability properties (RFC 9670 §1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrincipalsOwnerCapability {
+    pub account_id_for_principal: Id,
+    pub principal_id: Id,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl PrincipalsOwnerCapability {
+    pub fn new(account_id_for_principal: impl Into<Id>, principal_id: impl Into<Id>) -> Self {
+        Self {
+            account_id_for_principal: account_id_for_principal.into(),
+            principal_id: principal_id.into(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_account_id_for_principal(mut self, account_id: impl Into<Id>) -> Self {
+        self.account_id_for_principal = account_id.into();
+        self
+    }
+
+    pub fn with_principal_id(mut self, principal_id: impl Into<Id>) -> Self {
+        self.principal_id = principal_id.into();
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// The `SetError` types RFC 9670 §2 adds for `Principal/set`.
+pub mod principal_set_error {
+    pub const FORBIDDEN: &str = "forbidden";
+    pub const PRINCIPAL_ALREADY_EXISTS: &str = "principalAlreadyExists";
+    pub const INVALID_PROPERTIES: &str = "invalidProperties";
+}
+
+/// Principal availability calculation capability properties (draft-ietf-jmap-calendars-28 §1.5.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrincipalAvailabilityCapability {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_availability_duration: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl PrincipalAvailabilityCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_availability_duration(mut self, duration: impl Into<String>) -> Self {
+        self.max_availability_duration = Some(duration.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     #[test]
@@ -206,12 +545,11 @@ mod tests {
 
     #[test]
     fn busy_period_round_trips_with_and_without_an_event() {
-        let without_event = BusyPeriod {
-            utc_start: UtcDate::new("2026-09-01T13:00:00Z"),
-            utc_end: UtcDate::new("2026-09-01T14:00:00Z"),
-            busy_status: "confirmed".to_owned(),
-            event: None,
-        };
+        let without_event = BusyPeriod::new(
+            UtcDate::new("2026-09-01T13:00:00Z"),
+            UtcDate::new("2026-09-01T14:00:00Z"),
+            "confirmed",
+        );
         let json = serde_json::to_value(&without_event).unwrap();
         assert!(json.get("event").is_none());
         assert_eq!(
@@ -219,13 +557,15 @@ mod tests {
             without_event
         );
 
-        let with_event = BusyPeriod {
-            event: Some(CalendarEvent {
-                title: Some("Dentist".to_owned()),
-                ..CalendarEvent::default()
-            }),
-            ..without_event
-        };
+        let with_event = BusyPeriod::new(
+            UtcDate::new("2026-09-01T13:00:00Z"),
+            UtcDate::new("2026-09-01T14:00:00Z"),
+            "confirmed",
+        )
+        .with_event(CalendarEvent {
+            title: Some("Dentist".to_owned()),
+            ..CalendarEvent::default()
+        });
         let json = serde_json::to_value(&with_event).unwrap();
         assert_eq!(json["event"]["title"], "Dentist");
         assert_eq!(
@@ -237,12 +577,11 @@ mod tests {
     #[test]
     fn get_availability_response_round_trips_a_list_of_busy_periods() {
         let response = GetAvailabilityResponse {
-            list: vec![BusyPeriod {
-                utc_start: UtcDate::new("2026-09-01T13:00:00Z"),
-                utc_end: UtcDate::new("2026-09-01T14:00:00Z"),
-                busy_status: "tentative".to_owned(),
-                event: None,
-            }],
+            list: vec![BusyPeriod::new(
+                UtcDate::new("2026-09-01T13:00:00Z"),
+                UtcDate::new("2026-09-01T14:00:00Z"),
+                "tentative",
+            )],
         };
         let json = serde_json::to_value(&response).unwrap();
         assert_eq!(json["list"][0]["busyStatus"], "tentative");

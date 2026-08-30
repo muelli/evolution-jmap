@@ -767,7 +767,8 @@ pub fn maps_alerts(event: &CalendarEvent) -> bool {
 /// because the property is not modeled: nothing here writes it, and the only
 /// question asked of it is whether it is `true`.
 fn uses_default_alerts(event: &CalendarEvent) -> bool {
-    event.extra.get("useDefaultAlerts") == Some(&Value::Bool(true))
+    event.use_default_alerts == Some(true)
+        || event.extra.get("useDefaultAlerts") == Some(&Value::Bool(true))
 }
 
 /// One entry of `alerts` as the `VALARM` that states it, or `None` for a reminder
@@ -1306,6 +1307,8 @@ fn read_alert(valarm: &ICalendarComponent) -> Option<Value> {
 /// then leaves off.
 pub fn maps_recurrence_rule(rule: &RecurrenceRule) -> bool {
     rule.extra.is_empty()
+        && rule.rscale.is_none()
+        && rule.skip.is_none()
         && writable(rule)
         && rule
             .by_day
@@ -1780,7 +1783,7 @@ pub fn time_zone_definition<'a>(event: &'a CalendarEvent, tzid: &str) -> Option<
 /// good as undefined. Callers: `jmap_cal_sync`'s create path, which files the
 /// appointment floating rather than sending a zone a server cannot resolve.
 pub fn maps_time_zone(event: &CalendarEvent) -> bool {
-    let Some(tzid) = event.time_zone.as_deref() else {
+    let Some(tzid) = event.time_zone.as_deref().filter(|s| !s.is_empty()) else {
         return true;
     };
     names_time_zone(tzid) || defines_time_zone(event, tzid)
@@ -2222,6 +2225,10 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
         // arrived without it would be drawn with alarms the series beside it is
         // drawn without — reminders that never fire, and, read back, an occurrence
         // the user apparently set them on.
+        use_default_alerts: event.use_default_alerts,
+        color: event.color.clone(),
+        locale: event.locale.clone(),
+        localizations: event.localizations.clone(),
         extra: event.extra.clone(),
         ..CalendarEvent::default()
     };
@@ -3383,6 +3390,7 @@ fn read_vevent(
         // scope, so `None` is also the honest answer here.
         time_zones: None,
         extra: Default::default(),
+        ..CalendarEvent::default()
     }
 }
 

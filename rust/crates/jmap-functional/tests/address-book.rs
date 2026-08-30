@@ -771,7 +771,7 @@ const SEEDED_FREEBUSY_URI: &str = "https://oldenburg.example/fb/jp.ifb";
 /// parameter for it, so it rides in the entry's `extra` and is the member that
 /// says whether a save *patched* the entry or replaced it: a replacement would
 /// hold the URI and nothing else.
-const SEEDED_CALENDAR_PREF: u64 = 1;
+const SEEDED_CALENDAR_PREF: u32 = 1;
 /// Who the server says the seeded card's owner is married to. A key rather than
 /// a value — RFC 9553 §2.1.8 keys `relatedTo` by the related entity itself — and
 /// free text rather than a `uid`, which is what RFC 9555 §2.9.5 allows and what
@@ -1324,8 +1324,11 @@ fn assert_the_seeded_calendars_survived(card: &ContactCard) {
         "the save rewrote the calendar address nobody touched: {card:?}"
     );
     assert_eq!(
-        calendar.extra.get("pref"),
-        Some(&serde_json::json!(SEEDED_CALENDAR_PREF)),
+        calendar.pref.or_else(|| calendar
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(SEEDED_CALENDAR_PREF),
         "{card:?}"
     );
 }
@@ -1378,8 +1381,11 @@ fn assert_the_seeded_notes_survived(card: &ContactCard) {
         "the save rewrote the note nobody touched: {card:?}"
     );
     assert_eq!(
-        note.extra.get("created"),
-        Some(&serde_json::json!(SEEDED_NOTE_CREATED)),
+        note.created
+            .as_ref()
+            .map(|d| d.as_str())
+            .or_else(|| note.extra.get("created").and_then(|v| v.as_str())),
+        Some(SEEDED_NOTE_CREATED),
         "{card:?}"
     );
 }
@@ -1476,7 +1482,7 @@ fn assert_the_seeded_service_survived(card: &ContactCard) {
     );
     assert_eq!(s2.user, None);
     assert_eq!(
-        s2.extra.get("contexts"),
+        s2.contexts.as_ref().or_else(|| s2.extra.get("contexts")),
         Some(&serde_json::json!({"private": true}))
     );
 
@@ -1493,7 +1499,7 @@ fn assert_the_seeded_service_survived(card: &ContactCard) {
     );
     assert_eq!(s3.uri, None);
     assert_eq!(
-        s3.extra.get("contexts"),
+        s3.contexts.as_ref().or_else(|| s3.extra.get("contexts")),
         Some(&serde_json::json!({"work": true}))
     );
 }
@@ -2301,8 +2307,11 @@ fn retyping_the_calendar_address_through_eds_patches_the_entry_it_replaces() {
         "the calendar address the user typed did not reach the server: {card:?}"
     );
     assert_eq!(
-        calendar.extra.get("pref"),
-        Some(&serde_json::json!(SEEDED_CALENDAR_PREF)),
+        calendar.pref.or_else(|| calendar
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(SEEDED_CALENDAR_PREF),
         "the save replaced the entry instead of patching it: {card:?}"
     );
     assert_the_seeded_freebusy_survived(card);
@@ -2740,8 +2749,11 @@ fn retyping_the_note_through_eds_patches_the_entry_it_replaces() {
         "the note the user typed did not reach the server: {card:?}"
     );
     assert_eq!(
-        note.extra.get("created"),
-        Some(&serde_json::json!(SEEDED_NOTE_CREATED)),
+        note.created
+            .as_ref()
+            .map(|d| d.as_str())
+            .or_else(|| note.extra.get("created").and_then(|v| v.as_str())),
+        Some(SEEDED_NOTE_CREATED),
         "the save replaced the entry instead of patching it: {card:?}"
     );
     assert_the_seeded_second_note_survived(card);

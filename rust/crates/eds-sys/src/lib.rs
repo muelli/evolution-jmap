@@ -40,4 +40,10 @@ pub const EDS_HEADER_VERSION: &str = env!("EDS_HEADER_VERSION");
 
 pub mod compat;
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+// Suppress unnecessary_transmutes warnings emitted by bindgen for glibc's
+// _IO_FILE bitfield accessor in newer container/rustc environments.
+#[allow(unnecessary_transmutes)]
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
+pub use generated::*;

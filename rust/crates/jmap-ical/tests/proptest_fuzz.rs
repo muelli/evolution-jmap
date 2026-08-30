@@ -106,6 +106,8 @@ prop_compose! {
             by_month,
             by_set_position,
             first_day_of_week,
+            rscale: None,
+            skip: None,
             extra: BTreeMap::new(),
         }
     }

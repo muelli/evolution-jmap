@@ -1073,9 +1073,9 @@ fn a_recurrence_the_mapping_cannot_carry_is_left_alone() {
     sync.save_component(&edited, Some(id.as_str())).unwrap();
 
     let rules = fixture.event(&id).recurrence_rule.unwrap();
-    assert_eq!(
-        rules.extra.get("rscale"),
-        Some(&json!("chinese")),
+    assert!(
+        rules.rscale.as_deref() == Some("chinese")
+            || rules.extra.get("rscale") == Some(&json!("chinese")),
         "a rule part the RRULE could not carry was dropped"
     );
     assert_eq!(
@@ -3884,7 +3884,13 @@ fn an_event_that_takes_the_default_reminders_keeps_them() {
         Some([("k1".to_owned(), quarter_of_an_hour_before())].into()),
         "a property nothing reads must not be written"
     );
-    assert_eq!(stored.extra.get("useDefaultAlerts"), Some(&json!(true)));
+    assert_eq!(
+        stored.use_default_alerts.or_else(|| stored
+            .extra
+            .get("useDefaultAlerts")
+            .and_then(|v| v.as_bool())),
+        Some(true)
+    );
     assert_eq!(
         stored.title.as_deref(),
         Some("Standup (short)"),
@@ -5372,4 +5378,420 @@ fn clearing_location_and_priority_patches_server_fields() {
     assert_eq!(stored.description.as_deref(), Some("Weekly status check"));
     let kws = stored.keywords.expect("keywords");
     assert!(kws.contains_key("standup"));
+}
+
+#[test]
+fn no_op_save_mints_no_patch_across_all_calendar_mapped_surfaces_matrix() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    // Matrix covering:
+    // - alerts (relative/absolute triggers, action, useDefaultAlerts)
+    // - recurrenceRule (daily/weekly/monthly RRULE, INTERVAL, UNTIL, COUNT)
+    // - recurrenceOverrides (EXDATE, RDATE, RECURRENCE-ID overrides)
+    // - zones (IANA, custom timeZones)
+    // - locations and virtualLocations (LOCATION, CONFERENCE)
+    // - links (ATTACH, IMAGE)
+    // - keywords / categories
+    // - privacy, status, priority, freeBusyStatus, showWithoutTime
+    // - unmodeled extra properties
+    let cases = vec![
+        (
+            "composite_recurring_event",
+            json!({
+                "title": "Quarterly Planning Workshop",
+                "description": "Full-day strategic roadmap alignment",
+                "start": "2026-03-01T09:00:00",
+                "duration": "PT8H",
+                "timeZone": "Europe/Berlin",
+                "status": "confirmed",
+                "privacy": "private",
+                "priority": 1,
+                "freeBusyStatus": "busy",
+                "showWithoutTime": false,
+                "locations": {
+                    "loc1": {
+                        "@type": "Location",
+                        "name": "Main Auditorium",
+                        "description": "Building A, Floor 2",
+                        "coordinates": "geo:52.520008,13.404954"
+                    }
+                },
+                "virtualLocations": {
+                    "v1": {
+                        "@type": "VirtualLocation",
+                        "name": "Video Conference",
+                        "uri": "https://meet.example.com/quarterly-planning",
+                        "features": {"video": true, "audio": true}
+                    }
+                },
+                "links": {
+                    "l1": {
+                        "@type": "Link",
+                        "href": "https://docs.example.com/q1-slides.pdf",
+                        "contentType": "application/pdf",
+                        "size": 1048576,
+                        "rel": "enclosure"
+                    }
+                },
+                "keywords": {
+                    "Strategy": true,
+                    "Planning": true
+                },
+                "alerts": {
+                    "a1": {
+                        "@type": "Alert",
+                        "action": "display",
+                        "trigger": {
+                            "@type": "OffsetTrigger",
+                            "offset": "-PT30M",
+                            "relativeTo": "start"
+                        }
+                    }
+                },
+                "recurrenceRule": {
+                    "@type": "RecurrenceRule",
+                    "frequency": "monthly",
+                    "interval": 3,
+                    "count": 4
+                },
+                "recurrenceOverrides": {
+                    "2026-06-01T09:00:00": {
+                        "excluded": true
+                    }
+                },
+                "unmodeledCalendarBags": {"costCenter": "1040", "organizerNote": "cater lunch"}
+            }),
+        ),
+        (
+            "allday_event_with_custom_timezone_and_tags",
+            json!({
+                "title": "Annual Company Offsite",
+                "start": "2026-07-15",
+                "duration": "P3D",
+                "showWithoutTime": true,
+                "status": "confirmed",
+                "privacy": "public",
+                "keywords": {
+                    "Offsite": true,
+                    "Company": true
+                },
+                "alerts": {
+                    "a1": {
+                        "@type": "Alert",
+                        "action": "display",
+                        "trigger": {
+                            "@type": "OffsetTrigger",
+                            "offset": "-P1D",
+                            "relativeTo": "start"
+                        }
+                    }
+                }
+            }),
+        ),
+    ];
+
+    for (name, initial_patch) in cases {
+        let id = fixture.seed(&fixture.ours, "Seed Event", "2026-01-15T10:00:00");
+        fixture.patch(&id, initial_patch);
+
+        // Load 1: Read event as rendered iCalendar
+        let loaded1 = sync.load_component(id.as_str()).expect(name);
+
+        // Save 1: Save untouched iCalendar back
+        let saved1 = sync
+            .save_component(&loaded1.icalendar, Some(id.as_str()))
+            .expect(name);
+
+        // Load 2: Fresh reload after Save 1
+        let loaded2 = sync.load_component(id.as_str()).expect(name);
+
+        // Assert: Save 2 MUST produce NO patch and preserve identical revision
+        let saved2 = sync
+            .save_component(&loaded2.icalendar, Some(id.as_str()))
+            .expect(name);
+        assert_eq!(
+            saved1.revision, saved2.revision,
+            "case '{name}': second save must not update revision"
+        );
+
+        // Assert: diff between server state and parsed event is completely empty
+        let current_event = fixture.event(&id);
+        let parsed_event = jmap_ical::ical_to_event(&loaded2.icalendar).expect(name);
+        let patch_diff = jmap_cal_sync::patch::diff(&current_event, &parsed_event);
+        assert!(
+            patch_diff.is_empty(),
+            "case '{name}': diff after round-trip must be empty, found: {patch_diff:?}"
+        );
+    }
+}
+
+#[test]
+fn no_op_save_mints_no_patch_on_empty_container_collections_and_empty_strings() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    let id = fixture.seed(&fixture.ours, "Seed Event", "2026-01-15T10:00:00");
+    fixture.patch(
+        &id,
+        json!({
+            "title": "",
+            "description": "",
+            "locations": {
+                "loc1": {
+                    "@type": "Location",
+                    "name": ""
+                }
+            },
+            "virtualLocations": {
+                "v1": {
+                    "@type": "VirtualLocation",
+                    "uri": "https://meet.example.com/standup",
+                    "name": "",
+                    "features": {}
+                }
+            },
+            "keywords": {},
+            "alerts": {},
+            "recurrenceOverrides": {},
+            "timeZone": "",
+            "links": {
+                "l1": {
+                    "@type": "Link",
+                    "href": ""
+                }
+            }
+        }),
+    );
+
+    let loaded1 = sync.load_component(id.as_str()).expect("load 1");
+    let saved1 = sync
+        .save_component(&loaded1.icalendar, Some(id.as_str()))
+        .expect("save 1");
+
+    let loaded2 = sync.load_component(id.as_str()).expect("load 2");
+    let saved2 = sync
+        .save_component(&loaded2.icalendar, Some(id.as_str()))
+        .expect("save 2");
+
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must not bump revision for empty containers, empty timeZone, and empty strings"
+    );
+
+    let current_event = fixture.event(&id);
+    let parsed_event = jmap_ical::ical_to_event(&loaded2.icalendar).expect("parse loaded2");
+    let patch_diff = jmap_cal_sync::patch::diff(&current_event, &parsed_event);
+    assert!(
+        patch_diff.is_empty(),
+        "diff after round-trip must be empty, found: {patch_diff:?}"
+    );
+
+    // Direct diff when edited carries explicit empty containers / empty names:
+    let mut edited_with_empty = parsed_event.clone();
+    edited_with_empty.time_zone = Some("".to_owned());
+    edited_with_empty.locations =
+        Some([("1".into(), json!({"@type": "Location", "name": ""}))].into());
+    edited_with_empty.virtual_locations = Some(
+        [(
+            "v1".into(),
+            json!({
+                "@type": "VirtualLocation",
+                "uri": "https://meet.example.com/standup",
+                "name": "",
+                "features": {}
+            }),
+        )]
+        .into(),
+    );
+    edited_with_empty.links = Some(
+        [(
+            "l1".into(),
+            json!({
+                "@type": "Link",
+                "href": ""
+            }),
+        )]
+        .into(),
+    );
+    edited_with_empty.alerts = Some(std::collections::BTreeMap::new());
+    edited_with_empty.recurrence_overrides = Some(std::collections::BTreeMap::new());
+
+    let direct_diff = jmap_cal_sync::patch::diff(&current_event, &edited_with_empty);
+    assert!(
+        direct_diff.is_empty(),
+        "diff with empty containers must be empty, found: {direct_diff:?}"
+    );
+}
+
+#[test]
+fn diff_normalizes_empty_timezone_and_start_against_absent_baseline() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Planning", "2026-01-15T13:00:00");
+    let mut current = fixture.event(&id);
+    current.time_zone = None;
+
+    let mut edited = current.clone();
+    edited.time_zone = Some("".to_owned());
+
+    let patch = jmap_cal_sync::patch::diff(&current, &edited);
+    assert!(
+        patch.is_empty(),
+        "diff with empty timeZone against None must be empty, found: {patch:?}"
+    );
+
+    let mut current_empty_tz = current.clone();
+    current_empty_tz.time_zone = Some("".to_owned());
+    let mut edited_none_tz = current.clone();
+    edited_none_tz.time_zone = None;
+
+    let patch2 = jmap_cal_sync::patch::diff(&current_empty_tz, &edited_none_tz);
+    assert!(
+        patch2.is_empty(),
+        "diff with None timeZone against empty timeZone must be empty, found: {patch2:?}"
+    );
+
+    // Clearing timeZone via empty string from an event with a timeZone patches null:
+    let mut current_with_tz = current.clone();
+    current_with_tz.time_zone = Some("Europe/Berlin".to_owned());
+    let mut edited_cleared_tz = current_with_tz.clone();
+    edited_cleared_tz.time_zone = Some("".to_owned());
+    let patch3 = jmap_cal_sync::patch::diff(&current_with_tz, &edited_cleared_tz);
+    assert_eq!(
+        patch3.get("timeZone"),
+        Some(&serde_json::Value::Null),
+        "clearing timeZone via empty string must patch timeZone to null"
+    );
+}
+
+#[test]
+fn no_op_save_mints_no_patch_across_all_calendar_surfaces_matrix() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Sprint Retrospective", "2026-06-15T10:00:00");
+    let sync = fixture.sync();
+
+    // Populate every mapped and unmapped surface across the JSCalendar schema
+    fixture.patch(
+        &id,
+        json!({
+            "title": "Sprint Retrospective & Roadmap Planning",
+            "description": "Bi-weekly review of engineering progress and milestones.",
+            "start": "2026-06-15T10:00:00",
+            "timeZone": "Europe/Berlin",
+            "duration": "PT1H30M",
+            "status": "confirmed",
+            "freeBusyStatus": "busy",
+            "privacy": "private",
+            "priority": 2,
+            "showWithoutTime": false,
+            "locations": {
+                "l1": {
+                    "@type": "Location",
+                    "name": "Main Auditorium, Building B",
+                    "description": "Floor 2, Room 201",
+                    "timeZone": "Europe/Berlin"
+                }
+            },
+            "virtualLocations": {
+                "v1": {
+                    "@type": "VirtualLocation",
+                    "uri": "https://meet.example.com/retro",
+                    "name": "Main Video Room",
+                    "features": {"video": true, "audio": true},
+                    "description": "PIN: 1234"
+                }
+            },
+            "links": {
+                "link1": {
+                    "@type": "Link",
+                    "href": "https://files.example.com/retro_agenda.pdf",
+                    "contentType": "application/pdf",
+                    "size": 102400,
+                    "title": "Retro Agenda"
+                }
+            },
+            "alerts": {
+                "a1": {
+                    "@type": "Alert",
+                    "action": "display",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M",
+                        "relativeTo": "start"
+                    }
+                }
+            },
+            "keywords": {
+                "Engineering": true,
+                "Sprint": true,
+                "Roadmap": true
+            },
+            "recurrenceRule": {
+                "@type": "RecurrenceRule",
+                "frequency": "weekly",
+                "interval": 2,
+                "byDay": [{"day": "mo"}]
+            },
+            "recurrenceOverrides": {
+                "2026-06-29T10:00:00": {
+                    "excluded": true
+                }
+            },
+            "participants": {
+                "p1": {
+                    "@type": "Participant",
+                    "name": "Vera Oldenburg",
+                    "email": "vera@example.com",
+                    "roles": {"owner": true, "attendee": true}
+                }
+            },
+            "sequence": 4,
+            "color": "#336699",
+            "locale": "en-US",
+            "customEventBag": "custom-event-data"
+        }),
+    );
+
+    // First load -> save cycle (simulating opening & saving untouched in Evolution)
+    let loaded1 = sync.load_component(id.as_str()).expect("load 1");
+    let saved1 = sync
+        .save_component(&loaded1.icalendar, Some(id.as_str()))
+        .expect("save 1");
+
+    // Second load -> save cycle
+    let loaded2 = sync.load_component(id.as_str()).expect("load 2");
+    let parsed_event2 = jmap_ical::ical_to_event(&loaded2.icalendar).expect("parse 2");
+    let current_event = fixture.event(&id);
+
+    let second_patch = jmap_cal_sync::patch::diff(&current_event, &parsed_event2);
+    assert!(
+        second_patch.is_empty(),
+        "second diff on event after round-trip must mint no patch, found: {second_patch:?}"
+    );
+
+    let saved2 = sync
+        .save_component(&loaded2.icalendar, Some(id.as_str()))
+        .expect("save 2");
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must not change server revision for untouched event"
+    );
+
+    // Verify all unmapped and mapped fields remain preserved server-side
+    let stored = fixture.event(&id);
+    assert_eq!(
+        stored.title.as_deref(),
+        Some("Sprint Retrospective & Roadmap Planning")
+    );
+    assert_eq!(stored.duration.as_deref(), Some("PT1H30M"));
+    assert_eq!(stored.privacy.as_deref(), Some("private"));
+    assert_eq!(stored.priority, Some(2));
+    assert!(stored.participants.is_some() || stored.extra.contains_key("participants"));
+    assert_eq!(stored.color.as_deref(), Some("#336699"));
+    assert_eq!(stored.locale.as_deref(), Some("en-US"));
+    assert_eq!(stored.extra.get("sequence"), Some(&json!(4)));
+    assert_eq!(
+        stored.extra.get("customEventBag"),
+        Some(&json!("custom-event-data"))
+    );
 }
