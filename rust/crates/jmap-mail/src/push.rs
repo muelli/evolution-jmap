@@ -61,19 +61,26 @@
 //! can change anything about. A folder nobody has opened is listed fresh when
 //! somebody does.
 //!
-//! [`PUSHED_TYPES`] is the message half only. The folder-list half — a
-//! `Mailbox` change, for which Camel's own thread-safe, self-coalescing
-//! `camel_store_folder_info_stale` is the right call — is deliberately left
-//! to polling for now: [`jmap_backend_core::push::start_for`] hands the
-//! callback no way to tell the two apart, and asking for `Mailbox` here would
-//! mean re-reading the whole folder tree on every arriving message.
+//! [`PUSHED_TYPES`] is the message half. The folder-list half — a `Mailbox`
+//! change — needs a different Camel call, `camel_store_folder_info_stale`
+//! (thread-safe and self-coalescing: it schedules a low-priority idle on the
+//! store's own session and drops a second request already pending, so
+//! calling it once per pushed `Mailbox` change costs nothing extra). Telling
+//! the two apart needs [`jmap_backend_core::push::start_for_with`], which
+//! hands the action the matched JMAP types instead of the bare fn pointer
+//! [`jmap_backend_core::push::start_for`] uses — [`dispatch`] is that action.
+//! [`PUSHED_TYPES`] therefore no longer names every type the subscription
+//! asks about; see [`start_push`](crate::store::JmapStore) for the combined
+//! list.
 
 use std::ptr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use eds_sys::camel_store_dup_opened_folders;
-use eds_sys::{CamelFolder, CamelStore, camel_folder_refresh_info_sync};
+use eds_sys::{
+    CamelFolder, CamelStore, camel_folder_refresh_info_sync, camel_store_folder_info_stale,
+};
 use glib_sys::g_ptr_array_free;
 use glib_sys::{GError, GFALSE, GTRUE, g_clear_error};
 use gobject_sys::{GObject, g_object_unref};
@@ -81,7 +88,8 @@ use jmap_backend_core::marshal::read_string;
 
 use crate::store::JmapStore;
 
-/// The JMAP data types a mail account has to hear about.
+/// The JMAP data types that ask for a message-level refresh — a pass through
+/// [`FolderRefresh`], same as before this module learned to tell types apart.
 ///
 /// `EmailDelivery` is RFC 8621 §5's delivery-only pseudo-type: its state moves
 /// when mail *arrives* and not when a flag changes, which is the one push a
@@ -90,6 +98,11 @@ use crate::store::JmapStore;
 /// `jmap-mock` tracks only `Email` of the two, so that is the one the tests
 /// exercise; asking for both is what a real server needs.
 pub const PUSHED_TYPES: &[&str] = &["Email", "EmailDelivery"];
+
+/// The JMAP data type that asks Camel to mark the folder *list* stale —
+/// `camel_store_folder_info_stale`, not [`FolderRefresh`], which only ever
+/// re-reads folders already open.
+pub const FOLDER_LIST_TYPES: &[&str] = &["Mailbox"];
 
 /// The coalescing worker described in this module's docs: EWS's
 /// `schedule_folder_update` and `run_update_thread`, as one object.
@@ -293,28 +306,65 @@ pub unsafe fn refresh_open_folders(store: *mut CamelStore) {
     unsafe { g_ptr_array_free(folders, GTRUE) };
 }
 
-/// The Camel half of a push, as the plain function pointer
-/// [`jmap_backend_core::push::start_for`] takes.
+/// The Camel half of a push, told which of the pushed JMAP types actually
+/// changed — the action [`jmap_backend_core::push::start_for_with`] calls,
+/// since a single `StateChange` can name both a message and a folder-list
+/// change at once and the two need different Camel calls.
 ///
-/// It cannot carry the coalescing state itself — it is a bare `fn` — so it
-/// finds it where the rest of the store's state lives: on the instance the
-/// push was started for.
+/// It cannot carry the coalescing state itself, so it finds it where the rest
+/// of the store's state lives: on the instance the push was started for.
 ///
 /// # Safety
 ///
 /// `object` must be a live [`JmapStore`], which is what
-/// [`jmap_backend_core::push::start_for`] guarantees: it only calls this under
-/// a strong reference taken from a `GWeakRef` on the instance it was given.
-pub unsafe extern "C" fn schedule_refresh(object: *mut GObject) {
-    // A panic must not unwind out of an `extern "C"` function, and this one
-    // is called from a thread with nothing above it to catch one.
-    jmap_backend_core::trampoline::guard("push schedule_refresh", (), || {
-        // SAFETY: a live instance of this crate's store type, by this
-        // function's contract.
-        if let Some(store) = unsafe { JmapStore::borrow(object.cast::<CamelStore>()) } {
+/// [`jmap_backend_core::push::start_for_with`] guarantees: it only calls this
+/// under a strong reference taken from a `GWeakRef` on the instance it was
+/// given.
+pub unsafe fn dispatch(object: *mut GObject, types: &[String]) {
+    let actions = actions_for(types);
+    // A panic here must not take the whole pump thread down with it, the
+    // same reason `Inner::run`'s pass above is wrapped in `catch_unwind`.
+    jmap_backend_core::trampoline::guard("push dispatch", (), || {
+        if actions.mark_folder_list_stale {
+            tracing::debug!("a pushed Mailbox change; marking the folder list stale");
+            // SAFETY: `object` is a live `CamelStore`, by this function's
+            // contract; `camel_store_folder_info_stale` only requires
+            // `CAMEL_IS_STORE(store)`, which a live `JmapStore` satisfies.
+            unsafe { camel_store_folder_info_stale(object.cast()) };
+        }
+        if actions.request_message_refresh
+            // SAFETY: a live instance of this crate's store type, by this
+            // function's contract.
+            && let Some(store) = unsafe { JmapStore::borrow(object.cast::<CamelStore>()) }
+        {
             store.request_folder_refresh();
         }
     });
+}
+
+/// Which Camel calls a pushed `StateChange`'s matched `types` ask for — the
+/// decision half of [`dispatch`], kept pure and separate from it so it is
+/// testable without a live `CamelStore`/`JmapStore` GObject, neither of which
+/// this crate's test environment can construct (see this module's own tests,
+/// and `tests/push.rs`'s doc comment for why).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Actions {
+    /// A `Mailbox` change: the folder list itself may have changed.
+    mark_folder_list_stale: bool,
+    /// An `Email` or `EmailDelivery` change: some open folder's messages may
+    /// have changed.
+    request_message_refresh: bool,
+}
+
+fn actions_for(types: &[String]) -> Actions {
+    Actions {
+        mark_folder_list_stale: types
+            .iter()
+            .any(|name| FOLDER_LIST_TYPES.contains(&name.as_str())),
+        request_message_refresh: types
+            .iter()
+            .any(|name| PUSHED_TYPES.contains(&name.as_str())),
+    }
 }
 
 /// A poisoned lock means a worker panicked mid-pass. What it guards is two
@@ -334,6 +384,66 @@ mod tests {
     use gobject_sys::{G_TYPE_OBJECT, g_object_new_with_properties};
 
     use super::*;
+
+    fn strings(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// The property the whole split exists for: a `Mailbox` change asks Camel
+    /// to mark the folder list stale, and nothing else.
+    #[test]
+    fn a_mailbox_change_marks_the_folder_list_stale_only() {
+        assert_eq!(
+            actions_for(&strings(&["Mailbox"])),
+            Actions {
+                mark_folder_list_stale: true,
+                request_message_refresh: false,
+            }
+        );
+    }
+
+    /// An `Email` or `EmailDelivery` change asks for a message refresh, and
+    /// does not touch the folder list.
+    #[test]
+    fn a_message_change_requests_a_refresh_only() {
+        for kind in ["Email", "EmailDelivery"] {
+            assert_eq!(
+                actions_for(&strings(&[kind])),
+                Actions {
+                    mark_folder_list_stale: false,
+                    request_message_refresh: true,
+                },
+                "{kind} must request a message refresh and nothing else"
+            );
+        }
+    }
+
+    /// A single push can name both — the whole reason `dispatch` needs to be
+    /// told which types matched, instead of one bare fn pointer.
+    #[test]
+    fn a_push_naming_both_kinds_asks_for_both_actions() {
+        assert_eq!(
+            actions_for(&strings(&["Mailbox", "Email"])),
+            Actions {
+                mark_folder_list_stale: true,
+                request_message_refresh: true,
+            }
+        );
+    }
+
+    /// A type this module does not watch for — unreachable in practice, since
+    /// `start_push` only ever asks the subscription to match `PUSHED_TYPES`
+    /// plus `FOLDER_LIST_TYPES` — asks for nothing rather than guessing.
+    #[test]
+    fn an_unwatched_type_asks_for_nothing() {
+        assert_eq!(
+            actions_for(&strings(&["ContactCard"])),
+            Actions {
+                mark_folder_list_stale: false,
+                request_message_refresh: false,
+            }
+        );
+    }
 
     /// A bare `GObject` to hang the weak reference on: [`FolderRefresh`] says
     /// nothing about *which* object, and a real `CamelJmapStore` needs a
