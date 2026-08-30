@@ -6,8 +6,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 # Stale-comments audit — comments that no longer match the code
 
 Read-only sweep of `rust/crates/**` (doc comments and inline comments; not
-`docs/NIGHT-LOG.md`/`docs/ROADMAP.md`/`docs/BACKLOG.md`, which are logs, not
-code comments), 2026-08-19, per `docs/ROADMAP.md` Track A7. Goal: find
+the project's log and planning documents, which are logs, not code
+comments), 2026-08-19, per `docs/ROADMAP.md` Track A7. Goal: find
 comments describing an outdated state — renamed/removed items, changed
 behaviour, done TODOs, resolved-milestone references ("once M7 lands" when M7
 is done), calcard/percent-encoding migration leftovers — and fix the
@@ -37,9 +37,9 @@ were found outside the M7/config-lookup family above.
    `insert_widgets` has yet to put on screen." Same fix.
 3. **`jmap-config/src/backend.rs`'s `insert_widgets` doc, "## Untestable
    here" section** — said this needs "a real Evolution session (or M9's
-   Xvfb tier)" and is "not tagged complete until a human confirms it." M7
-   is `COMPLETE` (`docs/MILESTONES.md`, `c3cac2d`) via two operator rounds in
-   real Evolution (`docs/ROADMAP.md`'s MAINTAINER DECISIONS section); the
+   Xvfb tier)" and is "not tagged complete until a human confirms it." M7 is
+   `COMPLETE` (`c3cac2d`) via two operator rounds in real Evolution
+   (`docs/ROADMAP.md`'s MAINTAINER DECISIONS section); the
    "M9's Xvfb tier" parenthetical was also wrong (see MEDIUM finding below).
    Rewritten to state the human confirmation that already happened and drop
    the inaccurate Xvfb claim.
@@ -79,7 +79,7 @@ were found outside the M7/config-lookup family above.
    assistant, so it never actually calls `insert_widgets`. The literal claim
    implied M9 covers this page; it doesn't — only a human running the
    assistant in real Evolution does (which is exactly what happened for M7's
-   sign-off, per `docs/NIGHT-LOG.md`). Medium confidence because a narrower
+   sign-off). Medium confidence because a narrower
    reading of the original sentence ("needs a display, which only that tier
    or a human supplies") isn't strictly false — but as written it reads as
    "M9's tier exercises this," which it doesn't. Both reworded to say so
@@ -132,7 +132,7 @@ were found outside the M7/config-lookup family above.
 Grepped `rust/crates` and `docs` for TODO/FIXME/XXX, "not yet
 implemented/written/done", "unwritten", "once M\d+ lands"/"when M\d+ lands",
 "has yet to", and similar phrasings; cross-checked every hit's file:line
-against the current code it describes and against `docs/MILESTONES.md`
+against the current code it describes and against the milestones ledger
 (all milestones M1–M10 plus `CALCARD` are `COMPLETE`). Ran a second,
 independent sweep for bare milestone references (`M7`, `M9`, `M10`) and for
 `calcard`/`percent` across `rust/crates/**/*.rs` to catch stale claims the
