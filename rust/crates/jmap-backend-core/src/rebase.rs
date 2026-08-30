@@ -3,7 +3,7 @@
 
 //! Whether an account opts into rebasing the session's `apiUrl`/
 //! `downloadUrl`/`uploadUrl`/`eventSourceUrl` onto the origin actually
-//! connected through: a custom `ESourceExtension`, `[Jmap Backend]` in the
+//! connected through: a custom `ESourceExtension`, `[JMAP Rebase]` in the
 //! account's own keyfile, with one boolean property, `rebase-urls`.
 //!
 //! `JMAP_LIVE_SERVER_REBASE_URLS` does the same rewrite (see
@@ -52,8 +52,24 @@ use crate::subclass::{ObjectSubclass, register_static};
 use crate::trampoline::{guard, log_critical};
 
 /// The keyfile group EDS finds this extension by — what an account's
-/// `.source` file shows as `[Jmap Backend]`.
-pub const EXTENSION_NAME: &CStr = c"Jmap Backend";
+/// `.source` file shows as `[JMAP Rebase]`.
+///
+/// Not `[Jmap Backend]`, which this was until the collision it caused was
+/// found: `e_source_camel_generate_subtype` names the `ESourceCamel` subtype it
+/// generates for a protocol `"<Protocol> Backend"`, so the `jmap` provider's own
+/// Camel settings already live under exactly that group. EDS files every
+/// `ESourceExtension` subclass's `class->name` into one `GHashTable`
+/// (`source_find_extension_classes_rec`), where `g_hash_table_insert` keeps the
+/// last writer and the order is `g_type_children`'s, so two classes claiming one
+/// name is not an error anywhere — it is a name that resolves to whichever type
+/// was registered later. A mail store or transport could hand this extension
+/// back where its Camel settings were asked for, leaving the account unable to
+/// connect with nothing logged; and [`rebase_urls`] could be handed an
+/// `ESourceCamel` to read as [`Extension`]. `[JMAP Rebase]` cannot collide with
+/// a generated Camel group, and matches the naming `jmap_config::oauth2`'s
+/// `[JMAP OAuth2]` already used. `tests/extension_name_collision.rs` in
+/// `jmap-backend-collection` pins the rule for both custom extensions.
+pub const EXTENSION_NAME: &CStr = c"JMAP Rebase";
 
 /// `E_SOURCE_PARAM_SETTING`, computed rather than bound, as in
 /// `jmap_config::oauth2`: `e-source.h` defines it as a plain `#define (1 <<
@@ -185,7 +201,7 @@ pub fn ensure_registered() {
 
 /// Whether `source` opts into `apiUrl`/`downloadUrl`/`uploadUrl`/
 /// `eventSourceUrl` rebasing (see the module docs). `false` for a source with
-/// no `[Jmap Backend]` group — every account written before this existed, and
+/// no `[JMAP Rebase]` group — every account written before this existed, and
 /// the default for a new one.
 ///
 /// # Safety
