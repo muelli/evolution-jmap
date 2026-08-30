@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The disconnect-window bound — `docs/ROADMAP.md` item 28's last piece.
+//! The disconnect-window bound: a disconnect must not wait out an in-flight
+//! store operation's whole network round trip.
 //!
 //! `JmapStore::drop_connection` takes the connection slot's write lock. Seven
 //! of the store's methods (`messages`, `messages_since`, `message_source`,
 //! `set_keywords`, `file_message`, `expunge_message`, `import_message`) used
 //! to hold that slot's *read* lock across their whole network round trip, so
-//! a disconnect racing one of them waited it out — up to one refresh, per the
-//! item's own measured limitation. They now clone the connection's `Arc` out
+//! a disconnect racing one of them waited it out — up to one refresh, the
+//! previously measured worst case. They now clone the connection's `Arc` out
 //! and drop the guard before making the request, so a disconnect no longer
 //! waits on one of these seven. `folders` and the four folder-tree-writing
 //! methods are deliberately unchanged: they hold the lock across their round

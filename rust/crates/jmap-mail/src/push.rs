@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Turning a server-pushed `StateChange` into the folder refresh Camel
-//! already runs — the mail half of `docs/ROADMAP.md` item 28.
+//! already runs — the mail half of JMAP Push.
 //!
 //! [`jmap_backend_core::push`] is the account-independent half of this and is
 //! reused unchanged: it owns the EventSource subscription, decides which
