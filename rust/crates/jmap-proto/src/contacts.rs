@@ -419,6 +419,16 @@ impl NameComponent {
             extra: BTreeMap::new(),
         }
     }
+
+    pub fn phonetic(&self) -> Option<&str> {
+        self.extra.get("phonetic").and_then(|v| v.as_str())
+    }
+
+    pub fn with_phonetic(mut self, phonetic: impl Into<String>) -> Self {
+        self.extra
+            .insert("phonetic".to_string(), Value::String(phonetic.into()));
+        self
+    }
 }
 
 /// JSContact Nickname (RFC 9553 §2.2.2): one name the contact is also known
@@ -721,6 +731,16 @@ impl AddressComponent {
             value: value.into(),
             extra: BTreeMap::new(),
         }
+    }
+
+    pub fn phonetic(&self) -> Option<&str> {
+        self.extra.get("phonetic").and_then(|v| v.as_str())
+    }
+
+    pub fn with_phonetic(mut self, phonetic: impl Into<String>) -> Self {
+        self.extra
+            .insert("phonetic".to_string(), Value::String(phonetic.into()));
+        self
     }
 }
 
@@ -1157,10 +1177,16 @@ pub mod link_kind {
 /// Standard RFC 9553 §2.2.1 name component kinds.
 pub mod name_component_kind {
     pub const PREFIX: &str = "prefix";
+    pub const TITLE: &str = "title";
     pub const GIVEN: &str = "given";
+    pub const GIVEN2: &str = "given2";
     pub const MIDDLE: &str = "middle";
     pub const SURNAME: &str = "surname";
+    pub const SURNAME2: &str = "surname2";
     pub const SUFFIX: &str = "suffix";
+    pub const GENERATION: &str = "generation";
+    pub const CREDENTIAL: &str = "credential";
+    pub const SEPARATOR: &str = "separator";
 }
 
 /// Standard RFC 9553 §2.5.1 address component kinds.
@@ -1170,12 +1196,17 @@ pub mod address_component_kind {
     pub const FLOOR: &str = "floor";
     pub const STREET: &str = "street";
     pub const APPARTMENT: &str = "appartment";
+    pub const APARTMENT: &str = "apartment";
     pub const ROOM: &str = "room";
     pub const BUILDING: &str = "building";
     pub const LOCALITY: &str = "locality";
+    pub const DISTRICT: &str = "district";
+    pub const SUBDISTRICT: &str = "subdistrict";
     pub const REGION: &str = "region";
     pub const POSTCODE: &str = "postcode";
+    pub const POST_OFFICE_BOX: &str = "postOfficeBox";
     pub const COUNTRY: &str = "country";
+    pub const COUNTRY_CODE: &str = "countryCode";
 }
 
 /// JSContact CryptoKey (RFC 9553 §2.6.1): a cryptographic key for the contact.

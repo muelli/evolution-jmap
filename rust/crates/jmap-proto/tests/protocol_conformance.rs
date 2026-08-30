@@ -1542,3 +1542,148 @@ fn rfc8620_standard_error_and_enum_constants_exact_values() {
     assert_eq!(quota_data_type::CALENDARS, "Calendars");
     assert_eq!(quota_set_error::OVER_QUOTA, "overQuota");
 }
+
+#[test]
+fn rfc9219_smime_signature_verification_forward_compatibility() {
+    use jmap_proto::mail::{Email, EmailQueryFilter, smime_status};
+    use jmap_proto::session::{CAPABILITY_SMIME_VERIFY, Session};
+
+    // 1. Session with smimeverify capability and vendor options
+    let session_json = json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {
+                "maxSizeUpload": 10000000,
+                "maxConcurrentUpload": 4,
+                "maxSizeRequest": 10000000,
+                "maxConcurrentRequests": 4,
+                "maxCallsInRequest": 16,
+                "maxObjectsInGet": 500,
+                "maxObjectsInSet": 500,
+                "collationAlgorithms": ["i;ascii-casemap", "i;unicode-casemap"]
+            },
+            "urn:ietf:params:jmap:smimeverify": {
+                "maxCacheTtlSeconds": 86400,
+                "trustedAnchorSubjectList": ["CN=Example Root CA,O=Example Corp,C=US"],
+                "vendorHardwareSecurityModule": "enabled"
+            }
+        },
+        "accounts": {
+            "acc_1": {
+                "name": "Secure Mail Account",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {
+                    "urn:ietf:params:jmap:mail": {},
+                    "urn:ietf:params:jmap:smimeverify": {}
+                }
+            }
+        },
+        "primaryAccounts": {
+            "urn:ietf:params:jmap:mail": "acc_1"
+        },
+        "username": "alice@secure.example.com",
+        "apiUrl": "https://secure.example.com/jmap/api",
+        "downloadUrl": "https://secure.example.com/jmap/download/{blobId}",
+        "uploadUrl": "https://secure.example.com/jmap/upload/{accountId}",
+        "state": "stat_smime_01"
+    });
+
+    let session: Session = serde_json::from_value(session_json).expect("Session with smimeverify");
+    assert!(session.capabilities.contains_key(CAPABILITY_SMIME_VERIFY));
+    let smime_cap = session
+        .smime_verify_capability()
+        .expect("typed smime capability");
+    assert_eq!(smime_cap.extra["maxCacheTtlSeconds"], 86400);
+    assert_eq!(smime_cap.extra["vendorHardwareSecurityModule"], "enabled");
+
+    // 2. Email payload with S/MIME fields, future extension status, and body parts
+    let email_payload = json!({
+        "id": "msg_smime_secure_01",
+        "blobId": "blob_msg_01",
+        "threadId": "th_01",
+        "mailboxIds": {
+            "mb_inbox": true
+        },
+        "from": [{"name": "Bob Authenticated", "email": "bob@secure.example.com"}],
+        "subject": "Confidential Q3 Security Report",
+        "smimeStatus": "encrypted+signed/verified",
+        "smimeErrors": [
+            "Warning: CRL was cached 12 hours ago",
+            "Notice: Intermediate certificate stapled in payload"
+        ],
+        "smimeVerifiedAt": "2026-08-30T07:15:00Z",
+        "smimeValidationPolicy": "RFC5280-Strict-Enterprise",
+        "bodyStructure": {
+            "partId": "part_1",
+            "blobId": "blob_part_1",
+            "size": 1024,
+            "type": "text/plain",
+            "smimeStatus": "signed/verified",
+            "smimeErrors": [],
+            "smimeVerifiedAt": "2026-08-30T07:15:00Z",
+            "subParts": [
+                {
+                    "partId": "part_nested_1",
+                    "type": "application/pdf",
+                    "name": "Audit_Report.pdf",
+                    "smimeStatus": "signed/verified",
+                    "customSignatureDigest": "sha256:abcd1234ef5678"
+                }
+            ]
+        }
+    });
+
+    let email: Email = serde_json::from_value(email_payload).expect("Email with smime fields");
+    assert_eq!(email.id.as_ref().unwrap().as_str(), "msg_smime_secure_01");
+    assert_eq!(
+        email.smime_status.as_deref(),
+        Some("encrypted+signed/verified")
+    );
+    assert_eq!(email.smime_errors.as_ref().unwrap().len(), 2);
+    assert_eq!(
+        email.smime_verified_at.as_ref().unwrap().as_str(),
+        "2026-08-30T07:15:00Z"
+    );
+    assert_eq!(
+        email.extra["smimeValidationPolicy"],
+        "RFC5280-Strict-Enterprise"
+    );
+
+    let body = email.body_structure.as_ref().unwrap();
+    assert_eq!(
+        body.smime_status.as_deref(),
+        Some(smime_status::SIGNED_VERIFIED)
+    );
+    assert_eq!(
+        body.smime_verified_at.as_ref().unwrap().as_str(),
+        "2026-08-30T07:15:00Z"
+    );
+    let nested = &body.sub_parts.as_ref().unwrap()[0];
+    assert_eq!(
+        nested.smime_status.as_deref(),
+        Some(smime_status::SIGNED_VERIFIED)
+    );
+    assert_eq!(
+        nested.extra["customSignatureDigest"],
+        "sha256:abcd1234ef5678"
+    );
+
+    // 3. EmailQueryFilter with hasSmime and hasVerifiedSmime and forward extension
+    let filter_payload = json!({
+        "inMailbox": "mb_inbox",
+        "hasSmime": true,
+        "hasVerifiedSmime": true,
+        "customExtensionFilter": "requireHardwareToken"
+    });
+
+    let filter: EmailQueryFilter =
+        serde_json::from_value(filter_payload).expect("EmailQueryFilter with smime filters");
+    assert_eq!(filter.has_smime, Some(true));
+    assert_eq!(filter.has_verified_smime, Some(true));
+
+    // 4. Exact wire values for smime_status constants
+    assert_eq!(smime_status::UNKNOWN, "unknown");
+    assert_eq!(smime_status::SIGNED, "signed");
+    assert_eq!(smime_status::SIGNED_VERIFIED, "signed/verified");
+    assert_eq!(smime_status::SIGNED_FAILED, "signed/failed");
+}

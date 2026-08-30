@@ -1182,3 +1182,122 @@ fn mdn_capability_accessor() {
         MDNCapability::default().with_extra(serde_json::json!({"customMdnExtension": 123}))
     );
 }
+
+#[test]
+fn smime_verify_capability_and_session_accessor() {
+    use jmap_proto::State;
+    use jmap_proto::mail::SmimeVerifyCapability;
+    use jmap_proto::session::{CAPABILITY_SMIME_VERIFY, Session};
+
+    let mut session = Session::new(
+        "alice@example.com",
+        "https://jmap.example.com/api/",
+        "https://jmap.example.com/download/",
+        "https://jmap.example.com/upload/",
+        State::new("s1"),
+    );
+
+    assert!(session.smime_verify_capability().is_none());
+
+    session = session.with_capability(
+        CAPABILITY_SMIME_VERIFY,
+        serde_json::json!({"customSmimeOption": "enabled"}),
+    );
+
+    let cap = session.smime_verify_capability().expect("smime capability");
+    assert_eq!(
+        cap,
+        SmimeVerifyCapability::new()
+            .with_extra(serde_json::json!({"customSmimeOption": "enabled"}))
+    );
+}
+
+#[test]
+fn email_and_body_part_smime_properties_and_builders() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::mail::{Email, EmailBodyPart, smime_status};
+
+    let body_part = EmailBodyPart::new()
+        .with_part_id("1")
+        .with_content_type("text/plain")
+        .with_smime_status(smime_status::SIGNED_VERIFIED)
+        .with_smime_errors(["signer certificate expired but accepted by policy".to_string()])
+        .with_smime_verified_at(UtcDate::new("2026-08-30T07:00:00Z"));
+
+    assert_eq!(
+        body_part.smime_status.as_deref(),
+        Some(smime_status::SIGNED_VERIFIED)
+    );
+    assert_eq!(
+        body_part.smime_errors.as_ref().unwrap(),
+        &["signer certificate expired but accepted by policy"]
+    );
+    assert_eq!(
+        body_part.smime_verified_at.as_ref().unwrap().as_str(),
+        "2026-08-30T07:00:00Z"
+    );
+
+    let email = Email::new()
+        .with_id("msg1")
+        .with_smime_status(smime_status::SIGNED_VERIFIED)
+        .with_smime_errors(["no errors".to_string()])
+        .with_smime_verified_at(UtcDate::new("2026-08-30T07:00:00Z"))
+        .with_text_body([body_part.clone()]);
+
+    assert_eq!(
+        email.smime_status.as_deref(),
+        Some(smime_status::SIGNED_VERIFIED)
+    );
+    assert_eq!(email.smime_errors.as_ref().unwrap(), &["no errors"]);
+    assert_eq!(
+        email.smime_verified_at.as_ref().unwrap().as_str(),
+        "2026-08-30T07:00:00Z"
+    );
+
+    // Verify roundtrip through JSON
+    let json = serde_json::to_value(&email).expect("serialize email");
+    assert_eq!(json["smimeStatus"], "signed/verified");
+    assert_eq!(json["smimeErrors"], serde_json::json!(["no errors"]));
+    assert_eq!(json["smimeVerifiedAt"], "2026-08-30T07:00:00Z");
+
+    let deserialized: Email = serde_json::from_value(json).expect("deserialize email");
+    assert_eq!(deserialized, email);
+}
+
+#[test]
+fn email_query_filter_smime_filters() {
+    use jmap_proto::mail::EmailQueryFilter;
+
+    let filter = EmailQueryFilter::default()
+        .with_has_smime(true)
+        .with_has_verified_smime(true);
+
+    assert_eq!(filter.has_smime, Some(true));
+    assert_eq!(filter.has_verified_smime, Some(true));
+
+    let json = serde_json::to_value(&filter).expect("serialize filter");
+    assert_eq!(json["hasSmime"], true);
+    assert_eq!(json["hasVerifiedSmime"], true);
+
+    let deserialized: EmailQueryFilter = serde_json::from_value(json).expect("deserialize filter");
+    assert_eq!(deserialized, filter);
+}
+
+#[test]
+fn email_header_and_email_address_builders() {
+    use jmap_proto::mail::{EmailAddress, EmailHeader};
+
+    let header = EmailHeader::new("X-Custom-Header", "Value123");
+    assert_eq!(header.name, "X-Custom-Header");
+    assert_eq!(header.value, "Value123");
+
+    let modified_header = EmailHeader::default()
+        .with_name("Subject")
+        .with_value("Test Subject");
+    assert_eq!(modified_header.name, "Subject");
+    assert_eq!(modified_header.value, "Test Subject");
+
+    let addr = EmailAddress::from_email("carol@example.com").with_name("Carol");
+    assert_eq!(addr.email, "carol@example.com");
+    assert_eq!(addr.name.as_deref(), Some("Carol"));
+}

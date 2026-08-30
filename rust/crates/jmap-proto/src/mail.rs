@@ -301,6 +301,15 @@ pub struct Email {
     pub headers: Option<Vec<EmailHeader>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<EmailBodyPart>>,
+    /// S/MIME signature and certificate verification status (RFC 9219 §4.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smime_status: Option<String>,
+    /// S/MIME verification errors and warnings (RFC 9219 §4.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smime_errors: Option<Vec<String>>,
+    /// Time at which the S/MIME signature was verified (RFC 9219 §4.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smime_verified_at: Option<UtcDate>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -441,6 +450,24 @@ impl Email {
         attachments: impl IntoIterator<Item = EmailBodyPart>,
     ) -> Self {
         self.attachments = Some(attachments.into_iter().collect());
+        self
+    }
+
+    pub fn with_smime_status(mut self, status: impl Into<String>) -> Self {
+        self.smime_status = Some(status.into());
+        self
+    }
+
+    pub fn with_smime_errors(
+        mut self,
+        errors: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.smime_errors = Some(errors.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_smime_verified_at(mut self, verified_at: impl Into<UtcDate>) -> Self {
+        self.smime_verified_at = Some(verified_at.into());
         self
     }
 }
@@ -730,7 +757,7 @@ pub mod keyword {
 }
 
 /// A parsed email header (RFC 8621 §4.1.2.1).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct EmailHeader {
     pub name: String,
     pub value: String,
@@ -743,11 +770,21 @@ impl EmailHeader {
             value: value.into(),
         }
     }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    pub fn with_value(mut self, value: impl Into<String>) -> Self {
+        self.value = value.into();
+        self
+    }
 }
 
 /// A name/address pair (RFC 8621 §4.1.2.3). `name` is nullable but always
 /// present on the wire.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct EmailAddress {
     #[serde(default)]
     pub name: Option<String>,
@@ -760,6 +797,23 @@ impl EmailAddress {
             name: name.map(str::to_owned),
             email: email.to_owned(),
         }
+    }
+
+    pub fn from_email(email: impl Into<String>) -> Self {
+        Self {
+            name: None,
+            email: email.into(),
+        }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn with_email(mut self, email: impl Into<String>) -> Self {
+        self.email = email.into();
+        self
     }
 }
 
@@ -812,6 +866,15 @@ pub struct EmailBodyPart {
     pub sub_parts: Option<Vec<EmailBodyPart>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<Vec<EmailHeader>>,
+    /// S/MIME signature and certificate verification status (RFC 9219 §4.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smime_status: Option<String>,
+    /// S/MIME verification errors and warnings (RFC 9219 §4.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smime_errors: Option<Vec<String>>,
+    /// Time at which the S/MIME signature was verified (RFC 9219 §4.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smime_verified_at: Option<UtcDate>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -873,6 +936,24 @@ impl EmailBodyPart {
 
     pub fn with_headers(mut self, headers: impl IntoIterator<Item = EmailHeader>) -> Self {
         self.headers = Some(headers.into_iter().collect());
+        self
+    }
+
+    pub fn with_smime_status(mut self, status: impl Into<String>) -> Self {
+        self.smime_status = Some(status.into());
+        self
+    }
+
+    pub fn with_smime_errors(
+        mut self,
+        errors: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.smime_errors = Some(errors.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_smime_verified_at(mut self, verified_at: impl Into<UtcDate>) -> Self {
+        self.smime_verified_at = Some(verified_at.into());
         self
     }
 }
@@ -943,6 +1024,12 @@ pub struct EmailQueryFilter {
     pub before: Option<UtcDate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after: Option<UtcDate>,
+    /// S/MIME message presence filter (RFC 9219 §4.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_smime: Option<bool>,
+    /// S/MIME verified message filter (RFC 9219 §4.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_verified_smime: Option<bool>,
 }
 
 impl EmailQueryFilter {
@@ -1054,6 +1141,16 @@ impl EmailQueryFilter {
     pub fn time_range(mut self, after: Option<UtcDate>, before: Option<UtcDate>) -> Self {
         self.after = after;
         self.before = before;
+        self
+    }
+
+    pub fn with_has_smime(mut self, has: bool) -> Self {
+        self.has_smime = Some(has);
+        self
+    }
+
+    pub fn with_has_verified_smime(mut self, has: bool) -> Self {
+        self.has_verified_smime = Some(has);
         self
     }
 }
@@ -1781,4 +1878,33 @@ impl MDNCapability {
         }
         self
     }
+}
+
+/// S/MIME Signature Verification capability (RFC 9219 §3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SmimeVerifyCapability {
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl SmimeVerifyCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_extra(mut self, extra: Value) -> Self {
+        if let Value::Object(map) = extra {
+            self.extra.extend(map);
+        }
+        self
+    }
+}
+
+/// Standard S/MIME signature verification status values (RFC 9219 §4.1).
+pub mod smime_status {
+    pub const UNKNOWN: &str = "unknown";
+    pub const SIGNED: &str = "signed";
+    pub const SIGNED_VERIFIED: &str = "signed/verified";
+    pub const SIGNED_FAILED: &str = "signed/failed";
 }
