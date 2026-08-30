@@ -78,8 +78,7 @@ fn an_empty_info_list_is_null() {
 /// `e_book_meta_backend_info_free`. A list of bare `gchar *` here is read as
 /// structs: the first eight bytes of the uid text become the `uid` pointer,
 /// which EDS then hands to sqlite. That crashed the address book factory in
-/// `sqlite3_vmprintf` the moment a refresh followed a removal — see
-/// docs/NIGHT-LOG.md, session N+106.
+/// `sqlite3_vmprintf` the moment a refresh followed a removal.
 #[test]
 fn removals_are_infos_and_not_bare_strings() {
     let uids = ["K1".to_owned(), "K2".to_owned()];

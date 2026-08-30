@@ -527,8 +527,7 @@ fn get_changes_reports_changed_cards_and_the_ones_that_are_gone() {
         // Read as an `EBookMetaBackendInfo`, which is what
         // `e_book_meta_backend_process_changes_sync` does with this list —
         // reading it as a bare string instead is the shape that crashed the
-        // address book factory in `sqlite3_vmprintf` (see docs/NIGHT-LOG.md,
-        // session N+106).
+        // address book factory in `sqlite3_vmprintf`.
         assert_eq!(nth_info(outs.removed, 0).0, doomed.to_string());
     }
 }
