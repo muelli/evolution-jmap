@@ -61,6 +61,12 @@
 //! - [`refresh`] is `refresh_info_sync`, the folder vfunc that joins the three
 //!   above to a server: the mailbox listed over the store's connection, the
 //!   rows reconciled against what the folder holds, and the diff emitted.
+//! - [`push`] is what makes that happen on arrival rather than on the account's
+//!   refresh interval: the JMAP Push (RFC 8620 §7) subscription the store keeps
+//!   alongside its connection, and the coalescing worker that turns a pushed
+//!   `StateChange` into a `refresh_info_sync` of every open folder — off the
+//!   thread the push arrived on, because nothing that a disconnect waits for
+//!   may block on the network.
 //! - [`message`] is what a row is not: `get_message_sync`, the vfunc that
 //!   downloads one message's RFC 5322 bytes over the store's connection and lets
 //!   Camel's own parser turn them into the `CamelMimeMessage` the preview pane
@@ -152,6 +158,7 @@ pub mod mime;
 pub mod module;
 pub mod oauth2;
 pub mod provider;
+pub mod push;
 pub mod refresh;
 pub mod send;
 pub mod server;

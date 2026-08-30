@@ -6,10 +6,10 @@
 //! What it carries is the things a later increment cannot change cheaply: its
 //! parent, because every folder vfunc is declared on one of the two candidates;
 //! the settings class it is configured through — [`crate::settings`], without
-//! which a JMAP account has nowhere to keep a server; and the two slots its
+//! which a JMAP account has nowhere to keep a server; and the slots its
 //! state lives in, which are fields of the instance struct and therefore part
-//! of a layout the vfuncs read through — the connection, and the folder listing
-//! read over it.
+//! of a layout the vfuncs read through — the connection, the folder listing
+//! read over it, and the two the account's JMAP Push subscription needs.
 //!
 //! The `CamelService` vfuncs that fill and empty the first of those slots are
 //! [`crate::service`]; `CamelStoreClass`'s own `get_folder_info_sync`, which
@@ -17,10 +17,12 @@
 //! below, and `CamelSubscribable`'s three — which read and write the second slot
 //! too — are [`crate::subscribe`], declared from `interfaces` because an
 //! interface's vtable is filled through GObject rather than through our class.
+//! The last two slots are [`crate::push`]'s, filled and emptied alongside the
+//! connection, and that module's docs are where the reason they are two lives.
 
 use std::ffi::CStr;
 use std::ptr;
-use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
     CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_VJUNK, CAMEL_STORE_VTRASH, CamelOfflineStore,
@@ -30,12 +32,13 @@ use eds_sys::{
     camel_store_set_flags,
 };
 use glib_sys::GType;
-use gobject_sys::g_type_check_instance_is_a;
+use gobject_sys::{GObject, g_type_check_instance_is_a};
 use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::dispatched_borrow;
 use jmap_backend_core::owned::Owned;
+use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_once_after;
 use jmap_backend_core::subclass::{InterfaceDecl, ObjectSubclass, register_static};
 use jmap_client::Credentials;
@@ -47,6 +50,7 @@ use jmap_proto::{Id, State};
 
 use crate::connect::StoreError;
 use crate::oauth2;
+use crate::push::FolderRefresh;
 use crate::service::Connected;
 use crate::settings::settings_type;
 use crate::subscribe::Subscribable;
@@ -87,6 +91,23 @@ pub struct JmapStore {
     /// lock exclusively — cannot slip in between the request and the write and
     /// have its clearing undone by a tree the previous connection produced.
     folders: Slot<RwLock<Option<Listing>>>,
+    /// The JMAP Push subscription, for the same span as the connection: a
+    /// server that advertises an `eventSourceUrl` gets to say "mail arrived"
+    /// instead of being asked on the account's refresh interval.
+    ///
+    /// A plain `Mutex` — unlike the two above, nothing reads this on the hot
+    /// path; it is only installed, taken and dropped, all of which are
+    /// exclusive anyway.
+    push: Slot<Mutex<Option<PushRefresh>>>,
+    /// The coalescing worker a push hands the actual refreshing to, in a slot
+    /// of its own rather than beside the subscription above.
+    ///
+    /// That separation is what keeps [`JmapStore::stop_push`] from
+    /// deadlocking: stopping the subscription joins its pump thread, and that
+    /// pump may at that very moment be inside
+    /// [`crate::push::schedule_refresh`], which locks this. Two locks taken in
+    /// sequence and never nested cannot make a cycle; one lock would.
+    refresher: Slot<Mutex<Option<FolderRefresh>>>,
 }
 
 impl JmapStore {
@@ -102,10 +123,145 @@ impl JmapStore {
     /// from — describes.
     pub fn store_connection(&self, sync: MailSync) {
         if let Some(connection) = self.connection() {
-            let mut connection = write(connection);
+            let mut guard = write(connection);
             self.forget_folders();
             tracing::debug!("storing mail connection in store");
-            *connection = Some(sync);
+            *guard = Some(sync);
+        }
+        // And only then the push subscription, which is authenticated with
+        // the connection just installed and refreshes over it. The other
+        // order has a window in which a pushed refresh reaches
+        // `refresh_info_sync` before `store_connection` ran, which reports the
+        // account offline for a change that had in fact arrived.
+        self.start_push();
+    }
+
+    /// Subscribes to the account's JMAP Push stream, if the server offers one
+    /// — see [`crate::push`] for what a push then does, and why the refresh
+    /// it triggers is not run where the push arrives.
+    ///
+    /// A no-op with no connection, on a server advertising no
+    /// `eventSourceUrl`, and on a [`JmapStore::detached`] test instance, which
+    /// is not a GObject and so has nothing to hang a weak reference on. All
+    /// three leave the account exactly as every JMAP account was before push
+    /// existed: refreshed when Camel next asks.
+    fn start_push(&self) {
+        let Some(service) = self.service() else {
+            return;
+        };
+        let store = service.cast::<CamelStore>();
+
+        // The coalescing worker goes in first: `start_for` spawns its pump
+        // before it returns, so the very first push may arrive while this
+        // function is still running, and a push that finds no worker would be
+        // silently dropped.
+        //
+        let pass = |object: *mut GObject| {
+            // SAFETY: the store `FolderRefresh` was built for — checked to be
+            // a `CamelService`, and so a `CamelStore`, just above — under the
+            // strong reference the worker holds across the whole call.
+            unsafe { crate::push::refresh_open_folders(object.cast()) };
+        };
+        // SAFETY: `service` is this live instance typed as its C ancestor —
+        // referenced for this call because `self` is borrowed from it — and
+        // the pass above is only ever called with that same pointer.
+        let refresher = unsafe { FolderRefresh::new(store.cast(), pass) };
+        self.install_refresher(Some(refresher));
+
+        let started = self.connection().and_then(|connection| {
+            let guard = read(connection);
+            guard.as_ref().and_then(|sync| {
+                // SAFETY: `store` is a valid GObject, referenced as above, and
+                // `schedule_refresh` accepts exactly this type.
+                unsafe {
+                    push::start_for(
+                        store.cast(),
+                        sync.client(),
+                        sync.account_id(),
+                        crate::push::PUSHED_TYPES,
+                        crate::push::schedule_refresh,
+                    )
+                }
+            })
+        });
+
+        if started.is_none() {
+            // No stream, so nothing will ever ask the worker for a pass.
+            self.install_refresher(None);
+        }
+        self.replace_push(started);
+    }
+
+    /// Installs `push` as the live subscription, stopping and dropping
+    /// whatever was there — which is what a reconnect wants, since the old
+    /// subscription is authenticated with the connection that was just
+    /// replaced.
+    pub fn store_push(&self, push: PushRefresh) {
+        self.replace_push(Some(push));
+    }
+
+    /// Stops the push subscription and waits for its pump, reporting whether
+    /// there was one. Once this returns, no further refresh can be *asked*
+    /// for; a pass already in flight is left to finish, on the store it holds
+    /// a strong reference to, because nothing here may block on a network
+    /// round trip (see [`crate::push`]).
+    pub fn stop_push(&self) -> bool {
+        // The subscription first, and without the refresher's lock held: the
+        // pump thread this joins may be inside `schedule_refresh` holding
+        // exactly that lock.
+        let stopped = self.replace_push(None);
+        self.install_refresher(None);
+        stopped
+    }
+
+    /// Whether a push subscription is live.
+    #[cfg(feature = "testing")]
+    pub fn is_pushing(&self) -> bool {
+        self.push
+            .get()
+            .is_some_and(|slot| push_lock(slot).is_some())
+    }
+
+    /// Replaces the `Authorization` header the live push subscription sends
+    /// on its future reconnect attempts, if there is a subscription — a
+    /// no-op otherwise. Called from `JmapStore::refresh_credentials` right
+    /// after it installs a fresh OAuth 2.0 token on the connection, so a
+    /// subscription refused with the stale one picks the new one up rather
+    /// than looping on the same failure until Camel itself reconnects.
+    pub fn refresh_push_headers(&self, headers: Vec<(String, String)>) {
+        if let Some(slot) = self.push.get()
+            && let Some(push) = push_lock(slot).as_ref()
+        {
+            push.set_headers(headers);
+        }
+    }
+
+    /// Asks the coalescing worker for a refresh pass. What
+    /// [`crate::push::schedule_refresh`] does, and the reason the worker
+    /// lives in a slot of its own — see the field's own comment.
+    pub fn request_folder_refresh(&self) {
+        if let Some(slot) = self.refresher.get()
+            && let Some(refresher) = refresher_lock(slot).as_ref()
+        {
+            refresher.request();
+        }
+    }
+
+    /// Puts `push` in the subscription slot, reporting whether it displaced
+    /// one. Dropping the displaced subscription stops and joins its pump.
+    fn replace_push(&self, push: Option<PushRefresh>) -> bool {
+        match self.push.get() {
+            Some(slot) => {
+                let previous = std::mem::replace(&mut *push_lock(slot), push);
+                previous.is_some()
+            }
+            None => false,
+        }
+    }
+
+    fn install_refresher(&self, refresher: Option<FolderRefresh>) {
+        if let Some(slot) = self.refresher.get() {
+            *refresher_lock(slot) = refresher;
         }
     }
 
@@ -122,6 +278,11 @@ impl JmapStore {
     /// mailbox tree in memory until Evolution quits is dead weight, and the
     /// point of a disconnect is that the account is not in use.
     pub fn drop_connection(&self) -> bool {
+        // Stopped first, and before the connection it authenticates with
+        // goes: a push arriving after this point would ask for a refresh over
+        // a store that has nothing left to refresh with.
+        let unsubscribed = self.stop_push();
+        tracing::debug!(unsubscribed, "stopping mail push before disconnecting");
         match self.connection() {
             Some(connection) => {
                 let mut connection = write(connection);
@@ -204,6 +365,12 @@ impl JmapStore {
             Ok(token) => {
                 tracing::debug!("refreshed the mail connection's OAuth 2.0 access token");
                 sync.client().set_credentials(Credentials::bearer(token));
+                // Read straight back off the client rather than formatted a
+                // second time here, so the header the push stream sends and
+                // the one every method call sends cannot drift apart.
+                if let Some(header) = sync.client().authorization_header() {
+                    self.refresh_push_headers(vec![("Authorization".to_owned(), header)]);
+                }
                 true
             }
             Err(failure) => {
@@ -909,6 +1076,8 @@ impl JmapStore {
         let store: Box<Self> = unsafe { zeroed_box() };
         store.connection.init(RwLock::new(None));
         store.folders.init(RwLock::new(None));
+        store.push.init(Mutex::new(None));
+        store.refresher.init(Mutex::new(None));
         store
     }
 
@@ -976,6 +1145,16 @@ pub(crate) fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
 
 pub(crate) fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
     lock.write().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The same rule for the two push slots, which are `Mutex` rather than
+/// `RwLock` because nothing reads either on a hot path.
+fn push_lock(slot: &Mutex<Option<PushRefresh>>) -> MutexGuard<'_, Option<PushRefresh>> {
+    slot.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn refresher_lock(slot: &Mutex<Option<FolderRefresh>>) -> MutexGuard<'_, Option<FolderRefresh>> {
+    slot.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The class struct, same rule one level up. It will grow overrides of
@@ -1063,6 +1242,8 @@ unsafe impl ObjectSubclass for JmapStore {
         unsafe {
             (*instance).connection.init(RwLock::new(None));
             (*instance).folders.init(RwLock::new(None));
+            (*instance).push.init(Mutex::new(None));
+            (*instance).refresher.init(Mutex::new(None));
         };
 
         // And what a JMAP account's trash and junk are: mailboxes of the
@@ -1090,10 +1271,21 @@ unsafe impl ObjectSubclass for JmapStore {
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
+        // Before the connection, and before anything else here: the push slot
+        // holds a thread that can call back into this instance, and clearing
+        // it stops and joins that thread. Camel does not promise a
+        // `disconnect_sync` before it drops a store — a service that never
+        // connected is finalized without one — so this, not that, is what
+        // guarantees the pump is gone.
+        //
         // SAFETY: the instance is being finalized, so nothing can still reach
-        // it and no borrow handed out by `get` is alive. Without this the
-        // connection — and its socket — outlives the account, and the folder
-        // listing leaks with it.
+        // it and no borrow handed out by `get` is alive.
+        unsafe {
+            (*instance).push.clear();
+            (*instance).refresher.clear();
+        };
+        // SAFETY: as above. Without this the connection — and its socket —
+        // outlives the account, and the folder listing leaks with it.
         unsafe {
             (*instance).connection.clear();
             (*instance).folders.clear();
