@@ -1,10 +1,9 @@
 SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 SPDX-License-Identifier: GPL-3.0-or-later
 
-This is a starting-point skeleton (docs/ROADMAP.md Track C3), not a package
-ready for an official Debian upload (that step, Track C4, is a human/social
-process, not agent work). What it gets a packager past, and what it
-deliberately leaves open:
+This is a starting-point skeleton, not a package ready for an official
+Debian upload (that step is a human/social process, not agent work). What
+it gets a packager past, and what it deliberately leaves open:
 
 Builds via dh + CMake/Ninja, reusing the same cmake/{Rust,Backends,
 Packaging}.cmake the CPack .deb (Track C1, already lintian-clean) is built
