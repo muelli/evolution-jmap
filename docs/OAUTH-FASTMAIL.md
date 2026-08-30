@@ -87,7 +87,7 @@ ClientRegistrationRequest` gained a `scope: Option<&str>` field;
 `jmap_config::oauth2_setup::discover_and_register` now passes the discovered
 `scopes_supported` joined with a space when the deployment names any, and
 `None` (omitting the field entirely, unchanged from before) when it names
-none — see `docs/NIGHT-LOG.md` for the increment. This closes the "confirm
+none. This closes the "confirm
 `/oauth/register` is open" item in `ROADMAP.md`'s CURRENT PRIORITY 2(b) and
 the scope-naming item together.
 
