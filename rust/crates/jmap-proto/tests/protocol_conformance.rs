@@ -1319,3 +1319,226 @@ fn principals_owner_and_share_notification_forward_compatibility() {
         "invalidProperties"
     );
 }
+
+// ===========================================================================
+// RFC 8620 §7 Push & EventSource: Forward Compatibility & Conformance
+// ===========================================================================
+
+#[test]
+fn push_subscription_verification_and_state_change_forward_compatibility() {
+    use jmap_proto::push::{PushSubscription, PushVerification, StateChange};
+
+    // 1. PushSubscription with unknown fields and custom push encryption parameters
+    let sub_payload = json!({
+        "id": "sub_enterprise_99",
+        "deviceClientId": "device_desktop_linux_42",
+        "url": "https://push.example.com/endpoints/sub_99",
+        "keys": {
+            "p256dh": "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM=",
+            "auth": "tBHItJI5svbpez7KI4CCXg==",
+            "customKeyCurve": "ed25519"
+        },
+        "expires": "2026-12-31T23:59:59Z",
+        "types": ["Mailbox", "Email", "CalendarEvent", "ContactCard", "CustomVendorTask"],
+        "vendorNotificationChannel": "high-priority",
+        "retryAttemptsMax": 5
+    });
+
+    let sub: PushSubscription = serde_json::from_value(sub_payload)
+        .expect("PushSubscription deserializes with unknown fields");
+    assert_eq!(sub.id.as_ref().unwrap().as_str(), "sub_enterprise_99");
+    assert_eq!(sub.device_client_id, "device_desktop_linux_42");
+    assert_eq!(sub.url, "https://push.example.com/endpoints/sub_99");
+    let keys = sub.keys.as_ref().expect("keys present");
+    assert_eq!(
+        keys.p256dh,
+        "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM="
+    );
+    assert_eq!(keys.auth, "tBHItJI5svbpez7KI4CCXg==");
+    assert_eq!(
+        sub.expires.as_ref().unwrap().as_str(),
+        "2026-12-31T23:59:59Z"
+    );
+    assert_eq!(sub.types.as_ref().unwrap().len(), 5);
+    assert_eq!(sub.extra["vendorNotificationChannel"], "high-priority");
+    assert_eq!(sub.extra["retryAttemptsMax"], 5);
+
+    // 2. PushVerification with unknown fields
+    let ver_payload = json!({
+        "@type": "PushVerification",
+        "pushSubscriptionId": "sub_enterprise_99",
+        "verificationCode": "verify-code-778899",
+        "expiresAt": "2026-09-01T12:00:00Z",
+        "serverChallengeNonce": "nonce-445566"
+    });
+
+    let ver: PushVerification = serde_json::from_value(ver_payload)
+        .expect("PushVerification deserializes with unknown fields");
+    assert_eq!(ver.object_type, "PushVerification");
+    assert_eq!(ver.push_subscription_id.as_str(), "sub_enterprise_99");
+    assert_eq!(ver.verification_code, "verify-code-778899");
+    assert_eq!(ver.extra["expiresAt"], "2026-09-01T12:00:00Z");
+    assert_eq!(ver.extra["serverChallengeNonce"], "nonce-445566");
+
+    // 3. StateChange with multiple accounts and unknown fields
+    let sc_payload = json!({
+        "@type": "StateChange",
+        "changed": {
+            "acc_1": {
+                "Mailbox": "state_mbx_10",
+                "Email": "state_email_20"
+            },
+            "acc_2": {
+                "CalendarEvent": "state_cal_30",
+                "ContactCard": "state_card_40",
+                "VendorCustomType": "state_custom_50"
+            }
+        },
+        "eventId": "evt_push_seq_1001",
+        "pushedAt": "2026-08-30T14:22:00Z"
+    });
+
+    let sc: StateChange =
+        serde_json::from_value(sc_payload).expect("StateChange deserializes cleanly");
+    assert_eq!(sc.kind, "StateChange");
+    assert_eq!(
+        sc.changed[&Id::new("acc_1")]["Mailbox"].as_str(),
+        "state_mbx_10"
+    );
+    assert_eq!(
+        sc.changed[&Id::new("acc_1")]["Email"].as_str(),
+        "state_email_20"
+    );
+    assert_eq!(
+        sc.changed[&Id::new("acc_2")]["CalendarEvent"].as_str(),
+        "state_cal_30"
+    );
+    assert_eq!(
+        sc.changed[&Id::new("acc_2")]["ContactCard"].as_str(),
+        "state_card_40"
+    );
+    assert_eq!(
+        sc.changed[&Id::new("acc_2")]["VendorCustomType"].as_str(),
+        "state_custom_50"
+    );
+    assert_eq!(sc.extra["eventId"], "evt_push_seq_1001");
+    assert_eq!(sc.extra["pushedAt"], "2026-08-30T14:22:00Z");
+}
+
+#[test]
+fn rfc8620_standard_error_and_enum_constants_exact_values() {
+    use jmap_proto::blob::blob_set_error;
+    use jmap_proto::error::{method, request, set};
+    use jmap_proto::mail::{delivered, displayed, undo_status};
+    use jmap_proto::methods::filter_operator;
+    use jmap_proto::principals::{
+        principal_set_error, principal_type, share_notification_object_type,
+    };
+    use jmap_proto::push::push_subscription_set_error;
+    use jmap_proto::quota::{quota_data_type, quota_resource_type, quota_scope, quota_set_error};
+
+    // Method error types (RFC 8620 §3.6.2)
+    assert_eq!(method::UNKNOWN_METHOD, "unknownMethod");
+    assert_eq!(method::INVALID_ARGUMENTS, "invalidArguments");
+    assert_eq!(method::INVALID_RESULT_REFERENCE, "invalidResultReference");
+    assert_eq!(method::FORBIDDEN, "forbidden");
+    assert_eq!(method::ACCOUNT_NOT_FOUND, "accountNotFound");
+    assert_eq!(
+        method::ACCOUNT_NOT_SUPPORTED_BY_METHOD,
+        "accountNotSupportedByMethod"
+    );
+    assert_eq!(method::ACCOUNT_READ_ONLY, "accountReadOnly");
+    assert_eq!(method::SERVER_FAIL, "serverFail");
+    assert_eq!(method::SERVER_UNAVAILABLE, "serverUnavailable");
+    assert_eq!(method::SERVER_PARTIAL_FAIL, "serverPartialFail");
+    assert_eq!(method::UNKNOWN_CAPABILITY, "unknownCapability");
+    assert_eq!(method::STATE_MISMATCH, "stateMismatch");
+    assert_eq!(method::FROM_STATE_MISMATCH, "fromStateMismatch");
+    assert_eq!(method::CANNOT_CALCULATE_CHANGES, "cannotCalculateChanges");
+    assert_eq!(method::REQUEST_TOO_LARGE, "requestTooLarge");
+
+    // Set error types (RFC 8620 §5.3, §5.4)
+    assert_eq!(set::FORBIDDEN, "forbidden");
+    assert_eq!(set::OVER_QUOTA, "overQuota");
+    assert_eq!(set::TOO_LARGE, "tooLarge");
+    assert_eq!(set::RATE_LIMIT, "rateLimit");
+    assert_eq!(set::NOT_FOUND, "notFound");
+    assert_eq!(set::INVALID_PATCH, "invalidPatch");
+    assert_eq!(set::INVALID_PROPERTIES, "invalidProperties");
+    assert_eq!(set::SINGLETON, "singleton");
+    assert_eq!(set::WILL_DESTROY, "willDestroy");
+    assert_eq!(set::STATE_MISMATCH, "stateMismatch");
+    assert_eq!(set::REQUEST_TOO_LARGE, "requestTooLarge");
+    assert_eq!(set::ALREADY_EXISTS, "alreadyExists");
+    assert_eq!(set::CANNOT_DESTROY_ORIGINAL, "cannotDestroyOriginal");
+
+    // Request problem types (RFC 8620 §3.6.1)
+    assert_eq!(
+        request::UNKNOWN_CAPABILITY,
+        "urn:ietf:params:jmap:error:unknownCapability"
+    );
+    assert_eq!(request::NOT_JSON, "urn:ietf:params:jmap:error:notJSON");
+    assert_eq!(
+        request::NOT_REQUEST,
+        "urn:ietf:params:jmap:error:notRequest"
+    );
+    assert_eq!(request::LIMIT, "urn:ietf:params:jmap:error:limit");
+
+    // Filter operators (RFC 8620 §5.5)
+    assert_eq!(filter_operator::AND, "AND");
+    assert_eq!(filter_operator::OR, "OR");
+    assert_eq!(filter_operator::NOT, "NOT");
+
+    // Push subscription set errors (RFC 8620 §7.2.1)
+    assert_eq!(push_subscription_set_error::INVALID_URL, "invalidUrl");
+    assert_eq!(
+        push_subscription_set_error::EXPIRES_TOO_FAR,
+        "expiresTooFar"
+    );
+
+    // Undo status values (RFC 8621 §7)
+    assert_eq!(undo_status::PENDING, "pending");
+    assert_eq!(undo_status::FINAL, "final");
+    assert_eq!(undo_status::CANCELED, "canceled");
+
+    // Delivery and Displayed status values (RFC 8621 §7.1.1)
+    assert_eq!(delivered::QUEUED, "queued");
+    assert_eq!(delivered::YES, "yes");
+    assert_eq!(delivered::NO, "no");
+    assert_eq!(delivered::UNKNOWN, "unknown");
+    assert_eq!(displayed::UNKNOWN, "unknown");
+    assert_eq!(displayed::YES, "yes");
+
+    // Principal types and set errors (RFC 9670 §2)
+    assert_eq!(principal_type::INDIVIDUAL, "individual");
+    assert_eq!(principal_type::GROUP, "group");
+    assert_eq!(principal_type::RESOURCE, "resource");
+    assert_eq!(principal_type::LOCATION, "location");
+    assert_eq!(principal_type::OTHER, "other");
+    assert_eq!(principal_set_error::FORBIDDEN, "forbidden");
+    assert_eq!(
+        principal_set_error::PRINCIPAL_ALREADY_EXISTS,
+        "principalAlreadyExists"
+    );
+    assert_eq!(principal_set_error::INVALID_PROPERTIES, "invalidProperties");
+
+    // Share notification object types (RFC 9670 §4)
+    assert_eq!(share_notification_object_type::ADDRESS_BOOK, "AddressBook");
+    assert_eq!(share_notification_object_type::CALENDAR, "Calendar");
+    assert_eq!(share_notification_object_type::MAILBOX, "Mailbox");
+
+    // Blob set errors (RFC 9404 §4)
+    assert_eq!(blob_set_error::BLOB_NOT_FOUND, "blobNotFound");
+    assert_eq!(blob_set_error::TOO_LARGE, "tooLarge");
+
+    // Quota constants (RFC 9425 §2, §5)
+    assert_eq!(quota_resource_type::OCTETS, "octets");
+    assert_eq!(quota_resource_type::COUNT, "count");
+    assert_eq!(quota_scope::ACCOUNT, "account");
+    assert_eq!(quota_scope::DOMAIN, "domain");
+    assert_eq!(quota_scope::GLOBAL, "global");
+    assert_eq!(quota_data_type::MAIL, "Mail");
+    assert_eq!(quota_data_type::CONTACTS, "Contacts");
+    assert_eq!(quota_data_type::CALENDARS, "Calendars");
+    assert_eq!(quota_set_error::OVER_QUOTA, "overQuota");
+}

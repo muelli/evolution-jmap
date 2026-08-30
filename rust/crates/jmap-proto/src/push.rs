@@ -43,6 +43,21 @@ impl PushSubscription {
         }
     }
 
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_device_client_id(mut self, device_client_id: impl Into<String>) -> Self {
+        self.device_client_id = device_client_id.into();
+        self
+    }
+
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.url = url.into();
+        self
+    }
+
     pub fn with_keys(mut self, p256dh: impl Into<String>, auth: impl Into<String>) -> Self {
         self.keys = Some(PushSubscriptionKeys::new(p256dh, auth));
         self
@@ -96,6 +111,16 @@ impl PushVerification {
             extra: BTreeMap::new(),
         }
     }
+
+    pub fn with_push_subscription_id(mut self, push_subscription_id: impl Into<Id>) -> Self {
+        self.push_subscription_id = push_subscription_id.into();
+        self
+    }
+
+    pub fn with_verification_code(mut self, verification_code: impl Into<String>) -> Self {
+        self.verification_code = verification_code.into();
+        self
+    }
 }
 
 /// One account's changed data types and their new state tokens, as named in
@@ -135,6 +160,24 @@ impl StateChange {
             changed,
             extra: BTreeMap::new(),
         }
+    }
+
+    pub fn with_changed(mut self, changed: BTreeMap<Id, TypeState>) -> Self {
+        self.changed = changed;
+        self
+    }
+
+    pub fn with_account_change(
+        mut self,
+        account_id: impl Into<Id>,
+        type_name: impl Into<String>,
+        state: impl Into<State>,
+    ) -> Self {
+        self.changed
+            .entry(account_id.into())
+            .or_default()
+            .insert(type_name.into(), state.into());
+        self
     }
 }
 
