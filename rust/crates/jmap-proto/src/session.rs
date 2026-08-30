@@ -26,6 +26,7 @@ pub const CAPABILITY_QUOTA: &str = "urn:ietf:params:jmap:quota";
 pub const CAPABILITY_BLOB: &str = "urn:ietf:params:jmap:blob";
 pub const CAPABILITY_TASKS: &str = "urn:ietf:params:jmap:tasks";
 pub const CAPABILITY_SIEVE: &str = "urn:ietf:params:jmap:sieve";
+pub const CAPABILITY_SMIME_VERIFY: &str = "urn:ietf:params:jmap:smimeverify";
 
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -354,6 +355,13 @@ impl Session {
         &self,
     ) -> Option<crate::calendars::CalendarPreferencesCapability> {
         let val = self.capabilities.get(CAPABILITY_CALENDAR_PREFERENCES)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed S/MIME signature verification capability struct, if present (RFC 9219 §3).
+    #[cfg(feature = "mail")]
+    pub fn smime_verify_capability(&self) -> Option<crate::mail::SmimeVerifyCapability> {
+        let val = self.capabilities.get(CAPABILITY_SMIME_VERIFY)?;
         serde_json::from_value(val.clone()).ok()
     }
 }

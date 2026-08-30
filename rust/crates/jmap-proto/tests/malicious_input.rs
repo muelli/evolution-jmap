@@ -1057,4 +1057,11 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::principals::PrincipalsOwnerCapability>(&text);
     }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_smime_verify_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::SmimeVerifyCapability>(&text);
+    }
 }

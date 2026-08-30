@@ -1017,3 +1017,53 @@ fn contact_card_and_capability_builders() {
         Some("she/her")
     );
 }
+
+#[test]
+fn name_component_and_address_component_phonetic_and_builders() {
+    use jmap_proto::contacts::{
+        AddressComponent, NameComponent, address_component_kind, name_component_kind,
+    };
+
+    let name_comp = NameComponent::new(name_component_kind::GIVEN, "太郎").with_phonetic("タロウ");
+    assert_eq!(name_comp.kind, "given");
+    assert_eq!(name_comp.value, "太郎");
+    assert_eq!(name_comp.phonetic(), Some("タロウ"));
+
+    let json = serde_json::to_value(&name_comp).expect("serialize name component");
+    assert_eq!(json["kind"], "given");
+    assert_eq!(json["value"], "太郎");
+    assert_eq!(json["phonetic"], "タロウ");
+
+    let deserialized: NameComponent =
+        serde_json::from_value(json).expect("deserialize name component");
+    assert_eq!(deserialized, name_comp);
+
+    let addr_comp = AddressComponent::new(address_component_kind::LOCALITY, "千代田区")
+        .with_phonetic("チヨダク");
+    assert_eq!(addr_comp.kind, "locality");
+    assert_eq!(addr_comp.value, "千代田区");
+    assert_eq!(addr_comp.phonetic(), Some("チヨダク"));
+
+    let json_addr = serde_json::to_value(&addr_comp).expect("serialize address component");
+    assert_eq!(json_addr["kind"], "locality");
+    assert_eq!(json_addr["value"], "千代田区");
+    assert_eq!(json_addr["phonetic"], "チヨダク");
+
+    let deserialized_addr: AddressComponent =
+        serde_json::from_value(json_addr).expect("deserialize address component");
+    assert_eq!(deserialized_addr, addr_comp);
+
+    // Verify extended constants
+    assert_eq!(name_component_kind::TITLE, "title");
+    assert_eq!(name_component_kind::GIVEN2, "given2");
+    assert_eq!(name_component_kind::SURNAME2, "surname2");
+    assert_eq!(name_component_kind::GENERATION, "generation");
+    assert_eq!(name_component_kind::CREDENTIAL, "credential");
+    assert_eq!(name_component_kind::SEPARATOR, "separator");
+
+    assert_eq!(address_component_kind::APARTMENT, "apartment");
+    assert_eq!(address_component_kind::DISTRICT, "district");
+    assert_eq!(address_component_kind::COUNTRY_CODE, "countryCode");
+    assert_eq!(address_component_kind::POST_OFFICE_BOX, "postOfficeBox");
+    assert_eq!(address_component_kind::SUBDISTRICT, "subdistrict");
+}
