@@ -1094,4 +1094,34 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::websocket::WebSocketPushDisable>(&text);
     }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_filenode(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::filenode::FileNode>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_filenode_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::filenode::FileNodeCapability>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_filenode_rights(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::filenode::FileNodeRights>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_filenode_query_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::filenode::FileNodeQueryFilter>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_refplus_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::session::RefPlusCapability>(&text);
+    }
 }

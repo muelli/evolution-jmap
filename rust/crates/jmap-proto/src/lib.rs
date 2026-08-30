@@ -21,6 +21,8 @@
 //! - [RFC 9265] JMAP for Sieve Scripts: `SieveScript`, `SieveScript/validate`.
 //! - [RFC 8887] JMAP Subprotocol for WebSocket: `Request`, `Response`,
 //!   `RequestError`, `WebSocketPushEnable`, `WebSocketPushDisable`.
+//! - [draft-ietf-jmap-filenode] JMAP File Storage: `FileNode`, `FileNodeCapability`.
+//! - [draft-ietf-jmap-refplus] JMAP Enhanced Result References: `RefPlusCapability`.
 //!
 //! [RFC 8620]: https://www.rfc-editor.org/rfc/rfc8620
 //! [RFC 8621]: https://www.rfc-editor.org/rfc/rfc8621
@@ -33,6 +35,8 @@
 //! [RFC 9404]: https://www.rfc-editor.org/rfc/rfc9404
 //! [RFC 9265]: https://www.rfc-editor.org/rfc/rfc9265
 //! [RFC 8887]: https://www.rfc-editor.org/rfc/rfc8887
+//! [draft-ietf-jmap-filenode]: https://datatracker.ietf.org/doc/draft-ietf-jmap-filenode/
+//! [draft-ietf-jmap-refplus]: https://datatracker.ietf.org/doc/draft-ietf-jmap-refplus/
 
 pub mod blob;
 #[cfg(feature = "calendars")]
@@ -40,6 +44,7 @@ pub mod calendars;
 #[cfg(feature = "contacts")]
 pub mod contacts;
 pub mod error;
+pub mod filenode;
 pub mod id;
 #[cfg(feature = "mail")]
 pub mod mail;

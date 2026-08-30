@@ -112,7 +112,7 @@ impl<'de> Deserialize<'de> for Invocation {
 }
 
 /// A reference to the result of a previous method call in the same request;
-/// appears under a `#`-prefixed argument name (RFC 8620 §3.7).
+/// appears under a `#`-prefixed argument name (RFC 8620 §3.7, draft-ietf-jmap-refplus).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResultReference {
