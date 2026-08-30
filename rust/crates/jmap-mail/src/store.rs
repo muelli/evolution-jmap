@@ -351,10 +351,9 @@ impl JmapStore {
     /// retrying.
     ///
     /// The mail-side counterpart of the calendar and address book backends'
-    /// own `refresh_credentials` (`docs/ROADMAP.md` item 23): a 401 on a
-    /// pooled connection is answered by refreshing rather than escalating
-    /// straight to a consent window, since the stored refresh token is
-    /// usually still good.
+    /// own `refresh_credentials`: a 401 on a pooled connection is answered by
+    /// refreshing rather than escalating straight to a consent window, since
+    /// the stored refresh token is usually still good.
     ///
     /// Two reasons this reports "nothing to refresh": not an OAuth 2.0
     /// account (a Basic-password or API-token 401 means the stored secret is

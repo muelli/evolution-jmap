@@ -261,9 +261,9 @@ impl JmapTransport {
     /// on the live connection, reporting whether an operation is now worth
     /// retrying.
     ///
-    /// The transport-side twin of [`JmapStore::refresh_credentials`]
-    /// (`docs/ROADMAP.md` item 23) — same two "nothing to refresh" cases: not
-    /// an OAuth 2.0 account, or no `CamelService` to ask.
+    /// The transport-side twin of [`JmapStore::refresh_credentials`] — same
+    /// two "nothing to refresh" cases: not an OAuth 2.0 account, or no
+    /// `CamelService` to ask.
     ///
     /// [`JmapStore::refresh_credentials`]: crate::store::JmapStore::refresh_credentials
     fn refresh_credentials(&self, sync: &MailSync) -> bool {

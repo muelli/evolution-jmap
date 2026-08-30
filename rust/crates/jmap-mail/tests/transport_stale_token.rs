@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A pooled transport connection whose bearer token went stale —
-//! `docs/ROADMAP.md` item 23, the transport half.
+//! A pooled transport connection whose bearer token went stale — the
+//! transport half of the hourly re-consent fix.
 //!
 //! `JmapTransport::send_message`'s three network calls (identity lookup,
 //! outgoing-mailbox lookup, the send itself) each now run through

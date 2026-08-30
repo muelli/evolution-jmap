@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! A pooled mail connection whose bearer token went stale —
-//! `docs/ROADMAP.md` item 23.
+//! A pooled mail connection whose bearer token went stale — the store half
+//! of the hourly re-consent fix.
 //!
 //! Every store operation now runs through `retry_once_after`: on a 401 it
 //! asks [`JmapStore::refresh_credentials`] for a fresh access token and, if
