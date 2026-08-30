@@ -19,8 +19,8 @@
 //! Choose the redirect URI, or drive the user to
 //! `AuthorizationServer::authorization_endpoint` and capture what comes back.
 //! That is the consent exchange itself, which needs a browser and a display
-//! this crate's tests do not have — `docs/NIGHT-LOG.md` tracks it as still
-//! open. [`discover_and_register`] takes `redirect_uri` as a plain argument
+//! this crate's tests do not have; that gap is still open.
+//! [`discover_and_register`] takes `redirect_uri` as a plain argument
 //! for exactly that reason: this module's job stops at discovering a
 //! deployment's endpoints and registering a `client_id` against whichever
 //! redirect URI the consent-flow increment settles on, not at picking one.

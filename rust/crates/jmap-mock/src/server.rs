@@ -319,8 +319,7 @@ impl MockServerBuilder {
     /// inline — as Stalwart does, and as this crate's default shape (session
     /// served directly at the well-known path) does not, which is exactly
     /// why a redirect-related client bug went uncaught until a real server
-    /// exercised it (see `docs/NIGHT-LOG.md`, "session-discovery redirect
-    /// strips auth"). The redirect target answers 200 whether or not the
+    /// exercised it. The redirect target answers 200 whether or not the
     /// request carries valid credentials — matching the real server — with
     /// zero accounts when it does not, rather than a 401; a client that
     /// drops `Authorization` across the hop still gets a response, just an
@@ -374,9 +373,8 @@ impl MockServerBuilder {
     /// neither is server-set. This project's `jmap-client` assumed both
     /// would always be echoed back until the live Stalwart deployment
     /// omitted them and `EmailSubmission`'s deserialization panicked on the
-    /// missing fields — see `docs/NIGHT-LOG.md`, "send_email backfills
-    /// identityId/emailId a real server omits". Off by default, matching the
-    /// mock's own prior behaviour and every other test.
+    /// missing fields. Off by default, matching the mock's own prior
+    /// behaviour and every other test.
     pub fn terse_submission_create(mut self) -> Self {
         self.terse_submission_create = true;
         self
