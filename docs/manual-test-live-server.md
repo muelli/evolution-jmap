@@ -70,8 +70,7 @@ $ export JMAP_LIVE_SERVER_PASSWORD=...
 
 Or, for a Bearer token obtained some other way (there is no OAuth2 login flow
 in this repository yet — see `docs/ROADMAP.md`'s "real-server readiness"
-item and `docs/NIGHT-LOG.md`'s "two-hundred-and-seventy-seventh session" entry
-for why not):
+item for why not):
 
 ```console
 $ export JMAP_LIVE_SERVER_TOKEN=...
@@ -84,8 +83,7 @@ If the deployment's session document names an `apiUrl` (and
 though `JMAP_LIVE_SERVER_URL` itself is reachable — a reverse proxy, a NAT
 boundary, or a configured public hostname advertised over `https` when only a
 plain-`http` listener on a different address actually answers, as a
-disposable Stalwart 0.16 test deployment does (see `docs/NIGHT-LOG.md`,
-"apiUrl's scheme is hardcoded https, not just the hostname") — set:
+disposable Stalwart 0.16 test deployment does — set:
 
 ```console
 $ export JMAP_LIVE_SERVER_REBASE_URLS=1
@@ -269,8 +267,8 @@ in the invocation, worth failing loudly on.
   `jmap-client/tests/mail_send.rs`). Skipped, not failed, when
   `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` (step 3a) are not set.
 
-Anything short of that is a finding, not a nuisance — write it down in
-`docs/NIGHT-LOG.md`.
+Anything short of that is a finding, not a nuisance — report it as you
+would any other bug in this project.
 
 ## `jmap-cal-sync`'s free/busy test
 
@@ -346,7 +344,7 @@ missing the name and everything else just written. Fixed by rendering from a
 fresh `ContactCard/get` after create, the same way the update branch already
 did — see `jmap-book-sync/tests/terse_create.rs` for the headless,
 `jmap-mockd`-reproducible regression test (`MockServerBuilder::
-terse_contact_create`), and `docs/NIGHT-LOG.md` for the full account.
+terse_contact_create`).
 
 ## `jmap-collection-sync`'s create/delete test
 
@@ -392,8 +390,7 @@ asks for `isSubscribed: true` explicitly on both the `AddressBook` and
 `jmap-collection-sync/tests/create.rs`'s
 `a_created_collection_is_discoverable_even_when_the_server_defaults_new_collections_to_unsubscribed`
 for the headless, `jmap-mockd`-reproducible regression test
-(`MockServerBuilder::new_collections_default_unsubscribed`), and
-`docs/NIGHT-LOG.md` for the full account.
+(`MockServerBuilder::new_collections_default_unsubscribed`).
 
 ## `jmap-mail-sync`'s import/expunge test
 
@@ -521,7 +518,7 @@ else just written. Fixed by rendering from a fresh `load_component` after
 create, the same way the update branch already did — see
 `jmap-cal-sync/tests/terse_create.rs` for the headless, `jmap-mockd`-
 reproducible regression test (`MockServerBuilder::
-terse_calendar_event_create`), and `docs/NIGHT-LOG.md` for the full account.
+terse_calendar_event_create`).
 
 ## `jmap-mail-sync`'s keywords test
 
