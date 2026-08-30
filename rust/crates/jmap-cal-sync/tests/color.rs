@@ -100,20 +100,30 @@ impl Subscriber for CapturingSubscriber {
     fn exit(&self, _span: &SpanId) {}
 }
 
-#[test]
-fn set_color_traces_the_account_and_calendar_on_success() {
-    let fixture = Fixture::start();
-    let sync = fixture.sync();
+static CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+
+fn capture(run: impl FnOnce()) -> Vec<(Level, String, String)> {
+    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let captured = Arc::new(Mutex::new(Vec::new()));
     let subscriber = CapturingSubscriber {
         captured: captured.clone(),
     };
-
     tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        run();
+    });
+    std::mem::take(&mut *captured.lock().unwrap())
+}
+
+#[test]
+fn set_color_traces_the_account_and_calendar_on_success() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    let captured = capture(|| {
         sync.set_color(Some("#00ff00")).unwrap();
     });
 
-    let captured = captured.lock().unwrap();
     assert!(
         captured
             .iter()
@@ -144,16 +154,11 @@ fn set_color_traces_the_failure_when_the_calendar_is_gone() {
         fixture.account_id.clone(),
         Id::new("nonexistent"),
     );
-    let captured = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = CapturingSubscriber {
-        captured: captured.clone(),
-    };
 
-    tracing::subscriber::with_default(subscriber, || {
+    let captured = capture(|| {
         let _ = sync.set_color(Some("#00ff00"));
     });
 
-    let captured = captured.lock().unwrap();
     assert!(
         captured
             .iter()

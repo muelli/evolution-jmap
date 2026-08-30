@@ -24,6 +24,27 @@ pub struct RequestError {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl RequestError {
+    pub fn new(error_type: impl Into<String>) -> Self {
+        Self {
+            error_type: error_type.into(),
+            status: None,
+            detail: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_status(mut self, status: u16) -> Self {
+        self.status = Some(status);
+        self
+    }
+
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+}
+
 /// Arguments of a method-level `error` response (RFC 8620 §3.6.2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MethodError {
@@ -97,24 +118,50 @@ pub mod method {
     pub const ACCOUNT_NOT_SUPPORTED_BY_METHOD: &str = "accountNotSupportedByMethod";
     pub const ACCOUNT_READ_ONLY: &str = "accountReadOnly";
     pub const SERVER_FAIL: &str = "serverFail";
+    pub const SERVER_UNAVAILABLE: &str = "serverUnavailable";
+    pub const SERVER_PARTIAL_FAIL: &str = "serverPartialFail";
+    pub const UNKNOWN_CAPABILITY: &str = "unknownCapability";
     pub const STATE_MISMATCH: &str = "stateMismatch";
+    pub const FROM_STATE_MISMATCH: &str = "fromStateMismatch";
     /// The `since_state` of a `/changes` call is too old for the server to
     /// answer from its log; the client must resynchronise in full.
     pub const CANNOT_CALCULATE_CHANGES: &str = "cannotCalculateChanges";
     /// The call asked for more objects than the server is willing to answer in
-    /// one — for `/get`, more ids than `maxObjectsInGet` (RFC 8620 §5.1). Not a
+    /// one, for `/get`, more ids than `maxObjectsInGet` (RFC 8620 §5.1). Not a
     /// condition to report to the user: a client that reads the session
     /// document's limits and keeps to them never sees it.
     pub const REQUEST_TOO_LARGE: &str = "requestTooLarge";
+    pub const FROM_ACCOUNT_NOT_FOUND: &str = "fromAccountNotFound";
+    pub const FROM_ACCOUNT_NOT_SUPPORTED_BY_METHOD: &str = "fromAccountNotSupportedByMethod";
+    pub const UNSUPPORTED_FILTER: &str = "unsupportedFilter";
+    pub const UNSUPPORTED_SORT: &str = "unsupportedSort";
+    pub const ANCHOR_NOT_FOUND: &str = "anchorNotFound";
+    pub const TOO_MANY_CHANGES: &str = "tooManyChanges";
+    pub const UNKNOWN_DATA_TYPE: &str = "unknownDataType";
 }
 
-/// Well-known set-level error types (RFC 8620 §5.3).
+/// Well-known set-level error types (RFC 8620 §5.3, §5.4).
 pub mod set {
     pub const FORBIDDEN: &str = "forbidden";
     pub const OVER_QUOTA: &str = "overQuota";
+    pub const TOO_LARGE: &str = "tooLarge";
+    pub const RATE_LIMIT: &str = "rateLimit";
     pub const NOT_FOUND: &str = "notFound";
     pub const INVALID_PATCH: &str = "invalidPatch";
     pub const INVALID_PROPERTIES: &str = "invalidProperties";
     pub const SINGLETON: &str = "singleton";
     pub const WILL_DESTROY: &str = "willDestroy";
+    pub const STATE_MISMATCH: &str = "stateMismatch";
+    pub const REQUEST_TOO_LARGE: &str = "requestTooLarge";
+    pub const ALREADY_EXISTS: &str = "alreadyExists";
+    pub const CANNOT_DESTROY_ORIGINAL: &str = "cannotDestroyOriginal";
+    pub const CANNOT_DESTROY_DEFAULT: &str = "cannotDestroyDefault";
+}
+
+/// Standard RFC 8620 §3.6.1 request-level problem types (RFC 7807 URI format).
+pub mod request {
+    pub const UNKNOWN_CAPABILITY: &str = "urn:ietf:params:jmap:error:unknownCapability";
+    pub const NOT_JSON: &str = "urn:ietf:params:jmap:error:notJSON";
+    pub const NOT_REQUEST: &str = "urn:ietf:params:jmap:error:notRequest";
+    pub const LIMIT: &str = "urn:ietf:params:jmap:error:limit";
 }

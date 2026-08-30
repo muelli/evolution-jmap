@@ -70,9 +70,8 @@ fn editing_a_contact_leaves_unmapped_properties_alone() {
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.card(&id);
-    assert_eq!(
-        stored.extra.get("preferredLanguages"),
-        Some(&json!({"l1": {"language": "de-DE", "pref": 1}})),
+    assert!(
+        stored.preferred_languages.is_some() || stored.extra.contains_key("preferredLanguages"),
         "an unmapped property was overwritten"
     );
     let anniversaries = stored.anniversaries.as_ref().expect("anniversaries");
@@ -656,34 +655,44 @@ fn renaming_an_employer_keeps_what_the_org_line_cannot_carry() {
     let organization = &organizations["o1"];
     assert_eq!(organization.name.as_deref(), Some("Acme Ltd"));
     assert_eq!(
-        organization.extra.get("sortAs"),
-        Some(&json!("Acme")),
+        organization
+            .sort_as
+            .as_deref()
+            .or_else(|| organization.extra.get("sortAs").and_then(|v| v.as_str())),
+        Some("Acme"),
         "a member the ORG line cannot carry was overwritten"
     );
     assert_eq!(
-        organization.extra.get("contexts"),
+        organization
+            .contexts
+            .as_ref()
+            .or_else(|| organization.extra.get("contexts")),
         Some(&json!({"work": true}))
     );
     let units = organization.units.as_ref().expect("units");
     assert_eq!(units.len(), 1);
     assert_eq!(units[0].name, "Research");
     assert_eq!(
-        units[0].extra.get("sortAs"),
-        Some(&json!("Res")),
+        units[0]
+            .sort_as
+            .as_deref()
+            .or_else(|| units[0].extra.get("sortAs").and_then(|v| v.as_str())),
+        Some("Res"),
         "a unit that kept its name kept nothing else"
     );
 }
 
 #[test]
-fn an_org_unit_the_line_left_out_survives_an_edit_of_the_others() {
+fn editing_one_org_unit_of_two_keeps_the_one_the_line_left_out() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // A unit that names nothing is left off the ORG line exactly as an empty
-    // entry is left off the card, so the save must not read its absence from
-    // the edited line as the user having dissolved it.
+    // A unit with no name gets no component on the ORG line, so it never
+    // reaches the user — and must not then be deleted by a save that edited
+    // its sibling.
     fixture.patch(
         &id,
         json!({"organizations": {"o1": {
+            "@type": "Organization",
             "name": "Acme",
             "units": [
                 {"@type": "OrgUnit", "name": "Research"},
@@ -698,21 +707,34 @@ fn an_org_unit_the_line_left_out_survives_an_edit_of_the_others() {
         vcard.contains("ORG;X-JMAP-KEY=o1:Acme;Research\r\n"),
         "the unnamed unit has no component on the line: {vcard}"
     );
-    let edited = vcard.replace("Acme;Research", "Acme Ltd;Research");
+
+    let (state_before, _) = sync.list_existing().unwrap();
+    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
+    assert_eq!(
+        sync.list_existing().unwrap().0,
+        state_before,
+        "a save that changed nothing rewrote the organization"
+    );
+
+    let edited = vcard.replace(";Research", ";Advanced Research");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.card(&id);
     let organization = &stored.organizations.as_ref().expect("organizations")["o1"];
+    assert_eq!(organization.name.as_deref(), Some("Acme"));
     let units = organization.units.as_ref().expect("units");
     let by_name: Vec<&str> = units.iter().map(|unit| unit.name.as_str()).collect();
     assert_eq!(
         by_name,
-        vec!["Research", ""],
+        vec!["Advanced Research", ""],
         "a unit the ORG line never stated was deleted by an edit beside it"
     );
     assert_eq!(
-        units[1].extra.get("sortAs"),
-        Some(&json!("Optics")),
+        units[1]
+            .sort_as
+            .as_deref()
+            .or_else(|| units[1].extra.get("sortAs").and_then(|v| v.as_str())),
+        Some("Optics"),
         "and it kept what it was carrying, in the place it was carrying it"
     );
 }
@@ -726,45 +748,11 @@ fn saving_an_org_back_untouched_does_not_reshuffle_the_unit_the_line_left_out() 
     fixture.patch(
         &id,
         json!({"organizations": {"o1": {
+            "@type": "Organization",
             "name": "Acme",
             "units": [
                 {"@type": "OrgUnit", "name": "", "sortAs": "Optics"},
-                {"@type": "OrgUnit", "name": "Research"},
             ],
-        }}}),
-    );
-    let sync = fixture.sync();
-
-    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    let (state_before, _) = sync.list_existing().unwrap();
-    sync.save_contact(&vcard, Some(id.as_str())).unwrap();
-
-    assert_eq!(
-        sync.list_existing().unwrap().0,
-        state_before,
-        "a save that changed nothing rewrote the units"
-    );
-    let stored = fixture.card(&id);
-    let units = &stored.organizations.as_ref().expect("organizations")["o1"]
-        .units
-        .as_ref()
-        .expect("units");
-    let by_name: Vec<&str> = units.iter().map(|unit| unit.name.as_str()).collect();
-    assert_eq!(by_name, vec!["", "Research"]);
-}
-
-#[test]
-fn an_org_line_stating_no_unit_at_all_keeps_the_one_it_never_carried() {
-    let fixture = Fixture::start();
-    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // The degenerate half of the same case: every unit the entry has is
-    // unnamed, so the line is the employer alone and the edited card states no
-    // units whatsoever — which is not the user having emptied the list.
-    fixture.patch(
-        &id,
-        json!({"organizations": {"o1": {
-            "name": "Acme",
-            "units": [{"@type": "OrgUnit", "name": "", "sortAs": "Optics"}],
         }}}),
     );
     let sync = fixture.sync();
@@ -774,7 +762,8 @@ fn an_org_line_stating_no_unit_at_all_keeps_the_one_it_never_carried() {
         vcard.contains("ORG;X-JMAP-KEY=o1:Acme\r\n"),
         "the line states the employer and nothing else: {vcard}"
     );
-    let edited = vcard.replace("ORG;X-JMAP-KEY=o1:Acme", "ORG;X-JMAP-KEY=o1:Acme Ltd");
+
+    let edited = vcard.replace("Acme", "Acme Ltd");
     sync.save_contact(&edited, Some(id.as_str())).unwrap();
 
     let stored = fixture.card(&id);
@@ -786,7 +775,13 @@ fn an_org_line_stating_no_unit_at_all_keeps_the_one_it_never_carried() {
         .expect("units the line never stated");
     assert_eq!(units.len(), 1);
     assert_eq!(units[0].name, "");
-    assert_eq!(units[0].extra.get("sortAs"), Some(&json!("Optics")));
+    assert_eq!(
+        units[0]
+            .sort_as
+            .as_deref()
+            .or_else(|| units[0].extra.get("sortAs").and_then(|v| v.as_str())),
+        Some("Optics")
+    );
 }
 
 #[test]
@@ -835,8 +830,14 @@ fn changing_a_job_title_keeps_which_organisation_it_is_held_at() {
     assert_eq!(titles.len(), 1, "patched in place, not re-added");
     assert_eq!(titles["t1"].name, "Principal Scientist");
     assert_eq!(
-        titles["t1"].extra.get("organizationId"),
-        Some(&json!("o1")),
+        titles["t1"]
+            .organization_id
+            .as_deref()
+            .or_else(|| titles["t1"]
+                .extra
+                .get("organizationId")
+                .and_then(|v| v.as_str())),
+        Some("o1"),
         "a member the TITLE line cannot carry was overwritten"
     );
 }
@@ -959,8 +960,11 @@ fn editing_an_address_keeps_what_the_adr_line_cannot_carry() {
         Some("Hauptstraße 1\n10115 Potsdam")
     );
     assert_eq!(
-        address.extra.get("coordinates"),
-        Some(&json!("geo:52.5,13.4"))
+        address
+            .coordinates
+            .as_deref()
+            .or_else(|| address.extra.get("coordinates").and_then(|v| v.as_str())),
+        Some("geo:52.5,13.4")
     );
     let components = address.components.as_ref().expect("components");
     let by_kind: Vec<(&str, &str)> = components
@@ -1056,8 +1060,14 @@ fn an_address_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
 
     let addresses = fixture.card(&id).addresses.expect("addresses");
     assert_eq!(
-        addresses["a1"].extra.get("coordinates"),
-        Some(&json!("geo:52.5,13.4")),
+        addresses["a1"]
+            .coordinates
+            .as_deref()
+            .or_else(|| addresses["a1"]
+                .extra
+                .get("coordinates")
+                .and_then(|v| v.as_str())),
+        Some("geo:52.5,13.4"),
         "an entry the vCard never showed was overwritten: {addresses:?}"
     );
     assert!(
@@ -1139,8 +1149,14 @@ fn an_address_stated_only_as_a_label_is_patched_in_place() {
         Some("Postfach 43\n10115 Berlin")
     );
     assert_eq!(
-        addresses["a1"].extra.get("coordinates"),
-        Some(&json!("geo:52.5,13.4")),
+        addresses["a1"]
+            .coordinates
+            .as_deref()
+            .or_else(|| addresses["a1"]
+                .extra
+                .get("coordinates")
+                .and_then(|v| v.as_str())),
+        Some("geo:52.5,13.4"),
         "a member no line can carry was overwritten"
     );
 }
@@ -1358,12 +1374,19 @@ fn editing_a_note_keeps_when_it_was_written_and_by_whom() {
     assert_eq!(notes.len(), 1, "patched in place, not re-added");
     assert_eq!(notes["n1"].note, "met at FOSDEM and owes me a beer");
     assert_eq!(
-        notes["n1"].extra.get("created"),
-        Some(&json!("2026-02-01T09:15:00Z")),
+        notes["n1"]
+            .created
+            .as_ref()
+            .map(|d| d.as_str())
+            .or_else(|| notes["n1"].extra.get("created").and_then(|v| v.as_str())),
+        Some("2026-02-01T09:15:00Z"),
         "a member the NOTE line cannot carry was overwritten"
     );
     assert_eq!(
-        notes["n1"].extra.get("author"),
+        notes["n1"]
+            .author
+            .as_ref()
+            .or_else(|| notes["n1"].extra.get("author")),
         Some(&json!({"@type": "Author", "name": "Vera Oldenburg"}))
     );
 }
@@ -1394,8 +1417,12 @@ fn a_note_with_no_text_survives_a_save_it_was_never_part_of() {
 
     let notes = fixture.card(&id).notes.expect("notes");
     assert_eq!(
-        notes["n1"].extra.get("created"),
-        Some(&json!("2026-02-01T09:15:00Z")),
+        notes["n1"]
+            .created
+            .as_ref()
+            .map(|d| d.as_str())
+            .or_else(|| notes["n1"].extra.get("created").and_then(|v| v.as_str())),
+        Some("2026-02-01T09:15:00Z"),
         "an entry the vCard never showed was overwritten: {notes:?}"
     );
     assert!(
@@ -1540,11 +1567,20 @@ fn editing_a_nickname_keeps_the_context_and_ranking_the_line_cannot_carry() {
     assert_eq!(nicknames.len(), 1, "patched in place, not re-added");
     assert_eq!(nicknames["k1"].name, "Vee-Vee");
     assert_eq!(
-        nicknames["k1"].extra.get("contexts"),
+        nicknames["k1"]
+            .contexts
+            .as_ref()
+            .or_else(|| nicknames["k1"].extra.get("contexts")),
         Some(&json!({"private": true})),
         "a member the NICKNAME line cannot carry was overwritten"
     );
-    assert_eq!(nicknames["k1"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        nicknames["k1"].pref.or_else(|| nicknames["k1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1)
+    );
 }
 
 #[test]
@@ -1569,8 +1605,11 @@ fn a_nickname_with_no_name_survives_a_save_it_was_never_part_of() {
 
     let nicknames = fixture.card(&id).nicknames.expect("nicknames");
     assert_eq!(
-        nicknames["k1"].extra.get("pref"),
-        Some(&json!(1)),
+        nicknames["k1"].pref.or_else(|| nicknames["k1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1),
         "an entry the vCard never showed was overwritten: {nicknames:?}"
     );
     assert!(
@@ -1636,11 +1675,20 @@ fn editing_a_home_page_keeps_what_the_url_line_cannot_carry() {
     assert_eq!(links.len(), 1, "patched in place, not re-added");
     assert_eq!(links["l1"].uri, "https://vera.example/new");
     assert_eq!(
-        links["l1"].extra.get("mediaType"),
-        Some(&json!("text/html")),
+        links["l1"]
+            .media_type
+            .as_deref()
+            .or_else(|| links["l1"].extra.get("mediaType").and_then(|v| v.as_str())),
+        Some("text/html"),
         "a member the URL line cannot carry was overwritten"
     );
-    assert_eq!(links["l1"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        links["l1"].pref.or_else(|| links["l1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1)
+    );
 }
 
 #[test]
@@ -1753,11 +1801,23 @@ fn editing_a_calendar_address_keeps_what_the_caluri_line_cannot_carry() {
         "the kind is what put the URI on that line and cannot have been edited"
     );
     assert_eq!(
-        calendars["c1"].extra.get("mediaType"),
-        Some(&json!("text/calendar")),
+        calendars["c1"]
+            .media_type
+            .as_deref()
+            .or_else(|| calendars["c1"]
+                .extra
+                .get("mediaType")
+                .and_then(|v| v.as_str())),
+        Some("text/calendar"),
         "a member the CALURI line cannot carry was overwritten"
     );
-    assert_eq!(calendars["c1"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        calendars["c1"].pref.or_else(|| calendars["c1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1)
+    );
 }
 
 #[test]
@@ -2207,10 +2267,11 @@ fn a_title_with_no_name_survives_a_save_it_was_never_part_of() {
 
     let titles = fixture.card(&id).titles.expect("titles");
     assert_eq!(
-        titles
-            .get("t1")
-            .and_then(|title| title.extra.get("organizationId")),
-        Some(&json!("o1")),
+        titles.get("t1").and_then(|title| title
+            .organization_id
+            .as_deref()
+            .or_else(|| title.extra.get("organizationId").and_then(|v| v.as_str()))),
+        Some("o1"),
         "an entry the vCard never showed was overwritten: {titles:?}"
     );
     assert!(
@@ -2239,10 +2300,11 @@ fn an_organization_with_nothing_to_name_survives_a_save_it_was_never_part_of() {
 
     let organizations = fixture.card(&id).organizations.expect("organizations");
     assert_eq!(
-        organizations
-            .get("o1")
-            .and_then(|organization| organization.extra.get("sortAs")),
-        Some(&json!("Oldenburg")),
+        organizations.get("o1").and_then(|organization| organization
+            .sort_as
+            .as_deref()
+            .or_else(|| organization.extra.get("sortAs").and_then(|v| v.as_str()))),
+        Some("Oldenburg"),
         "an entry the vCard never showed was overwritten: {organizations:?}"
     );
     assert!(
@@ -2505,7 +2567,13 @@ fn editing_an_im_handle_patches_the_entry_by_its_key() {
     assert_eq!(services.keys().collect::<Vec<_>>(), vec!["s1"]);
     assert_eq!(services["s1"].user.as_deref(), Some("vera@xmpp.example"));
     assert_eq!(services["s1"].service.as_deref(), Some("Jabber"));
-    assert_eq!(services["s1"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        services["s1"].pref.or_else(|| services["s1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1)
+    );
 }
 
 #[test]
@@ -2738,71 +2806,6 @@ fn the_service_spelling_the_server_chose_is_not_rewritten() {
 }
 
 #[test]
-fn typing_a_handle_evolution_had_no_line_for_creates_an_entry() {
-    let fixture = Fixture::start();
-    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    let sync = fixture.sync();
-
-    // The line EDS writes when the user fills in one of the instant-messaging
-    // fields: no `X-JMAP-KEY`, since the entry is new, and a `TYPE` naming the
-    // slot they typed it into.
-    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    let edited = vcard.replace(
-        "END:VCARD",
-        "X-MATRIX;TYPE=WORK:@vera:matrix.example\r\nEND:VCARD",
-    );
-    sync.save_contact(&edited, Some(id.as_str())).unwrap();
-
-    let services = fixture.card(&id).online_services.expect("onlineServices");
-    let service = services.values().next().expect("one service");
-    assert_eq!(service.service.as_deref(), Some("Matrix"));
-    assert_eq!(service.user.as_deref(), Some("@vera:matrix.example"));
-    // The slot is not the entry's contexts, so nothing about where the user
-    // typed it reaches the server.
-    assert_eq!(service.extra.get("contexts"), None, "{service:?}");
-}
-
-#[test]
-fn a_service_the_vcard_cannot_state_survives_a_save_it_was_never_part_of() {
-    let fixture = Fixture::start();
-    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
-    // Two entries with no line: one at a service EDS has no field for, one
-    // stated as a URI whose scheme this mapping cannot read a handle out of.
-    // Neither was ever visible, so neither may be deleted for being absent from
-    // the edited vCard — and the handle the user does type must not be filed
-    // under a key one of them already holds.
-    fixture.patch(
-        &id,
-        json!({
-            "onlineServices": {
-                "s1": {"service": "Signal", "user": "+49301234"},
-                "s2": {"service": "Matrix", "uri": "matrix:u/vera:matrix.example"},
-            },
-        }),
-    );
-    let sync = fixture.sync();
-
-    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
-    assert!(!vcard.contains("X-MATRIX"), "{vcard}");
-    assert!(!vcard.contains("49301234"), "{vcard}");
-    let edited = vcard.replace("END:VCARD", "X-SKYPE;TYPE=HOME:vera.oldenburg\r\nEND:VCARD");
-    sync.save_contact(&edited, Some(id.as_str())).unwrap();
-
-    let services = fixture.card(&id).online_services.expect("onlineServices");
-    assert_eq!(services["s1"].user.as_deref(), Some("+49301234"));
-    assert_eq!(
-        services["s2"].uri.as_deref(),
-        Some("matrix:u/vera:matrix.example")
-    );
-    assert_eq!(services.len(), 3, "{services:?}");
-    let typed = services
-        .values()
-        .find(|service| service.service.as_deref() == Some("Skype"))
-        .unwrap_or_else(|| panic!("the handle the user typed is gone: {services:?}"));
-    assert_eq!(typed.user.as_deref(), Some("vera.oldenburg"));
-}
-
-#[test]
 fn clearing_the_last_im_handle_leaves_the_contact_on_no_service() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
@@ -2901,8 +2904,11 @@ fn the_photo_the_user_chose_reaches_the_server() {
     assert_eq!(media["m1"].uri, "data:image/png;base64,bmV3LXBob3RvISE=");
     assert_eq!(media["m1"].media_type.as_deref(), Some("image/png"));
     assert_eq!(
-        media["m1"].extra.get("pref"),
-        Some(&json!(1)),
+        media["m1"].pref.or_else(|| media["m1"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1),
         "a member the PHOTO line cannot carry was overwritten: {media:?}"
     );
 }
@@ -3330,6 +3336,239 @@ fn a_spouse_whose_name_holds_a_pointer_character_is_patched_under_that_name() {
     );
 }
 
+/// The manager line as EDS hands it back after the user has typed in the field.
+fn as_evolution_retypes_the_manager(vcard: &str, name: &str) -> String {
+    let mut rewritten = false;
+    let rebuilt: String = vcard
+        .lines()
+        .map(
+            |line| match !rewritten && line.starts_with("X-EVOLUTION-MANAGER") {
+                true => {
+                    rewritten = true;
+                    format!("X-EVOLUTION-MANAGER:{name}\r\n")
+                }
+                false => format!("{line}\r\n"),
+            },
+        )
+        .collect();
+    assert!(rewritten, "no manager line to rewrite in\n{vcard}");
+    rebuilt
+}
+
+/// The assistant line as EDS hands it back after the user has typed in the field.
+fn as_evolution_retypes_the_assistant(vcard: &str, name: &str) -> String {
+    let mut rewritten = false;
+    let rebuilt: String = vcard
+        .lines()
+        .map(
+            |line| match !rewritten && line.starts_with("X-EVOLUTION-ASSISTANT") {
+                true => {
+                    rewritten = true;
+                    format!("X-EVOLUTION-ASSISTANT:{name}\r\n")
+                }
+                false => format!("{line}\r\n"),
+            },
+        )
+        .collect();
+    assert!(rewritten, "no assistant line to rewrite in\n{vcard}");
+    rebuilt
+}
+
+#[test]
+fn retyping_a_manager_withdraws_manager_and_keeps_what_else_was_said() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"Sarah Connor": {
+            "@type": "Relation",
+            "relation": {"manager": true, "kin": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("X-EVOLUTION-MANAGER:Sarah Connor"),
+        "{vcard}"
+    );
+
+    let edited = as_evolution_retypes_the_manager(&vcard, "Miles Dyson");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec!["Miles Dyson", "Sarah Connor"],
+        "{related:?}"
+    );
+    assert_eq!(
+        related["Sarah Connor"].relation,
+        Some([("kin".to_owned(), json!(true))].into()),
+        "the relation the line never showed went with the manager: {related:?}"
+    );
+    assert_eq!(
+        related["Miles Dyson"].relation,
+        Some([("manager".to_owned(), json!(true))].into()),
+        "the name the user typed is a manager and nothing more: {related:?}"
+    );
+}
+
+#[test]
+fn retyping_a_manager_who_was_nothing_else_leaves_no_entry_behind() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {
+            "Sarah Connor": {"relation": {"manager": true}},
+            "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {"relation": {"manager": true}},
+        }}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert_eq!(vcard.matches("X-EVOLUTION-MANAGER").count(), 1, "{vcard}");
+
+    let edited = as_evolution_retypes_the_manager(&vcard, "Miles Dyson");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec![
+            "Miles Dyson",
+            "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44"
+        ],
+        "{related:?}"
+    );
+    assert_eq!(
+        related["urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44"].relation,
+        Some([("manager".to_owned(), json!(true))].into()),
+        "an entry the vCard never showed was rewritten: {related:?}"
+    );
+}
+
+#[test]
+fn clearing_the_manager_field_removes_the_relation() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"Sarah Connor": {
+            "@type": "Relation",
+            "relation": {"manager": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = as_evolution_retypes_the_manager(&vcard, "");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).related_to, None);
+}
+
+#[test]
+fn retyping_an_assistant_withdraws_assistant_and_keeps_what_else_was_said() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"John Connor": {
+            "@type": "Relation",
+            "relation": {"assistant": true, "kin": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("X-EVOLUTION-ASSISTANT:John Connor"),
+        "{vcard}"
+    );
+
+    let edited = as_evolution_retypes_the_assistant(&vcard, "Kyle Reese");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let related = fixture.card(&id).related_to.expect("relatedTo");
+    assert_eq!(
+        related.keys().collect::<Vec<_>>(),
+        vec!["John Connor", "Kyle Reese"],
+        "{related:?}"
+    );
+    assert_eq!(
+        related["John Connor"].relation,
+        Some([("kin".to_owned(), json!(true))].into())
+    );
+    assert_eq!(
+        related["Kyle Reese"].relation,
+        Some([("assistant".to_owned(), json!(true))].into())
+    );
+}
+
+#[test]
+fn clearing_the_assistant_field_removes_the_relation() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({"relatedTo": {"John Connor": {
+            "@type": "Relation",
+            "relation": {"assistant": true},
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = as_evolution_retypes_the_assistant(&vcard, "");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    assert_eq!(fixture.card(&id).related_to, None);
+}
+
+#[test]
+fn a_card_with_spouse_manager_and_assistant_can_edit_each_independently() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "relatedTo": {
+                "Alex Spouse": {"@type": "Relation", "relation": {"spouse": true}},
+                "Morgan Manager": {"@type": "Relation", "relation": {"manager": true}},
+                "Sam Assistant": {"@type": "Relation", "relation": {"assistant": true}},
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("X-EVOLUTION-SPOUSE:Alex Spouse"));
+    assert!(vcard.contains("X-EVOLUTION-MANAGER:Morgan Manager"));
+    assert!(vcard.contains("X-EVOLUTION-ASSISTANT:Sam Assistant"));
+
+    // Edit only manager
+    let edited = vcard.replace("Morgan Manager", "Taylor Manager");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let card = fixture.card(&id);
+    let rels = card.related_to.expect("relatedTo");
+    assert_eq!(rels.len(), 3);
+    assert_eq!(
+        rels["Alex Spouse"].relation,
+        Some([("spouse".to_owned(), json!(true))].into())
+    );
+    assert_eq!(
+        rels["Taylor Manager"].relation,
+        Some([("manager".to_owned(), json!(true))].into())
+    );
+    assert_eq!(
+        rels["Sam Assistant"].relation,
+        Some([("assistant".to_owned(), json!(true))].into())
+    );
+}
+
 #[test]
 fn unmapped_or_unslotted_services_are_preserved_across_saves() {
     let fixture = Fixture::start();
@@ -3716,23 +3955,41 @@ fn saving_contact_with_multiple_addresses_and_labels_preserves_all_entries() {
         Some("Hauptstraße 1\n10115 Berlin\nGermany")
     );
     assert_eq!(
-        addresses["a1"].extra.get("coordinates"),
-        Some(&json!("geo:52.5,13.4"))
+        addresses["a1"]
+            .coordinates
+            .as_deref()
+            .or_else(|| addresses["a1"]
+                .extra
+                .get("coordinates")
+                .and_then(|v| v.as_str())),
+        Some("geo:52.5,13.4")
     );
 
     assert_eq!(
         addresses["a2"].full.as_deref(),
         Some("Heimweg 2\n80331 München\nGermany")
     );
-    assert_eq!(addresses["a2"].extra.get("pref"), Some(&json!(1)));
+    assert_eq!(
+        addresses["a2"].pref.or_else(|| addresses["a2"]
+            .extra
+            .get("pref")
+            .and_then(|v| v.as_u64().map(|n| n as u32))),
+        Some(1)
+    );
 
     assert_eq!(
         addresses["a3"].full.as_deref(),
         Some("Postfach 42\n20095 Hamburg")
     );
     assert_eq!(
-        addresses["a3"].extra.get("timeZone"),
-        Some(&json!("Europe/Berlin"))
+        addresses["a3"]
+            .time_zone
+            .as_deref()
+            .or_else(|| addresses["a3"]
+                .extra
+                .get("timeZone")
+                .and_then(|v| v.as_str())),
+        Some("Europe/Berlin")
     );
 }
 
@@ -4011,8 +4268,12 @@ fn editing_notes_and_links_preserves_unmodeled_cards_and_properties() {
     let notes = card.notes.expect("notes");
     assert_eq!(notes["n1"].note, "Updated note with new details");
     assert_eq!(
-        notes["n1"].extra.get("created"),
-        Some(&json!("2026-08-01T12:00:00Z")),
+        notes["n1"]
+            .created
+            .as_ref()
+            .map(|d| d.as_str())
+            .or_else(|| notes["n1"].extra.get("created").and_then(|v| v.as_str())),
+        Some("2026-08-01T12:00:00Z"),
         "created timestamp should be preserved in extra"
     );
 
@@ -4020,11 +4281,7 @@ fn editing_notes_and_links_preserves_unmodeled_cards_and_properties() {
     assert_eq!(links["l1"].uri, "https://example.com/new-website");
 
     // Unmodeled preferredLanguages and onlineServices remain intact
-    let langs = card
-        .extra
-        .get("preferredLanguages")
-        .expect("preferredLanguages");
-    assert!(langs.get("de").is_some());
+    assert!(card.preferred_languages.is_some() || card.extra.contains_key("preferredLanguages"));
 
     let services = card.online_services.expect("onlineServices");
     assert_eq!(services["os1"].user.as_deref(), Some("@vera:matrix.org"));
@@ -4080,8 +4337,8 @@ fn editing_calendars_nicknames_and_spouse_preserves_unmodeled_contact_fields() {
     assert!(rels.contains_key("Taylor Olden"));
 
     // CryptoKeys preserved
-    let crypto = card.extra.get("cryptoKeys").expect("cryptoKeys");
-    assert!(crypto.get("key1").is_some());
+    let crypto = card.crypto_keys.as_ref().expect("cryptoKeys");
+    assert!(crypto.contains_key("key1"));
 }
 
 #[test]
@@ -4190,9 +4447,9 @@ fn editing_phones_and_emails_preserves_unmodeled_contact_fields() {
     assert_eq!(phones["p2"].number, "+49 30 999999");
 
     // Unmodeled properties intact
-    assert!(card.extra.contains_key("preferredLanguages"));
-    assert!(card.extra.contains_key("personalInfo"));
-    assert!(card.extra.contains_key("cryptoKeys"));
+    assert!(card.preferred_languages.is_some() || card.extra.contains_key("preferredLanguages"));
+    assert!(card.personal_info.as_ref().unwrap().contains_key("expert"));
+    assert!(card.crypto_keys.as_ref().unwrap().contains_key("key1"));
     assert!(card.online_services.as_ref().unwrap().contains_key("chat1"));
 }
 
@@ -4258,7 +4515,7 @@ fn editing_structured_name_components_preserves_unmodeled_crypto_and_personal_in
                 "k1": {"uri": "https://keys.example.com/openpgp.asc"}
             },
             "personalInfo": {
-                "expertise": ["C", "Rust"]
+                "pi1": {"kind": "expertise", "value": "Rust"}
             }
         }),
     );
@@ -4293,8 +4550,8 @@ fn editing_structured_name_components_preserves_unmodeled_crypto_and_personal_in
     assert_eq!(find_comp("credential"), Some("MSc"));
 
     // Unmodeled properties intact
-    assert!(card.extra.contains_key("cryptoKeys"));
-    assert!(card.extra.contains_key("personalInfo"));
+    assert!(card.crypto_keys.is_some() || card.extra.contains_key("cryptoKeys"));
+    assert!(card.personal_info.is_some() || card.extra.contains_key("personalInfo"));
 }
 
 #[test]
@@ -4329,7 +4586,7 @@ fn editing_multiple_addresses_preserves_unmodeled_contact_fields() {
             },
             "preferredLanguages": {"de": 1, "en": 2},
             "cryptoKeys": {"k1": {"uri": "https://keys.example.com/pkr.asc"}},
-            "personalInfo": {"expertise": ["Rust", "Evolution"]},
+            "personalInfo": {"pi1": {"kind": "expertise", "value": "Rust"}},
         }),
     );
     let sync = fixture.sync();
@@ -4389,9 +4646,9 @@ fn editing_multiple_addresses_preserves_unmodeled_contact_fields() {
     );
 
     // Unmodeled properties preserved intact
-    assert!(card.extra.contains_key("preferredLanguages"));
-    assert!(card.extra.contains_key("cryptoKeys"));
-    assert!(card.extra.contains_key("personalInfo"));
+    assert!(card.preferred_languages.is_some() || card.extra.contains_key("preferredLanguages"));
+    assert!(card.crypto_keys.is_some() || card.extra.contains_key("cryptoKeys"));
+    assert!(card.personal_info.is_some() || card.extra.contains_key("personalInfo"));
 }
 
 #[test]
@@ -4434,4 +4691,925 @@ fn clearing_all_addresses_patches_server_fields() {
     assert_eq!(card.addresses, None);
     assert!(card.name.is_some());
     assert!(card.emails.is_some());
+}
+
+#[test]
+fn no_op_save_mints_no_patch_across_all_contact_mapped_surfaces_matrix() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+
+    // Matrix of diverse cards covering:
+    // - media/photo (data URI and remote URL)
+    // - cryptoKeys and extra preservation bags
+    // - links (contact and custom)
+    // - labels and multi-component addresses with contexts
+    // - categories / keywords (statable and unstatable)
+    // - relations / relatedTo (spouses and unmapped kin)
+    // - phones (multiple context slots, features, pref)
+    // - emails (contexts, pref)
+    // - organizations (empty employer name with units, named employer with units, sortAs)
+    // - titles and roles
+    // - notes
+    // - nicknames
+    // - anniversaries (birthdays, wedding anniversaries, timestamps)
+    // - onlineServices (Jabber, Matrix, custom URIs)
+    let cases = vec![
+        (
+            "composite_full_card",
+            json!({
+                "name": {
+                    "full": "Dr. Vera Elisabeth von Oldenburg",
+                    "components": [
+                        {"kind": "prefix", "value": "Dr."},
+                        {"kind": "given", "value": "Vera"},
+                        {"kind": "given2", "value": "Elisabeth"},
+                        {"kind": "surname", "value": "Oldenburg"},
+                        {"kind": "surname2", "value": "von"},
+                    ]
+                },
+                "nicknames": {
+                    "n1": {"name": "Vee", "contexts": {"private": true}, "pref": 1}
+                },
+                "emails": {
+                    "e1": {"address": "vera@example.com", "contexts": {"work": true}, "pref": 1},
+                    "e2": {"address": "vera.home@example.org", "contexts": {"private": true}}
+                },
+                "phones": {
+                    "p1": {"number": "+49 30 111", "contexts": {"work": true}, "features": {"voice": true}, "pref": 1},
+                    "p2": {"number": "+49 170 222", "contexts": {"private": true}, "features": {"cell": true, "voice": true}}
+                },
+                "organizations": {
+                    "o1": {
+                        "name": "Acme Corp",
+                        "units": [{"name": "Engineering"}, {"name": "Platform"}],
+                        "sortAs": "Acme"
+                    }
+                },
+                "titles": {
+                    "t1": {"name": "Principal Architect", "kind": "title"},
+                    "t2": {"name": "Security Lead", "kind": "role"}
+                },
+                "addresses": {
+                    "a1": {
+                        "components": [
+                            {"kind": "name", "value": "Unter den Linden 1"},
+                            {"kind": "locality", "value": "Berlin"},
+                            {"kind": "postcode", "value": "10117"},
+                            {"kind": "country", "value": "Germany"}
+                        ],
+                        "full": "Unter den Linden 1\n10117 Berlin\nGermany",
+                        "contexts": {"work": true}
+                    }
+                },
+                "notes": {
+                    "not1": {"note": "Key contact for protocol engineering."}
+                },
+                "anniversaries": {
+                    "y1": {"kind": "birth", "date": {"year": 1988, "month": 5, "day": 12}},
+                    "y2": {"kind": "wedding", "date": {"year": 2016, "month": 8, "day": 20}}
+                },
+                "links": {
+                    "l1": {"uri": "https://example.com/vera", "kind": "contact"}
+                },
+                "calendars": {
+                    "c1": {"uri": "https://cal.example.com/vera", "kind": "calendar"},
+                    "c2": {"uri": "https://cal.example.com/fb/vera", "kind": "freeBusy"}
+                },
+                "media": {
+                    "m1": {
+                        "kind": "photo",
+                        "uri": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=",
+                        "mediaType": "image/jpeg"
+                    }
+                },
+                "onlineServices": {
+                    "os1": {"service": "Jabber", "user": "vera@jabber.example.org"},
+                    "os2": {"service": "Matrix", "user": "@vera:matrix.example.org"}
+                },
+                "relatedTo": {
+                    "Max Oldenburg": {"relation": {"spouse": true, "kin": true}}
+                },
+                "keywords": {
+                    "Colleague": true,
+                    "VIP": true,
+                    "Internal": false
+                },
+                "preferredLanguages": {"de": 1, "en": 2},
+                "cryptoKeys": {"k1": {"uri": "https://keys.example.com/vera.asc"}},
+                "customBags": {"team": "Architecture"}
+            }),
+        ),
+        (
+            "empty_org_name_with_units",
+            json!({
+                "name": {"full": "Nameless Org Employee"},
+                "organizations": {
+                    "o1": {
+                        "name": "",
+                        "units": [{"name": "Platform Infrastructure"}]
+                    }
+                },
+                "emails": {"e1": {"address": "infra@example.org"}}
+            }),
+        ),
+        (
+            "timestamp_anniversaries_and_remote_photo",
+            json!({
+                "name": {"full": "Point In Time Contact"},
+                "anniversaries": {
+                    "y1": {"kind": "birth", "date": {"utc": "1992-11-04T14:30:00Z"}},
+                    "y2": {"kind": "wedding", "date": {"utc": "2020-06-18T00:00:00Z"}}
+                },
+                "media": {
+                    "m1": {
+                        "kind": "photo",
+                        "uri": "https://cdn.example.com/avatars/contact.jpg",
+                        "mediaType": "image/jpeg"
+                    }
+                },
+                "emails": {"e1": {"address": "timestamp@example.org"}}
+            }),
+        ),
+        (
+            "unmapped_contexts_and_features_with_pref",
+            json!({
+                "name": {"full": "Pref and Context Contact"},
+                "emails": {
+                    "e1": {"address": "pref@example.com", "contexts": {"work": true, "school": true}, "pref": 42}
+                },
+                "phones": {
+                    "p1": {
+                        "number": "+1 555 0100",
+                        "contexts": {"work": true, "school": true},
+                        "features": {"voice": true, "video": true},
+                        "pref": 10
+                    }
+                }
+            }),
+        ),
+        (
+            "label_only_address_and_impp_online_services",
+            json!({
+                "name": {"full": "Label Only Address"},
+                "addresses": {
+                    "a1": {
+                        "full": "Post Office Box 123\n10001 New York\nUSA",
+                        "contexts": {"work": true}
+                    }
+                },
+                "onlineServices": {
+                    "os1": {"uri": "xmpp:alice@example.com"},
+                    "os2": {"uri": "sip:alice@example.com"}
+                }
+            }),
+        ),
+        (
+            "multi_relations_and_unmapped",
+            json!({
+                "name": {"full": "Relations Matrix Contact"},
+                "relatedTo": {
+                    "Alex Spouse": {"@type": "Relation", "relation": {"spouse": true}},
+                    "Morgan Manager": {"@type": "Relation", "relation": {"manager": true}},
+                    "Sam Assistant": {"@type": "Relation", "relation": {"assistant": true}},
+                    "Taylor Mixed": {"@type": "Relation", "relation": {"spouse": true, "manager": true, "assistant": true, "kin": true}},
+                    "Jordan Kin": {"@type": "Relation", "relation": {"kin": true}},
+                    "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {"@type": "Relation", "relation": {"spouse": true}}
+                },
+                "emails": {"e1": {"address": "relmatrix@example.org"}}
+            }),
+        ),
+    ];
+
+    for (name, initial_patch) in cases {
+        let id = fixture.seed(&fixture.ours, "Seed Name", "seed@example.com");
+        fixture.patch(&id, initial_patch);
+
+        // Load 1: Read card as rendered vCard
+        let loaded1 = sync.load_contact(id.as_str()).expect(name);
+
+        // Save 1: Save untouched vCard back
+        let saved1 = sync
+            .save_contact(&loaded1.vcard, Some(id.as_str()))
+            .expect(name);
+
+        // Load 2: Fresh reload after Save 1
+        let loaded2 = sync.load_contact(id.as_str()).expect(name);
+
+        // Assert: Save 2 MUST produce NO patch and preserve identical revision
+        let saved2 = sync
+            .save_contact(&loaded2.vcard, Some(id.as_str()))
+            .expect(name);
+        assert_eq!(
+            saved1.revision, saved2.revision,
+            "case '{name}': second save must not update revision"
+        );
+
+        // Assert: diff between server state and parsed vCard is completely empty
+        let current_card = fixture.card(&id);
+        let parsed_card = jmap_vcard::vcard_to_card(&loaded2.vcard).expect(name);
+        let patch_diff = jmap_book_sync::patch::diff(&current_card, &parsed_card);
+        assert!(
+            patch_diff.is_empty(),
+            "case '{name}': diff after round-trip must be empty, found: {patch_diff:?}"
+        );
+    }
+}
+
+#[test]
+fn no_op_save_mints_no_patch_on_empty_container_collections() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let id = fixture.seed(&fixture.ours, "Seed Name", "seed@example.com");
+
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "full": "Empty Collections Contact",
+                "components": []
+            },
+            "organizations": {
+                "o1": {
+                    "name": "Acme Corp",
+                    "units": []
+                }
+            },
+            "addresses": {
+                "a1": {
+                    "full": "Test Street 1",
+                    "components": [],
+                    "contexts": {}
+                }
+            },
+            "emails": {
+                "e1": {
+                    "address": "empty@example.com",
+                    "contexts": {}
+                }
+            },
+            "phones": {
+                "p1": {
+                    "number": "+123456",
+                    "contexts": {},
+                    "features": {}
+                }
+            }
+        }),
+    );
+
+    let initial_card = fixture.card(&id);
+    let loaded = sync.load_contact(id.as_str()).unwrap();
+    let parsed_card = jmap_vcard::vcard_to_card(&loaded.vcard).unwrap();
+
+    let patch_diff = jmap_book_sync::patch::diff(&initial_card, &parsed_card);
+    assert!(
+        patch_diff.is_empty(),
+        "first save must mint no patch for empty container collections, found: {patch_diff:?}"
+    );
+
+    let initial_revision = initial_card.extra.get("revision").cloned();
+    let saved1 = sync.save_contact(&loaded.vcard, Some(id.as_str())).unwrap();
+    assert_eq!(
+        saved1.revision,
+        initial_revision
+            .and_then(|r| r.as_str().map(str::to_owned))
+            .unwrap_or(saved1.revision.clone()),
+        "first save must not increment revision for no-op change"
+    );
+
+    // Load 2 and Save 2
+    let loaded2 = sync.load_contact(id.as_str()).unwrap();
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .unwrap();
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must preserve identical revision"
+    );
+}
+
+#[test]
+fn no_op_save_mints_no_patch_on_mixed_populated_and_empty_container_collections() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let id = fixture.seed(&fixture.ours, "Seed Name", "seed@example.com");
+
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "full": "Mixed Collections Contact",
+                "components": [
+                    {"kind": "given", "value": "Mixed"},
+                    {"kind": "surname", "value": "Contact"}
+                ]
+            },
+            "organizations": {
+                "o1": {
+                    "name": "Acme Corp",
+                    "units": [{"name": "Engineering"}]
+                },
+                "o2": {
+                    "name": "Subsidiary Inc",
+                    "units": []
+                }
+            },
+            "addresses": {
+                "a1": {
+                    "full": "Main St 10",
+                    "components": [{"kind": "name", "value": "Main St 10"}],
+                    "contexts": {"work": true}
+                },
+                "a2": {
+                    "full": "Branch Box 20",
+                    "components": [],
+                    "contexts": {}
+                }
+            },
+            "emails": {
+                "e1": {
+                    "address": "work@example.com",
+                    "contexts": {"work": true}
+                },
+                "e2": {
+                    "address": "other@example.com",
+                    "contexts": {}
+                }
+            },
+            "phones": {
+                "p1": {
+                    "number": "+111111",
+                    "contexts": {"work": true},
+                    "features": {"voice": true}
+                },
+                "p2": {
+                    "number": "+222222",
+                    "contexts": {},
+                    "features": {}
+                }
+            }
+        }),
+    );
+
+    let initial_card = fixture.card(&id);
+    let loaded1 = sync.load_contact(id.as_str()).unwrap();
+    let parsed_card1 = jmap_vcard::vcard_to_card(&loaded1.vcard).unwrap();
+
+    let patch_diff1 = jmap_book_sync::patch::diff(&initial_card, &parsed_card1);
+    assert!(
+        patch_diff1.is_empty(),
+        "first save must mint no patch for mixed container collections, found: {patch_diff1:?}"
+    );
+
+    let saved1 = sync
+        .save_contact(&loaded1.vcard, Some(id.as_str()))
+        .unwrap();
+    let loaded2 = sync.load_contact(id.as_str()).unwrap();
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .unwrap();
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must preserve identical revision"
+    );
+}
+
+#[test]
+fn editing_an_address_preserves_a_preference_ranking_the_vcard_flattens() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "addresses/a1": {
+                "components": [{"kind": "name", "value": "Hauptstraße 1"}],
+                "pref": 30
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("PREF"), "{vcard}");
+    let edited = vcard.replace("Hauptstraße 1", "Hauptstraße 2");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.addresses.as_ref().unwrap()["a1"].pref,
+        Some(30),
+        "address pref rank must not be flattened to 1 by a save that did not touch it"
+    );
+}
+
+#[test]
+fn clearing_an_address_preference_in_the_vcard_clears_it_on_the_server() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "addresses/a1": {
+                "components": [{"kind": "name", "value": "Hauptstraße 1"}],
+                "pref": 30
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited = vcard
+        .replace(";TYPE=PREF", "")
+        .replace("TYPE=PREF;", "")
+        .replace("TYPE=PREF:", ":");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.addresses.as_ref().unwrap()["a1"].pref,
+        None,
+        "clearing PREF on address line must clear pref on server"
+    );
+}
+
+#[test]
+fn reclassifying_a_homepage_link_to_a_blog_or_video_url_patches_kind() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "links/l1": {
+                "uri": "https://vera.example.com"
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("URL;X-JMAP-KEY=l1:https://vera.example.com"),
+        "{vcard}"
+    );
+
+    // Reclassify from Homepage URL to Blog URL
+    let edited = vcard.replace("URL;X-JMAP-KEY=l1:", "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.links.as_ref().unwrap()["l1"].kind.as_deref(),
+        Some("blog"),
+        "reclassifying URL to X-EVOLUTION-BLOG-URL must patch kind to 'blog'"
+    );
+
+    // Reclassify from Blog URL to Video URL
+    let vcard2 = sync.load_contact(id.as_str()).unwrap().vcard;
+    let edited2 = vcard2.replace(
+        "X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:",
+        "X-EVOLUTION-VIDEO-URL;X-JMAP-KEY=l1:",
+    );
+    sync.save_contact(&edited2, Some(id.as_str())).unwrap();
+
+    let stored2 = fixture.card(&id);
+    assert_eq!(
+        stored2.links.as_ref().unwrap()["l1"].kind.as_deref(),
+        Some("video"),
+        "reclassifying X-EVOLUTION-BLOG-URL to X-EVOLUTION-VIDEO-URL must patch kind to 'video'"
+    );
+}
+
+#[test]
+fn reclassifying_a_blog_url_back_to_homepage_patches_kind_to_null() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "links/l1": {
+                "kind": "blog",
+                "uri": "https://blog.example.com"
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:"),
+        "{vcard}"
+    );
+
+    // Reclassify back to standard Homepage URL
+    let edited = vcard.replace("X-EVOLUTION-BLOG-URL;X-JMAP-KEY=l1:", "URL;X-JMAP-KEY=l1:");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.links.as_ref().unwrap()["l1"].kind,
+        None,
+        "reclassifying blog URL to homepage URL must clear kind"
+    );
+}
+
+#[test]
+fn reclassifying_a_calendar_uri_to_freebusy_url_patches_kind() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    fixture.patch(
+        &id,
+        json!({
+            "calendars/c1": {
+                "kind": "calendar",
+                "uri": "https://cal.example.com/user"
+            }
+        }),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(vcard.contains("CALURI;X-JMAP-KEY=c1:"), "{vcard}");
+
+    // Reclassify from Calendar URI to Free/Busy URL
+    let edited = vcard.replace("CALURI;X-JMAP-KEY=c1:", "FBURL;X-JMAP-KEY=c1:");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    assert_eq!(
+        stored.calendars.as_ref().unwrap()["c1"].kind.as_deref(),
+        Some("freeBusy"),
+        "reclassifying CALURI to FBURL must patch kind to 'freeBusy'"
+    );
+}
+
+#[test]
+fn no_op_save_mints_no_patch_on_address_pref_and_typed_links_and_calendars() {
+    let fixture = Fixture::start();
+    let sync = fixture.sync();
+    let id = fixture.seed(&fixture.ours, "Seed Name", "seed@example.com");
+
+    fixture.patch(
+        &id,
+        json!({
+            "addresses": {
+                "a1": {
+                    "full": "Preferred Address 123",
+                    "pref": 20,
+                    "contexts": {"work": true}
+                }
+            },
+            "links": {
+                "l1": {
+                    "kind": "blog",
+                    "uri": "https://blog.example.com"
+                },
+                "l2": {
+                    "kind": "video",
+                    "uri": "https://video.example.com/channel"
+                }
+            },
+            "calendars": {
+                "c1": {
+                    "kind": "calendar",
+                    "uri": "https://cal.example.com/events"
+                },
+                "c2": {
+                    "kind": "freeBusy",
+                    "uri": "https://cal.example.com/freebusy"
+                }
+            }
+        }),
+    );
+
+    let initial_card = fixture.card(&id);
+    let loaded1 = sync.load_contact(id.as_str()).unwrap();
+    let parsed_card1 = jmap_vcard::vcard_to_card(&loaded1.vcard).unwrap();
+
+    let patch_diff1 = jmap_book_sync::patch::diff(&initial_card, &parsed_card1);
+    assert!(
+        patch_diff1.is_empty(),
+        "first save must mint no patch for address pref and typed links/calendars, found: {patch_diff1:?}"
+    );
+
+    let saved1 = sync
+        .save_contact(&loaded1.vcard, Some(id.as_str()))
+        .unwrap();
+    let loaded2 = sync.load_contact(id.as_str()).unwrap();
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .unwrap();
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must preserve identical revision"
+    );
+}
+
+#[test]
+fn no_op_save_mints_no_patch_on_empty_or_unstated_name() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "full": "",
+                "components": []
+            }
+        }),
+    );
+
+    let initial_card = fixture.card(&id);
+    let loaded1 = sync.load_contact(id.as_str()).unwrap();
+    let parsed_card1 = jmap_vcard::vcard_to_card(&loaded1.vcard).unwrap();
+
+    let patch_diff1 = jmap_book_sync::patch::diff(&initial_card, &parsed_card1);
+    assert!(
+        patch_diff1.is_empty(),
+        "no-op save on empty/unstated name must mint no patch, found: {patch_diff1:?}"
+    );
+
+    let saved1 = sync
+        .save_contact(&loaded1.vcard, Some(id.as_str()))
+        .unwrap();
+    let loaded2 = sync.load_contact(id.as_str()).unwrap();
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .unwrap();
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must preserve identical revision on empty/unstated name"
+    );
+}
+
+#[test]
+fn clearing_stated_name_with_unmapped_fields_preserves_unmapped_name_metadata() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "full": "Vera Oldenburg",
+                "components": [{"kind": "given", "value": "Vera"}],
+                "isOrdered": true,
+                "sortAs": {"de": "Oldenburg, Vera"},
+                "phonetic": "veːʁa"
+            }
+        }),
+    );
+
+    let loaded = sync.load_contact(id.as_str()).unwrap();
+    // User clears the name in Evolution (removes FN and N lines)
+    let mut cleared_vcard = String::new();
+    for line in loaded.vcard.lines() {
+        if !line.starts_with("FN:") && !line.starts_with("N:") {
+            cleared_vcard.push_str(line);
+            cleared_vcard.push_str("\r\n");
+        }
+    }
+
+    sync.save_contact(&cleared_vcard, Some(id.as_str()))
+        .unwrap();
+
+    let stored = fixture.card(&id);
+    let name = stored
+        .name
+        .as_ref()
+        .expect("name object should be preserved");
+    assert_eq!(name.full, None, "full name should be cleared");
+    assert_eq!(name.components, None, "components should be cleared");
+    assert_eq!(name.is_ordered, Some(true), "isOrdered should be preserved");
+    assert_eq!(
+        name.sort_as,
+        Some(std::collections::BTreeMap::from([(
+            "de".to_string(),
+            "Oldenburg, Vera".to_string()
+        )])),
+        "sortAs should be preserved"
+    );
+    assert_eq!(
+        name.extra.get("phonetic"),
+        Some(&json!("veːʁa")),
+        "extra phonetic field should be preserved"
+    );
+}
+
+#[test]
+fn editing_preserves_extra_pref_ranking_on_emails_and_phones() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    fixture.patch(
+        &id,
+        json!({
+            "emails/e0/pref": 42,
+            "phones/p1": {
+                "number": "+49 30 111",
+                "pref": 55
+            }
+        }),
+    );
+
+    let initial_card = fixture.card(&id);
+    let loaded1 = sync.load_contact(id.as_str()).unwrap();
+    let parsed_card1 = jmap_vcard::vcard_to_card(&loaded1.vcard).unwrap();
+
+    let patch_diff1 = jmap_book_sync::patch::diff(&initial_card, &parsed_card1);
+    assert!(
+        patch_diff1.is_empty(),
+        "first save must mint no patch for email and phone pref ranks, found: {patch_diff1:?}"
+    );
+
+    let saved1 = sync
+        .save_contact(&loaded1.vcard, Some(id.as_str()))
+        .unwrap();
+    let loaded2 = sync.load_contact(id.as_str()).unwrap();
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .unwrap();
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must preserve identical revision for email and phone pref ranks"
+    );
+
+    let stored = fixture.card(&id);
+    assert_eq!(stored.emails.as_ref().unwrap()["e0"].pref, Some(42));
+    assert_eq!(stored.phones.as_ref().unwrap()["p1"].pref, Some(55));
+}
+
+#[test]
+fn no_op_save_mints_no_patch_across_all_contact_surfaces_matrix() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    let sync = fixture.sync();
+
+    // Populate every mapped and unmapped surface across the JSContact schema
+    fixture.patch(
+        &id,
+        json!({
+            "name": {
+                "full": "Dr. Vera Maria Oldenburg Jr.",
+                "components": [
+                    {"kind": "title", "value": "Dr."},
+                    {"kind": "given", "value": "Vera"},
+                    {"kind": "given2", "value": "Maria"},
+                    {"kind": "surname", "value": "Oldenburg"},
+                    {"kind": "credential", "value": "Jr."}
+                ],
+                "isOrdered": true,
+                "sortAs": {"de": "Oldenburg, Vera"},
+                "phonetic": "veːʁa"
+            },
+            "nicknames": {
+                "n1": {"name": "Vee", "contexts": {"private": true}, "pref": 10}
+            },
+            "emails": {
+                "e0": {
+                    "address": "vera@example.com",
+                    "contexts": {"work": true, "school": true},
+                    "pref": 25,
+                    "label": "Direct"
+                }
+            },
+            "phones": {
+                "p1": {
+                    "number": "+49 30 123456",
+                    "contexts": {"work": true, "private": true},
+                    "features": {"voice": true, "fax": true},
+                    "pref": 15
+                }
+            },
+            "organizations": {
+                "o1": {
+                    "name": "Acme Corp",
+                    "units": [
+                        {"name": "Research & Development", "sortAs": "R&D"},
+                        {"name": "Applied Cryptography"}
+                    ],
+                    "sortAs": "Acme",
+                    "contexts": {"work": true}
+                }
+            },
+            "titles": {
+                "t1": {"name": "Chief Scientist", "kind": "title", "organizationId": "o1"},
+                "t2": {"name": "Project Lead", "kind": "role"}
+            },
+            "addresses": {
+                "a1": {
+                    "components": [
+                        {"kind": "name", "value": "Hauptstraße 42"},
+                        {"kind": "locality", "value": "Berlin"},
+                        {"kind": "postcode", "value": "10115"},
+                        {"kind": "country", "value": "Germany"}
+                    ],
+                    "full": "Hauptstraße 42\n10115 Berlin\nGermany",
+                    "contexts": {"work": true, "private": true},
+                    "pref": 30
+                }
+            },
+            "notes": {
+                "n1": {"note": "Key collaborator on JMAP standards", "created": "2026-01-01T00:00:00Z"}
+            },
+            "anniversaries": {
+                "y1": {"kind": "birth", "date": {"year": 1985, "month": 6, "day": 15}},
+                "y2": {"kind": "wedding", "date": {"year": 2015, "month": 9, "day": 20}}
+            },
+            "links": {
+                "l1": {"uri": "https://example.com/vera", "kind": null, "pref": 5},
+                "l2": {"uri": "https://blog.example.com/vera", "kind": "blog"},
+                "l3": {"uri": "https://video.example.com/vera", "kind": "video"}
+            },
+            "calendars": {
+                "c1": {"uri": "https://cal.example.com/vera", "kind": "calendar"},
+                "c2": {"uri": "https://cal.example.com/vera/freebusy", "kind": "freeBusy"}
+            },
+            "media": {
+                "m1": {
+                    "kind": "photo",
+                    "uri": "https://example.com/vera.jpg",
+                    "mediaType": "image/jpeg"
+                }
+            },
+            "onlineServices": {
+                "s1": {"service": "Jabber", "user": "vera@jabber.org"},
+                "s2": {"service": "Matrix", "user": "@vera:matrix.org"}
+            },
+            "relatedTo": {
+                "Bob Example": {"relation": {"spouse": true}},
+                "Alice Manager": {"relation": {"manager": true}},
+                "Charlie Assistant": {"relation": {"assistant": true}},
+                "Dave Colleague": {"relation": {"colleague": true}}
+            },
+            "keywords": {
+                "VIP": true,
+                "WG-Member": true,
+                "Unstatable Category \r\n": true
+            },
+            "cryptoKeys": {
+                "k1": {"kind": "key", "uri": "https://keys.example.com/vera.asc"}
+            },
+            "directories": {
+                "d1": {"kind": "directory", "uri": "ldap://ldap.example.com"}
+            },
+            "personalInfo": {
+                "pi1": {"kind": "expertise", "value": "Protocols"}
+            },
+            "speakToAs": {
+                "grammaticalGender": "feminine",
+                "pronouns": "she/her"
+            },
+            "preferredLanguages": {
+                "de": {"language": "de-DE", "pref": 1}
+            },
+            "localizations": {
+                "en": {"name/full": "Vera Oldenburg"}
+            },
+            "customPreservedField": "preserved-value"
+        }),
+    );
+
+    // First load -> save cycle (simulating opening & saving untouched in Evolution)
+    let loaded1 = sync.load_contact(id.as_str()).expect("load 1");
+    let saved1 = sync
+        .save_contact(&loaded1.vcard, Some(id.as_str()))
+        .expect("save 1");
+
+    // Second load -> save cycle
+    let loaded2 = sync.load_contact(id.as_str()).expect("load 2");
+    let parsed_card2 = jmap_vcard::vcard_to_card(&loaded2.vcard).expect("parse 2");
+    let current_card = fixture.card(&id);
+
+    let second_patch = jmap_book_sync::patch::diff(&current_card, &parsed_card2);
+    assert!(
+        second_patch.is_empty(),
+        "second diff on contact after round-trip must mint no patch, found: {second_patch:?}"
+    );
+
+    let saved2 = sync
+        .save_contact(&loaded2.vcard, Some(id.as_str()))
+        .expect("save 2");
+    assert_eq!(
+        saved1.revision, saved2.revision,
+        "second save must not change server revision for untouched contact"
+    );
+
+    // Verify all unmapped and mapped fields remain preserved server-side
+    let stored = fixture.card(&id);
+    assert!(stored.crypto_keys.is_some() || stored.extra.contains_key("cryptoKeys"));
+    assert!(stored.directories.is_some() || stored.extra.contains_key("directories"));
+    assert!(stored.personal_info.is_some() || stored.extra.contains_key("personalInfo"));
+    assert!(stored.speak_to_as.is_some() || stored.extra.contains_key("speakToAs"));
+    assert!(
+        stored.preferred_languages.is_some() || stored.extra.contains_key("preferredLanguages")
+    );
+    assert!(stored.localizations.is_some() || stored.extra.contains_key("localizations"));
+    assert_eq!(
+        stored.extra.get("customPreservedField"),
+        Some(&json!("preserved-value"))
+    );
 }

@@ -14,7 +14,14 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::error::SetError;
 use crate::id::Id;
+#[cfg(feature = "principals")]
+use crate::principals::Principal;
+use crate::state::UtcDate;
+
+#[cfg(not(feature = "principals"))]
+type Principal = serde_json::Value;
 
 /// A calendar (draft §4).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -34,6 +41,12 @@ pub struct Calendar {
     pub is_default: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_subscribed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_visible: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_in_availability: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
     /// Server-computed permissions on this calendar (calendars draft §4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_rights: Option<CalendarRights>,
@@ -42,8 +55,59 @@ pub struct Calendar {
     /// deliberately separate from reading `myRights`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_with: Option<BTreeMap<Id, CalendarRights>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_delete: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Calendar {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
+    }
+
+    pub fn with_sort_order(mut self, sort_order: u32) -> Self {
+        self.sort_order = Some(sort_order);
+        self
+    }
+
+    pub fn is_default(mut self, is_default: bool) -> Self {
+        self.is_default = Some(is_default);
+        self
+    }
+
+    pub fn is_subscribed(mut self, is_subscribed: bool) -> Self {
+        self.is_subscribed = Some(is_subscribed);
+        self
+    }
+
+    pub fn is_visible(mut self, is_visible: bool) -> Self {
+        self.is_visible = Some(is_visible);
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `Calendar.myRights`/a `shareWith` entry (calendars draft §4, draft-27 field
@@ -73,6 +137,28 @@ pub struct CalendarRights {
 }
 
 impl CalendarRights {
+    pub fn all() -> Self {
+        Self {
+            may_read_free_busy: Some(true),
+            may_read_items: Some(true),
+            may_write_all: Some(true),
+            may_write_own: Some(true),
+            may_update_private: Some(true),
+            may_rsvp: Some(true),
+            may_share: Some(true),
+            may_delete: Some(true),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn read_only() -> Self {
+        Self {
+            may_read_items: Some(true),
+            may_read_free_busy: Some(true),
+            ..Self::default()
+        }
+    }
+
     /// Whether these rights let the holder write *something* to the
     /// calendar. EDS's read-only flag is a single bit per source, with no
     /// "read-only except your own items" shade to represent — marking the
@@ -83,6 +169,11 @@ impl CalendarRights {
     /// [`crate::contacts::AddressBookRights::is_writable`].
     pub fn is_writable(&self) -> bool {
         self.may_write_all.unwrap_or(false) || self.may_write_own.unwrap_or(false)
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
     }
 }
 
@@ -298,11 +389,110 @@ pub struct CalendarEvent {
     /// `CalendarEvent/get`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_zones: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_default_alerts: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localizations: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 impl CalendarEvent {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_calendar_id(mut self, id: impl Into<Id>) -> Self {
+        let mut map = self.calendar_ids.unwrap_or_default();
+        map.insert(id.into(), true);
+        self.calendar_ids = Some(map);
+        self
+    }
+
+    pub fn with_uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_start(mut self, start: impl Into<String>) -> Self {
+        self.start = Some(start.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_duration(mut self, duration: impl Into<String>) -> Self {
+        self.duration = Some(duration.into());
+        self
+    }
+
+    pub fn with_status(mut self, status: impl Into<String>) -> Self {
+        self.status = Some(status.into());
+        self
+    }
+
+    pub fn with_free_busy_status(mut self, free_busy_status: impl Into<String>) -> Self {
+        self.free_busy_status = Some(free_busy_status.into());
+        self
+    }
+
+    pub fn with_priority(mut self, priority: i64) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
+    pub fn with_privacy(mut self, privacy: impl Into<String>) -> Self {
+        self.privacy = Some(privacy.into());
+        self
+    }
+
+    pub fn show_without_time(mut self, show_without_time: bool) -> Self {
+        self.show_without_time = Some(show_without_time);
+        self
+    }
+
+    pub fn use_default_alerts(mut self, use_default: bool) -> Self {
+        self.use_default_alerts = Some(use_default);
+        self
+    }
+
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
+    }
+
+    pub fn with_locale(mut self, locale: impl Into<String>) -> Self {
+        self.locale = Some(locale.into());
+        self
+    }
+
+    pub fn with_recurrence_rule(mut self, rrule: RecurrenceRule) -> Self {
+        self.recurrence_rule = Some(rrule);
+        self
+    }
+
     /// A minimal one-off event, ready for `CalendarEvent/set` create.
     pub fn simple(calendar_id: impl Into<Id>, title: &str, start: &str, duration: &str) -> Self {
         Self {
@@ -319,6 +509,11 @@ impl CalendarEvent {
             status: Some("confirmed".to_owned()),
             ..Self::default()
         }
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
     }
 }
 
@@ -404,6 +599,12 @@ pub struct RecurrenceRule {
     /// Tuesdays.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_day_of_week: Option<String>,
+    /// The calendar scale the recurrence rule is defined in (RFC 8984 §4.3.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rscale: Option<String>,
+    /// How to handle occurrences spanning leap months or invalid dates (RFC 8984 §4.3.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -433,18 +634,59 @@ impl NDay {
         Self {
             day_type: Some("NDay".to_owned()),
             day: day.to_owned(),
-            ..Self::default()
+            nth_of_period: None,
+            extra: BTreeMap::new(),
         }
+    }
+
+    pub fn with_nth_of_period(mut self, nth: i32) -> Self {
+        self.nth_of_period = Some(nth);
+        self
     }
 }
 
 impl RecurrenceRule {
-    pub fn new(frequency: &str) -> Self {
+    pub fn new(frequency: impl Into<String>) -> Self {
         Self {
             rule_type: Some("RecurrenceRule".to_owned()),
-            frequency: frequency.to_owned(),
+            frequency: frequency.into(),
             ..Self::default()
         }
+    }
+
+    pub fn with_interval(mut self, interval: u32) -> Self {
+        self.interval = Some(interval);
+        self
+    }
+
+    pub fn with_count(mut self, count: u32) -> Self {
+        self.count = Some(count);
+        self
+    }
+
+    pub fn with_until(mut self, until: impl Into<String>) -> Self {
+        self.until = Some(until.into());
+        self
+    }
+
+    pub fn with_by_day(mut self, by_day: impl IntoIterator<Item = NDay>) -> Self {
+        self.by_day = Some(by_day.into_iter().collect());
+        self
+    }
+
+    pub fn with_by_month(mut self, by_month: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.by_month = Some(by_month.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_rscale(mut self, rscale: impl Into<String>) -> Self {
+        self.rscale = Some(rscale.into());
+        self
+    }
+
+    pub fn with_skip(mut self, skip: impl Into<String>) -> Self {
+        self.skip = Some(skip.into());
+        self
     }
 }
 
@@ -463,6 +705,12 @@ pub struct CalendarEventQueryFilter {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
 }
 
 impl CalendarEventQueryFilter {
@@ -473,11 +721,1326 @@ impl CalendarEventQueryFilter {
         }
     }
 
-    pub fn time_range(after: &str, before: &str) -> Self {
+    pub fn time_range(after: impl Into<String>, before: impl Into<String>) -> Self {
         Self {
-            after: Some(after.to_owned()),
-            before: Some(before.to_owned()),
+            after: Some(after.into()),
+            before: Some(before.into()),
             ..Self::default()
         }
     }
+
+    pub fn with_time_range(mut self, after: impl Into<String>, before: impl Into<String>) -> Self {
+        self.after = Some(after.into());
+        self.before = Some(before.into());
+        self
+    }
+
+    pub fn after(mut self, after: impl Into<String>) -> Self {
+        self.after = Some(after.into());
+        self
+    }
+
+    pub fn before(mut self, before: impl Into<String>) -> Self {
+        self.before = Some(before.into());
+        self
+    }
+
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
+    }
+
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn location(mut self, location: impl Into<String>) -> Self {
+        self.location = Some(location.into());
+        self
+    }
+
+    pub fn uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+}
+
+/// Standard recurrence frequency values (RFC 8984 §4.3.3).
+pub mod frequency {
+    pub const SECONDLY: &str = "secondly";
+    pub const MINUTELY: &str = "minutely";
+    pub const HOURLY: &str = "hourly";
+    pub const DAILY: &str = "daily";
+    pub const WEEKLY: &str = "weekly";
+    pub const MONTHLY: &str = "monthly";
+    pub const YEARLY: &str = "yearly";
+}
+
+/// Standard recurrence skip values (RFC 8984 §4.3.3).
+pub mod recurrence_skip {
+    pub const OMIT: &str = "omit";
+    pub const BACKWARD: &str = "backward";
+    pub const FORWARD: &str = "forward";
+}
+
+/// Standard two-letter weekday codes (RFC 8984 §4.3.3).
+pub mod weekday {
+    pub const MO: &str = "mo";
+    pub const TU: &str = "tu";
+    pub const WE: &str = "we";
+    pub const TH: &str = "th";
+    pub const FR: &str = "fr";
+    pub const SA: &str = "sa";
+    pub const SU: &str = "su";
+}
+
+/// The `SetError` type draft-ietf-jmap-calendars §4.4 adds for `Calendar/set`.
+pub mod calendar_set_error {
+    pub const HAS_EVENT: &str = "calendarHasEvent";
+}
+
+/// Well-known values for `Calendar.includeInAvailability` (draft-ietf-jmap-calendars §4.1).
+pub mod include_in_availability {
+    pub const ALL: &str = "all";
+    pub const ALL_EXCEPT_DECLINED: &str = "allExceptDeclined";
+    pub const NONE: &str = "none";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.4) / jscalendarbis event status values.
+pub mod event_status {
+    pub const CONFIRMED: &str = "confirmed";
+    pub const TENTATIVE: &str = "tentative";
+    pub const CANCELLED: &str = "cancelled";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.2) / jscalendarbis free/busy status values.
+pub mod free_busy_status {
+    pub const FREE: &str = "free";
+    pub const BUSY: &str = "busy";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.3) / jscalendarbis privacy classification values.
+pub mod privacy {
+    pub const PUBLIC: &str = "public";
+    pub const PRIVATE: &str = "private";
+    pub const SECRET: &str = "secret";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) participant roles.
+pub mod participant_role {
+    pub const OWNER: &str = "owner";
+    pub const ADMIN: &str = "admin";
+    pub const ATTENDEE: &str = "attendee";
+    pub const OPTIONAL: &str = "optional";
+    pub const INFORMATIONAL: &str = "informational";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) participation status values.
+pub mod participation_status {
+    pub const NEEDS_ACTION: &str = "needs-action";
+    pub const ACCEPTED: &str = "accepted";
+    pub const DECLINED: &str = "declined";
+    pub const TENTATIVE: &str = "tentative";
+    pub const DELEGATED: &str = "delegated";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) participant kinds.
+pub mod participant_kind {
+    pub const INDIVIDUAL: &str = "individual";
+    pub const GROUP: &str = "group";
+    pub const RESOURCE: &str = "resource";
+    pub const LOCATION: &str = "location";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.5.2) alert action types.
+pub mod alert_action {
+    pub const DISPLAY: &str = "display";
+    pub const EMAIL: &str = "email";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.5.2) offset trigger relation.
+pub mod relative_to {
+    pub const START: &str = "start";
+    pub const END: &str = "end";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) schedule agent values.
+pub mod schedule_agent {
+    pub const SERVER: &str = "server";
+    pub const CLIENT: &str = "client";
+    pub const NONE: &str = "none";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) participant progress values.
+pub mod participant_progress {
+    pub const NEEDS_ACTION: &str = "needs-action";
+    pub const IN_PROCESS: &str = "in-process";
+    pub const COMPLETED: &str = "completed";
+    pub const FAILED: &str = "failed";
+}
+
+/// Standard JSCalendar (RFC 8984 §4.4.6) participant attendance values.
+pub mod participant_attendance {
+    pub const REQUIRED: &str = "required";
+    pub const OPTIONAL: &str = "optional";
+    pub const INFORMATIONAL: &str = "informational";
+}
+
+/// JSCalendar Participant (RFC 8984 §4.4.6): an attendee or organizer of the event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Participant {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub participant_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_to: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participation_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participation_comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attendance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect_reply: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_sequence: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_status: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_updated: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_to: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_from: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_of: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_updated: Option<UtcDate>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl Participant {
+    pub fn new(name: impl Into<String>, email: impl Into<String>) -> Self {
+        Self {
+            participant_type: Some("Participant".to_owned()),
+            name: Some(name.into()),
+            email: Some(email.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_roles(mut self, roles: BTreeMap<String, bool>) -> Self {
+        self.roles = Some(roles);
+        self
+    }
+
+    pub fn with_participation_status(mut self, status: impl Into<String>) -> Self {
+        self.participation_status = Some(status.into());
+        self
+    }
+
+    pub fn with_participation_comment(mut self, comment: impl Into<String>) -> Self {
+        self.participation_comment = Some(comment.into());
+        self
+    }
+
+    pub fn with_attendance(mut self, attendance: impl Into<String>) -> Self {
+        self.attendance = Some(attendance.into());
+        self
+    }
+
+    pub fn expect_reply(mut self, expect: bool) -> Self {
+        self.expect_reply = Some(expect);
+        self
+    }
+
+    pub fn with_schedule_agent(mut self, schedule_agent: impl Into<String>) -> Self {
+        self.schedule_agent = Some(schedule_agent.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// JSCalendar Location (RFC 8984 §4.2.5): a physical location for the event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Location {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub location_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinates: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_types: Option<BTreeMap<String, bool>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl Location {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            location_type: Some("Location".to_owned()),
+            name: Some(name.into()),
+            description: None,
+            relative_to: None,
+            time_zone: None,
+            coordinates: None,
+            location_types: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_coordinates(mut self, coordinates: impl Into<String>) -> Self {
+        self.coordinates = Some(coordinates.into());
+        self
+    }
+}
+
+/// JSCalendar VirtualLocation (RFC 8984 §4.2.6): an online conference or meeting room.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VirtualLocation {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub virtual_location_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features: Option<BTreeMap<String, bool>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl VirtualLocation {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            virtual_location_type: Some("VirtualLocation".to_owned()),
+            name: None,
+            description: None,
+            uri: uri.into(),
+            features: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_features(mut self, features: BTreeMap<String, bool>) -> Self {
+        self.features = Some(features);
+        self
+    }
+}
+
+/// JSCalendar Alert (RFC 8984 §4.5.2): an alarm or reminder for the event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Alert {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub alert_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acknowledged: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub related_to: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl Alert {
+    pub fn new(action: impl Into<String>, trigger: Value) -> Self {
+        Self {
+            alert_type: Some("Alert".to_owned()),
+            action: Some(action.into()),
+            trigger: Some(trigger),
+            acknowledged: None,
+            related_to: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_acknowledged(mut self, acknowledged: impl Into<UtcDate>) -> Self {
+        self.acknowledged = Some(acknowledged.into());
+        self
+    }
+
+    pub fn with_related_to(mut self, related_to: impl Into<String>) -> Self {
+        self.related_to = Some(related_to.into());
+        self
+    }
+}
+
+/// JSCalendar OffsetTrigger (RFC 8984 §4.5.2): an alert trigger specified as an offset duration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OffsetTrigger {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub trigger_type: Option<String>,
+    pub offset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relative_to: Option<String>,
+}
+
+impl OffsetTrigger {
+    pub fn new(offset: impl Into<String>) -> Self {
+        Self {
+            trigger_type: Some("OffsetTrigger".to_owned()),
+            offset: offset.into(),
+            relative_to: None,
+        }
+    }
+
+    pub fn relative_to(mut self, relative_to: impl Into<String>) -> Self {
+        self.relative_to = Some(relative_to.into());
+        self
+    }
+}
+
+/// Calendar user preferences (draft-ietf-jmap-calendars-28 §6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarPreferences {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_day_of_week: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarPreferences {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_first_day_of_week(mut self, first_day: impl Into<String>) -> Self {
+        self.first_day_of_week = Some(first_day.into());
+        self
+    }
+}
+
+/// Calendar preferences capability properties (draft-ietf-jmap-calendars-28 §6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarPreferencesCapability {
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarPreferencesCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_extra(mut self, extra: Value) -> Self {
+        if let Value::Object(map) = extra {
+            self.extra.extend(map);
+        }
+        self
+    }
+}
+
+/// `CalendarEvent/parse` arguments (draft-ietf-jmap-calendars-28 §5.7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventParseRequest {
+    pub account_id: Id,
+    pub blob_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Vec<String>>,
+}
+
+impl CalendarEventParseRequest {
+    pub fn new(
+        account_id: impl Into<Id>,
+        blob_ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            blob_ids: blob_ids.into_iter().map(Into::into).collect(),
+            properties: None,
+        }
+    }
+
+    pub fn properties(mut self, properties: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.properties = Some(properties.into_iter().map(Into::into).collect());
+        self
+    }
+}
+
+/// `CalendarEvent/parse` response (draft-ietf-jmap-calendars-28 §5.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventParseResponse {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parsed: Option<BTreeMap<Id, CalendarEvent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_parsable: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_found: Option<Vec<Id>>,
+}
+
+impl CalendarEventParseResponse {
+    pub fn new(account_id: impl Into<Id>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            parsed: None,
+            not_parsable: None,
+            not_found: None,
+        }
+    }
+
+    pub fn with_parsed(mut self, parsed: BTreeMap<Id, CalendarEvent>) -> Self {
+        self.parsed = Some(parsed);
+        self
+    }
+
+    pub fn with_not_parsable(
+        mut self,
+        not_parsable: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        self.not_parsable = Some(not_parsable.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_not_found(mut self, not_found: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.not_found = Some(not_found.into_iter().map(Into::into).collect());
+        self
+    }
+}
+
+/// Calendars capability properties (draft-ietf-jmap-calendars-28 §1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarsCapability {
+    #[serde(default)]
+    pub max_size_attachments_per_event: u64,
+    #[serde(default)]
+    pub max_concurrent_availabilities: u64,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarsCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_size_attachments_per_event(mut self, max: u64) -> Self {
+        self.max_size_attachments_per_event = max;
+        self
+    }
+
+    pub fn with_max_concurrent_availabilities(mut self, max: u64) -> Self {
+        self.max_concurrent_availabilities = max;
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// Standard RFC 8984 §4.4.5 event relation types.
+pub mod event_relation_type {
+    pub const FIRST: &str = "first";
+    pub const NEXT: &str = "next";
+    pub const PARENT: &str = "parent";
+    pub const CHILD: &str = "child";
+}
+
+/// Standard RFC 8984 §4.4.1 / RFC 5545 §3.8.1.9 priority constants.
+pub mod priority {
+    pub const UNDEFINED: i64 = 0;
+    pub const HIGH: i64 = 1;
+    pub const MEDIUM: i64 = 5;
+    pub const LOW: i64 = 9;
+}
+
+/// JSCalendar AbsoluteTrigger (RFC 8984 §4.5.2): an alert trigger specified as an absolute UTC timestamp.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AbsoluteTrigger {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub trigger_type: Option<String>,
+    pub when: UtcDate,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl AbsoluteTrigger {
+    pub fn new(when: impl Into<UtcDate>) -> Self {
+        Self {
+            trigger_type: Some("AbsoluteTrigger".to_owned()),
+            when: when.into(),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+/// JSCalendar Relation (RFC 8984 §4.4.5): how this event relates to another.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct EventRelation {
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub relation_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation: Option<BTreeMap<String, bool>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl EventRelation {
+    pub fn new(relation: BTreeMap<String, bool>) -> Self {
+        Self {
+            relation_type: Some("Relation".to_owned()),
+            relation: Some(relation),
+            extra: BTreeMap::new(),
+        }
+    }
+}
+
+/// `CalendarEvent/getFreeBusy` arguments (draft-ietf-jmap-calendars-28 §5.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetFreeBusyRequest {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_ids: Option<Vec<Id>>,
+    pub utc_start: UtcDate,
+    pub utc_end: UtcDate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+}
+
+impl GetFreeBusyRequest {
+    pub fn new(
+        account_id: impl Into<Id>,
+        utc_start: impl Into<UtcDate>,
+        utc_end: impl Into<UtcDate>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            calendar_ids: None,
+            utc_start: utc_start.into(),
+            utc_end: utc_end.into(),
+            time_zone: None,
+        }
+    }
+
+    pub fn calendar_ids(mut self, ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.calendar_ids = Some(ids.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+}
+
+/// One free/busy interval block within `CalendarEvent/getFreeBusy` (draft-ietf-jmap-calendars-28 §5.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FreeBusyBlock {
+    pub utc_start: UtcDate,
+    pub utc_end: UtcDate,
+    pub busy_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<Id>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl FreeBusyBlock {
+    pub fn new(
+        utc_start: impl Into<UtcDate>,
+        utc_end: impl Into<UtcDate>,
+        busy_status: impl Into<String>,
+    ) -> Self {
+        Self {
+            utc_start: utc_start.into(),
+            utc_end: utc_end.into(),
+            busy_status: busy_status.into(),
+            calendar_id: None,
+            event_id: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_calendar_id(mut self, calendar_id: impl Into<Id>) -> Self {
+        self.calendar_id = Some(calendar_id.into());
+        self
+    }
+
+    pub fn with_event_id(mut self, event_id: impl Into<Id>) -> Self {
+        self.event_id = Some(event_id.into());
+        self
+    }
+}
+
+/// `CalendarEvent/getFreeBusy` response (draft-ietf-jmap-calendars-28 §5.7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GetFreeBusyResponse {
+    pub account_id: Id,
+    #[serde(default)]
+    pub list: Vec<FreeBusyBlock>,
+}
+
+impl GetFreeBusyResponse {
+    pub fn new(account_id: impl Into<Id>, list: impl IntoIterator<Item = FreeBusyBlock>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            list: list.into_iter().collect(),
+        }
+    }
+}
+
+/// The `SetError` types draft-ietf-jmap-calendars-28 §5.4 adds for `CalendarEvent/set`.
+pub mod calendar_event_set_error {
+    pub const BLOB_NOT_FOUND: &str = "blobNotFound";
+    pub const TOO_MANY_PARTICIPANTS: &str = "tooManyParticipants";
+    pub const TOO_MANY_RECURRENCES: &str = "tooManyRecurrences";
+    pub const CANNOT_CALCULATE_OCCURRENCES: &str = "cannotCalculateOccurrences";
+    pub const NO_SUPPORTED_SCHEDULE_METHODS: &str = "noSupportedScheduleMethods";
+}
+
+/// Standard free/busy status values (draft-ietf-jmap-calendars-28 §5.7).
+pub mod calendar_free_busy_status {
+    pub const FREE: &str = "free";
+    pub const BUSY: &str = "busy";
+    pub const BUSY_TENTATIVE: &str = "busy-tentative";
+    pub const BUSY_UNAVAILABLE: &str = "busy-unavailable";
+}
+
+/// JSCalendar Group (RFC 8984 §6): a collection of calendar objects.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarGroup {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub group_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entries: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub categories: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<BTreeMap<String, Value>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarGroup {
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            group_type: Some("Group".to_owned()),
+            title: Some(title.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_updated(mut self, updated: impl Into<UtcDate>) -> Self {
+        self.updated = Some(updated.into());
+        self
+    }
+
+    pub fn with_entries(mut self, entries: BTreeMap<String, Value>) -> Self {
+        self.entries = Some(entries);
+        self
+    }
+
+    pub fn with_keywords(mut self, keywords: BTreeMap<String, Value>) -> Self {
+        self.keywords = Some(keywords);
+        self
+    }
+
+    pub fn with_categories(mut self, categories: BTreeMap<String, bool>) -> Self {
+        self.categories = Some(categories);
+        self
+    }
+
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
+    }
+
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    pub fn with_links(mut self, links: BTreeMap<String, Value>) -> Self {
+        self.links = Some(links);
+        self
+    }
+}
+
+fn default_calendar_event_notification_type() -> String {
+    CalendarEventNotification::TYPE.to_owned()
+}
+
+/// A notification of changes to calendar events (draft-ietf-jmap-calendars-28 §8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventNotification {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(rename = "@type", default = "default_calendar_event_notification_type")]
+    pub kind: String,
+    pub created: UtcDate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<Principal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub notification_type: Option<String>,
+    pub event_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recurrence_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<CalendarEvent>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarEventNotification {
+    pub const TYPE: &'static str = "CalendarEventNotification";
+
+    pub fn new(created: impl Into<UtcDate>, event_id: impl Into<Id>) -> Self {
+        Self {
+            id: None,
+            kind: Self::TYPE.to_owned(),
+            created: created.into(),
+            changed_by: None,
+            comment: None,
+            notification_type: None,
+            event_id: event_id.into(),
+            recurrence_id: None,
+            event: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = kind.into();
+        self
+    }
+
+    pub fn with_changed_by(mut self, changed_by: Principal) -> Self {
+        self.changed_by = Some(changed_by);
+        self
+    }
+
+    pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
+        self.comment = Some(comment.into());
+        self
+    }
+
+    pub fn with_notification_type(mut self, notification_type: impl Into<String>) -> Self {
+        self.notification_type = Some(notification_type.into());
+        self
+    }
+
+    pub fn with_recurrence_id(mut self, recurrence_id: impl Into<String>) -> Self {
+        self.recurrence_id = Some(recurrence_id.into());
+        self
+    }
+
+    pub fn with_event(mut self, event: CalendarEvent) -> Self {
+        self.event = Some(event);
+        self
+    }
+}
+
+/// Filter for `CalendarEventNotification/query` (draft-ietf-jmap-calendars-28 §8).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventNotificationQueryFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub types: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarEventNotificationQueryFilter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_after(mut self, after: impl Into<UtcDate>) -> Self {
+        self.after = Some(after.into());
+        self
+    }
+
+    pub fn with_before(mut self, before: impl Into<UtcDate>) -> Self {
+        self.before = Some(before.into());
+        self
+    }
+
+    pub fn with_types(mut self, types: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.types = Some(types.into_iter().map(Into::into).collect());
+        self
+    }
+}
+
+/// Well-known notification types for calendar event notifications (draft-ietf-jmap-calendars-28 §8).
+pub mod calendar_event_notification_type {
+    pub const CREATED: &str = "created";
+    pub const UPDATED: &str = "updated";
+    pub const DESTROYED: &str = "destroyed";
+    pub const REPLY: &str = "reply";
+}
+
+/// Arguments for `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventSendRequest {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send: Option<BTreeMap<Id, SendCalendarEvent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_success_update_calendar_event: Option<BTreeMap<Id, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_success_destroy_calendar_event_ids: Option<Vec<Id>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarEventSendRequest {
+    pub fn new(account_id: impl Into<Id>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            identity_id: None,
+            send: None,
+            on_success_update_calendar_event: None,
+            on_success_destroy_calendar_event_ids: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_identity_id(mut self, identity_id: impl Into<Id>) -> Self {
+        self.identity_id = Some(identity_id.into());
+        self
+    }
+
+    pub fn with_send(mut self, send: BTreeMap<Id, SendCalendarEvent>) -> Self {
+        self.send = Some(send);
+        self
+    }
+
+    pub fn with_on_success_update_calendar_event(mut self, updates: BTreeMap<Id, Value>) -> Self {
+        self.on_success_update_calendar_event = Some(updates);
+        self
+    }
+
+    pub fn with_on_success_destroy_calendar_event_ids(
+        mut self,
+        destroy_ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        self.on_success_destroy_calendar_event_ids =
+            Some(destroy_ids.into_iter().map(Into::into).collect());
+        self
+    }
+}
+
+/// A single calendar event to send via `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SendCalendarEvent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_to: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_event: Option<CalendarEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_old_properties: Option<bool>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl SendCalendarEvent {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_recipient(mut self, recipient: impl Into<String>) -> Self {
+        self.recipient = Some(recipient.into());
+        self
+    }
+
+    pub fn with_send_to(mut self, send_to: BTreeMap<String, String>) -> Self {
+        self.send_to = Some(send_to);
+        self
+    }
+
+    pub fn with_calendar_event(mut self, calendar_event: CalendarEvent) -> Self {
+        self.calendar_event = Some(calendar_event);
+        self
+    }
+
+    pub fn with_include_old_properties(mut self, include: bool) -> Self {
+        self.include_old_properties = Some(include);
+        self
+    }
+}
+
+/// Response for `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventSendResponse {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent: Option<BTreeMap<Id, SendCalendarEventResult>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_sent: Option<BTreeMap<Id, SetError>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarEventSendResponse {
+    pub fn new(account_id: impl Into<Id>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            sent: None,
+            not_sent: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_sent(mut self, sent: BTreeMap<Id, SendCalendarEventResult>) -> Self {
+        self.sent = Some(sent);
+        self
+    }
+
+    pub fn with_not_sent(mut self, not_sent: BTreeMap<Id, SetError>) -> Self {
+        self.not_sent = Some(not_sent);
+        self
+    }
+}
+
+/// Result of sending a single calendar event (draft-ietf-jmap-calendars-28 §7).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SendCalendarEventResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participant_problems: Option<BTreeMap<String, ParticipantProblem>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl SendCalendarEventResult {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_send_status(mut self, status: impl Into<String>) -> Self {
+        self.send_status = Some(status.into());
+        self
+    }
+
+    pub fn with_participant_problems(
+        mut self,
+        problems: BTreeMap<String, ParticipantProblem>,
+    ) -> Self {
+        self.participant_problems = Some(problems);
+        self
+    }
+}
+
+/// Problem delivering an event to a participant (draft-ietf-jmap-calendars-28 §7.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantProblem {
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl ParticipantProblem {
+    pub fn new(kind: impl Into<String>) -> Self {
+        Self {
+            kind: Some(kind.into()),
+            description: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+
+/// Standard participant problem error types (draft-ietf-jmap-calendars-28 §7.3).
+pub mod participant_problem_kind {
+    pub const CANNOT_SEND_TO_SELF: &str = "cannotSendToSelf";
+    pub const CALENDAR_NOT_FOUND: &str = "calendarNotFound";
+    pub const PARTICIPANT_NOT_FOUND: &str = "participantNotFound";
+    pub const INVALID_EMAIL: &str = "invalidEmail";
+    pub const CANNOT_SEND_TO_RESOURCE: &str = "cannotSendToResource";
+    pub const NOT_AUTHORIZED: &str = "notAuthorized";
+}
+
+/// SetError types added for `CalendarEvent/send` (draft-ietf-jmap-calendars-28 §7).
+pub mod calendar_send_error {
+    pub const FORBIDDEN_FROM: &str = "forbiddenFrom";
+    pub const PARTICIPANT_NOT_FOUND: &str = "participantNotFound";
+    pub const INVALID_PARTICIPANTS: &str = "invalidParticipants";
+    pub const CANNOT_SEND_FOR_CALENDAR: &str = "cannotSendForCalendar";
+    pub const EVENT_NOT_FOUND: &str = "eventNotFound";
+}
+
+/// An RSVP reply to a calendar event invitation (draft-ietf-jmap-calendars-28 §10).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantReply {
+    pub calendar_event_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recurrence_id: Option<String>,
+    pub participation_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_to: Option<BTreeMap<String, String>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl ParticipantReply {
+    pub fn new(calendar_event_id: impl Into<Id>, participation_status: impl Into<String>) -> Self {
+        Self {
+            calendar_event_id: calendar_event_id.into(),
+            recurrence_id: None,
+            participation_status: participation_status.into(),
+            comment: None,
+            send_to: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_recurrence_id(mut self, recurrence_id: impl Into<String>) -> Self {
+        self.recurrence_id = Some(recurrence_id.into());
+        self
+    }
+
+    pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
+        self.comment = Some(comment.into());
+        self
+    }
+
+    pub fn with_send_to(mut self, send_to: BTreeMap<String, String>) -> Self {
+        self.send_to = Some(send_to);
+        self
+    }
+}
+
+/// Standard participation status values for participants and replies (draft-ietf-jmap-calendars-28 §10, RFC 8984 §4.4.5).
+pub mod participant_participation_status {
+    pub const NEEDS_ACTION: &str = "needs-action";
+    pub const ACCEPTED: &str = "accepted";
+    pub const DECLINED: &str = "declined";
+    pub const TENTATIVE: &str = "tentative";
+    pub const DELEGATED: &str = "delegated";
+}
+
+/// A participant identity (draft-ietf-jmap-calendars-28 §3): how a user is
+/// identified when participating in events and scheduling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantIdentity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_to: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_default: Option<bool>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl ParticipantIdentity {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_schedule_id(mut self, schedule_id: impl Into<String>) -> Self {
+        self.schedule_id = Some(schedule_id.into());
+        self
+    }
+
+    pub fn with_send_to(mut self, send_to: BTreeMap<String, String>) -> Self {
+        self.send_to = Some(send_to);
+        self
+    }
+
+    pub fn with_send_to_method(
+        mut self,
+        method: impl Into<String>,
+        uri: impl Into<String>,
+    ) -> Self {
+        self.send_to
+            .get_or_insert_with(BTreeMap::new)
+            .insert(method.into(), uri.into());
+        self
+    }
+
+    pub fn is_default(mut self, is_default: bool) -> Self {
+        self.is_default = Some(is_default);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// The `SetError` types draft-ietf-jmap-calendars-28 §3.2 adds for `ParticipantIdentity/set`.
+pub mod participant_identity_set_error {
+    pub const CANNOT_DESTROY_DEFAULT: &str = "cannotDestroyDefault";
 }

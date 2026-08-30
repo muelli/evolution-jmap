@@ -12,8 +12,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/../rust"
 
-cargo test --locked \
-    -p eds-sys -p evo-sys \
-    -p jmap-backend-core \
-    -p jmap-backend-book -p jmap-backend-cal -p jmap-mail \
+CRATES=(
+    -p eds-sys -p evo-sys
+    -p jmap-backend-core
+    -p jmap-backend-book -p jmap-backend-cal -p jmap-mail
     -p jmap-backend-collection -p jmap-config
+)
+
+if ! cargo clippy --version >/dev/null 2>&1 && command -v rustup >/dev/null 2>&1; then
+    rustup component add clippy
+fi
+
+cargo clippy --locked "${CRATES[@]}" --all-targets -- -D warnings
+
+cargo test --locked "${CRATES[@]}"

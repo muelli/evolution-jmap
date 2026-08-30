@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::id::Id;
+use crate::state::UtcDate;
 
 /// An address book (RFC 9610 §2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -38,8 +39,44 @@ pub struct AddressBook {
     /// separate from reading `myRights`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_with: Option<BTreeMap<Id, AddressBookRights>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_delete: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl AddressBook {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_sort_order(mut self, sort_order: u32) -> Self {
+        self.sort_order = Some(sort_order);
+        self
+    }
+
+    pub fn is_default(mut self, is_default: bool) -> Self {
+        self.is_default = Some(is_default);
+        self
+    }
+
+    pub fn is_subscribed(mut self, is_subscribed: bool) -> Self {
+        self.is_subscribed = Some(is_subscribed);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `AddressBook.myRights`/a `shareWith` entry, RFC 9610 §2.
@@ -59,6 +96,28 @@ pub struct AddressBookRights {
 }
 
 impl AddressBookRights {
+    pub fn all() -> Self {
+        Self {
+            may_read: Some(true),
+            may_write: Some(true),
+            may_share: Some(true),
+            may_delete: Some(true),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn read_only() -> Self {
+        Self {
+            may_read: Some(true),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+
     /// Whether these rights let the holder write to the address book — the
     /// one bit [`crate::calendars::Calendar`]'s sibling collection-sync layer
     /// narrows a writable account down to. Absent `mayWrite` reads as `false`
@@ -82,16 +141,24 @@ pub struct ContactCard {
     #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
     pub card_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<Name>,
+
     /// The names the contact is also known by (RFC 9553 §2.2.2), keyed like
     /// the other JSContact maps. vCard states each on a `NICKNAME` line of
     /// its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nicknames: Option<BTreeMap<String, Nickname>>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emails: Option<BTreeMap<String, ContactEmail>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,11 +229,117 @@ pub struct ContactCard {
     /// line EDS keeps `E_CONTACT_SPOUSE` on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub related_to: Option<BTreeMap<String, Relation>>,
+    /// The cryptographic keys for the contact (RFC 9553 §2.6.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crypto_keys: Option<BTreeMap<String, CryptoKey>>,
+    /// The directory services that may be searched for more info on the contact (RFC 9553 §2.6.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directories: Option<BTreeMap<String, Directory>>,
+    /// Personal information such as gender, expertise, hobbies (RFC 9553 §2.8.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_info: Option<BTreeMap<String, PersonalInfo>>,
+    /// How to address the contact (RFC 9553 §2.2.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speak_to_as: Option<SpeakToAs>,
+    /// Preferred languages for communication (RFC 9553 §2.8.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_languages: Option<BTreeMap<String, LanguagePref>>,
+    /// Localized property values (RFC 9553 §2.7.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub localizations: Option<BTreeMap<String, Value>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
 impl ContactCard {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_address_book_id(mut self, id: impl Into<Id>) -> Self {
+        let mut map = self.address_book_ids.unwrap_or_default();
+        map.insert(id.into(), true);
+        self.address_book_ids = Some(map);
+        self
+    }
+
+    pub fn with_uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+
+    pub fn with_name(mut self, name: Name) -> Self {
+        self.name = Some(name);
+        self
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_email(mut self, key: impl Into<String>, email: ContactEmail) -> Self {
+        let mut map = self.emails.unwrap_or_default();
+        map.insert(key.into(), email);
+        self.emails = Some(map);
+        self
+    }
+
+    pub fn with_phone(mut self, key: impl Into<String>, phone: ContactPhone) -> Self {
+        let mut map = self.phones.unwrap_or_default();
+        map.insert(key.into(), phone);
+        self.phones = Some(map);
+        self
+    }
+
+    pub fn with_address(mut self, key: impl Into<String>, address: Address) -> Self {
+        let mut map = self.addresses.unwrap_or_default();
+        map.insert(key.into(), address);
+        self.addresses = Some(map);
+        self
+    }
+
+    pub fn with_organization(mut self, key: impl Into<String>, org: Organization) -> Self {
+        let mut map = self.organizations.unwrap_or_default();
+        map.insert(key.into(), org);
+        self.organizations = Some(map);
+        self
+    }
+
+    pub fn with_title(mut self, key: impl Into<String>, title: Title) -> Self {
+        let mut map = self.titles.unwrap_or_default();
+        map.insert(key.into(), title);
+        self.titles = Some(map);
+        self
+    }
+
+    pub fn with_note(mut self, key: impl Into<String>, note: Note) -> Self {
+        let mut map = self.notes.unwrap_or_default();
+        map.insert(key.into(), note);
+        self.notes = Some(map);
+        self
+    }
+
+    pub fn with_created(mut self, created: impl Into<UtcDate>) -> Self {
+        self.created = Some(created.into());
+        self
+    }
+
+    pub fn with_updated(mut self, updated: impl Into<UtcDate>) -> Self {
+        self.updated = Some(updated.into());
+        self
+    }
+
+    pub fn with_speak_to_as(mut self, speak_to_as: SpeakToAs) -> Self {
+        self.speak_to_as = Some(speak_to_as);
+        self
+    }
+
     /// A minimal card with a full name and one email address, ready for
     /// `ContactCard/set` create.
     pub fn simple(address_book_id: impl Into<Id>, full_name: &str, email: &str) -> Self {
@@ -201,8 +374,36 @@ pub struct Name {
     pub components: Option<Vec<NameComponent>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_ordered: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_as: Option<BTreeMap<String, String>>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Name {
+    pub fn new(full: impl Into<String>) -> Self {
+        Self {
+            full: Some(full.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_components(mut self, components: impl IntoIterator<Item = NameComponent>) -> Self {
+        self.components = Some(components.into_iter().collect());
+        self
+    }
+
+    pub fn is_ordered(mut self, is_ordered: bool) -> Self {
+        self.is_ordered = Some(is_ordered);
+        self
+    }
+
+    pub fn with_sort_as(mut self, sort_as: BTreeMap<String, String>) -> Self {
+        self.sort_as = Some(sort_as);
+        self
+    }
 }
 
 /// One name component: kind is `given`, `surname`, `title`, …
@@ -221,23 +422,27 @@ pub struct NameComponent {
 }
 
 impl NameComponent {
-    pub fn new(kind: &str, value: &str) -> Self {
+    pub fn new(kind: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
-            kind: kind.to_owned(),
-            value: value.to_owned(),
+            kind: kind.into(),
+            value: value.into(),
             extra: BTreeMap::new(),
         }
+    }
+
+    pub fn phonetic(&self) -> Option<&str> {
+        self.extra.get("phonetic").and_then(|v| v.as_str())
+    }
+
+    pub fn with_phonetic(mut self, phonetic: impl Into<String>) -> Self {
+        self.extra
+            .insert("phonetic".to_string(), Value::String(phonetic.into()));
+        self
     }
 }
 
 /// JSContact Nickname (RFC 9553 §2.2.2): one name the contact is also known
 /// by.
-///
-/// `contexts` and `pref` are not modeled: RFC 2426 §3.1.3's `NICKNAME` takes
-/// none of the parameters that could state either — it has no `TYPE` — and
-/// Evolution's contact editor shows a nickname without a context or a
-/// ranking. Both therefore ride in [`Self::extra`], where the save path can
-/// see the members it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Nickname {
@@ -245,6 +450,10 @@ pub struct Nickname {
     /// of it a `NICKNAME` line has room for.
     #[serde(default)]
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -263,6 +472,31 @@ pub struct ContactEmail {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl ContactEmail {
+    pub fn new(address: impl Into<String>) -> Self {
+        Self {
+            address: address.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.extra
+            .insert("label".to_owned(), Value::String(label.into()));
+        self
+    }
+}
+
 /// JSContact Phone (RFC 9553 §2.3.3).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -279,41 +513,82 @@ pub struct ContactPhone {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl ContactPhone {
+    pub fn new(number: impl Into<String>) -> Self {
+        Self {
+            number: number.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+
+    pub fn with_features(mut self, features: Value) -> Self {
+        self.features = Some(features);
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.extra
+            .insert("label".to_owned(), Value::String(label.into()));
+        self
+    }
+}
+
 /// JSContact Organization (RFC 9553 §2.2.3).
-///
-/// `sortAs` and `contexts` are not modeled: vCard 3.0's `ORG` (RFC 2426
-/// §3.5.5) has no component and no parameter for either, so they ride in
-/// [`Self::extra`] — where the save path can see them and leave them alone,
-/// which is the whole reason this is a struct and not a `Value`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Organization {
     /// The organisation's own name, which the `ORG` value states first.
-    ///
-    /// Optional, as RFC 9553 §2.2.3 has it: a card may name only the units,
-    /// and answering `Some("")` for that would put an empty employer on the
-    /// server where it never had one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// The units within it, outermost first — the departments the `ORG` value
     /// lists after the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub units: Option<Vec<OrgUnit>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_as: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Organization {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: Some(name.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_units(mut self, units: impl IntoIterator<Item = OrgUnit>) -> Self {
+        self.units = Some(units.into_iter().collect());
+        self
+    }
+
+    pub fn with_sort_as(mut self, sort_as: impl Into<String>) -> Self {
+        self.sort_as = Some(sort_as.into());
+        self
+    }
+}
+
 /// JSContact OrgUnit (RFC 9553 §2.2.3): one unit of an [`Organization`].
-///
-/// A unit holds a `sortAs` besides its name, which is why the vCard mapping
-/// cannot rebuild the list from the `ORG` components alone — see the save
-/// path, which carries a unit's unmapped members across a rename of its
-/// siblings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OrgUnit {
     #[serde(default)]
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_as: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -322,19 +597,19 @@ impl OrgUnit {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_owned(),
+            sort_as: None,
             extra: BTreeMap::new(),
         }
+    }
+
+    pub fn with_sort_as(mut self, sort_as: impl Into<String>) -> Self {
+        self.sort_as = Some(sort_as.into());
+        self
     }
 }
 
 /// JSContact Title (RFC 9553 §2.2.4): a job title the contact holds, or a
 /// role it plays.
-///
-/// `organizationId` — which of the card's `organizations` the title is held
-/// at — is not modeled: vCard 3.0's `TITLE` and `ROLE` (RFC 2426 §§3.5.1,
-/// 3.5.2) are plain text with no component and no parameter naming an
-/// organisation, so it rides in [`Self::extra`], where the save path can see
-/// the member it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Title {
@@ -346,47 +621,108 @@ pub struct Title {
     /// nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Title {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_organization_id(mut self, organization_id: impl Into<String>) -> Self {
+        self.organization_id = Some(organization_id.into());
+        self
+    }
+}
+
 /// JSContact Address (RFC 9553 §2.5.1): one postal address.
-///
-/// Only the three members a vCard can carry are modeled — the `ADR` line's
-/// components and its `TYPE`, and the `LABEL` line's text. `coordinates`,
-/// `countryCode`, `timeZone`, `pref` and the rest ride in [`Self::extra`] —
-/// where the save path can see the members it is refusing to touch, which is
-/// the whole reason this is a struct and not a `Value`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Address {
     /// The parts the address is built from, each naming what it is.
-    ///
-    /// RFC 9553 §2.5.1 leaves the order meaningful only when `isOrdered` is
-    /// set, so this is a list of named parts rather than a fixed shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub components: Option<Vec<AddressComponent>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contexts: Option<Value>,
     /// The address written out as it should be printed, line breaks and all.
-    ///
-    /// RFC 9553 §2.5.1 has this stand on its own — an address may be stated
-    /// here and nowhere else, "even if the individual address components are
-    /// not known" — which is the same thing RFC 2426 §3.2.2's `LABEL` says,
-    /// and what EDS keeps in its three synthetic address-label fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_ordered: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinates: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Address {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_components(
+        mut self,
+        components: impl IntoIterator<Item = AddressComponent>,
+    ) -> Self {
+        self.components = Some(components.into_iter().collect());
+        self
+    }
+
+    pub fn with_full(mut self, full: impl Into<String>) -> Self {
+        self.full = Some(full.into());
+        self
+    }
+
+    pub fn is_ordered(mut self, is_ordered: bool) -> Self {
+        self.is_ordered = Some(is_ordered);
+        self
+    }
+
+    pub fn with_country_code(mut self, country_code: impl Into<String>) -> Self {
+        self.country_code = Some(country_code.into());
+        self
+    }
+
+    pub fn with_coordinates(mut self, coordinates: impl Into<String>) -> Self {
+        self.coordinates = Some(coordinates.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+}
+
 /// One part of an [`Address`]: `kind` is `name` (the street), `locality`,
 /// `postcode`, `floor`, …
-///
-/// Like [`NameComponent`], this keeps what it does not model: a component
-/// carries a `phonetic` spelling besides its value, and the save path writes
-/// the component list back whole, so a member dropped on the way in is a
-/// member deleted on the way out.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AddressComponent {
@@ -399,21 +735,26 @@ pub struct AddressComponent {
 }
 
 impl AddressComponent {
-    pub fn new(kind: &str, value: &str) -> Self {
+    pub fn new(kind: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
-            kind: kind.to_owned(),
-            value: value.to_owned(),
+            kind: kind.into(),
+            value: value.into(),
             extra: BTreeMap::new(),
         }
+    }
+
+    pub fn phonetic(&self) -> Option<&str> {
+        self.extra.get("phonetic").and_then(|v| v.as_str())
+    }
+
+    pub fn with_phonetic(mut self, phonetic: impl Into<String>) -> Self {
+        self.extra
+            .insert("phonetic".to_string(), Value::String(phonetic.into()));
+        self
     }
 }
 
 /// JSContact Note (RFC 9553 §2.8.3): one free-text note about the contact.
-///
-/// `created` and `author` are not modeled: vCard 3.0's `NOTE` (RFC 2426
-/// §3.6.2) is plain text with no component and no parameter for when a note
-/// was written or by whom, so both ride in [`Self::extra`] — where the save
-/// path can see the members it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {
@@ -421,15 +762,29 @@ pub struct Note {
     /// a note a `NOTE` line has room for.
     #[serde(default)]
     pub note: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Note {
+    pub fn new(note: impl Into<String>) -> Self {
+        Self {
+            note: note.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_created(mut self, created: impl Into<UtcDate>) -> Self {
+        self.created = Some(created.into());
+        self
+    }
+}
+
 /// JSContact Anniversary (RFC 9553 §2.8.1): one memorable date.
-///
-/// `place` — where the birth or the wedding happened — is not modeled: a
-/// vCard date line is a date and nothing else, so it rides in [`Self::extra`]
-/// where the save path can see the member it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Anniversary {
@@ -441,26 +796,35 @@ pub struct Anniversary {
     pub kind: String,
     /// The date itself, kept as it arrived rather than parsed into a shape
     /// of our own.
-    ///
-    /// RFC 9553 §2.8.1 allows two: a `PartialDate`, which may state only a
-    /// year or only a month and day, and a `Timestamp`, which states a point
-    /// in time. A vCard line can carry neither shape whole — it states one
-    /// calendar day — so the save patches *into* whichever object the server
-    /// sent rather than replacing it, and that is only possible while its
-    /// unmapped members (`calendarScale`, the time of day) are still here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub date: Option<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Anniversary {
+    pub fn new(kind: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_date(mut self, date: Value) -> Self {
+        self.date = Some(date);
+        self
+    }
+
+    pub fn with_place(mut self, place: Address) -> Self {
+        self.extra.insert(
+            "place".to_owned(),
+            serde_json::to_value(place).unwrap_or(Value::Null),
+        );
+        self
+    }
+}
+
 /// JSContact Link (RFC 9553 §2.6.3): one resource the contact points at.
-///
-/// `mediaType`, `contexts`, `pref` and `label` are not modeled: vCard 3.0's
-/// `URL` (RFC 2426 §3.6.8) is a bare URI with no parameter for what the
-/// resource is, where it is used, how strongly it is preferred or what to call
-/// it, so all four ride in [`Self::extra`] — where the save path can see the
-/// members it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Link {
@@ -470,63 +834,97 @@ pub struct Link {
     pub uri: String,
     /// What kind of link it is — `contact`, a URI for getting in touch, is
     /// the one kind RFC 9553 §2.6.3 defines, and it has no default.
-    ///
-    /// A link that names no kind is the plain website vCard 3.0's `URL` means
-    /// (RFC 9555 §2.6.3 pairs the two), which is why this is modeled rather
-    /// than carried: the mapping has to be able to tell those apart from the
-    /// kinds it must leave alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Link {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
 /// JSContact Calendar (RFC 9553 §2.4.1): one calendaring resource of the
 /// contact — a calendar of theirs, or the free/busy data drawn from one.
-///
-/// `mediaType`, `contexts`, `pref` and `label` are not modeled, for the reason
-/// [`Link`]'s are not: the `CALURI` and `FBURL` lines EDS keeps these on are
-/// bare URIs with no parameter for what the resource is, where it is used, how
-/// strongly it is preferred or what to call it, so all four ride in
-/// [`Self::extra`] — where the save path can see the members it is refusing to
-/// touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Calendar {
-    /// What the resource is: `calendar` or `freeBusy` per RFC 9553 §2.4.1,
-    /// which makes it mandatory and gives it no default — an entry stating
-    /// none is malformed, and is modeled as `None` rather than refused so that
-    /// one bad entry does not cost the user the whole address book.
-    ///
-    /// Modeled rather than carried because it is the mapping's filter, as
-    /// [`Media`]'s is: it says which of the two lines the URI goes on, and
-    /// there is no third line to put an entry that names neither on.
+    /// What the resource is: `calendar` or `freeBusy` per RFC 9553 §2.4.1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Where the resource is. Mandatory per RFC 9553 §2.4.1, and the only
     /// part of a calendar either line has room for.
     #[serde(default)]
     pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Calendar {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
 /// JSContact Media (RFC 9553 §2.6.4): one media resource the card carries.
-///
-/// `pref` and `label` are not modeled, for the reason [`Nickname`]'s are not:
-/// RFC 2426 §3.1.4's `PHOTO` has no parameter for a ranking or for what to call
-/// the picture. Both ride in [`Self::extra`], where the save path can see the
-/// members it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Media {
-    /// What the resource is: `photo`, `sound` or `logo` per RFC 9553 §2.6.4,
-    /// which makes it mandatory — an entry stating none is malformed, and is
-    /// modeled as `None` rather than refused so that one bad entry does not
-    /// cost the user the whole address book.
-    ///
-    /// Modeled rather than carried because it is the mapping's filter: of the
-    /// three kinds, only a photo is the picture Evolution shows.
+    /// What the resource is: `photo`, `sound` or `logo` per RFC 9553 §2.6.4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Where the resource is. Mandatory per RFC 9553 §2.6.4, and for a picture
@@ -534,51 +932,103 @@ pub struct Media {
     #[serde(default)]
     pub uri: String,
     /// The media type of the resource, which RFC 9553 §2.6.4 asks for when the
-    /// URI does not state one. Modeled because a `PHOTO` line's `TYPE` is what
-    /// tells EDS what the bytes are.
+    /// URI does not state one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Media {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+
+    pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
+        self.media_type = Some(media_type.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
 /// JSContact OnlineService (RFC 9553 §2.3.2): the contact as one online
 /// service or protocol knows them.
-///
-/// `contexts`, `pref` and `label` are not modeled, for the reason
-/// [`Nickname`]'s are not. The `X-` line EDS keeps a handle on does take a
-/// `TYPE`, but that parameter is the *slot* EDS files the handle in rather than
-/// the entry's contexts — a line without one reaches no field the user can see,
-/// measured against libebook-contacts 3.52 — so the vCard mapping writes it and
-/// reads nothing back off it. All three therefore ride in [`Self::extra`],
-/// where the save path can see the members it is refusing to touch.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct OnlineService {
     /// The name of the service or protocol — `Jabber`, `Matrix`, `Skype`.
-    ///
-    /// RFC 9553 §2.3.2 lets it be capitalised as the service itself
-    /// capitalises it and has two names be equal when they match
-    /// case-insensitively, so the mapping compares rather than rewrites the
-    /// spelling the server chose.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
     /// The name the contact is known by at the service. Free text per RFC 9553
-    /// §2.3.2, and what the vCard line states: Evolution's instant-messaging
-    /// field holds a handle rather than a URI.
+    /// §2.3.2, and what the vCard line states.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<String>,
     /// The contact's identifier at the service as a URI (RFC 9553 §2.3.2
     /// requires RFC 3986 §3).
-    ///
-    /// Drawn only where the service's scheme is known to state the handle and
-    /// nothing besides, which is a short list; elsewhere it is modeled so that
-    /// the save path can tell an entry that states one from an entry that does
-    /// not.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl OnlineService {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_service(mut self, service: impl Into<String>) -> Self {
+        self.service = Some(service.into());
+        self
+    }
+
+    pub fn with_user(mut self, user: impl Into<String>) -> Self {
+        self.user = Some(user.into());
+        self
+    }
+
+    pub fn with_uri(mut self, uri: impl Into<String>) -> Self {
+        self.uri = Some(uri.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
 }
 
 /// JSContact Relation (RFC 9553 §2.1.8): how one related entity relates to
@@ -608,6 +1058,22 @@ pub struct Relation {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl Relation {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_relation(mut self, relation: BTreeMap<String, bool>) -> Self {
+        self.relation = Some(
+            relation
+                .into_iter()
+                .map(|(k, v)| (k, Value::Bool(v)))
+                .collect(),
+        );
+        self
+    }
+}
+
 /// `ContactCard/query` filter conditions (RFC 9610 §3.3). Flat conditions
 /// only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -616,11 +1082,21 @@ pub struct ContactCardQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_address_book: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online_service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 impl ContactCardQueryFilter {
@@ -630,4 +1106,544 @@ impl ContactCardQueryFilter {
             ..Self::default()
         }
     }
+
+    pub fn uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn email(mut self, email: impl Into<String>) -> Self {
+        self.email = Some(email.into());
+        self
+    }
+
+    pub fn phone(mut self, phone: impl Into<String>) -> Self {
+        self.phone = Some(phone.into());
+        self
+    }
+
+    pub fn online_service(mut self, service: impl Into<String>) -> Self {
+        self.online_service = Some(service.into());
+        self
+    }
+
+    pub fn address(mut self, address: impl Into<String>) -> Self {
+        self.address = Some(address.into());
+        self
+    }
+
+    pub fn kind(mut self, kind: impl Into<String>) -> Self {
+        self.kind = Some(kind.into());
+        self
+    }
+}
+
+/// The `SetError` type RFC 9610 §2.4 adds for `AddressBook/set`.
+pub mod address_book_set_error {
+    pub const HAS_CARD: &str = "addressBookHasCard";
+    pub const ADDRESS_BOOK_HAS_CONTENTS: &str = "addressBookHasContents";
+}
+
+/// Standard RFC 9553 §2.8.1 anniversary kinds.
+pub mod anniversary_kind {
+    pub const BIRTH: &str = "birth";
+    pub const DEATH: &str = "death";
+    pub const WEDDING: &str = "wedding";
+}
+
+/// Standard RFC 9553 §2.2.4 job title kinds.
+pub mod title_kind {
+    pub const TITLE: &str = "title";
+    pub const ROLE: &str = "role";
+}
+
+/// Standard RFC 9553 §2.4.1 calendar resource kinds.
+pub mod calendar_kind {
+    pub const CALENDAR: &str = "calendar";
+    pub const FREE_BUSY: &str = "freeBusy";
+}
+
+/// Standard RFC 9553 §2.6.4 media resource kinds.
+pub mod media_kind {
+    pub const PHOTO: &str = "photo";
+    pub const SOUND: &str = "sound";
+    pub const LOGO: &str = "logo";
+}
+
+/// Standard RFC 9553 §2.6.3 link kinds.
+pub mod link_kind {
+    pub const CONTACT: &str = "contact";
+}
+
+/// Standard RFC 9553 §2.2.1 name component kinds.
+pub mod name_component_kind {
+    pub const PREFIX: &str = "prefix";
+    pub const TITLE: &str = "title";
+    pub const GIVEN: &str = "given";
+    pub const GIVEN2: &str = "given2";
+    pub const MIDDLE: &str = "middle";
+    pub const SURNAME: &str = "surname";
+    pub const SURNAME2: &str = "surname2";
+    pub const SUFFIX: &str = "suffix";
+    pub const GENERATION: &str = "generation";
+    pub const CREDENTIAL: &str = "credential";
+    pub const SEPARATOR: &str = "separator";
+}
+
+/// Standard RFC 9553 §2.5.1 address component kinds.
+pub mod address_component_kind {
+    pub const NAME: &str = "name";
+    pub const UNIT: &str = "unit";
+    pub const FLOOR: &str = "floor";
+    pub const STREET: &str = "street";
+    pub const APPARTMENT: &str = "appartment";
+    pub const APARTMENT: &str = "apartment";
+    pub const ROOM: &str = "room";
+    pub const BUILDING: &str = "building";
+    pub const LOCALITY: &str = "locality";
+    pub const DISTRICT: &str = "district";
+    pub const SUBDISTRICT: &str = "subdistrict";
+    pub const REGION: &str = "region";
+    pub const POSTCODE: &str = "postcode";
+    pub const POST_OFFICE_BOX: &str = "postOfficeBox";
+    pub const COUNTRY: &str = "country";
+    pub const COUNTRY_CODE: &str = "countryCode";
+}
+
+/// JSContact CryptoKey (RFC 9553 §2.6.1): a cryptographic key for the contact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CryptoKey {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CryptoKey {
+    pub fn new(kind: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self {
+            kind: Some(kind.into()),
+            uri: uri.into(),
+            media_type: None,
+            pref: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
+        self.media_type = Some(media_type.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+}
+
+/// Standard RFC 9553 §2.6.1 crypto key kinds.
+pub mod crypto_key_kind {
+    pub const KEY: &str = "key";
+    pub const CERT: &str = "cert";
+}
+
+/// JSContact Directory (RFC 9553 §2.6.2): a directory service for the contact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Directory {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl Directory {
+    pub fn new(kind: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self {
+            kind: Some(kind.into()),
+            uri: uri.into(),
+            media_type: None,
+            pref: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_media_type(mut self, media_type: impl Into<String>) -> Self {
+        self.media_type = Some(media_type.into());
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+}
+
+/// Standard RFC 9553 §2.6.2 directory kinds.
+pub mod directory_kind {
+    pub const DIRECTORY: &str = "directory";
+}
+
+/// JSContact PersonalInfo (RFC 9553 §2.8.4): personal information about the contact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonalInfo {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_as: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl PersonalInfo {
+    pub fn new(kind: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            value: Some(value.into()),
+            list_as: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_list_as(mut self, list_as: impl Into<String>) -> Self {
+        self.list_as = Some(list_as.into());
+        self
+    }
+}
+
+/// Standard RFC 9553 §2.8.4 personal info kinds.
+pub mod personal_info_kind {
+    pub const GENDER: &str = "gender";
+    pub const EXPERTISE: &str = "expertise";
+    pub const HOBBY: &str = "hobby";
+    pub const INTEREST: &str = "interest";
+}
+
+/// JSContact CardGroup (RFC 9553 §2.1.2): a group of contact cards.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CardGroup {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub card_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub members: Option<BTreeMap<String, bool>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CardGroup {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            card_type: Some("Group".to_owned()),
+            name: Some(name.into()),
+            members: None,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_members(mut self, members: BTreeMap<String, bool>) -> Self {
+        self.members = Some(members);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// Contacts capability properties (RFC 9610 §1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactsCapability {
+    #[serde(default)]
+    pub max_size_attachments_per_card: u64,
+    #[serde(default)]
+    pub max_number_of_cards_in_set: u64,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl ContactsCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_size_attachments_per_card(mut self, max: u64) -> Self {
+        self.max_size_attachments_per_card = max;
+        self
+    }
+
+    pub fn with_max_number_of_cards_in_set(mut self, max: u64) -> Self {
+        self.max_number_of_cards_in_set = max;
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// Standard RFC 9553 §2.1.1 JSContact card kinds.
+pub mod card_kind {
+    pub const INDIVIDUAL: &str = "individual";
+    pub const GROUP: &str = "group";
+    pub const ORG: &str = "org";
+    pub const LOCATION: &str = "location";
+    pub const DEVICE: &str = "device";
+    pub const APPLICATION: &str = "application";
+}
+
+/// Standard RFC 9553 §2.2.5 grammatical genders.
+pub mod grammatical_gender {
+    pub const ANIMATE: &str = "animate";
+    pub const INANIMATE: &str = "inanimate";
+    pub const FEMININE: &str = "feminine";
+    pub const MASCULINE: &str = "masculine";
+    pub const NEUTER: &str = "neuter";
+    pub const COMMON: &str = "common";
+}
+
+/// JSContact SpeakToAs (RFC 9553 §2.2.5): how to address the contact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeakToAs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grammatical_gender: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pronouns: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl SpeakToAs {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_grammatical_gender(mut self, gender: impl Into<String>) -> Self {
+        self.grammatical_gender = Some(gender.into());
+        self
+    }
+
+    pub fn with_pronouns(mut self, pronouns: impl Into<String>) -> Self {
+        self.pronouns = Some(pronouns.into());
+        self
+    }
+}
+
+/// JSContact LanguagePref (RFC 9553 §2.8.5): preferred language for communication.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguagePref {
+    #[serde(default)]
+    pub language: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contexts: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pref: Option<u32>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl LanguagePref {
+    pub fn new(language: impl Into<String>) -> Self {
+        Self {
+            language: language.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_contexts(mut self, contexts: Value) -> Self {
+        self.contexts = Some(contexts);
+        self
+    }
+
+    pub fn with_pref(mut self, pref: u32) -> Self {
+        self.pref = Some(pref);
+        self
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for LanguagePref {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct LanguagePrefVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for LanguagePrefVisitor {
+            type Value = LanguagePref;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a LanguagePref object, number, or string")
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<LanguagePref, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LanguagePref {
+                    pref: Some(value as u32),
+                    ..LanguagePref::default()
+                })
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<LanguagePref, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LanguagePref {
+                    pref: Some(value as u32),
+                    ..LanguagePref::default()
+                })
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<LanguagePref, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(LanguagePref {
+                    language: value.to_owned(),
+                    ..LanguagePref::default()
+                })
+            }
+
+            fn visit_map<M>(self, map: M) -> Result<LanguagePref, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct RawLanguagePref {
+                    #[serde(default)]
+                    language: String,
+                    #[serde(default)]
+                    contexts: Option<Value>,
+                    #[serde(default)]
+                    pref: Option<u32>,
+                    #[serde(flatten)]
+                    extra: BTreeMap<String, Value>,
+                }
+
+                let raw = RawLanguagePref::deserialize(
+                    serde::de::value::MapAccessDeserializer::new(map),
+                )?;
+                Ok(LanguagePref {
+                    language: raw.language,
+                    contexts: raw.contexts,
+                    pref: raw.pref,
+                    extra: raw.extra,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(LanguagePrefVisitor)
+    }
+}
+
+/// `ContactCard/parse` arguments (RFC 9610 §3.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactCardParseRequest {
+    pub account_id: Id,
+    pub blob_ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Vec<String>>,
+}
+
+impl ContactCardParseRequest {
+    pub fn new(
+        account_id: impl Into<Id>,
+        blob_ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            blob_ids: blob_ids.into_iter().map(Into::into).collect(),
+            properties: None,
+        }
+    }
+
+    pub fn properties(mut self, properties: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.properties = Some(properties.into_iter().map(Into::into).collect());
+        self
+    }
+}
+
+/// `ContactCard/parse` response (RFC 9610 §3.4).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactCardParseResponse {
+    pub account_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parsed: Option<BTreeMap<Id, ContactCard>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_parsable: Option<Vec<Id>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_found: Option<Vec<Id>>,
+}
+
+impl ContactCardParseResponse {
+    pub fn new(account_id: impl Into<Id>) -> Self {
+        Self {
+            account_id: account_id.into(),
+            parsed: None,
+            not_parsable: None,
+            not_found: None,
+        }
+    }
+
+    pub fn with_parsed(mut self, parsed: BTreeMap<Id, ContactCard>) -> Self {
+        self.parsed = Some(parsed);
+        self
+    }
+
+    pub fn with_not_parsable(
+        mut self,
+        not_parsable: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Self {
+        self.not_parsable = Some(not_parsable.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_not_found(mut self, not_found: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.not_found = Some(not_found.into_iter().map(Into::into).collect());
+        self
+    }
+}
+
+/// The `SetError` types RFC 9610 §3.2 adds for `ContactCard/set`.
+pub mod contact_card_set_error {
+    pub const BLOB_NOT_FOUND: &str = "blobNotFound";
 }

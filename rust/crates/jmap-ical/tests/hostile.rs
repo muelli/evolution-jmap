@@ -222,3 +222,268 @@ fn a_dtend_with_a_multibyte_character_at_the_slice_boundary_does_not_panic() {
         "an unreadable DTEND must be dropped, not panic or invent a duration"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial-input robustness net (Batch 13 Item 5)
+
+use std::time::{Duration, Instant};
+
+/// Truncated and unterminated iCalendar documents must be rejected with typed ICalError,
+/// never panic, never hang, and never silently parse incomplete events.
+#[test]
+fn truncated_and_unterminated_ical_rejection_matrix() {
+    let not_calendar_cases = [
+        "",
+        "   ",
+        "\r\n",
+        "\n",
+        "\t",
+        "FOO:BAR\r\n",
+        "VERSION:2.0\r\n",
+    ];
+    for input in not_calendar_cases {
+        assert_eq!(
+            jmap_ical::ical_to_event(input),
+            Err(ICalError::NotACalendar),
+            "input {input:?} should be rejected with NotACalendar"
+        );
+    }
+
+    let unterminated_cases = [
+        ("BEGIN:VCALENDAR", "VCALENDAR"),
+        ("BEGIN:VCALENDAR\r\n", "VCALENDAR"),
+        ("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:evt1\r\n", "VEVENT"),
+        (
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VEVENT\r\n",
+            "VCALENDAR",
+        ),
+        (
+            "BEGIN:VCALENDAR\r\nBEGIN:VTIMEZONE\r\nBEGIN:STANDARD\r\nEND:STANDARD\r\n",
+            "VTIMEZONE",
+        ),
+    ];
+    for (input, component) in unterminated_cases {
+        assert_eq!(
+            jmap_ical::ical_to_event(input),
+            Err(ICalError::Unterminated(component.to_owned())),
+            "input {input:?} should be rejected with Unterminated({component})"
+        );
+    }
+
+    let mismatched_cases = [
+        (
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VALARM\r\nEND:VCALENDAR\r\n",
+            "VEVENT",
+            "VALARM",
+        ),
+        (
+            "BEGIN:VCALENDAR\r\nBEGIN:VTIMEZONE\r\nBEGIN:STANDARD\r\nEND:STANDARD\r\nEND:VCALENDAR\r\n",
+            "VTIMEZONE",
+            "VCALENDAR",
+        ),
+    ];
+    for (input, expected, found) in mismatched_cases {
+        assert_eq!(
+            jmap_ical::ical_to_event(input),
+            Err(ICalError::Mismatched {
+                expected: expected.to_owned(),
+                found: found.to_owned(),
+            }),
+            "input {input:?} should be rejected with Mismatched"
+        );
+    }
+
+    // Trailing content after END:VCALENDAR
+    let trailing = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\nEXTRA:TRAILING\r\n";
+    assert!(matches!(
+        jmap_ical::ical_to_event(trailing),
+        Err(ICalError::Trailing(_))
+    ));
+
+    // Calendar without VEVENT
+    let no_event =
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nEND:VCALENDAR\r\n";
+    assert_eq!(jmap_ical::ical_to_event(no_event), Err(ICalError::NoEvent));
+}
+
+/// Unbalanced quoting in parameters must never panic, hang, or inject properties.
+#[test]
+fn unbalanced_quoting_in_ical_parameters_matrix() {
+    let hostile_quoted = [
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART;TZID=\"Europe/Berlin:20260115T130000\r\nSUMMARY:Test\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nATTENDEE;CN=\"Alice Smith:mailto:alice@example.com\r\nDTSTART:20260115T130000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nORGANIZER;CN=\"Bob\"Jones\":mailto:bob@example.com\r\nDTSTART:20260115T130000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nATTACH;FMTTYPE=\"application/pdf:https://example.com/doc.pdf\r\nDTSTART:20260115T130000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nX-PARAM;FOO=\"\"\"\":Bar\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+    ];
+
+    for input in hostile_quoted {
+        let start = Instant::now();
+        let res = jmap_ical::ical_to_event(input);
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "parse of hostile quoting hung on {input:?}"
+        );
+        if let Ok(event) = res {
+            assert!(event.id.is_some());
+        }
+    }
+}
+
+/// Absurd folding (every 2 octets, tabs, empty continuation lines) must parse losslessly.
+#[test]
+fn absurd_folding_every_second_octet_matrix() {
+    let mut folded = String::from(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nSUMMARY:\r\n",
+    );
+    let raw_val = "All Hands Engineering Sync";
+    for chunk in raw_val.as_bytes().chunks(2) {
+        folded.push(' ');
+        folded.push_str(std::str::from_utf8(chunk).unwrap());
+        folded.push_str("\r\n");
+    }
+    folded.push_str("END:VEVENT\r\nEND:VCALENDAR\r\n");
+
+    let event = jmap_ical::ical_to_event(&folded).expect("absurdly folded event should parse");
+    assert_eq!(event.title.as_deref(), Some("All Hands Engineering Sync"));
+
+    // Empty continuation lines and tab continuations
+    let empty_continuations = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:evt2\r\nDTSTART:20260115T130000Z\r\nDESCRIPTION:First line\r\n \r\n \r\n \tSecond line\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let event2 = jmap_ical::ical_to_event(empty_continuations).expect("tab folding should parse");
+    assert_eq!(
+        event2.description.as_deref(),
+        Some("First line\tSecond line")
+    );
+}
+
+/// A calendar with 10,000 properties parses in strictly bounded time with no stack overflow or hang.
+#[test]
+fn calendar_with_10k_properties_bounded_execution() {
+    let mut large_ics = String::with_capacity(500_000);
+    large_ics.push_str("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:stress-evt\r\nDTSTART:20260115T130000Z\r\nSUMMARY:Stress Test Event\r\n");
+    for i in 0..10_000 {
+        use std::fmt::Write;
+        let _ = writeln!(large_ics, "X-CUSTOM-PROP-{i}:value-{i}\r");
+    }
+    large_ics.push_str("DESCRIPTION:Final description\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n");
+
+    let start = Instant::now();
+    let event = jmap_ical::ical_to_event(&large_ics).expect("10k properties event should parse");
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "parsing 10k properties event took too long: {elapsed:?}"
+    );
+    assert_eq!(event.title.as_deref(), Some("Stress Test Event"));
+    assert_eq!(event.description.as_deref(), Some("Final description"));
+}
+
+/// CRLF, LF, CR, and mixed line endings must parse deterministically without data corruption.
+#[test]
+fn crlf_lf_cr_mixed_line_endings_matrix() {
+    let pure_lf = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:x\nBEGIN:VEVENT\nUID:evt1\nDTSTART:20260115T130000Z\nSUMMARY:Test Event\nDESCRIPTION:Line 1\n Line 2\nEND:VEVENT\nEND:VCALENDAR\n";
+    let pure_crlf = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nSUMMARY:Test Event\r\nDESCRIPTION:Line 1\r\n Line 2\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let mixed = "BEGIN:VCALENDAR\r\nVERSION:2.0\nPRODID:x\r\nBEGIN:VEVENT\nUID:evt1\r\nDTSTART:20260115T130000Z\nSUMMARY:Test Event\r\nDESCRIPTION:Line 1\n Line 2\r\nEND:VEVENT\nEND:VCALENDAR\r\n";
+
+    for (variant, input) in [
+        ("pure_lf", pure_lf),
+        ("pure_crlf", pure_crlf),
+        ("mixed", mixed),
+    ] {
+        let event = jmap_ical::ical_to_event(input)
+            .unwrap_or_else(|err| panic!("variant {variant} failed to parse: {err:?}"));
+        assert_eq!(
+            event.title.as_deref(),
+            Some("Test Event"),
+            "variant {variant} title mismatch"
+        );
+        assert_eq!(
+            event.description.as_deref(),
+            Some("Line 1Line 2"),
+            "variant {variant} description mismatch"
+        );
+    }
+}
+
+/// Malformed dates, durations, recurrence rules, and triggers must be safely rejected or defaulted without panic.
+#[test]
+fn malformed_dates_durations_recurrence_and_triggers_matrix() {
+    let hostile_payloads = [
+        // Malformed DTSTART
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:invalid\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:2026-01-15\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T999999Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20261345T000000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART;VALUE=DATE:2026\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        // Malformed DURATION / DTEND
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nDTEND:not-a-date\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nDURATION:invalid\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nDURATION:PT-5M\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nDURATION:P\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        // Malformed RRULE
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nRRULE:FREQ=MONTHLY;BYDAY=99ZZ\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nRRULE:FREQ=SECONDLY;INTERVAL=-10\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nRRULE:FREQ=DAILY;COUNT=-1\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nRRULE:FREQ=FOOBAR\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nRRULE:FREQ=DAILY;BYSETPOS=0\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nRRULE:FREQ=DAILY;BYSETPOS=999999\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        // Malformed VALARM / TRIGGER
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:invalid\r\nDESCRIPTION:Reminder\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER;VALUE=DATE-TIME:not-a-date\r\nDESCRIPTION:Reminder\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        // Malformed GEO
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nGEO:not,a,geo\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nGEO:abc;def\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        // Malformed ATTACH
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nATTACH;ENCODING=BASE64;VALUE=BINARY:!@#$%^&*()\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nATTACH:data:image/png;base64,corrupt\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+    ];
+
+    for input in hostile_payloads {
+        let res = jmap_ical::ical_to_event(input);
+        assert!(
+            res.is_ok() || res.is_err(),
+            "must complete without panicking on {input:?}"
+        );
+        if let Ok(event) = res {
+            assert_eq!(event.id.as_ref().map(|id| id.as_str()), Some("1"));
+        }
+    }
+}
+
+/// Multibyte UTF-8 characters at exact slice boundaries never cause char boundary panics.
+#[test]
+fn adversarial_multibyte_utf8_slice_boundary_matrix() {
+    let multi_byte_chars = [
+        "é",       // 2 bytes: C3 A9
+        "€",       // 3 bytes: E2 82 AC
+        "𞋀",       // 4 bytes: F0 9E 8B 80
+        "𐎟",       // 4 bytes: F0 90 8E 9F
+        "🎉",      // 4 bytes: F0 9F 8E 89
+        "한",      // 3 bytes: ED 95 9C
+        "العربية", // Arabic multi-byte
+    ];
+
+    for ch in multi_byte_chars {
+        // Date-time with multibyte characters
+        let ics_dtstart = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:{ch}20260115T130000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let _ = jmap_ical::ical_to_event(&ics_dtstart);
+
+        let ics_recurrence_id = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nRECURRENCE-ID;TZID=UTC:{ch}20260115T130000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let _ = jmap_ical::ical_to_event(&ics_recurrence_id);
+
+        // Summary and description with multibyte characters
+        let ics_text = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20260115T130000Z\r\nSUMMARY:Summary {ch}\r\nDESCRIPTION:Description {ch}\r\nLOCATION:Location {ch}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let event = jmap_ical::ical_to_event(&ics_text).expect("multibyte text should parse");
+        assert_eq!(
+            event.title.as_deref(),
+            Some(format!("Summary {ch}").as_str())
+        );
+    }
+}

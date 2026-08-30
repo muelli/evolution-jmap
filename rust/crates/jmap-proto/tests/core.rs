@@ -453,3 +453,1110 @@ fn resolve_primary_account_fallback_excludes_a_non_personal_account() {
         None
     );
 }
+
+/// RFC 8620 §2 explicitly permits a server to omit `primaryAccounts` outright
+/// ("a server that does not support this concept MUST omit this property").
+/// Deserializing such a session document must succeed with empty primary_accounts.
+#[test]
+fn session_deserializes_when_primary_accounts_is_omitted_by_server() {
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {"urn:ietf:params:jmap:core": {}},
+        "accounts": {
+            "A1": {
+                "name": "a@example.com",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {"urn:ietf:params:jmap:core": {}}
+            }
+        },
+        "username": "a@example.com",
+        "apiUrl": "https://jmap.example.com/api/",
+        "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?accept={type}",
+        "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+        "eventSourceUrl": "https://jmap.example.com/eventsource/",
+        "state": "s1"
+    }))
+    .expect("session without primaryAccounts must deserialize cleanly");
+
+    assert!(session.primary_accounts.is_empty());
+}
+
+/// RFC 8620 §5.5 defines `collation` on `Comparator` as an optional string.
+#[test]
+fn comparator_roundtrips_collation_when_specified() {
+    let value = serde_json::json!({
+        "property": "receivedAt",
+        "isAscending": false,
+        "collation": "i;unicode-casemap"
+    });
+    let comparator: Comparator = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(comparator.property, "receivedAt");
+    assert!(!comparator.is_ascending);
+    assert_eq!(comparator.collation.as_deref(), Some("i;unicode-casemap"));
+
+    let round_tripped = serde_json::to_value(&comparator).unwrap();
+    assert_eq!(round_tripped, value);
+}
+
+/// RFC 8620 §5.3 defines well-known `tooLarge` set error code.
+#[test]
+fn set_error_has_too_large_code() {
+    assert_eq!(jmap_proto::error::set::TOO_LARGE, "tooLarge");
+}
+
+/// A `/get` response carrying unknown server extensions deserializes without error.
+#[test]
+fn get_response_ignores_unknown_server_properties() {
+    let value = serde_json::json!({
+        "accountId": "A1",
+        "state": "s1",
+        "list": [{"id": "1"}],
+        "notFound": [],
+        "customExtension": "ignored_cleanly"
+    });
+    let resp: jmap_proto::methods::GetResponse<serde_json::Value> =
+        serde_json::from_value(value).expect("GetResponse must deserialize unknown fields cleanly");
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.state.as_str(), "s1");
+    assert_eq!(resp.list.len(), 1);
+}
+
+/// A `/changes` response omitting optional empty arrays and false hasMoreChanges deserializes cleanly.
+#[test]
+fn changes_response_deserializes_with_omitted_empty_lists_and_defaults() {
+    let value = serde_json::json!({
+        "accountId": "A1",
+        "oldState": "s1",
+        "newState": "s2",
+        "futureMember": 123
+    });
+    let resp: jmap_proto::methods::ChangesResponse = serde_json::from_value(value).unwrap();
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.old_state.as_str(), "s1");
+    assert_eq!(resp.new_state.as_str(), "s2");
+    assert!(!resp.has_more_changes);
+    assert!(resp.created.is_empty());
+    assert!(resp.updated.is_empty());
+    assert!(resp.destroyed.is_empty());
+}
+
+/// A `/query` response omitting optional position/canCalculateChanges defaults cleanly.
+#[test]
+fn query_response_deserializes_with_omitted_defaults() {
+    let value = serde_json::json!({
+        "accountId": "A1",
+        "queryState": "qs1",
+        "extraMetric": "abc"
+    });
+    let resp: jmap_proto::methods::QueryResponse = serde_json::from_value(value).unwrap();
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.query_state.as_str(), "qs1");
+    assert!(!resp.can_calculate_changes);
+    assert_eq!(resp.position, 0);
+    assert!(resp.ids.is_empty());
+}
+
+/// RFC 8620 §2 mandates: "eventSourceUrl: String ... A server that does not support this MUST omit this property."
+/// Deserializing such a session document must succeed without error.
+#[test]
+fn session_deserializes_when_event_source_url_is_omitted_by_server() {
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {"urn:ietf:params:jmap:core": {}},
+        "accounts": {
+            "A1": {
+                "name": "a@example.com",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {"urn:ietf:params:jmap:core": {}}
+            }
+        },
+        "username": "a@example.com",
+        "apiUrl": "https://jmap.example.com/api/",
+        "downloadUrl": "https://jmap.example.com/download/{accountId}/{blobId}/{name}?accept={type}",
+        "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+        "state": "s1"
+    }))
+    .expect("session without eventSourceUrl must deserialize cleanly");
+
+    assert_eq!(session.event_source_url, "");
+}
+
+/// A `/get` response omitting the `list` array deserializes cleanly with an empty list.
+#[test]
+fn get_response_deserializes_when_list_is_omitted_by_server() {
+    let value = serde_json::json!({
+        "accountId": "A1",
+        "state": "s1",
+        "notFound": ["id1"]
+    });
+    let resp: jmap_proto::methods::GetResponse<serde_json::Value> =
+        serde_json::from_value(value).expect("GetResponse without list must deserialize cleanly");
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.state.as_str(), "s1");
+    assert!(resp.list.is_empty());
+    assert_eq!(resp.not_found.len(), 1);
+}
+
+/// A response envelope omitting `methodResponses` deserializes cleanly with an empty list.
+#[test]
+fn response_envelope_deserializes_when_method_responses_is_omitted_by_server() {
+    let value = serde_json::json!({
+        "sessionState": "s1"
+    });
+    let resp: jmap_proto::response::Response = serde_json::from_value(value)
+        .expect("Response without methodResponses must deserialize cleanly");
+    assert_eq!(resp.session_state.as_str(), "s1");
+    assert!(resp.method_responses.is_empty());
+}
+
+/// Error codes and problem types in `jmap_proto::error` cover RFC 8620 specifications.
+#[test]
+fn core_error_constants_cover_rfc8620() {
+    assert_eq!(
+        jmap_proto::error::method::SERVER_UNAVAILABLE,
+        "serverUnavailable"
+    );
+    assert_eq!(
+        jmap_proto::error::method::SERVER_PARTIAL_FAIL,
+        "serverPartialFail"
+    );
+    assert_eq!(
+        jmap_proto::error::method::UNKNOWN_CAPABILITY,
+        "unknownCapability"
+    );
+
+    assert_eq!(jmap_proto::error::set::RATE_LIMIT, "rateLimit");
+    assert_eq!(jmap_proto::error::set::STATE_MISMATCH, "stateMismatch");
+    assert_eq!(jmap_proto::error::set::REQUEST_TOO_LARGE, "requestTooLarge");
+
+    assert_eq!(
+        jmap_proto::error::request::UNKNOWN_CAPABILITY,
+        "urn:ietf:params:jmap:error:unknownCapability"
+    );
+    assert_eq!(
+        jmap_proto::error::request::NOT_JSON,
+        "urn:ietf:params:jmap:error:notJSON"
+    );
+    assert_eq!(
+        jmap_proto::error::request::NOT_REQUEST,
+        "urn:ietf:params:jmap:error:notRequest"
+    );
+    assert_eq!(
+        jmap_proto::error::request::LIMIT,
+        "urn:ietf:params:jmap:error:limit"
+    );
+}
+
+/// `Id` implements `Default`.
+#[test]
+fn id_implements_default_trait() {
+    let id = Id::default();
+    assert_eq!(id.as_str(), "");
+}
+
+/// `RequestError` supports standard RFC 7807 / RFC 8620 §3.6.1 problem details members.
+#[test]
+fn request_error_problem_details_fields_cover_rfc7807_and_rfc8620() {
+    let value = serde_json::json!({
+        "type": "urn:ietf:params:jmap:error:limit",
+        "status": 400,
+        "title": "Request limit exceeded",
+        "detail": "maxCallsInRequest exceeded",
+        "instance": "urn:uuid:12345678-1234-5678-1234-567812345678",
+        "limit": "maxCallsInRequest"
+    });
+    let err: jmap_proto::error::RequestError = serde_json::from_value(value).unwrap();
+    assert_eq!(err.error_type, "urn:ietf:params:jmap:error:limit");
+    assert_eq!(err.status, Some(400));
+    assert_eq!(
+        err.extra.get("title"),
+        Some(&serde_json::json!("Request limit exceeded"))
+    );
+    assert_eq!(err.detail.as_deref(), Some("maxCallsInRequest exceeded"));
+    assert_eq!(
+        err.extra.get("instance"),
+        Some(&serde_json::json!(
+            "urn:uuid:12345678-1234-5678-1234-567812345678"
+        ))
+    );
+    assert_eq!(
+        err.extra.get("limit"),
+        Some(&serde_json::json!("maxCallsInRequest"))
+    );
+}
+
+/// `QueryRequest` supports RFC 8620 §5.5 anchor and anchorOffset properties.
+#[test]
+fn query_request_anchor_and_anchor_offset_cover_rfc8620() {
+    let req = QueryRequest::<serde_json::Value>::new("A1")
+        .anchor("msg_123")
+        .anchor_offset(-5);
+    assert_eq!(req.anchor.as_ref().unwrap().as_str(), "msg_123");
+    assert_eq!(req.anchor_offset, Some(-5));
+
+    let json = serde_json::to_value(&req).unwrap();
+    assert_eq!(json["anchor"], "msg_123");
+    assert_eq!(json["anchorOffset"], -5);
+
+    let roundtrip: QueryRequest<serde_json::Value> = serde_json::from_value(json).unwrap();
+    assert_eq!(roundtrip.anchor.as_ref().unwrap().as_str(), "msg_123");
+    assert_eq!(roundtrip.anchor_offset, Some(-5));
+}
+
+/// `QueryChangesRequest` and `QueryChangesResponse` support RFC 8620 §5.6.
+#[test]
+fn query_changes_request_and_response_roundtrip_covers_rfc8620() {
+    use jmap_proto::methods::{AddedItem, QueryChangesRequest, QueryChangesResponse};
+
+    let req = QueryChangesRequest::<serde_json::Value>::new("A1", "qs_old")
+        .filter(serde_json::json!({"hasKeyword": "$seen"}))
+        .max_changes(50)
+        .up_to_id("msg_99")
+        .calculate_total();
+
+    let json = serde_json::to_value(&req).unwrap();
+    assert_eq!(json["accountId"], "A1");
+    assert_eq!(json["sinceQueryState"], "qs_old");
+    assert_eq!(json["maxChanges"], 50);
+    assert_eq!(json["upToId"], "msg_99");
+    assert_eq!(json["calculateTotal"], true);
+
+    let resp_val = serde_json::json!({
+        "accountId": "A1",
+        "oldQueryState": "qs_old",
+        "newQueryState": "qs_new",
+        "total": 12,
+        "removed": ["id1", "id2"],
+        "added": [
+            {"id": "id3", "index": 0},
+            {"id": "id4", "index": 5}
+        ]
+    });
+    let resp: QueryChangesResponse = serde_json::from_value(resp_val.clone()).unwrap();
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.old_query_state.as_str(), "qs_old");
+    assert_eq!(resp.new_query_state.as_str(), "qs_new");
+    assert_eq!(resp.total, Some(12));
+    assert_eq!(resp.removed.len(), 2);
+    assert_eq!(resp.added.len(), 2);
+    assert_eq!(resp.added[0], AddedItem::new("id3", 0));
+    assert_eq!(resp.added[1], AddedItem::new("id4", 5));
+
+    let round_tripped = serde_json::to_value(&resp).unwrap();
+    assert_eq!(round_tripped, resp_val);
+}
+
+/// `CopyRequest` and `CopyResponse` support RFC 8620 §5.4.
+#[test]
+fn copy_request_and_response_roundtrip_covers_rfc8620() {
+    use jmap_proto::methods::{CopyRequest, CopyResponse};
+
+    let req = CopyRequest::<serde_json::Value>::new("SrcAccount", "DstAccount")
+        .if_from_in_state("src_state_1")
+        .if_in_state("dst_state_1")
+        .copy_object("c1", serde_json::json!({"name": "Item 1"}))
+        .on_success_destroy_original()
+        .destroy_from_if_in_state("src_state_1");
+
+    let json = serde_json::to_value(&req).unwrap();
+    assert_eq!(json["fromAccountId"], "SrcAccount");
+    assert_eq!(json["ifFromInState"], "src_state_1");
+    assert_eq!(json["accountId"], "DstAccount");
+    assert_eq!(json["ifInState"], "dst_state_1");
+    assert_eq!(json["onSuccessDestroyOriginal"], true);
+    assert_eq!(json["destroyFromIfInState"], "src_state_1");
+    assert_eq!(json["create"]["c1"]["name"], "Item 1");
+
+    let resp_val = serde_json::json!({
+        "fromAccountId": "SrcAccount",
+        "accountId": "DstAccount",
+        "oldState": "s1",
+        "newState": "s2",
+        "created": {
+            "c1": {"id": "dst_id_1"}
+        }
+    });
+    let resp: CopyResponse<serde_json::Value> = serde_json::from_value(resp_val.clone()).unwrap();
+    assert_eq!(resp.from_account_id.as_str(), "SrcAccount");
+    assert_eq!(resp.account_id.as_str(), "DstAccount");
+    assert_eq!(resp.old_state.as_ref().unwrap().as_str(), "s1");
+    assert_eq!(resp.new_state.as_str(), "s2");
+    assert!(resp.created.unwrap().contains_key("c1"));
+}
+
+/// Standard filter operators and error codes in RFC 8620 are defined.
+#[test]
+fn standard_filter_operators_and_error_codes_cover_rfc8620() {
+    assert_eq!(jmap_proto::methods::filter_operator::AND, "AND");
+    assert_eq!(jmap_proto::methods::filter_operator::OR, "OR");
+    assert_eq!(jmap_proto::methods::filter_operator::NOT, "NOT");
+
+    assert_eq!(jmap_proto::error::set::ALREADY_EXISTS, "alreadyExists");
+    assert_eq!(
+        jmap_proto::error::method::FROM_STATE_MISMATCH,
+        "fromStateMismatch"
+    );
+    assert_eq!(
+        jmap_proto::error::set::CANNOT_DESTROY_ORIGINAL,
+        "cannotDestroyOriginal"
+    );
+}
+
+/// PushSubscription, PushVerification, and StateChange types cover RFC 8620 §7.
+#[test]
+fn push_and_state_change_roundtrip_covers_rfc8620() {
+    use jmap_proto::push::{
+        PushSubscription, PushSubscriptionKeys, PushVerification, StateChange,
+        push_subscription_set_error,
+    };
+    use std::collections::BTreeMap;
+
+    assert_eq!(push_subscription_set_error::INVALID_URL, "invalidUrl");
+    assert_eq!(
+        push_subscription_set_error::EXPIRES_TOO_FAR,
+        "expiresTooFar"
+    );
+
+    let sub = PushSubscription {
+        id: Some(Id::new("sub_1")),
+        device_client_id: "device_abc".to_owned(),
+        url: "https://push.example.com/endpoint".to_owned(),
+        keys: Some(PushSubscriptionKeys {
+            p256dh: "key_p256dh".to_owned(),
+            auth: "key_auth".to_owned(),
+        }),
+        expires: Some(UtcDate::new("2026-10-01T00:00:00Z")),
+        types: Some(vec!["Email".to_owned(), "CalendarEvent".to_owned()]),
+        extra: BTreeMap::new(),
+    };
+
+    let sub_val = serde_json::to_value(&sub).unwrap();
+    assert_eq!(sub_val["id"], "sub_1");
+    assert_eq!(sub_val["deviceClientId"], "device_abc");
+    assert_eq!(sub_val["url"], "https://push.example.com/endpoint");
+    assert_eq!(sub_val["keys"]["p256dh"], "key_p256dh");
+    assert_eq!(sub_val["expires"], "2026-10-01T00:00:00Z");
+    assert_eq!(
+        sub_val["types"],
+        serde_json::json!(["Email", "CalendarEvent"])
+    );
+
+    let round_tripped: PushSubscription = serde_json::from_value(sub_val).unwrap();
+    assert_eq!(round_tripped, sub);
+
+    let verification = PushVerification {
+        object_type: "PushVerification".to_owned(),
+        push_subscription_id: Id::new("sub_1"),
+        verification_code: "code_12345".to_owned(),
+        extra: BTreeMap::new(),
+    };
+    let ver_val = serde_json::to_value(&verification).unwrap();
+    assert_eq!(ver_val["@type"], "PushVerification");
+    assert_eq!(ver_val["pushSubscriptionId"], "sub_1");
+    assert_eq!(ver_val["verificationCode"], "code_12345");
+
+    let ver_round_tripped: PushVerification = serde_json::from_value(ver_val).unwrap();
+    assert_eq!(ver_round_tripped, verification);
+
+    let state_change = StateChange {
+        kind: "StateChange".to_owned(),
+        changed: BTreeMap::from([(
+            Id::new("A1"),
+            BTreeMap::from([
+                ("Email".to_owned(), State::new("s_email_1")),
+                ("Mailbox".to_owned(), State::new("s_box_1")),
+            ]),
+        )]),
+        extra: BTreeMap::new(),
+    };
+    let sc_val = serde_json::to_value(&state_change).unwrap();
+    assert_eq!(sc_val["@type"], "StateChange");
+    assert_eq!(sc_val["changed"]["A1"]["Email"], "s_email_1");
+
+    let sc_round_tripped: StateChange = serde_json::from_value(sc_val).unwrap();
+    assert_eq!(sc_round_tripped, state_change);
+}
+
+/// BlobCopyRequest, BlobCopyResponse, and CoreCapability cover RFC 8620 §5.7 & §2.
+#[test]
+fn blob_copy_and_core_capabilities_roundtrip_covers_rfc8620() {
+    use jmap_proto::methods::{BlobCopyRequest, BlobCopyResponse};
+    use jmap_proto::session::CoreCapability;
+    use std::collections::BTreeMap;
+
+    let req = BlobCopyRequest::new("acc_source", "acc_target", vec!["blob_1", "blob_2"]);
+    let req_val = serde_json::to_value(&req).unwrap();
+    assert_eq!(req_val["fromAccountId"], "acc_source");
+    assert_eq!(req_val["accountId"], "acc_target");
+    assert_eq!(req_val["blobIds"], serde_json::json!(["blob_1", "blob_2"]));
+
+    let round_req: BlobCopyRequest = serde_json::from_value(req_val).unwrap();
+    assert_eq!(round_req, req);
+
+    let resp = BlobCopyResponse {
+        from_account_id: Id::new("acc_source"),
+        account_id: Id::new("acc_target"),
+        copied: Some(BTreeMap::from([(Id::new("blob_1"), Id::new("blob_1_new"))])),
+        not_copied: Some(BTreeMap::from([(
+            Id::new("blob_2"),
+            jmap_proto::error::SetError::new("notFound"),
+        )])),
+    };
+    let resp_val = serde_json::to_value(&resp).unwrap();
+    assert_eq!(resp_val["copied"]["blob_1"], "blob_1_new");
+    assert_eq!(resp_val["notCopied"]["blob_2"]["type"], "notFound");
+
+    let round_resp: BlobCopyResponse = serde_json::from_value(resp_val).unwrap();
+    assert_eq!(round_resp, resp);
+
+    let cap = CoreCapability {
+        max_size_upload: 10_000_000,
+        max_concurrent_upload: 4,
+        max_size_request: 5_000_000,
+        max_concurrent_requests: 8,
+        max_calls_in_request: 16,
+        max_objects_in_get: 256,
+        max_objects_in_set: 128,
+        collation_algorithms: vec!["i;ascii-casemap".to_owned(), "i;octet".to_owned()],
+        extra: BTreeMap::new(),
+    };
+    let cap_val = serde_json::to_value(&cap).unwrap();
+    assert_eq!(cap_val["maxSizeUpload"], 10_000_000);
+    assert_eq!(cap_val["maxConcurrentUpload"], 4);
+    assert_eq!(cap_val["maxSizeRequest"], 5_000_000);
+    assert_eq!(cap_val["maxConcurrentRequests"], 8);
+    assert_eq!(cap_val["maxCallsInRequest"], 16);
+    assert_eq!(cap_val["maxObjectsInGet"], 256);
+    assert_eq!(cap_val["maxObjectsInSet"], 128);
+    assert_eq!(
+        cap_val["collationAlgorithms"],
+        serde_json::json!(["i;ascii-casemap", "i;octet"])
+    );
+
+    let round_cap: CoreCapability = serde_json::from_value(cap_val.clone()).unwrap();
+    assert_eq!(round_cap, cap);
+
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": cap_val
+        },
+        "accounts": {},
+        "username": "user@example.com",
+        "apiUrl": "https://api.example.com/jmap",
+        "downloadUrl": "https://api.example.com/download",
+        "uploadUrl": "https://api.example.com/upload",
+        "state": "s1"
+    }))
+    .unwrap();
+
+    assert_eq!(session.max_concurrent_upload(), Some(4));
+    assert_eq!(session.max_concurrent_requests(), Some(8));
+    assert_eq!(session.max_objects_in_set(), Some(128));
+    assert_eq!(
+        session.collation_algorithms(),
+        Some(vec!["i;ascii-casemap".to_owned(), "i;octet".to_owned()])
+    );
+    assert_eq!(session.core_capability(), Some(cap));
+}
+
+#[test]
+fn query_request_and_changes_request_calculate_total_builder() {
+    use jmap_proto::methods::{QueryChangesRequest, QueryRequest};
+
+    let q: QueryRequest<()> = QueryRequest::new("A1").calculate_total();
+    assert!(q.calculate_total);
+    let q_val = serde_json::to_value(&q).unwrap();
+    assert_eq!(q_val["calculateTotal"], true);
+
+    let qc: QueryChangesRequest<()> = QueryChangesRequest::new("A1", "s1").calculate_total();
+    assert!(qc.calculate_total);
+    let qc_val = serde_json::to_value(&qc).unwrap();
+    assert_eq!(qc_val["calculateTotal"], true);
+}
+
+#[test]
+fn query_request_and_changes_request_collapse_threads_builder() {
+    use jmap_proto::methods::{QueryChangesRequest, QueryRequest};
+
+    let q: QueryRequest<()> = QueryRequest::new("A1").collapse_threads();
+    assert!(q.collapse_threads);
+    let q_val = serde_json::to_value(&q).unwrap();
+    assert_eq!(q_val["collapseThreads"], true);
+
+    let qc: QueryChangesRequest<()> = QueryChangesRequest::new("A1", "s1").collapse_threads();
+    assert!(qc.collapse_threads);
+    let qc_val = serde_json::to_value(&qc).unwrap();
+    assert_eq!(qc_val["collapseThreads"], true);
+}
+
+#[test]
+fn response_deserializes_missing_session_state_with_default() {
+    use jmap_proto::response::Response;
+
+    let value = serde_json::json!({
+        "methodResponses": []
+    });
+
+    let resp: Response = serde_json::from_value(value).unwrap();
+    assert_eq!(resp.session_state.as_str(), "");
+}
+
+#[test]
+fn result_reference_and_push_builders_roundtrip() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::push::{PushSubscription, PushVerification, StateChange};
+    use jmap_proto::request::ResultReference;
+    use std::collections::BTreeMap;
+
+    let rr = ResultReference::new("call1", "Email/query", "/ids");
+    assert_eq!(rr.result_of, "call1");
+    assert_eq!(rr.name, "Email/query");
+    assert_eq!(rr.path, "/ids");
+    let rr_val = serde_json::to_value(&rr).unwrap();
+    assert_eq!(rr_val["resultOf"], "call1");
+    assert_eq!(rr_val["name"], "Email/query");
+    assert_eq!(rr_val["path"], "/ids");
+    assert_eq!(
+        serde_json::from_value::<ResultReference>(rr_val).unwrap(),
+        rr
+    );
+
+    let sub = PushSubscription::new("dev_0", "https://push.example.com/initial")
+        .with_id("sub_1")
+        .with_device_client_id("dev_1")
+        .with_url("https://push.example.com/sub")
+        .with_keys("key_p256", "auth_secret")
+        .with_expires(UtcDate::new("2026-10-01T00:00:00Z"))
+        .with_types(["Email", "ContactCard", "CalendarEvent"]);
+
+    assert_eq!(sub.id.as_ref().unwrap().as_str(), "sub_1");
+    assert_eq!(sub.device_client_id, "dev_1");
+    assert_eq!(sub.url, "https://push.example.com/sub");
+    assert_eq!(sub.keys.as_ref().unwrap().p256dh, "key_p256");
+    assert_eq!(sub.keys.as_ref().unwrap().auth, "auth_secret");
+    assert_eq!(
+        sub.expires.as_ref().unwrap().as_str(),
+        "2026-10-01T00:00:00Z"
+    );
+    assert_eq!(sub.types.as_ref().unwrap().len(), 3);
+
+    let ver = PushVerification::new("sub_0", "initial_code")
+        .with_push_subscription_id("sub_42")
+        .with_verification_code("challenge_xyz");
+    assert_eq!(ver.object_type, "PushVerification");
+    assert_eq!(ver.push_subscription_id.as_str(), "sub_42");
+    assert_eq!(ver.verification_code, "challenge_xyz");
+
+    let change = StateChange::new(BTreeMap::new())
+        .with_changed(BTreeMap::from([(
+            "acc1".into(),
+            BTreeMap::from([("Email".to_owned(), "state_123".into())]),
+        )]))
+        .with_account_change("acc1", "Mailbox", "state_mbx_1")
+        .with_account_change("acc2", "CalendarEvent", "state_cal_1");
+    assert_eq!(change.kind, "StateChange");
+    assert_eq!(
+        change.changed[&"acc1".into()]["Email"].as_str(),
+        "state_123"
+    );
+    assert_eq!(
+        change.changed[&"acc1".into()]["Mailbox"].as_str(),
+        "state_mbx_1"
+    );
+    assert_eq!(
+        change.changed[&"acc2".into()]["CalendarEvent"].as_str(),
+        "state_cal_1"
+    );
+}
+
+#[test]
+fn core_echo_and_builder_methods_roundtrip() {
+    use jmap_proto::methods::{ChangesRequest, Echo, GetRequest, UploadResponse};
+    use jmap_proto::request::{Invocation, Request, ResultReference};
+    use jmap_proto::response::Response;
+    use std::collections::BTreeMap;
+
+    // Core/echo
+    let echo = Echo::new(serde_json::json!({"testKey": "testVal", "num": 42}));
+    let echo_val = serde_json::to_value(&echo).unwrap();
+    assert_eq!(echo_val["testKey"], "testVal");
+    assert_eq!(echo_val["num"], 42);
+    let round_echo: Echo<serde_json::Value> = serde_json::from_value(echo_val).unwrap();
+    assert_eq!(round_echo, echo);
+
+    // GetRequest builders
+    let rr = ResultReference::new("call0", "Email/query", "/ids");
+    let get_req = GetRequest::all("acc1")
+        .properties(["id", "blobId", "threadId"])
+        .ids_ref(rr);
+    assert_eq!(
+        get_req.properties.as_ref().unwrap(),
+        &["id", "blobId", "threadId"]
+    );
+    assert_eq!(get_req.ids_ref.as_ref().unwrap().result_of, "call0");
+
+    // ChangesRequest builders
+    let chg_req = ChangesRequest::new("acc1", "s1").max_changes(50);
+    assert_eq!(chg_req.account_id.as_str(), "acc1");
+    assert_eq!(chg_req.since_state.as_str(), "s1");
+    assert_eq!(chg_req.max_changes, Some(50));
+
+    // UploadResponse builders
+    let upload = UploadResponse::new("acc1", "blob_99", 2048).with_content_type("text/plain");
+    assert_eq!(upload.account_id.as_str(), "acc1");
+    assert_eq!(upload.blob_id.as_str(), "blob_99");
+    assert_eq!(upload.size, 2048);
+    assert_eq!(upload.content_type.as_deref(), Some("text/plain"));
+
+    // Request with_created_ids
+    let req = Request::new(["urn:ietf:params:jmap:core"])
+        .with_created_ids(BTreeMap::from([("c1".into(), "id1".into())]));
+    assert_eq!(
+        req.created_ids.as_ref().unwrap()[&"c1".into()].as_str(),
+        "id1"
+    );
+
+    // Response builders and Invocation from_value
+    let inv = Invocation::from_value("Core/echo", serde_json::json!({"ack": true}), "c0");
+    let resp = Response::new("s_final")
+        .with_method_response(inv)
+        .with_created_ids(BTreeMap::from([("c1".into(), "id1".into())]));
+    assert_eq!(resp.session_state.as_str(), "s_final");
+    assert_eq!(resp.method_responses.len(), 1);
+    assert_eq!(resp.method_responses[0].name, "Core/echo");
+    assert_eq!(
+        resp.created_ids.as_ref().unwrap()[&"c1".into()].as_str(),
+        "id1"
+    );
+}
+
+#[test]
+fn session_typed_capability_accessors_and_websocket_roundtrip() {
+    use jmap_proto::session::{
+        CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
+        CAPABILITY_MDN, CAPABILITY_PRINCIPALS, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
+        CAPABILITY_WEBSOCKET, WebSocketCapability,
+    };
+
+    let session: Session = serde_json::from_value(serde_json::json!({
+        "capabilities": {
+            CAPABILITY_CORE: {
+                "maxSizeUpload": 10000000,
+                "maxConcurrentUpload": 4,
+                "maxSizeRequest": 5000000,
+                "maxConcurrentRequests": 8,
+                "maxCallsInRequest": 16,
+                "maxObjectsInGet": 500,
+                "maxObjectsInSet": 500,
+                "collationAlgorithms": ["i;ascii-casemap", "i;unicode-casemap"]
+            },
+            CAPABILITY_MAIL: {
+                "maxSizeAttachmentsPerEmail": 50000000,
+                "maxSizeEmailInBytes": 100000000,
+                "mayCreateTopLevelMailbox": true
+            },
+            CAPABILITY_SUBMISSION: {
+                "maxDelayedSend": 86400,
+                "submissionExtensions": {"futurerelease": []}
+            },
+            CAPABILITY_CONTACTS: {
+                "maxSizeAttachmentsPerCard": 5000000,
+                "maxNumberOfCardsInSet": 100
+            },
+            CAPABILITY_CALENDARS: {
+                "maxSizeAttachmentsPerEvent": 20000000,
+                "maxConcurrentAvailabilities": 10
+            },
+            CAPABILITY_PRINCIPALS: {
+                "maxPrincipalsPerGet": 50
+            },
+            CAPABILITY_WEBSOCKET: {
+                "url": "wss://jmap.example.com/ws",
+                "supportsPush": true
+            },
+            CAPABILITY_VACATION_RESPONSE: {},
+            CAPABILITY_MDN: {}
+        },
+        "accounts": {
+            "A1": {
+                "name": "john@example.com",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {
+                    CAPABILITY_CORE: {},
+                    CAPABILITY_MAIL: {}
+                }
+            }
+        },
+        "primaryAccounts": {
+            CAPABILITY_MAIL: "A1"
+        },
+        "username": "john@example.com",
+        "apiUrl": "https://jmap.example.com/api",
+        "downloadUrl": "https://jmap.example.com/download/{blobId}",
+        "uploadUrl": "https://jmap.example.com/upload/{accountId}",
+        "eventSourceUrl": "https://jmap.example.com/events",
+        "state": "s1234"
+    }))
+    .unwrap();
+
+    let core_cap = session.core_capability().expect("core capability");
+    assert_eq!(core_cap.max_size_upload, 10000000);
+    assert_eq!(core_cap.max_calls_in_request, 16);
+
+    let mail_cap = session.mail_capability().expect("mail capability");
+    assert_eq!(mail_cap.max_size_attachments_per_email, 50000000);
+    assert!(mail_cap.may_create_top_level_mailbox);
+
+    let sub_cap = session
+        .submission_capability()
+        .expect("submission capability");
+    assert_eq!(sub_cap.max_delayed_send, 86400);
+
+    let contacts_cap = session.contacts_capability().expect("contacts capability");
+    assert_eq!(contacts_cap.max_number_of_cards_in_set, 100);
+
+    let cal_cap = session
+        .calendars_capability()
+        .expect("calendars capability");
+    assert_eq!(cal_cap.max_concurrent_availabilities, 10);
+
+    let princ_cap = session
+        .principals_capability()
+        .expect("principals capability");
+    assert_eq!(princ_cap.max_principals_per_get, Some(50));
+
+    let ws_cap = session
+        .websocket_capability()
+        .expect("websocket capability");
+    assert_eq!(ws_cap.url, "wss://jmap.example.com/ws");
+    assert!(ws_cap.supports_push);
+
+    let ws_val = serde_json::to_value(&ws_cap).unwrap();
+    assert_eq!(ws_val["url"], "wss://jmap.example.com/ws");
+    assert!(ws_val["supportsPush"].as_bool().unwrap());
+    assert_eq!(
+        serde_json::from_value::<WebSocketCapability>(ws_val).unwrap(),
+        ws_cap
+    );
+}
+
+#[test]
+fn core_response_and_request_error_builders() {
+    use jmap_proto::error::{RequestError, SetError, request};
+    use jmap_proto::methods::{
+        AddedItem, BlobCopyResponse, ChangesResponse, CopyResponse, GetResponse,
+        QueryChangesResponse, QueryResponse,
+    };
+    use std::collections::BTreeMap;
+
+    let get_resp = GetResponse::new("acc1", "s1", vec![10, 20, 30]).with_not_found(["id4", "id5"]);
+    assert_eq!(get_resp.account_id.as_str(), "acc1");
+    assert_eq!(get_resp.state.as_str(), "s1");
+    assert_eq!(get_resp.list, vec![10, 20, 30]);
+    assert_eq!(get_resp.not_found.len(), 2);
+
+    let changes_resp = ChangesResponse::new("acc1", "s1", "s2")
+        .with_created(["c1"])
+        .with_updated(["u1", "u2"])
+        .with_destroyed(["d1"])
+        .has_more_changes(true);
+    assert_eq!(changes_resp.account_id.as_str(), "acc1");
+    assert_eq!(changes_resp.old_state.as_str(), "s1");
+    assert_eq!(changes_resp.new_state.as_str(), "s2");
+    assert_eq!(changes_resp.created.len(), 1);
+    assert_eq!(changes_resp.updated.len(), 2);
+    assert_eq!(changes_resp.destroyed.len(), 1);
+    assert!(changes_resp.has_more_changes);
+
+    let query_resp = QueryResponse::new("acc1", "qs1", ["i1", "i2"])
+        .with_total(100)
+        .with_limit(2)
+        .with_position(0)
+        .can_calculate_changes(true);
+    assert_eq!(query_resp.account_id.as_str(), "acc1");
+    assert_eq!(query_resp.query_state.as_str(), "qs1");
+    assert_eq!(query_resp.ids.len(), 2);
+    assert_eq!(query_resp.total, Some(100));
+    assert_eq!(query_resp.limit, Some(2));
+    assert_eq!(query_resp.position, 0);
+    assert!(query_resp.can_calculate_changes);
+
+    let query_changes_resp = QueryChangesResponse::new("acc1", "qs1", "qs2")
+        .with_added([AddedItem::new("i3", 2)])
+        .with_removed(["i1"])
+        .with_total(100);
+    assert_eq!(query_changes_resp.account_id.as_str(), "acc1");
+    assert_eq!(query_changes_resp.old_query_state.as_str(), "qs1");
+    assert_eq!(query_changes_resp.new_query_state.as_str(), "qs2");
+    assert_eq!(query_changes_resp.added.len(), 1);
+    assert_eq!(query_changes_resp.removed.len(), 1);
+    assert_eq!(query_changes_resp.total, Some(100));
+
+    let blob_copy_resp = BlobCopyResponse::new("acc_src", "acc_dst")
+        .with_copied(BTreeMap::from([("b1".into(), "b1_dst".into())]))
+        .with_not_copied(BTreeMap::from([("b2".into(), SetError::new("notFound"))]));
+    assert_eq!(blob_copy_resp.from_account_id.as_str(), "acc_src");
+    assert_eq!(blob_copy_resp.account_id.as_str(), "acc_dst");
+    assert_eq!(blob_copy_resp.copied.as_ref().unwrap().len(), 1);
+    assert_eq!(blob_copy_resp.not_copied.as_ref().unwrap().len(), 1);
+
+    let copy_resp = CopyResponse::<serde_json::Value>::new("acc_src", "acc_dst", "s2")
+        .with_old_state("s1")
+        .with_created(BTreeMap::from([(
+            "k1".to_string(),
+            serde_json::json!({"id": "new_1"}),
+        )]))
+        .with_not_created(BTreeMap::from([(
+            "k2".to_string(),
+            SetError::new("alreadyExists"),
+        )]));
+    assert_eq!(copy_resp.from_account_id.as_str(), "acc_src");
+    assert_eq!(copy_resp.account_id.as_str(), "acc_dst");
+    assert_eq!(copy_resp.old_state.as_ref().unwrap().as_str(), "s1");
+    assert_eq!(copy_resp.new_state.as_str(), "s2");
+    assert_eq!(copy_resp.created.as_ref().unwrap().len(), 1);
+    assert_eq!(copy_resp.not_created.as_ref().unwrap().len(), 1);
+
+    let req_err = RequestError::new(request::NOT_REQUEST)
+        .with_status(400)
+        .with_detail("The request was malformed JSON");
+    assert_eq!(req_err.error_type, request::NOT_REQUEST);
+    assert_eq!(req_err.status, Some(400));
+    assert_eq!(
+        req_err.detail.as_deref(),
+        Some("The request was malformed JSON")
+    );
+}
+
+#[test]
+fn session_account_core_capability_and_state_builders() {
+    use jmap_proto::session::{Account, CoreCapability, Session, WebSocketCapability};
+    use jmap_proto::{Id, State, UtcDate};
+
+    let s = State::new("state_123");
+    assert_eq!(s.as_ref(), "state_123");
+
+    let d_str: String = "2026-08-29T12:00:00Z".to_string();
+    let d: UtcDate = d_str.into();
+    assert_eq!(d.as_ref(), "2026-08-29T12:00:00Z");
+
+    let core_cap = CoreCapability::new()
+        .with_max_size_upload(10_000_000)
+        .with_max_concurrent_upload(5)
+        .with_max_size_request(20_000_000)
+        .with_max_concurrent_requests(10)
+        .with_max_calls_in_request(20)
+        .with_max_objects_in_get(500)
+        .with_max_objects_in_set(100)
+        .with_collation_algorithms(["i;ascii-casemap", "i;octet"]);
+
+    assert_eq!(core_cap.max_size_upload, 10_000_000);
+    assert_eq!(core_cap.max_concurrent_upload, 5);
+    assert_eq!(core_cap.max_size_request, 20_000_000);
+    assert_eq!(core_cap.max_concurrent_requests, 10);
+    assert_eq!(core_cap.max_calls_in_request, 20);
+    assert_eq!(core_cap.max_objects_in_get, 500);
+    assert_eq!(core_cap.max_objects_in_set, 100);
+    assert_eq!(core_cap.collation_algorithms.len(), 2);
+
+    let ws_cap = WebSocketCapability::new("wss://api.example.com/jmap/ws").supports_push(true);
+    assert_eq!(ws_cap.url, "wss://api.example.com/jmap/ws");
+    assert!(ws_cap.supports_push);
+
+    let acct = Account::new("Alice")
+        .is_personal(true)
+        .is_read_only(false)
+        .with_capability("urn:ietf:params:jmap:mail", serde_json::json!({}));
+    assert_eq!(acct.name, "Alice");
+    assert!(acct.is_personal);
+    assert!(!acct.is_read_only);
+    assert!(
+        acct.account_capabilities
+            .contains_key("urn:ietf:params:jmap:mail")
+    );
+
+    let session = Session::new(
+        "alice@example.com",
+        "https://api.example.com/jmap",
+        "https://api.example.com/download/{blobId}",
+        "https://api.example.com/upload",
+        "state_abc",
+    )
+    .with_event_source_url("https://api.example.com/events")
+    .with_capability(
+        "urn:ietf:params:jmap:core",
+        serde_json::to_value(&core_cap).unwrap(),
+    )
+    .with_capability("urn:ietf:params:jmap:mail", serde_json::json!({}))
+    .with_account("A1", acct)
+    .with_primary_account("urn:ietf:params:jmap:mail", "A1");
+
+    assert_eq!(session.username, "alice@example.com");
+    assert_eq!(session.api_url, "https://api.example.com/jmap");
+    assert_eq!(
+        session.download_url,
+        "https://api.example.com/download/{blobId}"
+    );
+    assert_eq!(session.upload_url, "https://api.example.com/upload");
+    assert_eq!(session.event_source_url, "https://api.example.com/events");
+    assert_eq!(session.state.as_str(), "state_abc");
+    assert_eq!(session.accounts.len(), 1);
+    assert_eq!(
+        session.resolve_primary_account("urn:ietf:params:jmap:mail"),
+        Some(&Id::new("A1"))
+    );
+}
+
+#[test]
+fn set_response_and_set_request_builders_and_roundtrip() {
+    use jmap_proto::error::SetError;
+    use jmap_proto::methods::{SetRequest, SetResponse};
+    use std::collections::BTreeMap;
+
+    let mut create_map = BTreeMap::new();
+    create_map.insert("c1".to_string(), serde_json::json!({"name": "Item 1"}));
+
+    let mut update_map = BTreeMap::new();
+    update_map.insert(Id::new("u1"), serde_json::json!({"name": "Item 2"}));
+
+    let req = SetRequest::<serde_json::Value>::new("A1")
+        .if_in_state("s_req")
+        .with_create(create_map)
+        .with_update(update_map)
+        .with_destroy(vec![Id::new("d1")]);
+
+    assert_eq!(req.account_id.as_str(), "A1");
+    assert_eq!(req.if_in_state.as_ref().unwrap().as_str(), "s_req");
+    assert!(req.create.as_ref().unwrap().contains_key("c1"));
+    assert!(req.update.as_ref().unwrap().contains_key(&Id::new("u1")));
+    assert_eq!(req.destroy.as_ref().unwrap(), &vec![Id::new("d1")]);
+
+    let req_val = serde_json::to_value(&req).unwrap();
+    assert_eq!(req_val["accountId"], "A1");
+    assert_eq!(req_val["ifInState"], "s_req");
+    assert_eq!(req_val["create"]["c1"]["name"], "Item 1");
+    assert_eq!(req_val["update"]["u1"]["name"], "Item 2");
+    assert_eq!(req_val["destroy"][0], "d1");
+
+    let mut created = BTreeMap::new();
+    created.insert("c1".to_string(), serde_json::json!({"id": "i1"}));
+
+    let mut updated = BTreeMap::new();
+    updated.insert(Id::new("u1"), Some(serde_json::json!({"id": "u1"})));
+
+    let mut not_created = BTreeMap::new();
+    not_created.insert("c2".to_string(), SetError::new("invalidProperties"));
+
+    let mut not_updated = BTreeMap::new();
+    not_updated.insert(Id::new("u2"), SetError::new("notFound"));
+
+    let mut not_destroyed = BTreeMap::new();
+    not_destroyed.insert(Id::new("d2"), SetError::new("forbidden"));
+
+    let resp = SetResponse::<serde_json::Value>::new("A1", "s_new")
+        .with_old_state("s_old")
+        .with_created(created)
+        .with_updated(updated)
+        .with_destroyed(vec![Id::new("d1")])
+        .with_not_created(not_created)
+        .with_not_updated(not_updated)
+        .with_not_destroyed(not_destroyed);
+
+    assert_eq!(resp.account_id.as_str(), "A1");
+    assert_eq!(resp.old_state.as_ref().unwrap().as_str(), "s_old");
+    assert_eq!(resp.new_state.as_str(), "s_new");
+    assert!(resp.created.as_ref().unwrap().contains_key("c1"));
+    assert!(resp.updated.as_ref().unwrap().contains_key(&Id::new("u1")));
+    assert_eq!(resp.destroyed.as_ref().unwrap(), &vec![Id::new("d1")]);
+    assert!(resp.not_created.as_ref().unwrap().contains_key("c2"));
+    assert!(
+        resp.not_updated
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::new("u2"))
+    );
+    assert!(
+        resp.not_destroyed
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::new("d2"))
+    );
+
+    let resp_val = serde_json::to_value(&resp).unwrap();
+    assert_eq!(resp_val["accountId"], "A1");
+    assert_eq!(resp_val["oldState"], "s_old");
+    assert_eq!(resp_val["newState"], "s_new");
+    assert_eq!(resp_val["created"]["c1"]["id"], "i1");
+    assert_eq!(resp_val["notCreated"]["c2"]["type"], "invalidProperties");
+
+    let round_resp: SetResponse<serde_json::Value> = serde_json::from_value(resp_val).unwrap();
+    assert_eq!(round_resp, resp);
+}
+
+#[test]
+fn query_request_position_builder() {
+    let req = QueryRequest::<serde_json::Value>::new("A1")
+        .position(42)
+        .limit(10);
+    assert_eq!(req.position, 42);
+    assert_eq!(req.limit, Some(10));
+    let json = serde_json::to_value(&req).unwrap();
+    assert_eq!(json["position"], 42);
+    assert_eq!(json["limit"], 10);
+}
+
+#[test]
+fn webpush_vapid_capability_roundtrip_and_session_accessor() {
+    use jmap_proto::push::WebPushVapidCapability;
+    use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_WEBPUSH_VAPID, Session};
+
+    let cap = WebPushVapidCapability::new("BC4n3xamplePublicVapidKeyInBase64UrlFormat")
+        .with_application_server_key("BC4n3xamplePublicVapidKeyInBase64UrlFormat_updated");
+    assert_eq!(
+        cap.application_server_key,
+        "BC4n3xamplePublicVapidKeyInBase64UrlFormat_updated"
+    );
+
+    let val = serde_json::to_value(&cap).unwrap();
+    assert_eq!(
+        val["applicationServerKey"],
+        "BC4n3xamplePublicVapidKeyInBase64UrlFormat_updated"
+    );
+
+    let deserialized: WebPushVapidCapability = serde_json::from_value(val).unwrap();
+    assert_eq!(deserialized, cap);
+
+    let session = Session::new(
+        "user@example.com",
+        "https://example.com/api",
+        "https://example.com/download",
+        "https://example.com/upload",
+        "state1",
+    )
+    .with_capability(
+        CAPABILITY_CORE,
+        serde_json::json!({
+            "maxSizeUpload": 50000000,
+            "maxConcurrentUpload": 4,
+            "maxSizeRequest": 10000000,
+            "maxConcurrentRequests": 8,
+            "maxCallsInRequest": 16,
+            "maxObjectsInGet": 500,
+            "maxObjectsInSet": 500,
+            "collationAlgorithms": ["i;ascii-casemap", "i;unicode-casemap"]
+        }),
+    )
+    .with_capability(
+        CAPABILITY_WEBPUSH_VAPID,
+        serde_json::json!({
+            "applicationServerKey": "BC4n3xamplePublicVapidKeyInBase64UrlFormat"
+        }),
+    );
+
+    let session_cap = session.webpush_vapid_capability().unwrap();
+    assert_eq!(
+        session_cap.application_server_key,
+        "BC4n3xamplePublicVapidKeyInBase64UrlFormat"
+    );
+}

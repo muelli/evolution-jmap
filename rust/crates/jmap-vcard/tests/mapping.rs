@@ -19,7 +19,7 @@ use jmap_vcard::{
     online_service_handle, online_service_uri, restore_address_components, restore_name_components,
     same_photo, same_service, states_a_point_in_time, states_address, states_address_component,
     states_anniversary, states_assistant, states_calendar, states_context, states_email,
-    states_file_as, states_keyword, states_link, states_manager, states_media,
+    states_file_as, states_keyword, states_link, states_manager, states_media, states_name,
     states_name_component, states_nickname, states_note, states_nothing_but_the_marriage,
     states_online_service, states_org_unit, states_organization, states_phone,
     states_phone_feature, states_spouse, states_title, title_kind, vcard_to_card,
@@ -4211,6 +4211,7 @@ fn maps_contact_with_unmodeled_office_and_organization_extra_safely() {
                 OrgUnit::new("Advanced Optics"),
             ]),
             extra: org_extra,
+            ..Organization::default()
         },
     );
 
@@ -4848,6 +4849,7 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
     let empty_with_sort_as = OrgUnit {
         name: "".to_owned(),
         extra: [("sortAs".to_owned(), json!("Alpha"))].into(),
+        ..OrgUnit::default()
     };
     assert!(!states_org_unit(&empty_with_sort_as));
 
@@ -4857,6 +4859,7 @@ fn org_unit_empty_name_characterization_and_unstated_predicate_fidelity() {
     let normal_with_sort_as = OrgUnit {
         name: "Engineering".to_owned(),
         extra: [("sortAs".to_owned(), json!("Eng"))].into(),
+        ..OrgUnit::default()
     };
     assert!(states_org_unit(&normal_with_sort_as));
 
@@ -4911,6 +4914,7 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
                         OrgUnit {
                             name: "".to_owned(),
                             extra: [("sortAs".to_owned(), json!("Secret"))].into(),
+                            ..OrgUnit::default()
                         },
                     ]),
                     ..Organization::default()
@@ -4941,6 +4945,7 @@ fn org_with_empty_name_units_and_sort_as_emission_and_roundtrip() {
                         OrgUnit {
                             name: "".to_owned(),
                             extra: [("sortAs".to_owned(), json!("OpticsSort"))].into(),
+                            ..OrgUnit::default()
                         },
                         OrgUnit::new("Optics"),
                         OrgUnit::new(""),
@@ -5028,10 +5033,25 @@ fn name_and_address_component_predicates_and_context_mapping_fidelity() {
         "unmapped_kind",
         "Alice"
     )));
-    assert!(!states_name_component(&NameComponent::new(
-        "unmapped_kind",
-        ""
-    )));
+    // states_name: checks if any mapped component, full name, or file-as is stated
+    assert!(states_name(&Name {
+        full: Some("Alice".to_string()),
+        ..Name::default()
+    }));
+    assert!(states_name(&Name {
+        components: Some(vec![NameComponent::new("given", "Alice")]),
+        ..Name::default()
+    }));
+    assert!(!states_name(&Name::default()));
+    assert!(!states_name(&Name {
+        full: Some("".to_string()),
+        components: Some(vec![]),
+        ..Name::default()
+    }));
+    assert!(!states_name(&Name {
+        components: Some(vec![NameComponent::new("unmapped_kind", "value")]),
+        ..Name::default()
+    }));
 
     // maps_context: covers "work" and "private"
     assert!(maps_context("work"));
@@ -6911,6 +6931,7 @@ fn address_pref_ordering_and_primary_selection_with_label_pairing() {
                         contexts: Some(json!({"home": true})),
                         full: None,
                         extra: extra_sec,
+                        ..Address::default()
                     },
                 ),
                 (
@@ -6920,6 +6941,7 @@ fn address_pref_ordering_and_primary_selection_with_label_pairing() {
                         contexts: Some(json!({"home": true})),
                         full: Some("Primary Allee 1\n10115 Berlin\nGermany".to_owned()),
                         extra: extra_pri,
+                        ..Address::default()
                     },
                 ),
                 (
@@ -6929,6 +6951,7 @@ fn address_pref_ordering_and_primary_selection_with_label_pairing() {
                         contexts: Some(json!({"work": true})),
                         full: None,
                         extra: BTreeMap::new(),
+                        ..Address::default()
                     },
                 ),
             ]
@@ -7053,6 +7076,7 @@ fn adr_all_seven_structured_components_roundtrip() {
         contexts: Some(json!({"work": true})),
         full: Some("Acme Corp\nPO Box 777\nSuite 400\nMountain View, CA 94043\nUSA".to_owned()),
         extra: BTreeMap::new(),
+        ..Address::default()
     };
 
     let card = one_address("a1", full_address);
@@ -7313,6 +7337,7 @@ fn multiple_addresses_with_mixed_labels_and_contexts_pairing() {
             contexts: Some(json!({"work": true})),
             full: Some("Work Label\n100 Work Way\nSeattle, WA".to_owned()),
             extra: BTreeMap::new(),
+            ..Address::default()
         },
     );
     addresses.insert(
@@ -7326,6 +7351,7 @@ fn multiple_addresses_with_mixed_labels_and_contexts_pairing() {
             contexts: Some(json!({"private": true})),
             full: Some("Home Label\n200 Home St\nHome Town, USA".to_owned()),
             extra: BTreeMap::new(),
+            ..Address::default()
         },
     );
     addresses.insert(
@@ -7335,6 +7361,7 @@ fn multiple_addresses_with_mixed_labels_and_contexts_pairing() {
             contexts: None,
             full: Some("Postal Delivery Only\nPO Box 9999\nRemote City".to_owned()),
             extra: BTreeMap::new(),
+            ..Address::default()
         },
     );
     addresses.insert(
@@ -7348,6 +7375,7 @@ fn multiple_addresses_with_mixed_labels_and_contexts_pairing() {
             contexts: None,
             full: None,
             extra: BTreeMap::new(),
+            ..Address::default()
         },
     );
 
@@ -7911,6 +7939,7 @@ fn jscontact_card_with_unmodeled_extra_properties_emission_and_fixed_point() {
                 Note {
                     note: "Modeled note".to_owned(),
                     extra: note_extra,
+                    ..Note::default()
                 },
             )]
             .into(),
@@ -8018,6 +8047,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
         Note {
             note: long_note_text.to_owned(),
             extra: BTreeMap::new(),
+            ..Note::default()
         },
     );
 
@@ -8034,6 +8064,7 @@ fn rfc2426_line_folding_and_unfolding_long_note_and_photo_roundtrip() {
             uri: photo_uri.clone(),
             media_type: Some("image/jpeg".to_owned()),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
 
@@ -8240,6 +8271,7 @@ fn rfc2426_line_folding_never_splits_multibyte_utf8_sequences() {
                 Note {
                     note: note_text.clone(),
                     extra: BTreeMap::new(),
+                    ..Note::default()
                 },
             );
 
@@ -8323,6 +8355,7 @@ fn rfc2426_line_folding_exact_boundary_lengths_around_75_octets() {
             Note {
                 note: value.clone(),
                 extra: BTreeMap::new(),
+                ..Note::default()
             },
         );
 
@@ -8381,6 +8414,7 @@ fn rfc2426_line_folding_with_escaped_delimiters_and_backslashes() {
         Note {
             note: long_note_with_escapes.clone(),
             extra: BTreeMap::new(),
+            ..Note::default()
         },
     );
 
@@ -8426,6 +8460,7 @@ fn rfc2426_value_escaping_note_with_all_four_special_characters_roundtrip() {
         Note {
             note: note_text.to_owned(),
             extra: BTreeMap::new(),
+            ..Note::default()
         },
     );
 
@@ -8485,6 +8520,7 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
                 OrgUnit::new("Unit with \\ backslash and \n newline"),
             ]),
             extra: BTreeMap::new(),
+            ..Organization::default()
         },
     );
 
@@ -8533,6 +8569,7 @@ fn rfc2426_value_escaping_comma_inside_org_unit_roundtrip() {
                 OrgUnit::new("Group\\Gamma\nAlpha"),
             ]),
             extra: BTreeMap::new(),
+            ..Organization::default()
         },
     );
     let nameless_card = ContactCard {
@@ -8581,7 +8618,7 @@ fn rfc2426_value_escaping_semicolon_inside_adr_component_roundtrip() {
                 "PO Box 123; Station B\nApt 4B, Room 12; Building C\n123 Main St; 2nd Floor, West Wing\nSan Francisco; Bay Area, California; Northern 94105; 94107\nUnited States; North America"
                     .to_owned(),
             ),
-            extra: BTreeMap::new(),
+            extra: BTreeMap::new(), ..Address::default()
         },
     );
 
@@ -8641,6 +8678,7 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
         Nickname {
             name: "Ali, Baba; Chief\\Boss\nLead".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
 
@@ -8651,6 +8689,7 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
             name: "Director, Architecture; Core \\ Systems\nLead".to_owned(),
             kind: Some("title".to_owned()),
             extra: BTreeMap::new(),
+            ..Title::default()
         },
     );
     titles.insert(
@@ -8659,6 +8698,7 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
             name: "Lead, Quality; Assurance \\ Test\nSpecialist".to_owned(),
             kind: Some("role".to_owned()),
             extra: BTreeMap::new(),
+            ..Title::default()
         },
     );
 
@@ -8701,6 +8741,7 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
             uri: "https://example.com/query?q=test;sort=desc,rank&filter=a\\b".to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
 
@@ -8721,6 +8762,7 @@ fn rfc2426_value_escaping_across_all_vcard_properties_roundtrip() {
                 NameComponent::new("credential", "III; Esq."),
             ]),
             extra: BTreeMap::new(),
+            ..Name::default()
         }),
         nicknames: Some(nicknames),
         titles: Some(titles),
@@ -8806,6 +8848,7 @@ fn rfc2426_value_escaping_no_double_escaping_multiroundtrip() {
         Note {
             note: complex_text.to_owned(),
             extra: BTreeMap::new(),
+            ..Note::default()
         },
     );
 
@@ -9336,6 +9379,7 @@ fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
         Nickname {
             name: "Vee".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
     let card = ContactCard {
@@ -9359,6 +9403,7 @@ fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
         Nickname {
             name: "Vee".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
     multi_nicks.insert(
@@ -9366,6 +9411,7 @@ fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
         Nickname {
             name: "Vera the Elder".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
     multi_nicks.insert(
@@ -9373,6 +9419,7 @@ fn nickname_single_and_multiple_entries_eds_slotting_and_roundtrip() {
         Nickname {
             name: "Chief Architect".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
     let multi_card = ContactCard {
@@ -9489,6 +9536,7 @@ fn nickname_special_characters_escaping_unicode_and_parameters() {
                 ("contexts".to_owned(), json!({"work": true})),
             ]
             .into(),
+            ..Nickname::default()
         },
     );
     nicks.insert(
@@ -9496,6 +9544,7 @@ fn nickname_special_characters_escaping_unicode_and_parameters() {
         Nickname {
             name: "たなかさん (田中)".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
     nicks.insert(
@@ -9503,6 +9552,7 @@ fn nickname_special_characters_escaping_unicode_and_parameters() {
         Nickname {
             name: "Саша (Александр)".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
     nicks.insert(
@@ -9510,6 +9560,7 @@ fn nickname_special_characters_escaping_unicode_and_parameters() {
         Nickname {
             name: "🌟 SuperStar 🦊".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
 
@@ -9553,11 +9604,13 @@ fn nickname_empty_absent_and_predicate_fidelity() {
     // Tests states_nickname predicate and empty/absent nickname handling:
     assert!(states_nickname(&Nickname {
         name: "Nick".into(),
-        extra: BTreeMap::new()
+        extra: BTreeMap::new(),
+        ..Nickname::default()
     }));
     assert!(!states_nickname(&Nickname {
         name: "".into(),
-        extra: BTreeMap::new()
+        extra: BTreeMap::new(),
+        ..Nickname::default()
     }));
 
     // Empty nicknames are not emitted
@@ -9567,6 +9620,7 @@ fn nickname_empty_absent_and_predicate_fidelity() {
         Nickname {
             name: "".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
     nicks.insert(
@@ -9574,6 +9628,7 @@ fn nickname_empty_absent_and_predicate_fidelity() {
         Nickname {
             name: "Valid Nick".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
     let card = ContactCard {
@@ -9614,6 +9669,7 @@ fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
             uri: "https://alice.example.com".to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
     links.insert(
@@ -9622,6 +9678,7 @@ fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
             uri: "https://work.example.org/alice".to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
     links.insert(
@@ -9630,6 +9687,7 @@ fn url_single_and_multiple_properties_eds_slotting_and_roundtrip() {
             uri: "https://github.com/alice".to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
 
@@ -9692,6 +9750,7 @@ fn url_kind_filtering_and_contact_uri_omission() {
             uri: "https://alice.example.com".to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
     links.insert(
@@ -9700,6 +9759,7 @@ fn url_kind_filtering_and_contact_uri_omission() {
             uri: "https://contact.example.com/form".to_owned(),
             kind: Some("contact".to_owned()),
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
     links.insert(
@@ -9708,6 +9768,7 @@ fn url_kind_filtering_and_contact_uri_omission() {
             uri: "https://alice.example.com/rss.xml".to_owned(),
             kind: Some("feed".to_owned()),
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
     links.insert(
@@ -9716,6 +9777,7 @@ fn url_kind_filtering_and_contact_uri_omission() {
             uri: "https://news.alice.example.com".to_owned(),
             kind: Some("news".to_owned()),
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
     links.insert(
@@ -9724,6 +9786,7 @@ fn url_kind_filtering_and_contact_uri_omission() {
             uri: "https://custom.example.com/profile".to_owned(),
             kind: Some("x-vendor-profile".to_owned()),
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
 
@@ -9807,6 +9870,7 @@ fn url_query_parameters_punctuation_and_encoding_fidelity() {
                 .to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
     links.insert(
@@ -9816,6 +9880,7 @@ fn url_query_parameters_punctuation_and_encoding_fidelity() {
                 .to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
     links.insert(
@@ -9824,6 +9889,7 @@ fn url_query_parameters_punctuation_and_encoding_fidelity() {
             uri: "http://[2001:db8::1]:8080/index.html?token=abc;def,ghi".to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
 
@@ -9860,22 +9926,26 @@ fn url_empty_absent_and_predicate_fidelity() {
     assert!(states_link(&Link {
         uri: "https://example.com".into(),
         kind: None,
-        extra: BTreeMap::new()
+        extra: BTreeMap::new(),
+        ..Link::default()
     }));
     assert!(!states_link(&Link {
         uri: "".into(),
         kind: None,
-        extra: BTreeMap::new()
+        extra: BTreeMap::new(),
+        ..Link::default()
     }));
     assert!(!states_link(&Link {
         uri: "https://example.com".into(),
         kind: Some("contact".into()),
-        extra: BTreeMap::new()
+        extra: BTreeMap::new(),
+        ..Link::default()
     }));
     assert!(!states_link(&Link {
         uri: "https://example.com".into(),
         kind: Some("other".into()),
-        extra: BTreeMap::new()
+        extra: BTreeMap::new(),
+        ..Link::default()
     }));
 
     // Empty links are not emitted
@@ -9886,6 +9956,7 @@ fn url_empty_absent_and_predicate_fidelity() {
             uri: "".to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
     links.insert(
@@ -9894,6 +9965,7 @@ fn url_empty_absent_and_predicate_fidelity() {
             uri: "https://valid.example.com".to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
     let card = ContactCard {
@@ -9932,6 +10004,7 @@ fn url_empty_absent_and_predicate_fidelity() {
                 ("mediaType".to_owned(), json!("text/html")),
             ]
             .into(),
+            ..Link::default()
         },
     );
     let rich_card = ContactCard {
@@ -9959,6 +10032,7 @@ fn url_and_calendar_properties_coexistence_and_slotting() {
             uri: "https://alice.example.com".to_owned(),
             kind: None,
             extra: BTreeMap::new(),
+            ..Link::default()
         },
     );
 
@@ -9969,6 +10043,7 @@ fn url_and_calendar_properties_coexistence_and_slotting() {
             uri: "https://cal.example.com/alice.ics".to_owned(),
             kind: Some("calendar".to_owned()),
             extra: BTreeMap::new(),
+            ..Calendar::default()
         },
     );
     cals.insert(
@@ -9977,6 +10052,7 @@ fn url_and_calendar_properties_coexistence_and_slotting() {
             uri: "https://cal.example.com/fb/alice.ifb".to_owned(),
             kind: Some("freeBusy".to_owned()),
             extra: BTreeMap::new(),
+            ..Calendar::default()
         },
     );
 
@@ -10187,6 +10263,7 @@ fn non_ascii_multilingual_names_and_components_roundtrip() {
                 full: Some(full_name.to_owned()),
                 components: (!components.is_empty()).then_some(components),
                 extra: BTreeMap::new(),
+                ..Name::default()
             }),
             ..ContactCard::default()
         };
@@ -10250,6 +10327,7 @@ fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
                 OrgUnit::new("Équipe Cryptographie"),
             ]),
             extra: BTreeMap::new(),
+            ..Organization::default()
         },
     );
     orgs.insert(
@@ -10261,6 +10339,7 @@ fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
                 OrgUnit::new("Группа поисковых технологий"),
             ]),
             extra: BTreeMap::new(),
+            ..Organization::default()
         },
     );
 
@@ -10271,6 +10350,7 @@ fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
             name: "Directeur Général Adjoint".to_owned(),
             kind: Some("title".to_owned()),
             extra: BTreeMap::new(),
+            ..Title::default()
         },
     );
     titles.insert(
@@ -10279,6 +10359,7 @@ fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
             name: "Главный архитектор систем".to_owned(),
             kind: Some("role".to_owned()),
             extra: BTreeMap::new(),
+            ..Title::default()
         },
     );
     titles.insert(
@@ -10287,6 +10368,7 @@ fn non_ascii_multilingual_organization_title_and_role_roundtrip() {
             name: "開発最高責任者".to_owned(),
             kind: Some("title".to_owned()),
             extra: BTreeMap::new(),
+            ..Title::default()
         },
     );
 
@@ -10361,6 +10443,7 @@ fn non_ascii_structured_addresses_and_labels_roundtrip() {
             ),
             contexts: Some(json!({"work": true})),
             extra: BTreeMap::new(),
+            ..Address::default()
         },
     );
     // German address with umlauts and eszett
@@ -10378,6 +10461,7 @@ fn non_ascii_structured_addresses_and_labels_roundtrip() {
             full: Some("Goethestraße 42\n80336 München\nDeutschland".to_owned()),
             contexts: Some(json!({"home": true})),
             extra: BTreeMap::new(),
+            ..Address::default()
         },
     );
     // Japanese address with Kanji
@@ -10393,6 +10477,7 @@ fn non_ascii_structured_addresses_and_labels_roundtrip() {
             full: Some("〒100-8111 東京都千代田区千代田1-1\n日本".to_owned()),
             contexts: None,
             extra: BTreeMap::new(),
+            ..Address::default()
         },
     );
 
@@ -10476,7 +10561,7 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
         "n1".to_owned(),
         Note {
             note: "München ist eine wunderschöne Stadt mit vielen Parks und Museen.\nRené & Hélène apprécient beaucoup la gastronomie française: café, croissants, crème brûlée.\n∀x ∈ ℝ: x² ≥ 0 (math symbols test 🧑‍💻🚀🌟)".to_owned(),
-            extra: BTreeMap::new(),
+            extra: BTreeMap::new(), ..Note::default()
         },
     );
 
@@ -10486,6 +10571,7 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
         Nickname {
             name: "Schätzchen".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
     nicknames.insert(
@@ -10493,6 +10579,7 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
         Nickname {
             name: "Маша (Мария)".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
     nicknames.insert(
@@ -10500,6 +10587,7 @@ fn non_ascii_notes_nicknames_categories_and_spouse_roundtrip() {
         Nickname {
             name: "たなか (田中)".to_owned(),
             extra: BTreeMap::new(),
+            ..Nickname::default()
         },
     );
 
@@ -11072,48 +11160,56 @@ fn photo_eds_photo_field_replacements_and_same_photo_equality() {
         uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
         media_type: Some("image/jpeg".to_owned()),
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     let inline_jpeg_caps = Media {
         kind: Some("photo".to_owned()),
         uri: format!("data:image/JPEG;base64,{PAYLOAD}"),
         media_type: Some("image/JPEG".to_owned()),
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     let inline_jpeg_unpadded = Media {
         kind: Some("photo".to_owned()),
         uri: format!("data:image/jpeg;base64,{}", PAYLOAD.trim_end_matches('=')),
         media_type: Some("image/jpeg".to_owned()),
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     let inline_png = Media {
         kind: Some("photo".to_owned()),
         uri: format!("data:image/png;base64,{PAYLOAD}"),
         media_type: Some("image/png".to_owned()),
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     let inline_diff_payload = Media {
         kind: Some("photo".to_owned()),
         uri: "data:image/jpeg;base64,AQIDBA==".to_owned(),
         media_type: Some("image/jpeg".to_owned()),
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     let uri_photo1 = Media {
         kind: Some("photo".to_owned()),
         uri: "https://example.com/alice.jpg".to_owned(),
         media_type: None,
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     let uri_photo2 = Media {
         kind: Some("photo".to_owned()),
         uri: "https://example.com/bob.jpg".to_owned(),
         media_type: None,
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     let non_photo = Media {
         kind: Some("logo".to_owned()),
         uri: "https://example.com/logo.png".to_owned(),
         media_type: None,
         extra: BTreeMap::new(),
+        ..Media::default()
     };
 
     // Inline comparisons
@@ -11185,6 +11281,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
             uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
             media_type: Some("image/jpeg".to_owned()),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
     media_map.insert(
@@ -11194,6 +11291,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
             uri: "https://example.com/profile-large.jpg".to_owned(),
             media_type: None,
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
     media_map.insert(
@@ -11203,6 +11301,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
             uri: "data:image/png;base64,AQIDBA==".to_owned(),
             media_type: Some("image/png".to_owned()),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
 
@@ -11258,6 +11357,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
             uri: format!("data:image/jpeg;base64,{PAYLOAD}"),
             media_type: Some("image/jpeg".to_owned()),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
     mixed_media.insert(
@@ -11267,6 +11367,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
             uri: "https://example.com/corp-logo.png".to_owned(),
             media_type: Some("image/png".to_owned()),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
     mixed_media.insert(
@@ -11276,6 +11377,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
             uri: "https://example.com/pronunciation.ogg".to_owned(),
             media_type: Some("audio/ogg".to_owned()),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
     mixed_media.insert(
@@ -11285,6 +11387,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
             uri: "https://example.com/resume.pdf".to_owned(),
             media_type: Some("application/pdf".to_owned()),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
     mixed_media.insert(
@@ -11294,6 +11397,7 @@ fn photo_multiple_coexisting_entries_and_non_photo_media_filtering() {
             uri: "https://example.com/unknown.dat".to_owned(),
             media_type: None,
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
 
@@ -11828,6 +11932,7 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
             media_type: Some("image/jpeg".to_owned()),
             uri: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned(),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
     media.insert(
@@ -11837,6 +11942,7 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
             media_type: Some("image/png".to_owned()),
             uri: "https://example.com/company_logo.png".to_owned(),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
     media.insert(
@@ -11846,6 +11952,7 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
             media_type: Some("audio/wav".to_owned()),
             uri: "data:audio/wav;base64,UklGRg==".to_owned(),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
     media.insert(
@@ -11855,6 +11962,7 @@ fn jscontact_sound_and_logo_media_entries_server_preservation() {
             media_type: Some("application/pdf".to_owned()),
             uri: "https://example.com/resume.pdf".to_owned(),
             extra: BTreeMap::new(),
+            ..Media::default()
         },
     );
 
@@ -12585,36 +12693,43 @@ fn evolution_remaining_x_properties_coexistence_and_predicates() {
         uri: "https://example.com".to_string(),
         kind: None,
         extra: BTreeMap::new(),
+        ..Link::default()
     }));
     assert!(states_link(&Link {
         uri: "https://blogs.example.com".to_string(),
         kind: Some("blog".to_string()),
         extra: BTreeMap::new(),
+        ..Link::default()
     }));
     assert!(states_link(&Link {
         uri: "https://video.example.com".to_string(),
         kind: Some("video".to_string()),
         extra: BTreeMap::new(),
+        ..Link::default()
     }));
     assert!(!states_link(&Link {
         uri: "".to_string(),
         kind: None,
         extra: BTreeMap::new(),
+        ..Link::default()
     }));
     assert!(!states_link(&Link {
         uri: "".to_string(),
         kind: Some("blog".to_string()),
         extra: BTreeMap::new(),
+        ..Link::default()
     }));
     assert!(!states_link(&Link {
         uri: "https://example.com/contact".to_string(),
         kind: Some("contact".to_string()),
         extra: BTreeMap::new(),
+        ..Link::default()
     }));
     assert!(!states_link(&Link {
         uri: "https://example.com/rss".to_string(),
         kind: Some("feed".to_string()),
         extra: BTreeMap::new(),
+        ..Link::default()
     }));
 }
 
@@ -12943,6 +13058,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
                         contexts: Some(json!({"work": true})),
                         full: Some("Hauptstraße 1\n10115 Berlin\nGermany".to_owned()),
                         extra: extra_work,
+                        ..Address::default()
                     },
                 ),
                 (
@@ -12957,6 +13073,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
                         contexts: Some(json!({"private": true})),
                         full: Some("Heimweg 2\n80331 München\nGermany".to_owned()),
                         extra: BTreeMap::new(),
+                        ..Address::default()
                     },
                 ),
                 (
@@ -12971,6 +13088,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
                         contexts: None,
                         full: Some("Postfach 42\n20095 Hamburg\nGermany".to_owned()),
                         extra: BTreeMap::new(),
+                        ..Address::default()
                     },
                 ),
             ]
@@ -13057,6 +13175,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
                         contexts: Some(json!({"work": true})),
                         full: Some("Work Label Only\nBerlin".to_owned()),
                         extra: BTreeMap::new(),
+                        ..Address::default()
                     },
                 ),
                 (
@@ -13066,6 +13185,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
                         contexts: Some(json!({"private": true})),
                         full: Some("Home Label Only\nMünchen".to_owned()),
                         extra: BTreeMap::new(),
+                        ..Address::default()
                     },
                 ),
                 (
@@ -13075,6 +13195,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
                         contexts: None,
                         full: Some("Other Label Only\nHamburg".to_owned()),
                         extra: BTreeMap::new(),
+                        ..Address::default()
                     },
                 ),
             ]
@@ -13114,6 +13235,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
                         contexts: Some(json!({"work": true})),
                         full: Some("Work Street 10\nBerlin".to_owned()),
                         extra: BTreeMap::new(),
+                        ..Address::default()
                     },
                 ),
                 (
@@ -13123,6 +13245,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
                         contexts: Some(json!({"private": true})),
                         full: Some("Home Label Only\nCologne".to_owned()),
                         extra: BTreeMap::new(),
+                        ..Address::default()
                     },
                 ),
                 (
@@ -13132,6 +13255,7 @@ fn address_three_label_slots_work_home_other_and_adr_pairing_matrix() {
                         contexts: None,
                         full: None,
                         extra: BTreeMap::new(),
+                        ..Address::default()
                     },
                 ),
             ]
@@ -13216,6 +13340,7 @@ fn email_and_address_label_edge_cases_and_parameter_permutations() {
                         "Acme Corp, Suite 400\\nDept; Ops\\nSan Francisco, CA\\nUSA".to_owned(),
                     ),
                     extra: BTreeMap::new(),
+                    ..Address::default()
                 },
             )]
             .into_iter()
@@ -14242,6 +14367,7 @@ fn name_with_empty_full_string_and_components_reaches_fixed_point() {
             }]),
             full: Some("".to_string()),
             extra: BTreeMap::new(),
+            ..Name::default()
         }),
         ..Default::default()
     };
@@ -14401,6 +14527,7 @@ fn file_as_and_sort_string_coexistence_without_clobbering() {
             full: Some("Albert Einstein".to_string()),
             components: None,
             extra,
+            ..Name::default()
         }),
         ..Default::default()
     };
@@ -14455,6 +14582,7 @@ fn file_as_card_level_and_name_level_emission() {
                 m.insert("file_as".to_string(), json!("Doe, John (Name Extra)"));
                 m
             },
+            ..Name::default()
         }),
         ..Default::default()
     };
@@ -14487,6 +14615,7 @@ fn file_as_card_level_and_name_level_emission() {
                 m.insert("fileAs".to_string(), json!("   "));
                 m
             },
+            ..Name::default()
         }),
         ..Default::default()
     };
@@ -15001,6 +15130,7 @@ fn im_scheme_long_tail_aliases_and_canonical_uri_resolution() {
             uri: Some(uri.to_owned()),
             user: None,
             extra: BTreeMap::new(),
+            ..OnlineService::default()
         };
         assert_eq!(
             online_service_handle(&service_entry),
@@ -15044,6 +15174,7 @@ fn im_scheme_action_query_and_invalid_handle_rejection() {
             uri: Some(uri.to_owned()),
             user: None,
             extra: BTreeMap::new(),
+            ..OnlineService::default()
         };
         assert!(
             !states_online_service(&service_entry),
@@ -15272,19 +15403,21 @@ fn crypto_keys_and_logo_server_state_untouched_characterization() {
         kind: Some("photo".to_owned()),
         uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
         media_type: Some("image/png".to_owned()),
-        extra: BTreeMap::new(),
-    };
+        extra: BTreeMap::new(), ..Media::default()
+        };
     let logo = Media {
         kind: Some("logo".to_owned()),
         uri: "https://example.com/corp_logo.svg".to_owned(),
         media_type: Some("image/svg+xml".to_owned()),
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     let sound = Media {
         kind: Some("sound".to_owned()),
         uri: "https://example.com/pronunciation.ogg".to_owned(),
         media_type: Some("audio/ogg".to_owned()),
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     media.insert("m_photo".to_owned(), photo.clone());
     media.insert("m_logo".to_owned(), logo.clone());
@@ -15410,6 +15543,7 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
                 NameComponent::new("surname", "Doe"),
             ]),
             extra: name_extra,
+            ..Name::default()
         }),
         emails: Some(
             [(
@@ -15447,6 +15581,7 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
                     contexts: Some(json!({"work": true})),
                     full: Some("100 Industrial Pkwy, Springfield".into()),
                     extra: adr_extra,
+                    ..Address::default()
                 },
             )]
             .into(),
@@ -15458,6 +15593,7 @@ fn proptest_generator_sync_coverage_and_domain_invariants() {
                     uri: "https://portfolio.example.com".into(),
                     kind: Some("website".into()),
                     extra: link_extra,
+                    ..Link::default()
                 },
             )]
             .into(),
@@ -16510,18 +16646,21 @@ fn jscontact_agent_relations_and_sound_media_server_preservation() {
         uri: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_owned(),
         media_type: Some("image/jpeg".to_owned()),
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     let sound = Media {
         kind: Some("sound".to_owned()),
         uri: "https://example.com/pronounce.mp3".to_owned(),
         media_type: Some("audio/mpeg".to_owned()),
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     let logo = Media {
         kind: Some("logo".to_owned()),
         uri: "https://example.com/corp_logo.png".to_owned(),
         media_type: Some("image/png".to_owned()),
         extra: BTreeMap::new(),
+        ..Media::default()
     };
     media.insert("m_photo".to_owned(), photo.clone());
     media.insert("m_sound".to_owned(), sound.clone());
@@ -17907,9 +18046,11 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
                 NameComponent::new("given", "Test"),
                 NameComponent::new("surname", "SelfConsistency"),
             ]),
-            extra: name_extra,
+            extra: name_extra, ..Name::default()
         }),
-        nicknames: Some([("n1".to_string(), Nickname { name: "SelfTest".into(), extra: BTreeMap::new() })].into()),
+        nicknames: Some([("n1".to_string(), Nickname { name: "SelfTest".into(), extra: BTreeMap::new(),
+            ..Nickname::default()
+        })].into()),
         emails: Some([
             ("e1".to_string(), ContactEmail {
                 address: "selftest.work@example.com".into(),
@@ -17951,27 +18092,27 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
                 ]),
                 contexts: Some(json!({"work": true})),
                 full: Some("100 Innovation Way, Cambridge, MA 02139, USA".into()),
-                extra: BTreeMap::new(),
-            }),
+                extra: BTreeMap::new(), ..Address::default()
+        }),
         ].into()),
         organizations: Some([
             ("o1".to_string(), Organization {
                 name: Some("SelfConsistency Labs Inc.".into()),
                 units: Some(vec![OrgUnit::new("Core Engine"), OrgUnit::new("Protocols")]),
-                extra: BTreeMap::new(),
-            }),
+                extra: BTreeMap::new(), ..Organization::default()
+        }),
         ].into()),
         titles: Some([
             ("t1".to_string(), Title {
                 name: "Chief Architect".into(),
                 kind: Some("title".into()),
-                extra: BTreeMap::new(),
-            }),
+                extra: BTreeMap::new(), ..Title::default()
+        }),
             ("t2".to_string(), Title {
                 name: "Principal Investigator".into(),
                 kind: Some("role".into()),
-                extra: BTreeMap::new(),
-            }),
+                extra: BTreeMap::new(), ..Title::default()
+        }),
         ].into()),
         anniversaries: Some([
             ("bday".to_string(), Anniversary {
@@ -18004,32 +18145,32 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
                 service: Some("Jabber".into()),
                 user: Some("selftest@jabber.org".into()),
                 uri: None,
-                extra: BTreeMap::new(),
-            }),
+                extra: BTreeMap::new(), ..OnlineService::default()
+        }),
             ("s2".to_string(), OnlineService {
                 service: Some("Matrix".into()),
                 user: Some("selftest:matrix.org".into()),
                 uri: None,
-                extra: BTreeMap::new(),
-            }),
+                extra: BTreeMap::new(), ..OnlineService::default()
+        }),
         ].into()),
         links: Some([
             ("l1".to_string(), Link {
                 uri: "https://blog.selftest.example".into(),
                 kind: Some("blog".into()),
-                extra: BTreeMap::new(),
-            }),
+                extra: BTreeMap::new(), ..Link::default()
+        }),
             ("l2".to_string(), Link {
                 uri: "https://video.selftest.example/watch".into(),
                 kind: Some("video".into()),
-                extra: BTreeMap::new(),
-            }),
+                extra: BTreeMap::new(), ..Link::default()
+        }),
         ].into()),
         notes: Some([
             ("n1".to_string(), Note {
                 note: "Self-consistency verification note.\nLine 2 of multi-line note.".into(),
-                extra: BTreeMap::new(),
-            }),
+                extra: BTreeMap::new(), ..Note::default()
+        }),
         ].into()),
         keywords: Some([
             ("Testing".into(), json!(true)),
@@ -18041,8 +18182,8 @@ fn real_exporter_fixture_evolution_roundtrip_self_consistency() {
                 kind: Some("photo".into()),
                 uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".into(),
                 media_type: Some("image/png".into()),
-                extra: BTreeMap::new(),
-            }),
+                extra: BTreeMap::new(), ..Media::default()
+        }),
         ].into()),
         ..ContactCard::default()
     };
@@ -18395,6 +18536,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                 NameComponent::new("surname", "Sync"),
             ]),
             extra: name_extra,
+            ..Name::default()
         }),
         emails: Some(
             [(
@@ -18435,6 +18577,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                     contexts: Some(json!({"work": true})),
                     full: Some("500 Silicon Ave, Palo Alto, CA 94301, USA".into()),
                     extra: adr_extra,
+                    ..Address::default()
                 },
             )]
             .into(),
@@ -18448,6 +18591,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                         uri: "data:image/jpeg;base64,/9j/4AAQSkZJRg==".to_string(),
                         media_type: Some("image/jpeg".to_string()),
                         extra: BTreeMap::new(),
+                        ..Media::default()
                     },
                 ),
                 (
@@ -18457,6 +18601,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                         uri: "https://example.com/audio.ogg".to_string(),
                         media_type: Some("audio/ogg".to_string()),
                         extra: BTreeMap::new(),
+                        ..Media::default()
                     },
                 ),
                 (
@@ -18466,6 +18611,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                         uri: "https://example.com/logo.png".to_string(),
                         media_type: Some("image/png".to_string()),
                         extra: BTreeMap::new(),
+                        ..Media::default()
                     },
                 ),
             ]
@@ -18506,6 +18652,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                         user: Some("fuzz@jabber.org".to_string()),
                         uri: None,
                         extra: BTreeMap::new(),
+                        ..OnlineService::default()
                     },
                 ),
                 (
@@ -18515,6 +18662,7 @@ fn batch_6_item_4_generator_sync_and_domain_fixpoints_fidelity() {
                         user: Some("fuzz_skype".to_string()),
                         uri: None,
                         extra: BTreeMap::new(),
+                        ..OnlineService::default()
                     },
                 ),
             ]
@@ -18667,6 +18815,7 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
                         name: "Principal Optical Engineer".to_owned(),
                         kind: None, // default kind is "title"
                         extra: [("organizationId".to_string(), json!("o1"))].into(),
+                        ..Title::default()
                     },
                 ),
                 (
@@ -18675,6 +18824,7 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
                         name: "Senior Research Fellow".to_owned(),
                         kind: Some("title".to_owned()),
                         extra: [("organizationId".to_string(), json!("o2"))].into(),
+                        ..Title::default()
                     },
                 ),
                 (
@@ -18683,6 +18833,7 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
                         name: "Chief Architect & Science Lead".to_owned(),
                         kind: Some("role".to_owned()),
                         extra: [("organizationId".to_string(), json!("o1"))].into(),
+                        ..Title::default()
                     },
                 ),
                 (
@@ -18691,6 +18842,7 @@ fn multi_org_and_multi_title_and_role_with_organization_id_association_roundtrip
                         name: "Advisory Council Member".to_owned(),
                         kind: Some("role".to_owned()),
                         extra: [("organizationId".to_string(), json!("o2"))].into(),
+                        ..Title::default()
                     },
                 ),
             ]
@@ -20834,11 +20986,13 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
             components: Some(vec![NameComponent::new("given", "0")]),
             full: Some(String::new()),
             extra: BTreeMap::new(),
+            ..Name::default()
         },
         Name {
             components: Some(vec![NameComponent::new("given", "𞋀")]),
             full: Some(String::new()),
             extra: BTreeMap::new(),
+            ..Name::default()
         },
         Name {
             components: Some(vec![
@@ -20847,6 +21001,7 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
             ]),
             full: Some(String::new()),
             extra: BTreeMap::new(),
+            ..Name::default()
         },
         Name {
             components: Some(vec![
@@ -20858,6 +21013,7 @@ fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
             ]),
             full: Some(String::new()),
             extra: BTreeMap::new(),
+            ..Name::default()
         },
     ];
 
@@ -20935,4 +21091,627 @@ fn vcard_trailing_whitespace_roundtrip_multi_pass_convergence() {
     assert_eq!(vcard3, vcard4, "vCard pass 3 == pass 4");
     assert_eq!(card2, card3, "ContactCard pass 2 == pass 3");
     assert_eq!(card3, card4, "ContactCard pass 3 == pass 4");
+}
+
+#[test]
+fn empty_org_name_reads_as_absent_inbound_matrix() {
+    // 1. Inbound vCards where ORG has only empty components parse to organizations: None
+    let empty_org_vcards = [
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;;;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;;;;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG;X-JMAP-KEY=o1:\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG;X-JMAP-KEY=o1:;\r\nEND:VCARD\r\n",
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG;X-JMAP-KEY=o1:;;;\r\nEND:VCARD\r\n",
+    ];
+    for vcard in empty_org_vcards {
+        let card = vcard_to_card(vcard).expect("parse empty org vcard");
+        assert_eq!(
+            card.organizations, None,
+            "empty ORG components must yield organizations: None for {vcard}"
+        );
+    }
+
+    // 2. Inbound vCards with empty first component but non-empty units read name as None (absent)
+    let unit_only_vcards = [
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;Engineering\r\nEND:VCARD\r\n",
+            vec!["Engineering"],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;;Platform\r\nEND:VCARD\r\n",
+            vec!["Platform"],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;Engineering;Security\r\nEND:VCARD\r\n",
+            vec!["Engineering", "Security"],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:;;;Security;Ops\r\nEND:VCARD\r\n",
+            vec!["Security", "Ops"],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG;X-JMAP-KEY=o1:;Research;Optics;\r\nEND:VCARD\r\n",
+            vec!["Research", "Optics"],
+        ),
+    ];
+    for (vcard, expected_units) in unit_only_vcards {
+        let card = vcard_to_card(vcard).expect("parse unit-only org vcard");
+        let orgs = card.organizations.expect("organizations present");
+        let org = orgs.values().next().expect("single organization");
+        assert_eq!(
+            org.name, None,
+            "first empty component must read as name: None for {vcard}"
+        );
+        let units: Vec<&str> = org
+            .units
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|u| u.name.as_str())
+            .collect();
+        assert_eq!(units, expected_units, "units parsed correctly for {vcard}");
+    }
+
+    // 3. Inbound vCards with employer name and trailing empty components read name as Some and drop trailing empty units
+    let named_org_vcards: [(&str, &str, Vec<&str>); 5] = [
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp\r\nEND:VCARD\r\n",
+            "Acme Corp",
+            vec![],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp;\r\nEND:VCARD\r\n",
+            "Acme Corp",
+            vec![],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp;;;\r\nEND:VCARD\r\n",
+            "Acme Corp",
+            vec![],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp;Engineering;\r\nEND:VCARD\r\n",
+            "Acme Corp",
+            vec!["Engineering"],
+        ),
+        (
+            "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alice\r\nORG:Acme Corp;;Security;\r\nEND:VCARD\r\n",
+            "Acme Corp",
+            vec!["Security"],
+        ),
+    ];
+    for (vcard, expected_name, expected_units) in named_org_vcards {
+        let card = vcard_to_card(vcard).expect("parse named org vcard");
+        let orgs = card.organizations.expect("organizations present");
+        let org = orgs.values().next().expect("single organization");
+        assert_eq!(org.name.as_deref(), Some(expected_name));
+        let units: Vec<&str> = org
+            .units
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|u| u.name.as_str())
+            .collect();
+        assert_eq!(units, expected_units);
+    }
+}
+
+#[test]
+fn empty_org_name_outbound_emission_and_predicate_decision_matrix() {
+    // 1. Organization with name: None and no units states nothing and emits no ORG line
+    let org_none_no_units = Organization {
+        name: None,
+        units: None,
+        ..Default::default()
+    };
+    assert!(!states_organization(&org_none_no_units));
+
+    // 2. Organization with name: Some("") and no units states nothing and emits no ORG line
+    let org_empty_name_no_units = Organization {
+        name: Some(String::new()),
+        units: None,
+        ..Default::default()
+    };
+    assert!(!states_organization(&org_empty_name_no_units));
+
+    // 3. Organization with name: Some("") and only empty units states nothing and emits no ORG line
+    let org_empty_name_empty_units = Organization {
+        name: Some(String::new()),
+        units: Some(vec![OrgUnit::new(""), OrgUnit::new("")]),
+        ..Default::default()
+    };
+    assert!(!states_organization(&org_empty_name_empty_units));
+
+    // 4. ContactCard with empty-named org and no units emits no ORG property
+    let card_empty_org = ContactCard {
+        organizations: Some([("o1".to_owned(), org_empty_name_no_units.clone())].into()),
+        ..Default::default()
+    };
+    let vcard_empty_org = card_to_vcard(&card_empty_org);
+    assert!(
+        !vcard_empty_org.contains("ORG"),
+        "must emit no ORG line when org name is empty and no units exist"
+    );
+
+    // 5. ContactCard with employer name and no units emits single component (no empty trailing component)
+    let card_named_org = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme Corp".to_owned()),
+                    units: None,
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let vcard_named_org = card_to_vcard(&card_named_org);
+    assert_eq!(line(&vcard_named_org, "ORG"), "ORG;X-JMAP-KEY=o1:Acme Corp");
+
+    // 6. ContactCard with employer name and empty units emits employer name without empty unit components
+    let card_named_org_empty_units = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some("Acme Corp".to_owned()),
+                    units: Some(vec![OrgUnit::new(""), OrgUnit::new("")]),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let vcard_named_org_empty_units = card_to_vcard(&card_named_org_empty_units);
+    assert_eq!(
+        line(&vcard_named_org_empty_units, "ORG"),
+        "ORG;X-JMAP-KEY=o1:Acme Corp"
+    );
+
+    // 7. ContactCard with name: Some("") and valid units emits leading empty component to preserve slot
+    let card_empty_name_valid_units = ContactCard {
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some(String::new()),
+                    units: Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Security")]),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let vcard_empty_name_valid_units = card_to_vcard(&card_empty_name_valid_units);
+    assert_eq!(
+        line(&vcard_empty_name_valid_units, "ORG"),
+        "ORG;X-JMAP-KEY=o1:;Engineering;Security"
+    );
+}
+
+#[test]
+fn empty_org_name_normalisation_and_fixpoint_stability() {
+    // Starting with an organisation that explicitly sets name: Some("") and valid units
+    let initial_card = ContactCard {
+        name: Some(Name {
+            full: Some("Alice Smith".to_owned()),
+            ..Default::default()
+        }),
+        organizations: Some(
+            [(
+                "o1".to_owned(),
+                Organization {
+                    name: Some(String::new()),
+                    units: Some(vec![OrgUnit::new("Engineering"), OrgUnit::new("Platform")]),
+                    ..Default::default()
+                },
+            )]
+            .into(),
+        ),
+        ..Default::default()
+    };
+
+    // Pass 1: emit vCard and read back
+    let vcard1 = card_to_vcard(&initial_card);
+    assert_eq!(
+        line(&vcard1, "ORG"),
+        "ORG;X-JMAP-KEY=o1:;Engineering;Platform"
+    );
+
+    let card1 = vcard_to_card(&vcard1).expect("pass 1 parse");
+    let org1 = &card1.organizations.as_ref().unwrap()["o1"];
+    // Verifying normalization: empty name normalized to None (absent)
+    assert_eq!(
+        org1.name, None,
+        "empty org name must be normalized to None (absent)"
+    );
+    assert_eq!(
+        org1.units.as_deref(),
+        Some([OrgUnit::new("Engineering"), OrgUnit::new("Platform")].as_slice())
+    );
+
+    // Pass 2: re-emit and re-read
+    let vcard2 = card_to_vcard(&card1);
+    let card2 = vcard_to_card(&vcard2).expect("pass 2 parse");
+
+    // Pass 3: re-emit and re-read
+    let vcard3 = card_to_vcard(&card2);
+    let card3 = vcard_to_card(&vcard3).expect("pass 3 parse");
+
+    // Immediate byte-identical and structural fixed-point convergence
+    assert_eq!(vcard1, vcard2, "vCard pass 1 == pass 2");
+    assert_eq!(vcard2, vcard3, "vCard pass 2 == pass 3");
+    assert_eq!(card1, card2, "ContactCard pass 1 == pass 2");
+    assert_eq!(card2, card3, "ContactCard pass 2 == pass 3");
+}
+
+#[test]
+fn empty_org_name_multiple_organizations_matrix() {
+    let card = ContactCard {
+        name: Some(Name {
+            full: Some("Bob MultiOrg".to_owned()),
+            ..Default::default()
+        }),
+        organizations: Some(
+            [
+                (
+                    "o1".to_owned(),
+                    Organization {
+                        name: Some("Acme Corp".to_owned()),
+                        units: Some(vec![OrgUnit::new("Primary")]),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "o2".to_owned(),
+                    Organization {
+                        name: Some(String::new()),
+                        units: Some(vec![OrgUnit::new("Contracting")]),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "o3".to_owned(),
+                    Organization {
+                        name: None,
+                        units: Some(vec![OrgUnit::new("Advisory")]),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "o4".to_owned(),
+                    Organization {
+                        name: Some(String::new()),
+                        units: None,
+                        ..Default::default()
+                    },
+                ),
+            ]
+            .into(),
+        ),
+        ..Default::default()
+    };
+
+    let vcard = card_to_vcard(&card);
+    // o4 has no employer name and no units -> omitted
+    let org_lines: Vec<&str> = vcard.lines().filter(|l| l.starts_with("ORG")).collect();
+    assert_eq!(
+        org_lines.len(),
+        3,
+        "only o1, o2, o3 must be emitted; o4 must be omitted"
+    );
+    assert!(vcard.contains("ORG;X-JMAP-KEY=o1:Acme Corp;Primary"));
+    assert!(vcard.contains("ORG;X-JMAP-KEY=o2:;Contracting"));
+    assert!(vcard.contains("ORG;X-JMAP-KEY=o3:;Advisory"));
+    assert!(!vcard.contains("X-JMAP-KEY=o4"));
+
+    let back = vcard_to_card(&vcard).expect("parse multi-org vcard");
+    let orgs = back.organizations.expect("organizations present");
+    assert_eq!(orgs.len(), 3);
+    assert_eq!(orgs["o1"].name.as_deref(), Some("Acme Corp"));
+    assert_eq!(orgs["o2"].name, None);
+    assert_eq!(orgs["o3"].name, None);
+    assert!(!orgs.contains_key("o4"));
+}
+
+#[test]
+fn eds_360_wedding_anniversary_dual_emission_both_spellings() {
+    // MAINTAINER DECIDED 2026-08-28 (B'):
+    // Emit both X-EVOLUTION-ANNIVERSARY (read by EDS 3.52) and ANNIVERSARY
+    // (read by EDS 3.60+) for a wedding anniversary.
+    let card = one_anniversary(
+        "wedding",
+        json!({"@type": "PartialDate", "year": 1996, "month": 8, "day": 3}),
+    );
+
+    let vcard = card_to_vcard(&card);
+
+    // 1. Must emit both lines with the X-JMAP-KEY parameter
+    assert_eq!(
+        line(&vcard, "X-EVOLUTION-ANNIVERSARY"),
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03"
+    );
+    assert_eq!(
+        line(&vcard, "ANNIVERSARY"),
+        "ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03"
+    );
+
+    // 2. Inbound parse must deduplicate the dual representation into a single Anniversary
+    let parsed = vcard_to_card(&vcard).expect("parse dual-emitted anniversary");
+    let anniversaries = parsed.anniversaries.as_ref().expect("anniversaries");
+    assert_eq!(
+        anniversaries.len(),
+        1,
+        "dual emission must not create a duplicate anniversary entry"
+    );
+    assert_eq!(anniversaries["y1"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniversaries["y1"]),
+        Some("1996-08-03".to_owned())
+    );
+
+    // 3. Multi-stage fixed-point stability
+    let vcard2 = card_to_vcard(&parsed);
+    let parsed2 = vcard_to_card(&vcard2).expect("pass 2 parse");
+    let vcard3 = card_to_vcard(&parsed2);
+
+    assert_eq!(
+        vcard, vcard2,
+        "Pass 1 and Pass 2 vCards must be byte-identical fixed points"
+    );
+    assert_eq!(
+        vcard2, vcard3,
+        "Pass 2 and Pass 3 vCards must be byte-identical fixed points"
+    );
+    assert_eq!(
+        parsed, parsed2,
+        "Pass 1 and Pass 2 ContactCards must be structurally identical fixed points"
+    );
+}
+
+#[test]
+fn eds_360_wedding_anniversary_inbound_either_spelling_or_both_matrix() {
+    // 1. EDS 3.52 native input: only X-EVOLUTION-ANNIVERSARY
+    let vcard_352 = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Smith\r\n",
+        "X-EVOLUTION-ANNIVERSARY:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_352 = vcard_to_card(vcard_352).expect("parse EDS 3.52 native");
+    let anniv_352 = card_352.anniversaries.as_ref().expect("anniversaries 352");
+    assert_eq!(anniv_352.len(), 1);
+    assert_eq!(anniv_352["y1"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniv_352["y1"]),
+        Some("1996-08-03".to_owned())
+    );
+    let emitted_352 = card_to_vcard(&card_352);
+    assert!(emitted_352.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03\r\n"));
+    assert!(emitted_352.contains("ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03\r\n"));
+
+    // 2. EDS 3.60+ / standard vCard 4.0 native input: only ANNIVERSARY
+    let vcard_360 = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Smith\r\n",
+        "ANNIVERSARY:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_360 = vcard_to_card(vcard_360).expect("parse EDS 3.60 native");
+    let anniv_360 = card_360.anniversaries.as_ref().expect("anniversaries 360");
+    assert_eq!(anniv_360.len(), 1);
+    assert_eq!(anniv_360["y1"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniv_360["y1"]),
+        Some("1996-08-03".to_owned())
+    );
+    let emitted_360 = card_to_vcard(&card_360);
+    assert!(emitted_360.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03\r\n"));
+    assert!(emitted_360.contains("ANNIVERSARY;X-JMAP-KEY=y1:1996-08-03\r\n"));
+
+    // 3. Unkeyed dual input (both lines present without X-JMAP-KEY)
+    let vcard_both_unkeyed = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Smith\r\n",
+        "X-EVOLUTION-ANNIVERSARY:1996-08-03\r\n",
+        "ANNIVERSARY:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_both = vcard_to_card(vcard_both_unkeyed).expect("parse unkeyed dual");
+    let anniv_both = card_both
+        .anniversaries
+        .as_ref()
+        .expect("anniversaries both");
+    assert_eq!(
+        anniv_both.len(),
+        1,
+        "unkeyed dual lines must be deduplicated to 1 anniversary"
+    );
+    assert_eq!(anniv_both["y1"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniv_both["y1"]),
+        Some("1996-08-03".to_owned())
+    );
+
+    // 4. Reverse-order unkeyed dual input (ANNIVERSARY preceding X-EVOLUTION-ANNIVERSARY)
+    let vcard_reverse = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Smith\r\n",
+        "ANNIVERSARY:1996-08-03\r\n",
+        "X-EVOLUTION-ANNIVERSARY:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_rev = vcard_to_card(vcard_reverse).expect("parse reverse dual");
+    let anniv_rev = card_rev
+        .anniversaries
+        .as_ref()
+        .expect("anniversaries reverse");
+    assert_eq!(
+        anniv_rev.len(),
+        1,
+        "reverse dual lines must be deduplicated to 1 anniversary"
+    );
+    assert_eq!(anniv_rev["y1"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&anniv_rev["y1"]),
+        Some("1996-08-03".to_owned())
+    );
+
+    // 5. Coexistence with birthday (BDAY + dual wedding lines)
+    let vcard_bday_wedding = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Alice Smith\r\n",
+        "BDAY;X-JMAP-KEY=y1:1980-01-01\r\n",
+        "X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y2:1996-08-03\r\n",
+        "ANNIVERSARY;X-JMAP-KEY=y2:1996-08-03\r\n",
+        "END:VCARD\r\n"
+    );
+    let card_bday_wedding = vcard_to_card(vcard_bday_wedding).expect("parse bday + wedding");
+    let annivs = card_bday_wedding
+        .anniversaries
+        .as_ref()
+        .expect("anniversaries bday+wedding");
+    assert_eq!(
+        annivs.len(),
+        2,
+        "birthday and wedding anniversary must coexist as 2 entries"
+    );
+    assert_eq!(annivs["y1"].kind, "birth");
+    assert_eq!(
+        anniversary_date(&annivs["y1"]),
+        Some("1980-01-01".to_owned())
+    );
+    assert_eq!(annivs["y2"].kind, "wedding");
+    assert_eq!(
+        anniversary_date(&annivs["y2"]),
+        Some("1996-08-03".to_owned())
+    );
+
+    let emitted_bday_wedding = card_to_vcard(&card_bday_wedding);
+    assert!(emitted_bday_wedding.contains("BDAY;X-JMAP-KEY=y1:1980-01-01\r\n"));
+    assert!(emitted_bday_wedding.contains("X-EVOLUTION-ANNIVERSARY;X-JMAP-KEY=y2:1996-08-03\r\n"));
+    assert!(emitted_bday_wedding.contains("ANNIVERSARY;X-JMAP-KEY=y2:1996-08-03\r\n"));
+}
+
+#[test]
+fn eds_360_chat_handles_and_sort_order_measured_non_issue_characterization() {
+    // MAINTAINER DECIDED 2026-08-28 (B'):
+    // 1. Chat handles: we only ever emit and read the X-JABBER-style text lines;
+    //    nothing touches E_CONTACT_IM_* field ids. Which internal field EDS files
+    //    that line into (attribute list on 3.52, _HOME_1 slot on 3.60) is EDS's own
+    //    business and never reaches our mapping.
+    let im_vcard = concat!(
+        "BEGIN:VCARD\r\nVERSION:3.0\r\n",
+        "FN:Test User\r\n",
+        "X-AIM;X-JMAP-KEY=s1;TYPE=HOME:test_aim\r\n",
+        "X-GADUGADU;X-JMAP-KEY=s2;TYPE=WORK:123456\r\n",
+        "X-GOOGLE-TALK;X-JMAP-KEY=s3;TYPE=WORK:test@gmail.com\r\n",
+        "X-GROUPWISE;X-JMAP-KEY=s4;TYPE=WORK:test_gw\r\n",
+        "X-ICQ;X-JMAP-KEY=s5;TYPE=HOME:654321\r\n",
+        "X-JABBER;X-JMAP-KEY=s6;TYPE=HOME:test@jabber.org\r\n",
+        "X-MSN;X-JMAP-KEY=s7;TYPE=HOME:test@msn.com\r\n",
+        "X-MATRIX;X-JMAP-KEY=s8;TYPE=WORK:@test:matrix.org\r\n",
+        "X-SKYPE;X-JMAP-KEY=s9;TYPE=WORK:test_skype\r\n",
+        "X-YAHOO;X-JMAP-KEY=s10;TYPE=HOME:test_yahoo\r\n",
+        "END:VCARD\r\n"
+    );
+    let card = vcard_to_card(im_vcard).expect("parse IM vcard");
+    let services = card.online_services.as_ref().expect("online_services");
+    assert_eq!(services.len(), 10);
+    let emitted = card_to_vcard(&card);
+    for line in [
+        "X-AIM;X-JMAP-KEY=s1;TYPE=HOME:test_aim\r\n",
+        "X-GADUGADU;X-JMAP-KEY=s2;TYPE=HOME:123456\r\n",
+        "X-GOOGLE-TALK;X-JMAP-KEY=s3;TYPE=HOME:test@gmail.com\r\n",
+        "X-GROUPWISE;X-JMAP-KEY=s4;TYPE=HOME:test_gw\r\n",
+        "X-ICQ;X-JMAP-KEY=s5;TYPE=HOME:654321\r\n",
+        "X-JABBER;X-JMAP-KEY=s6;TYPE=HOME:test@jabber.org\r\n",
+        "X-MSN;X-JMAP-KEY=s7;TYPE=HOME:test@msn.com\r\n",
+        "X-MATRIX;X-JMAP-KEY=s8;TYPE=HOME:@test:matrix.org\r\n",
+        "X-SKYPE;X-JMAP-KEY=s9;TYPE=HOME:test_skype\r\n",
+        "X-YAHOO;X-JMAP-KEY=s10;TYPE=HOME:test_yahoo\r\n",
+    ] {
+        assert!(emitted.contains(line), "emitted must contain {line}");
+    }
+
+    // 2. E_CONTACT_NAME_OR_ORG sort order: EDS only derives it when FILE_AS is absent,
+    //    the derivation feeds Evolution's own list sorting, and we never read the field.
+    //    We write X-EVOLUTION-FILE-AS whenever the card states one, pre-empting derivation.
+    let card_with_file_as = ContactCard {
+        name: Some(Name {
+            full: Some("Albert Einstein".to_owned()),
+            extra: [("fileAs".to_owned(), json!("Einstein, Albert"))].into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let emitted_file_as = card_to_vcard(&card_with_file_as);
+    assert!(emitted_file_as.contains("X-EVOLUTION-FILE-AS:Einstein\\, Albert\r\n"));
+
+    let card_without_file_as = ContactCard {
+        name: Some(Name {
+            full: Some("Albert Einstein".to_owned()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let emitted_no_file_as = card_to_vcard(&card_without_file_as);
+    assert!(!emitted_no_file_as.contains("X-EVOLUTION-FILE-AS"));
+    assert!(emitted_no_file_as.contains("FN:Albert Einstein\r\n"));
+}
+
+#[test]
+fn photo_non_image_mediatype_and_data_uri_roundtrip_fixpoint_matrix() {
+    let cases = [
+        // 1. Non-image audio/ogg data URI with invalid VALUE parameter (minimal repro from backlog)
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=date:data:audio/ogg;base64,T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\nEND:VCARD\r\n",
+        // 2. Explicit non-image MEDIATYPE parameter with audio data URI
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;MEDIATYPE=audio/ogg:data:audio/ogg;base64,T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\nEND:VCARD\r\n",
+        // 3. Explicit non-image TYPE parameter on binary photo
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;TYPE=audio/ogg;ENCODING=b:T2dnUwACAAAAAAAAAABAAAABAAAAAKs1N1E=\r\nEND:VCARD\r\n",
+        // 4. Explicit non-image MEDIATYPE parameter on remote URI
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=uri;MEDIATYPE=audio/ogg:https://example.com/sound.ogg\r\nEND:VCARD\r\n",
+        // 5. Data URI with explicit VALUE=uri parameter
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=uri:data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==\r\nEND:VCARD\r\n",
+        // 6. Unknown type parameter
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;TYPE=UNKNOWN;ENCODING=b:AQIDBA==\r\nEND:VCARD\r\n",
+        // 7. Standard vCard 4.0 data URI
+        "BEGIN:VCARD\r\nVERSION:4.0\r\nPHOTO:data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAwA0JaQAA3AA/vuUAAA=\r\nEND:VCARD\r\n",
+        // 8. Remote URI with valid image MEDIATYPE
+        "BEGIN:VCARD\r\nVERSION:3.0\r\nPHOTO;VALUE=uri;MEDIATYPE=image/jpeg:https://example.com/photo.jpg\r\nEND:VCARD\r\n",
+    ];
+
+    for (idx, raw_vcard) in cases.iter().enumerate() {
+        let card1 = vcard_to_card(raw_vcard)
+            .unwrap_or_else(|e| panic!("case {idx} pass 1 parse failed: {e:?}"));
+        let vcard1 = card_to_vcard(&card1);
+        let card2 = vcard_to_card(&vcard1)
+            .unwrap_or_else(|e| panic!("case {idx} pass 2 parse failed: {e:?}"));
+        let vcard2 = card_to_vcard(&card2);
+        let card3 = vcard_to_card(&vcard2)
+            .unwrap_or_else(|e| panic!("case {idx} pass 3 parse failed: {e:?}"));
+
+        assert_eq!(
+            vcard1, vcard2,
+            "case {idx} vcard1 and vcard2 must reach fixed point"
+        );
+        assert_eq!(
+            card2, card3,
+            "case {idx} card2 and card3 must reach fixed point"
+        );
+        if idx < 7 {
+            assert_eq!(
+                card1, card2,
+                "case {idx} card1 and card2 must reach immediate fixed point"
+            );
+        }
+    }
 }
