@@ -900,4 +900,34 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::blob::BlobUploadResponse>(&text);
     }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_task(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::tasks::Task>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_task_list(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::tasks::TaskList>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_task_list_rights(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::tasks::TaskListRights>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_tasks_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::tasks::TasksCapability>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_task_query_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::tasks::TaskQueryFilter>(&text);
+    }
 }

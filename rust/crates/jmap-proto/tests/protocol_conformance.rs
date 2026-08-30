@@ -24,7 +24,10 @@ use jmap_proto::response::Response;
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
     CAPABILITY_MDN, CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION,
-    CAPABILITY_VACATION_RESPONSE, CAPABILITY_WEBSOCKET, Session,
+    CAPABILITY_TASKS, CAPABILITY_VACATION_RESPONSE, CAPABILITY_WEBSOCKET, Session,
+};
+use jmap_proto::tasks::{
+    Task, TaskList, TasksCapability, task_progress, task_set_error, task_status,
 };
 use serde_json::json;
 
@@ -155,7 +158,7 @@ fn session_forward_compatibility_with_unknown_capabilities_and_fields() {
 }
 
 #[test]
-fn session_quota_and_blob_capabilities_typed_accessors() {
+fn session_quota_blob_and_tasks_capabilities_typed_accessors() {
     let raw = json!({
         "capabilities": {
             "urn:ietf:params:jmap:core": {},
@@ -163,6 +166,11 @@ fn session_quota_and_blob_capabilities_typed_accessors() {
             "urn:ietf:params:jmap:blob": {
                 "maxSizeSource": 50000000,
                 "maxSizeTarget": 25000000
+            },
+            "urn:ietf:params:jmap:tasks": {
+                "maxTasksPerGet": 1000,
+                "maxTasksPerSet": 500,
+                "maxTaskListsPerGet": 100
             }
         },
         "accounts": {},
@@ -179,6 +187,10 @@ fn session_quota_and_blob_capabilities_typed_accessors() {
     let blob_cap = session.blob_capability().expect("has blob capability");
     assert_eq!(blob_cap.max_size_source, Some(50000000));
     assert_eq!(blob_cap.max_size_target, Some(25000000));
+    let tasks_cap: TasksCapability = session.tasks_capability().expect("has tasks capability");
+    assert_eq!(tasks_cap.max_tasks_per_get, Some(1000));
+    assert_eq!(tasks_cap.max_tasks_per_set, Some(500));
+    assert_eq!(tasks_cap.max_task_lists_per_get, Some(100));
 }
 
 #[test]
@@ -601,6 +613,61 @@ fn calendar_conformance_required_vs_optional_fields() {
 }
 
 // ===========================================================================
+// draft-ietf-jmap-tasks & RFC 8984: Task & TaskList Conformance
+// ===========================================================================
+
+#[test]
+fn task_forward_compatibility_with_unknown_statuses_and_properties() {
+    let payload = json!({
+        "@type": "Task",
+        "id": "task_future_1",
+        "taskListId": "tl_projects",
+        "uid": "uid-task-future-99",
+        "title": "Deploy neural routing engine",
+        "status": "in-review",
+        "progress": "blocked-on-dependency",
+        "percentComplete": 75,
+        "due": "2026-10-01T12:00:00Z",
+        "priority": 3,
+        "customAutomatedAgent": "Gemini-Agent-42",
+        "telemetryKey": "TM-889900"
+    });
+
+    let task: Task = serde_json::from_value(payload).expect("Task deserializes");
+    assert_eq!(task.id.as_ref().unwrap().as_str(), "task_future_1");
+    assert_eq!(task.task_list_id.as_ref().unwrap().as_str(), "tl_projects");
+    assert_eq!(task.uid, "uid-task-future-99");
+    assert_eq!(task.title.as_deref(), Some("Deploy neural routing engine"));
+    assert_eq!(task.status.as_deref(), Some("in-review"));
+    assert_eq!(task.progress.as_deref(), Some("blocked-on-dependency"));
+    assert_eq!(task.percent_complete, Some(75));
+
+    // Custom extension properties ride in extra
+    assert_eq!(task.extra["customAutomatedAgent"], "Gemini-Agent-42");
+    assert_eq!(task.extra["telemetryKey"], "TM-889900");
+}
+
+#[test]
+fn task_list_conformance_required_vs_optional_fields() {
+    let minimal_list = json!({
+        "id": "tl_work",
+        "name": "Work Tasks"
+    });
+
+    let list: TaskList = serde_json::from_value(minimal_list).expect("minimal TaskList");
+    assert_eq!(list.id.as_ref().unwrap().as_str(), "tl_work");
+    assert_eq!(list.name, "Work Tasks");
+    assert!(list.color.is_none());
+    assert!(list.sort_order.is_none());
+    assert!(list.is_default.is_none());
+    assert!(list.is_subscribed.is_none());
+    assert!(list.share_with.is_none());
+    assert!(list.my_rights.is_none());
+    assert!(list.may_delete.is_none());
+    assert!(list.extra.is_empty());
+}
+
+// ===========================================================================
 // RFC 9670: Principals & Sharing Conformance
 // ===========================================================================
 
@@ -677,6 +744,7 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
     assert_eq!(CAPABILITY_WEBSOCKET, "urn:ietf:params:jmap:websocket");
     assert_eq!(CAPABILITY_QUOTA, "urn:ietf:params:jmap:quota");
     assert_eq!(CAPABILITY_BLOB, "urn:ietf:params:jmap:blob");
+    assert_eq!(CAPABILITY_TASKS, "urn:ietf:params:jmap:tasks");
 
     // Mailbox roles (RFC 8621 §2 / RFC 8457)
     assert_eq!(role::INBOX, "inbox");
@@ -701,6 +769,24 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
     assert_eq!(event_status::CONFIRMED, "confirmed");
     assert_eq!(event_status::TENTATIVE, "tentative");
     assert_eq!(event_status::CANCELLED, "cancelled");
+
+    // Task statuses (RFC 8984 §5.1, draft-ietf-jmap-tasks §4.1)
+    assert_eq!(task_status::NEEDS_ACTION, "needs-action");
+    assert_eq!(task_status::COMPLETED, "completed");
+    assert_eq!(task_status::IN_PROCESS, "in-process");
+    assert_eq!(task_status::CANCELLED, "cancelled");
+    assert_eq!(task_status::FAILED, "failed");
+
+    // Task progress (RFC 8984 §5.1)
+    assert_eq!(task_progress::NEEDS_ACTION, "needs-action");
+    assert_eq!(task_progress::COMPLETED, "completed");
+    assert_eq!(task_progress::IN_PROCESS, "in-process");
+    assert_eq!(task_progress::FAILED, "failed");
+    assert_eq!(task_progress::CANCELLED, "cancelled");
+
+    // Task set errors (draft-ietf-jmap-tasks §4.3)
+    assert_eq!(task_set_error::TOO_MANY_RECURRENCES, "tooManyRecurrences");
+    assert_eq!(task_set_error::TASK_LIST_NOT_FOUND, "taskListNotFound");
 
     // Calendar free/busy (RFC 8984 §4.1.2)
     assert_eq!(free_busy_status::FREE, "free");
