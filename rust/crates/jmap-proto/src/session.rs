@@ -25,6 +25,7 @@ pub const CAPABILITY_WEBSOCKET: &str = "urn:ietf:params:jmap:websocket";
 pub const CAPABILITY_QUOTA: &str = "urn:ietf:params:jmap:quota";
 pub const CAPABILITY_BLOB: &str = "urn:ietf:params:jmap:blob";
 pub const CAPABILITY_TASKS: &str = "urn:ietf:params:jmap:tasks";
+pub const CAPABILITY_SIEVE: &str = "urn:ietf:params:jmap:sieve";
 
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -321,6 +322,12 @@ impl Session {
     #[cfg(feature = "calendars")]
     pub fn tasks_capability(&self) -> Option<crate::tasks::TasksCapability> {
         let val = self.capabilities.get(CAPABILITY_TASKS)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed sieve capability struct, if present (RFC 9265 §1.1).
+    pub fn sieve_capability(&self) -> Option<crate::sieve::SieveCapability> {
+        let val = self.capabilities.get(CAPABILITY_SIEVE)?;
         serde_json::from_value(val.clone()).ok()
     }
 }

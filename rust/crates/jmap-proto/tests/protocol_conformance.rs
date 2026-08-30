@@ -23,8 +23,12 @@ use jmap_proto::request::Request;
 use jmap_proto::response::Response;
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
-    CAPABILITY_MDN, CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION,
-    CAPABILITY_TASKS, CAPABILITY_VACATION_RESPONSE, CAPABILITY_WEBSOCKET, Session,
+    CAPABILITY_MDN, CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SIEVE,
+    CAPABILITY_SUBMISSION, CAPABILITY_TASKS, CAPABILITY_VACATION_RESPONSE, CAPABILITY_WEBSOCKET,
+    Session,
+};
+use jmap_proto::sieve::{
+    SieveCapability, SieveScript, SieveScriptValidateResponse, sieve_set_error,
 };
 use jmap_proto::tasks::{
     Task, TaskList, TasksCapability, task_progress, task_set_error, task_status,
@@ -158,7 +162,7 @@ fn session_forward_compatibility_with_unknown_capabilities_and_fields() {
 }
 
 #[test]
-fn session_quota_blob_and_tasks_capabilities_typed_accessors() {
+fn session_quota_blob_tasks_and_sieve_capabilities_typed_accessors() {
     let raw = json!({
         "capabilities": {
             "urn:ietf:params:jmap:core": {},
@@ -171,6 +175,12 @@ fn session_quota_blob_and_tasks_capabilities_typed_accessors() {
                 "maxTasksPerGet": 1000,
                 "maxTasksPerSet": 500,
                 "maxTaskListsPerGet": 100
+            },
+            "urn:ietf:params:jmap:sieve": {
+                "maxSizeScript": 65536,
+                "maxNumberScripts": 20,
+                "implementation": "ManageSieve 2.0",
+                "sieveExtensions": ["fileinto", "reject"]
             }
         },
         "accounts": {},
@@ -191,6 +201,14 @@ fn session_quota_blob_and_tasks_capabilities_typed_accessors() {
     assert_eq!(tasks_cap.max_tasks_per_get, Some(1000));
     assert_eq!(tasks_cap.max_tasks_per_set, Some(500));
     assert_eq!(tasks_cap.max_task_lists_per_get, Some(100));
+    let sieve_cap: SieveCapability = session.sieve_capability().expect("has sieve capability");
+    assert_eq!(sieve_cap.max_size_script, 65536);
+    assert_eq!(sieve_cap.max_number_scripts, Some(20));
+    assert_eq!(sieve_cap.implementation.as_deref(), Some("ManageSieve 2.0"));
+    assert_eq!(
+        sieve_cap.sieve_extensions,
+        vec!["fileinto".to_string(), "reject".to_string()]
+    );
 }
 
 #[test]
@@ -745,6 +763,7 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
     assert_eq!(CAPABILITY_QUOTA, "urn:ietf:params:jmap:quota");
     assert_eq!(CAPABILITY_BLOB, "urn:ietf:params:jmap:blob");
     assert_eq!(CAPABILITY_TASKS, "urn:ietf:params:jmap:tasks");
+    assert_eq!(CAPABILITY_SIEVE, "urn:ietf:params:jmap:sieve");
 
     // Mailbox roles (RFC 8621 §2 / RFC 8457)
     assert_eq!(role::INBOX, "inbox");
@@ -788,6 +807,29 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
     assert_eq!(task_set_error::TOO_MANY_RECURRENCES, "tooManyRecurrences");
     assert_eq!(task_set_error::TASK_LIST_NOT_FOUND, "taskListNotFound");
 
+    // Sieve set errors (RFC 9265 §2.3.2)
+    assert_eq!(
+        sieve_set_error::CANNOT_DELETE_ACTIVE_SCRIPT,
+        "cannotDeleteActiveScript"
+    );
+    assert_eq!(
+        sieve_set_error::DUPLICATE_SCRIPT_NAME,
+        "duplicateScriptName"
+    );
+    assert_eq!(sieve_set_error::INVALID_SIEVE, "invalidSieve");
+    assert_eq!(
+        sieve_set_error::MAX_NUMBER_SCRIPTS_EXCEEDED,
+        "maxNumberScriptsExceeded"
+    );
+    assert_eq!(
+        sieve_set_error::MAX_SIZE_SCRIPT_EXCEEDED,
+        "maxSizeScriptExceeded"
+    );
+    assert_eq!(
+        sieve_set_error::MULTIPLE_ACTIVE_SCRIPTS,
+        "multipleActiveScripts"
+    );
+
     // Calendar free/busy (RFC 8984 §4.1.2)
     assert_eq!(free_busy_status::FREE, "free");
     assert_eq!(free_busy_status::BUSY, "busy");
@@ -799,5 +841,61 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
     assert_eq!(
         calendar_free_busy_status::BUSY_UNAVAILABLE,
         "busy-unavailable"
+    );
+}
+
+// ===========================================================================
+// RFC 9265 Sieve: Forward Compatibility & Conformance
+// ===========================================================================
+
+#[test]
+fn rfc9265_sieve_script_and_validation_forward_compatibility() {
+    let script_payload = json!({
+        "id": "sieve_1",
+        "name": "Main Rule",
+        "blobId": "b_sieve_100",
+        "isActive": true,
+        "futureExtensionProperty": "flag-tag",
+        "vendorAudit": {
+            "lastChecked": "2026-08-30T12:00:00Z",
+            "passedValidation": true
+        }
+    });
+
+    let script: SieveScript = serde_json::from_value(script_payload)
+        .expect("deserialize SieveScript with unknown fields");
+    assert_eq!(script.id.as_ref().unwrap().as_str(), "sieve_1");
+    assert_eq!(script.name, "Main Rule");
+    assert_eq!(script.blob_id.as_str(), "b_sieve_100");
+    assert!(script.is_active);
+    assert_eq!(script.extra["futureExtensionProperty"], "flag-tag");
+    assert_eq!(script.extra["vendorAudit"]["passedValidation"], true);
+
+    let validate_resp_payload = json!({
+        "accountId": "acc_sieve",
+        "isValid": false,
+        "error": {
+            "description": "Invalid test command",
+            "lineNumber": 15,
+            "columnNumber": 3,
+            "action": "custom_filter",
+            "extraDiagnosticCode": "E_SYNTAX_402"
+        },
+        "serverWarnings": ["Script exceeds recommended execution step limit"]
+    });
+
+    let resp: SieveScriptValidateResponse = serde_json::from_value(validate_resp_payload)
+        .expect("deserialize SieveScriptValidateResponse with diagnostics");
+    assert_eq!(resp.account_id.as_str(), "acc_sieve");
+    assert!(!resp.is_valid);
+    let err = resp.error.expect("validation error present");
+    assert_eq!(err.description.as_deref(), Some("Invalid test command"));
+    assert_eq!(err.line_number, Some(15));
+    assert_eq!(err.column_number, Some(3));
+    assert_eq!(err.action.as_deref(), Some("custom_filter"));
+    assert_eq!(err.extra["extraDiagnosticCode"], "E_SYNTAX_402");
+    assert_eq!(
+        resp.extra["serverWarnings"][0],
+        "Script exceeds recommended execution step limit"
     );
 }

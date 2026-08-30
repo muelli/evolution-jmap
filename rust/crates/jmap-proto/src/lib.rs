@@ -18,6 +18,7 @@
 //!   methods (feature `principals`).
 //! - [RFC 9425] JMAP for Quotas: the `Quota` object and `/query` filter.
 //! - [RFC 9404] JMAP Blob Management: `Blob/get` and `Blob/upload`.
+//! - [RFC 9265] JMAP for Sieve Scripts: `SieveScript`, `SieveScript/validate`.
 //!
 //! [RFC 8620]: https://www.rfc-editor.org/rfc/rfc8620
 //! [RFC 8621]: https://www.rfc-editor.org/rfc/rfc8621
@@ -28,6 +29,7 @@
 //! [RFC 9670]: https://www.rfc-editor.org/rfc/rfc9670
 //! [RFC 9425]: https://www.rfc-editor.org/rfc/rfc9425
 //! [RFC 9404]: https://www.rfc-editor.org/rfc/rfc9404
+//! [RFC 9265]: https://www.rfc-editor.org/rfc/rfc9265
 
 pub mod blob;
 #[cfg(feature = "calendars")]
@@ -46,6 +48,7 @@ pub mod quota;
 pub mod request;
 pub mod response;
 pub mod session;
+pub mod sieve;
 pub mod state;
 #[cfg(feature = "calendars")]
 pub mod tasks;

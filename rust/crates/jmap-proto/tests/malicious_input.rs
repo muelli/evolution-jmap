@@ -930,4 +930,40 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::tasks::TaskQueryFilter>(&text);
     }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_sieve_script(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::sieve::SieveScript>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_sieve_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::sieve::SieveCapability>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_sieve_script_query_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::sieve::SieveScriptQueryFilter>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_sieve_script_validate_request(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::sieve::SieveScriptValidateRequest>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_sieve_script_validate_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::sieve::SieveScriptValidateResponse>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_sieve_script_validate_error(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::sieve::SieveScriptValidateError>(&text);
+    }
 }
