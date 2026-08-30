@@ -1124,4 +1124,35 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::session::RefPlusCapability>(&text);
     }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_metadata_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::metadata::MetadataCapability>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_data_type_metadata_info(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::metadata::DataTypeMetadataInfo>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_metadata_text_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::metadata::MetadataTextFilter>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_metadata_filter_condition(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::metadata::MetadataFilterCondition>(&text);
+    }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_mail_share_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::MailShareCapability>(&text);
+    }
 }

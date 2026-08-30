@@ -23,9 +23,9 @@ use jmap_proto::request::Request;
 use jmap_proto::response::Response;
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
-    CAPABILITY_MDN, CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SIEVE,
-    CAPABILITY_SUBMISSION, CAPABILITY_TASKS, CAPABILITY_VACATION_RESPONSE, CAPABILITY_WEBSOCKET,
-    Session,
+    CAPABILITY_MAIL_SHARE, CAPABILITY_MDN, CAPABILITY_METADATA, CAPABILITY_PRINCIPALS,
+    CAPABILITY_QUOTA, CAPABILITY_SIEVE, CAPABILITY_SUBMISSION, CAPABILITY_TASKS,
+    CAPABILITY_VACATION_RESPONSE, CAPABILITY_WEBSOCKET, Session,
 };
 use jmap_proto::sieve::{
     SieveCapability, SieveScript, SieveScriptValidateResponse, sieve_set_error,
@@ -2062,4 +2062,152 @@ fn filenode_and_refplus_forward_compatibility_and_conformance() {
     assert_eq!(filenode_set_error::NODE_HAS_CHILDREN, "nodeHasChildren");
     assert_eq!(filenode_set_error::ALREADY_EXISTS, "alreadyExists");
     assert_eq!(filenode_set_error::INVALID_NODE_TYPE, "invalidNodeType");
+}
+
+#[test]
+fn metadata_and_mail_sharing_forward_compatibility_and_conformance() {
+    use jmap_proto::metadata::MetadataFilterCondition;
+
+    // 1. Session with metadata and mail sharing capabilities
+    let session_payload = json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {},
+            "urn:ietf:params:jmap:metadata": {
+                "dataTypes": {
+                    "Email": {
+                        "namespaces": ["urn:ietf:params:jmap:metadata:notes"],
+                        "supportsVendorNamespaces": true,
+                        "supportsPrivate": true,
+                        "maxDepth": 4,
+                        "customDataTypeParam": "active"
+                    },
+                    "ContactCard": {
+                        "namespaces": [],
+                        "supportsVendorNamespaces": false,
+                        "supportsPrivate": true,
+                        "maxDepth": 2
+                    }
+                },
+                "serverGlobalMetadataLimit": 1048576
+            },
+            "urn:ietf:params:jmap:mail:share": {
+                "administerViaAcl": true
+            }
+        },
+        "accounts": {},
+        "primaryAccounts": {},
+        "username": "user@example.com",
+        "apiUrl": "https://api.example.com/jmap/",
+        "downloadUrl": "https://api.example.com/download/{blobId}",
+        "uploadUrl": "https://api.example.com/upload/",
+        "state": "s1"
+    });
+
+    let session: Session = serde_json::from_value(session_payload)
+        .expect("deserializes Session with metadata and mail share");
+
+    let meta_cap = session
+        .metadata_capability()
+        .expect("has metadata capability");
+    assert_eq!(meta_cap.data_types.len(), 2);
+    let email_info = &meta_cap.data_types["Email"];
+    assert_eq!(
+        email_info.namespaces,
+        vec!["urn:ietf:params:jmap:metadata:notes".to_string()]
+    );
+    assert!(email_info.supports_vendor_namespaces);
+    assert!(email_info.supports_private);
+    assert_eq!(email_info.max_depth, Some(4));
+    assert_eq!(email_info.extra["customDataTypeParam"], "active");
+    assert_eq!(meta_cap.extra["serverGlobalMetadataLimit"], 1048576);
+
+    let mail_share_cap = session
+        .mail_share_capability()
+        .expect("has mail share capability");
+    assert_eq!(mail_share_cap.extra["administerViaAcl"], true);
+
+    // 2. Mailbox with shareWith and mayShare forward-compatibility
+    let mailbox_payload = json!({
+        "id": "mb_shared_projects",
+        "name": "Shared Projects",
+        "shareWith": {
+            "p_alice": {
+                "mayReadItems": true,
+                "mayAddItems": true,
+                "mayRemoveItems": false,
+                "maySetSeen": true,
+                "maySetKeywords": true,
+                "mayCreateChild": false,
+                "mayRename": false,
+                "mayDelete": false,
+                "maySubmit": true,
+                "mayShare": true,
+                "customAclRight": "audit"
+            },
+            "p_auditor": {
+                "mayReadItems": true,
+                "mayShare": false
+            }
+        },
+        "myRights": {
+            "mayReadItems": true,
+            "mayShare": true
+        },
+        "vendorSyncPolicy": "realtime"
+    });
+
+    let mbx: Mailbox =
+        serde_json::from_value(mailbox_payload).expect("Mailbox with shareWith and rights");
+    assert_eq!(mbx.id.as_ref().unwrap().as_str(), "mb_shared_projects");
+    assert_eq!(mbx.name, "Shared Projects");
+    let share_map = mbx.share_with.as_ref().unwrap();
+    assert_eq!(share_map.len(), 2);
+    let alice_rights = share_map.get(&"p_alice".into()).unwrap();
+    assert_eq!(alice_rights.may_read_items, Some(true));
+    assert_eq!(alice_rights.may_share, Some(true));
+    assert!(alice_rights.may_share());
+    assert_eq!(alice_rights.extra["customAclRight"], "audit");
+
+    let my_rights = mbx.my_rights.as_ref().unwrap();
+    assert_eq!(my_rights.may_read_items, Some(true));
+    assert_eq!(my_rights.may_share, Some(true));
+    assert!(my_rights.may_share());
+
+    assert_eq!(mbx.extra["vendorSyncPolicy"], "realtime");
+
+    // 3. MetadataFilterCondition with unknown extension fields
+    let filter_payload = json!({
+        "metadataExists": "com.vendor.workflow.status",
+        "metadataTextContains": {
+            "path": "com.vendor.workflow.summary",
+            "text": "approved",
+            "matchCollation": "i;ascii-casemap"
+        },
+        "privateMetadataTextEquals": {
+            "path": "user.personalNotes",
+            "text": "confidential"
+        },
+        "futureMetadataOperator": "regexMatch"
+    });
+
+    let filter: MetadataFilterCondition =
+        serde_json::from_value(filter_payload).expect("MetadataFilterCondition");
+    assert_eq!(
+        filter.metadata_exists.as_deref(),
+        Some("com.vendor.workflow.status")
+    );
+    let text_contains = filter.metadata_text_contains.as_ref().unwrap();
+    assert_eq!(text_contains.path, "com.vendor.workflow.summary");
+    assert_eq!(text_contains.text, "approved");
+    assert_eq!(text_contains.extra["matchCollation"], "i;ascii-casemap");
+
+    let priv_equals = filter.private_metadata_text_equals.as_ref().unwrap();
+    assert_eq!(priv_equals.path, "user.personalNotes");
+    assert_eq!(priv_equals.text, "confidential");
+
+    assert_eq!(filter.extra["futureMetadataOperator"], "regexMatch");
+
+    // 4. Capability URN constants exact match
+    assert_eq!(CAPABILITY_METADATA, "urn:ietf:params:jmap:metadata");
+    assert_eq!(CAPABILITY_MAIL_SHARE, "urn:ietf:params:jmap:mail:share");
 }

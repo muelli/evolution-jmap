@@ -29,6 +29,8 @@ pub const CAPABILITY_SIEVE: &str = "urn:ietf:params:jmap:sieve";
 pub const CAPABILITY_SMIME_VERIFY: &str = "urn:ietf:params:jmap:smimeverify";
 pub const CAPABILITY_FILENODE: &str = "urn:ietf:params:jmap:filenode";
 pub const CAPABILITY_REFPLUS: &str = "urn:ietf:params:jmap:refplus";
+pub const CAPABILITY_METADATA: &str = "urn:ietf:params:jmap:metadata";
+pub const CAPABILITY_MAIL_SHARE: &str = "urn:ietf:params:jmap:mail:share";
 
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -376,6 +378,19 @@ impl Session {
     /// Typed RefPlus capability struct, if present (draft-ietf-jmap-refplus §1.2).
     pub fn refplus_capability(&self) -> Option<RefPlusCapability> {
         let val = self.capabilities.get(CAPABILITY_REFPLUS)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed metadata capability struct, if present (draft-ietf-jmap-metadata §1.2).
+    pub fn metadata_capability(&self) -> Option<crate::metadata::MetadataCapability> {
+        let val = self.capabilities.get(CAPABILITY_METADATA)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed mail share capability struct, if present (draft-ietf-jmap-mail-sharing §1.2).
+    #[cfg(feature = "mail")]
+    pub fn mail_share_capability(&self) -> Option<crate::mail::MailShareCapability> {
+        let val = self.capabilities.get(CAPABILITY_MAIL_SHARE)?;
         serde_json::from_value(val.clone()).ok()
     }
 }

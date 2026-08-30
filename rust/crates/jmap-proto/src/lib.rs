@@ -48,6 +48,7 @@ pub mod filenode;
 pub mod id;
 #[cfg(feature = "mail")]
 pub mod mail;
+pub mod metadata;
 pub mod methods;
 #[cfg(feature = "principals")]
 pub mod principals;
