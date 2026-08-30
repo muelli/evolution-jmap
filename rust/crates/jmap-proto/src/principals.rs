@@ -267,6 +267,8 @@ pub struct ShareNotification {
     pub object_id: Id,
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_rights: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_rights: Option<Value>,
@@ -288,6 +290,7 @@ impl ShareNotification {
             object_type: object_type.into(),
             object_id: object_id.into(),
             account_id: account_id.into(),
+            name: None,
             old_rights: None,
             new_rights: None,
             extra: BTreeMap::new(),
@@ -301,6 +304,11 @@ impl ShareNotification {
 
     pub fn with_changed_by(mut self, changed_by: Principal) -> Self {
         self.changed_by = Some(changed_by);
+        self
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
         self
     }
 
@@ -375,6 +383,36 @@ impl PrincipalsCapability {
 
     pub fn with_max_principals_per_get(mut self, max: u64) -> Self {
         self.max_principals_per_get = Some(max);
+        self
+    }
+}
+
+/// Principals owner capability properties (RFC 9670 §1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrincipalsOwnerCapability {
+    pub account_id_for_principal: Id,
+    pub principal_id: Id,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl PrincipalsOwnerCapability {
+    pub fn new(account_id_for_principal: impl Into<Id>, principal_id: impl Into<Id>) -> Self {
+        Self {
+            account_id_for_principal: account_id_for_principal.into(),
+            principal_id: principal_id.into(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_account_id_for_principal(mut self, account_id: impl Into<Id>) -> Self {
+        self.account_id_for_principal = account_id.into();
+        self
+    }
+
+    pub fn with_principal_id(mut self, principal_id: impl Into<Id>) -> Self {
+        self.principal_id = principal_id.into();
         self
     }
 }

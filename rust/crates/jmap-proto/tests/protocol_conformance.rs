@@ -1224,3 +1224,98 @@ fn calendar_scheduling_and_notifications_forward_compatibility() {
     assert_eq!(share_filter.object_type.as_deref(), Some("Calendar"));
     assert_eq!(share_filter.extra["includeSubscribed"], true);
 }
+
+#[test]
+fn principals_owner_and_share_notification_forward_compatibility() {
+    use jmap_proto::methods::SetResponse;
+    use jmap_proto::principals::{PrincipalsOwnerCapability, ShareNotification};
+
+    // 1. PrincipalsOwnerCapability with unknown fields
+    let owner_cap_payload = json!({
+        "accountIdForPrincipal": "acc_principals_main",
+        "principalId": "p_enterprise_root",
+        "delegationAllowed": true,
+        "maxDelegatedAccounts": 50
+    });
+
+    let owner_cap: PrincipalsOwnerCapability = serde_json::from_value(owner_cap_payload)
+        .expect("PrincipalsOwnerCapability deserializes with extensions");
+    assert_eq!(
+        owner_cap.account_id_for_principal.as_str(),
+        "acc_principals_main"
+    );
+    assert_eq!(owner_cap.principal_id.as_str(), "p_enterprise_root");
+    assert_eq!(owner_cap.extra["delegationAllowed"], true);
+    assert_eq!(owner_cap.extra["maxDelegatedAccounts"], 50);
+
+    // 2. ShareNotification with name and unknown fields
+    let notif_payload = json!({
+        "id": "sn_calendar_shared",
+        "created": "2026-09-01T15:30:00Z",
+        "changedBy": {
+            "id": "p_admin",
+            "name": "Admin Coordinator",
+            "email": "admin@example.com"
+        },
+        "objectType": "Calendar",
+        "objectId": "cal_marketing",
+        "accountId": "acc_user",
+        "name": "Marketing Strategy Calendar",
+        "oldRights": null,
+        "newRights": {
+            "mayReadItems": true,
+            "mayAddItems": true
+        },
+        "notificationPriority": "high",
+        "autoAccept": true
+    });
+
+    let notif: ShareNotification = serde_json::from_value(notif_payload)
+        .expect("ShareNotification deserializes with name and extensions");
+    assert_eq!(notif.id.as_ref().unwrap().as_str(), "sn_calendar_shared");
+    assert_eq!(notif.created.as_str(), "2026-09-01T15:30:00Z");
+    assert_eq!(notif.name.as_deref(), Some("Marketing Strategy Calendar"));
+    assert_eq!(notif.object_type, "Calendar");
+    assert_eq!(notif.object_id.as_str(), "cal_marketing");
+    assert_eq!(notif.account_id.as_str(), "acc_user");
+    assert_eq!(notif.changed_by.as_ref().unwrap().name, "Admin Coordinator");
+    assert_eq!(notif.extra["notificationPriority"], "high");
+    assert_eq!(notif.extra["autoAccept"], true);
+
+    // 3. SetResponse forward compatibility
+    let set_resp_payload = json!({
+        "accountId": "acc_user",
+        "oldState": "state_1",
+        "newState": "state_2",
+        "created": {
+            "c1": { "id": "obj_1", "name": "Created 1" }
+        },
+        "updated": {
+            "u1": null
+        },
+        "destroyed": ["d1"],
+        "notCreated": {
+            "c2": { "type": "invalidProperties", "description": "Invalid title" }
+        },
+        "serverLatencyMs": 14
+    });
+
+    let set_resp: SetResponse<serde_json::Value> =
+        serde_json::from_value(set_resp_payload).expect("SetResponse deserializes cleanly");
+    assert_eq!(set_resp.account_id.as_str(), "acc_user");
+    assert_eq!(set_resp.old_state.as_ref().unwrap().as_str(), "state_1");
+    assert_eq!(set_resp.new_state.as_str(), "state_2");
+    assert!(set_resp.created.as_ref().unwrap().contains_key("c1"));
+    assert!(
+        set_resp
+            .updated
+            .as_ref()
+            .unwrap()
+            .contains_key(&Id::new("u1"))
+    );
+    assert_eq!(set_resp.destroyed.as_ref().unwrap(), &vec![Id::new("d1")]);
+    assert_eq!(
+        set_resp.not_created.as_ref().unwrap()["c2"].error_type,
+        "invalidProperties"
+    );
+}

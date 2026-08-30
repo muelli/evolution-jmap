@@ -295,8 +295,18 @@ impl Session {
     }
 
     /// Typed principals capability struct, if present (RFC 9670 §1.3).
+    #[cfg(feature = "principals")]
     pub fn principals_capability(&self) -> Option<crate::principals::PrincipalsCapability> {
         let val = self.capabilities.get(CAPABILITY_PRINCIPALS)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed principals owner capability struct, if present (RFC 9670 §1.3).
+    #[cfg(feature = "principals")]
+    pub fn principals_owner_capability(
+        &self,
+    ) -> Option<crate::principals::PrincipalsOwnerCapability> {
+        let val = self.capabilities.get(CAPABILITY_PRINCIPALS_OWNER)?;
         serde_json::from_value(val.clone()).ok()
     }
 

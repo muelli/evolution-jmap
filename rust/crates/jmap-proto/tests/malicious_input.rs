@@ -1050,4 +1050,11 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::principals::ShareNotificationQueryFilter>(&text);
     }
+
+    #[cfg(feature = "principals")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_principals_owner_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::principals::PrincipalsOwnerCapability>(&text);
+    }
 }

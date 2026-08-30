@@ -97,6 +97,7 @@ fn share_notification_roundtrip_covers_rfc9670() {
         object_type: share_notification_object_type::CALENDAR.to_owned(),
         object_id: "cal_123".into(),
         account_id: "A1".into(),
+        name: None,
         old_rights: Some(serde_json::json!({"mayReadItems": true})),
         new_rights: Some(serde_json::json!({"mayReadItems": true, "mayAddItems": true})),
         extra: BTreeMap::new(),
@@ -333,4 +334,82 @@ fn share_notification_query_filter_roundtrip_and_builders() {
 
     let deserialized: ShareNotificationQueryFilter = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized, filter);
+}
+
+#[test]
+fn principals_owner_capability_roundtrip_and_session_accessor() {
+    use jmap_proto::principals::PrincipalsOwnerCapability;
+    use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_PRINCIPALS_OWNER, Session};
+
+    let cap = PrincipalsOwnerCapability::new("acc_principals", "p_owner")
+        .with_account_id_for_principal("acc_principals_override")
+        .with_principal_id("p_owner_override");
+
+    assert_eq!(
+        cap.account_id_for_principal.as_str(),
+        "acc_principals_override"
+    );
+    assert_eq!(cap.principal_id.as_str(), "p_owner_override");
+
+    let val = serde_json::to_value(&cap).unwrap();
+    assert_eq!(val["accountIdForPrincipal"], "acc_principals_override");
+    assert_eq!(val["principalId"], "p_owner_override");
+
+    let deserialized: PrincipalsOwnerCapability = serde_json::from_value(val).unwrap();
+    assert_eq!(deserialized, cap);
+
+    let session = Session::new(
+        "user@example.com",
+        "https://example.com/api",
+        "https://example.com/download",
+        "https://example.com/upload",
+        "state1",
+    )
+    .with_capability(
+        CAPABILITY_CORE,
+        serde_json::json!({
+            "maxSizeUpload": 50000000,
+            "maxConcurrentUpload": 4,
+            "maxSizeRequest": 10000000,
+            "maxConcurrentRequests": 8,
+            "maxCallsInRequest": 16,
+            "maxObjectsInGet": 500,
+            "maxObjectsInSet": 500,
+            "collationAlgorithms": ["i;ascii-casemap", "i;unicode-casemap"]
+        }),
+    )
+    .with_capability(
+        CAPABILITY_PRINCIPALS_OWNER,
+        serde_json::json!({
+            "accountIdForPrincipal": "acc_p1",
+            "principalId": "p_root"
+        }),
+    );
+
+    let session_cap = session.principals_owner_capability().unwrap();
+    assert_eq!(session_cap.account_id_for_principal.as_str(), "acc_p1");
+    assert_eq!(session_cap.principal_id.as_str(), "p_root");
+}
+
+#[test]
+fn share_notification_name_property_and_builder() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::principals::{ShareNotification, share_notification_object_type};
+
+    let notif = ShareNotification::new(
+        UtcDate::new("2026-09-01T16:00:00Z"),
+        share_notification_object_type::ADDRESS_BOOK,
+        "book_work",
+        "acc_alice",
+    )
+    .with_name("Work Contacts");
+
+    assert_eq!(notif.name.as_deref(), Some("Work Contacts"));
+
+    let json = serde_json::to_value(&notif).unwrap();
+    assert_eq!(json["name"], "Work Contacts");
+
+    let deserialized: ShareNotification = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized.name.as_deref(), Some("Work Contacts"));
+    assert_eq!(deserialized, notif);
 }
