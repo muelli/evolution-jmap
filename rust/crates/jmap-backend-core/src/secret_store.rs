@@ -5,11 +5,10 @@
 //!
 //! ## The one question EDS cannot be asked
 //!
-//! `docs/ROADMAP.md` item 17 asked for a dead secret store to surface a
-//! message instead of another consent window, and its (b)/(c) halves are
-//! answered by classifying the `GError`
-//! `e_source_get_oauth2_access_token_sync` sets — see
-//! [`crate::oauth2::is_secret_store_failure`]. Its (a) half, a *locked*
+//! A dead secret store should surface a message, not another consent
+//! window. Two of the three ways that can happen are answered by
+//! classifying the `GError` `e_source_get_oauth2_access_token_sync` sets —
+//! see [`crate::oauth2::is_secret_store_failure`]. The third, a *locked*
 //! login keyring, cannot be, and the reason is structural rather than an
 //! oversight anywhere:
 //!
@@ -57,7 +56,7 @@
 //! be the thing that starts a daemon: in `evolution-source-registry`, where
 //! the address book and calendar backends run, D-Bus-activating
 //! `org.freedesktop.secrets` is a 25-second timeout when it cannot start
-//! (`docs/ROADMAP.md` item 18) and a side effect on the session when it can.
+//! and a side effect on the session when it can.
 //! With the flag, a service that is not running answers "cannot determine",
 //! which is [`None`] here and no behaviour change at all at the call site.
 //!

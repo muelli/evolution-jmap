@@ -385,8 +385,8 @@ pub unsafe fn classify_failure(
 /// every `ESource` this crate's own tests build (never backed by a real
 /// registry) hits, and those tests already pin `REQUIRED` for it.
 ///
-/// Confirmed by hand, not assumed (`docs/ROADMAP.md` item 17's own ask): with
-/// `org.freedesktop.secrets` unable to start (a broken D-Bus activation, a
+/// Confirmed by hand, not assumed: with `org.freedesktop.secrets` unable to
+/// start (a broken D-Bus activation, a
 /// real, reproducible shape of a dead secret store), the exact call this
 /// function classifies for answers `g_dbus_error_quark()`/
 /// `G_DBUS_ERROR_SPAWN_EXEC_FAILED` — a different *domain*, which is the one
@@ -395,7 +395,7 @@ pub unsafe fn classify_failure(
 ///
 /// **Two D-Bus codes are carved out**, and only two:
 /// [`is_service_gone`]'s. They are the ones that mean "nothing owns that bus
-/// name", which is `docs/ROADMAP.md` item 22's failure and not a store
+/// name", which is a dead-peer failure and not a store
 /// failure at all.
 ///
 /// **Does not catch every "the store is locked" case.** A collection that
@@ -417,7 +417,7 @@ unsafe fn is_secret_store_failure(error: *const GError) -> bool {
 }
 
 /// Whether `error` is "the bus has no owner for the name this call was
-/// addressed to" — `docs/ROADMAP.md` item 22's captured failure, and the one
+/// addressed to" — the captured dead-peer failure, and the one
 /// D-Bus outcome that is neither a credential nor a secret store.
 ///
 /// **The mechanism, established from source rather than from the trace.** A
@@ -472,7 +472,7 @@ unsafe fn is_secret_store_failure(error: *const GError) -> bool {
 /// trace is a `:1.N`, and `org.freedesktop.secrets` failing to activate
 /// produces the same two codes with a well-known name in the message — but
 /// telling those apart would mean parsing `dbus-daemon`'s English error text,
-/// which `docs/ROADMAP.md` item 17 ruled out for exactly this classification
+/// which was ruled out for exactly this classification
 /// ("domain **and** code, not message text"). It does not need telling apart:
 /// both are "a service this sign-in needs is not running", both are `ERROR`
 /// and never consent, and the message this produces names whichever one it
@@ -502,8 +502,8 @@ unsafe fn is_service_gone(error: *const GError) -> bool {
 /// [`is_secret_store_failure`] above and [`crate::secret_store`] for why the
 /// two arrive here identical.
 ///
-/// Domain **and** code, not message text, per `docs/ROADMAP.md` item 17's own
-/// ask. The narrowness is load-bearing rather than tidiness: EDS's other
+/// Domain **and** code, not message text, by design. The narrowness is
+/// load-bearing rather than tidiness: EDS's other
 /// deliberate `G_IO_ERROR`-domain outcomes must keep going to
 /// [`ConnectError::OAuth2`]/`REQUIRED` untouched, and `G_IO_ERROR_NOT_SUPPORTED`
 /// — what a bare `ESource` with no registry behind it answers, which is every
@@ -523,10 +523,9 @@ unsafe fn is_secret_not_found(error: *const GError) -> bool {
 /// the bus's own message, which is where the peer gets *named*.
 ///
 /// Split out of [`access_token`] only so that a test can drive it: the
-/// naming is `docs/ROADMAP.md` item 22's Do(3) in full ("surface item-17-style
-/// as an ERROR naming the dead peer"), and a message that quietly stopped
-/// including EDS's own text would still compile, still be `ERROR`, and still
-/// leave nobody able to tell which service died.
+/// naming must surface an `ERROR` naming the dead peer, and a message that
+/// quietly stopped including EDS's own text would still compile, still be
+/// `ERROR`, and still leave nobody able to tell which service died.
 fn service_gone_error(message: Option<String>) -> ConnectError {
     ConnectError::ServiceGone(translate_with(
         // TRANSLATORS: %1$s is the message bus's own text naming which service
@@ -859,7 +858,7 @@ mod tests {
         }
     }
 
-    /// The captured shape of `docs/ROADMAP.md` item 22: a token fetch that
+    /// The captured shape of a dead registry peer: a token fetch that
     /// dies with `G_DBUS_ERROR_SERVICE_UNKNOWN` ("The name :1.4 was not
     /// provided by any .service files") because the `ESource` still holds a
     /// `GDBusObjectManagerClient` proxy addressed to a registry that has

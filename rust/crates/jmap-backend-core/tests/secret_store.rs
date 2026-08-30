@@ -4,12 +4,11 @@
 //! `secret_store::default_collection_is_locked` against a real
 //! `gnome-keyring-daemon`, in the three states that matter.
 //!
-//! No fake can prove this one. The whole point of the module
-//! (`docs/ROADMAP.md` item 17(a)) is that a locked keyring is invisible
-//! through EDS's own API, so the evidence that asking the Secret Service
-//! directly *does* see it has to come from a secret service that is really
-//! locked — the same standard `crate::resolver`'s live `_jmap._tcp` lookup
-//! is held to.
+//! No fake can prove this one. The whole point of the module is that a
+//! locked keyring is invisible through EDS's own API, so the evidence that
+//! asking the Secret Service directly *does* see it has to come from a
+//! secret service that is really locked — the same standard
+//! `crate::resolver`'s live `_jmap._tcp` lookup is held to.
 //!
 //! # Why every test here re-executes this binary
 //!
@@ -327,8 +326,8 @@ const UNLOCK: &str = r#"
 
 /// The same daemon *without* the unlock: it serves the login keyring already
 /// on disk, locked, because nothing has given it a password. This is the
-/// operator's own symptom (`docs/ROADMAP.md` item 17) — a session whose
-/// keyring PAM never unlocked — and it is also what D-Bus activation of
+/// operator's own symptom — a session whose keyring PAM never unlocked —
+/// and it is also what D-Bus activation of
 /// `org.freedesktop.secrets` produces on any desktop where the unlock prompt
 /// is dismissed.
 const START_LOCKED: &str = r#"
@@ -412,8 +411,8 @@ fn a_bus_that_could_not_start_a_secret_service_reports_none_available() {
 /// nothing owns the name.
 ///
 /// And it must stay unstarted. `secret_store` promises never to activate
-/// anything (`docs/ROADMAP.md` item 18: activating `org.freedesktop.secrets`
-/// from `evolution-source-registry` is a 25-second timeout when it cannot
+/// anything (activating `org.freedesktop.secrets` from
+/// `evolution-source-registry` is a 25-second timeout when it cannot
 /// start, on the connect path). The stub service here would touch a marker
 /// file if the bus ever ran it, so the absence of that file is the promise
 /// under test. An assertion, not a comment.

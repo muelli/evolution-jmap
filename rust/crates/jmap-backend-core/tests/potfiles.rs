@@ -7,8 +7,8 @@
 //! `POTFILES.in` and over nothing else. So a source that marks a string and is
 //! not in that list is not a build error, not a warning, and not visible
 //! anywhere: the string is simply absent from the `.pot`, no translator is ever
-//! offered it, and it ships in English forever. The standing directive in
-//! `docs/ROADMAP.md` asks for a check that catches exactly that, and this is it.
+//! offered it, and it ships in English forever. The standing directive asks
+//! for a check that catches exactly that, and this is it.
 //!
 //! It checks the list in both directions, because both are silent when wrong:
 //!

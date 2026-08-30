@@ -3,7 +3,7 @@
 
 //! The one retry-on-stale-credentials control flow, written once.
 //!
-//! `docs/ROADMAP.md` item 23: a long-lived connection (the calendar, address
+//! A long-lived connection (the calendar, address
 //! book and mail backends each keep one open across many operations) can
 //! outlive the OAuth 2.0 access token it was built with. Today a 401 on such
 //! a connection is escalated straight to a fresh consent window, even though

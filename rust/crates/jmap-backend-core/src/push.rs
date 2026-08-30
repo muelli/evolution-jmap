@@ -3,9 +3,9 @@
 
 //! Turning a server-pushed `StateChange` into the refresh EDS already runs.
 //!
-//! `docs/ROADMAP.md` item 28 is explicit that a push must "trigger the
-//! EXISTING `get_changes_sync` path rather than growing a second sync
-//! mechanism", and that evolution-ews is the precedent to study. It is a
+//! A push must "trigger the EXISTING `get_changes_sync` path rather than
+//! growing a second sync mechanism", and evolution-ews is the precedent to
+//! study. It is a
 //! short one: `ebb_ews_server_notification_cb` decides whether a server
 //! notification concerns *this* backend's folder and, if it does, calls
 //! `e_book_meta_backend_schedule_refresh` — nothing else. EDS takes it from
@@ -219,8 +219,7 @@ impl PushRefresh {
     /// connection, so a subscription a stale token got refused on picks up
     /// the new one on its next reconnect instead of looping on the same
     /// failure until the backend itself reconnects (see
-    /// [`jmap_client::eventsource`]'s own module doc, and
-    /// `docs/ROADMAP.md` item 28).
+    /// [`jmap_client::eventsource`]'s own module doc).
     pub fn set_headers(&self, headers: Vec<(String, String)>) {
         self.headers.set(headers);
     }
