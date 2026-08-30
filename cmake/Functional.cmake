@@ -273,9 +273,9 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# opening a folder. Same libraries, because it is the same kind of
 	# process: a libcamel consumer that is also the provider's host.
 	# `mail-stale-token` is a third program of the same kind, and the only
-	# one here that subclasses a Camel class: `docs/ROADMAP.md` item 25 needs
-	# a session that answers `get_oauth2_access_token_sync`, which the base
-	# `CamelSession` does not — see the file's own header.
+	# one here that subclasses a Camel class: it needs a session that answers
+	# `get_oauth2_access_token_sync`, which the base `CamelSession` does not
+	# — see the file's own header.
 	foreach(_client mail transport mail-stale-token)
 		add_executable(functional-${_client}-client tests/functional/${_client}-client.c)
 		target_include_directories(functional-${_client}-client PRIVATE
@@ -631,9 +631,9 @@ if(ENABLE_FUNCTIONAL_TESTS)
 
 	# The other half of the secret-store story: not the harness's own unlock
 	# step but the PRODUCT reading a real secret service, both what it asks
-	# of one. Its lock state (`docs/ROADMAP.md` item 17(a)), and whether there
-	# is a service to be had at all (item 31), which is a different question
-	# with a different consequence: a locked store still holds the token, so
+	# of one. Its lock state, and whether there is a service to be had at
+	# all, which is a different question with a different consequence: a
+	# locked store still holds the token, so
 	# the user is told to unlock it, while an absent one cannot hold a token
 	# at all, so no sign-in window is offered. Registered here rather than
 	# left to
