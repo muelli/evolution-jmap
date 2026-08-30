@@ -1869,3 +1869,197 @@ fn rfc8887_websocket_forward_compatibility_and_conformance() {
     assert_eq!(message_type::PUSH_DISABLE, "WebSocketPushDisable");
     assert_eq!(message_type::STATE_CHANGE, "StateChange");
 }
+
+#[test]
+fn filenode_and_refplus_forward_compatibility_and_conformance() {
+    use jmap_proto::filenode::{
+        FileNode, FileNodeCapability, FileNodeQueryFilter, filenode_set_error, node_role, node_type,
+    };
+    use jmap_proto::request::ResultReference;
+    use jmap_proto::session::{
+        CAPABILITY_FILENODE, CAPABILITY_REFPLUS, RefPlusCapability, Session,
+    };
+
+    // 1. Session carrying FileNode and RefPlus capabilities with vendor extensions
+    let session_json = json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {
+                "maxSizeUpload": 10000000,
+                "maxConcurrentUpload": 4,
+                "maxSizeRequest": 10000000,
+                "maxConcurrentRequests": 4,
+                "maxCallsInRequest": 16,
+                "maxObjectsInGet": 500,
+                "maxObjectsInSet": 500,
+                "collationAlgorithms": ["i;ascii-casemap", "i;unicode-casemap"]
+            },
+            "urn:ietf:params:jmap:filenode": {
+                "maxFileNodeDepth": 32,
+                "maxSizeFileNodeName": 1024,
+                "fileNodeQuerySortOptions": ["name", "size", "modified", "customVendorRank"],
+                "vendorCloudBackend": "ceph-s3-tier"
+            },
+            "urn:ietf:params:jmap:refplus": {
+                "jsonPath": true,
+                "filterCondition": true,
+                "setProperty": true,
+                "maxJsonPathLength": 4096
+            }
+        },
+        "accounts": {
+            "acc_storage_1": {
+                "name": "Cloud Storage",
+                "isPersonal": true,
+                "isReadOnly": false,
+                "accountCapabilities": {
+                    "urn:ietf:params:jmap:filenode": {
+                        "maxFileNodeDepth": 32,
+                        "maxSizeFileNodeName": 1024
+                    }
+                }
+            }
+        },
+        "primaryAccounts": {},
+        "username": "alice@storage.example.com",
+        "apiUrl": "https://storage.example.com/jmap/api",
+        "downloadUrl": "https://storage.example.com/jmap/download/{blobId}",
+        "uploadUrl": "https://storage.example.com/jmap/upload/{accountId}",
+        "state": "stat_storage_01"
+    });
+
+    let session: Session =
+        serde_json::from_value(session_json).expect("Session with filenode and refplus");
+    assert!(session.capabilities.contains_key(CAPABILITY_FILENODE));
+    assert!(session.capabilities.contains_key(CAPABILITY_REFPLUS));
+
+    let filenode_cap: FileNodeCapability = session
+        .filenode_capability()
+        .expect("typed filenode capability");
+    assert_eq!(filenode_cap.max_file_node_depth, Some(32));
+    assert_eq!(filenode_cap.max_size_file_node_name, Some(1024));
+    assert_eq!(
+        filenode_cap.file_node_query_sort_options,
+        vec!["name", "size", "modified", "customVendorRank"]
+    );
+    assert_eq!(filenode_cap.extra["vendorCloudBackend"], "ceph-s3-tier");
+
+    let refplus_cap: RefPlusCapability = session
+        .refplus_capability()
+        .expect("typed refplus capability");
+    assert_eq!(refplus_cap.json_path, Some(true));
+    assert_eq!(refplus_cap.filter_condition, Some(true));
+    assert_eq!(refplus_cap.set_property, Some(true));
+    assert_eq!(refplus_cap.extra["maxJsonPathLength"], 4096);
+
+    // 2. FileNode with unknown fields, custom node types and roles, and nested rights extensions
+    let filenode_payload = json!({
+        "id": "fn_backup_tar",
+        "parentId": "fn_dir_backups",
+        "name": "system_state_20260830.tar.gz",
+        "blobId": "blob_archive_7788",
+        "size": 52428800,
+        "nodeType": "file",
+        "nodeRole": "custom-archived-snapshot",
+        "created": "2026-08-30T06:00:00Z",
+        "modified": "2026-08-30T06:30:00Z",
+        "executable": false,
+        "myRights": {
+            "mayRead": true,
+            "mayWrite": false,
+            "mayAdmin": false,
+            "mayModifyContent": false,
+            "maySharePublicly": true
+        },
+        "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "vendorEncryptionAlgorithm": "AES-GCM-256",
+        "retentionPolicyDays": 90
+    });
+
+    let node: FileNode =
+        serde_json::from_value(filenode_payload).expect("FileNode with unknown fields");
+    assert_eq!(node.id.as_str(), "fn_backup_tar");
+    assert_eq!(node.parent_id.as_ref().unwrap().as_str(), "fn_dir_backups");
+    assert_eq!(node.name, "system_state_20260830.tar.gz");
+    assert_eq!(node.blob_id.as_ref().unwrap().as_str(), "blob_archive_7788");
+    assert_eq!(node.size, Some(52428800));
+    assert_eq!(node.node_type, "file");
+    assert_eq!(node.node_role.as_deref(), Some("custom-archived-snapshot"));
+    assert_eq!(
+        node.created.as_ref().unwrap().as_str(),
+        "2026-08-30T06:00:00Z"
+    );
+    assert_eq!(
+        node.modified.as_ref().unwrap().as_str(),
+        "2026-08-30T06:30:00Z"
+    );
+    assert_eq!(node.executable, Some(false));
+    let rights = node.my_rights.as_ref().unwrap();
+    assert_eq!(rights.may_read, Some(true));
+    assert_eq!(rights.may_write, Some(false));
+    assert_eq!(rights.extra["maySharePublicly"], true);
+    assert_eq!(node.extra["vendorEncryptionAlgorithm"], "AES-GCM-256");
+    assert_eq!(node.extra["retentionPolicyDays"], 90);
+
+    // 3. FileNodeQueryFilter with custom extension criteria
+    let filter_payload = json!({
+        "parentId": "fn_dir_backups",
+        "descendantId": "fn_backup_tar",
+        "hasParentId": true,
+        "name": "system_state",
+        "nodeType": "file",
+        "role": "custom-archived-snapshot",
+        "isExecutable": false,
+        "hasBlob": true,
+        "vendorTagFilter": "production-critical"
+    });
+
+    let filter: FileNodeQueryFilter =
+        serde_json::from_value(filter_payload).expect("FileNodeQueryFilter with custom extensions");
+    assert_eq!(
+        filter.parent_id.as_ref().unwrap().as_str(),
+        "fn_dir_backups"
+    );
+    assert_eq!(
+        filter.descendant_id.as_ref().unwrap().as_str(),
+        "fn_backup_tar"
+    );
+    assert_eq!(filter.has_parent_id, Some(true));
+    assert_eq!(filter.name.as_deref(), Some("system_state"));
+    assert_eq!(filter.node_type.as_deref(), Some("file"));
+    assert_eq!(filter.role.as_deref(), Some("custom-archived-snapshot"));
+    assert_eq!(filter.is_executable, Some(false));
+    assert_eq!(filter.has_blob, Some(true));
+    assert_eq!(filter.extra["vendorTagFilter"], "production-critical");
+
+    // 4. ResultReference with JSONPath
+    let res_ref_payload = json!({
+        "resultOf": "FileNode/query",
+        "name": "ids",
+        "path": "$[?(@.size > 1048576)].id",
+        "fallbackValue": []
+    });
+    let res_ref: ResultReference =
+        serde_json::from_value(res_ref_payload).expect("ResultReference with jsonPath");
+    assert_eq!(res_ref.result_of, "FileNode/query");
+    assert_eq!(res_ref.name, "ids");
+    assert_eq!(res_ref.path, "$[?(@.size > 1048576)].id");
+
+    // 5. Constants exact wire values
+    assert_eq!(node_type::FILE, "file");
+    assert_eq!(node_type::DIRECTORY, "directory");
+    assert_eq!(node_type::SYMLINK, "symlink");
+    assert_eq!(node_type::OTHER, "other");
+
+    assert_eq!(node_role::ROOT, "root");
+    assert_eq!(node_role::HOME, "home");
+    assert_eq!(node_role::TRASH, "trash");
+    assert_eq!(node_role::DOCUMENTS, "documents");
+    assert_eq!(node_role::PICTURES, "pictures");
+    assert_eq!(node_role::VIDEOS, "videos");
+    assert_eq!(node_role::MUSIC, "music");
+    assert_eq!(node_role::DOWNLOADS, "downloads");
+
+    assert_eq!(filenode_set_error::NODE_HAS_CHILDREN, "nodeHasChildren");
+    assert_eq!(filenode_set_error::ALREADY_EXISTS, "alreadyExists");
+    assert_eq!(filenode_set_error::INVALID_NODE_TYPE, "invalidNodeType");
+}

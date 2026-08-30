@@ -27,6 +27,8 @@ pub const CAPABILITY_BLOB: &str = "urn:ietf:params:jmap:blob";
 pub const CAPABILITY_TASKS: &str = "urn:ietf:params:jmap:tasks";
 pub const CAPABILITY_SIEVE: &str = "urn:ietf:params:jmap:sieve";
 pub const CAPABILITY_SMIME_VERIFY: &str = "urn:ietf:params:jmap:smimeverify";
+pub const CAPABILITY_FILENODE: &str = "urn:ietf:params:jmap:filenode";
+pub const CAPABILITY_REFPLUS: &str = "urn:ietf:params:jmap:refplus";
 
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -363,6 +365,58 @@ impl Session {
     pub fn smime_verify_capability(&self) -> Option<crate::mail::SmimeVerifyCapability> {
         let val = self.capabilities.get(CAPABILITY_SMIME_VERIFY)?;
         serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed FileNode capability struct, if present (draft-ietf-jmap-filenode §1.2).
+    pub fn filenode_capability(&self) -> Option<crate::filenode::FileNodeCapability> {
+        let val = self.capabilities.get(CAPABILITY_FILENODE)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed RefPlus capability struct, if present (draft-ietf-jmap-refplus §1.2).
+    pub fn refplus_capability(&self) -> Option<RefPlusCapability> {
+        let val = self.capabilities.get(CAPABILITY_REFPLUS)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+}
+
+/// RefPlus capability properties (draft-ietf-jmap-refplus §1.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RefPlusCapability {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub json_path: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter_condition: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_property: Option<bool>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl RefPlusCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_json_path(mut self, json_path: bool) -> Self {
+        self.json_path = Some(json_path);
+        self
+    }
+
+    pub fn with_filter_condition(mut self, filter_condition: bool) -> Self {
+        self.filter_condition = Some(filter_condition);
+        self
+    }
+
+    pub fn with_set_property(mut self, set_property: bool) -> Self {
+        self.set_property = Some(set_property);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
     }
 }
 
