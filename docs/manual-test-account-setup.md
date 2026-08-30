@@ -188,8 +188,8 @@ Edit the fields to point at the mock and clear its refusal:
   `.source` file of the same shape — because `commit_changes` writes
   precisely that file.
 
-Anything short of the above is a bug in this repository, not in the recipe;
-`docs/NIGHT-LOG.md` is where the ones found this way get written down.
+Anything short of the above is a bug in this repository, not in the recipe —
+report it as you would any other bug in this project.
 
 ## What this does not cover
 
