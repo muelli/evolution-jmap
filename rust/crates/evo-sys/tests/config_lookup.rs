@@ -10,9 +10,8 @@
 // account assistant tries to auto-configure a JMAP account — the pattern
 // evolution-ews's own `src/EWS/evolution/e-ews-config-lookup.c`
 // (gitlab.gnome.org/GNOME/evolution-ews, `master`) already uses for Exchange
-// autodiscovery. See `docs/NIGHT-LOG.md`'s three-hundred-and-fourth session
-// for the full reasoning; this file is the FFI foundation that work needs,
-// not the work itself.
+// autodiscovery. This file is the FFI foundation that work needs, not the
+// work itself.
 //
 // As in `eds-sys/tests/oauth2.rs`: an interface has no `g_type_query` size, so
 // what is checkable is the vtable's *offsets* — a slot bindgen wrote a
