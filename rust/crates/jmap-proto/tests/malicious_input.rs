@@ -966,4 +966,25 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::sieve::SieveScriptValidateError>(&text);
     }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar_group(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::CalendarGroup>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar_preferences_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::CalendarPreferencesCapability>(&text);
+    }
+
+    #[cfg(feature = "mail")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_mdn_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::mail::MDNCapability>(&text);
+    }
 }

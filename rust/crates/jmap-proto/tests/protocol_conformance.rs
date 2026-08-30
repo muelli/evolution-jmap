@@ -899,3 +899,90 @@ fn rfc9265_sieve_script_and_validation_forward_compatibility() {
         "Script exceeds recommended execution step limit"
     );
 }
+
+// ===========================================================================
+// RFC 8984 JSCalendar Group & Capability Conformance
+// ===========================================================================
+
+#[test]
+fn rfc8984_calendar_group_and_capabilities_forward_compatibility() {
+    use jmap_proto::calendars::{CalendarGroup, CalendarPreferencesCapability};
+    use jmap_proto::mail::MDNCapability;
+
+    let group_payload = json!({
+        "@type": "Group",
+        "id": "grp_future",
+        "uid": "urn:uuid:group-9999",
+        "title": "Release Team Milestones",
+        "description": "Sprint milestones and tasks",
+        "timeZone": "Europe/Paris",
+        "updated": "2026-08-30T10:00:00Z",
+        "entries": {
+            "evt_release_candidate": {
+                "@type": "Event",
+                "title": "Release Candidate Freeze",
+                "start": "2026-09-15T00:00:00"
+            }
+        },
+        "keywords": {
+            "release": true
+        },
+        "categories": {
+            "engineering": true
+        },
+        "color": "#117733",
+        "source": "https://calendar.example.com/groups/release",
+        "links": {
+            "tracker": {
+                "href": "https://bugzilla.example.com/milestones"
+            }
+        },
+        "futureGroupExtension": {
+            "hierarchyLevel": 2,
+            "readOnlyEntries": true
+        }
+    });
+
+    let group: CalendarGroup = serde_json::from_value(group_payload)
+        .expect("deserialize CalendarGroup with unknown fields");
+    assert_eq!(group.id.as_ref().unwrap().as_str(), "grp_future");
+    assert_eq!(group.group_type.as_deref(), Some("Group"));
+    assert_eq!(group.uid.as_deref(), Some("urn:uuid:group-9999"));
+    assert_eq!(group.title.as_deref(), Some("Release Team Milestones"));
+    assert_eq!(
+        group.description.as_deref(),
+        Some("Sprint milestones and tasks")
+    );
+    assert_eq!(group.time_zone.as_deref(), Some("Europe/Paris"));
+    assert_eq!(
+        group.updated.as_ref().unwrap().as_str(),
+        "2026-08-30T10:00:00Z"
+    );
+    assert_eq!(group.color.as_deref(), Some("#117733"));
+    assert_eq!(
+        group.source.as_deref(),
+        Some("https://calendar.example.com/groups/release")
+    );
+    assert_eq!(group.keywords.as_ref().unwrap()["release"], true);
+    assert!(group.categories.as_ref().unwrap()["engineering"]);
+    assert_eq!(group.extra["futureGroupExtension"]["hierarchyLevel"], 2);
+    assert_eq!(group.extra["futureGroupExtension"]["readOnlyEntries"], true);
+
+    let pref_cap_payload = json!({
+        "maxTimeZoneFavorites": 10,
+        "vendorDefaultLocale": "en-US"
+    });
+    let pref_cap: CalendarPreferencesCapability = serde_json::from_value(pref_cap_payload)
+        .expect("deserialize CalendarPreferencesCapability with extensions");
+    assert_eq!(pref_cap.extra["maxTimeZoneFavorites"], 10);
+    assert_eq!(pref_cap.extra["vendorDefaultLocale"], "en-US");
+
+    let mdn_cap_payload = json!({
+        "maxMdnsPerRequest": 50,
+        "signingMethodsSupported": ["pgp", "smime"]
+    });
+    let mdn_cap: MDNCapability =
+        serde_json::from_value(mdn_cap_payload).expect("deserialize MDNCapability with extensions");
+    assert_eq!(mdn_cap.extra["maxMdnsPerRequest"], 50);
+    assert_eq!(mdn_cap.extra["signingMethodsSupported"][0], "pgp");
+}

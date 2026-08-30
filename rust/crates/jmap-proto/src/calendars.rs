@@ -894,6 +894,8 @@ pub struct Participant {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub participation_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub participation_comment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attendance: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect_reply: Option<bool>,
@@ -936,6 +938,11 @@ impl Participant {
 
     pub fn with_participation_status(mut self, status: impl Into<String>) -> Self {
         self.participation_status = Some(status.into());
+        self
+    }
+
+    pub fn with_participation_comment(mut self, comment: impl Into<String>) -> Self {
+        self.participation_comment = Some(comment.into());
         self
     }
 
@@ -1151,6 +1158,27 @@ impl CalendarPreferences {
 
     pub fn with_first_day_of_week(mut self, first_day: impl Into<String>) -> Self {
         self.first_day_of_week = Some(first_day.into());
+        self
+    }
+}
+
+/// Calendar preferences capability properties (draft-ietf-jmap-calendars-28 §6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarPreferencesCapability {
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarPreferencesCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_extra(mut self, extra: Value) -> Self {
+        if let Value::Object(map) = extra {
+            self.extra.extend(map);
+        }
         self
     }
 }
@@ -1424,4 +1452,108 @@ pub mod calendar_free_busy_status {
     pub const BUSY: &str = "busy";
     pub const BUSY_TENTATIVE: &str = "busy-tentative";
     pub const BUSY_UNAVAILABLE: &str = "busy-unavailable";
+}
+
+/// JSCalendar Group (RFC 8984 §6): a collection of calendar objects.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarGroup {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+    pub group_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<UtcDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entries: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub categories: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub links: Option<BTreeMap<String, Value>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl CalendarGroup {
+    pub fn new(title: impl Into<String>) -> Self {
+        Self {
+            group_type: Some("Group".to_owned()),
+            title: Some(title.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_uid(mut self, uid: impl Into<String>) -> Self {
+        self.uid = Some(uid.into());
+        self
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_time_zone(mut self, time_zone: impl Into<String>) -> Self {
+        self.time_zone = Some(time_zone.into());
+        self
+    }
+
+    pub fn with_updated(mut self, updated: impl Into<UtcDate>) -> Self {
+        self.updated = Some(updated.into());
+        self
+    }
+
+    pub fn with_entries(mut self, entries: BTreeMap<String, Value>) -> Self {
+        self.entries = Some(entries);
+        self
+    }
+
+    pub fn with_keywords(mut self, keywords: BTreeMap<String, Value>) -> Self {
+        self.keywords = Some(keywords);
+        self
+    }
+
+    pub fn with_categories(mut self, categories: BTreeMap<String, bool>) -> Self {
+        self.categories = Some(categories);
+        self
+    }
+
+    pub fn with_color(mut self, color: impl Into<String>) -> Self {
+        self.color = Some(color.into());
+        self
+    }
+
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
+    }
+
+    pub fn with_links(mut self, links: BTreeMap<String, Value>) -> Self {
+        self.links = Some(links);
+        self
+    }
 }

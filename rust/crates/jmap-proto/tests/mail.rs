@@ -1154,3 +1154,31 @@ fn email_body_part_capability_and_submission_filter_builders() {
         "2026-09-01T00:00:00Z"
     );
 }
+
+#[test]
+fn mdn_capability_accessor() {
+    use jmap_proto::State;
+    use jmap_proto::mail::MDNCapability;
+    use jmap_proto::session::{CAPABILITY_MDN, Session};
+
+    let mut session = Session::new(
+        "alice@example.com",
+        "https://jmap.example.com/api/",
+        "https://jmap.example.com/download/",
+        "https://jmap.example.com/upload/",
+        State::new("s1"),
+    );
+
+    assert!(session.mdn_capability().is_none());
+
+    session = session.with_capability(
+        CAPABILITY_MDN,
+        serde_json::json!({"customMdnExtension": 123}),
+    );
+
+    let cap = session.mdn_capability().expect("capability present");
+    assert_eq!(
+        cap,
+        MDNCapability::default().with_extra(serde_json::json!({"customMdnExtension": 123}))
+    );
+}
