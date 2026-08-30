@@ -424,6 +424,32 @@ pub mod principal_set_error {
     pub const INVALID_PROPERTIES: &str = "invalidProperties";
 }
 
+/// Principal availability calculation capability properties (draft-ietf-jmap-calendars-28 §1.5.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrincipalAvailabilityCapability {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_availability_duration: Option<String>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl PrincipalAvailabilityCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_max_availability_duration(mut self, duration: impl Into<String>) -> Self {
+        self.max_availability_duration = Some(duration.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

@@ -1617,6 +1617,7 @@ pub mod email_submission_set_error {
     pub const INVALID_RECIPIENTS: &str = "invalidRecipients";
     pub const FORBIDDEN_MAIL_FROM: &str = "forbiddenMailFrom";
     pub const FORBIDDEN_FROM: &str = "forbiddenFrom";
+    pub const FORBIDDEN_TO_SEND: &str = "forbiddenToSend";
 }
 
 /// Standard undoStatus values (RFC 8621 §7).

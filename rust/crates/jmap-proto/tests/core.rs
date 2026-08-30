@@ -1505,3 +1505,58 @@ fn query_request_position_builder() {
     assert_eq!(json["position"], 42);
     assert_eq!(json["limit"], 10);
 }
+
+#[test]
+fn webpush_vapid_capability_roundtrip_and_session_accessor() {
+    use jmap_proto::push::WebPushVapidCapability;
+    use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_WEBPUSH_VAPID, Session};
+
+    let cap = WebPushVapidCapability::new("BC4n3xamplePublicVapidKeyInBase64UrlFormat")
+        .with_application_server_key("BC4n3xamplePublicVapidKeyInBase64UrlFormat_updated");
+    assert_eq!(
+        cap.application_server_key,
+        "BC4n3xamplePublicVapidKeyInBase64UrlFormat_updated"
+    );
+
+    let val = serde_json::to_value(&cap).unwrap();
+    assert_eq!(
+        val["applicationServerKey"],
+        "BC4n3xamplePublicVapidKeyInBase64UrlFormat_updated"
+    );
+
+    let deserialized: WebPushVapidCapability = serde_json::from_value(val).unwrap();
+    assert_eq!(deserialized, cap);
+
+    let session = Session::new(
+        "user@example.com",
+        "https://example.com/api",
+        "https://example.com/download",
+        "https://example.com/upload",
+        "state1",
+    )
+    .with_capability(
+        CAPABILITY_CORE,
+        serde_json::json!({
+            "maxSizeUpload": 50000000,
+            "maxConcurrentUpload": 4,
+            "maxSizeRequest": 10000000,
+            "maxConcurrentRequests": 8,
+            "maxCallsInRequest": 16,
+            "maxObjectsInGet": 500,
+            "maxObjectsInSet": 500,
+            "collationAlgorithms": ["i;ascii-casemap", "i;unicode-casemap"]
+        }),
+    )
+    .with_capability(
+        CAPABILITY_WEBPUSH_VAPID,
+        serde_json::json!({
+            "applicationServerKey": "BC4n3xamplePublicVapidKeyInBase64UrlFormat"
+        }),
+    );
+
+    let session_cap = session.webpush_vapid_capability().unwrap();
+    assert_eq!(
+        session_cap.application_server_key,
+        "BC4n3xamplePublicVapidKeyInBase64UrlFormat"
+    );
+}

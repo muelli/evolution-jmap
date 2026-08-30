@@ -31,6 +31,8 @@ pub const CAPABILITY_FILENODE: &str = "urn:ietf:params:jmap:filenode";
 pub const CAPABILITY_REFPLUS: &str = "urn:ietf:params:jmap:refplus";
 pub const CAPABILITY_METADATA: &str = "urn:ietf:params:jmap:metadata";
 pub const CAPABILITY_MAIL_SHARE: &str = "urn:ietf:params:jmap:mail:share";
+pub const CAPABILITY_PRINCIPALS_AVAILABILITY: &str = "urn:ietf:params:jmap:principals:availability";
+pub const CAPABILITY_WEBPUSH_VAPID: &str = "urn:ietf:params:jmap:webpush-vapid";
 
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -391,6 +393,21 @@ impl Session {
     #[cfg(feature = "mail")]
     pub fn mail_share_capability(&self) -> Option<crate::mail::MailShareCapability> {
         let val = self.capabilities.get(CAPABILITY_MAIL_SHARE)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed Principal availability capability struct, if present (draft-ietf-jmap-calendars-28 §1.5.2).
+    #[cfg(feature = "principals")]
+    pub fn principals_availability_capability(
+        &self,
+    ) -> Option<crate::principals::PrincipalAvailabilityCapability> {
+        let val = self.capabilities.get(CAPABILITY_PRINCIPALS_AVAILABILITY)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed WebPush VAPID capability struct, if present (RFC 9749 §6).
+    pub fn webpush_vapid_capability(&self) -> Option<crate::push::WebPushVapidCapability> {
+        let val = self.capabilities.get(CAPABILITY_WEBPUSH_VAPID)?;
         serde_json::from_value(val.clone()).ok()
     }
 }

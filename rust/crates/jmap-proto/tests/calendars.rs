@@ -1415,3 +1415,41 @@ fn participant_reply_roundtrip_and_builders() {
     let deserialized: ParticipantReply = serde_json::from_value(json).unwrap();
     assert_eq!(deserialized, reply);
 }
+
+#[test]
+fn participant_identity_roundtrip_and_builders() {
+    use jmap_proto::calendars::{ParticipantIdentity, participant_identity_set_error};
+
+    assert_eq!(
+        participant_identity_set_error::CANNOT_DESTROY_DEFAULT,
+        "cannotDestroyDefault"
+    );
+
+    let identity = ParticipantIdentity::new("Alice Work")
+        .with_id("pi_work")
+        .with_schedule_id("mailto:alice.work@example.com")
+        .with_send_to_method("imip", "mailto:alice.work@example.com")
+        .with_send_to_method("web", "https://example.com/schedule/alice")
+        .is_default(true);
+
+    assert_eq!(identity.name, "Alice Work");
+    assert_eq!(identity.id.as_ref().unwrap().as_str(), "pi_work");
+    assert_eq!(
+        identity.schedule_id.as_deref(),
+        Some("mailto:alice.work@example.com")
+    );
+    assert_eq!(identity.is_default, Some(true));
+    let send_to = identity.send_to.as_ref().unwrap();
+    assert_eq!(send_to["imip"], "mailto:alice.work@example.com");
+    assert_eq!(send_to["web"], "https://example.com/schedule/alice");
+
+    let json = serde_json::to_value(&identity).unwrap();
+    assert_eq!(json["name"], "Alice Work");
+    assert_eq!(json["id"], "pi_work");
+    assert_eq!(json["scheduleId"], "mailto:alice.work@example.com");
+    assert_eq!(json["isDefault"], true);
+    assert_eq!(json["sendTo"]["imip"], "mailto:alice.work@example.com");
+
+    let deserialized: ParticipantIdentity = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized, identity);
+}

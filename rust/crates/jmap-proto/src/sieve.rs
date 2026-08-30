@@ -249,6 +249,7 @@ impl SieveScriptValidateError {
 /// The `SetError` types RFC 9265 §2.3.2 adds for `SieveScript/set`.
 pub mod sieve_set_error {
     pub const CANNOT_DELETE_ACTIVE_SCRIPT: &str = "cannotDeleteActiveScript";
+    pub const SIEVE_IS_ACTIVE: &str = "sieveIsActive";
     pub const DUPLICATE_SCRIPT_NAME: &str = "duplicateScriptName";
     pub const INVALID_SIEVE: &str = "invalidSieve";
     pub const MAX_NUMBER_SCRIPTS_EXCEEDED: &str = "maxNumberScriptsExceeded";

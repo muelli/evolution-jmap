@@ -1155,4 +1155,24 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::mail::MailShareCapability>(&text);
     }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_participant_identity(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::ParticipantIdentity>(&text);
+    }
+
+    #[cfg(feature = "principals")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_principal_availability_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::principals::PrincipalAvailabilityCapability>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_webpush_vapid_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::push::WebPushVapidCapability>(&text);
+    }
 }

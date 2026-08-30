@@ -2211,3 +2211,132 @@ fn metadata_and_mail_sharing_forward_compatibility_and_conformance() {
     assert_eq!(CAPABILITY_METADATA, "urn:ietf:params:jmap:metadata");
     assert_eq!(CAPABILITY_MAIL_SHARE, "urn:ietf:params:jmap:mail:share");
 }
+
+#[test]
+fn participant_identity_availability_and_webpush_vapid_conformance_and_forward_compatibility() {
+    use jmap_proto::calendars::{
+        ParticipantIdentity, calendar_event_set_error, participant_identity_set_error,
+    };
+    use jmap_proto::contacts::address_book_set_error;
+    use jmap_proto::error::{method, set};
+    use jmap_proto::mail::email_submission_set_error;
+    use jmap_proto::session::{
+        CAPABILITY_PRINCIPALS_AVAILABILITY, CAPABILITY_WEBPUSH_VAPID, Session,
+    };
+    use jmap_proto::sieve::sieve_set_error;
+
+    // 1. Session with availability and webpush-vapid capabilities
+    let session_payload = json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {},
+            "urn:ietf:params:jmap:principals:availability": {
+                "maxAvailabilityDuration": "P60D",
+                "vendorAvailabilityOption": true
+            },
+            "urn:ietf:params:jmap:webpush-vapid": {
+                "applicationServerKey": "BP_custom_test_vapid_key_base64url",
+                "vendorPushOption": "batching"
+            }
+        },
+        "accounts": {},
+        "primaryAccounts": {},
+        "username": "user@example.com",
+        "apiUrl": "https://api.example.com/jmap/",
+        "downloadUrl": "https://api.example.com/download/{blobId}",
+        "uploadUrl": "https://api.example.com/upload/",
+        "state": "s1"
+    });
+
+    let session: Session = serde_json::from_value(session_payload)
+        .expect("deserializes Session with availability and webpush-vapid");
+
+    let avail_cap = session
+        .principals_availability_capability()
+        .expect("has principals:availability capability");
+    assert_eq!(avail_cap.max_availability_duration.as_deref(), Some("P60D"));
+    assert_eq!(avail_cap.extra["vendorAvailabilityOption"], true);
+
+    let vapid_cap = session
+        .webpush_vapid_capability()
+        .expect("has webpush-vapid capability");
+    assert_eq!(
+        vapid_cap.application_server_key,
+        "BP_custom_test_vapid_key_base64url"
+    );
+    assert_eq!(vapid_cap.extra["vendorPushOption"], "batching");
+
+    // 2. ParticipantIdentity forward-compatibility with unknown extension members
+    let identity_payload = json!({
+        "id": "pi_scheduling_default",
+        "name": "Engineering Team Lead",
+        "scheduleId": "mailto:lead@engineering.example.com",
+        "sendTo": {
+            "imip": "mailto:lead@engineering.example.com",
+            "customTransport": "urn:ietf:params:jmap:transport:webhook:https://webhook.example.com/sched"
+        },
+        "isDefault": true,
+        "vendorRoleTag": "team-lead",
+        "customPermissionLevel": 5
+    });
+
+    let pi: ParticipantIdentity =
+        serde_json::from_value(identity_payload).expect("ParticipantIdentity deserialization");
+    assert_eq!(pi.id.as_ref().unwrap().as_str(), "pi_scheduling_default");
+    assert_eq!(pi.name, "Engineering Team Lead");
+    assert_eq!(
+        pi.schedule_id.as_deref(),
+        Some("mailto:lead@engineering.example.com")
+    );
+    assert_eq!(pi.is_default, Some(true));
+    let send_to = pi.send_to.as_ref().unwrap();
+    assert_eq!(send_to["imip"], "mailto:lead@engineering.example.com");
+    assert_eq!(
+        send_to["customTransport"],
+        "urn:ietf:params:jmap:transport:webhook:https://webhook.example.com/sched"
+    );
+    assert_eq!(pi.extra["vendorRoleTag"], "team-lead");
+    assert_eq!(pi.extra["customPermissionLevel"], 5);
+
+    // 3. Exact constant string values verification
+    assert_eq!(
+        CAPABILITY_PRINCIPALS_AVAILABILITY,
+        "urn:ietf:params:jmap:principals:availability"
+    );
+    assert_eq!(
+        CAPABILITY_WEBPUSH_VAPID,
+        "urn:ietf:params:jmap:webpush-vapid"
+    );
+
+    assert_eq!(
+        participant_identity_set_error::CANNOT_DESTROY_DEFAULT,
+        "cannotDestroyDefault"
+    );
+    assert_eq!(
+        address_book_set_error::ADDRESS_BOOK_HAS_CONTENTS,
+        "addressBookHasContents"
+    );
+    assert_eq!(
+        calendar_event_set_error::CANNOT_CALCULATE_OCCURRENCES,
+        "cannotCalculateOccurrences"
+    );
+    assert_eq!(
+        calendar_event_set_error::NO_SUPPORTED_SCHEDULE_METHODS,
+        "noSupportedScheduleMethods"
+    );
+    assert_eq!(sieve_set_error::SIEVE_IS_ACTIVE, "sieveIsActive");
+    assert_eq!(
+        email_submission_set_error::FORBIDDEN_TO_SEND,
+        "forbiddenToSend"
+    );
+
+    assert_eq!(method::FROM_ACCOUNT_NOT_FOUND, "fromAccountNotFound");
+    assert_eq!(
+        method::FROM_ACCOUNT_NOT_SUPPORTED_BY_METHOD,
+        "fromAccountNotSupportedByMethod"
+    );
+    assert_eq!(method::UNSUPPORTED_FILTER, "unsupportedFilter");
+    assert_eq!(method::UNSUPPORTED_SORT, "unsupportedSort");
+    assert_eq!(method::ANCHOR_NOT_FOUND, "anchorNotFound");
+    assert_eq!(method::TOO_MANY_CHANGES, "tooManyChanges");
+    assert_eq!(set::CANNOT_DESTROY_DEFAULT, "cannotDestroyDefault");
+}

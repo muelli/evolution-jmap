@@ -127,10 +127,16 @@ pub mod method {
     /// answer from its log; the client must resynchronise in full.
     pub const CANNOT_CALCULATE_CHANGES: &str = "cannotCalculateChanges";
     /// The call asked for more objects than the server is willing to answer in
-    /// one — for `/get`, more ids than `maxObjectsInGet` (RFC 8620 §5.1). Not a
+    /// one, for `/get`, more ids than `maxObjectsInGet` (RFC 8620 §5.1). Not a
     /// condition to report to the user: a client that reads the session
     /// document's limits and keeps to them never sees it.
     pub const REQUEST_TOO_LARGE: &str = "requestTooLarge";
+    pub const FROM_ACCOUNT_NOT_FOUND: &str = "fromAccountNotFound";
+    pub const FROM_ACCOUNT_NOT_SUPPORTED_BY_METHOD: &str = "fromAccountNotSupportedByMethod";
+    pub const UNSUPPORTED_FILTER: &str = "unsupportedFilter";
+    pub const UNSUPPORTED_SORT: &str = "unsupportedSort";
+    pub const ANCHOR_NOT_FOUND: &str = "anchorNotFound";
+    pub const TOO_MANY_CHANGES: &str = "tooManyChanges";
 }
 
 /// Well-known set-level error types (RFC 8620 §5.3, §5.4).
@@ -148,6 +154,7 @@ pub mod set {
     pub const REQUEST_TOO_LARGE: &str = "requestTooLarge";
     pub const ALREADY_EXISTS: &str = "alreadyExists";
     pub const CANNOT_DESTROY_ORIGINAL: &str = "cannotDestroyOriginal";
+    pub const CANNOT_DESTROY_DEFAULT: &str = "cannotDestroyDefault";
 }
 
 /// Standard RFC 8620 §3.6.1 request-level problem types (RFC 7807 URI format).

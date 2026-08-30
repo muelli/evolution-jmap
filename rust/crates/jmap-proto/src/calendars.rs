@@ -1450,6 +1450,8 @@ pub mod calendar_event_set_error {
     pub const BLOB_NOT_FOUND: &str = "blobNotFound";
     pub const TOO_MANY_PARTICIPANTS: &str = "tooManyParticipants";
     pub const TOO_MANY_RECURRENCES: &str = "tooManyRecurrences";
+    pub const CANNOT_CALCULATE_OCCURRENCES: &str = "cannotCalculateOccurrences";
+    pub const NO_SUPPORTED_SCHEDULE_METHODS: &str = "noSupportedScheduleMethods";
 }
 
 /// Standard free/busy status values (draft-ietf-jmap-calendars-28 §5.7).
@@ -1947,4 +1949,73 @@ pub mod participant_participation_status {
     pub const DECLINED: &str = "declined";
     pub const TENTATIVE: &str = "tentative";
     pub const DELEGATED: &str = "delegated";
+}
+
+/// A participant identity (draft-ietf-jmap-calendars-28 §3): how a user is
+/// identified when participating in events and scheduling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantIdentity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<Id>,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_to: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_default: Option<bool>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl ParticipantIdentity {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_schedule_id(mut self, schedule_id: impl Into<String>) -> Self {
+        self.schedule_id = Some(schedule_id.into());
+        self
+    }
+
+    pub fn with_send_to(mut self, send_to: BTreeMap<String, String>) -> Self {
+        self.send_to = Some(send_to);
+        self
+    }
+
+    pub fn with_send_to_method(
+        mut self,
+        method: impl Into<String>,
+        uri: impl Into<String>,
+    ) -> Self {
+        self.send_to
+            .get_or_insert_with(BTreeMap::new)
+            .insert(method.into(), uri.into());
+        self
+    }
+
+    pub fn is_default(mut self, is_default: bool) -> Self {
+        self.is_default = Some(is_default);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// The `SetError` types draft-ietf-jmap-calendars-28 §3.2 adds for `ParticipantIdentity/set`.
+pub mod participant_identity_set_error {
+    pub const CANNOT_DESTROY_DEFAULT: &str = "cannotDestroyDefault";
 }

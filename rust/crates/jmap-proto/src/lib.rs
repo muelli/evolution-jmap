@@ -3,7 +3,7 @@
 
 //! JMAP protocol types.
 //!
-//! Pure data types with serde implementations — no I/O. Wire format follows:
+//! Pure data types with serde implementations - no I/O. Wire format follows:
 //!
 //! - [RFC 8620] JMAP core: session object, request/response envelopes,
 //!   `Id`/`State` primitives, method-level and set-level errors.
@@ -12,10 +12,11 @@
 //! - [RFC 9610] JMAP for Contacts: `AddressBook`, `ContactCard` carrying
 //!   JSContact ([RFC 9553]) cards (feature `contacts`).
 //! - [draft-ietf-jmap-calendars] JMAP for Calendars: `Calendar`,
-//!   `CalendarEvent` carrying JSCalendar ([RFC 8984]) events
+//!   `CalendarEvent` carrying JSCalendar ([RFC 8984]) events, `ParticipantIdentity`
 //!   (feature `calendars`).
-//! - [RFC 9670] JMAP Sharing: the `Principal` object and its `/get`/`/query`
-//!   methods (feature `principals`).
+//! - [RFC 9670] JMAP Sharing: the `Principal` object, `ShareNotification`,
+//!   and availability calculation (feature `principals`).
+//! - [RFC 9749] JMAP Web Push VAPID: `WebPushVapidCapability`.
 //! - [RFC 9425] JMAP for Quotas: the `Quota` object and `/query` filter.
 //! - [RFC 9404] JMAP Blob Management: `Blob/get` and `Blob/upload`.
 //! - [RFC 9265] JMAP for Sieve Scripts: `SieveScript`, `SieveScript/validate`.
@@ -23,6 +24,8 @@
 //!   `RequestError`, `WebSocketPushEnable`, `WebSocketPushDisable`.
 //! - [draft-ietf-jmap-filenode] JMAP File Storage: `FileNode`, `FileNodeCapability`.
 //! - [draft-ietf-jmap-refplus] JMAP Enhanced Result References: `RefPlusCapability`.
+//! - [draft-ietf-jmap-metadata] JMAP Metadata: `MetadataCapability`, `MetadataFilterCondition`.
+//! - [draft-ietf-jmap-mail-sharing] JMAP Mail Sharing: `MailShareCapability`, `MailboxRights`.
 //!
 //! [RFC 8620]: https://www.rfc-editor.org/rfc/rfc8620
 //! [RFC 8621]: https://www.rfc-editor.org/rfc/rfc8621
@@ -31,12 +34,15 @@
 //! [RFC 8984]: https://www.rfc-editor.org/rfc/rfc8984
 //! [draft-ietf-jmap-calendars]: https://datatracker.ietf.org/doc/draft-ietf-jmap-calendars/
 //! [RFC 9670]: https://www.rfc-editor.org/rfc/rfc9670
+//! [RFC 9749]: https://www.rfc-editor.org/rfc/rfc9749
 //! [RFC 9425]: https://www.rfc-editor.org/rfc/rfc9425
 //! [RFC 9404]: https://www.rfc-editor.org/rfc/rfc9404
 //! [RFC 9265]: https://www.rfc-editor.org/rfc/rfc9265
 //! [RFC 8887]: https://www.rfc-editor.org/rfc/rfc8887
 //! [draft-ietf-jmap-filenode]: https://datatracker.ietf.org/doc/draft-ietf-jmap-filenode/
 //! [draft-ietf-jmap-refplus]: https://datatracker.ietf.org/doc/draft-ietf-jmap-refplus/
+//! [draft-ietf-jmap-metadata]: https://datatracker.ietf.org/doc/draft-ietf-jmap-metadata/
+//! [draft-ietf-jmap-mail-sharing]: https://datatracker.ietf.org/doc/draft-ietf-jmap-mail-sharing/
 
 pub mod blob;
 #[cfg(feature = "calendars")]
