@@ -987,4 +987,67 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::mail::MDNCapability>(&text);
     }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar_event_notification(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::CalendarEventNotification>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar_event_notification_query_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::CalendarEventNotificationQueryFilter>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar_event_send_request(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::CalendarEventSendRequest>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_send_calendar_event(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::SendCalendarEvent>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_calendar_event_send_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::CalendarEventSendResponse>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_send_calendar_event_result(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::SendCalendarEventResult>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_participant_problem(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::ParticipantProblem>(&text);
+    }
+
+    #[cfg(feature = "calendars")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_participant_reply(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::calendars::ParticipantReply>(&text);
+    }
+
+    #[cfg(feature = "principals")]
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_share_notification_query_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::principals::ShareNotificationQueryFilter>(&text);
+    }
 }
