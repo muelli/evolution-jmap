@@ -7,12 +7,11 @@
 //! RFC 8620 §2.2 lets a server publish its JMAP host as a `_jmap._tcp` SRV
 //! record rather than answering at the bare email domain, and Fastmail does
 //! exactly that — which is why a plain email+password account there fetched
-//! `https://fastmail.com/.well-known/jmap` and got a 404 (see
-//! `docs/NIGHT-LOG.md`, "JMAP SRV autodiscovery"). `jmap-client` cannot do the
-//! lookup itself: it is a dependency-lean, runtime-free crate and a DNS
-//! resolver would be a dependency every embedder pays for. So it defines the
-//! [`Resolver`] trait and defaults it to `NoSrvResolver`, and the answer lives
-//! here, in the layer that is already linked against GLib.
+//! `https://fastmail.com/.well-known/jmap` and got a 404. `jmap-client`
+//! cannot do the lookup itself: it is a dependency-lean, runtime-free crate
+//! and a DNS resolver would be a dependency every embedder pays for. So it
+//! defines the [`Resolver`] trait and defaults it to `NoSrvResolver`, and the
+//! answer lives here, in the layer that is already linked against GLib.
 //!
 //! The lookup is GLib's own: `g_resolver_lookup_service()`, bound in `gio-sys`
 //! and part of frozen GIO API since 2.22. That is the whole reason to do it

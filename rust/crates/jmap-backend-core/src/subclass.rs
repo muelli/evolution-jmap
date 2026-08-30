@@ -545,8 +545,8 @@ mod tests {
         }
     }
 
-    /// The deadlock `docs/NIGHT-LOG.md` recorded against `jmap-mail`'s
-    /// `tests/transport.rs`, cut down to the half this crate owns.
+    /// The class-init/registration-lock deadlock originally caught in
+    /// `jmap-mail`'s `tests/transport.rs`, cut down to the half this crate owns.
     ///
     /// GLib serialises class initialisation with a recursive lock of its own
     /// and holds it across `class_init`. So a `class_init` that then waits for
