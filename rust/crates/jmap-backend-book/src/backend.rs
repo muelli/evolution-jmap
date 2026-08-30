@@ -555,8 +555,8 @@ unsafe extern "C" fn remove_contact_sync(
 ///
 /// ## The stale access token, and why the retry lives here
 ///
-/// `docs/ROADMAP.md` item 23, and the calendar backend's `with_connection`
-/// says the whole of it: this connection is pooled from `connect_sync` to
+/// The calendar backend's `with_connection` says the whole of it: this
+/// connection is pooled from `connect_sync` to
 /// `disconnect_sync` and carries the bearer token it was *built* with, an
 /// OAuth 2.0 access token lives about an hour, and the 401 that follows used
 /// to travel straight up to EDS as `E_CLIENT_ERROR_AUTHENTICATION_FAILED` —
