@@ -76,8 +76,8 @@ use gio_sys::{
 };
 use glib_sys::{
     GError, GFALSE, GVariant, g_error_free, g_variant_get_boolean, g_variant_get_child_value,
-    g_variant_get_string, g_variant_get_variant, g_variant_is_of_type, g_variant_new_string,
-    g_variant_n_children, g_variant_new_tuple, g_variant_type_free, g_variant_type_new,
+    g_variant_get_string, g_variant_get_variant, g_variant_is_of_type, g_variant_n_children,
+    g_variant_new_string, g_variant_new_tuple, g_variant_type_free, g_variant_type_new,
     g_variant_unref,
 };
 use gobject_sys::g_object_unref;
@@ -399,7 +399,8 @@ unsafe fn bus_can_activate(connection: *mut GDBusConnection, name: &CStr) -> Opt
         let mut found = false;
         for index in 0..g_variant_n_children(names) {
             let entry = g_variant_get_child_value(names, index);
-            if read_string(g_variant_get_string(entry, ptr::null_mut())).as_deref() == Some(wanted) {
+            if read_string(g_variant_get_string(entry, ptr::null_mut())).as_deref() == Some(wanted)
+            {
                 found = true;
             }
             g_variant_unref(entry);
