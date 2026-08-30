@@ -330,6 +330,22 @@ impl Session {
         let val = self.capabilities.get(CAPABILITY_SIEVE)?;
         serde_json::from_value(val.clone()).ok()
     }
+
+    /// Typed MDN capability struct, if present (RFC 9007 §1.3).
+    #[cfg(feature = "mail")]
+    pub fn mdn_capability(&self) -> Option<crate::mail::MDNCapability> {
+        let val = self.capabilities.get(CAPABILITY_MDN)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed calendar preferences capability struct, if present (draft-ietf-jmap-calendars-28 §6).
+    #[cfg(feature = "calendars")]
+    pub fn calendar_preferences_capability(
+        &self,
+    ) -> Option<crate::calendars::CalendarPreferencesCapability> {
+        let val = self.capabilities.get(CAPABILITY_CALENDAR_PREFERENCES)?;
+        serde_json::from_value(val.clone()).ok()
+    }
 }
 
 /// WebSocket capability properties (RFC 8887 §2).

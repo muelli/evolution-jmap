@@ -1108,3 +1108,103 @@ fn calendar_event_and_capability_builders() {
     assert_eq!(event.locale.as_deref(), Some("en"));
     assert!(event.recurrence_rule.is_some());
 }
+
+#[test]
+fn calendar_group_roundtrip_and_builders() {
+    use jmap_proto::calendars::CalendarGroup;
+    use jmap_proto::{Id, UtcDate};
+    use std::collections::BTreeMap;
+
+    let group = CalendarGroup::new("Project Milestones")
+        .with_id(Id::new("grp_1"))
+        .with_uid("urn:uuid:group-1234")
+        .with_description("Collection of sprint milestone events")
+        .with_time_zone("America/New_York")
+        .with_updated(UtcDate::new("2026-09-01T12:00:00Z"))
+        .with_entries(BTreeMap::from([(
+            "evt_1".to_string(),
+            serde_json::json!({"@type": "Event", "title": "Milestone 1"}),
+        )]))
+        .with_keywords(BTreeMap::from([(
+            "sprint".to_string(),
+            serde_json::Value::Bool(true),
+        )]))
+        .with_categories(BTreeMap::from([("engineering".to_string(), true)]))
+        .with_color("#228833")
+        .with_source("https://calendar.example.com/groups/grp_1")
+        .with_links(BTreeMap::from([(
+            "l1".to_string(),
+            serde_json::json!({"href": "https://wiki.example.com/sprint"}),
+        )]));
+
+    let json = serde_json::to_value(&group).unwrap();
+    assert_eq!(json["@type"], "Group");
+    assert_eq!(json["id"], "grp_1");
+    assert_eq!(json["uid"], "urn:uuid:group-1234");
+    assert_eq!(json["title"], "Project Milestones");
+    assert_eq!(json["description"], "Collection of sprint milestone events");
+    assert_eq!(json["timeZone"], "America/New_York");
+    assert_eq!(json["updated"], "2026-09-01T12:00:00Z");
+    assert_eq!(json["entries"]["evt_1"]["title"], "Milestone 1");
+    assert_eq!(json["keywords"]["sprint"], true);
+    assert_eq!(json["categories"]["engineering"], true);
+    assert_eq!(json["color"], "#228833");
+    assert_eq!(json["source"], "https://calendar.example.com/groups/grp_1");
+    assert_eq!(
+        json["links"]["l1"]["href"],
+        "https://wiki.example.com/sprint"
+    );
+
+    let deserialized: CalendarGroup = serde_json::from_value(json).unwrap();
+    assert_eq!(deserialized, group);
+}
+
+#[test]
+fn participant_participation_comment_roundtrip() {
+    use jmap_proto::calendars::Participant;
+
+    let p = Participant::new("Alice", "alice@example.com")
+        .with_participation_comment("Will arrive 10 minutes late");
+
+    let json = serde_json::to_value(&p).unwrap();
+    assert_eq!(json["name"], "Alice");
+    assert_eq!(json["email"], "alice@example.com");
+    assert_eq!(json["participationComment"], "Will arrive 10 minutes late");
+
+    let round_tripped: Participant = serde_json::from_value(json).unwrap();
+    assert_eq!(
+        round_tripped.participation_comment.as_deref(),
+        Some("Will arrive 10 minutes late")
+    );
+}
+
+#[test]
+fn calendar_preferences_capability_accessor() {
+    use jmap_proto::State;
+    use jmap_proto::calendars::CalendarPreferencesCapability;
+    use jmap_proto::session::{CAPABILITY_CALENDAR_PREFERENCES, Session};
+
+    let mut session = Session::new(
+        "alice@example.com",
+        "https://jmap.example.com/api/",
+        "https://jmap.example.com/download/",
+        "https://jmap.example.com/upload/",
+        State::new("s1"),
+    );
+
+    assert!(session.calendar_preferences_capability().is_none());
+
+    session = session.with_capability(
+        CAPABILITY_CALENDAR_PREFERENCES,
+        serde_json::json!({"customPrefExtension": true}),
+    );
+
+    let cap = session
+        .calendar_preferences_capability()
+        .expect("capability present");
+    assert_eq!(
+        cap,
+        CalendarPreferencesCapability::default()
+            .with_extra(serde_json::json!({"customPrefExtension": true}))
+    );
+}

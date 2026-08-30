@@ -1761,3 +1761,24 @@ pub mod mdn_set_error {
     pub const MDN_ALREADY_SENT: &str = "mdnAlreadySent";
     pub const FORBIDDEN_FROM: &str = "forbiddenFrom";
 }
+
+/// MDN capability properties (RFC 9007 §1.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MDNCapability {
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl MDNCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_extra(mut self, extra: Value) -> Self {
+        if let Value::Object(map) = extra {
+            self.extra.extend(map);
+        }
+        self
+    }
+}
