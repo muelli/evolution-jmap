@@ -64,8 +64,8 @@ impl TestSource {
     /// could have the other's verifier written over its own, or find one after
     /// having just redeemed its own and be told a single-use secret was reused.
     /// That is the intermittent `the_token_form_redeems_the_verifier_behind_
-    /// the_authorization_challenge` failure logged in `docs/NIGHT-LOG.md` on
-    /// 2026-08-24 — collisions between tests, not a defect in the keying.
+    /// the_authorization_challenge` failure from 2026-08-24 — collisions
+    /// between tests, not a defect in the keying.
     fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let uid = format!(
