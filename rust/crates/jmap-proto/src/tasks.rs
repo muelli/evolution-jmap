@@ -52,6 +52,11 @@ impl TasksCapability {
         self.max_task_lists_per_get = Some(max);
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// A TaskList collection (draft-ietf-jmap-tasks §2).
@@ -129,6 +134,11 @@ impl TaskList {
         self.my_rights = Some(rights);
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Permissions on a task list (draft-ietf-jmap-tasks §2.1).
@@ -182,6 +192,11 @@ impl TaskListRights {
 
     pub fn is_writable(&self) -> bool {
         self.may_write_all == Some(true) || self.may_write_own == Some(true)
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
     }
 }
 
@@ -376,6 +391,11 @@ impl Task {
         self.recurrence_rule = Some(rule);
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `Task/query` filter (draft-ietf-jmap-tasks §4.2).
@@ -433,6 +453,11 @@ impl TaskQueryFilter {
 
     pub fn with_has_recurrence(mut self, has_recurrence: bool) -> Self {
         self.has_recurrence = Some(has_recurrence);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }

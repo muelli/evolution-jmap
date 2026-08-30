@@ -2338,5 +2338,130 @@ fn participant_identity_availability_and_webpush_vapid_conformance_and_forward_c
     assert_eq!(method::UNSUPPORTED_SORT, "unsupportedSort");
     assert_eq!(method::ANCHOR_NOT_FOUND, "anchorNotFound");
     assert_eq!(method::TOO_MANY_CHANGES, "tooManyChanges");
+    assert_eq!(method::UNKNOWN_DATA_TYPE, "unknownDataType");
     assert_eq!(set::CANNOT_DESTROY_DEFAULT, "cannotDestroyDefault");
+}
+
+#[test]
+fn vacation_response_capability_and_unknown_data_type_conformance() {
+    use jmap_proto::blob::{BlobInfo, UploadBlobResult};
+    use jmap_proto::calendars::CalendarsCapability;
+    use jmap_proto::contacts::ContactsCapability;
+    use jmap_proto::error::method;
+    use jmap_proto::mail::VacationResponseCapability;
+    use jmap_proto::principals::PrincipalsCapability;
+    use jmap_proto::quota::QuotaCapability;
+    use jmap_proto::session::{
+        Account, CAPABILITY_VACATION_RESPONSE, CoreCapability, Session, WebSocketCapability,
+    };
+    use jmap_proto::sieve::SieveCapability;
+    use jmap_proto::tasks::TasksCapability;
+    use std::collections::BTreeMap;
+
+    // 1. RFC 8621 §1.5 Vacation Response Capability
+    assert_eq!(
+        CAPABILITY_VACATION_RESPONSE,
+        "urn:ietf:params:jmap:vacationresponse"
+    );
+
+    let session_payload = json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {
+                "maxSizeUpload": 50000000,
+                "maxConcurrentUpload": 4,
+                "maxSizeRequest": 10000000,
+                "maxConcurrentRequests": 8,
+                "maxCallsInRequest": 16,
+                "maxObjectsInGet": 500,
+                "maxObjectsInSet": 500,
+                "collationAlgorithms": ["i;ascii-casemap"]
+            },
+            "urn:ietf:params:jmap:vacationresponse": {
+                "customAutoReplySetting": true,
+                "maxRecipientRules": 50
+            }
+        },
+        "accounts": {},
+        "primaryAccounts": {},
+        "username": "user@example.com",
+        "apiUrl": "https://api.example.com/jmap/",
+        "downloadUrl": "https://api.example.com/download/{blobId}",
+        "uploadUrl": "https://api.example.com/upload/",
+        "state": "s1"
+    });
+
+    let session: Session = serde_json::from_value(session_payload)
+        .expect("deserializes Session with vacation response capability");
+
+    let vacation_cap = session
+        .vacation_response_capability()
+        .expect("has vacation response capability");
+    assert_eq!(vacation_cap.extra["customAutoReplySetting"], true);
+    assert_eq!(vacation_cap.extra["maxRecipientRules"], 50);
+
+    // 2. RFC 9404 method error constant
+    assert_eq!(method::UNKNOWN_DATA_TYPE, "unknownDataType");
+
+    // 3. Forward compatibility across capability types with extra bags
+    let core_cap = CoreCapability::new().with_extra(BTreeMap::from([(
+        "vendorCoreOpt".to_string(),
+        json!("enabled"),
+    )]));
+    assert_eq!(core_cap.extra["vendorCoreOpt"], "enabled");
+
+    let ws_cap = WebSocketCapability::new("wss://example.com/ws").with_extra(BTreeMap::from([(
+        "heartbeatInterval".to_string(),
+        json!(30),
+    )]));
+    assert_eq!(ws_cap.extra["heartbeatInterval"], 30);
+
+    let account = Account::new("Primary")
+        .with_extra(BTreeMap::from([("tier".to_string(), json!("enterprise"))]));
+    assert_eq!(account.extra["tier"], "enterprise");
+
+    let quota_cap = QuotaCapability::new().with_extra(BTreeMap::from([(
+        "quotaGranularity".to_string(),
+        json!("bytes"),
+    )]));
+    assert_eq!(quota_cap.extra["quotaGranularity"], "bytes");
+
+    let blob_info = BlobInfo::new("b1", 1024)
+        .with_extra(BTreeMap::from([("storageClass".to_string(), json!("hot"))]));
+    assert_eq!(blob_info.extra["storageClass"], "hot");
+
+    let upload_result = UploadBlobResult::new("b2", 2048).with_extra(BTreeMap::from([(
+        "sha256".to_string(),
+        json!("abc123hash"),
+    )]));
+    assert_eq!(upload_result.extra["sha256"], "abc123hash");
+
+    let sieve_cap = SieveCapability::new(102400).with_extra(BTreeMap::from([(
+        "regexEngine".to_string(),
+        json!("pcre2"),
+    )]));
+    assert_eq!(sieve_cap.extra["regexEngine"], "pcre2");
+
+    let tasks_cap = TasksCapability::new().with_extra(BTreeMap::from([(
+        "taskPriorityLevels".to_string(),
+        json!(9),
+    )]));
+    assert_eq!(tasks_cap.extra["taskPriorityLevels"], 9);
+
+    let contacts_cap = ContactsCapability::new()
+        .with_extra(BTreeMap::from([("vCardVersion".to_string(), json!("4.0"))]));
+    assert_eq!(contacts_cap.extra["vCardVersion"], "4.0");
+
+    let calendars_cap = CalendarsCapability::new()
+        .with_extra(BTreeMap::from([("maxAttendees".to_string(), json!(200))]));
+    assert_eq!(calendars_cap.extra["maxAttendees"], 200);
+
+    let principals_cap = PrincipalsCapability::new().with_extra(BTreeMap::from([(
+        "directoryProtocol".to_string(),
+        json!("ldap"),
+    )]));
+    assert_eq!(principals_cap.extra["directoryProtocol"], "ldap");
+
+    let vacation_cap_direct = VacationResponseCapability::new()
+        .with_extra(BTreeMap::from([("htmlSupported".to_string(), json!(true))]));
+    assert_eq!(vacation_cap_direct.extra["htmlSupported"], true);
 }

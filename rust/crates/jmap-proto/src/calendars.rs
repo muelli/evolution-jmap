@@ -103,6 +103,11 @@ impl Calendar {
         self.time_zone = Some(time_zone.into());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `Calendar.myRights`/a `shareWith` entry (calendars draft §4, draft-27 field
@@ -164,6 +169,11 @@ impl CalendarRights {
     /// [`crate::contacts::AddressBookRights::is_writable`].
     pub fn is_writable(&self) -> bool {
         self.may_write_all.unwrap_or(false) || self.may_write_own.unwrap_or(false)
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
     }
 }
 
@@ -499,6 +509,11 @@ impl CalendarEvent {
             status: Some("confirmed".to_owned()),
             ..Self::default()
         }
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
     }
 }
 
@@ -966,6 +981,11 @@ impl Participant {
         self.schedule_agent = Some(schedule_agent.into());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// JSCalendar Location (RFC 8984 §4.2.5): a physical location for the event.
@@ -1283,6 +1303,11 @@ impl CalendarsCapability {
 
     pub fn with_max_concurrent_availabilities(mut self, max: u64) -> Self {
         self.max_concurrent_availabilities = max;
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }

@@ -355,6 +355,13 @@ impl Session {
         serde_json::from_value(val.clone()).ok()
     }
 
+    /// Typed vacation response capability struct, if present (RFC 8621 §1.5).
+    #[cfg(feature = "mail")]
+    pub fn vacation_response_capability(&self) -> Option<crate::mail::VacationResponseCapability> {
+        let val = self.capabilities.get(CAPABILITY_VACATION_RESPONSE)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
     /// Typed calendar preferences capability struct, if present (draft-ietf-jmap-calendars-28 §6).
     #[cfg(feature = "calendars")]
     pub fn calendar_preferences_capability(
@@ -476,6 +483,11 @@ impl WebSocketCapability {
         self.supports_push = supports;
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Core capability properties (RFC 8620 §2).
@@ -549,6 +561,11 @@ impl CoreCapability {
         self.collation_algorithms = algorithms.into_iter().map(Into::into).collect();
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// One account the user has access to (RFC 8620 §1.6.2).
@@ -593,6 +610,11 @@ impl Account {
 
     pub fn with_capabilities(mut self, capabilities: BTreeMap<String, Value>) -> Self {
         self.account_capabilities = capabilities;
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 

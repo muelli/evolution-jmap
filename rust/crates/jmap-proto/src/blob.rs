@@ -75,6 +75,11 @@ impl BlobInfo {
         self.content_type = Some(content_type.into());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `Blob/get` arguments (RFC 9404 §2.1).
@@ -183,6 +188,11 @@ impl UploadBlob {
         self.size = Some(size);
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Result of an uploaded blob in `Blob/upload` (RFC 9404 §2.2).
@@ -209,6 +219,11 @@ impl UploadBlobResult {
 
     pub fn with_content_type(mut self, content_type: impl Into<String>) -> Self {
         self.content_type = Some(content_type.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }

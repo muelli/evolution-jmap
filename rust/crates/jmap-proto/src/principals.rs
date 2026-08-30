@@ -112,6 +112,11 @@ impl Principal {
         self.is_personal = Some(is_personal);
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `Principal/query` filter (RFC 9670 §2): resolve a person by name, email,
@@ -321,6 +326,11 @@ impl ShareNotification {
         self.new_rights = Some(new_rights);
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Standard RFC 9670 §4 share notification object types.
@@ -364,6 +374,11 @@ impl ShareNotificationQueryFilter {
         self.object_type = Some(object_type.into());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Principals capability properties (RFC 9670 §1.3).
@@ -383,6 +398,11 @@ impl PrincipalsCapability {
 
     pub fn with_max_principals_per_get(mut self, max: u64) -> Self {
         self.max_principals_per_get = Some(max);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }
@@ -413,6 +433,11 @@ impl PrincipalsOwnerCapability {
 
     pub fn with_principal_id(mut self, principal_id: impl Into<Id>) -> Self {
         self.principal_id = principal_id.into();
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }

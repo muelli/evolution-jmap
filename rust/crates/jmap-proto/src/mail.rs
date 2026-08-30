@@ -195,6 +195,26 @@ impl Thread {
             extra: BTreeMap::new(),
         }
     }
+
+    pub fn with_id(mut self, id: impl Into<Id>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    pub fn with_email_ids(mut self, email_ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.email_ids = email_ids.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_email_id(mut self, email_id: impl Into<Id>) -> Self {
+        self.email_ids.push(email_id.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Vacation response auto-responder settings (RFC 8621 §8).
@@ -238,6 +258,11 @@ impl VacationResponse {
         self
     }
 
+    pub fn with_is_enabled(mut self, is_enabled: bool) -> Self {
+        self.is_enabled = is_enabled;
+        self
+    }
+
     pub fn with_from_date(mut self, from_date: impl Into<UtcDate>) -> Self {
         self.from_date = Some(from_date.into());
         self
@@ -260,6 +285,30 @@ impl VacationResponse {
 
     pub fn with_html_body(mut self, html_body: impl Into<String>) -> Self {
         self.html_body = Some(html_body.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
+/// Vacation response capability properties (RFC 8621 §1.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VacationResponseCapability {
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl VacationResponseCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }
@@ -887,6 +936,16 @@ impl EmailAddressGroup {
         self.name = Some(name.into());
         self
     }
+
+    pub fn with_addresses(mut self, addresses: impl IntoIterator<Item = EmailAddress>) -> Self {
+        self.addresses = addresses.into_iter().collect();
+        self
+    }
+
+    pub fn with_address(mut self, address: EmailAddress) -> Self {
+        self.addresses.push(address);
+        self
+    }
 }
 
 /// A node in the MIME tree (RFC 8621 §4.1.4).
@@ -1348,6 +1407,37 @@ fn default_displayed() -> String {
     displayed::UNKNOWN.to_owned()
 }
 
+impl DeliveryStatus {
+    pub fn new(smtp_reply: impl Into<String>) -> Self {
+        Self {
+            smtp_reply: smtp_reply.into(),
+            delivered: default_delivered(),
+            displayed: default_displayed(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_smtp_reply(mut self, smtp_reply: impl Into<String>) -> Self {
+        self.smtp_reply = smtp_reply.into();
+        self
+    }
+
+    pub fn with_delivered(mut self, delivered: impl Into<String>) -> Self {
+        self.delivered = delivered.into();
+        self
+    }
+
+    pub fn with_displayed(mut self, displayed: impl Into<String>) -> Self {
+        self.displayed = displayed.into();
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
 impl Default for DeliveryStatus {
     fn default() -> Self {
         Self {
@@ -1578,6 +1668,33 @@ pub struct Envelope {
     pub rcpt_to: Vec<EnvelopeAddress>,
 }
 
+impl Envelope {
+    pub fn new(
+        mail_from: EnvelopeAddress,
+        rcpt_to: impl IntoIterator<Item = EnvelopeAddress>,
+    ) -> Self {
+        Self {
+            mail_from,
+            rcpt_to: rcpt_to.into_iter().collect(),
+        }
+    }
+
+    pub fn with_mail_from(mut self, mail_from: EnvelopeAddress) -> Self {
+        self.mail_from = mail_from;
+        self
+    }
+
+    pub fn with_rcpt_to(mut self, rcpt_to: impl IntoIterator<Item = EnvelopeAddress>) -> Self {
+        self.rcpt_to = rcpt_to.into_iter().collect();
+        self
+    }
+
+    pub fn with_recipient(mut self, recipient: EnvelopeAddress) -> Self {
+        self.rcpt_to.push(recipient);
+        self
+    }
+}
+
 /// One envelope address; `parameters` (SMTP extensions) is nullable and
 /// always present on the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -1593,6 +1710,11 @@ impl EnvelopeAddress {
             email: email.into(),
             parameters: None,
         }
+    }
+
+    pub fn with_parameters(mut self, parameters: Value) -> Self {
+        self.parameters = Some(parameters);
+        self
     }
 }
 
@@ -1681,6 +1803,11 @@ impl MailCapability {
         self.may_create_top_level_mailbox = may;
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Submission capability properties (RFC 8621 §1.4).
@@ -1707,6 +1834,11 @@ impl SubmissionCapability {
 
     pub fn with_submission_extensions(mut self, extensions: BTreeMap<String, Vec<String>>) -> Self {
         self.submission_extensions = extensions;
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }
@@ -1789,6 +1921,31 @@ impl MDN {
         self.original_message_id = Some(original_message_id.into());
         self
     }
+
+    pub fn with_mdn_gateway(mut self, gateway: impl Into<String>) -> Self {
+        self.mdn_gateway = Some(gateway.into());
+        self
+    }
+
+    pub fn with_original_recipient(mut self, original_recipient: impl Into<String>) -> Self {
+        self.original_recipient = Some(original_recipient.into());
+        self
+    }
+
+    pub fn with_error(mut self, error: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.error = Some(error.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_extension_fields(mut self, extension_fields: BTreeMap<String, String>) -> Self {
+        self.extension_fields = Some(extension_fields);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// The disposition information of an MDN (RFC 9007 §2.1).
@@ -1821,6 +1978,24 @@ impl MDNDisposition {
             modifiers: None,
             extra: BTreeMap::new(),
         }
+    }
+
+    pub fn with_error(mut self, error: impl Into<String>) -> Self {
+        self.error = Some(error.into());
+        self
+    }
+
+    pub fn with_modifiers(
+        mut self,
+        modifiers: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.modifiers = Some(modifiers.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
     }
 }
 

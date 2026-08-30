@@ -137,6 +137,7 @@ pub mod method {
     pub const UNSUPPORTED_SORT: &str = "unsupportedSort";
     pub const ANCHOR_NOT_FOUND: &str = "anchorNotFound";
     pub const TOO_MANY_CHANGES: &str = "tooManyChanges";
+    pub const UNKNOWN_DATA_TYPE: &str = "unknownDataType";
 }
 
 /// Well-known set-level error types (RFC 8620 §5.3, §5.4).
