@@ -1,11 +1,11 @@
 # Release notes draft — next version after v0.2.0 (prepared 2026-08-29)
 
-Prepared for roadmap item 30 ("release PREPARATION"). Covers `git log
-v0.2.0..HEAD`. **The maintainer chooses the version number and edits this
-down** — nothing here is final copy, and nothing bumps `rust/Cargo.toml`,
-`CMakeLists.txt`, or `docs/packaging/changelog`. Every bullet below cites the
-commit(s) it is based on; verify by inspection rather than trusting the
-summary if anything looks surprising.
+Prepared as release-notes preparation for the next version after v0.2.0.
+Covers `git log v0.2.0..HEAD`. **The maintainer chooses the version number
+and edits this down** — nothing here is final copy, and nothing bumps
+`rust/Cargo.toml`, `CMakeLists.txt`, or `docs/packaging/changelog`. Every
+bullet below cites the commit(s) it is based on; verify by inspection
+rather than trusting the summary if anything looks surprising.
 
 ## Fixed
 
@@ -123,9 +123,9 @@ summary if anything looks surprising.
   (`6206f31`, `8c3c5b3`, `d5cf563`, `c0480ac`); proptest-based fuzzing of
   session/request/response deserialization and structure-aware vCard/iCal
   round-trips added (`1332dbd`, `6a32d7c`, `3a92425`).
-  `docs/BACKLOG.md` has two fuzz-found issues logged but not fixed in this
-  window (a `jmap-vcard` trailing-whitespace round-trip nit, and a real
-  `jmap-ical` panic on a non-ASCII byte in a DATE-TIME value).
+  Two fuzz-found issues are logged but not fixed in this window (a
+  `jmap-vcard` trailing-whitespace round-trip nit, and a real `jmap-ical`
+  panic on a non-ASCII byte in a DATE-TIME value).
 - **A large batch of test-only fidelity characterization** (pins existing
   behavior; no production code changed) across ALTID/LANGUAGE, CATEGORIES,
   non-ASCII/CHARSET/ENCODING, NICKNAME/URL, LOGO/KEY, multi-TYPE phones,
@@ -153,8 +153,8 @@ summary if anything looks surprising.
   `percent-encoding` crate (`0382402`); calcard bumped to 0.3.13, retiring
   a fold-workaround (`3dde547`).
 - **Research with no shipped code change**: a "stale source UID" consent
-  scare (roadmap item 26) investigated and found harmless — the UID
-  belonged to an ordinary collection child, not dangling dconf debris
+  scare investigated and found harmless — the UID belonged to an ordinary
+  collection child, not dangling dconf debris
   (`9e95a56`); externalising JSContact/JSCalendar conversion onto the
   `calcard` crate's own converter (item 27) was measured (15% pass rate
   against our acceptance suite) and rejected — see
