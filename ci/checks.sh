@@ -75,7 +75,15 @@ boundary_lint_exclude=(
     --exclude=BACKLOG.md --exclude=MILESTONES.md
     --exclude=ROADMAP.md --exclude=checks.sh
 )
-boundary_lint_pattern='NIGHT-LOG\.md|AGY-LOG\.md|AGY-TASKS\.md|BACKLOG\.md|MILESTONES\.md|ROADMAP\.md item [0-9]+|[Rr]oadmap item [0-9]+'
+# NOTE 2026-08-30: the first version of this pattern required a literal space
+# in "ROADMAP.md item 23", but the form this repository actually uses is
+# `docs/ROADMAP.md` item 23, with a closing backtick in between. It therefore
+# matched 15 of the 89 real references and the sweep stopped four times
+# believing it was finished. Every ROADMAP.md mention now counts: the thin
+# roadmap that survives the split carries no item numbers, no Track headings
+# and no CURRENT PRIORITY section, so each existing citation needs a decision
+# rather than an assumption.
+boundary_lint_pattern='NIGHT-LOG\.md|AGY-LOG\.md|AGY-TASKS\.md|BACKLOG\.md|MILESTONES\.md|ROADMAP\.md'
 boundary_lint_count=$({ grep -rnE "$boundary_lint_pattern" "${boundary_lint_paths[@]}" "${boundary_lint_exclude[@]}" 2>/dev/null || true; } | wc -l)
 echo "-- $boundary_lint_count mention(s) remain; see docs/ROADMAP.md's repository-split item for the sweep plan --"
 
