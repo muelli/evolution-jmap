@@ -35,9 +35,9 @@
 //! version of this comment claimed evolution-ews registers
 //! `EOAuth2ServiceOffice365` "in exactly this module... and nowhere else,"
 //! and used that to argue registering our own service only in the registry
-//! process was enough — which is exactly the reasoning `docs/ROADMAP.md`
-//! item 12 later found wrong the hard way (an infinite OAuth2 consent loop
-//! on the book/cal backends). Reading evolution-ews's actual source (not
+//! process was enough — which is exactly the reasoning later found wrong
+//! the hard way (an infinite OAuth2 consent loop on the book/cal backends).
+//! Reading evolution-ews's actual source (not
 //! just this one file) shows the claim was wrong, not merely incomplete:
 //! `src/EWS/registry/module-ews-backend.c`,
 //! `src/EWS/evolution/module-ews-configuration.c` (the shell process),
