@@ -44,3 +44,6 @@ tracing = { workspace = true }
 jmap-mail = { path = ".", features = ["testing"] }
 # The connect tests need a server to open an account against.
 evolution-jmap-mock = { workspace = true }
+# The disconnect-window test builds its own session document for a fake
+# Transport, rather than a real MockServer.
+serde_json = { workspace = true }

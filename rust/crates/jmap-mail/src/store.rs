@@ -80,7 +80,14 @@ pub struct JmapStore {
     /// different operations that may all be in flight — and serialising them
     /// behind one lock would make each wait on the slowest. Only connect and
     /// disconnect, which replace the value, need exclusive access.
-    connection: Slot<RwLock<Option<MailSync>>>,
+    ///
+    /// The `Arc` is what lets most callers below clone the connection out and
+    /// drop the guard before making their network round trip, so
+    /// `drop_connection`'s write lock does not wait on one already in flight
+    /// — see each method's own comment for which ones do this and which
+    /// cannot. `MailSync` itself has no reason to be `Clone`; sharing the one
+    /// instance is the point.
+    connection: Slot<RwLock<Option<Arc<MailSync>>>>,
     /// The folder tree the connection last answered with, and when.
     ///
     /// A slot of its own rather than a field of the connection, so that a
@@ -126,7 +133,7 @@ impl JmapStore {
             let mut guard = write(connection);
             self.forget_folders();
             tracing::debug!("storing mail connection in store");
-            *guard = Some(sync);
+            *guard = Some(Arc::new(sync));
         }
         // And only then the push subscription, which is authenticated with
         // the connection just installed and refreshes over it. The other
@@ -406,7 +413,7 @@ impl JmapStore {
     pub fn inspect_connection<R>(&self, f: impl FnOnce(&MailSync) -> R) -> Option<R> {
         let connection = self.connection()?;
         let guard = read(connection);
-        guard.as_ref().map(f)
+        guard.as_ref().map(|sync| f(sync))
     }
 
     /// The account's folder tree — what `get_folder_info_sync` answers with.
@@ -507,9 +514,14 @@ impl JmapStore {
     /// store's client. Nothing is cached here — a listing *is* the folder's
     /// state, and the summary is where it lives.
     ///
-    /// The connection is read-locked across the request, which is what makes a
-    /// disconnect that arrives mid-refresh wait rather than pull the client out
-    /// from under it. Read-locked, so several folders may refresh at once.
+    /// The connection is cloned out and the lock released before the request
+    /// goes out, unlike [`JmapStore::folders`]: nothing here touches the
+    /// `folders` field, so the ordering rule that field's own comment states
+    /// does not apply, and a disconnect arriving mid-request may now proceed
+    /// without waiting for it — see the `connection` field's own comment. The
+    /// request still runs against the connection that was live when it
+    /// started; a disconnect that races it does not cancel it, only stops
+    /// making it wait.
     ///
     /// The state the listing comes with is the one the *next* refresh asks
     /// [`JmapStore::messages_since`] from; the folder keeps it in its summary,
@@ -520,13 +532,16 @@ impl JmapStore {
     /// calculate a delta from.
     pub fn messages(&self, mailbox: &Id) -> Result<(State, Vec<MessageSummary>), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
-        let connection = read(connection);
-        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let sync = {
+            let guard = read(connection);
+            let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
+            Arc::clone(sync)
+        };
         tracing::debug!(mailbox_id = mailbox.as_str(), "listing messages in mailbox");
         match retry_once_after(
             || sync.messages(mailbox),
             SyncError::is_unauthorized,
-            || self.refresh_credentials(sync),
+            || self.refresh_credentials(&sync),
         ) {
             Ok((state, list)) => {
                 tracing::debug!(
@@ -572,8 +587,11 @@ impl JmapStore {
         held: usize,
     ) -> Result<MessageUpdate, StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
-        let connection = read(connection);
-        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let sync = {
+            let guard = read(connection);
+            let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
+            Arc::clone(sync)
+        };
         tracing::debug!(
             mailbox_id = mailbox.as_str(),
             since = since.as_str(),
@@ -583,7 +601,7 @@ impl JmapStore {
         match retry_once_after(
             || sync.messages_since(mailbox, since, held),
             SyncError::is_unauthorized,
-            || self.refresh_credentials(sync),
+            || self.refresh_credentials(&sync),
         ) {
             Ok(update) => {
                 tracing::debug!(
@@ -614,13 +632,16 @@ impl JmapStore {
     /// mailboxes is one message here, which is what it is on the server.
     pub fn message_source(&self, uid: &Id) -> Result<Vec<u8>, StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
-        let connection = read(connection);
-        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let sync = {
+            let guard = read(connection);
+            let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
+            Arc::clone(sync)
+        };
         tracing::debug!(uid = uid.as_str(), "fetching message source");
         match retry_once_after(
             || sync.message_source(uid),
             SyncError::is_unauthorized,
-            || self.refresh_credentials(sync),
+            || self.refresh_credentials(&sync),
         ) {
             Ok(source) => {
                 tracing::debug!(
@@ -655,13 +676,16 @@ impl JmapStore {
     /// closes.
     pub fn set_keywords(&self, uid: &Id, change: &KeywordChange) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
-        let connection = read(connection);
-        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let sync = {
+            let guard = read(connection);
+            let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
+            Arc::clone(sync)
+        };
         tracing::debug!(uid = uid.as_str(), "setting message keywords");
         match retry_once_after(
             || sync.set_keywords(uid, change),
             SyncError::is_unauthorized,
-            || self.refresh_credentials(sync),
+            || self.refresh_credentials(&sync),
         ) {
             Ok(()) => {
                 tracing::debug!(uid = uid.as_str(), "set message keywords");
@@ -687,13 +711,16 @@ impl JmapStore {
     /// identifies it in the account rather than in a folder.
     pub fn file_message(&self, uid: &Id, filing: &Filing) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
-        let connection = read(connection);
-        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let sync = {
+            let guard = read(connection);
+            let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
+            Arc::clone(sync)
+        };
         tracing::debug!(uid = uid.as_str(), "filing message");
         match retry_once_after(
             || sync.file_message(uid, filing),
             SyncError::is_unauthorized,
-            || self.refresh_credentials(sync),
+            || self.refresh_credentials(&sync),
         ) {
             Ok(()) => {
                 tracing::debug!(uid = uid.as_str(), "filed message");
@@ -721,8 +748,11 @@ impl JmapStore {
     /// trash while the rest of the account is still refreshing.
     pub fn expunge_message(&self, uid: &Id, mailbox: &Id) -> Result<(), StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
-        let connection = read(connection);
-        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let sync = {
+            let guard = read(connection);
+            let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
+            Arc::clone(sync)
+        };
         tracing::debug!(
             uid = uid.as_str(),
             mailbox_id = mailbox.as_str(),
@@ -731,7 +761,7 @@ impl JmapStore {
         match retry_once_after(
             || sync.expunge_message(uid, mailbox),
             SyncError::is_unauthorized,
-            || self.refresh_credentials(sync),
+            || self.refresh_credentials(&sync),
         ) {
             Ok(()) => {
                 tracing::debug!(
@@ -772,8 +802,11 @@ impl JmapStore {
         received_at: Option<i64>,
     ) -> Result<Id, StoreError> {
         let connection = self.connection().ok_or(StoreError::Disconnected)?;
-        let connection = read(connection);
-        let sync = connection.as_ref().ok_or(StoreError::Disconnected)?;
+        let sync = {
+            let guard = read(connection);
+            let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
+            Arc::clone(sync)
+        };
         tracing::debug!(
             mailbox_id = mailbox.as_str(),
             size = source.len(),
@@ -787,7 +820,7 @@ impl JmapStore {
         match retry_once_after(
             || sync.import_message(mailbox, source.clone(), keywords, received_at),
             SyncError::is_unauthorized,
-            || self.refresh_credentials(sync),
+            || self.refresh_credentials(&sync),
         ) {
             Ok(id) => {
                 tracing::debug!(
@@ -1112,7 +1145,7 @@ impl JmapStore {
 
     /// The connection slot, or `None` on an instance whose `instance_init` has
     /// not run or whose `finalize` already has.
-    fn connection(&self) -> Option<&RwLock<Option<MailSync>>> {
+    fn connection(&self) -> Option<&RwLock<Option<Arc<MailSync>>>> {
         self.connection.get()
     }
 
