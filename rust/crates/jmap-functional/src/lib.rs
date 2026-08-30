@@ -384,7 +384,7 @@ impl Session {
         // to survive being interpolated into the script text.
         let unlock_and_exec = r#"
             printf '\n' | gnome-keyring-daemon --daemonize --unlock --components=secrets >/dev/null ||
-                { echo "gnome-keyring-daemon --unlock failed; is gnome-keyring installed? (docs/ROADMAP.md item 18)" >&2; exit 97; }
+                { echo "gnome-keyring-daemon --unlock failed; is gnome-keyring installed? EDS D-Bus-activates org.freedesktop.secrets on credential lookups and needs a running keyring daemon to answer it." >&2; exit 97; }
             exec "$0" "$@"
         "#;
         let stdout_path = self.root.join("run.stdout");

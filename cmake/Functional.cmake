@@ -193,10 +193,11 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		message(FATAL_ERROR
 			"ENABLE_FUNCTIONAL_TESTS is ON but EDS's own "
 			"module-oauth2-services.so was not found. It ships with the "
-			"evolution-data-server runtime package; docs/ROADMAP.md item 22's "
-			"reproduction stages it beside module-jmap-backend.so because "
-			"EDS_REGISTRY_MODULES replaces the module directory rather than "
-			"extending it.")
+			"evolution-data-server runtime package; the functional harness "
+			"stages it beside module-jmap-backend.so because the OAuth2 "
+			"credential tests need EDS's own OAuth2Support object to exist, "
+			"and EDS_REGISTRY_MODULES replaces the module directory rather "
+			"than extending it, so both modules must be present at once.")
 	endif()
 
 	# docs/ROADMAP.md item 25's calendar leg. Another libecal consumer, but
@@ -607,8 +608,10 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		message(FATAL_ERROR
 			"ENABLE_FUNCTIONAL_TESTS is ON but gnome-keyring-daemon was not "
 			"found (Debian/Ubuntu: gnome-keyring). Every functional test's "
-			"session needs a secret store to answer EDS's credential lookups; "
-			"see docs/ROADMAP.md item 18.")
+			"session needs a secret store: EDS D-Bus-activates "
+			"org.freedesktop.secrets on the first credential lookup, and "
+			"without a running keyring daemon to answer that activation, "
+			"the lookup hangs until it times out.")
 	endif()
 
 	# The harness's own secret-store step, proven with no backend, module, or
