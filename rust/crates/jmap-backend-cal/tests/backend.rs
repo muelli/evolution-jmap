@@ -20,6 +20,8 @@
 use std::ffi::{CStr, CString};
 use std::mem::{MaybeUninit, size_of};
 use std::ptr;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use eds_sys::{
     E_CAL_OPERATION_FLAG_NONE, E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalBackendSyncClass,
@@ -622,4 +624,46 @@ fn finalize_stops_a_push_subscription_no_disconnect_ever_reached() {
         "finalize kept the push subscription, and its thread"
     );
     assert!(!backend.0.is_connected());
+}
+
+/// The header-refresh piece of item 28: a push subscription's `Authorization`
+/// header can go stale for the same reason the pooled connection's does — an
+/// OAuth 2.0 access token rotates. `refresh_credentials` cannot be driven
+/// end-to-end here since it needs a real `ESource`'s token exchange, but
+/// `JmapCalBackend::refresh_push_headers` is the half it hands off to, and is
+/// directly testable: a subscription started with a stale header is refused,
+/// reconnects, and resumes listening once the fresh header replaces it.
+#[test]
+fn refresh_push_headers_lets_a_stalled_subscription_reconnect() {
+    let server = MockServer::builder().bearer_token("fresh-token").start();
+    let backend = Detached::new();
+    let url = expand_url(
+        &format!("{}/eventsource", server.origin()),
+        &["CalendarEvent"],
+        false,
+        0,
+    );
+    backend.0.store_push(PushRefresh::start(
+        url,
+        vec![("Authorization".to_owned(), "Bearer stale-token".to_owned())],
+        server.account_id(),
+        vec!["CalendarEvent".to_owned()],
+        || {},
+    ));
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.unauthorized_responses() == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "the stale token was never refused"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    backend.0.refresh_push_headers(vec![(
+        "Authorization".to_owned(),
+        "Bearer fresh-token".to_owned(),
+    )]);
+
+    server.wait_for_event_source_subscriber(Duration::from_secs(5));
 }

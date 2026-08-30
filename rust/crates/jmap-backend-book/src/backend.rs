@@ -146,6 +146,21 @@ impl JmapBookBackend {
         self.push.get().is_some_and(|slot| lock(slot).is_some())
     }
 
+    /// Replaces the `Authorization` header the live push subscription sends
+    /// on its future reconnect attempts, if there is a subscription — a
+    /// no-op otherwise, which is what a server with no `eventSourceUrl`
+    /// leaves. Called from [`refresh_credentials`] right after it installs a
+    /// fresh OAuth 2.0 token on the connection, so a subscription refused
+    /// with the stale one picks the new one up rather than looping on the
+    /// same failure until the backend itself reconnects.
+    pub fn refresh_push_headers(&self, headers: Vec<(String, String)>) {
+        if let Some(slot) = self.push.get()
+            && let Some(push) = lock(slot).as_ref()
+        {
+            push.set_headers(headers);
+        }
+    }
+
     /// Whether an operation would find a connection.
     pub fn is_connected(&self) -> bool {
         self.session()
@@ -675,6 +690,12 @@ unsafe fn refresh_credentials(
         Ok(token) => {
             tracing::debug!("refreshed the address book connection's OAuth 2.0 access token");
             sync.client().set_credentials(Credentials::bearer(token));
+            if let Some(header) = sync.client().authorization_header()
+                // SAFETY: forwarded from this function's own contract.
+                && let Some(backend) = unsafe { instance(meta_backend) }
+            {
+                backend.refresh_push_headers(vec![("Authorization".to_owned(), header)]);
+            }
             true
         }
         Err(failure) => {
