@@ -22,9 +22,9 @@ use jmap_proto::principals::Principal;
 use jmap_proto::request::Request;
 use jmap_proto::response::Response;
 use jmap_proto::session::{
-    CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_MDN,
-    CAPABILITY_PRINCIPALS, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
-    CAPABILITY_WEBSOCKET, Session,
+    CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
+    CAPABILITY_MDN, CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION,
+    CAPABILITY_VACATION_RESPONSE, CAPABILITY_WEBSOCKET, Session,
 };
 use serde_json::json;
 
@@ -152,6 +152,33 @@ fn session_forward_compatibility_with_unknown_capabilities_and_fields() {
         session.primary_account("urn:ietf:params:jmap:mail:snooze"),
         Some(&Id::new("A_primary"))
     );
+}
+
+#[test]
+fn session_quota_and_blob_capabilities_typed_accessors() {
+    let raw = json!({
+        "capabilities": {
+            "urn:ietf:params:jmap:core": {},
+            "urn:ietf:params:jmap:quota": {},
+            "urn:ietf:params:jmap:blob": {
+                "maxSizeSource": 50000000,
+                "maxSizeTarget": 25000000
+            }
+        },
+        "accounts": {},
+        "primaryAccounts": {},
+        "username": "user@example.com",
+        "apiUrl": "https://api.example.com/jmap/",
+        "downloadUrl": "https://api.example.com/download/{blobId}",
+        "uploadUrl": "https://api.example.com/upload/",
+        "state": "s1"
+    });
+
+    let session: Session = serde_json::from_value(raw).expect("deserializes Session");
+    assert!(session.quota_capability().is_some());
+    let blob_cap = session.blob_capability().expect("has blob capability");
+    assert_eq!(blob_cap.max_size_source, Some(50000000));
+    assert_eq!(blob_cap.max_size_target, Some(25000000));
 }
 
 #[test]
@@ -649,6 +676,8 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
     assert_eq!(CAPABILITY_CALENDARS, "urn:ietf:params:jmap:calendars");
     assert_eq!(CAPABILITY_PRINCIPALS, "urn:ietf:params:jmap:principals");
     assert_eq!(CAPABILITY_WEBSOCKET, "urn:ietf:params:jmap:websocket");
+    assert_eq!(CAPABILITY_QUOTA, "urn:ietf:params:jmap:quota");
+    assert_eq!(CAPABILITY_BLOB, "urn:ietf:params:jmap:blob");
 
     // Mailbox roles (RFC 8621 §2 / RFC 8457)
     assert_eq!(role::INBOX, "inbox");

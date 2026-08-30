@@ -22,6 +22,8 @@ pub const CAPABILITY_CALENDAR_PREFERENCES: &str = "urn:ietf:params:jmap:calendar
 pub const CAPABILITY_PRINCIPALS: &str = "urn:ietf:params:jmap:principals";
 pub const CAPABILITY_PRINCIPALS_OWNER: &str = "urn:ietf:params:jmap:principals:owner";
 pub const CAPABILITY_WEBSOCKET: &str = "urn:ietf:params:jmap:websocket";
+pub const CAPABILITY_QUOTA: &str = "urn:ietf:params:jmap:quota";
+pub const CAPABILITY_BLOB: &str = "urn:ietf:params:jmap:blob";
 
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -299,6 +301,18 @@ impl Session {
     /// Typed WebSocket capability struct, if present (RFC 8887 §2).
     pub fn websocket_capability(&self) -> Option<WebSocketCapability> {
         let val = self.capabilities.get(CAPABILITY_WEBSOCKET)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed quota capability struct, if present (RFC 9425 §1.1).
+    pub fn quota_capability(&self) -> Option<crate::quota::QuotaCapability> {
+        let val = self.capabilities.get(CAPABILITY_QUOTA)?;
+        serde_json::from_value(val.clone()).ok()
+    }
+
+    /// Typed blob capability struct, if present (RFC 9404 §1.1).
+    pub fn blob_capability(&self) -> Option<crate::blob::BlobCapability> {
+        let val = self.capabilities.get(CAPABILITY_BLOB)?;
         serde_json::from_value(val.clone()).ok()
     }
 }

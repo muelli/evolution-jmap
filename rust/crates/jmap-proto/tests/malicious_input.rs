@@ -834,4 +834,70 @@ proptest! {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::mail::SearchSnippetGetResponse>(&text);
     }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_quota(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::quota::Quota>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_quota_query_filter(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::quota::QuotaQueryFilter>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_quota_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::quota::QuotaCapability>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_blob_capability(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::BlobCapability>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_blob_info(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::BlobInfo>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_blob_get_request(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::BlobGetRequest>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_blob_get_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::BlobGetResponse>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_upload_blob(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::UploadBlob>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_upload_blob_result(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::UploadBlobResult>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_blob_upload_request(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::BlobUploadRequest>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_blob_upload_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::BlobUploadResponse>(&text);
+    }
 }
