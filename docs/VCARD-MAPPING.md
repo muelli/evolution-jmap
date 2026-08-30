@@ -330,7 +330,7 @@ All implementation logic resides in `rust/crates/jmap-vcard/src/contact.rs`.
 
 ## 4. Special Semantics & Product Decision Catalog
 
-All product decisions and behavioral findings documented in `docs/AGY-LOG.md` are codified below:
+The product decisions and behavioral findings below were reached through empirical investigation of `jmap-vcard`'s test suite and EDS's own contact-field behaviour:
 
 ### 4.1 Dropped-by-Design Rationale for Unknown `X-` Properties
 `jmap-vcard` deliberately ignores unmapped vendor `X-` properties (e.g., `X-MOZILLA-HTML`, `X-APPLE-*`, `X-MS-*`, `X-SIGNAL`, `X-DISCORD`, `X-TELEGRAM`, `X-SLACK`, `X-TWITTER`, `X-SIP`, `X-MANAGER`, `X-ASSISTANT`, `X-EVOLUTION-FILE-AS`, `X-EVOLUTION-CALLBACK`, `X-EVOLUTION-RADIO`, `X-EVOLUTION-TELEX`, `X-EVOLUTION-TTYTDD`):
