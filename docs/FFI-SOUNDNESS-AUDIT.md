@@ -72,8 +72,7 @@ The one gap found, in `jmap-backend-core`:
   incoming `error`, keeping the first one — matching GLib's own
   `g_set_error()` family, which refuses the same way at runtime, not only in
   debug builds, and this crate's own existing idiom for "cannot happen but
-  must not be UB if it somehow does." See `docs/NIGHT-LOG.md`'s "Delivered:
-  FFI-SOUNDNESS-AUDIT Finding 1" entry.
+  must not be UB if it somehow does."
 
 ## Question 3 — nullability
 
