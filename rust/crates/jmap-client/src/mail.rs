@@ -763,8 +763,8 @@ impl Client {
     /// same as any other capability-gated property.
     ///
     /// Nothing in this project's EDS integration calls this yet: Evolution
-    /// has no scheduled-send UI or Camel plumbing to drive it
-    /// (`docs/ROADMAP.md` item 29). This exists so the client side is ready
+    /// has no scheduled-send UI or Camel plumbing to drive it.
+    /// This exists so the client side is ready
     /// and proven against the day that changes.
     pub fn submit_email_at(
         &self,

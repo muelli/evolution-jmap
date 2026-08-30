@@ -88,8 +88,8 @@ fn auth_bearer_ok() {
     }
 }
 
-/// `docs/ROADMAP.md` item 23 Do(3): a long-lived backend connection whose
-/// cached bearer token has expired must be able to install a freshly
+/// A long-lived backend connection whose cached bearer token has expired
+/// must be able to install a freshly
 /// refreshed one and retry, without tearing the connection down and
 /// re-fetching the session — that full reconnect is what
 /// [`Client::connect`] does, and repeating it hourly for every open
@@ -119,8 +119,8 @@ fn set_credentials_lets_a_stale_bearer_be_replaced_without_reconnecting() {
     assert_eq!(client.echo(json!({"n": 1})).unwrap(), json!({"n": 1}));
 }
 
-/// `docs/ROADMAP.md` item 23 Do(4): the real "stale bearer, then fresh"
-/// sequence needs the *server*, not just the client, to switch which token
+/// The real "stale bearer, then fresh" sequence needs the *server*, not
+/// just the client, to switch which token
 /// it accepts mid-test. Until now `MockServer` only ever accepted whichever
 /// token(s) were configured before `start()` — which is why the test above
 /// stands in for staleness by mutating the client's own (invalid) token
