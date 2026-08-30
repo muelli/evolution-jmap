@@ -534,8 +534,8 @@ fn a_childs_jmap_oauth2_group_follows_the_accounts() {
 #[test]
 fn a_mail_transport_child_gets_the_jmap_oauth2_group_too() {
     // The transport is the child whose missing registration the operator
-    // actually saw: Send popped the consent window (roadmap item 15). It takes
-    // the `follow_server` early path in `follow_collection`, so the OAuth2
+    // actually saw: Send popped the consent window. It takes the
+    // `follow_server` early path in `follow_collection`, so the OAuth2
     // binding must happen before that fork.
     with_timeout(|| {
         let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
