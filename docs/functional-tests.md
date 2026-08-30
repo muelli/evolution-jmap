@@ -1230,9 +1230,9 @@ What this does not, and cannot, cover: the actual browser consent exchange.
 That is `ECredentialsPrompterImplOAuth2`'s job, not this worker's — `run()`
 only has to leave behind a `client_id` and the discovered endpoints before a
 prompter ever opens, and this test's assertions stop at exactly that
-boundary. `docs/NIGHT-LOG.md`'s 307th session hand-drove this same dispatch
-once with a throwaway client before this test existed; this is that spike
-made permanent and repeatable.
+boundary. The 307th session hand-drove this same dispatch once with a
+throwaway client before this test existed; this is that spike made
+permanent and repeatable.
 
 ## What the collection test asserts
 
