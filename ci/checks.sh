@@ -60,4 +60,23 @@ else
     echo "-- cmake, ninja, or the EDS dev headers are not available; skipping the .deb packaging check (expected on a bare Rust-only machine) --" >&2
 fi
 
+echo "== repository-split boundary lint (warn only) =="
+# The infrastructure split (see docs/ROADMAP.md's repository-split item) moves
+# NIGHT-LOG.md/AGY-LOG.md/AGY-TASKS.md/BACKLOG.md/MILESTONES.md to a private
+# harness repository and rewrites this repository's ROADMAP.md down to a
+# thin, human-facing file with no item numbers. Until then, this just counts
+# how many mentions of those files, or of a ROADMAP.md item number, remain
+# outside the files being replaced — a progress meter for the sweep, not yet
+# an enforced boundary: flip to hard-fail only once the count is zero.
+boundary_lint_paths=(rust cmake ci debian docs)
+boundary_lint_exclude=(
+    --exclude=NIGHT-LOG.md --exclude=NIGHT-LOG-archive.md
+    --exclude=AGY-LOG.md --exclude=AGY-TASKS.md
+    --exclude=BACKLOG.md --exclude=MILESTONES.md
+    --exclude=ROADMAP.md --exclude=checks.sh
+)
+boundary_lint_pattern='NIGHT-LOG\.md|AGY-LOG\.md|AGY-TASKS\.md|BACKLOG\.md|MILESTONES\.md|ROADMAP\.md item [0-9]+|[Rr]oadmap item [0-9]+'
+boundary_lint_count=$({ grep -rnE "$boundary_lint_pattern" "${boundary_lint_paths[@]}" "${boundary_lint_exclude[@]}" 2>/dev/null || true; } | wc -l)
+echo "-- $boundary_lint_count mention(s) remain; see docs/ROADMAP.md's repository-split item for the sweep plan --"
+
 echo "== all checks passed =="
