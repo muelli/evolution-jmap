@@ -3,7 +3,7 @@
 
 //! `GET /eventsource` actually serving `text/event-stream` and pushing a
 //! `StateChange` on the `MockServer::push_state_change` test hook (RFC 8620
-//! §7.1/§7.3, `docs/ROADMAP.md` item 28's mock slice).
+//! §7.1/§7.3).
 //!
 //! Asked over a raw `TcpStream` like `jmap-mock/tests/upload.rs`: this is a
 //! long-lived connection with no `Content-Length`, which is exactly the

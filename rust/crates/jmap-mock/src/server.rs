@@ -342,14 +342,14 @@ impl MockServerBuilder {
 
     /// Answer every `GET /download/...` with a `302` to the same path on
     /// `origin`, instead of serving the blob — reproducing a real deployment
-    /// whose blob host redirects the download elsewhere (see
-    /// `docs/ROADMAP.md`, CURRENT PRIORITY item 9: a real Fastmail account's
-    /// blob download came back as the redirect target's own unrelated
-    /// content, not the message). Distinct from [`Self::advertise_origin`],
-    /// which changes what the *session document* names without changing what
-    /// answers a request — this changes what answers the request while the
-    /// session still calls this server the download host, matching the
-    /// shape of a redirect the client did not ask the session about.
+    /// whose blob host redirects the download elsewhere (a real Fastmail
+    /// account's blob download came back as the redirect target's own
+    /// unrelated content, not the message). Distinct from
+    /// [`Self::advertise_origin`], which changes what the *session document*
+    /// names without changing what answers a request — this changes what
+    /// answers the request while the session still calls this server the
+    /// download host, matching the shape of a redirect the client did not
+    /// ask the session about.
     pub fn download_via_redirect_to(mut self, origin: impl Into<String>) -> Self {
         self.download_via_redirect_to = Some(origin.into());
         self
@@ -358,8 +358,7 @@ impl MockServerBuilder {
     /// Answer `GET /download/...` with a `406` instead of the blob when the
     /// request's `Accept` header is exactly `application/json` — reproducing
     /// a server that does content negotiation on a blob download and refuses
-    /// a request that (wrongly) claims JSON is the only acceptable answer
-    /// (see `docs/ROADMAP.md`, CURRENT PRIORITY item 9's `Accept` smell).
+    /// a request that (wrongly) claims JSON is the only acceptable answer.
     /// Serves the blob for any other `Accept`, including none at all.
     pub fn reject_download_accept_json(mut self) -> Self {
         self.reject_download_accept_json = true;
@@ -588,9 +587,8 @@ impl MockServer {
 
     /// Push `change` to every `/eventsource` client connected right now
     /// (RFC 8620 §7.3) — the "test hook to push one on demand" that stands
-    /// in for a real server's own automatic emission on a state transition
-    /// (`docs/ROADMAP.md` item 28), until something in this mock's dispatch
-    /// path calls this itself.
+    /// in for a real server's own automatic emission on a state transition,
+    /// until something in this mock's dispatch path calls this itself.
     pub fn push_state_change(&self, change: &jmap_proto::push::StateChange) {
         let mut state = self
             .state

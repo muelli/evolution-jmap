@@ -79,9 +79,8 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
     // Snapshotted before any call runs, and diffed against the same
     // snapshot taken after (below), so this request can push one
     // `StateChange` (RFC 8620 §7.1) for whatever it actually mutated —
-    // `docs/ROADMAP.md` item 28's "wire a real mutation to
-    // `push_state_change` automatically", without every `*/set` handler
-    // having to say so itself.
+    // wiring a real mutation to `push_state_change` automatically, without
+    // every `*/set` handler having to say so itself.
     let type_states_before = state.type_state_snapshot();
     for call in &request.method_calls {
         // Recorded before the call is answered, and whatever the answer is: a
@@ -389,12 +388,11 @@ mod tests {
         assert_eq!(eval_pointer("/missing", &value), None);
     }
 
-    /// `docs/ROADMAP.md` item 28: a real mutation should push a
-    /// `StateChange` on its own, not only through the
-    /// `MockServer::push_state_change` test hook. A subscriber registered
-    /// directly against the state's own hub (no socket needed — that plumbing
-    /// is `eventsource`'s own concern, already tested there) proves
-    /// `handle_api` itself is the one broadcasting.
+    /// A real mutation should push a `StateChange` on its own, not only
+    /// through the `MockServer::push_state_change` test hook. A subscriber
+    /// registered directly against the state's own hub (no socket needed —
+    /// that plumbing is `eventsource`'s own concern, already tested there)
+    /// proves `handle_api` itself is the one broadcasting.
     #[test]
     fn a_mailbox_set_create_pushes_a_state_change_automatically() {
         let mut state = ServerState::new();
@@ -446,9 +444,9 @@ mod tests {
         ));
     }
 
-    /// `docs/ROADMAP.md` item 28's `types`-filtering: a subscriber whose
-    /// `types` filter names none of what actually changed is sent nothing at
-    /// all, same as a request that mutated nothing.
+    /// Push's `types`-filtering: a subscriber whose `types` filter names
+    /// none of what actually changed is sent nothing at all, same as a
+    /// request that mutated nothing.
     #[test]
     fn a_subscriber_filtered_to_an_unrelated_type_receives_nothing() {
         let mut state = ServerState::new();
