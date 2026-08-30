@@ -499,6 +499,7 @@ fn mailbox_sharing_identity_draft_and_email_filter_builders_roundtrip() {
         may_rename: Some(false),
         may_delete: Some(false),
         may_submit: Some(false),
+        may_share: Some(false),
         extra: BTreeMap::new(),
     };
 
@@ -1300,4 +1301,69 @@ fn email_header_and_email_address_builders() {
     let addr = EmailAddress::from_email("carol@example.com").with_name("Carol");
     assert_eq!(addr.email, "carol@example.com");
     assert_eq!(addr.name.as_deref(), Some("Carol"));
+}
+
+#[test]
+fn mail_share_capability_and_mailbox_sharing_roundtrip() {
+    use jmap_proto::mail::{MailShareCapability, Mailbox, MailboxRights};
+    use jmap_proto::session::{CAPABILITY_MAIL_SHARE, Session};
+    use serde_json::json;
+
+    assert_eq!(CAPABILITY_MAIL_SHARE, "urn:ietf:params:jmap:mail:share");
+
+    let cap = MailShareCapability::new().with_extra(
+        json!({"vendorOption": true})
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .collect(),
+    );
+    let cap_val = serde_json::to_value(&cap).expect("serialize MailShareCapability");
+    assert_eq!(cap_val["vendorOption"], true);
+    let roundtripped_cap: MailShareCapability =
+        serde_json::from_value(cap_val).expect("deserialize MailShareCapability");
+    assert_eq!(roundtripped_cap, cap);
+
+    let session = Session::new(
+        "alice@example.com",
+        "https://api.example.com/jmap/",
+        "https://api.example.com/download/{blobId}",
+        "https://api.example.com/upload/",
+        "s1",
+    )
+    .with_capability(CAPABILITY_MAIL_SHARE, json!({}));
+
+    let session_cap = session
+        .mail_share_capability()
+        .expect("has mail_share_capability");
+    assert_eq!(session_cap, MailShareCapability::new());
+
+    let rights = MailboxRights::read_only().with_may_share(true);
+    assert_eq!(rights.may_read_items, Some(true));
+    assert_eq!(rights.may_share, Some(true));
+    assert!(rights.may_share());
+
+    let all_rights = MailboxRights::all();
+    assert_eq!(all_rights.may_share, Some(true));
+    assert!(all_rights.may_share());
+
+    let mailbox = Mailbox::new("Shared Team Inbox")
+        .with_shared_principal("principal_alice", rights.clone())
+        .with_shared_principal("principal_bob", MailboxRights::all());
+
+    assert!(mailbox.share_with.is_some());
+    let share_map = mailbox.share_with.as_ref().unwrap();
+    assert_eq!(share_map.len(), 2);
+    assert_eq!(share_map.get(&"principal_alice".into()), Some(&rights));
+
+    let mbx_val = serde_json::to_value(&mailbox).expect("serialize Mailbox");
+    assert_eq!(mbx_val["shareWith"]["principal_alice"]["mayShare"], true);
+    assert_eq!(
+        mbx_val["shareWith"]["principal_alice"]["mayReadItems"],
+        true
+    );
+
+    let roundtripped_mbx: Mailbox = serde_json::from_value(mbx_val).expect("deserialize Mailbox");
+    assert_eq!(roundtripped_mbx, mailbox);
 }

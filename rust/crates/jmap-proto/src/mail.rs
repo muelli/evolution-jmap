@@ -38,9 +38,10 @@ pub struct Mailbox {
     pub unread_threads: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_subscribed: Option<bool>,
-    /// Server-computed permissions on this mailbox (RFC 8621 §2). RFC 8621
-    /// defines no `shareWith` for `Mailbox` — there is no standard JMAP way to
-    /// grant another principal rights on one — so this has no counterpart.
+    /// Permissions granted to specific principals on this mailbox (draft-ietf-jmap-mail-sharing §2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_with: Option<BTreeMap<Id, MailboxRights>>,
+    /// Server-computed permissions on this mailbox (RFC 8621 §2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_rights: Option<MailboxRights>,
     #[serde(flatten)]
@@ -74,6 +75,41 @@ impl Mailbox {
         self.is_subscribed = Some(subscribed);
         self
     }
+
+    pub fn with_share_with(mut self, share_with: BTreeMap<Id, MailboxRights>) -> Self {
+        self.share_with = Some(share_with);
+        self
+    }
+
+    pub fn with_shared_principal(
+        mut self,
+        principal_id: impl Into<Id>,
+        rights: MailboxRights,
+    ) -> Self {
+        self.share_with
+            .get_or_insert_with(BTreeMap::new)
+            .insert(principal_id.into(), rights);
+        self
+    }
+}
+
+/// Mail sharing capability properties (draft-ietf-jmap-mail-sharing §1.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MailShareCapability {
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl MailShareCapability {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `Mailbox.myRights`, RFC 8621 §2.
@@ -98,6 +134,9 @@ pub struct MailboxRights {
     pub may_delete: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_submit: Option<bool>,
+    /// Whether the user may administer and modify the shareWith property (draft-ietf-jmap-mail-sharing §2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_share: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -114,6 +153,7 @@ impl MailboxRights {
             may_rename: Some(true),
             may_delete: Some(true),
             may_submit: Some(true),
+            may_share: Some(true),
             extra: BTreeMap::new(),
         }
     }
@@ -123,6 +163,15 @@ impl MailboxRights {
             may_read_items: Some(true),
             ..Self::default()
         }
+    }
+
+    pub fn may_share(&self) -> bool {
+        self.may_share.unwrap_or(false)
+    }
+
+    pub fn with_may_share(mut self, may_share: bool) -> Self {
+        self.may_share = Some(may_share);
+        self
     }
 }
 
