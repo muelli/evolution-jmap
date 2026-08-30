@@ -433,10 +433,7 @@ fn a_startable_secret_service_counts_as_available_and_is_not_started() {
     )
     .expect("write the stub service file");
 
-    assert_eq!(
-        availability_in(&root, "", Some(&services)),
-        "Some(true)"
-    );
+    assert_eq!(availability_in(&root, "", Some(&services)), "Some(true)");
     assert!(
         !marker.exists(),
         "the probe activated the secret service; `service_is_available` must \
