@@ -255,7 +255,7 @@ pivots all four facts above on, since they are empirically all-or-nothing on
 the same EDS release (3.52 vs. 3.60.2, the only two legs this repository
 tests) — see that cfg's doc comment in `build.rs`.
 
-What is **not** closed by this fix, and belongs in `docs/BACKLOG.md` rather
+What is **not** closed by this fix, and belongs on the backlog rather
 than blocking M10: whether `jmap-vcard`'s own mapping should change on a
 newer EDS — should a JMAP contact's chat handle be read from/written to the
 multi-valued IM field or the first home slot; should the plugin write
