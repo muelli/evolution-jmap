@@ -80,6 +80,11 @@ impl Quota {
         self.description = Some(description.into());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `Quota/query` filter (RFC 9425 §4).
@@ -125,6 +130,11 @@ impl QuotaQueryFilter {
         self.data_types = Some(data_types.into_iter().map(Into::into).collect());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Quota capability properties (RFC 9425 §1.1).
@@ -138,6 +148,11 @@ pub struct QuotaCapability {
 impl QuotaCapability {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
     }
 }
 

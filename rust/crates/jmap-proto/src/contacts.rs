@@ -72,6 +72,11 @@ impl AddressBook {
         self.is_subscribed = Some(is_subscribed);
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `AddressBook.myRights`/a `shareWith` entry, RFC 9610 §2.
@@ -106,6 +111,11 @@ impl AddressBookRights {
             may_read: Some(true),
             ..Self::default()
         }
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
     }
 
     /// Whether these rights let the holder write to the address book — the
@@ -1365,6 +1375,11 @@ impl CardGroup {
         self.members = Some(members);
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Contacts capability properties (RFC 9610 §1.3).
@@ -1391,6 +1406,11 @@ impl ContactsCapability {
 
     pub fn with_max_number_of_cards_in_set(mut self, max: u64) -> Self {
         self.max_number_of_cards_in_set = max;
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }

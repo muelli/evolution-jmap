@@ -63,6 +63,11 @@ impl SieveCapability {
         self.sieve_extensions.push(extension.into());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// A Sieve script object (RFC 9265 §2).
@@ -100,6 +105,11 @@ impl SieveScript {
         self.is_active = is_active;
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `SieveScript/query` filter (RFC 9265 §2.4).
@@ -126,6 +136,11 @@ impl SieveScriptQueryFilter {
 
     pub fn with_is_active(mut self, is_active: bool) -> Self {
         self.is_active = Some(is_active);
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }
@@ -170,6 +185,11 @@ impl SieveScriptValidateRequest {
         self.content = Some(content.into());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// `SieveScript/validate` response (RFC 9265 §2.5).
@@ -201,6 +221,11 @@ impl SieveScriptValidateResponse {
             error: Some(error),
             extra: BTreeMap::new(),
         }
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
     }
 }
 
@@ -242,6 +267,11 @@ impl SieveScriptValidateError {
 
     pub fn with_action(mut self, action: impl Into<String>) -> Self {
         self.action = Some(action.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }

@@ -72,6 +72,11 @@ impl PushSubscription {
         self.types = Some(types.into_iter().map(Into::into).collect());
         self
     }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
 }
 
 /// Elliptic curve keys for Web Push payload encryption (RFC 8620 §7.2, RFC 8291).
@@ -87,6 +92,16 @@ impl PushSubscriptionKeys {
             p256dh: p256dh.into(),
             auth: auth.into(),
         }
+    }
+
+    pub fn with_p256dh(mut self, p256dh: impl Into<String>) -> Self {
+        self.p256dh = p256dh.into();
+        self
+    }
+
+    pub fn with_auth(mut self, auth: impl Into<String>) -> Self {
+        self.auth = auth.into();
+        self
     }
 }
 
@@ -119,6 +134,11 @@ impl PushVerification {
 
     pub fn with_verification_code(mut self, verification_code: impl Into<String>) -> Self {
         self.verification_code = verification_code.into();
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }
@@ -177,6 +197,11 @@ impl StateChange {
             .entry(account_id.into())
             .or_default()
             .insert(type_name.into(), state.into());
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
         self
     }
 }

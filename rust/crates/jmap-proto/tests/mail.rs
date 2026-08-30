@@ -1367,3 +1367,142 @@ fn mail_share_capability_and_mailbox_sharing_roundtrip() {
     let roundtripped_mbx: Mailbox = serde_json::from_value(mbx_val).expect("deserialize Mailbox");
     assert_eq!(roundtripped_mbx, mailbox);
 }
+
+#[test]
+fn vacation_response_capability_and_mail_types_fluent_builders_roundtrip() {
+    use jmap_proto::mail::{
+        DeliveryStatus, EmailAddress, EmailAddressGroup, Envelope, EnvelopeAddress, MDN,
+        MDNDisposition, Thread, VacationResponse, VacationResponseCapability,
+    };
+    use jmap_proto::session::{CAPABILITY_VACATION_RESPONSE, Session};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    assert_eq!(
+        CAPABILITY_VACATION_RESPONSE,
+        "urn:ietf:params:jmap:vacationresponse"
+    );
+
+    // 1. VacationResponseCapability
+    let cap = VacationResponseCapability::new()
+        .with_extra(BTreeMap::from([("vendorOpt".to_string(), json!(true))]));
+    let cap_val = serde_json::to_value(&cap).expect("serialize VacationResponseCapability");
+    assert_eq!(cap_val["vendorOpt"], true);
+    let roundtripped_cap: VacationResponseCapability =
+        serde_json::from_value(cap_val).expect("deserialize VacationResponseCapability");
+    assert_eq!(roundtripped_cap, cap);
+
+    let session = Session::new(
+        "alice@example.com",
+        "https://api.example.com/jmap/",
+        "https://api.example.com/download/{blobId}",
+        "https://api.example.com/upload/",
+        "s1",
+    )
+    .with_capability(CAPABILITY_VACATION_RESPONSE, json!({}));
+
+    let session_cap = session
+        .vacation_response_capability()
+        .expect("has vacation_response_capability");
+    assert_eq!(session_cap, VacationResponseCapability::new());
+
+    // 2. VacationResponse builders
+    let vacation = VacationResponse::new(false)
+        .with_id("singleton")
+        .with_is_enabled(true)
+        .with_subject("On Leave")
+        .with_text_body("I am out of office until Monday.")
+        .with_html_body("<p>I am out of office until Monday.</p>")
+        .with_extra(BTreeMap::from([("customField".to_string(), json!(123))]));
+    assert!(vacation.is_enabled);
+    assert_eq!(vacation.subject.as_deref(), Some("On Leave"));
+    assert_eq!(vacation.extra["customField"], 123);
+
+    // 3. Thread builders
+    let thread = Thread::new("T1", ["E1"])
+        .with_id("T2")
+        .with_email_ids(["E2", "E3"])
+        .with_email_id("E4")
+        .with_extra(BTreeMap::from([("starred".to_string(), json!(true))]));
+    assert_eq!(thread.id.as_ref().unwrap().as_str(), "T2");
+    let thread_email_ids: Vec<_> = thread.email_ids.iter().map(|id| id.as_str()).collect();
+    assert_eq!(thread_email_ids, vec!["E2", "E3", "E4"]);
+    assert_eq!(thread.extra["starred"], true);
+
+    // 4. EmailAddressGroup builders
+    let addr_group = EmailAddressGroup::new([EmailAddress::from_email("alice@example.com")])
+        .with_name("Engineering")
+        .with_addresses([EmailAddress::from_email("bob@example.com")])
+        .with_address(EmailAddress::from_email("carol@example.com"));
+    assert_eq!(addr_group.name.as_deref(), Some("Engineering"));
+    assert_eq!(addr_group.addresses.len(), 2);
+    assert_eq!(addr_group.addresses[0].email, "bob@example.com");
+    assert_eq!(addr_group.addresses[1].email, "carol@example.com");
+
+    // 5. Envelope and EnvelopeAddress builders
+    let env_addr =
+        EnvelopeAddress::new("alice@example.com").with_parameters(json!({"auth": "sender"}));
+    assert_eq!(env_addr.email, "alice@example.com");
+    assert_eq!(env_addr.parameters, Some(json!({"auth": "sender"})));
+
+    let envelope = Envelope::new(
+        EnvelopeAddress::new("sender@example.com"),
+        [EnvelopeAddress::new("rcpt1@example.com")],
+    )
+    .with_mail_from(EnvelopeAddress::new("from@example.com"))
+    .with_rcpt_to([EnvelopeAddress::new("rcpt2@example.com")])
+    .with_recipient(EnvelopeAddress::new("rcpt3@example.com"));
+    assert_eq!(envelope.mail_from.email, "from@example.com");
+    assert_eq!(envelope.rcpt_to.len(), 2);
+    assert_eq!(envelope.rcpt_to[0].email, "rcpt2@example.com");
+    assert_eq!(envelope.rcpt_to[1].email, "rcpt3@example.com");
+
+    // 6. DeliveryStatus builders
+    let delivery = DeliveryStatus::default()
+        .with_smtp_reply("250 2.1.5 Ok")
+        .with_delivered("yes")
+        .with_displayed("unknown")
+        .with_extra(BTreeMap::from([(
+            "tlsVersion".to_string(),
+            json!("TLSv1.3"),
+        )]));
+    assert_eq!(delivery.smtp_reply, "250 2.1.5 Ok");
+    assert_eq!(delivery.delivered, "yes");
+    assert_eq!(delivery.displayed, "unknown");
+    assert_eq!(delivery.extra["tlsVersion"], "TLSv1.3");
+
+    // 7. MDN and MDNDisposition builders
+    let disp = MDNDisposition::new("manual-action", "mdn-sent-manually", "displayed")
+        .with_error("no error")
+        .with_modifiers(["error"])
+        .with_extra(BTreeMap::from([("dispExtra".to_string(), json!(true))]));
+    assert_eq!(disp.action_mode, "manual-action");
+    assert_eq!(disp.error.as_deref(), Some("no error"));
+    assert_eq!(disp.modifiers.as_ref().unwrap(), &vec!["error".to_string()]);
+    assert_eq!(disp.extra["dispExtra"], true);
+
+    let mdn = MDN::new("E1", disp)
+        .with_mdn_gateway("mail.example.com")
+        .with_original_recipient("rfc822; orig@example.com")
+        .with_error(["syntax error"])
+        .with_extension_fields(BTreeMap::from([(
+            "X-Report".to_string(),
+            "Detail".to_string(),
+        )]))
+        .with_extra(BTreeMap::from([("mdnExtra".to_string(), json!(42))]));
+    assert_eq!(mdn.for_email_id.as_str(), "E1");
+    assert_eq!(mdn.mdn_gateway.as_deref(), Some("mail.example.com"));
+    assert_eq!(
+        mdn.original_recipient.as_deref(),
+        Some("rfc822; orig@example.com")
+    );
+    assert_eq!(
+        mdn.error.as_ref().unwrap(),
+        &vec!["syntax error".to_string()]
+    );
+    assert_eq!(
+        mdn.extension_fields.as_ref().unwrap().get("X-Report"),
+        Some(&"Detail".to_string())
+    );
+    assert_eq!(mdn.extra["mdnExtra"], 42);
+}
