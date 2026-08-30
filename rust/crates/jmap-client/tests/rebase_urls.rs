@@ -9,9 +9,8 @@
 //! This is exactly what a live Stalwart 0.16 test deployment does: its
 //! session always advertises `apiUrl`/`downloadUrl`/`uploadUrl`/
 //! `eventSourceUrl` as `https://<configured hostname>/…`, unconditionally,
-//! regardless of which listener actually answered the connection — see
-//! `docs/NIGHT-LOG.md`, "apiUrl's scheme is hardcoded https, not just the
-//! hostname". No Stalwart setting closes that gap, so a client that blindly
+//! regardless of which listener actually answered the connection. No
+//! Stalwart setting closes that gap, so a client that blindly
 //! trusts the advertised `apiUrl` cannot make a single method call against
 //! that deployment even though session discovery itself succeeded.
 

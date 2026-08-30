@@ -4,8 +4,8 @@
 //! RFC 8620 §2.2 SRV autodiscovery (`_jmap._tcp.<domain>`).
 //!
 //! Root-caused by an operator session testing a real `muelli@fastmail.com`
-//! account (see `docs/NIGHT-LOG.md`, "JMAP SRV autodiscovery"): the password
-//! path fetches `https://<email domain>/.well-known/jmap`, which 404s for
+//! account: the password path fetches
+//! `https://<email domain>/.well-known/jmap`, which 404s for
 //! Fastmail — JMAP actually lives at `api.fastmail.com`, published via a
 //! `_jmap._tcp.fastmail.com` SRV record. This is the client-side half of the
 //! fix: a [`Resolver`] seam `ClientBuilder::connect_domain` consults before

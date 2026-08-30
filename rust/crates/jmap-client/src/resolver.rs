@@ -5,10 +5,9 @@
 //!
 //! A client that knows only an email address's domain normally fetches
 //! `https://<domain>/.well-known/jmap` directly. Some deployments (Fastmail
-//! among them — see `docs/NIGHT-LOG.md`, "JMAP SRV autodiscovery") instead
-//! publish the real JMAP host via a `_jmap._tcp` SRV record and answer
-//! nothing at the bare domain, so a client that only ever tries the bare
-//! domain gets a 404 for those.
+//! among them) instead publish the real JMAP host via a `_jmap._tcp` SRV
+//! record and answer nothing at the bare domain, so a client that only ever
+//! tries the bare domain gets a 404 for those.
 //!
 //! This crate does no DNS itself — deliberately: adding a DNS resolver crate
 //! here would cost every embedder a dependency most of them do not need.
