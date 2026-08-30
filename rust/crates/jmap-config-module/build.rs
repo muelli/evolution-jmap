@@ -13,8 +13,7 @@
 // happens to have `libevolution-mail.so.0` already resident (or
 // `LD_LIBRARY_PATH` pointed at `/usr/lib/evolution`) fails before this
 // crate's own code ever runs. That is exactly what silently keeps the
-// account-setup module from registering with a real `EConfigLookup` — see
-// `docs/NIGHT-LOG.md`'s "CURRENT PRIORITY item 2(a)" entry.
+// account-setup module from registering with a real `EConfigLookup`.
 //
 // `evo-sys` is in `[dependencies]` for metadata only: this crate calls none
 // of its bindings, but Cargo only sets `DEP_EVOLUTION_SHELL_LIBDIRS` (from
