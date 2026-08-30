@@ -479,7 +479,7 @@ fn subscription(fixture: &Fixture) -> PushRefresh {
         Vec::new(),
         fixture.account_id.clone(),
         vec!["ContactCard".to_owned()],
-        || {},
+        |_types: &[String]| {},
     )
 }
 
@@ -560,7 +560,7 @@ fn refresh_push_headers_lets_a_stalled_subscription_reconnect() {
         vec![("Authorization".to_owned(), "Bearer stale-token".to_owned())],
         server.account_id(),
         vec!["ContactCard".to_owned()],
-        || {},
+        |_types: &[String]| {},
     ));
 
     let deadline = Instant::now() + Duration::from_secs(5);

@@ -105,7 +105,7 @@ pub struct JmapStore {
     /// That separation is what keeps [`JmapStore::stop_push`] from
     /// deadlocking: stopping the subscription joins its pump thread, and that
     /// pump may at that very moment be inside
-    /// [`crate::push::schedule_refresh`], which locks this. Two locks taken in
+    /// [`crate::push::dispatch`], which locks this. Two locks taken in
     /// sequence and never nested cannot make a cycle; one lock would.
     refresher: Slot<Mutex<Option<FolderRefresh>>>,
 }
@@ -168,18 +168,33 @@ impl JmapStore {
         let refresher = unsafe { FolderRefresh::new(store.cast(), pass) };
         self.install_refresher(Some(refresher));
 
+        // Both halves of item 28's mail-side push in one subscription: a
+        // `Mailbox` change and an `Email`/`EmailDelivery` change ask Camel for
+        // different things, so `dispatch` needs to be told which one a given
+        // `StateChange` actually named — `start_for_with`, not `start_for`,
+        // is what carries that through.
+        let watched: Vec<&str> = crate::push::PUSHED_TYPES
+            .iter()
+            .chain(crate::push::FOLDER_LIST_TYPES)
+            .copied()
+            .collect();
+        let action = |object, types: &[String]| {
+            // SAFETY: `object` is a valid GObject, referenced as the call
+            // below promises, and `dispatch` accepts exactly this type.
+            unsafe { crate::push::dispatch(object, types) }
+        };
         let started = self.connection().and_then(|connection| {
             let guard = read(connection);
             guard.as_ref().and_then(|sync| {
                 // SAFETY: `store` is a valid GObject, referenced as above, and
-                // `schedule_refresh` accepts exactly this type.
+                // `action` accepts exactly this type.
                 unsafe {
-                    push::start_for(
+                    push::start_for_with(
                         store.cast(),
                         sync.client(),
                         sync.account_id(),
-                        crate::push::PUSHED_TYPES,
-                        crate::push::schedule_refresh,
+                        &watched,
+                        action,
                     )
                 }
             })
@@ -237,8 +252,9 @@ impl JmapStore {
     }
 
     /// Asks the coalescing worker for a refresh pass. What
-    /// [`crate::push::schedule_refresh`] does, and the reason the worker
-    /// lives in a slot of its own — see the field's own comment.
+    /// [`crate::push::dispatch`] does for an `Email`/`EmailDelivery` push,
+    /// and the reason the worker lives in a slot of its own — see the
+    /// field's own comment.
     pub fn request_folder_refresh(&self) {
         if let Some(slot) = self.refresher.get()
             && let Some(refresher) = refresher_lock(slot).as_ref()

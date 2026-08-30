@@ -91,6 +91,36 @@ pub unsafe fn start_for(
     types: &[&str],
     schedule_refresh: unsafe extern "C" fn(*mut GObject),
 ) -> Option<PushRefresh> {
+    let action = move |object: *mut GObject, _types: &[String]| {
+        // SAFETY: `object` is a strong reference to `backend`'s object, under
+        // the same contract `start_for`'s own doc promises, and the caller
+        // promised `schedule_refresh` accepts that object's type.
+        unsafe { schedule_refresh(object) };
+    };
+    // SAFETY: forwarded to `start_for_with`, which has the same contract on
+    // `backend`.
+    unsafe { start_for_with(backend, client, account_id, types, action) }
+}
+
+/// Like [`start_for`], but for a caller whose action needs to know which of
+/// `types` the pushed `StateChange` actually named — a plain `unsafe extern
+/// "C" fn(*mut GObject)` cannot carry that, since it must match a real vtable
+/// entry point's fixed signature (`start_for`'s case). `jmap-mail` uses this:
+/// a `Mailbox` change and an `Email`/`EmailDelivery` change ask Camel for two
+/// different things, and a single `StateChange` can name both at once.
+///
+/// # Safety
+///
+/// Same contract as [`start_for`]: `backend` must be a valid GObject with a
+/// strong reference held for the length of this call, and `action` must
+/// accept a pointer to that object's actual type.
+pub unsafe fn start_for_with(
+    backend: *mut GObject,
+    client: &Client,
+    account_id: &Id,
+    types: &[&str],
+    action: impl Fn(*mut GObject, &[String]) + Send + Sync + 'static,
+) -> Option<PushRefresh> {
     let template = client.session().event_source_url.trim();
     if template.is_empty() {
         tracing::debug!("the server advertises no eventSourceUrl; push is unavailable");
@@ -110,11 +140,11 @@ pub unsafe fn start_for(
         headers,
         account_id.clone(),
         types.iter().map(|name| (*name).to_owned()).collect(),
-        move || {
+        move |matched: &[String]| {
             // SAFETY: `with_strong` runs this only while holding a strong
             // reference to the object `backend` pointed at, and the caller
-            // promised `schedule_refresh` accepts that object's type.
-            weak.with_strong(|object| unsafe { schedule_refresh(object) });
+            // promised `action` accepts that object's type.
+            weak.with_strong(|object| action(object, matched));
         },
     ))
 }
@@ -141,12 +171,18 @@ impl PushRefresh {
     /// An empty `types` accepts any type for the account, matching the `*`
     /// [`expand_url`](jmap_client::eventsource::expand_url) puts in the URL
     /// for the same input.
+    ///
+    /// `refresh` is told which of `types` the concerning `StateChange`
+    /// actually named (all of them naming this account, if `types` is
+    /// empty) — most callers ignore it and refresh unconditionally, but a
+    /// caller whose account can be told apart by which JMAP type changed
+    /// (`jmap-mail`, message vs. folder-list) needs it.
     pub fn start(
         url: String,
         headers: Vec<(String, String)>,
         account_id: Id,
         types: Vec<String>,
-        refresh: impl Fn() + Send + 'static,
+        refresh: impl Fn(&[String]) + Send + 'static,
     ) -> Self {
         let cancel = CancelFlag::new();
         let headers = SharedHeaders::new(headers);
@@ -159,12 +195,13 @@ impl PushRefresh {
                     let Some(change) = subscription.recv_timeout(POLL_INTERVAL) else {
                         continue;
                     };
-                    if concerns(&change, &account_id, &types) {
+                    let matched = concerns(&change, &account_id, &types);
+                    if !matched.is_empty() {
                         tracing::debug!(
                             account_id = account_id.as_str(),
                             "a pushed StateChange concerns this backend; scheduling a refresh"
                         );
-                        refresh();
+                        refresh(&matched);
                     }
                 }
             })
@@ -215,14 +252,23 @@ impl Drop for PushRefresh {
     }
 }
 
-/// Whether a pushed `StateChange` says something this backend should refresh
-/// for: its own account, and — unless it asked for every type — a type it
-/// asked about.
-fn concerns(change: &StateChange, account_id: &Id, types: &[String]) -> bool {
-    change
-        .changed
-        .get(account_id)
-        .is_some_and(|state| types.is_empty() || types.iter().any(|name| state.contains_key(name)))
+/// Which of `types` a pushed `StateChange` names for `account_id` — empty if
+/// the change does not concern this account at all, or names none of the
+/// types asked about. An empty `types` accepts any type the account has, so
+/// every type the `StateChange` names for it comes back.
+fn concerns(change: &StateChange, account_id: &Id, types: &[String]) -> Vec<String> {
+    let Some(state) = change.changed.get(account_id) else {
+        return Vec::new();
+    };
+    if types.is_empty() {
+        state.keys().cloned().collect()
+    } else {
+        types
+            .iter()
+            .filter(|name| state.contains_key(name.as_str()))
+            .cloned()
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -251,34 +297,62 @@ mod tests {
 
     #[test]
     fn a_change_to_a_watched_type_on_this_account_concerns_us() {
-        assert!(concerns(
-            &change("a1", "ContactCard"),
-            &Id::new("a1"),
-            &names(&["ContactCard"])
-        ));
+        assert_eq!(
+            concerns(
+                &change("a1", "ContactCard"),
+                &Id::new("a1"),
+                &names(&["ContactCard"])
+            ),
+            names(&["ContactCard"]),
+            "the matched types must name the type that actually changed"
+        );
     }
 
     #[test]
     fn a_change_to_another_account_does_not() {
-        assert!(!concerns(
-            &change("a2", "ContactCard"),
-            &Id::new("a1"),
-            &names(&["ContactCard"])
-        ));
+        assert!(
+            concerns(
+                &change("a2", "ContactCard"),
+                &Id::new("a1"),
+                &names(&["ContactCard"])
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn a_change_to_a_type_we_did_not_ask_about_does_not() {
-        assert!(!concerns(
-            &change("a1", "Email"),
-            &Id::new("a1"),
-            &names(&["ContactCard"])
-        ));
+        assert!(
+            concerns(
+                &change("a1", "Email"),
+                &Id::new("a1"),
+                &names(&["ContactCard"])
+            )
+            .is_empty()
+        );
     }
 
     #[test]
     fn asking_for_no_types_in_particular_accepts_any_on_this_account() {
-        assert!(concerns(&change("a1", "Email"), &Id::new("a1"), &[]));
+        assert_eq!(
+            concerns(&change("a1", "Email"), &Id::new("a1"), &[]),
+            names(&["Email"]),
+            "an empty filter matches, and names, whichever type changed"
+        );
+    }
+
+    #[test]
+    fn a_change_naming_two_watched_types_reports_both() {
+        let mut types = BTreeMap::new();
+        types.insert("Email".to_owned(), State::new("s1"));
+        types.insert("Mailbox".to_owned(), State::new("s1"));
+        let mut changed = BTreeMap::new();
+        changed.insert(Id::new("a1"), types);
+        let change = StateChange::new(changed);
+
+        let mut matched = concerns(&change, &Id::new("a1"), &names(&["Email", "Mailbox"]));
+        matched.sort();
+        assert_eq!(matched, names(&["Email", "Mailbox"]));
     }
 
     /// The whole pump, over a real socket: a mutation in the mock broadcasts
@@ -300,7 +374,7 @@ mod tests {
             Vec::new(),
             Id::new("a1"),
             names(&["ContactCard"]),
-            move || {
+            move |_types: &[String]| {
                 counter.fetch_add(1, Ordering::SeqCst);
             },
         );
@@ -335,7 +409,7 @@ mod tests {
             Vec::new(),
             Id::new("a1"),
             names(&["ContactCard"]),
-            move || {
+            move |_types: &[String]| {
                 counter.fetch_add(1, Ordering::SeqCst);
             },
         );
@@ -382,7 +456,7 @@ mod tests {
             vec![("Authorization".to_owned(), "Bearer stale-token".to_owned())],
             Id::new("a1"),
             names(&["ContactCard"]),
-            move || {
+            move |_types: &[String]| {
                 counter.fetch_add(1, Ordering::SeqCst);
             },
         );
@@ -420,7 +494,13 @@ mod tests {
             false,
             0,
         );
-        let mut push = PushRefresh::start(url, Vec::new(), Id::new("a1"), Vec::new(), || {});
+        let mut push = PushRefresh::start(
+            url,
+            Vec::new(),
+            Id::new("a1"),
+            Vec::new(),
+            |_types: &[String]| {},
+        );
         server.wait_for_event_source_subscriber(Duration::from_secs(5));
 
         let started = Instant::now();
@@ -453,12 +533,18 @@ mod tests {
         let inner = Arc::clone(&slot);
         let stopped = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&stopped);
-        let push = PushRefresh::start(url, Vec::new(), Id::new("a1"), Vec::new(), move || {
-            // Stand-in for finalize: drop the `PushRefresh` from the
-            // pump thread itself.
-            drop(inner.lock().expect("slot lock").take());
-            counter.fetch_add(1, Ordering::SeqCst);
-        });
+        let push = PushRefresh::start(
+            url,
+            Vec::new(),
+            Id::new("a1"),
+            Vec::new(),
+            move |_types: &[String]| {
+                // Stand-in for finalize: drop the `PushRefresh` from the
+                // pump thread itself.
+                drop(inner.lock().expect("slot lock").take());
+                counter.fetch_add(1, Ordering::SeqCst);
+            },
+        );
         *slot.lock().expect("slot lock") = Some(push);
 
         server.wait_for_event_source_subscriber(Duration::from_secs(5));

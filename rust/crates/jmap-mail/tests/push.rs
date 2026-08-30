@@ -36,7 +36,7 @@ fn subscription(server: &MockServer, token: &str) -> PushRefresh {
         vec![("Authorization".to_owned(), format!("Bearer {token}"))],
         server.account_id(),
         vec!["Email".to_owned()],
-        || {},
+        |_types: &[String]| {},
     )
 }
 
