@@ -187,6 +187,37 @@ pub mod push_subscription_set_error {
     pub const EXPIRES_TOO_FAR: &str = "expiresTooFar";
 }
 
+/// Voluntary Application Server Identification (VAPID) Web Push capability properties (RFC 9749 §6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WebPushVapidCapability {
+    pub application_server_key: String,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl WebPushVapidCapability {
+    pub fn new(application_server_key: impl Into<String>) -> Self {
+        Self {
+            application_server_key: application_server_key.into(),
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_application_server_key(
+        mut self,
+        application_server_key: impl Into<String>,
+    ) -> Self {
+        self.application_server_key = application_server_key.into();
+        self
+    }
+
+    pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
+        self.extra = extra;
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
