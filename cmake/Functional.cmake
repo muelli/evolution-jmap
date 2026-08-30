@@ -200,8 +200,9 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"than extending it, so both modules must be present at once.")
 	endif()
 
-	# docs/ROADMAP.md item 25's calendar leg. Another libecal consumer, but
-	# with two things the five above do not need: it seeds the secret store
+	# The calendar leg of the stale-token-refresh acceptance test build.
+	# Another libecal consumer, but with two things the five above do not
+	# need: it seeds the secret store
 	# (`e_secret_store_store_sync`) before it connects, and it asks whether the
 	# registry exported `Source.OAuth2Support` for its source
 	# (`e_source_ref_dbus_object`). Both are libedataserver, which is therefore
@@ -220,7 +221,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_directories(functional-cal-stale-token-client PRIVATE
 		${LIBECAL_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
 
-	# docs/ROADMAP.md item 25's address-book leg. The same shape as
+	# The address-book leg of the same acceptance test. The same shape as
 	# functional-cal-stale-token-client above, with libebook swapped for
 	# libecal — see that target's own comment and the client's header for
 	# why libedataserver is named here too.
@@ -236,7 +237,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_directories(functional-book-stale-token-client PRIVATE
 		${LIBEBOOK_LIBRARY_DIRS} ${LIBEDATASERVER_LIBRARY_DIRS})
 
-	# docs/ROADMAP.md item 26's reproduction client. A registry-only
+	# The stale-source-uid reproduction client. A registry-only
 	# libedataserver consumer like functional-collection-client, plus GSettings
 	# — which is not a separate dependency here: `gio-2.0` comes in with
 	# libedataserver's own pkg-config, and `g_settings_new` is what lets this
@@ -496,9 +497,9 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_TRANSPORT_CLIENT=$<TARGET_FILE:functional-transport-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 
-	# docs/ROADMAP.md item 25: item 23's acceptance test, made headless — the
-	# hourly re-consent, driven through a real `CamelService` rather than
-	# through the operator leaving Evolution open for an afternoon. Stages the
+	# The mail leg of the hourly-re-consent acceptance test, made headless:
+	# driven through a real `CamelService` rather than through the operator
+	# leaving Evolution open for an afternoon. Stages the
 	# same module and `.urls` file as the two legs above, under the same two
 	# variable names and for the same reason: it is one provider.
 	add_test(
@@ -514,7 +515,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-mail-stale-token-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 
-	# docs/ROADMAP.md item 25's calendar leg: the same acceptance test as
+	# The calendar leg of the same acceptance test as
 	# `functional-mail-stale-token`, for the backend whose refresh goes through
 	# an `ESource` rather than a `CamelSession`. Needs three modules where
 	# every other calendar test needs one — the calendar backend in the
@@ -537,7 +538,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-cal-stale-token-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
 	)
 
-	# docs/ROADMAP.md item 25's address-book leg: the same acceptance test as
+	# The address-book leg of the same acceptance test as
 	# `functional-cal-stale-token`, for `jmap-backend-book`'s own
 	# `with_connection`/`retry_on_authentication_failure` wiring. Same three
 	# modules, same reasoning, with libebook's factory and backend in place of
@@ -555,8 +556,8 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_STALE_TOKEN_CLIENT=$<TARGET_FILE:functional-book-stale-token-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
 	)
 
-	# docs/ROADMAP.md item 26: whether a source UID reachable only from
-	# dconf/GSettings can drive the registry into a credential lookup and a
+	# Whether a source UID reachable only from dconf/GSettings can drive the
+	# registry into a credential lookup and a
 	# consent window, and — since it cannot — what actually produces the
 	# operator's `Failed to lookup password for source <uid>` line for a UID
 	# with no keyfile in the config directory. Uses the collection backend's
@@ -577,8 +578,8 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_STALE_SOURCE_UID_CLIENT=$<TARGET_FILE:functional-stale-source-uid-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
-	# docs/ROADMAP.md item 22 Do(1): the stale Source.OAuth2Support proxy that
-	# turns a silent token fetch into G_DBUS_ERROR_SERVICE_UNKNOWN and then a
+	# The stale Source.OAuth2Support proxy that turns a silent token fetch
+	# into G_DBUS_ERROR_SERVICE_UNKNOWN and then a
 	# consent window. Reuses the collection backend's module (it is what
 	# registers the "JMAP" EOAuth2Service the account's `[Authentication]
 	# Method` names) and adds EDS's own oauth2-services module beside it.
@@ -598,7 +599,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# `gnome-keyring-daemon` is what `Session::run` (rust/crates/jmap-functional/
 	# src/lib.rs) unlocks a login keyring on before every other test's client
 	# runs — every account with an `[Authentication]` extension makes EDS ask a
-	# `org.freedesktop.secrets` provider, per docs/ROADMAP.md item 18. Checked
+	# `org.freedesktop.secrets` provider. Checked
 	# here, loudly, for the same reason the three daemons above are: a missing
 	# secret store fails a functional test with a bare D-Bus activation error
 	# or timeout that says nothing about what is missing.
