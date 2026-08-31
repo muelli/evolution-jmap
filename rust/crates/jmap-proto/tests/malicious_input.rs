@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Property-based fuzzing of the untrusted-server boundary (Track A4,
-//! `docs/ROADMAP.md`): a JMAP server is not trusted, so a response's
+//! Property-based fuzzing of the untrusted-server boundary: a JMAP server
+//! is not trusted, so a response's
 //! *shape* is hostile input, not a contract this crate's `Deserialize`
 //! impls are allowed to assume. Every property here feeds arbitrary JSON
 //! straight into an envelope type's deserialization; the only thing

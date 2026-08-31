@@ -191,8 +191,7 @@ fn a_session_that_names_no_get_limit_says_so() {
     assert_eq!(session.max_objects_in_get(), None);
 }
 
-/// RFC 8620 §2's own example account carries a real `maxDelayedSend`
-/// (docs/ROADMAP.md item 29's "detect server support").
+/// RFC 8620 §2's own example account carries a real `maxDelayedSend`.
 #[test]
 fn the_account_names_its_delayed_send_limit() {
     let session: Session = serde_json::from_value(fixture("core/session.json")).unwrap();

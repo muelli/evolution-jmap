@@ -627,8 +627,8 @@ impl Account {
     /// this alone: no delayed send at all (`maxDelayedSend` absent, or `0`
     /// per RFC 8621's own "MUST be 0 if this feature is not supported"), and
     /// an account that does not offer the submission capability in the first
-    /// place. Either way, the answer for `docs/ROADMAP.md` item 29's "detect
-    /// server support" is the same: do not offer scheduled send.
+    /// place. Either way, the answer to "does this account support scheduled
+    /// send" is the same: do not offer scheduled send.
     pub fn max_delayed_send(&self) -> Option<u64> {
         self.account_capabilities
             .get(CAPABILITY_SUBMISSION)?
