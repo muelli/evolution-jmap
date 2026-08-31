@@ -3,7 +3,9 @@ SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# DRAFT, not filed
+# FILED 2026-08-31: https://gitlab.gnome.org/GNOME/glib/-/work_items/4041
+
+Kept for the record; the filed issue is the canonical copy.
 
 Target: `GNOME/glib`, issue. Measured against GLib/GIO 2.80.0 (Ubuntu 24.04)
 on 2026-08-31; the mechanism was verified unchanged in `main` by source
