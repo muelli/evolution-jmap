@@ -42,14 +42,16 @@
 //!
 //! ## The instance is a trait, for the same reason it was a closure
 //!
-//! Everything below needs four calls on a live collection — three of
-//! `ECollectionBackend`'s own and one on the `ESourceRegistryServer` behind
-//! `e_collection_backend_ref_server()` — and nothing else of a GObject, while a
-//! real instance needs a running `evolution-source-registry` on the session bus,
-//! which neither this machine nor CI has. [`Collection`] is those calls and only
-//! those, so that the decisions — which children, in which order, written before
-//! exported, and which removals — are testable against real `ESource`s and a
-//! real `jmap-mockd`, and the untestable part is four one-line method bodies.
+//! Everything below needs five calls on a live collection — three of
+//! `ECollectionBackend`'s own, one on the `ESourceRegistryServer` behind
+//! `e_collection_backend_ref_server()`, and one directly on an
+//! `EServerSideSource` child (`set_remote_deletable`) — and nothing else of a
+//! GObject, while a real instance needs a running `evolution-source-registry`
+//! on the session bus, which neither this machine nor CI has. [`Collection`]
+//! is those calls and only those, so that the decisions — which children, in
+//! which order, written before exported, and which removals — are testable
+//! against real `ESource`s and a real `jmap-mockd`, and the untestable part
+//! is five one-line method bodies.
 //!
 //! ## The order, and why it is a decision
 //!
@@ -93,7 +95,7 @@ use crate::authenticate::Login;
 use crate::child_source::{UnwritableSetting, apply};
 use crate::removal::{NotRemoved, remove_obsolete};
 
-/// The four calls on a live collection that a fan-out needs.
+/// The five calls on a live collection that a fan-out needs.
 ///
 /// One trait rather than four closures because they are four views of one
 /// object and are called in an order that matters; see the module comment on
@@ -138,6 +140,23 @@ pub unsafe trait Collection {
     /// (see `jmap_collection_sync::children`), so it has no opinion about them,
     /// and a source it has no opinion about is one it must not remove.
     fn existing_children(&self) -> Vec<*mut ESource>;
+
+    /// `e_server_side_source_set_remote_deletable (child, deletable)`: whether
+    /// Evolution offers "Delete" on this child at all.
+    ///
+    /// Called for every child [`adopt`] writes, new or drawn from a previous
+    /// fan-out — unlike the other four methods, which only run once per child's
+    /// life in this backend, this one has to run on every rediscovery too, so
+    /// that a collection whose `myRights.mayDelete` changes on the server is
+    /// not stuck with whatever it answered the first time. It runs *after*
+    /// [`Collection::publish`], deliberately: a newly published child also goes
+    /// through `child_added`'s
+    /// [`offer_deletion`](crate::delete_resource::offer_deletion), which sets
+    /// the flag unconditionally deletable as the permissive default for a
+    /// child fanned out with no rights opinion yet — this call is what
+    /// corrects that default to the real per-resource answer, and it must lose
+    /// that race, not win it.
+    fn set_remote_deletable(&self, child: *mut ESource, deletable: bool);
 }
 
 /// What one fan-out did, and everything about it that is worth a log line.
@@ -235,7 +254,14 @@ pub unsafe fn apply_fanout<C: Collection + ?Sized>(
     let mut report = Populated::default();
     for child in fanout.children() {
         // SAFETY: the caller's contract is this function's.
-        match unsafe { adopt(collection, &child.resource_id, &child.settings(connection)) } {
+        match unsafe {
+            adopt(
+                collection,
+                &child.resource_id,
+                &child.settings(connection),
+                child.remote_deletable,
+            )
+        } {
             Adopted::Written { .. } => report.children.push(child.resource_id),
             Adopted::Uncreated => report.uncreated.push(child.resource_id),
             Adopted::Abandoned(setting) => report.abandoned.push(Abandoned {
@@ -275,6 +301,7 @@ pub unsafe fn adopt<C: Collection + ?Sized>(
     collection: &C,
     resource_id: &str,
     settings: &[Setting],
+    remote_deletable: bool,
 ) -> Adopted {
     // SAFETY: `new_child` is `(transfer full)`; the reference `Owned` takes here
     // is released at the end of this function whichever path is taken below —
@@ -298,6 +325,15 @@ pub unsafe fn adopt<C: Collection + ?Sized>(
             if is_new {
                 collection.publish(source.as_ptr());
             }
+            // After the publish, not before: a newly published child's
+            // `child_added` already ran `offer_deletion`'s unconditional
+            // "deletable" default by this point, and this is what corrects it
+            // to the real per-resource answer — see `Collection::set_remote_
+            // deletable`'s own doc on why the order is load-bearing. For a
+            // child drawn from the cache there was no publish and therefore no
+            // `child_added` this time either, so this call is the only place a
+            // rediscovery's changed rights ever reach an existing child.
+            collection.set_remote_deletable(source.as_ptr(), remote_deletable);
             Adopted::Written { published: is_new }
         }
         Err(setting) => Adopted::Abandoned(setting),

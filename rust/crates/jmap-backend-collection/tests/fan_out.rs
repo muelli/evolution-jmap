@@ -101,6 +101,13 @@ struct Collection {
     /// Which trait method was called when, so that an ordering decision is a
     /// test rather than a comment.
     calls: RefCell<Vec<&'static str>>,
+    /// Every `set_remote_deletable` call, by the resource id of the child it
+    /// named. Recorded rather than written onto the real `ESource` property:
+    /// these fixtures are plain sources (`e_source_new_with_uid`), not the
+    /// `EServerSideSource`s `e_server_side_source_set_remote_deletable` needs,
+    /// and the point of this trait method existing is exactly to let a fan-out
+    /// be tested without one.
+    remote_deletable: RefCell<Vec<(String, bool)>>,
 }
 
 impl Collection {
@@ -144,6 +151,17 @@ impl Collection {
             .map(|(_, source)| source.0)
             .unwrap_or_else(|| panic!("no child was created for {resource_id}"))
     }
+
+    /// The last `deletable` answer `set_remote_deletable` was given for
+    /// `resource_id`, or `None` if it was never called for it.
+    fn remote_deletable_of(&self, resource_id: &str) -> Option<bool> {
+        self.remote_deletable
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(id, _)| id == resource_id)
+            .map(|(_, deletable)| *deletable)
+    }
 }
 
 // SAFETY: every pointer handed out is a valid `ESource` carrying a reference of
@@ -185,6 +203,20 @@ unsafe impl jmap_backend_collection::fan_out::Collection for Collection {
         self.calls.borrow_mut().push("existing_children");
         self.existing.iter().map(Source::dup).collect()
     }
+
+    fn set_remote_deletable(&self, child: *mut ESource, deletable: bool) {
+        self.calls.borrow_mut().push("set_remote_deletable");
+        // SAFETY: every source this is called on is one `new_child` or a
+        // previous `existing_children`/cache lookup handed back, alive for
+        // this call. `unwrap_or_default` rather than `expect`: a test that
+        // hands `adopt` no settings at all (isolating the reference-count
+        // question `Collection::new_child`/`publish` answer) writes no
+        // identity either, and this call still has to happen for it.
+        let resource_id = unsafe { resource_id_of(child) }.unwrap_or_default();
+        self.remote_deletable
+            .borrow_mut()
+            .push((resource_id, deletable));
+    }
 }
 
 /// Where the *account* says its server is. Deliberately not the mock's address:
@@ -216,6 +248,7 @@ fn resource(id: &str) -> Resource {
         is_default: false,
         color: None,
         writable: None,
+        deletable: None,
     }
 }
 
@@ -257,6 +290,7 @@ fn written_child(kind: ChildKind, collection: &str) -> Source {
         is_default: false,
         color: None,
         read_only: false,
+        remote_deletable: true,
     };
     // SAFETY: a live source of this process's own.
     unsafe {
@@ -412,6 +446,90 @@ fn each_child_is_written_with_the_server_the_account_names() {
     });
 }
 
+/// A fan-out of one account's address books only, so a test can hand-build
+/// `Resource`s with the `deletable` field it cares about — `fanout()` above
+/// only ever builds them with `None` in every field but the name.
+fn fanout_of(resources: Vec<Resource>) -> Fanout {
+    Fanout {
+        parts: Parts::ALL,
+        layout: CollectionLayout {
+            mail: None,
+            contacts: Some(account()),
+            calendars: None,
+        },
+        address_books: resources,
+        calendars: Vec::new(),
+    }
+}
+
+#[test]
+fn a_childs_may_delete_reaches_set_remote_deletable_and_absence_stays_deletable() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Item 40: `myRights.mayDelete` reaches EDS's `remote-deletable` through
+        // `Resource::deletable` -> `Child::remote_deletable` ->
+        // `Collection::set_remote_deletable`, and an absent `myRights` — the
+        // ordinary case — must not be mistaken for "the server said no".
+        let mut locked = resource("AB1");
+        locked.deletable = Some(false);
+        let collection = Collection::default();
+
+        // SAFETY: as above.
+        unsafe {
+            apply_fanout(
+                &collection,
+                &fanout_of(vec![locked, resource("AB2")]),
+                &connection(),
+            )
+        };
+
+        assert_eq!(
+            collection.remote_deletable_of(&ChildKind::AddressBook.resource_id(&Id::new("AB1"))),
+            Some(false),
+            "myRights said not deletable"
+        );
+        assert_eq!(
+            collection.remote_deletable_of(&ChildKind::AddressBook.resource_id(&Id::new("AB2"))),
+            Some(true),
+            "absent myRights stays deletable"
+        );
+    });
+}
+
+#[test]
+fn a_rediscovery_with_changed_rights_updates_remote_deletable_on_the_existing_child() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The case `child_added`'s `offer_deletion` cannot reach a second time:
+        // it fires once, the first time a child is exported, so a collection's
+        // rights changing on a later fan-out of an *already-existing* child has
+        // to be picked up somewhere that runs on every fan-out — `adopt`, not
+        // `child_added`.
+        let cached_id = ChildKind::AddressBook.resource_id(&Id::new("AB1"));
+        let collection = Collection {
+            cached: vec![(cached_id.clone(), Source::new("jmap-cached"))],
+            ..Collection::default()
+        };
+
+        let mut deletable = resource("AB1");
+        deletable.deletable = Some(true);
+        // SAFETY: as above.
+        unsafe { apply_fanout(&collection, &fanout_of(vec![deletable]), &connection()) };
+        assert_eq!(collection.remote_deletable_of(&cached_id), Some(true));
+
+        let mut now_locked = resource("AB1");
+        now_locked.deletable = Some(false);
+        // SAFETY: as above.
+        unsafe { apply_fanout(&collection, &fanout_of(vec![now_locked]), &connection()) };
+        assert_eq!(
+            collection.remote_deletable_of(&cached_id),
+            Some(false),
+            "a rights change on an existing child must reach it on rediscovery, \
+             not only on the child's first mint"
+        );
+    });
+}
+
 #[test]
 fn a_child_created_now_is_exported_and_one_drawn_from_the_cache_is_not() {
     with_timeout(|| {
@@ -476,7 +594,7 @@ fn nothing_is_exported_before_all_of_it_is_written() {
         ];
 
         // SAFETY: as above.
-        let adopted = unsafe { adopt(&collection, "addressbook:AB1", &unwritable) };
+        let adopted = unsafe { adopt(&collection, "addressbook:AB1", &unwritable, true) };
 
         assert!(
             matches!(adopted, Adopted::Abandoned(_)),
@@ -512,7 +630,7 @@ fn adopt_releases_exactly_the_reference_new_child_handed_over() {
         };
 
         // SAFETY: the collection satisfies the trait's contract.
-        let cached_adopted = unsafe { adopt(&collection, &cached_id, &[]) };
+        let cached_adopted = unsafe { adopt(&collection, &cached_id, &[], true) };
         assert_eq!(cached_adopted, Adopted::Written { published: false });
         let (_, source) = collection
             .cached
@@ -527,7 +645,7 @@ fn adopt_releases_exactly_the_reference_new_child_handed_over() {
         );
 
         // SAFETY: as above.
-        let new_adopted = unsafe { adopt(&collection, &new_id, &[]) };
+        let new_adopted = unsafe { adopt(&collection, &new_id, &[], true) };
         assert_eq!(new_adopted, Adopted::Written { published: true });
         let created = collection.created.borrow();
         let (_, source) = created

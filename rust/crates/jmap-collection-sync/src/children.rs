@@ -100,6 +100,17 @@ pub struct Child {
     /// read-only account is read-only regardless of what any one
     /// collection's `myRights` claims — see [`Child::for_resource`].
     pub read_only: bool,
+    /// What EDS's `remote-deletable` `ESource` property should say — unlike
+    /// [`Child::read_only`], a real property
+    /// (`e_server_side_source_set_remote_deletable`) rather than a fact for
+    /// the backend to consult at call time, because it is what makes
+    /// Evolution grey out "Delete" instead of offering it and then
+    /// surfacing the server's `forbidden` error after the click. No
+    /// account-wide bit to narrow against — `myRights.mayDelete` is
+    /// per-collection to begin with, and [`Resource::deletable`] is `true`
+    /// absent an opinion from the server, matching the permissive default
+    /// every child had before this field existed.
+    pub remote_deletable: bool,
 }
 
 impl Fanout {
@@ -169,6 +180,10 @@ impl Child {
             // account-wide bit, unchanged from before per-collection rights
             // were read at all.
             read_only: account.read_only || resource.writable == Some(false),
+            // Absent `mayDelete` (`resource.deletable` is `None`) leaves this
+            // deletable — the state every child was in before per-collection
+            // deletion rights were read at all.
+            remote_deletable: resource.deletable.unwrap_or(true),
         }
     }
 }
@@ -225,6 +240,7 @@ mod tests {
             is_default: false,
             color: None,
             writable: None,
+            deletable: None,
         }
     }
 
@@ -409,6 +425,24 @@ mod tests {
         };
 
         assert!(fanout.children()[0].read_only);
+    }
+
+    #[test]
+    fn a_collections_own_my_rights_decides_whether_it_is_remote_deletable() {
+        // Item 40: `myRights.mayDelete` has no account-wide bit to narrow
+        // against — it is per-collection to begin with — so `false` and
+        // `true` both read straight through, and an absent `myRights` stays
+        // deletable, matching every child's state before this field existed.
+        let mut undeletable = resource("AB1", "Locked share");
+        undeletable.deletable = Some(false);
+        let fanout = fanout(vec![undeletable, resource("AB2", "Personal")], Vec::new());
+
+        let children = fanout.children();
+        assert!(!children[0].remote_deletable, "myRights said not deletable");
+        assert!(
+            children[1].remote_deletable,
+            "absent myRights stays deletable"
+        );
     }
 
     #[test]

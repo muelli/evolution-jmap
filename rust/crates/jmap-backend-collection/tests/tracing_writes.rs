@@ -320,6 +320,11 @@ unsafe impl CollectionTrait for MockCollection {
     fn publish(&self, child: *mut ESource) {
         self.published.borrow_mut().push(child);
     }
+
+    fn set_remote_deletable(&self, _child: *mut ESource, _deletable: bool) {
+        // Not what this fixture's tests are about: they pin what `fan_out`
+        // traces, not what it writes onto a child's `remote-deletable`.
+    }
 }
 
 #[derive(Default)]
@@ -561,6 +566,7 @@ fn adopt_created_traces_structured_fields() {
             is_default: false,
             color: None,
             read_only: false,
+            remote_deletable: true,
         };
         let conn = connection();
 

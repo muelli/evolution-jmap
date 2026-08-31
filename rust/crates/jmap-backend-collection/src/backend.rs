@@ -32,7 +32,8 @@ use eds_sys::{
     e_collection_backend_list_calendar_sources, e_collection_backend_list_contacts_sources,
     e_collection_backend_new_child, e_collection_backend_ref_server,
     e_collection_backend_thaw_populate, e_server_side_source_set_remote_creatable,
-    e_source_get_uid, e_source_registry_debug_print, e_source_registry_server_add_source,
+    e_server_side_source_set_remote_deletable, e_source_get_uid, e_source_registry_debug_print,
+    e_source_registry_server_add_source,
 };
 use gio_sys::{GCancellable, GTlsCertificateFlags};
 use glib_sys::{GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar, guint16};
@@ -1060,6 +1061,20 @@ unsafe impl Collection for Live {
         // SAFETY: as above.
         children.extend(unsafe { drain(e_collection_backend_list_calendar_sources(self.0)) });
         children
+    }
+
+    fn set_remote_deletable(&self, child: *mut ESource, deletable: bool) {
+        // SAFETY: every source `adopt` calls this on came from
+        // `e_collection_backend_new_child`, which — like every child of a
+        // collection in `evolution-source-registry` — hands back an
+        // `EServerSideSource`; `.cast()` is the same one
+        // `delete_resource::offer_deletion` makes of the same guarantee.
+        unsafe {
+            e_server_side_source_set_remote_deletable(
+                child.cast(),
+                if deletable { GTRUE } else { GFALSE },
+            )
+        };
     }
 }
 

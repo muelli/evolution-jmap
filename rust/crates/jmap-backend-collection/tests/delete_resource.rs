@@ -70,6 +70,7 @@ fn child(kind: ChildKind, collection_id: &str) -> Child {
         is_default: false,
         color: None,
         read_only: false,
+        remote_deletable: true,
     }
 }
 

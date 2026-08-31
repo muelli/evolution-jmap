@@ -195,6 +195,7 @@ mod tests {
             is_default: false,
             color: None,
             writable: None,
+            deletable: None,
         }
     }
 

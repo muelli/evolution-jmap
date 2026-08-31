@@ -73,7 +73,11 @@
 //! [`crate::delete_resource::offer_deletion`], called from `child_added`, which
 //! is EDS's own funnel for every child of a collection and therefore covers a
 //! created child on its publish as well as a discovered or cached one. So its
-//! absence here is where the flag is written, not whether.
+//! absence here is where the flag is written, not whether. Unlike a
+//! discovered child, a created one has nothing to correct that default
+//! afterwards — [`crate::fan_out::adopt`]'s per-resource `myRights.mayDelete`
+//! answer is a fan-out's, and a create never runs one — so a freshly created
+//! collection stays deletable until the next populate reads its rights.
 //!
 //! ## The credentials are looked up, not remembered
 //!
