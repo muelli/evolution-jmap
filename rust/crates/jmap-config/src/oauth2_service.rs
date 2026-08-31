@@ -102,7 +102,13 @@ use crate::oauth2;
 /// translated: it is the value the setup UI has to write as
 /// `[Authentication] method` for `can_process`'s default matching (see the
 /// module docs) to ever say yes.
-pub const NAME: &CStr = c"JMAP";
+///
+/// Re-exported rather than spelled out: `jmap-mail`'s named `CamelSasl` has to
+/// give the same string as its `authproto` and cannot see this crate, so the
+/// literal lives in the crate both can reach. See
+/// [`jmap_backend_core::oauth2::OAUTH2_SERVICE_NAME`] for the three places
+/// that have to agree.
+pub const NAME: &CStr = jmap_backend_core::oauth2::OAUTH2_SERVICE_NAME;
 
 /// The instance struct: nothing but [`EOAuth2ServiceBase`]'s own state. No
 /// per-instance storage of our own — everything this service answers is

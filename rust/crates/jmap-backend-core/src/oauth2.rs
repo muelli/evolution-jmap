@@ -107,7 +107,7 @@
 //! number is only of use to something that holds a connection open across the
 //! expiry and re-authenticates in place — which no JMAP backend here does.
 
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::ptr;
 use std::sync::OnceLock;
 
@@ -129,6 +129,37 @@ use crate::marshal::{extension_if_present, read_string};
 /// The generic spelling of "this source authenticates with OAuth 2.0", as
 /// opposed to the name of one particular service.
 pub const OAUTH2_METHOD: &str = "OAuth2";
+
+/// The name of *this project's* `EOAuth2Service` — the particular-service
+/// spelling [`OAUTH2_METHOD`] is the generic counterpart of.
+///
+/// It lives here rather than in the crate that implements the service
+/// ([`jmap_config::oauth2_service::NAME`], which is now this constant) because
+/// three separate places have to agree on the same literal and only two of
+/// them are in that crate:
+///
+/// - `e_oauth2_service_get_name` answers it, and
+///   `EOAuth2Service::can_process`'s default implementation compares
+///   `[Authentication] Method` against it — so it is what the setup UI writes
+///   into an account that uses OAuth 2.0;
+/// - [`method_is_oauth2`] recognises it through
+///   `e_oauth2_services_is_oauth2_alias`, and so does
+///   `mail_ui_session_authenticate_sync` when deciding whether a rejected
+///   silent attempt may recover through the consent window; and
+/// - [`jmap_mail::sasl`] gives it as its `CamelServiceAuthType::authproto`, so
+///   that `camel_sasl_authtype` answers for the very string
+///   `mail_config_auth_check_host_changed_cb` looks the mechanism up under
+///   (`camel_sasl_authtype (e_oauth2_service_get_name (oauth2_service))`,
+///   evolution 3.52.4).
+///
+/// `jmap-mail` cannot see `jmap-config` — the Camel provider does not depend
+/// on the account-editor module — so a literal in each would be two spellings
+/// nothing compares, and a rename of one would silently turn the mail half of
+/// an OAuth 2.0 account back into a password prompt.
+///
+/// [`jmap_config::oauth2_service::NAME`]: ../../jmap_config/oauth2_service/constant.NAME.html
+/// [`jmap_mail::sasl`]: ../../jmap_mail/sasl/index.html
+pub const OAUTH2_SERVICE_NAME: &CStr = c"JMAP";
 
 /// The process's `EOAuth2Services`, kept alive for as long as the process is —
 /// see the module docs on why holding one is part of asking the question
