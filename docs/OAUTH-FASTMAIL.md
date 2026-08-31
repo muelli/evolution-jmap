@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 **Question (operator-requested):** does Fastmail support OAuth 2.0 *dynamic
 client registration* (RFC 7591)? The project's OAuth design is
-autodiscovery-only (decision #1 in `ROADMAP.md`): discover the provider's
+autodiscovery-only: discover the provider's
 endpoints, dynamically register a public client, run authorization-code + PKCE
 — with **no** shipped/pre-registered `client_id`. That only works if the
 provider offers open dynamic registration.
@@ -88,8 +88,7 @@ ClientRegistrationRequest` gained a `scope: Option<&str>` field;
 `scopes_supported` joined with a space when the deployment names any, and
 `None` (omitting the field entirely, unchanged from before) when it names
 none. This closes the "confirm
-`/oauth/register` is open" item in `ROADMAP.md`'s CURRENT PRIORITY 2(b) and
-the scope-naming item together.
+`/oauth/register` is open" item and the scope-naming item together.
 
 ## Concrete constraints for our implementation (found pre-implementation)
 
@@ -157,7 +156,7 @@ the night agents implemented after this was queued (Resolver seam in
 `jmap-client` — `a07f1a6`; both call sites routed through it — `2881ac5`,
 `bdca950`). So the OAuth-via-Look-Up path is the next real-server step, and it
 is still **DEFERRED** pending a TLS-proper deployment + a human running the
-consent round-trip (see `ROADMAP.md`). This document is the input to that work.
+consent round-trip. This document is the input to that work.
 
 ## Sources
 

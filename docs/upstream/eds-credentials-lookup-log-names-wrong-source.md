@@ -6,9 +6,9 @@ SPDX-License-Identifier: GPL-3.0-or-later
 # DRAFT, not filed
 
 Target: `GNOME/evolution-data-server`, issue. Written 2026-08-29 against EDS
-3.52.3 while answering `docs/ROADMAP.md` item 26. Filed only after a
-maintainer has read it, same rule as the two Evolution drafts beside this
-file.
+3.52.3 while root-causing a stray `Failed to lookup password` log line that
+named a UID matching no known source. Filed only after a maintainer has read
+it, same rule as the two Evolution drafts beside this file.
 
 ---
 
