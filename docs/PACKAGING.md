@@ -11,8 +11,8 @@ not solve.
 
 The maintainer is deliberately not filing a Debian ITP or uploading this
 package. That is not an oversight to work around; it is a considered
-decision (`docs/ROADMAP.md`, Track C4) to leave "who packages this" to
-whoever wants to, rather than have upstream become the Debian maintainer.
+decision to leave "who packages this" to whoever wants to, rather than
+have upstream become the Debian maintainer.
 Everything below exists to make that person's first hour easier, not to
 pretend the packaging work is finished.
 
@@ -44,9 +44,9 @@ That runs three legs:
   `/usr/share/lintian/overrides/evolution-jmap`) for a single justified
   RUNPATH entry: `module-jmap-configuration.so` needs
   `/usr/lib/evolution` (Evolution's own private libdir) at load time to
-  resolve `libevolution-mail.so`/`libevolution-util.so` — read
-  `docs/ROADMAP.md`'s CURRENT PRIORITY item 8 for the full story if you
-  need to know why that RUNPATH is there rather than removed.
+  resolve `libevolution-mail.so`/`libevolution-util.so` — read the comment
+  in `docs/packaging/lintian-overrides` for the full story of why that
+  RUNPATH is there rather than removed.
 
 If you are packaging a Rust GNOME module for the first time, this is the
 thing to imitate structurally even if your target distro's tooling differs
