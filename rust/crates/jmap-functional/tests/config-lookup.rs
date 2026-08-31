@@ -21,9 +21,8 @@
 //! *real* `EConfigLookup` actually dispatches into it and that the result it
 //! adds configures a scratch `ESource`'s `[Collection]`/`[Authentication]`/
 //! `[Security]` extensions the way the account assistant's own
-//! `configure_source` call would. The 307th session's log
-//! (`docs/NIGHT-LOG.md`) hand-drove exactly this once with a throwaway
-//! client; this is that spike made permanent.
+//! `configure_source` call would. The 307th session's log hand-drove exactly
+//! this once with a throwaway client; this is that spike made permanent.
 
 use jmap_functional::{Session, observations, required_path};
 use jmap_mock::MockServer;
@@ -71,7 +70,7 @@ fn a_real_config_lookup_discovers_and_configures_an_oauth2_jmap_account() {
     // `scheme://host:port` shape `config_lookup::parse_target` reads a
     // `servers` override in, and the one thing that lets a plaintext,
     // non-default-port test deployment be named at all (the 307th session's
-    // fix; see `docs/NIGHT-LOG.md`).
+    // fix).
     let output = session.run(
         &client,
         &[

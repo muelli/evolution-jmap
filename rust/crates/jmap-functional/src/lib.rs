@@ -126,8 +126,8 @@ impl Session {
     /// So a child source's keyfile is never in [`Self::sources_directory`],
     /// and "this UID matches no configured source" is the normal condition of
     /// every source Evolution ever fanned an account out into rather than
-    /// evidence of debris — which is the whole of `docs/ROADMAP.md` item 26.
-    /// Exposed so `tests/stale-source-uid.rs` can go and look in both places
+    /// evidence of debris. Exposed so `tests/stale-source-uid.rs` can go and
+    /// look in both places
     /// instead of taking the client program's word for where a child landed.
     pub fn cache_sources_directory(&self, collection_uid: &str) -> PathBuf {
         self.root
@@ -143,7 +143,8 @@ impl Session {
     /// `ESR_DEBUG=1` that `e_source_registry_debug_enabled`
     /// (`e-data-server-util.c:2372`) gates every `e_source_registry_debug_print`
     /// on, and with it the `Failed to lookup password for source …` line
-    /// `docs/ROADMAP.md` item 26 is about — has no other way to ask for them.
+    /// `tests/stale-source-uid.rs` investigates — has no other way to ask for
+    /// them.
     ///
     /// The output lands in the same captured stdout as the client's own
     /// `key=value` observations, because `dbus-run-session`'s `dbus-daemon`
@@ -287,12 +288,11 @@ impl Session {
     /// `RUNPATH`, the same way every real Evolution module has it, so
     /// `dlopen`ing the module resolves its transitive `libevolution-mail.so`
     /// dependency on its own. That was not always so: the 307th session's
-    /// hand-driven spike (`docs/NIGHT-LOG.md`) found the module missing that
-    /// `RUNPATH` and worked around it here with `LD_LIBRARY_PATH`, without
-    /// tracing why the `RUNPATH` itself was absent; a later session found and
-    /// fixed the actual cause (see `docs/NIGHT-LOG.md`'s "CURRENT PRIORITY
-    /// item 2(a)" entry) and removed the workaround, since a passing test
-    /// that still carried it would not prove the fix.
+    /// hand-driven spike found the module missing that `RUNPATH` and worked
+    /// around it here with `LD_LIBRARY_PATH`, without tracing why the
+    /// `RUNPATH` itself was absent; a later session found and fixed the
+    /// actual cause and removed the workaround, since a passing test that
+    /// still carried it would not prove the fix.
     pub fn stage_config_lookup_module(&mut self, built_module: &Path) -> PathBuf {
         let directory = self.root.join("config-lookup-module");
         fs::create_dir_all(&directory).expect("create the config-lookup module directory");
@@ -360,7 +360,7 @@ impl Session {
     /// — ask a `org.freedesktop.secrets` provider, and without this step
     /// that ask either finds no provider at all (a functional container
     /// carrying only `evolution-data-server`/`dbus-daemon`, no
-    /// `gnome-keyring`, per `docs/ROADMAP.md` item 18) or, once one is
+    /// `gnome-keyring`) or, once one is
     /// installed, hits `gnome-keyring-daemon`'s own default D-Bus activation
     /// (`--start --foreground`, from its `.service` file) needing to CREATE
     /// or UNLOCK a collection it has never seen before — which falls back to

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `docs/ROADMAP.md` item 25, the CALENDAR leg: item 23's acceptance test,
-//! made headless for the backend that refreshes through an `ESource` rather
-//! than through a `CamelSession`.
+//! The CALENDAR leg: item 23's acceptance test, made headless for the
+//! backend that refreshes through an `ESource` rather than through a
+//! `CamelSession`.
 //!
 //! The mail leg (`mail-stale-token.rs`) got to override
 //! `get_oauth2_access_token_sync` on a test `CamelSession`, because

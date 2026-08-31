@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `docs/ROADMAP.md` item 26: the headless answer to the operator's
-//! 2026-08-29 observation — `evolution-source-registry` logging
+//! The headless answer to the operator's 2026-08-29 observation —
+//! `evolution-source-registry` logging
 //!
 //! ```text
 //! server_side_source_credentials_lookup_cb: Failed to lookup password for
