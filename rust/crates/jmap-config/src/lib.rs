@@ -151,3 +151,4 @@ pub mod module;
 pub mod oauth2;
 pub mod oauth2_service;
 pub mod oauth2_setup;
+pub mod source_config;

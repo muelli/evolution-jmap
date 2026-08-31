@@ -9,11 +9,14 @@
 //! it; `EModule`'s `load` dlopens the file, resolves `e_module_load`, and calls
 //! it with itself as the `GTypeModule`. Whatever types are registered against
 //! that module by the time the call returns are the module's contribution —
-//! for us, two: the [`EMailConfigServiceBackend`
-//! subclass](crate::backend::JmapConfigServiceBackend), and
+//! for us, four: the [`EMailConfigServiceBackend`
+//! subclass](crate::backend::JmapConfigServiceBackend);
 //! [`JmapConfigLookup`](crate::config_lookup::JmapConfigLookup), an
 //! `EConfigLookupWorker` the account assistant's "Look Up Account Details"
-//! step finds the same way.
+//! step finds the same way; and the two
+//! [`ESourceConfigBackend`s](crate::source_config) that put JMAP in the New
+//! Address Book and New Calendar dialogs. (The `EOAuth2Service` below makes a
+//! fifth, registered for a reason of its own.)
 //!
 //! ## Nothing is registered *with* anything
 //!
@@ -73,6 +76,7 @@ use jmap_backend_core::trampoline::guard;
 
 use crate::backend::JmapConfigServiceBackend;
 use crate::config_lookup::JmapConfigLookup;
+use crate::source_config::{JmapBookConfig, JmapCalConfig};
 
 /// Sets up this project's `tracing` dispatcher and gettext domain, and
 /// registers the setup backend against `type_module`.
@@ -129,6 +133,15 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
             // freshly discovered OAuth account prompted for a password that
             // nothing could satisfy.
             register_dynamic::<crate::oauth2_service::Service>(type_module);
+            // The two `ESourceConfigBackend`s, and the reason the New Address
+            // Book and New Calendar dialogs offer JMAP at all — see
+            // `crate::source_config`. Registered here rather than from a module
+            // of their own because Evolution's shell already loads this one out
+            // of the same `moduledir`, and `e_extensible_load_extensions` finds
+            // an extension by walking the type system, not a table: being
+            // registered, before the dialog is constructed, *is* the wiring.
+            register_dynamic::<JmapBookConfig>(type_module);
+            register_dynamic::<JmapCalConfig>(type_module);
         }
         crate::oauth2::ensure_registered();
     });
