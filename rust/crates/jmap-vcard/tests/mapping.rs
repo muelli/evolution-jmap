@@ -2667,6 +2667,24 @@ fn a_photo_whose_bytes_are_not_text_reads_back_byte_for_byte() {
 }
 
 #[test]
+fn a_photo_whose_bytes_are_text_that_also_looks_like_base64_is_not_decoded_twice() {
+    // Fuzzer-found regression (`prop_photo_inline_and_uri_roundtrip_stability`,
+    // shrunk case `is_uri = false, subtype = "jpeg", raw_bytes = [97, 65, 56]`).
+    // `[97, 65, 56]` is the ASCII text "aA8", which calcard decodes from
+    // `ENCODING=b` and, being valid UTF-8, hands back as text rather than
+    // binary — the same path the SVG case above takes. "aA8" also happens to
+    // be valid base64 (it decodes to `[104, 15]`), so a reader that decodes it
+    // a second time silently corrupts the photo instead of erroring.
+    let media = photo_line("PHOTO;TYPE=jpeg;ENCODING=b:YUE4");
+    assert_eq!(media.uri, "data:image/jpeg;base64,YUE4");
+
+    // Driven the whole way round, exactly as the property test does.
+    let uri = "data:image/jpeg;base64,YUE4";
+    let vcard = card_to_vcard(&one_photo(uri, Some("image/jpeg")));
+    assert_eq!(read_photo(&vcard).uri, uri, "{vcard}");
+}
+
+#[test]
 fn a_photo_line_states_the_key_its_entry_is_filed_under() {
     // As every other keyed map's line does, so that an untouched picture is
     // recognised as the entry it came from. The key only survives a line EDS

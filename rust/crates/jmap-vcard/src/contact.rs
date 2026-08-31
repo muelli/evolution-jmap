@@ -2651,14 +2651,20 @@ pub fn vcard_to_card(vcard: &str) -> Result<ContactCard, VCardError> {
 /// libebook-contacts 3.52 — with the `X-JMAP-KEY` gone from a line the user
 /// edited, which is the save's problem rather than this one's.
 ///
-/// The bytes come from [`entry_binary`] where the line carried bytes and
-/// from the value's own where it carried text, since calcard decodes the base64
-/// either way and surfaces bytes only when the result is not a string: an SVG is
-/// a picture whose bytes *are* text. The cost of taking both paths is that a
-/// `PHOTO` line stating neither `VALUE=uri` nor a transfer encoding — a bare
-/// `PHOTO:<uri>`, which EDS reads as no picture at all (measured) — is
-/// indistinguishable here from a picture whose bytes are text, and is read as
-/// the latter. Neither EDS's writer nor this emitter produces such a line.
+/// The bytes come from [`entry_binary`] where the line carried bytes and from
+/// the value's own text otherwise. calcard consumes `ENCODING=b`/`BASE64`
+/// itself — it never survives into `entry.params` — decoding the value and
+/// handing back [`VCardValue::Binary`] when the result is not a valid string,
+/// or plain [`VCardValue::Text`] when it is: an SVG is a picture whose bytes
+/// *are* text, and a photo whose bytes happen to be valid UTF-8 hits the same
+/// path. Either way the value calcard hands back is already final; this side
+/// must not decode it a second time — a photo whose already-decoded bytes
+/// coincidentally also look like base64 would otherwise be corrupted. The
+/// cost of taking both paths as final is that a `PHOTO` line stating neither
+/// `VALUE=uri` nor a transfer encoding — a bare `PHOTO:<uri>`, which EDS reads
+/// as no picture at all (measured) — is indistinguishable here from a picture
+/// whose bytes are text, and is read as the latter. Neither EDS's writer nor
+/// this emitter produces such a line.
 ///
 /// The media type is built from the `TYPE` parameter rather than taken from
 /// calcard, so that the one rule EDS applies is applied once and in one place:
@@ -2723,11 +2729,8 @@ fn read_photo(entry: &VCardEntry) -> Option<Media> {
         }
     } else if let Some(bytes) = entry_binary(entry) {
         (bytes.to_vec(), None)
-    } else if let Some(bytes) = decoded(&raw_text) {
-        (bytes, None)
     } else {
-        let bytes = raw_text.into_bytes();
-        (bytes, None)
+        (raw_text.into_bytes(), None)
     };
 
     if bytes.is_empty() {
