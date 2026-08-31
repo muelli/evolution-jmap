@@ -9,10 +9,9 @@
 //! `jmap-cal-sync/tests/live_server.rs` proves `CalSync::free_busy` and
 //! `live_server_save.rs` proves `CalSync::save_component`/
 //! `remove_component` against the real server, but neither drives
-//! `set_color` — the last of this crate's four user-triggered writes (see
-//! `docs/NIGHT-LOG.md`'s Track B1 "`jmap-cal-sync` now has all four of its
-//! user-triggered writes traced" note) to get a live-server test. Only
-//! `jmap-mockd` has ever exercised it (`jmap-cal-sync/tests/color.rs`); this
+//! `set_color` — the last of this crate's four user-triggered writes to get
+//! a live-server test. Only `jmap-mockd` has ever exercised it
+//! (`jmap-cal-sync/tests/color.rs`); this
 //! file is its live-server counterpart, following the same recipe as this
 //! crate's other live-server files.
 //!
