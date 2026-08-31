@@ -41,6 +41,7 @@
 //! that case detaches instead. It is safe to: the thread holds nothing that
 //! `Drop` frees, and the cancellation it is about to observe is set first.
 
+use std::collections::BTreeMap;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -49,6 +50,7 @@ use jmap_client::eventsource::{SharedHeaders, expand_url};
 use jmap_client::transport::CancelFlag;
 use jmap_client::{Client, EventSourceSubscription};
 use jmap_proto::Id;
+use jmap_proto::State;
 use jmap_proto::push::StateChange;
 
 use crate::weak::WeakBackend;
@@ -191,11 +193,12 @@ impl PushRefresh {
             let headers = headers.clone();
             thread::spawn(move || {
                 let subscription = EventSourceSubscription::start(url, headers, cancel.clone());
+                let mut last_state: BTreeMap<String, State> = BTreeMap::new();
                 while !cancel.is_cancelled() {
                     let Some(change) = subscription.recv_timeout(POLL_INTERVAL) else {
                         continue;
                     };
-                    let matched = concerns(&change, &account_id, &types);
+                    let matched = concerns(&change, &account_id, &types, &mut last_state);
                     if !matched.is_empty() {
                         tracing::debug!(
                             account_id = account_id.as_str(),
@@ -251,23 +254,46 @@ impl Drop for PushRefresh {
     }
 }
 
-/// Which of `types` a pushed `StateChange` names for `account_id` — empty if
-/// the change does not concern this account at all, or names none of the
-/// types asked about. An empty `types` accepts any type the account has, so
-/// every type the `StateChange` names for it comes back.
-fn concerns(change: &StateChange, account_id: &Id, types: &[String]) -> Vec<String> {
+/// Which of `types` a pushed `StateChange` names for `account_id` with a
+/// state string that actually differs from the last one seen — empty if the
+/// change does not concern this account at all, names none of the types
+/// asked about, or names only types whose state string is unchanged since
+/// the last call. An empty `types` accepts any type the account has, so
+/// every type the `StateChange` names for it is a candidate.
+///
+/// RFC 8620 §7.1's `StateChange` carries a state string per (account,
+/// type); comparing it against `last_state` — updated here on every
+/// candidate, matched or not — is what turns a server pushing the same
+/// state repeatedly into zero refreshes after the first. A type's first
+/// sighting always counts as a change, since there is nothing yet in
+/// `last_state` to compare it against.
+fn concerns(
+    change: &StateChange,
+    account_id: &Id,
+    types: &[String],
+    last_state: &mut BTreeMap<String, State>,
+) -> Vec<String> {
     let Some(state) = change.changed.get(account_id) else {
         return Vec::new();
     };
-    if types.is_empty() {
-        state.keys().cloned().collect()
+    let candidates: Vec<&String> = if types.is_empty() {
+        state.keys().collect()
     } else {
         types
             .iter()
             .filter(|name| state.contains_key(name.as_str()))
-            .cloned()
             .collect()
+    };
+    let mut matched = Vec::new();
+    for name in candidates {
+        let new_state = &state[name];
+        let is_change = last_state.get(name) != Some(new_state);
+        if is_change {
+            matched.push(name.clone());
+        }
+        last_state.insert(name.clone(), new_state.clone());
     }
+    matched
 }
 
 #[cfg(test)]
@@ -278,13 +304,16 @@ mod tests {
     use std::time::Instant;
 
     use jmap_client::eventsource::expand_url;
-    use jmap_proto::State;
 
     use super::*;
 
     fn change(account: &str, kind: &str) -> StateChange {
+        change_with_state(account, kind, "s1")
+    }
+
+    fn change_with_state(account: &str, kind: &str, state: &str) -> StateChange {
         let mut types = BTreeMap::new();
-        types.insert(kind.to_owned(), State::new("s1"));
+        types.insert(kind.to_owned(), State::new(state));
         let mut changed = BTreeMap::new();
         changed.insert(Id::new(account), types);
         StateChange::new(changed)
@@ -300,7 +329,8 @@ mod tests {
             concerns(
                 &change("a1", "ContactCard"),
                 &Id::new("a1"),
-                &names(&["ContactCard"])
+                &names(&["ContactCard"]),
+                &mut BTreeMap::new()
             ),
             names(&["ContactCard"]),
             "the matched types must name the type that actually changed"
@@ -313,7 +343,8 @@ mod tests {
             concerns(
                 &change("a2", "ContactCard"),
                 &Id::new("a1"),
-                &names(&["ContactCard"])
+                &names(&["ContactCard"]),
+                &mut BTreeMap::new()
             )
             .is_empty()
         );
@@ -325,7 +356,8 @@ mod tests {
             concerns(
                 &change("a1", "Email"),
                 &Id::new("a1"),
-                &names(&["ContactCard"])
+                &names(&["ContactCard"]),
+                &mut BTreeMap::new()
             )
             .is_empty()
         );
@@ -334,7 +366,12 @@ mod tests {
     #[test]
     fn asking_for_no_types_in_particular_accepts_any_on_this_account() {
         assert_eq!(
-            concerns(&change("a1", "Email"), &Id::new("a1"), &[]),
+            concerns(
+                &change("a1", "Email"),
+                &Id::new("a1"),
+                &[],
+                &mut BTreeMap::new()
+            ),
             names(&["Email"]),
             "an empty filter matches, and names, whichever type changed"
         );
@@ -349,9 +386,89 @@ mod tests {
         changed.insert(Id::new("a1"), types);
         let change = StateChange::new(changed);
 
-        let mut matched = concerns(&change, &Id::new("a1"), &names(&["Email", "Mailbox"]));
+        let mut matched = concerns(
+            &change,
+            &Id::new("a1"),
+            &names(&["Email", "Mailbox"]),
+            &mut BTreeMap::new(),
+        );
         matched.sort();
         assert_eq!(matched, names(&["Email", "Mailbox"]));
+    }
+
+    #[test]
+    fn a_repeated_state_string_does_not_concern_us_again() {
+        let mut last_state = BTreeMap::new();
+        let first = change_with_state("a1", "ContactCard", "s1");
+        assert_eq!(
+            concerns(
+                &first,
+                &Id::new("a1"),
+                &names(&["ContactCard"]),
+                &mut last_state
+            ),
+            names(&["ContactCard"]),
+            "the first sighting of a state string always counts as a change"
+        );
+
+        let repeat = change_with_state("a1", "ContactCard", "s1");
+        assert!(
+            concerns(
+                &repeat,
+                &Id::new("a1"),
+                &names(&["ContactCard"]),
+                &mut last_state
+            )
+            .is_empty(),
+            "the same state string seen again must not concern us a second time"
+        );
+
+        let genuinely_new = change_with_state("a1", "ContactCard", "s2");
+        assert_eq!(
+            concerns(
+                &genuinely_new,
+                &Id::new("a1"),
+                &names(&["ContactCard"]),
+                &mut last_state
+            ),
+            names(&["ContactCard"]),
+            "a state string that actually differs from the last one seen must concern us"
+        );
+    }
+
+    #[test]
+    fn each_type_tracks_its_own_last_seen_state_independently() {
+        let mut last_state = BTreeMap::new();
+        let mut types = BTreeMap::new();
+        types.insert("Email".to_owned(), State::new("s1"));
+        types.insert("Mailbox".to_owned(), State::new("s1"));
+        let mut changed = BTreeMap::new();
+        changed.insert(Id::new("a1"), types);
+        let first = StateChange::new(changed);
+        concerns(
+            &first,
+            &Id::new("a1"),
+            &names(&["Email", "Mailbox"]),
+            &mut last_state,
+        );
+
+        // Only Mailbox's state string actually moved.
+        let mut types = BTreeMap::new();
+        types.insert("Email".to_owned(), State::new("s1"));
+        types.insert("Mailbox".to_owned(), State::new("s2"));
+        let mut changed = BTreeMap::new();
+        changed.insert(Id::new("a1"), types);
+        let second = StateChange::new(changed);
+        assert_eq!(
+            concerns(
+                &second,
+                &Id::new("a1"),
+                &names(&["Email", "Mailbox"]),
+                &mut last_state
+            ),
+            names(&["Mailbox"]),
+            "an unchanged type must not be reported alongside a changed one"
+        );
     }
 
     /// The whole pump, over a real socket: a mutation in the mock broadcasts
@@ -429,6 +546,63 @@ mod tests {
             refreshes.load(Ordering::SeqCst),
             1,
             "only the push naming this backend's account may refresh it"
+        );
+    }
+
+    /// The pump-level counterpart of the `concerns` unit tests above: a
+    /// server pushing the same state string twice must produce exactly one
+    /// refresh, and a state string that genuinely differs must still
+    /// produce its own (item 37 — RFC 8620 §7.1's `StateChange` carries a
+    /// state string per (account, type), and nothing compared it before).
+    #[test]
+    fn a_repeated_push_state_does_not_refresh_twice_but_a_new_one_does() {
+        let server = jmap_mock::MockServer::builder().start();
+        let url = expand_url(
+            &format!("{}/eventsource", server.origin()),
+            &["ContactCard"],
+            false,
+            0,
+        );
+        let refreshes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&refreshes);
+        let _push = PushRefresh::start(
+            url,
+            Vec::new(),
+            Id::new("a1"),
+            names(&["ContactCard"]),
+            move |_types: &[String]| {
+                counter.fetch_add(1, Ordering::SeqCst);
+            },
+        );
+
+        server.wait_for_event_source_subscriber(Duration::from_secs(5));
+        server.push_state_change(&change_with_state("a1", "ContactCard", "s1"));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while refreshes.load(Ordering::SeqCst) < 1 {
+            assert!(Instant::now() < deadline, "the first push never refreshed");
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        // The same state again must not trigger a second refresh. Push a
+        // genuinely new state right after it and wait for THAT refresh — if
+        // the repeat had wrongly counted, this would observe 3, not 2, once
+        // it lands.
+        server.push_state_change(&change_with_state("a1", "ContactCard", "s1"));
+        server.push_state_change(&change_with_state("a1", "ContactCard", "s2"));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while refreshes.load(Ordering::SeqCst) < 2 {
+            assert!(Instant::now() < deadline, "the new state never refreshed");
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        // Give a wrongly-counted repeat time to have landed too.
+        thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            refreshes.load(Ordering::SeqCst),
+            2,
+            "the repeated state must not have produced a third refresh"
         );
     }
 
