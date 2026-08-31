@@ -14220,7 +14220,7 @@ fn fixpoint_convergence_across_all_contact_property_domains_matrix() {
 
 #[test]
 fn trailing_whitespace_filed_bug_minimal_input_named_regression() {
-    // Minimal reproduction input recorded in docs/BACKLOG.md:
+    // Minimal reproduction input for the filed trailing-whitespace round-trip bug:
     // "BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n"
     let input = "BEGIN:VCARD\r\nVERSION:3.0\r\nNICKNAME;ENCODING=b:! \r\nEND:VCARD\r\n";
 
@@ -20861,8 +20861,7 @@ fn anniversary_multi_pass_roundtrip_fixpoint_stability() {
 
 #[test]
 fn vcard_trailing_whitespace_and_nickname_encoding_fixpoint_characterization() {
-    // Backlog finding (docs/BACKLOG.md "jmap-vcard round trip is not a fixed point for a value with trailing whitespace",
-    // first manifestation): A raw vCard with unescaped trailing whitespace in NICKNAME (e.g. from an ENCODING=b
+    // Backlog finding, first manifestation: A raw vCard with unescaped trailing whitespace in NICKNAME (e.g. from an ENCODING=b
     // envelope or raw imported stream) keeps the trailing space on first emit (NICKNAME;X-JMAP-KEY=k1:! ),
     // but on the second pass calcard's parser trims unescaped trailing whitespace, normalizing it to '!'.
     // Multi-stage fixpoint asserts that pass 2 (vcard2, card2) and pass 3 (vcard3, card3) reach an exact byte-identical fixed point.
@@ -20974,7 +20973,7 @@ fn vcard_trailing_whitespace_across_all_property_types_matrix() {
 
 #[test]
 fn contact_card_empty_stated_full_name_synthesis_fixpoint_matrix() {
-    // Backlog finding (docs/BACKLOG.md, second and third manifestations):
+    // Backlog finding, second and third manifestations:
     // A ContactCard with a stated-but-empty full name (`full: Some("")`) and single/multiple
     // name components (`given: "0"`, `given: "𞋀"`, Unicode multi-byte characters) previously
     // took an extra round trip because `card_to_vcard` emitted an empty `FN:` while `read_name`
