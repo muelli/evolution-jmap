@@ -4,7 +4,10 @@
 # libevolution-shell.so has to record that directory in its own RUNPATH or
 # it cannot load at all outside a process that already has them resident —
 # every module Evolution installs under /usr/lib/evolution/modules/*.so
-# already carries exactly this RUNPATH, this one included. See
-# docs/ROADMAP.md's CURRENT PRIORITY item 2(a) (why the module needs it)
-# and item 8 (why this override, and not the RUNPATH itself, is the fix).
+# already carries exactly this RUNPATH, this one included. lintian's
+# custom-library-search-path tag still fires on it, because its exemption
+# for a package's own private libdir only matches /usr/lib/<source-package>,
+# which this is not; since the RUNPATH itself is required for the module to
+# load, the fix is this override arguing the entry is deliberate, not
+# removing the RUNPATH.
 evolution-jmap: custom-library-search-path RUNPATH /usr/lib/evolution [usr/lib/evolution/modules/module-jmap-configuration.so]
