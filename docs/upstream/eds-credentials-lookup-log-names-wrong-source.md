@@ -3,7 +3,12 @@ SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# READY TO FILE (reviewed 2026-08-31)
+# SUBMITTED as a merge request, 2026-08-31
+
+Filed not as an issue but directly as a fix:
+https://gitlab.gnome.org/GNOME/evolution-data-server/-/merge_requests/243
+(branch `credentials-lookup-log-credentials-source`, local clone at
+`~/vcs/evolution-data-server`). Kept for the record; the MR is canonical.
 
 Target: `GNOME/evolution-data-server`, issue. Paste the title and everything
 below the rule as the issue body. Validated 2026-08-30/31: the child-under-
