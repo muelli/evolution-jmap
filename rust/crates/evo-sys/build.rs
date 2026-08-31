@@ -15,10 +15,26 @@ use std::path::PathBuf;
 /// would be claiming support for releases nothing here has been held against.
 const MIN_EVO: &str = "3.52";
 
-/// The one class the setup module subclasses, and its accessors. Everything
+/// The classes the setup module subclasses, and their accessors. Everything
 /// else in Evolution's headers — the pages, the assistant, the notebook — is
-/// reached through the vfuncs of this class or not at all, so the surface this
-/// crate claims to have audited stays one file wide.
+/// reached through the vfuncs of these classes or not at all, so the surface
+/// this crate claims to have audited stays a header at a time.
+///
+/// `ESourceConfigBackend` is the second, and it is the one Evolution's *New
+/// Address Book* and *New Calendar* dialogs are built out of:
+/// `ESourceConfig` walks every registered subclass of it and makes one
+/// candidate — one entry in the Type list, one page of widgets, one
+/// commit target — per subclass. Its class struct is generated for the same
+/// reason `EMailConfigServiceBackend`'s is, and it is the more load-bearing of
+/// the two: four vfunc slots, all four of them written by our `class_init`,
+/// and `tests/source_config.rs` pins each one's offset rather than only the
+/// struct's total size. `ESourceConfigBackendPrivate` comes with it under the
+/// same prefix, as the opaque type the instance's `priv` points at.
+///
+/// `ESourceConfig` itself does *not*: it is a `GtkBox`, so generating it means
+/// generating the GTK class structs [`BLOCKED_GTK_TYPES`] exists to keep out.
+/// It joins [`EVO_HANDLES`] instead, on the same argument as the mail config
+/// page — nothing here subclasses it, allocates one, or reads a field of it.
 ///
 /// `EConfigLookupWorker` joins it for a different reason: not subclassed, but
 /// an *interface* this crate will implement (`jmap-config`'s OAuth 2.0
@@ -44,6 +60,7 @@ const ALLOWED_TYPES: &[&str] = &[
     "EMailConfigServiceBackend.*",
     "EConfigLookupWorker.*",
     "EConfigLookupResult.*",
+    "ESourceConfigBackend.*",
 ];
 
 /// String macros this crate reads rather than hand-copies: the parameter
@@ -91,6 +108,19 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_config_lookup_result_simple_add_string",
     "e_config_lookup_result_simple_add_boolean",
     "e_config_lookup_result_simple_add_uint",
+    // `ESourceConfigBackend`'s own wrappers, by prefix for the same reason the
+    // mail config backend's are: it is a class this crate subclasses, so every
+    // one of its accessors is a call our vfuncs may legitimately make.
+    "e_source_config_backend_.*",
+    // And exactly one call on the `ESourceConfig` those hand back. Not
+    // `e_source_config_.*`: that prefix would take on the dialog's page
+    // management, its candidate list and its async commit, none of which a
+    // backend touches. The rest of what an `insert_widgets` will need off it
+    // (`_insert_widget`, `_get_registry`, `_add_refresh_interval`, …) joins
+    // this list a line at a time with the code that calls it; `get_type` is
+    // here now because `tests/source_config.rs` asks the running type system
+    // whether the handle below really is the GtkBox this crate calls it.
+    "e_source_config_get_type",
 ];
 
 /// The GTK calls, named one at a time rather than by prefix.
@@ -178,15 +208,17 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
 /// objects.
 ///
 /// `ESourceRegistry` and friends match the `ESource` prefix and would be
-/// blocked with it; that is correct — eds-sys has them too.
+/// blocked with it; that is correct — eds-sys has them too. The one name that
+/// starts `ESource` and is *not* EDS's is `ESourceConfigBackend`, which is why
+/// the `ESource` half of this list is built by [`blocked_source_types`] rather
+/// than written out here.
 const BLOCKED_TYPES: &[&str] = &[
     "G[A-Z].*",
     "_G[A-Z].*",
     "g[a-z]+",
     "va_list",
     "__va_list_tag",
-    "E(Extension|Source)[A-Za-z]*",
-    "_E(Extension|Source)[A-Za-z]*",
+    "_?EExtension[A-Za-z]*",
     "Camel.*",
     "_Camel.*",
     // `EConfigLookupWorker::run`'s own parameters: eds-sys already generates
@@ -195,6 +227,52 @@ const BLOCKED_TYPES: &[&str] = &[
     // the one every EDS-facing crate in this workspace shares.
     "_?ENamedParameters",
 ];
+
+/// The one `ESource*` name in these headers that eds-sys does not have, and
+/// that this crate therefore has to generate rather than borrow: Evolution's
+/// own `ESourceConfigBackend`, which lives in `libevolution-util`.
+///
+/// A prefix, not an exact name: `ESourceConfigBackendClass` and
+/// `ESourceConfigBackendPrivate` are exempt with it.
+const EXEMPT_FROM_SOURCE_BLOCK: &str = "ESourceConfigBackend";
+
+/// `E(Extension|Source)[A-Za-z]*`'s `ESource` half, minus
+/// [`EXEMPT_FROM_SOURCE_BLOCK`].
+///
+/// The exemption cannot be written as one more allowlist entry, because
+/// bindgen's blocklist beats its allowlist: a name in both is referenced by
+/// every generated signature and defined by nothing, which is a binding that
+/// does not compile (checked, before this function was written). And it cannot
+/// be written as a negative lookahead, because bindgen matches a whole type
+/// name against `regex`, which has none.
+///
+/// So it is spelled out the only way an anchored, lookahead-free regex can. For
+/// every proper prefix of the exempt name from `ESource` onwards, two
+/// alternatives: the prefix exactly, and the prefix followed by any character
+/// *other* than the one the exempt name continues with. Their union is every
+/// name beginning `ESource` except those beginning with the exempt name — so
+/// `ESourceCamel`, `ESourceRegistry` and the rest stay blocked and keep coming
+/// from eds-sys, while `ESourceConfigBackend` and its two companions are
+/// generated here.
+///
+/// Note what this deliberately does *not* exempt: `ESourceConfig` itself, and
+/// its `Class`/`Private`. They differ from the exempt name at the character
+/// after `ESourceConfig`, so the `ESourceConfig` + not-`B` alternative catches
+/// them, and they stay blocked — which is what sends them to [`EVO_HANDLES`],
+/// where a `GtkBox` subclass belongs.
+fn blocked_source_types() -> Vec<String> {
+    let exempt = EXEMPT_FROM_SOURCE_BLOCK;
+    let mut out = Vec::new();
+    for len in "ESource".len()..exempt.len() {
+        let prefix = &exempt[..len];
+        let next = &exempt[len..len + 1];
+        for underscore in ["", "_"] {
+            out.push(format!("{underscore}{prefix}"));
+            out.push(format!("{underscore}{prefix}[^{next}][A-Za-z]*"));
+        }
+    }
+    out
+}
 
 /// GTK's *types*, which this crate does not generate even though it now calls
 /// GTK functions.
@@ -273,7 +351,22 @@ const BLOCKED_EVO_TYPES: &[&str] = &[
 /// `_add_result`, …) once a worker exists to make those calls — not a widget,
 /// but opaque for the identical reason, since nothing here subclasses it or
 /// reads a field of it.
-const EVO_HANDLES: &[&str] = &["EMailConfigServicePage", "EMailConfigPage", "EConfigLookup"];
+///
+/// `ESourceConfig` is the fourth, and the closest analogue of the first: it is
+/// what `e_source_config_backend_get_config` hands a backend's vfuncs, exactly
+/// as the page is what `e_mail_config_service_backend_get_page` hands the mail
+/// one, and it is a `GtkBox` — so generating it would pull in the GTK class
+/// structs, and would be a claim about a layout nothing here reads a field of.
+/// `tests/source_config.rs` asks the running type system for the one thing this
+/// treatment does assume, that the handle really is a `GtkBox`, rather than
+/// taking the header's word for it. Note the *backend* class beside it is the
+/// opposite case and is generated, for the same reason the mail one is.
+const EVO_HANDLES: &[&str] = &[
+    "EMailConfigServicePage",
+    "EMailConfigPage",
+    "EConfigLookup",
+    "ESourceConfig",
+];
 
 /// The GTK classes the calls above mention, as opaque handles.
 ///
@@ -425,10 +518,13 @@ fn main() {
     for v in ALLOWED_VARS {
         builder = builder.allowlist_var(v);
     }
+    let source_types = blocked_source_types();
     for t in BLOCKED_TYPES
         .iter()
-        .chain(BLOCKED_GTK_TYPES)
-        .chain(BLOCKED_EVO_TYPES)
+        .copied()
+        .chain(BLOCKED_GTK_TYPES.iter().copied())
+        .chain(BLOCKED_EVO_TYPES.iter().copied())
+        .chain(source_types.iter().map(String::as_str))
     {
         builder = builder.blocklist_type(t);
     }
