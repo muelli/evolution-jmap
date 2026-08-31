@@ -173,6 +173,17 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	target_link_libraries(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
 	target_link_directories(functional-oauth2-stale-proxy-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
 
+	# Item 41's reproduction client. Another registry-only consumer, run
+	# twice against two accounts that share an [Authentication] User but
+	# point at two different mock JMAP deployments, to reproduce the
+	# secret-store slot collision `eos_generate_secret_uid` causes by keying
+	# on (service name, user) alone. See the client's own header.
+	add_executable(functional-oauth2-token-collision-client tests/functional/oauth2-token-collision-client.c)
+	target_include_directories(functional-oauth2-token-collision-client PRIVATE ${LIBEDATASERVER_INCLUDE_DIRS})
+	target_compile_options(functional-oauth2-token-collision-client PRIVATE ${LIBEDATASERVER_CFLAGS_OTHER})
+	target_link_libraries(functional-oauth2-token-collision-client PRIVATE ${LIBEDATASERVER_LIBRARIES})
+	target_link_directories(functional-oauth2-token-collision-client PRIVATE ${LIBEDATASERVER_LIBRARY_DIRS})
+
 	# EDS's OWN registry module, not one this project builds. `EDS_REGISTRY_
 	# MODULES` replaces EDS's module directory rather than adding to it
 	# (`e-source-registry-server.c:1073`), so a functional session sees only
@@ -594,6 +605,21 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_OAUTH2_STALE_PROXY_CLIENT=$<TARGET_FILE:functional-oauth2-stale-proxy-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
+	)
+
+	# Item 41: two accounts sharing one [Authentication] User, pointed at two
+	# independent mock JMAP deployments, collide on one secret-store slot.
+	add_test(
+		NAME functional-oauth2-token-collision
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test oauth2-token-collision
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-oauth2-token-collision PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_OAUTH2_TOKEN_COLLISION_CLIENT=$<TARGET_FILE:functional-oauth2-token-collision-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so;JMAP_FUNCTIONAL_EDS_OAUTH2_SERVICES_MODULE=${MODULE_OAUTH2_SERVICES_LIBRARY}"
 	)
 
 	# `gnome-keyring-daemon` is what `Session::run` (rust/crates/jmap-functional/
