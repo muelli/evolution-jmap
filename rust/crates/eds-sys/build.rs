@@ -109,6 +109,23 @@ const ALLOWED_TYPES: &[&str] = &[
     // default behind — tests/camel.rs pins both — so it is the first interface
     // whose vtable one of our types has to fill in rather than merely claim.
     "CamelSubscribable.*",
+    // The authentication mechanism half of a provider. `CamelSasl` is the
+    // abstract base whose class carries the `CamelServiceAuthType` that
+    // `camel_sasl_authtype` keys its table by, and `CamelSaslXOAuth2` the
+    // subclass a bearer-token mechanism derives from — the two the provider's
+    // own named mechanism sits under, so that `camel_sasl_is_xoauth2_alias`
+    // answers yes for it.
+    //
+    // Exact names rather than a `CamelSasl.*` prefix, for the reason
+    // `EOAuth2Service` is spelled out above: the prefix also matches
+    // `CamelSaslAnonymous`, `-CramMd5`, `-DigestMd5`, `-Gssapi`, `-Login`,
+    // `-Ntlm`, `-Plain`, `-Popb4smtp` and the three built-in XOAUTH2 flavours,
+    // and emitting their class structs would be this layer claiming to have
+    // layout-checked eleven types nothing here will ever subclass.
+    "CamelSasl",
+    "CamelSaslClass",
+    "CamelSaslXOAuth2",
+    "CamelSaslXOAuth2Class",
     "CamelTransport.*",
     "CamelSession.*",
     "CamelSettings.*",
@@ -395,6 +412,21 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // subscription editor calls a store through, and the two that emit the
     // signals a store sends back when the answer to one of them changed.
     "camel_subscribable_.*",
+    // The two type accessors the provider's named mechanism is registered
+    // under and against, plus the two lookups that are the whole reason it
+    // exists: `camel_sasl_authtype`, which is what
+    // `mail_ui_session_authenticate_sync` asks before deciding whether a
+    // mechanism gets one silent attempt or a password prompt, and
+    // `camel_sasl_is_xoauth2_alias`, which is how Evolution's account editor
+    // recognises a bearer mechanism under a name of its own. Named one at a
+    // time rather than by `camel_sasl_.*`, which would also bring
+    // `camel_sasl_new` and the challenge/try-empty-password calls — the
+    // instance-side surface of a mechanism this provider declares but never
+    // instantiates.
+    "camel_sasl_get_type",
+    "camel_sasl_xoauth2_get_type",
+    "camel_sasl_authtype",
+    "camel_sasl_is_xoauth2_alias",
     // `camel_folder_info_new` and `_free` are the allocator pair the folder
     // tree is built and torn down with; the type accessor is what
     // tests/layout.rs queries.

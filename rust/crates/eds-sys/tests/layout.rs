@@ -306,6 +306,17 @@ fn camel_layouts_match_the_gtype_system() {
         CamelTransport,
         CamelTransportClass
     );
+    // The mechanism chain the provider's own named authtype hangs off.
+    // `CamelSasl`'s class is where the `CamelServiceAuthType *` slot that
+    // `camel_sasl_authtype` reads lives, ahead of twenty reserved pointers, so
+    // a class struct one field short here would install our authtype over
+    // Camel's `try_empty_password_sync` slot instead.
+    assert_layout!(camel_sasl_get_type, CamelSasl, CamelSaslClass);
+    assert_layout!(
+        camel_sasl_xoauth2_get_type,
+        CamelSaslXOAuth2,
+        CamelSaslXOAuth2Class
+    );
     assert_layout!(camel_session_get_type, CamelSession, CamelSessionClass);
     assert_layout!(camel_settings_get_type, CamelSettings, CamelSettingsClass);
     assert_layout!(
