@@ -61,6 +61,14 @@ const ALLOWED_TYPES: &[&str] = &[
     "EConfigLookupWorker.*",
     "EConfigLookupResult.*",
     "ESourceConfigBackend.*",
+    // The enum `e_cal_source_config_get_source_type` answers with, and the only
+    // type generated here that belongs to EDS rather than Evolution: it is
+    // libecal's, but a plain C enum rather than an object, and `eds-sys` does
+    // not generate it (checked, not assumed — nothing in that crate's surface
+    // takes or returns one). A value type has no layout for two copies to
+    // disagree about, so generating it here does not repeat the mistake
+    // [`BLOCKED_TYPES`] exists to prevent.
+    "ECalClientSourceType",
 ];
 
 /// String macros this crate reads rather than hand-copies: the parameter
@@ -121,6 +129,18 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // here now because `tests/source_config.rs` asks the running type system
     // whether the handle below really is the GtkBox this crate calls it.
     "e_source_config_get_type",
+    // The two derived config classes, named a function at a time rather than by
+    // prefix — a subclass declares itself an extension of one of these and
+    // never calls anything else on it. `e_book_source_config_get_type` and
+    // `e_cal_source_config_get_type` are what `class_init` writes into
+    // `EExtensionClass::extensible_type`; `_get_source_type` is the one call a
+    // vfunc makes, and it is `allow_creation`'s whole content on the calendar
+    // side. Deliberately not `e_cal_source_config_add_offline_toggle` or
+    // `e_book_source_config_add_autocomplete_check`: no vfunc here builds a
+    // widget, and none of Evolution's own cal modules calls the former either.
+    "e_book_source_config_get_type",
+    "e_cal_source_config_get_type",
+    "e_cal_source_config_get_source_type",
 ];
 
 /// The GTK calls, named one at a time rather than by prefix.
@@ -320,6 +340,14 @@ const BLOCKED_EVO_TYPES: &[&str] = &[
     // `[A-Za-z]*` so it matches only the exact name, the same way the page
     // above is distinguished from `EMailConfigServiceBackend`.
     "_?EConfigLookup",
+    // `EBookSourceConfig` and `ECalSourceConfig`, for the same reason
+    // `ESourceConfig` is blocked and handled: each leads with an `ESourceConfig`
+    // parent, which is itself a handle here — so a generated struct would put a
+    // zero-sized field where a `GtkBox` sits and mislocate everything after it.
+    // Neither is subclassed, allocated or read from; the calendar one is only
+    // ever the pointer `e_source_config_backend_get_config` handed back, cast
+    // the way C's `E_CAL_SOURCE_CONFIG()` casts it.
+    "_?E(Book|Cal)SourceConfig[A-Za-z]*",
 ];
 
 /// Evolution's classes reached only through a pointer, as opaque handles — the
@@ -366,6 +394,14 @@ const EVO_HANDLES: &[&str] = &[
     "EMailConfigPage",
     "EConfigLookup",
     "ESourceConfig",
+    // Its two derived classes, the fifth and sixth, on exactly the argument the
+    // fourth makes: both are `ESourceConfig`s and so `GtkBox`es, and the only
+    // thing done with either is to name its `GType` or hand its pointer back to
+    // Evolution. `tests/source_config.rs` asks the running type system whether
+    // they really do derive from `ESourceConfig`, which is the one thing the
+    // `E_CAL_SOURCE_CONFIG()`-shaped cast in `allow_creation` assumes.
+    "EBookSourceConfig",
+    "ECalSourceConfig",
 ];
 
 /// The GTK classes the calls above mention, as opaque handles.

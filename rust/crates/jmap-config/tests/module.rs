@@ -34,7 +34,7 @@ use std::sync::OnceLock;
 use eds_sys::EExtensionClass;
 use evo_sys::{
     EMailConfigServiceBackendClass, e_config_lookup_get_type, e_config_lookup_worker_get_type,
-    e_mail_config_service_backend_get_type,
+    e_mail_config_service_backend_get_type, e_source_config_backend_get_type,
 };
 use glib_sys::{GFALSE, GTRUE, GType, gboolean};
 use gobject_sys::{
@@ -49,6 +49,7 @@ use jmap_config::config_lookup::JmapConfigLookup;
 use jmap_config::mail::MAIL_BACKEND_NAME;
 use jmap_config::module::{load, unload};
 use jmap_config::oauth2_service;
+use jmap_config::source_config::{JmapBookConfig, JmapCalConfig};
 
 /// A `GTypeModule` standing in for the `EModule` Evolution would load us as.
 #[repr(C)]
@@ -327,6 +328,54 @@ fn the_lookup_worker_type_is_registered_against_the_module() {
         loaded.module,
         "the lookup worker type was not registered against the module"
     );
+}
+
+/// The two `ESourceConfigBackend`s, held to the same two things the backend and
+/// the lookup worker are held to: in the type system at all, and registered
+/// against the module rather than statically.
+///
+/// This is the piece whose absence the operator hit. `ESourceConfig` builds one
+/// candidate per registered subclass of `ESourceConfigBackend`, so before these
+/// two the New Address Book and New Calendar dialogs had no JMAP entry, editing
+/// an existing JMAP source found a NULL backend, and OK asserted instead of
+/// saving. `tests/source_config.rs` pins what the classes *say*; this pins that
+/// the entry point puts them where Evolution will look.
+///
+/// Registered against the module and not statically, for the reason
+/// [`the_registered_type_belongs_to_the_module`] gives: a statically registered
+/// type outlives the code its `class_init` and vfunc pointers live in, which is
+/// a dangling call the moment Evolution unloads us.
+#[test]
+fn the_source_config_backends_are_registered_against_the_module() {
+    let loaded = loaded();
+    for (label, name) in [
+        (
+            "address book",
+            <JmapBookConfig as ObjectSubclass>::NAME.as_ptr(),
+        ),
+        ("calendar", <JmapCalConfig as ObjectSubclass>::NAME.as_ptr()),
+    ] {
+        // SAFETY: NAME is a 'static NUL-terminated string.
+        let gtype = unsafe { g_type_from_name(name) };
+        assert_ne!(
+            gtype, 0,
+            "e_module_load did not register the {label} config backend — its \
+             dialog offers no JMAP entry without it"
+        );
+        assert_ne!(
+            // SAFETY: both are registered types.
+            unsafe { g_type_is_a(gtype, e_source_config_backend_get_type()) },
+            0,
+            "the registered {label} type is not an ESourceConfigBackend, so \
+             ESourceConfig would not build a candidate from it"
+        );
+        assert_eq!(
+            // SAFETY: a registered type.
+            unsafe { g_type_get_plugin(gtype) }.cast::<GTypeModule>(),
+            loaded.module,
+            "the {label} config backend was not registered against the module"
+        );
+    }
 }
 
 #[test]

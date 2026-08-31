@@ -56,6 +56,12 @@ fn warm_up() {
         assert!(!klass.is_null(), "g_type_class_ref returned NULL");
         g_type_class_unref(klass);
         gtk_box_get_type();
+        // The two derived config classes, on the same thread and for the same
+        // reason: each is another GtkBox subclass registered on first ask, so
+        // leaving them to whichever test got there first would put the
+        // registration back in a race with the class initialiser above.
+        e_book_source_config_get_type();
+        e_cal_source_config_get_type();
     });
 }
 
@@ -211,4 +217,80 @@ fn source_config_is_an_opaque_gtk_box() {
             "ESourceConfig is no longer a GtkBox"
         );
     }
+}
+
+/// The two classes a backend names as its `extensible_type`, and the one thing
+/// the handles above assume about them.
+///
+/// `EExtensionClass::extensible_type` is a single `GType`, and
+/// `e_extensible_load_extensions` instantiates an extension only for the
+/// extensible whose type it names — so which of these two a subclass names is
+/// the whole of whether its candidate turns up in New Address Book or in New
+/// Calendar. Naming `ESourceConfig` itself would put it in both and hand each
+/// the other's scratch source, which is why the derived types have to be
+/// reachable from here at all.
+///
+/// Both are opaque handles, so the assertion is the one `tests/gtk.rs` makes
+/// about the widget classes: the running type system says they derive from the
+/// `ESourceConfig` that `e_source_config_backend_get_config` returns, which is
+/// what licenses `allow_creation`'s cast of that return value to an
+/// `ECalSourceConfig *` — the Rust spelling of C's `E_CAL_SOURCE_CONFIG()`.
+#[test]
+fn the_two_dialog_classes_derive_from_the_config_a_backend_is_handed() {
+    warm_up();
+    for (name, gtype) in [
+        // SAFETY: no arguments, and the type system initialises itself.
+        ("EBookSourceConfig", unsafe {
+            e_book_source_config_get_type()
+        }),
+        // SAFETY: as above.
+        ("ECalSourceConfig", unsafe {
+            e_cal_source_config_get_type()
+        }),
+    ] {
+        assert_ne!(gtype, 0, "{name}: get_type() answered the invalid type");
+        assert!(
+            // SAFETY: `gtype` is a registered type, as just asserted.
+            unsafe { g_type_is_a(gtype, e_source_config_get_type()) } != 0,
+            "{name} is no longer an ESourceConfig"
+        );
+    }
+    assert_eq!(
+        size_of::<EBookSourceConfig>(),
+        0,
+        "EBookSourceConfig is no longer an opaque handle"
+    );
+    assert_eq!(
+        size_of::<ECalSourceConfig>(),
+        0,
+        "ECalSourceConfig is no longer an opaque handle"
+    );
+}
+
+/// The three source types one `ECalSourceConfig` serves, distinguished by
+/// nothing but `e_cal_source_config_get_source_type`'s answer.
+///
+/// This is not a binding detail. New Calendar, New Task List and New Memo List
+/// are the same dialog class with a different value here, so every registered
+/// calendar config backend is offered in all three unless its `allow_creation`
+/// says otherwise — Evolution's own `cal-config-google` and `cal-config-gtasks`
+/// each override it for exactly this reason. A JMAP account has calendars and
+/// no task or memo collections, so the constant this crate compares against had
+/// better be the one libecal means by "events"; the enum is `#[repr(C)]`
+/// integers generated from a header, so the check that it has not been
+/// renumbered under us is that the four values are the four distinct ones the
+/// header declares, in its order.
+#[test]
+fn the_calendar_source_types_are_the_distinct_values_libecal_declares() {
+    let all = [
+        E_CAL_CLIENT_SOURCE_TYPE_EVENTS,
+        E_CAL_CLIENT_SOURCE_TYPE_TASKS,
+        E_CAL_CLIENT_SOURCE_TYPE_MEMOS,
+        E_CAL_CLIENT_SOURCE_TYPE_LAST,
+    ];
+    assert_eq!(
+        all,
+        [0, 1, 2, 3],
+        "ECalClientSourceType has been renumbered"
+    );
 }

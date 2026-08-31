@@ -45,3 +45,22 @@
  * handle (see build.rs), being a GtkBox. */
 #define __E_UTIL_H_INSIDE__
 #include <e-util/e-source-config-backend.h>
+
+/* The two `ESourceConfig` subclasses a backend declares itself an extension
+ * *of*, which is the whole of how a candidate reaches one dialog and not the
+ * other. `EExtensionClass::extensible_type` is a single GType, so a subclass
+ * registered against `ESourceConfig` itself would appear in New Address Book
+ * and New Calendar alike and hand each the other's scratch source; Evolution's
+ * own modules name the derived class instead (`module-book-config-local` takes
+ * `E_TYPE_BOOK_SOURCE_CONFIG`, `module-cal-config-caldav`
+ * `E_TYPE_CAL_SOURCE_CONFIG`), and so do ours.
+ *
+ * Only their `get_type` accessors are generated, plus the one call that makes
+ * the calendar side correct: `e_cal_source_config_get_source_type`. The same
+ * `ECalSourceConfig` serves New Calendar, New Task List and New Memo List, and
+ * distinguishes them by that value alone — so a calendar backend that does not
+ * consult it offers JMAP in all three, and a JMAP account has no task or memo
+ * collections to create. Both classes stay opaque handles (see build.rs), being
+ * `ESourceConfig`s and so `GtkBox`es. */
+#include <e-util/e-book-source-config.h>
+#include <e-util/e-cal-source-config.h>
