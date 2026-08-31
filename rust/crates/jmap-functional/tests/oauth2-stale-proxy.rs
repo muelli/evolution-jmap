@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `docs/ROADMAP.md` item 22, Do(1): the headless reproduction of the stale
-//! `Source.OAuth2Support` interface proxy.
+//! The headless reproduction of the stale `Source.OAuth2Support` interface
+//! proxy.
 //!
 //! What the item-20 tracing captured live on 2026-08-28 was a calendar factory
 //! asking for an access token and getting `"The name :1.4 was not provided by

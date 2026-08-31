@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `docs/ROADMAP.md` item 25: item 23's acceptance test, made headless.
+//! Item 23's acceptance test, made headless.
 //!
 //! Item 23 — the hourly re-consent — is code-complete at all four call sites,
 //! and its acceptance test was "the operator leaves Evolution open for hours

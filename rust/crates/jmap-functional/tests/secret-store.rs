@@ -3,10 +3,10 @@
 
 //! M9 layer 1's own environment, not a backend under test.
 //!
-//! `docs/ROADMAP.md` item 18: the gated functional CI job's private session
-//! bus has no secret service, so `evolution_source_registry_creates_and_
-//! deletes_a_calendar` (any account with an `[Authentication]` extension,
-//! really) fails when `create_resource_sync`'s `stored_password_of` asks
+//! The gated functional CI job's private session bus has no secret service,
+//! so `evolution_source_registry_creates_and_deletes_a_calendar` (any
+//! account with an `[Authentication]` extension, really) fails when
+//! `create_resource_sync`'s `stored_password_of` asks
 //! `e_source_credentials_provider_lookup_sync` for one. `Session::run` now
 //! unlocks a login keyring on the private bus before the real client runs —
 //! see its own doc comment for why that specific step, not merely installing
@@ -52,7 +52,7 @@ fn a_session_creates_a_usable_login_keyring_before_running_its_client() {
 
 #[test]
 fn running_a_client_does_not_leave_a_keyring_daemon_behind() {
-    // docs/BACKLOG.md: "`jmap_functional::Session::run` leaks a
+    // The finding: "`jmap_functional::Session::run` leaks a
     // `gnome-keyring-daemon` per run" — `--daemonize` detaches it from the
     // private bus, so it outlives `dbus-run-session` unless `run` itself
     // reaps it.

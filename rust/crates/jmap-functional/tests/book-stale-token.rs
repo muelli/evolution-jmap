@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `docs/ROADMAP.md` item 25, the ADDRESS-BOOK leg: item 23's acceptance
-//! test, made headless for `jmap-backend-book`.
+//! The ADDRESS-BOOK leg: item 23's acceptance test, made headless for
+//! `jmap-backend-book`.
 //!
 //! This is `cal-stale-token.rs` with the calendar pair swapped for the
 //! address-book one — `jmap_backend_core::oauth2::source_uses_oauth2` is the
