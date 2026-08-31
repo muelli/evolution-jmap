@@ -1,6 +1,6 @@
 # Newer-Evolution/EDS portability spike — the config/GUI axis (Track F)
 
-Track F's premise (`docs/ROADMAP.md`): M10's `eds-version-matrix` job already
+Track F's premise: M10's `eds-version-matrix` job already
 proves the **data/backend** crates (`eds-sys`, `evo-sys`, `jmap-backend-*`)
 green on EDS 3.52 and 3.60, but flagged the **config/GUI** crate
 (`jmap-config`, `EMailConfigServiceBackend`/`EMailConfigServicePage`) as the

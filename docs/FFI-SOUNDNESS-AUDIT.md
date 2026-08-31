@@ -5,7 +5,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # FFI soundness audit (Track A5, 2026-08-19)
 
-Scope, as named by `docs/ROADMAP.md`'s Track A5: for every `extern "C"`
+Scope, as named by Track A5: for every `extern "C"`
 vfunc trampoline and FFI call site across the workspace's EDS-integration
 crates, check four things —
 

@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 Inventory of every `unsafe` block/fn/impl/trait in `rust/crates/**/src` (test
 modules excluded — they exercise the same helpers under a harness, not a new
-surface), 2026-08-19, per `docs/ROADMAP.md` Track A6. Complements Track A5
+surface), 2026-08-19, per Track A6. Complements Track A5
 (FFI *soundness*: `catch_unwind` coverage, transfer-full/none correctness,
 nullability, `GCancellable`) — this audit is about *reduction, containment,
 and idiom*: is each `unsafe` block as small and as well-abstracted as it
