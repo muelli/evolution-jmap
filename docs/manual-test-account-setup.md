@@ -129,6 +129,33 @@ does not offer a way to point discovery at `127.0.0.1:8080` in your
 Evolution version, skip to step 5 and fill the fields in by hand instead —
 that is the fallback path this whole recipe exists to prove works too.
 
+### Troubleshooting: OAuth 2.0 against a self-hosted deployment
+
+If this step reaches a self-hosted server rather than the mock or a known
+provider, and the assistant comes back *without* offering OAuth 2.0 — no
+error dialog, just a *Receiving Email* page with Authentication still on
+**Password** — check the deployment's advertised hostname before assuming
+this repository is at fault.
+
+`jmap-client`'s RFC 8414 discovery refuses a metadata document whose stated
+`issuer` does not exactly match the address it was fetched from (§3.3): a
+server that lets its issuer be spoofed lets *any* deployment claim to be
+any other one, so this check stays strict by design and has no opt-in to
+relax it. `jmap-config`'s lookup worker treats that refusal, like any other
+discovery failure, as "OAuth 2.0 not available here" and logs it only at
+debug level (`config_lookup.rs`) rather than surfacing a dialog — run with
+`EVOLUTION_JMAP_LOG=debug` (see `journalctl --user -f`) and look for
+`requires them to be identical` to confirm this is what happened, versus
+some other discovery failure.
+
+**The fix is on the server, not in Evolution:** a self-hosted deployment's
+advertised issuer/hostname must be the same address clients actually reach
+it on. A JMAP server left at its installer's default hostname (e.g.
+Stalwart's `SystemSettings.defaultHostname` still reading `example.com`
+while actually reached at a different address) will hit this every time;
+correcting that setting on the server is the fix, and Password
+authentication against the same server is unaffected in the meantime.
+
 ## 5. The server-settings page
 
 However you arrived at the *Receiving Email* page — by hand or via step 4 —
