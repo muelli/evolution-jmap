@@ -36,8 +36,7 @@ impl SyncError {
     /// Whether the server rejected the request with HTTP 401 — on a
     /// long-lived connection, what a bearer token that expired while the
     /// connection sat idle looks like. The caller's answer is to refresh the
-    /// token and retry once, not to reopen the consent window immediately
-    /// (`docs/ROADMAP.md` item 23).
+    /// token and retry once, not to reopen the consent window immediately.
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Client(error) if error.is_unauthorized())
     }
