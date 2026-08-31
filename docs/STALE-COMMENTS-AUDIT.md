@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 Read-only sweep of `rust/crates/**` (doc comments and inline comments; not
 the project's log and planning documents, which are logs, not code
-comments), 2026-08-19, per `docs/ROADMAP.md` Track A7. Goal: find
+comments), 2026-08-19, per Track A7. Goal: find
 comments describing an outdated state — renamed/removed items, changed
 behaviour, done TODOs, resolved-milestone references ("once M7 lands" when M7
 is done), calcard/percent-encoding migration leftovers — and fix the
@@ -38,8 +38,7 @@ were found outside the M7/config-lookup family above.
 3. **`jmap-config/src/backend.rs`'s `insert_widgets` doc, "## Untestable
    here" section** — said this needs "a real Evolution session (or M9's
    Xvfb tier)" and is "not tagged complete until a human confirms it." M7 is
-   `COMPLETE` (`c3cac2d`) via two operator rounds in real Evolution
-   (`docs/ROADMAP.md`'s MAINTAINER DECISIONS section); the
+   `COMPLETE` (`c3cac2d`) via two operator rounds in real Evolution; the
    "M9's Xvfb tier" parenthetical was also wrong (see MEDIUM finding below).
    Rewritten to state the human confirmation that already happened and drop
    the inaccurate Xvfb claim.
