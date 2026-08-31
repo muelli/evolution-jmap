@@ -91,7 +91,12 @@ impl std::error::Error for CreateFailure {}
 /// answered with, not from what was asked for: a server may normalise the name,
 /// may flag the new collection default, and — for a calendar — may assign it a
 /// colour. All three reach the child that way, so a created child is the child
-/// the next discovery would have written rather than a near-miss of it.
+/// the next discovery would have written rather than a near-miss of it. One
+/// exception: `name` alone falls back to what was *requested*, not the id,
+/// when the response leaves it out — RFC 8620 §5.3 lets a `created` response
+/// omit any property the server did not itself set, and a name it accepted
+/// unchanged is exactly that (operator-found 2026-08-31, real Fastmail: a
+/// "testcal" calendar showed up in Evolution as its server-assigned id).
 ///
 /// The create explicitly asks for `isSubscribed: true`. Both specifications
 /// leave a freshly created collection's subscription state up to the server,
@@ -138,6 +143,7 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
             created_resource(
                 created.id,
                 &created.name,
+                display_name,
                 created.is_default,
                 None,
                 writable,
@@ -164,6 +170,7 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
             created_resource(
                 created.id,
                 &created.name,
+                display_name,
                 created.is_default,
                 color,
                 writable,
@@ -183,14 +190,31 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
 /// `[Resource] Identity` carries, and a child written without one is a child
 /// whose cache file EDS deletes on the next start. So it is refused here rather
 /// than turned into an empty identity two layers down.
+///
+/// `server_name` is what the create's response stated, which may be blank: a
+/// `created` response need only carry properties the server itself set (RFC
+/// 8620 §5.3), and `name` is not one of those when the server accepted the
+/// requested name unchanged — a real server (Fastmail, operator-found
+/// 2026-08-31) leaves it out entirely rather than echoing it back. A blank
+/// `server_name` therefore means "accepted as asked", not "the server named
+/// it nothing", so it falls back to `requested_name` — never straight to the
+/// id — and only a `server_name` the response actually states (a genuine
+/// normalisation) overrides what was requested. The id is the last resort,
+/// for the one case neither name can cover: both blank.
 fn created_resource(
     id: Option<Id>,
-    name: &str,
+    server_name: &str,
+    requested_name: &str,
     is_default: Option<bool>,
     color: Option<String>,
     writable: Option<bool>,
 ) -> Option<Resource> {
     let id = id?;
+    let name = if server_name.trim().is_empty() {
+        requested_name
+    } else {
+        server_name
+    };
     Some(Resource {
         name: shown_name(name, &id),
         is_default: is_default == Some(true),
@@ -218,20 +242,44 @@ mod tests {
     #[test]
     fn a_created_collection_takes_the_servers_name_not_the_requested_one() {
         // The server answers a create with the object it created; a server that
-        // normalised the name is telling the client what the collection is
-        // actually called.
-        let resource = created_resource(Some(Id::new("AB9")), "Work Contacts", None, None, None)
-            .expect("the server named an id");
+        // stated a normalised name is telling the client what the collection is
+        // actually called, and that overrides what was asked for.
+        let resource = created_resource(
+            Some(Id::new("AB9")),
+            "Work Contacts",
+            "work contacts",
+            None,
+            None,
+            None,
+        )
+        .expect("the server named an id");
         assert_eq!(resource.name, "Work Contacts");
         assert_eq!(resource.id, Id::new("AB9"));
         assert!(!resource.is_default);
     }
 
     #[test]
-    fn a_created_collection_the_server_named_nothing_shows_its_id() {
+    fn a_created_collection_whose_response_omits_the_name_shows_the_requested_name() {
+        // RFC 8620 §5.3: a `created` response need only carry properties the
+        // server itself set. `name` is not one of those when the server
+        // accepted the requested name unchanged, so a real server (Fastmail,
+        // operator-found 2026-08-31) leaves it out — an absent name means
+        // "accepted as asked", not "the server named it nothing", and must
+        // not fall back to the id the way `created_resource`'s caller passes
+        // an empty string for "the response omitted this".
+        let resource = created_resource(Some(Id::new("CiV")), "", "testcal", None, None, None)
+            .expect("the server named an id");
+        assert_eq!(resource.name, "testcal");
+    }
+
+    #[test]
+    fn a_created_collection_neither_name_names_anything_shows_its_id() {
         // The same never-blank rule a listing applies — a blank row in the
-        // sidebar is one the user cannot tell from another blank row.
-        let resource = created_resource(Some(Id::new("Cal9")), "   ", None, None, None)
+        // sidebar is one the user cannot tell from another blank row. This is
+        // the one case genuinely reachable only via the id: Evolution refuses
+        // an empty display name in its own create dialogs, but `Requested`
+        // documents that a blank request is sent rather than rejected here.
+        let resource = created_resource(Some(Id::new("Cal9")), "   ", "  ", None, None, None)
             .expect("the server named an id");
         assert_eq!(resource.name, "Cal9");
     }
@@ -240,13 +288,14 @@ mod tests {
     fn a_create_the_server_reported_no_id_for_is_no_resource() {
         // `[Resource] Identity` is what this becomes, and a child written
         // without one is a child EDS deletes the cache file of.
-        assert!(created_resource(None, "Work", None, None, None).is_none());
+        assert!(created_resource(None, "Work", "Work", None, None, None).is_none());
     }
 
     #[test]
     fn the_servers_default_flag_and_calendar_colour_reach_the_resource() {
         let resource = created_resource(
             Some(Id::new("Cal9")),
+            "Work",
             "Work",
             Some(true),
             Some("#ff8800".to_owned()),
@@ -266,6 +315,7 @@ mod tests {
         // share would show as writable until the next populate corrected it.
         let resource = created_resource(
             Some(Id::new("AB9")),
+            "Read-only share",
             "Read-only share",
             None,
             None,

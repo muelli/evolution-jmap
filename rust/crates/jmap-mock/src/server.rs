@@ -102,6 +102,7 @@ pub struct MockServerBuilder {
     terse_contact_create: bool,
     new_collections_default_unsubscribed: bool,
     terse_calendar_event_create: bool,
+    terse_collection_create: bool,
     max_delayed_send: Option<u64>,
 }
 
@@ -416,6 +417,23 @@ impl MockServerBuilder {
         self
     }
 
+    /// Omit `name` from a created `AddressBook`/`Calendar`'s `created` entry,
+    /// as a server that reads RFC 8620 §5.3 literally does: the client
+    /// supplied `name` itself and the server accepted it unchanged, so it is
+    /// not server-set and may be left out — confirmed against a live
+    /// Fastmail deployment (operator-found 2026-08-31, a created calendar
+    /// showing its server-assigned id as its name in Evolution instead of the
+    /// requested name). Unlike [`Self::terse_contact_create`] and
+    /// [`Self::terse_calendar_event_create`], this does not strip the whole
+    /// object down to `id`: `isDefault`, `myRights` and (for calendars)
+    /// `color` are genuinely server-computed here and stay. Off by default,
+    /// matching the mock's own prior behaviour (echoing `name` back) and
+    /// every other test.
+    pub fn terse_collection_create(mut self) -> Self {
+        self.terse_collection_create = true;
+        self
+    }
+
     /// Advertise `maxDelayedSend` (in seconds) on the submission account
     /// capability (RFC 8621 §7.1), so a client can detect support for
     /// `EmailSubmission.sendAt` before offering scheduled send
@@ -448,6 +466,7 @@ impl MockServerBuilder {
         state.terse_contact_create = self.terse_contact_create;
         state.new_collections_default_unsubscribed = self.new_collections_default_unsubscribed;
         state.terse_calendar_event_create = self.terse_calendar_event_create;
+        state.terse_collection_create = self.terse_collection_create;
         state.max_delayed_send = self.max_delayed_send;
         let state = Arc::new(Mutex::new(state));
 
@@ -519,6 +538,7 @@ impl MockServer {
             terse_contact_create: false,
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
+            terse_collection_create: false,
             max_delayed_send: None,
         }
     }
