@@ -184,6 +184,16 @@ pub struct ServerState {
     /// matching every other test and this project's own prior assumption
     /// before that finding.
     pub terse_calendar_event_create: bool,
+    /// Omit `name` from a created `AddressBook`/`Calendar`'s `created` entry,
+    /// as [`crate::MockServerBuilder::terse_collection_create`] asked — the
+    /// client supplied `name` itself and the server accepted it unchanged, so
+    /// a spec-following server (RFC 8620 §5.3) may leave it out, as a live
+    /// Fastmail deployment does. Unlike `terse_contact_create`/
+    /// `terse_calendar_event_create`, this strips only `name`: `isDefault`,
+    /// `myRights` and (for calendars) `color` are genuinely server-computed
+    /// here. `false` echoes `name` back, matching every other test and this
+    /// project's own prior assumption before that finding.
+    pub terse_collection_create: bool,
     /// `maxDelayedSend` to advertise on the submission account capability, as
     /// [`crate::MockServerBuilder::max_delayed_send`] asked (RFC 8621 §7.1).
     /// `None` advertises an empty submission capability object, matching
@@ -219,6 +229,7 @@ impl ServerState {
             terse_contact_create: false,
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
+            terse_collection_create: false,
             max_delayed_send: None,
             event_source: EventSourceHub::new(),
         }

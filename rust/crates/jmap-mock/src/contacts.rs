@@ -49,6 +49,7 @@ pub fn address_book_get(state: &mut ServerState, arguments: Value) -> Result<Val
 pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<AddressBook> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
+    let terse_collection_create = state.terse_collection_create;
     let account = account_mut(state, &request.account_id)?;
 
     let response = simple_set(&mut account.address_books, request, |id, book| {
@@ -66,7 +67,28 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
         }
         Ok(())
     })?;
-    to_result(&response)
+    let mut result = to_result(&response)?;
+
+    // RFC 8620 §5.3: the `created` map need only carry properties the client
+    // did not already send. `name` was named by the client itself in a
+    // create, so it is not server-set — a server reading that literally
+    // (Fastmail among them) leaves it out. See
+    // `MockServerBuilder::terse_collection_create`'s doc for the finding
+    // this reproduces. Unlike `contact_card_set`'s identical-shaped stanza,
+    // only `name` is stripped: `isDefault`/`myRights` are genuinely
+    // server-computed here and every test relying on them must still see
+    // them.
+    if terse_collection_create
+        && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
+    {
+        for object in created.values_mut() {
+            if let Some(map) = object.as_object_mut() {
+                map.remove("name");
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 pub fn contact_card_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {

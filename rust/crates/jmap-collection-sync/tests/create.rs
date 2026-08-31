@@ -133,6 +133,28 @@ fn a_created_collection_is_the_only_new_child_of_its_kind() {
     assert!(after.address_books.iter().any(|book| book.name == "Work"));
 }
 
+/// Operator-found on real Fastmail, 2026-08-31: a calendar created as
+/// "testcal" showed up in Evolution as "CiV", the server-assigned id.
+/// `Calendar/set`'s `created` response echoes only SERVER-set properties
+/// (RFC 8620 §5.3), so a server that accepted the requested name unchanged
+/// leaves `name` out entirely — an absent name means "accepted as asked",
+/// not "the server named it nothing", and must not fall back to the id the
+/// way a server-stated blank name would.
+#[test]
+fn a_create_whose_response_omits_the_name_shows_the_requested_name_not_the_id() {
+    let server = MockServer::builder().terse_collection_create().start();
+
+    for kind in [ChildKind::AddressBook, ChildKind::Calendar] {
+        let child = create_collection(&client(&server), &requested(kind, "testcal"))
+            .unwrap_or_else(|error| panic!("the mock creates {kind:?}s: {error}"));
+
+        assert_eq!(
+            child.display_name, "testcal",
+            "a create whose response omits `name` must keep the requested name"
+        );
+    }
+}
+
 #[test]
 fn a_login_whose_server_serves_no_contacts_refuses_the_create() {
     // Not "send it to the primary account and hope": on a server whose contacts
