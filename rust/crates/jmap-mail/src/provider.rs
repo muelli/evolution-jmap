@@ -26,9 +26,11 @@ use eds_sys::{
     CAMEL_URL_ALLOW_USER, CAMEL_URL_NEED_HOST, CamelProvider, CamelProviderFlags,
     CamelProviderURLFlags, camel_provider_register,
 };
+use glib_sys::g_list_append;
 use gobject_sys::G_TYPE_INVALID;
 use jmap_backend_core::i18n::{DOMAIN, N_};
 
+use crate::sasl::{auth_type, sasl_type};
 use crate::store::store_type;
 use crate::transport::transport_type;
 
@@ -139,6 +141,18 @@ pub fn register() -> &'static CamelProvider {
         object_types[CAMEL_PROVIDER_STORE as usize] = store;
         object_types[CAMEL_PROVIDER_TRANSPORT as usize] = transport;
 
+        // Registering the mechanism type *is* publishing the mechanism —
+        // `camel_sasl_authtype` walks `CAMEL_TYPE_SASL`'s children rather than
+        // consulting a table anything adds to, so this call is what makes the
+        // lookup answer. Done here, alongside the other two types, because
+        // this is the one function Camel is guaranteed to have reached before
+        // anything can authenticate a JMAP account.
+        sasl_type();
+        // SAFETY: appending to a NULL list allocates a fresh one, and the
+        // element is `crate::sasl`'s `'static` auth type. The list is never
+        // freed, which is what `authtypes` below requires.
+        let authtypes = unsafe { g_list_append(ptr::null_mut(), auth_type().cast()) };
+
         let provider = Box::new(CamelProvider {
             protocol: PROTOCOL.as_ptr(),
             name: NAME.as_ptr(),
@@ -164,11 +178,18 @@ pub fn register() -> &'static CamelProvider {
             #[cfg(camel_provider_url_helpers)]
             auto_detect: None,
             object_types,
-            // The SASL mechanisms the provider advertises. Empty rather than
-            // NULL-as-a-mistake: authentication is Bearer or Basic over HTTPS,
-            // negotiated by the client, and Camel's list is about its own SASL
-            // implementations.
-            authtypes: ptr::null_mut(),
+            // The mechanisms the provider advertises, which for this one is
+            // exactly [`crate::sasl`]'s. Not a claim that a SASL exchange
+            // happens — authentication is Bearer or Basic over HTTPS — but the
+            // list `EAuthComboBox` builds the account editor's
+            // *Authentication type* combo from, so a NULL here is an account
+            // whose OAuth 2.0 choice the editor cannot show or offer.
+            //
+            // The list is leaked with the struct, and for the same reason: the
+            // pointer is read out of Camel's table for as long as the process
+            // runs. `g_list_append` on a NULL list allocates the first (and
+            // only) link.
+            authtypes,
             // Only consulted by the CamelURL-keyed service cache, which
             // nothing reaches on a registry-configured account; NULL makes
             // Camel use its own defaults.

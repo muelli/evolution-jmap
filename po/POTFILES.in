@@ -60,3 +60,4 @@ rust/crates/jmap-config/src/config_lookup.rs
 rust/crates/jmap-config/src/oauth2_service.rs
 rust/crates/jmap-config/src/oauth2_setup.rs
 rust/crates/jmap-mail/src/provider.rs
+rust/crates/jmap-mail/src/sasl.rs

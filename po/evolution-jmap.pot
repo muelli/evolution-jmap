@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-29 21:35+0200\n"
+"POT-Creation-Date: 2026-08-31 17:06+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -80,15 +80,15 @@ msgstr ""
 msgid "the %1$s backend has no account to connect to"
 msgstr ""
 
-#: rust/crates/jmap-backend-core/src/oauth2.rs:536
-#: rust/crates/jmap-backend-core/src/oauth2.rs:646
+#: rust/crates/jmap-backend-core/src/oauth2.rs:566
+#: rust/crates/jmap-backend-core/src/oauth2.rs:676
 msgid "no further detail was given"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the message bus's own text naming which service
 #. has no owner, e.g. "The name :1.4 was not provided by any .service
 #. files".
-#: rust/crates/jmap-backend-core/src/oauth2.rs:535
+#: rust/crates/jmap-backend-core/src/oauth2.rs:565
 #, c-format
 msgid ""
 "a service this account's sign-in needs is not running, so no access token "
@@ -97,7 +97,7 @@ msgstr ""
 
 #. TRANSLATORS: %1$s is EDS's own message for why the
 #. account's secret store (keyring) could not be reached.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:645
+#: rust/crates/jmap-backend-core/src/oauth2.rs:675
 #, c-format
 msgid "the account's secret store (keyring) could not be reached: %1$s"
 msgstr ""
@@ -106,7 +106,7 @@ msgstr ""
 #. the account's stored token cannot be read because the
 #. system keyring is locked, which signing in again cannot
 #. fix.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:677
+#: rust/crates/jmap-backend-core/src/oauth2.rs:707
 msgid ""
 "the login keyring is locked, so this account's OAuth 2.0 token can be "
 "neither read nor stored; unlock the keyring and try again"
@@ -115,7 +115,7 @@ msgstr ""
 #. TRANSLATORS: shown instead of a fresh sign-in window when
 #. the system has no keyring service at all, so a token
 #. obtained by signing in could not be saved anywhere.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:705
+#: rust/crates/jmap-backend-core/src/oauth2.rs:735
 msgid ""
 "this system has no keyring service to store an OAuth 2.0 token in, so "
 "signing in again would not keep this account signed in; enable a keyring "
@@ -124,26 +124,26 @@ msgstr ""
 
 #. TRANSLATORS: shown when EDS refused an OAuth 2.0 account's
 #. access token but did not say why.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:716
+#: rust/crates/jmap-backend-core/src/oauth2.rs:746
 msgid "the account has no OAuth 2.0 access token"
 msgstr ""
 
 #. TRANSLATORS: shown when EDS handed back an OAuth 2.0 access
 #. token that was empty rather than absent.
-#: rust/crates/jmap-backend-core/src/oauth2.rs:747
+#: rust/crates/jmap-backend-core/src/oauth2.rs:777
 msgid "the OAuth 2.0 service returned an empty access token"
 msgstr ""
 
 #. TRANSLATORS: shown when Evolution asks a JMAP account to
 #. create a collection whose kind the request does not state.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:165
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:169
 msgid "the new collection is neither an address book nor a calendar"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
 #. the JMAP server behind an account offers no account of that
 #. kind at all, so there is nowhere to create one.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:177
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:181
 #, c-format
 msgid "this account's JMAP server has no place to create %1$s in"
 msgstr ""
@@ -152,7 +152,7 @@ msgstr ""
 #. developer-facing description of the setting that could not be
 #. written. Shown when the collection was made on the server and
 #. the local source describing it could not be completed.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:186
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:190
 #, c-format
 msgid ""
 "the %1$s was created on the server, but the source for it could not be "
@@ -162,14 +162,14 @@ msgstr ""
 #. TRANSLATORS: shown when Evolution asks a JMAP account to
 #. delete something that is not one of the address books or
 #. calendars that account created.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:132
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:144
 msgid "this is not an address book or a calendar of this JMAP account"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
 #. the JMAP server behind an account offers no account of that
 #. kind at all, so the collection cannot be there to delete.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:143
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:155
 #, c-format
 msgid "this account's JMAP server has no %1$s to delete"
 msgstr ""
@@ -177,42 +177,42 @@ msgstr ""
 #. TRANSLATORS: %1$s is a developer-facing reason from Evolution
 #. Data Server. Shown when the collection was deleted on the
 #. server and the local source describing it stayed behind.
-#: rust/crates/jmap-backend-collection/src/delete_resource.rs:155
+#: rust/crates/jmap-backend-collection/src/delete_resource.rs:167
 #, c-format
 msgid ""
 "the collection was deleted on the server, but the source for it could not be "
 "removed: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:346
+#: rust/crates/jmap-config/src/backend.rs:345
 msgid "_Server:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:347
+#: rust/crates/jmap-config/src/backend.rs:346
 msgid "_Port:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:348
+#: rust/crates/jmap-config/src/backend.rs:347
 msgid "_Username:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:355
+#: rust/crates/jmap-config/src/backend.rs:354
 msgid "Use a _secure connection (TLS)"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:360
+#: rust/crates/jmap-config/src/backend.rs:359
 msgid "A_uthentication:"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:388
+#: rust/crates/jmap-config/src/backend.rs:387
 msgid "Password"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:389
+#: rust/crates/jmap-config/src/backend.rs:388
 msgid "OAuth 2.0"
 msgstr ""
 
-#: rust/crates/jmap-config/src/backend.rs:392
+#: rust/crates/jmap-config/src/backend.rs:391
 msgid "API Token"
 msgstr ""
 
@@ -234,26 +234,26 @@ msgid ""
 "Details\" instead."
 msgstr ""
 
-#: rust/crates/jmap-config/src/config_lookup.rs:335
+#: rust/crates/jmap-config/src/config_lookup.rs:333
 msgid "Look up JMAP account details"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the server this account was discovered
 #. against, shown in the account assistant's list of lookup results.
-#: rust/crates/jmap-config/src/config_lookup.rs:400
+#: rust/crates/jmap-config/src/config_lookup.rs:398
 #, c-format
 msgid "JMAP account at %1$s, using OAuth 2.0"
 msgstr ""
 
-#: rust/crates/jmap-config/src/config_lookup.rs:426
+#: rust/crates/jmap-config/src/config_lookup.rs:424
 msgid "JMAP account (OAuth 2.0)"
 msgstr ""
 
 #. TRANSLATORS: the name of an account type, in the list of account types
 #. Evolution offers when adding an account. A protocol name — leave it as it is
 #. unless your language writes it in another script.
-#: rust/crates/jmap-config/src/oauth2_service.rs:385
-#: rust/crates/jmap-mail/src/provider.rs:58
+#: rust/crates/jmap-config/src/oauth2_service.rs:391
+#: rust/crates/jmap-mail/src/provider.rs:60
 msgid "JMAP"
 msgstr ""
 
@@ -264,6 +264,18 @@ msgstr ""
 
 #. TRANSLATORS: the one-line description of the "JMAP" account type, shown
 #. beneath its name in the list of account types.
-#: rust/crates/jmap-mail/src/provider.rs:65
+#: rust/crates/jmap-mail/src/provider.rs:67
 msgid "For reading and storing mail on JMAP servers."
+msgstr ""
+
+#. TRANSLATORS: the name of an authentication method, in the "Authentication
+#. type" list of a JMAP account's settings. "JMAP" is a protocol name — leave it
+#. as it is unless your language writes it in another script.
+#: rust/crates/jmap-mail/src/sasl.rs:151
+msgid "OAuth2 (JMAP)"
+msgstr ""
+
+#. TRANSLATORS: the description of the "OAuth2 (JMAP)" authentication method.
+#: rust/crates/jmap-mail/src/sasl.rs:163
+msgid "Uses an OAuth 2.0 access token to connect to the JMAP server."
 msgstr ""
