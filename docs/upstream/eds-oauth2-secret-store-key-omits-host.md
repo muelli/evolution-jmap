@@ -3,7 +3,9 @@ SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# Submit-ready. File at https://gitlab.gnome.org/GNOME/evolution-data-server/-/issues
+# FILED 2026-08-31: https://gitlab.gnome.org/GNOME/evolution-data-server/-/work_items/663
+
+Kept for the record; the filed issue is the canonical copy.
 
 Everything below the horizontal rule is the issue body.
 
