@@ -7,10 +7,9 @@ against `jmap-mockd`, and check the one thing layer 1 cannot — that a JMAP
 account actually appears in Evolution's own mail view with mail in it, the
 way a person opening the application would see it.
 
-It is one test, deliberately. The roadmap calls it a canary, not coverage:
-a full scripted GUI suite (composing, reading, account setup by clicking
-through dialogs) is out of scope for this repository — see `docs/ROADMAP.md`
-M9 for where that belongs instead.
+It is one test, deliberately: a canary, not coverage. A full scripted GUI
+suite (composing, reading, account setup by clicking through dialogs) is out
+of scope for this repository.
 
 ## What it does
 

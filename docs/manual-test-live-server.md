@@ -69,8 +69,7 @@ $ export JMAP_LIVE_SERVER_PASSWORD=...
 ```
 
 Or, for a Bearer token obtained some other way (there is no OAuth2 login flow
-in this repository yet — see `docs/ROADMAP.md`'s "real-server readiness"
-item for why not):
+in this repository yet):
 
 ```console
 $ export JMAP_LIVE_SERVER_TOKEN=...
@@ -169,8 +168,8 @@ in the invocation, worth failing loudly on.
   `calendar_create_then_destroy_round_trips_through_the_real_api` —
   `AddressBook/set`/`Calendar/set` create a *collection* (what a user's "New
   Address Book"/"New Calendar" sends, and what the collection backend's
-  `create_resource_sync`/`delete_resource_sync` vfuncs issue — see
-  `docs/ROADMAP.md`'s Track D1), confirm the new one shows up in
+  `create_resource_sync`/`delete_resource_sync` vfuncs issue), confirm the
+  new one shows up in
   `AddressBook/get`/`Calendar/get` with the right name, then destroy it and
   confirm it is gone. Unlike the tests below, these do not also check
   `Client::all_changes`: neither type has a `_get` method here that exposes a
@@ -218,10 +217,10 @@ in the invocation, worth failing loudly on.
   — creates a `CalendarEvent` whose `recurrenceRule` is set (a daily rule,
   three occurrences), confirms it via `CalendarEvent/get`, then destroys it.
   This property's wire shape changed from RFC 8984's plural `recurrenceRules`
-  array to jscalendarbis §3.3.3's singular `recurrenceRule` object
-  (`docs/ROADMAP.md`'s CURRENT PRIORITY item 14 follow-up (a)); a server that
-  still expected the old array would reject this create with
-  `invalidProperties`, the exact failure mode item 14's own text describes.
+  array to jscalendarbis §3.3.3's singular `recurrenceRule` object; a server
+  that still expected the old array would reject this create with
+  `invalidProperties`, exactly the failure mode this format change guards
+  against.
   Narrower than the plain create/update/destroy test above (no update, no
   `all_changes`/`query` checks) — its only job is proving the property shape
   itself against a real, independent JSCalendar implementation, which

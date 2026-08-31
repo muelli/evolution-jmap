@@ -175,10 +175,10 @@ bug.
    next-increment candidate. **Fixed 2026-08-24 (session N+57)** — see the
    table row above.
 
-Both were filed as follow-up items in `docs/ROADMAP.md`'s item 11 entry rather
-than fixed in the same session that found them, per the item's own "each its
-own increment" instruction and that session's time budget — each was picked up
-and closed in its own later increment instead.
+Both were filed as follow-up items rather than fixed in the same session that
+found them, per this project's own "each its own increment" discipline and
+that session's time budget — each was picked up and closed in its own later
+increment instead.
 
 ## Summary
 
@@ -203,8 +203,8 @@ The collection-backend surface had two genuine, non-EWS-specific gaps: no
 credential push to already-running child backends on a fresh collection
 authentication (**still open**), and no `get_destination_address` override
 for host-specific reachability monitoring (**fixed 2026-08-24, session
-N+57**). Both were filed in `docs/ROADMAP.md` item 11 rather than fixed in
-the audit itself. The config-lookup surface has one more: failure-mode
+N+57**). Both were filed as follow-up items rather than fixed in the audit
+itself. The config-lookup surface has one more: failure-mode
 differentiation
 (a JMAP-shaped host that fails discovery for a real reason vs. a plain
 non-match) is uniformly silent today, where EWS's worker reports the

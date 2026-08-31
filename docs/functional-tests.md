@@ -14,8 +14,7 @@ the result through EDS's ordinary client API: the same calls Evolution makes.
 The server on the other side is the in-repo mock, so no account anywhere is
 involved.
 
-This is M9 layer 1 of `docs/ROADMAP.md`. The GUI tier is a separate thing and
-is not here.
+This is M9 layer 1. The GUI tier is a separate thing and is not here.
 
 ## Running them
 
@@ -45,8 +44,8 @@ of whoever runs them.
 - `gnome-keyring-daemon`, from `gnome-keyring`: every test's session gets its
   own login keyring, unlocked before the client runs (`Session::run`), so EDS's
   credential lookups reach a real `org.freedesktop.secrets` provider instead of
-  timing out or failing on a display-less prompt. See `docs/ROADMAP.md` item
-  18 and `rust/crates/jmap-functional/tests/secret-store.rs`.
+  timing out or failing on a display-less prompt. See
+  `rust/crates/jmap-functional/tests/secret-store.rs`.
 
 Configuring with `-DENABLE_FUNCTIONAL_TESTS=ON` without these is a configure
 error naming the missing one. That is deliberate: see below.

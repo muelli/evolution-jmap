@@ -27,10 +27,9 @@ segfault (or a compile break) discovered much later, on someone's machine.
   `evolution-data-server-devel`/`evolution-devel` packages track Fedora's
   own current stable. At the digest pinned in `ci.yml`
   (`fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898`,
-  Fedora 44), that resolves to EDS **3.60.2** — past the 3.56 line
-  `docs/ROADMAP.md`'s M7 note flags for the GtkUIManager removal, so this
-  one container covers both the "current stable" and "3.56+" minimums in a
-  single leg.
+  Fedora 44), that resolves to EDS **3.60.2** — past the 3.56 line M7's own
+  note flags for the GtkUIManager removal, so this one container covers both
+  the "current stable" and "3.56+" minimums in a single leg.
 
 Building distinct pinned images per version (rather than tracking `latest`
 or apt-pinning inside a shared image) is deliberate: a digest is
@@ -263,8 +262,7 @@ multi-valued IM field or the first home slot; should the plugin write
 `NAME_OR_ORG`'s sort-order shape. Those are `jmap-vcard` mapping decisions
 the maintainer has to make; M10's own acceptance criteria only asks that
 breakage be visible, not that every version be made to work identically
-(explicitly out of scope, see the milestone's acceptance criteria in
-`docs/ROADMAP.md`).
+(explicitly out of scope).
 
 The pinned-3.52 leg (what the plugin actually ships against) is unaffected by
 any of the above.
