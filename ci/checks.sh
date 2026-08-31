@@ -60,7 +60,7 @@ else
     echo "-- cmake, ninja, or the EDS dev headers are not available; skipping the .deb packaging check (expected on a bare Rust-only machine) --" >&2
 fi
 
-echo "== repository-split boundary lint (warn only) =="
+echo "== repository-split boundary lint =="
 # The infrastructure split (see docs/ROADMAP.md's repository-split item) moves
 # NIGHT-LOG.md/AGY-LOG.md/AGY-TASKS.md/BACKLOG.md/MILESTONES.md to a private
 # harness repository and rewrites this repository's ROADMAP.md down to a
