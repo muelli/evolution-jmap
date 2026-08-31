@@ -37,6 +37,12 @@
 //!   connection between `connect_sync` and `disconnect_sync`, and keeps the
 //!   folder listing read over it — what `get_folder_info_sync` answers with,
 //!   and what Camel's `REFRESH` flag decides whether to go and check.
+//! - [`sasl`] is the mechanism that OAuth 2.0 choice is *named* by:
+//!   `CamelSaslXOAuth2Jmap`, a class that conducts no SASL exchange and exists
+//!   to be found by `camel_sasl_authtype` under this project's
+//!   `EOAuth2Service` name. Finding it is what makes Evolution give the
+//!   account one silent token attempt before any consent window, and what puts
+//!   an entry in the *Authentication type* combo.
 //! - [`service`] is the `CamelService` half of that store as vfuncs:
 //!   `connect_sync`, which asks the session to authenticate rather than opening
 //!   anything itself, `authenticate_sync`, which is where the connection is
@@ -160,6 +166,7 @@ pub mod oauth2;
 pub mod provider;
 pub mod push;
 pub mod refresh;
+pub mod sasl;
 pub mod send;
 pub mod server;
 pub mod service;
