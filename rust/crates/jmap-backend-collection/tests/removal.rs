@@ -99,6 +99,7 @@ fn child(kind: ChildKind, collection: &str) -> Child {
         is_default: false,
         color: None,
         read_only: false,
+        remote_deletable: true,
     }
 }
 
@@ -117,6 +118,7 @@ fn resource(id: &str) -> Resource {
         is_default: false,
         color: None,
         writable: None,
+        deletable: None,
     }
 }
 

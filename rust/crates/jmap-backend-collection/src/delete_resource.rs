@@ -57,6 +57,18 @@
 //! reason. evolution-ews instead sets it at each of the three sites that mint a
 //! child; one funnel is the same behaviour with no site left to forget.
 //!
+//! **This funnel writes the permissive default, not the last word.** It
+//! answers `deletable` for the *identity* question above — is this source a
+//! collection this backend wrote at all — and has no opinion on `myRights`,
+//! because a cached or newly-published child reaches it before or without any
+//! server contact. [`crate::fan_out::adopt`] corrects that default to the
+//! real per-resource `myRights.mayDelete` immediately after a fan-out writes
+//! a child — new or rediscovered — through
+//! [`Collection::set_remote_deletable`](crate::fan_out::Collection::set_remote_deletable),
+//! which is also the only place a rights *change* on an already-existing
+//! child ever reaches it, since `child_added` fires exactly once per source's
+//! life in a running registry.
+//!
 //! ## What may be deleted is decided by what the source says it is
 //!
 //! [`doomed_of`] answers `None` for every source that is not a child this

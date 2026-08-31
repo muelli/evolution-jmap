@@ -71,6 +71,12 @@ pub struct Resource {
     /// [`crate::children::Child::for_resource`] on the account-wide
     /// `read_only` fallback exactly as before this field existed.
     pub writable: Option<bool>,
+    /// `myRights.mayDelete` (`AddressBookRights`/`CalendarRights::may_delete`),
+    /// read straight through. `None` when the server sent no `myRights` at
+    /// all, or sent one that leaves `mayDelete` out — both of which
+    /// [`crate::children::Child::for_resource`] reads as "deletable", the
+    /// permissive default EDS itself defaults a child to absent any opinion.
+    pub deletable: Option<bool>,
 }
 
 /// Everything one JMAP login fans out into.
@@ -157,6 +163,7 @@ fn resources<C: Collection>(listing: Vec<C>) -> Vec<Resource> {
                     is_default: collection.is_default() == Some(true),
                     color: collection.color(),
                     writable: collection.writable(),
+                    deletable: collection.deletable(),
                 },
             ))
         })
@@ -201,6 +208,10 @@ trait Collection {
     /// for this collection at all — the case [`Resource::writable`]'s own doc
     /// says falls back to the account-wide bit unchanged.
     fn writable(&self) -> Option<bool>;
+    /// `myRights.mayDelete`, or `None` when the server sent no `myRights` at
+    /// all, or one with no `mayDelete` — the case [`Resource::deletable`]'s
+    /// own doc says falls back to deletable.
+    fn deletable(&self) -> Option<bool>;
 }
 
 impl Collection for AddressBook {
@@ -225,6 +236,9 @@ impl Collection for AddressBook {
     fn writable(&self) -> Option<bool> {
         self.my_rights.as_ref().map(AddressBookRights::is_writable)
     }
+    fn deletable(&self) -> Option<bool> {
+        self.my_rights.as_ref().and_then(|rights| rights.may_delete)
+    }
 }
 
 impl Collection for Calendar {
@@ -248,6 +262,9 @@ impl Collection for Calendar {
     }
     fn writable(&self) -> Option<bool> {
         self.my_rights.as_ref().map(CalendarRights::is_writable)
+    }
+    fn deletable(&self) -> Option<bool> {
+        self.my_rights.as_ref().and_then(|rights| rights.may_delete)
     }
 }
 
@@ -360,6 +377,36 @@ mod tests {
             ..Calendar::default()
         };
         assert_eq!(resources(vec![calendar_own_only])[0].writable, Some(true));
+    }
+
+    #[test]
+    fn my_rights_absent_leaves_deletable_none_and_present_is_read_through() {
+        // The same shape as `writable`'s test above, for the field item 40's
+        // fix reads instead: an absent `myRights`, or one that says nothing
+        // about `mayDelete`, must not be mistaken for the server actually
+        // stating a rights answer.
+        assert_eq!(
+            resources(vec![book(Some("AB1"), "Personal")])[0].deletable,
+            None
+        );
+
+        let mut undeletable = book(Some("AB2"), "Locked share");
+        undeletable.my_rights = Some(AddressBookRights {
+            may_delete: Some(false),
+            ..AddressBookRights::default()
+        });
+        assert_eq!(resources(vec![undeletable])[0].deletable, Some(false));
+
+        let calendar = Calendar {
+            id: Some(Id::new("Cal1")),
+            name: "Work".to_owned(),
+            my_rights: Some(CalendarRights {
+                may_delete: Some(true),
+                ..CalendarRights::default()
+            }),
+            ..Calendar::default()
+        };
+        assert_eq!(resources(vec![calendar])[0].deletable, Some(true));
     }
 
     #[test]

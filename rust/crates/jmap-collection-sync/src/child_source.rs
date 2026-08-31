@@ -275,6 +275,7 @@ mod tests {
             is_default: false,
             color: None,
             read_only: false,
+            remote_deletable: true,
         }
     }
 

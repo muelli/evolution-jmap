@@ -300,6 +300,7 @@ fn the_server_this_backend_contacts_is_the_one_its_children_are_given() {
             is_default: false,
             color: None,
             read_only: false,
+            remote_deletable: true,
         };
 
         let settings = child.settings(&server.connection);

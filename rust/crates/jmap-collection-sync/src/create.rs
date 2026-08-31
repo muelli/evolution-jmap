@@ -140,6 +140,10 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
                 .my_rights
                 .as_ref()
                 .map(|rights| rights.is_writable());
+            let deletable = created
+                .my_rights
+                .as_ref()
+                .and_then(|rights| rights.may_delete);
             created_resource(
                 created.id,
                 &created.name,
@@ -147,6 +151,7 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
                 created.is_default,
                 None,
                 writable,
+                deletable,
             )
         }
         ChildKind::Calendar => {
@@ -167,6 +172,10 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
                 .my_rights
                 .as_ref()
                 .map(|rights| rights.is_writable());
+            let deletable = created
+                .my_rights
+                .as_ref()
+                .and_then(|rights| rights.may_delete);
             created_resource(
                 created.id,
                 &created.name,
@@ -174,6 +183,7 @@ pub fn create_collection(client: &Client, requested: &Requested) -> Result<Child
                 created.is_default,
                 color,
                 writable,
+                deletable,
             )
         }
     }
@@ -208,6 +218,7 @@ fn created_resource(
     is_default: Option<bool>,
     color: Option<String>,
     writable: Option<bool>,
+    deletable: Option<bool>,
 ) -> Option<Resource> {
     let id = id?;
     let name = if server_name.trim().is_empty() {
@@ -220,6 +231,7 @@ fn created_resource(
         is_default: is_default == Some(true),
         color,
         writable,
+        deletable,
         id,
     })
 }
@@ -251,6 +263,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("the server named an id");
         assert_eq!(resource.name, "Work Contacts");
@@ -267,8 +280,9 @@ mod tests {
         // "accepted as asked", not "the server named it nothing", and must
         // not fall back to the id the way `created_resource`'s caller passes
         // an empty string for "the response omitted this".
-        let resource = created_resource(Some(Id::new("CiV")), "", "testcal", None, None, None)
-            .expect("the server named an id");
+        let resource =
+            created_resource(Some(Id::new("CiV")), "", "testcal", None, None, None, None)
+                .expect("the server named an id");
         assert_eq!(resource.name, "testcal");
     }
 
@@ -279,7 +293,7 @@ mod tests {
         // the one case genuinely reachable only via the id: Evolution refuses
         // an empty display name in its own create dialogs, but `Requested`
         // documents that a blank request is sent rather than rejected here.
-        let resource = created_resource(Some(Id::new("Cal9")), "   ", "  ", None, None, None)
+        let resource = created_resource(Some(Id::new("Cal9")), "   ", "  ", None, None, None, None)
             .expect("the server named an id");
         assert_eq!(resource.name, "Cal9");
     }
@@ -288,7 +302,7 @@ mod tests {
     fn a_create_the_server_reported_no_id_for_is_no_resource() {
         // `[Resource] Identity` is what this becomes, and a child written
         // without one is a child EDS deletes the cache file of.
-        assert!(created_resource(None, "Work", "Work", None, None, None).is_none());
+        assert!(created_resource(None, "Work", "Work", None, None, None, None).is_none());
     }
 
     #[test]
@@ -299,6 +313,7 @@ mod tests {
             "Work",
             Some(true),
             Some("#ff8800".to_owned()),
+            None,
             None,
         )
         .expect("the server named an id");
@@ -320,8 +335,28 @@ mod tests {
             None,
             None,
             Some(false),
+            None,
         )
         .expect("the server named an id");
         assert_eq!(resource.writable, Some(false));
+    }
+
+    #[test]
+    fn the_servers_my_rights_reach_the_resource_as_deletable() {
+        // The same pairing as `writable` above, for `mayDelete`: a create's
+        // response naming rights up front must reach the resource item 40's
+        // fix reads, or a freshly created undeletable share would show as
+        // deletable until the next populate corrected it.
+        let resource = created_resource(
+            Some(Id::new("AB9")),
+            "Locked share",
+            "Locked share",
+            None,
+            None,
+            None,
+            Some(false),
+        )
+        .expect("the server named an id");
+        assert_eq!(resource.deletable, Some(false));
     }
 }
