@@ -32,14 +32,17 @@
 //! would be exactly the bug item 23 is about.
 //!
 //! `camel_session_authenticate_sync` is where that shows. `jmap-mail`'s
-//! `connect_sync` (`service.rs`) authenticates an OAuth 2.0 account *itself*,
-//! through `camel_service_authenticate_sync`, and reaches the session's
-//! interactive loop only when the server rejects the token outright — which
-//! in the running application is `mail_ui_session_authenticate_sync`, the
-//! credentials prompter, and for an OAuth2-method source the consent window.
-//! So the session's `authenticate_sync` is not merely a proxy for the
-//! escalation: on this path it *is* the escalation, and a healthy run leaves
-//! its count at zero.
+//! `connect_sync` (`service.rs`) names [`jmap_mail::sasl::MECHANISM`] and
+//! hands the connect off to `camel_session_authenticate_sync`, exactly as
+//! `mail_ui_session_authenticate_sync` does in the running application. A
+//! mechanism that needs no password buys a silent attempt at this provider's
+//! own `authenticate_sync` before any prompt, so a healthy connect *does*
+//! reach the session once — that is what makes the silent attempt possible
+//! at all, not a bug — and only a rejected attempt escalates further, to the
+//! credentials prompter, which for an OAuth2-method source is the consent
+//! window. So a healthy run's baseline is exactly one session-level call,
+//! made at connect time, and the escalation this test watches for is any
+//! call *beyond* that baseline.
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -271,14 +274,16 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
         Some(&"1"),
         "the connect did not fetch exactly one access token through the session\n{report}"
     );
-    // And it did so without the session's interactive loop, which is what
-    // `connect_sync`'s own silent-attempt-first branch exists for: a connect
-    // that already needed the prompter would make the count after the
-    // rotation impossible to read.
+    // Exactly one — the connect's own silent attempt through the named
+    // mechanism, which is what buys an OAuth 2.0 account its one try before
+    // any prompt. A second call here would mean that attempt was rejected
+    // and the connect already fell back to the session's interactive loop,
+    // which would make the count after the rotation impossible to read.
     assert_eq!(
         seen.get("authenticate-calls-before-rotation"),
-        Some(&"0"),
-        "the connect went through the session's interactive authentication\n{report}"
+        Some(&"1"),
+        "the connect's silent attempt through the named mechanism never reached the \
+         session, or reached it more than once\n{report}"
     );
     assert_eq!(
         seen.get("folders"),
@@ -300,9 +305,10 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     );
 
     // How it succeeded, not merely that it did. One extra token fetch is a
-    // refresh; a second `authenticate` call would be the provider going back
-    // to the session for credentials, which in the running application is the
-    // consent window item 23 exists to stop.
+    // refresh; a call *beyond* the one already counted before rotation would
+    // be the provider going back to the session for credentials a second
+    // time, which in the running application is the consent window item 23
+    // exists to stop.
     assert_eq!(
         seen.get("token-fetches"),
         Some(&"2"),
@@ -310,9 +316,9 @@ fn a_stale_token_is_refreshed_and_the_operation_retried_silently() {
     );
     assert_eq!(
         seen.get("authenticate-calls"),
-        Some(&"0"),
-        "the 401 reached the session's interactive authentication — in the running \
-         application that is the consent window item 23 is about\n{report}"
+        Some(&"1"),
+        "the 401 reached the session's interactive authentication a second time — in the \
+         running application that is the consent window item 23 is about\n{report}"
     );
 
     // From the server's own side of the wire, and the assertion that makes
@@ -386,14 +392,15 @@ fn a_refresh_that_does_not_help_fails_once_rather_than_looping() {
     // this test did not expect going in, so it is asserted rather than
     // described: the escalation is *not* inside the failing operation. The
     // store reports the 401 to whoever asked for the folder tree and stops;
-    // nothing goes back to the session. Which means the prompter is reached,
-    // at most, once per reconnect rather than once per failed operation —
-    // strictly better than "exactly once", and the assertion here is what
-    // would notice if that ever changed.
+    // nothing goes back to the session beyond the one silent attempt already
+    // counted before rotation. Which means the prompter is reached, at most,
+    // once per reconnect rather than once per failed operation — strictly
+    // better than "exactly once", and the assertion here is what would
+    // notice if that ever changed.
     assert_eq!(
         seen.get("authenticate-calls"),
-        Some(&"0"),
-        "the failing operation went back to the session for credentials instead of \
-         reporting the failure to its caller\n{report}"
+        Some(&"1"),
+        "the failing operation went back to the session for credentials a second time \
+         instead of reporting the failure to its caller\n{report}"
     );
 }
