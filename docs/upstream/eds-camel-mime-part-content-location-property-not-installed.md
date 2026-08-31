@@ -3,7 +3,20 @@ SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# DRAFT, not filed
+# RESOLVED UPSTREAM, do not file (2026-08-31)
+
+The maintainer asked for this to be fixed and proposed as a patch. Checking
+the upstream tree first showed it is already done: commit `43357db`
+("CamelMimePart: Use g_object_notify_by_pspec when possible", 2025-06-23)
+installs `properties[PROP_CONTENT_LOCATION]` in `camel_mime_part_class_init`
+and converts the notify to `g_object_notify_by_pspec`. Verified against the
+tags: **3.56.0 still has the bug, 3.58.0 is fixed.** There is nothing to
+propose upstream, and the GNOME 3.52 stable branch is closed.
+
+The warning therefore only affects EDS 3.52 through 3.56 installations, e.g.
+Ubuntu 24.04's 3.52.x. It is cosmetic there and not worth a distro SRU.
+
+The original draft is kept below for the record.
 
 Target: `GNOME/evolution-data-server`, issue. Written 2026-08-31 against EDS
 3.52.3, found 2026-08-24 (session N+60) while root-causing an unrelated
