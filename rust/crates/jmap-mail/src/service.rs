@@ -23,6 +23,12 @@
 //! an `EMailSession`, a source registry and a session bus — are exactly those
 //! steps minus the GObject: [`authenticate`] and [`report_authentication`].
 //!
+//! The one thing `connect_sync` decides on its way there is *which mechanism*
+//! it names, and for an OAuth 2.0 account that decides whether the session
+//! calls `authenticate_sync` back at all before it puts a consent window in
+//! front of the user. [`crate::sasl`] is where that mechanism, and the reasoning
+//! behind it, lives.
+//!
 //! ## The verdict, and when it comes with a `GError`
 //!
 //! `authenticate_sync` answers twice: a [`CamelAuthenticationResult`] and,
@@ -58,14 +64,14 @@
 use std::ptr;
 
 use eds_sys::{
-    CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_SERVICE_ERROR_INVALID,
-    CamelAuthenticationResult, CamelService, CamelServiceClass, camel_network_settings_dup_host,
-    camel_network_settings_dup_user, camel_network_settings_get_port,
-    camel_service_authenticate_sync, camel_service_error_quark, camel_service_get_password,
-    camel_service_ref_session, camel_service_ref_settings, camel_session_authenticate_sync,
+    CAMEL_AUTHENTICATION_ERROR, CAMEL_SERVICE_ERROR_INVALID, CamelAuthenticationResult,
+    CamelService, CamelServiceClass, camel_network_settings_dup_host,
+    camel_network_settings_dup_user, camel_network_settings_get_port, camel_service_error_quark,
+    camel_service_get_password, camel_service_ref_session, camel_service_ref_settings,
+    camel_session_authenticate_sync,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, GTRUE, g_error_free, g_error_new_literal, gboolean, gchar};
+use glib_sys::{GError, GFALSE, GTRUE, g_error_new_literal, gboolean, gchar};
 use gobject_sys::g_type_class_peek;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
@@ -322,63 +328,42 @@ unsafe extern "C" fn connect_sync<T: Connected>(
                 return fail_disconnected(error);
             };
 
-            // An OAuth 2.0 account authenticates ITSELF first — silently, with
-            // the token the engine session resolves through the collection
-            // (e-mail-session.c's `get_oauth2_access_token_sync`). It cannot be
-            // left to the session call below: `mail_ui_session_authenticate_sync`
-            // (e-mail-ui-session.c, 3.52) treats a NULL mechanism as
-            // prompt-first — it sets `result = CAMEL_AUTHENTICATION_REJECTED`
-            // without ever calling this service's authenticate, and goes
-            // straight to the credentials prompter, which for an OAuth2-method
-            // source is the consent window. Observed live 2026-08-26: a consent
-            // at every send while every silent token path answered fine. EWS
-            // avoids it by shipping a named CamelSasl subclass per service;
-            // this branch is the same semantics without the registration:
-            // silent attempt first, the session's interactive loop only as the
-            // recovery for a real rejection.
-            let settings = Owned::from_raw(camel_service_ref_settings(service));
-            if settings
-                .as_ref()
-                .is_some_and(|settings| crate::oauth2::uses_oauth2(settings.as_ptr()))
-            {
-                let mut attempt_error: *mut GError = ptr::null_mut();
-                let result = camel_service_authenticate_sync(
-                    service,
-                    ptr::null(),
-                    cancellable,
-                    &mut attempt_error,
-                );
-                if result == CAMEL_AUTHENTICATION_ACCEPTED {
-                    return GTRUE;
-                }
-                if result == CAMEL_AUTHENTICATION_ERROR {
-                    // A token fetch that failed outright (dead keyring, no
-                    // network to the token endpoint): a message the user can
-                    // read, never a consent loop that cannot help.
-                    if !error.is_null() {
-                        *error = attempt_error;
-                    } else if !attempt_error.is_null() {
-                        g_error_free(attempt_error);
-                    }
-                    return GFALSE;
-                }
-                // REJECTED: the server refused the token itself — re-consent
-                // through the session's loop below is the correct recovery.
-                if !attempt_error.is_null() {
-                    g_error_free(attempt_error);
-                }
-                tracing::debug!(
-                    "server rejected the OAuth 2.0 token; deferring to the session's interactive recovery"
-                );
-            }
-
-            // NULL mechanism: JMAP authenticates over HTTP and offers no SASL
-            // mechanisms to pick between, which is also why
+            // Which mechanism the session is asked to authenticate under. For
+            // an OAuth 2.0 account it is [`crate::sasl::MECHANISM`], and
+            // naming it is what buys the account a silent attempt:
+            // `mail_ui_session_authenticate_sync` (e-mail-ui-session.c, 3.52)
+            // looks the string up with `camel_sasl_authtype` and, finding a
+            // mechanism that does not need a password, calls this service's
+            // own `authenticate_sync` once before any prompt — falling to the
+            // consent window only if that attempt comes back REJECTED. A NULL
+            // mechanism skips that branch entirely and prompts first, which is
+            // the consent-at-every-send the operator observed on 2026-08-26
+            // (GNOME/evolution#3382).
+            //
+            // The mechanism is the SASL's own name and not whatever the
+            // account's `auth-mechanism` field happens to say, because
+            // `uses_oauth2` also accepts EDS's generic `"OAuth2"` spelling
+            // (`method_is_oauth2`) — a string no `CamelSasl` and no
+            // `EOAuth2Service` is named after. Passing that through would fail
+            // both of the session's lookups; passing ours makes the silent
+            // attempt *and* its `e_oauth2_services_is_oauth2_alias` recovery
+            // work for an account written either way.
+            //
+            // Every other credential kind keeps the NULL, and the difference
+            // is not a preference: a password and an API token both have to be
+            // *typed*, so the session's prompt-first loop is where they come
+            // from. There is no SASL mechanism to name for either — Basic and
+            // Bearer are HTTP, negotiated by the client, which is also why
             // `query_auth_types_sync` is left alone.
+            let settings = Owned::from_raw(camel_service_ref_settings(service));
+            let mechanism = crate::sasl::mechanism_for(
+                settings.as_ref().map_or(ptr::null_mut(), Owned::as_ptr),
+            );
+
             camel_session_authenticate_sync(
                 session.as_ptr(),
                 service,
-                ptr::null(),
+                mechanism,
                 cancellable,
                 error,
             )
@@ -390,8 +375,12 @@ unsafe extern "C" fn connect_sync<T: Connected>(
 /// service.
 unsafe extern "C" fn authenticate_sync<T: Connected>(
     service: *mut CamelService,
-    // Ignored, and NULL on every call this code provokes: `connect_sync` passes
-    // none and nothing advertises any.
+    // Ignored, and deliberately: on the OAuth 2.0 path this is
+    // [`crate::sasl::MECHANISM`] handed back to us by the session, which tells
+    // us nothing [`attempt`] does not read off the settings itself, and on
+    // every other path it is NULL. What the mechanism decides is whether the
+    // session calls this vfunc at all before prompting — a question already
+    // answered by the time we are in here.
     _mechanism: *const gchar,
     cancellable: *mut GCancellable,
     error: *mut *mut GError,
