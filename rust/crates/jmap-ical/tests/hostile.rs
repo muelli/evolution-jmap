@@ -206,9 +206,9 @@ fn nested(depth: usize) -> String {
 /// straddling byte offset 6 of its time part used to panic: the length check
 /// only counted bytes, so slicing `time[..6]` landed mid-character before the
 /// ASCII-digit check three lines down ever got a chance to reject the value
-/// cleanly. Found by `proptest_fuzz.rs`'s hostile-input fuzzer (see
-/// `docs/BACKLOG.md`); pinned here as the exact minimal input it found, now
-/// that `to_local_date_time` checks `is_char_boundary` before slicing.
+/// cleanly. Found by `proptest_fuzz.rs`'s hostile-input fuzzer; pinned here
+/// as the exact minimal input it found, now that `to_local_date_time` checks
+/// `is_char_boundary` before slicing.
 #[test]
 fn a_dtend_with_a_multibyte_character_at_the_slice_boundary_does_not_panic() {
     let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Example//NONSGML//EN\r\nBEGIN:VEVENT\r\nUID:evt1\r\nDTSTART:20260115T130000Z\r\nDTEND: A\u{ac0}\u{20}\u{ae}T\u{10397}\u{fffc}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";

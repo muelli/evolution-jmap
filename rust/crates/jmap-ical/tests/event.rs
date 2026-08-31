@@ -3471,7 +3471,7 @@ fn a_day_of_the_month_a_hand_written_rule_invents_is_not_written_back() {
     // what it parsed, which drops a token it could not read (`BYMONTHDAY=15,XX`
     // arrives as `[15]`) and wraps one too large for its own field (`999` arrives
     // as `-25`). Both then look like days the user chose. That narrowing happens
-    // below this crate and cannot be seen from here — see docs/NIGHT-LOG.md.
+    // below this crate and cannot be seen from here.
     let ics = concat!(
         "BEGIN:VCALENDAR\r\n",
         "BEGIN:VEVENT\r\n",

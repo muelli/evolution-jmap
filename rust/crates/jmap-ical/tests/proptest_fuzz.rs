@@ -1386,8 +1386,8 @@ fn a_space_before_an_escaped_character_in_a_category_survives_a_roundtrip() {
     );
 }
 
-/// Regression test for `docs/BACKLOG.md`'s "`jmap-ical` round trip is not a
-/// fixed point for a whitespace-only `CATEGORIES` value": a `CATEGORIES`
+/// Regression test for the finding that `jmap-ical` round trip is not a
+/// fixed point for a whitespace-only `CATEGORIES` value: a `CATEGORIES`
 /// value that is a single backslash-escaped space parses as the literal tag
 /// `" "` (calcard keeps an escaped character verbatim), which this crate then
 /// writes back unescaped as a bare `CATEGORIES: ` line — and calcard's own
