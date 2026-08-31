@@ -1149,8 +1149,7 @@ fn assert_card_fixpoint(card2: &ContactCard, card3: &ContactCard) -> Result<(), 
 }
 
 // Regression for a fixed-point failure `prop_card_roundtrip_reaches_fixed_point_stability`
-// found on a random seed (docs/BACKLOG.md, "jmap-vcard round trip is not a fixed point for
-// a value with trailing whitespace", second occurrence): a `Name` with a stated-but-empty
+// found on a random seed, second occurrence: a `Name` with a stated-but-empty
 // `full` and only a `given` component round-tripped once (to `parsed1`) drops `full`
 // (an empty FN is indistinguishable from an absent one on read), but round-tripping that
 // result again (to `parsed2`) synthesizes a derived `full` from the components — so
@@ -1178,7 +1177,7 @@ fn a_name_with_an_empty_stated_full_and_only_a_given_component_reaches_fixed_poi
     );
 }
 
-// Regression for empty organisation name normalization (Batch 13 Item 8 / docs/BACKLOG.md):
+// Regression for empty organisation name normalization (Batch 13 Item 8):
 // An organisation whose name is `Some("")` and has units must normalize to `name: None` on the
 // first parse, emit the leading semicolon to preserve the unit's department slot, and reach
 // immediate fixed-point stability.
