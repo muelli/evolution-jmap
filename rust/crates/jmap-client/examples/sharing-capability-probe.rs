@@ -3,10 +3,10 @@
 //
 // Live probe of Track E Phase C's step 1: what does a real Stalwart
 // deployment actually advertise and accept for `shareWith` / `myRights` /
-// `ShareNotification` (RFC 9670 §4's "Framework for Shared Data")? The
-// design in docs/PRINCIPALS-DESIGN.md models the types against the specs;
-// this probe checks them against the wire before the mock is extended to
-// match and any wiring is TDD'd.
+// `ShareNotification` (RFC 9670 §4's "Framework for Shared Data") across
+// AddressBook, Mailbox and Calendar? The design in docs/PRINCIPALS-DESIGN.md
+// models the types against the specs; this probe checks them against the
+// wire before the mock is extended to match and any wiring is TDD'd.
 //
 // Deliberately uses `Client::single_call` for every `shareWith` write so a
 // field-name mismatch shows up as a raw JSON diff rather than a silently
@@ -20,12 +20,13 @@
 //       <origin> <alice-user> <alice-password> <bob-user> <bob-password>
 
 use jmap_client::{Client, Credentials};
+use jmap_proto::calendars::{Calendar, CalendarRights};
 use jmap_proto::contacts::{AddressBook, AddressBookRights};
 use jmap_proto::methods::{GetRequest, SetRequest};
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::session::{
-    CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_PRINCIPALS,
-    CAPABILITY_PRINCIPALS_OWNER,
+    CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
+    CAPABILITY_PRINCIPALS, CAPABILITY_PRINCIPALS_OWNER,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -243,6 +244,91 @@ fn main() {
         }
     } else {
         println!("alice has no mailboxes to probe Mailbox sharing with");
+    }
+
+    // --- Calendar sharing (calendars draft §4: myRights AND shareWith both
+    // modeled in the base capability, no Stalwart-local extension needed the
+    // way Mailbox sharing requires one).
+    if alice
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_CALENDARS)
+    {
+        let alice_calendar_account = alice
+            .primary_account(CAPABILITY_CALENDARS)
+            .expect("alice's calendar account");
+        let calendar = alice
+            .calendar_create(
+                &alice_calendar_account,
+                &Calendar::new("agent-sharing-probe calendar"),
+            )
+            .expect("Calendar/set create");
+        let calendar_id = calendar.id.clone().expect("server-set calendar id");
+        println!(
+            "created calendar {calendar_id}, default myRights = {:?}",
+            calendar.my_rights
+        );
+
+        let mut calendar_share_with = BTreeMap::new();
+        calendar_share_with.insert(
+            bob_principal_id.clone(),
+            CalendarRights {
+                may_read_free_busy: Some(true),
+                may_read_items: Some(true),
+                may_write_all: Some(false),
+                may_write_own: Some(false),
+                may_update_private: Some(false),
+                may_rsvp: Some(false),
+                may_share: Some(false),
+                may_delete: Some(false),
+                extra: BTreeMap::new(),
+            },
+        );
+        let calendar_patch = json!({ "shareWith": calendar_share_with });
+        let calendar_share_response = alice.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "Calendar/set",
+            &SetRequest::<Calendar>::new(alice_calendar_account.clone())
+                .update(calendar_id.clone(), calendar_patch),
+        );
+        match calendar_share_response {
+            Ok(value) => print_raw("Calendar/set shareWith raw response", &value),
+            Err(error) => println!("Calendar/set shareWith FAILED: {error}"),
+        }
+
+        let calendars_after = alice.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "Calendar/get",
+            &GetRequest::all(alice_calendar_account.clone()),
+        );
+        match calendars_after {
+            Ok(value) => print_raw("Calendar/get (alice, after share) raw response", &value),
+            Err(error) => println!("Calendar/get (alice, after share) FAILED: {error}"),
+        }
+
+        // Can bob now see the shared calendar by querying alice's account
+        // directly with his own credentials?
+        let calendars_from_bob = bob.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "Calendar/get",
+            &GetRequest::all(alice_calendar_account.clone()),
+        );
+        match calendars_from_bob {
+            Ok(value) => print_raw(
+                "Calendar/get (bob, on alice's account) raw response",
+                &value,
+            ),
+            Err(error) => println!("Calendar/get (bob, on alice's account) FAILED: {error}"),
+        }
+
+        alice
+            .calendar_destroy(&alice_calendar_account, &calendar_id)
+            .expect("Calendar/set destroy (cleanup)");
+        println!("cleaned up probe calendar {calendar_id}");
+    } else {
+        println!(
+            "NOT SUPPORTED: server does not advertise {CAPABILITY_CALENDARS}, skipping Calendar probe"
+        );
     }
 
     // Cleanup.
