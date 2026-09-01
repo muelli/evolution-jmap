@@ -220,6 +220,11 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
             not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
             continue;
         };
+        // Captured now: `existing` borrows `tree`, which the placement check
+        // below re-borrows mutably, so the pre-patch `shareWith` has to be an
+        // owned clone to survive past that point for the `ShareNotification`
+        // diff (Track E Phase C step 2, RFC 9670 §4).
+        let old_share_with = existing.share_with.clone();
         let Some(patch_map) = patch.as_object() else {
             not_updated.insert(id, SetError::new(error::set::INVALID_PATCH));
             continue;
@@ -255,6 +260,14 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
             continue;
         }
         tree.insert(id.clone(), patched.clone());
+        crate::principals::record_share_changes(
+            account,
+            jmap_proto::principals::share_notification_object_type::MAILBOX,
+            &id,
+            &request.account_id,
+            old_share_with.as_ref(),
+            patched.share_with.as_ref(),
+        );
         to_update.push((id, patched));
     }
 

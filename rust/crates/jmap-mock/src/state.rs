@@ -271,6 +271,10 @@ impl ServerState {
                     ("AddressBook", account.address_books.state_counter()),
                     ("Calendar", account.calendars.state_counter()),
                     ("CalendarEvent", account.calendar_events.state_counter()),
+                    (
+                        "ShareNotification",
+                        account.share_notifications.state_counter(),
+                    ),
                 ]);
                 (id.clone(), types)
             })
@@ -395,6 +399,14 @@ pub struct AccountState {
     pub calendars: Store<jmap_proto::calendars::Calendar>,
     pub calendar_events: Store<jmap_proto::calendars::CalendarEvent>,
     pub principals: Store<jmap_proto::principals::Principal>,
+    /// `ShareNotification` records (RFC 9670 §4), one per grant change. Kept
+    /// in the same account as the shared object itself rather than in a
+    /// separate per-recipient account, since this mock models one principal
+    /// per bearer token in a single account rather than a real server's
+    /// distinct account per principal — the recipient the notification is
+    /// for is carried alongside it (the `Id`) and used to filter
+    /// `ShareNotification/get`/`/query` to only the caller it belongs to.
+    pub share_notifications: Store<(Id, jmap_proto::principals::ShareNotification)>,
     /// The principal that answers RFC 9670 §2.5's `currentUserPrincipalId` —
     /// "which principal is *me* in this account". `None` until a test seeds
     /// one; the session document then omits the property rather than naming a
@@ -418,6 +430,7 @@ impl AccountState {
             calendars: Store::new("CAL"),
             calendar_events: Store::new("CE"),
             principals: Store::new("P"),
+            share_notifications: Store::new("SN"),
             current_user_principal_id: None,
             blobs: BTreeMap::new(),
             next_blob_id: 1,

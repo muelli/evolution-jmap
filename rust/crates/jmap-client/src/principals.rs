@@ -9,6 +9,7 @@ use jmap_proto::Id;
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse};
 use jmap_proto::principals::{
     BusyPeriod, GetAvailabilityRequest, GetAvailabilityResponse, Principal, PrincipalQueryFilter,
+    ShareNotification, ShareNotificationQueryFilter,
 };
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CORE, CAPABILITY_PRINCIPALS};
 use jmap_proto::state::UtcDate;
@@ -40,6 +41,32 @@ impl Client {
     ) -> Result<Vec<Id>, Error> {
         let request = QueryRequest::new(account_id.clone()).filter(filter);
         let arguments = self.single_call(USING, "Principal/query", &request)?;
+        let response: QueryResponse = serde_json::from_value(arguments)?;
+        Ok(response.ids)
+    }
+
+    /// Fetch all `ShareNotification`s visible to this credential (RFC 9670
+    /// §4) — one appears for each `shareWith` grant, widen, narrow, or
+    /// revoke a caller was the recipient of.
+    pub fn share_notifications(&self, account_id: &Id) -> Result<Vec<ShareNotification>, Error> {
+        let arguments = self.single_call(
+            USING,
+            "ShareNotification/get",
+            &GetRequest::all(account_id.clone()),
+        )?;
+        let response: GetResponse<ShareNotification> = serde_json::from_value(arguments)?;
+        Ok(response.list)
+    }
+
+    /// Resolve `ShareNotification` ids matching `filter`
+    /// (`ShareNotification/query`, RFC 9670 §4).
+    pub fn share_notification_query(
+        &self,
+        account_id: &Id,
+        filter: ShareNotificationQueryFilter,
+    ) -> Result<Vec<Id>, Error> {
+        let request = QueryRequest::new(account_id.clone()).filter(filter);
+        let arguments = self.single_call(USING, "ShareNotification/query", &request)?;
         let response: QueryResponse = serde_json::from_value(arguments)?;
         Ok(response.ids)
     }

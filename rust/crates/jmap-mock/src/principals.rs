@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Principal methods (`Principal/get`, `Principal/query`, RFC 9670) and
-//! principal seeding helpers.
+//! Principal methods (`Principal/get`, `Principal/query`, `ShareNotification/get`,
+//! `ShareNotification/query`, RFC 9670) and principal seeding helpers.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::Id;
 use jmap_proto::calendars::CalendarEvent;
@@ -10,13 +12,19 @@ use jmap_proto::error::MethodError;
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse};
 use jmap_proto::principals::{
     BusyPeriod, GetAvailabilityRequest, GetAvailabilityResponse, Principal, PrincipalQueryFilter,
+    ShareNotification, ShareNotificationQueryFilter,
 };
 use jmap_proto::session::CAPABILITY_CALENDARS;
 use jmap_proto::state::UtcDate;
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::AccountState;
+
+/// Deterministic stand-in for "now" — the mock has no clock on purpose
+/// (reproducible tests), same value `mail.rs`'s own `MOCK_NOW` uses.
+const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 pub fn principal_get(
     state: &mut crate::state::ServerState,
@@ -225,6 +233,183 @@ fn parse_simple_duration_seconds(duration: &str) -> Option<u32> {
         return None;
     }
     Some(seconds)
+}
+
+/// `ShareNotification/get` (RFC 9670 §4): a notification lives in the
+/// recipient's own account in the RFC's model, which this mock does not
+/// have (one principal per bearer token sharing a single account, not a
+/// separate account per principal — see [`AccountState::share_notifications`]).
+/// The nearest equivalent here is filtering to the notifications recorded
+/// for whichever principal `caller` resolves to; a caller bound to no
+/// principal, or one nothing was ever shared with, simply sees none. Unlike
+/// `AddressBook/get`/`Mailbox/get`, there is no owner special case: the
+/// owner is the one *making* grants, never their own recipient, so they see
+/// nothing here even though they see everything on the shared object itself.
+pub fn share_notification_get(
+    state: &mut crate::state::ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
+    let request: GetRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+    let viewer = caller.or(account.current_user_principal_id.as_ref());
+
+    let mut list = Vec::new();
+    let mut not_found = Vec::new();
+    match &request.ids {
+        None => {
+            for (_, (recipient, notification)) in account.share_notifications.iter() {
+                if Some(recipient) == viewer {
+                    list.push(notification.clone());
+                }
+            }
+        }
+        Some(ids) => {
+            for id in ids {
+                match account.share_notifications.get(id) {
+                    Some((recipient, notification)) if Some(recipient) == viewer => {
+                        list.push(notification.clone());
+                    }
+                    _ => not_found.push(id.clone()),
+                }
+            }
+        }
+    }
+
+    to_result(&GetResponse {
+        account_id: request.account_id,
+        state: account.share_notifications.state(),
+        list,
+        not_found,
+    })
+}
+
+/// `ShareNotification/query` (RFC 9670 §4): same viewer filter as
+/// [`share_notification_get`], narrowed further by `objectType`/`before`/
+/// `after` (compared as plain strings — every `UtcDate` this mock produces
+/// is already `YYYY-MM-DDTHH:MM:SSZ`, which sorts lexically the same as
+/// chronologically).
+pub fn share_notification_query(
+    state: &mut crate::state::ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
+    let request: QueryRequest<ShareNotificationQueryFilter> = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+    let viewer = caller.or(account.current_user_principal_id.as_ref());
+    let filter = request.filter.unwrap_or_default();
+
+    let visible = |recipient: &Id, notification: &ShareNotification| {
+        Some(recipient) == viewer && share_notification_matches(notification, &filter)
+    };
+
+    let ids: Vec<Id> = account
+        .share_notifications
+        .iter()
+        .filter(|(_, (recipient, notification))| visible(recipient, notification))
+        .map(|(id, _)| id.clone())
+        .skip(request.position.max(0) as usize)
+        .take(request.limit.unwrap_or(u64::MAX) as usize)
+        .collect();
+
+    let total = account
+        .share_notifications
+        .iter()
+        .filter(|(_, (recipient, notification))| visible(recipient, notification))
+        .count() as u64;
+
+    to_result(&QueryResponse {
+        account_id: request.account_id,
+        query_state: account.share_notifications.state(),
+        can_calculate_changes: false,
+        position: request.position.max(0) as u64,
+        ids,
+        total: request.calculate_total.then_some(total),
+        limit: None,
+    })
+}
+
+fn share_notification_matches(
+    notification: &ShareNotification,
+    filter: &ShareNotificationQueryFilter,
+) -> bool {
+    if let Some(after) = &filter.after
+        && notification.created.as_str() <= after.as_str()
+    {
+        return false;
+    }
+    if let Some(before) = &filter.before
+        && notification.created.as_str() >= before.as_str()
+    {
+        return false;
+    }
+    if let Some(object_type) = &filter.object_type
+        && &notification.object_type != object_type
+    {
+        return false;
+    }
+    true
+}
+
+/// Record a `ShareNotification` (RFC 9670 §4) for each principal whose
+/// `shareWith` rights actually changed between `old` and `new` — a grant
+/// made, widened, narrowed, or revoked. Compares the typed rights directly
+/// (works for both `AddressBookRights` and `MailboxRights`) so a share
+/// changing from one right to an equal one is not reported as a change.
+///
+/// Called from `AddressBook/set` and `Mailbox/set` on a successful update;
+/// creating an object with `shareWith` already populated does not yet emit a
+/// notification (no test needs it, and it is cheap to add if one does).
+pub(crate) fn record_share_changes<R>(
+    account: &mut AccountState,
+    object_type: &str,
+    object_id: &Id,
+    object_account_id: &Id,
+    old: Option<&BTreeMap<Id, R>>,
+    new: Option<&BTreeMap<Id, R>>,
+) where
+    R: Clone + PartialEq + Serialize,
+{
+    let mut recipients: BTreeSet<Id> = BTreeSet::new();
+    if let Some(map) = old {
+        recipients.extend(map.keys().cloned());
+    }
+    if let Some(map) = new {
+        recipients.extend(map.keys().cloned());
+    }
+
+    let mut to_create: Vec<(Id, ShareNotification)> = Vec::new();
+    for recipient in recipients {
+        let old_rights = old.and_then(|map| map.get(&recipient));
+        let new_rights = new.and_then(|map| map.get(&recipient));
+        if old_rights == new_rights {
+            continue;
+        }
+        let mut notification = ShareNotification::new(
+            UtcDate::new(MOCK_NOW),
+            object_type,
+            object_id.clone(),
+            object_account_id.clone(),
+        );
+        if let Some(rights) = old_rights {
+            notification =
+                notification.with_old_rights(serde_json::to_value(rights).unwrap_or(Value::Null));
+        }
+        if let Some(rights) = new_rights {
+            notification =
+                notification.with_new_rights(serde_json::to_value(rights).unwrap_or(Value::Null));
+        }
+        to_create.push((recipient, notification));
+    }
+
+    if !to_create.is_empty() {
+        account.share_notifications.transaction(|txn| {
+            for (recipient, notification) in to_create {
+                let id = txn.alloc_id();
+                txn.create(id.clone(), (recipient, notification.with_id(id)));
+            }
+        });
+    }
 }
 
 fn principal_matches(principal: &Principal, filter: &PrincipalQueryFilter) -> bool {

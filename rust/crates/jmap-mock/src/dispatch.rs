@@ -327,6 +327,12 @@ fn handle_method(
         "Principal/getAvailability" => {
             crate::principals::principal_get_availability(state, arguments)
         }
+        "ShareNotification/get" => {
+            crate::principals::share_notification_get(state, arguments, caller)
+        }
+        "ShareNotification/query" => {
+            crate::principals::share_notification_query(state, arguments, caller)
+        }
         "Identity/get" => crate::mail::identity_get(state, arguments),
         "EmailSubmission/set" => crate::mail::email_submission_set(state, arguments, created_ids),
         _ => Err(MethodError::new(error::method::UNKNOWN_METHOD)),
