@@ -14,18 +14,53 @@ use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
 
-pub fn address_book_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+/// `caller` is the identity `AddressBook/get`'s request carried, as resolved
+/// by [`crate::auth::AuthConfig::identity_for`] — `None` (no identity bound
+/// to the credential) reads as "this account's own owner", matching every
+/// test that predates sharing. A caller who *is* a distinct principal only
+/// sees books that principal's own `shareWith` entry grants, and gets
+/// `forbidden` outright if the account shares nothing with them at all
+/// (verified against a live Stalwart server: Track E Phase C step 1's
+/// findings, recorded in the work queue).
+pub fn address_book_get(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
+
+    let is_owner =
+        caller.is_none_or(|caller| account.current_user_principal_id.as_ref() == Some(caller));
+    if !is_owner {
+        let caller = caller.expect("is_owner is false only when caller is Some");
+        let shared_with_caller = account
+            .address_books
+            .iter()
+            .any(|(_, book)| book_rights_for(book, caller).is_some());
+        if !shared_with_caller {
+            return Err(MethodError::new(error::method::FORBIDDEN)
+                .with_description("no address book in this account is shared with you"));
+        }
+    }
 
     let mut list = Vec::new();
     let mut not_found = Vec::new();
     match &request.ids {
-        None => list.extend(account.address_books.iter().map(|(_, book)| book.clone())),
+        None => {
+            for (_, book) in account.address_books.iter() {
+                if let Some(visible) = visible_book(book, is_owner, caller) {
+                    list.push(visible);
+                }
+            }
+        }
         Some(ids) => {
             for id in ids {
                 match account.address_books.get(id) {
-                    Some(book) => list.push(book.clone()),
+                    Some(book) => match visible_book(book, is_owner, caller) {
+                        Some(visible) => list.push(visible),
+                        None => not_found.push(id.clone()),
+                    },
                     None => not_found.push(id.clone()),
                 }
             }
@@ -38,6 +73,30 @@ pub fn address_book_get(state: &mut ServerState, arguments: Value) -> Result<Val
         list,
         not_found,
     })
+}
+
+/// The rights `book.share_with` grants `principal`, or `None` if it grants
+/// them nothing (including "not shared at all").
+fn book_rights_for(
+    book: &AddressBook,
+    principal: &Id,
+) -> Option<jmap_proto::contacts::AddressBookRights> {
+    book.share_with.as_ref()?.get(principal).cloned()
+}
+
+/// The owner sees every book unchanged, exactly as before sharing existed. A
+/// foreign caller sees a book only if it is shared with them, with
+/// `myRights` replaced by the grant itself rather than whatever the owner's
+/// own `myRights` happened to be.
+fn visible_book(book: &AddressBook, is_owner: bool, caller: Option<&Id>) -> Option<AddressBook> {
+    if is_owner {
+        return Some(book.clone());
+    }
+    let caller = caller.expect("is_owner is false only when caller is Some");
+    let rights = book_rights_for(book, caller)?;
+    let mut visible = book.clone();
+    visible.my_rights = Some(rights);
+    Some(visible)
 }
 
 /// `AddressBook/set` (RFC 9610 §2): making and removing an address book.

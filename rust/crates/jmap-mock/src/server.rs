@@ -120,6 +120,16 @@ impl MockServerBuilder {
         self
     }
 
+    /// Accept a bearer token bound to `principal`, so requests carrying it
+    /// are answered as that principal for the cross-account sharing checks
+    /// (Track E Phase C) — a second identity on the same server, the way a
+    /// share's grantee is a different principal than its owner while both
+    /// sit on one JMAP deployment.
+    pub fn bearer_token_as(mut self, token: &str, principal: jmap_proto::Id) -> Self {
+        self.auth.allow_bearer_as(token, principal);
+        self
+    }
+
     /// Leave a capability URN out of the session document entirely — the
     /// account will not list it, and no primary account resolves under it.
     ///
@@ -803,11 +813,11 @@ fn handle_request(
         .iter()
         .find(|header| header.field.equiv("Authorization"))
         .map(|header| header.value.as_str().to_owned());
-    if !auth
-        .lock()
-        .expect("mock auth lock")
-        .authorized(authorization.as_deref())
-    {
+    let auth_guard = auth.lock().expect("mock auth lock");
+    let authorized = auth_guard.authorized(authorization.as_deref());
+    let caller = auth_guard.identity_for(authorization.as_deref());
+    drop(auth_guard);
+    if !authorized {
         state
             .lock()
             .expect("mock state lock")
@@ -849,7 +859,7 @@ fn handle_request(
                 return;
             }
             let mut state = state.lock().expect("mock state lock");
-            let (status, response) = dispatch::handle_api(&mut state, &body);
+            let (status, response) = dispatch::handle_api(&mut state, &body, caller.as_ref());
             drop(state);
             respond_json(request, status, &response);
         }

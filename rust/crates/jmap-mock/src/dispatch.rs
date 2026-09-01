@@ -4,6 +4,7 @@
 //! API endpoint dispatch: envelope parsing, back-reference resolution
 //! (RFC 8620 §3.7), and the method registry.
 
+use jmap_proto::Id;
 use jmap_proto::error::{self, MethodError};
 use jmap_proto::request::{Invocation, Request, ResultReference};
 use jmap_proto::response::Response;
@@ -12,7 +13,13 @@ use serde_json::{Map, Value};
 use crate::state::{ServerState, TypeStateSnapshot};
 
 /// Handle a POST to the API endpoint. Returns (HTTP status, JSON body).
-pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
+///
+/// `caller` is the principal the request's credential was bound to via
+/// [`crate::auth::AuthConfig::allow_bearer_as`], for the cross-account
+/// sharing checks (Track E Phase C) that need to know who is asking; `None`
+/// means the credential named no identity, which every check before sharing
+/// existed already assumed and keeps assuming.
+pub fn handle_api(state: &mut ServerState, body: &[u8], caller: Option<&Id>) -> (u16, Value) {
     if let Ok(text) = std::str::from_utf8(body) {
         println!("--> POST /jmap\n{text}");
     }
@@ -88,17 +95,19 @@ pub fn handle_api(state: &mut ServerState, body: &[u8]) -> (u16, Value) {
         // what a test counting them is asking about.
         state.method_calls.push(call.name.clone());
         let invocation = match resolve_references(call, &responses) {
-            Ok(arguments) => match handle_method(state, &call.name, arguments, &created_ids) {
-                Ok(result) => {
-                    record_created_ids(&call.name, &result, &mut created_ids);
-                    Invocation {
-                        name: call.name.clone(),
-                        arguments: result,
-                        call_id: call.call_id.clone(),
+            Ok(arguments) => {
+                match handle_method(state, &call.name, arguments, &created_ids, caller) {
+                    Ok(result) => {
+                        record_created_ids(&call.name, &result, &mut created_ids);
+                        Invocation {
+                            name: call.name.clone(),
+                            arguments: result,
+                            call_id: call.call_id.clone(),
+                        }
                     }
+                    Err(method_error) => error_invocation(method_error, &call.call_id),
                 }
-                Err(method_error) => error_invocation(method_error, &call.call_id),
-            },
+            }
             Err(method_error) => error_invocation(method_error, &call.call_id),
         };
         responses.push(invocation);
@@ -264,6 +273,7 @@ fn handle_method(
     name: &str,
     arguments: Value,
     created_ids: &std::collections::BTreeMap<String, jmap_proto::Id>,
+    caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
     match name {
         "Core/echo" => Ok(arguments),
@@ -273,7 +283,7 @@ fn handle_method(
         "Email/query" => crate::mail::email_query(state, arguments),
         "Email/set" => crate::mail::email_set(state, arguments),
         "Email/import" => crate::mail::email_import(state, arguments),
-        "AddressBook/get" => crate::contacts::address_book_get(state, arguments),
+        "AddressBook/get" => crate::contacts::address_book_get(state, arguments, caller),
         "AddressBook/set" => crate::contacts::address_book_set(state, arguments),
         "ContactCard/get" => crate::contacts::contact_card_get(state, arguments),
         "ContactCard/set" => crate::contacts::contact_card_set(state, arguments),
@@ -408,7 +418,7 @@ mod tests {
             .expect("build request");
         let body = serde_json::to_vec(&request).expect("serialize request");
 
-        let (status, _response) = super::handle_api(&mut state, &body);
+        let (status, _response) = super::handle_api(&mut state, &body, None);
         assert_eq!(status, 200);
 
         let pushed = receiver
@@ -435,7 +445,7 @@ mod tests {
             .expect("build request");
         let body = serde_json::to_vec(&request).expect("serialize request");
 
-        let (status, _response) = super::handle_api(&mut state, &body);
+        let (status, _response) = super::handle_api(&mut state, &body, None);
         assert_eq!(status, 200);
 
         assert!(matches!(
@@ -466,7 +476,7 @@ mod tests {
             .expect("build request");
         let body = serde_json::to_vec(&request).expect("serialize request");
 
-        let (status, _response) = super::handle_api(&mut state, &body);
+        let (status, _response) = super::handle_api(&mut state, &body, None);
         assert_eq!(status, 200);
 
         assert!(matches!(
@@ -496,7 +506,7 @@ mod tests {
             .expect("build request");
         let body = serde_json::to_vec(&request).expect("serialize request");
 
-        let (status, _response) = super::handle_api(&mut state, &body);
+        let (status, _response) = super::handle_api(&mut state, &body, None);
         assert_eq!(status, 200);
 
         let pushed = receiver
