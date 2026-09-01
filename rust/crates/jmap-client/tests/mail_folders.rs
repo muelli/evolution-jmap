@@ -431,3 +431,81 @@ fn mailbox_shared_with_a_principal_is_visible_only_to_them() {
         "the owner's own view still sees both mailboxes"
     );
 }
+
+/// Track E Phase C step 2: a grant is not one-shot. Widening an existing
+/// `shareWith` entry changes `myRights` on the next `/get`, and revoking it
+/// entirely (patching the principal's key to `null`, RFC 8620 §5.3) returns
+/// the previously-shared principal to outright `forbidden`, matching the
+/// live Stalwart probe's own manual revoke check (Track E Phase C step 1's
+/// findings, recorded in the work queue). Mirrors
+/// `address_book_share_can_be_widened_then_revoked`.
+#[test]
+fn mailbox_share_can_be_widened_then_revoked() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder()
+        .bearer_token("alice-token")
+        .bearer_token_as("bob-token", bob.clone())
+        .start();
+    let account_id = server.account_id();
+    let archive = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_mailbox("Archive", None)
+    };
+
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+    let bob_client = Client::connect(server.origin(), Credentials::bearer("bob-token")).unwrap();
+
+    alice
+        .mailbox_update(
+            &account_id,
+            &archive,
+            json!({"shareWith": {bob.as_str(): {"mayReadItems": true}}}),
+        )
+        .unwrap();
+    let rights = bob_client.mailbox_get(&account_id).unwrap().list[0]
+        .my_rights
+        .clone()
+        .expect("myRights is computed from the grant");
+    assert_eq!(rights.may_read_items, Some(true));
+    assert_ne!(
+        rights.may_add_items,
+        Some(true),
+        "mayAddItems was not granted yet"
+    );
+
+    alice
+        .mailbox_update(
+            &account_id,
+            &archive,
+            json!({"shareWith": {bob.as_str(): {"mayReadItems": true, "mayAddItems": true}}}),
+        )
+        .unwrap();
+    let widened = bob_client.mailbox_get(&account_id).unwrap().list[0]
+        .my_rights
+        .clone()
+        .expect("myRights is computed from the widened grant");
+    assert_eq!(widened.may_read_items, Some(true));
+    assert_eq!(
+        widened.may_add_items,
+        Some(true),
+        "widened to mayAddItems too"
+    );
+
+    alice
+        .mailbox_update(
+            &account_id,
+            &archive,
+            json!({format!("shareWith/{}", bob.as_str()): null}),
+        )
+        .unwrap();
+    match bob_client.mailbox_get(&account_id) {
+        Err(Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, "forbidden");
+        }
+        other => panic!("expected forbidden after the grant is revoked, got {other:?}"),
+    }
+}
