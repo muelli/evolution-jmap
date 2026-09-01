@@ -61,13 +61,12 @@ else
 fi
 
 echo "== repository-split boundary lint =="
-# The infrastructure split (see docs/ROADMAP.md's repository-split item) moves
-# NIGHT-LOG.md/AGY-LOG.md/AGY-TASKS.md/BACKLOG.md/MILESTONES.md to a private
-# harness repository and rewrites this repository's ROADMAP.md down to a
-# thin, human-facing file with no item numbers. Until then, this just counts
-# how many mentions of those files, or of a ROADMAP.md item number, remain
-# outside the files being replaced — a progress meter for the sweep, not yet
-# an enforced boundary: flip to hard-fail only once the count is zero.
+# The infrastructure split moved NIGHT-LOG.md/AGY-LOG.md/AGY-TASKS.md/
+# BACKLOG.md/MILESTONES.md to a private harness repository and rewrote this
+# repository's ROADMAP.md down to a thin, human-facing file with no item
+# numbers. The sweep that cleared every existing mention reached zero on
+# 2026-08-31; this now hard-fails on any new mention of those files, or of a
+# ROADMAP.md item number, in the product tree.
 boundary_lint_paths=(rust cmake ci debian docs)
 boundary_lint_exclude=(
     --exclude=NIGHT-LOG.md --exclude=NIGHT-LOG-archive.md
