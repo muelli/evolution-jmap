@@ -96,7 +96,7 @@ fn share_notification_roundtrip_covers_rfc9670() {
         }),
         object_type: share_notification_object_type::CALENDAR.to_owned(),
         object_id: "cal_123".into(),
-        account_id: "A1".into(),
+        object_account_id: "A1".into(),
         name: None,
         old_rights: Some(serde_json::json!({"mayReadItems": true})),
         new_rights: Some(serde_json::json!({"mayReadItems": true, "mayAddItems": true})),
@@ -107,7 +107,7 @@ fn share_notification_roundtrip_covers_rfc9670() {
     assert_eq!(n_val["id"], "sn_1");
     assert_eq!(n_val["objectType"], "Calendar");
     assert_eq!(n_val["objectId"], "cal_123");
-    assert_eq!(n_val["accountId"], "A1");
+    assert_eq!(n_val["objectAccountId"], "A1");
     assert_eq!(n_val["changedBy"]["name"], "Alice Admin");
     assert_eq!(n_val["newRights"]["mayAddItems"], true);
 
@@ -213,7 +213,7 @@ fn share_notification_builders_roundtrip() {
     assert_eq!(notif.created.as_str(), "2026-09-01T15:00:00Z");
     assert_eq!(notif.object_type, "Calendar");
     assert_eq!(notif.object_id.as_str(), "cal_team");
-    assert_eq!(notif.account_id.as_str(), "acc_alice");
+    assert_eq!(notif.object_account_id.as_str(), "acc_alice");
     assert_eq!(notif.changed_by.as_ref().unwrap().name, "Admin User");
 
     let notif_val = serde_json::to_value(&notif).unwrap();
@@ -221,7 +221,7 @@ fn share_notification_builders_roundtrip() {
     assert_eq!(notif_val["created"], "2026-09-01T15:00:00Z");
     assert_eq!(notif_val["objectType"], "Calendar");
     assert_eq!(notif_val["objectId"], "cal_team");
-    assert_eq!(notif_val["accountId"], "acc_alice");
+    assert_eq!(notif_val["objectAccountId"], "acc_alice");
     assert_eq!(notif_val["changedBy"]["name"], "Admin User");
     assert_eq!(notif_val["oldRights"]["mayRead"], true);
     assert_eq!(notif_val["newRights"]["mayWrite"], true);
@@ -459,5 +459,38 @@ fn principal_availability_capability_roundtrip_and_session_accessor() {
     assert_eq!(
         session_cap.max_availability_duration.as_deref(),
         Some("P90D")
+    );
+}
+
+/// A real `ShareNotification/get` response captured from a live Stalwart
+/// 0.16 server (Track E Phase C's probe step). RFC 9670 §4 names the
+/// property `objectAccountId`, matching `docs/PRINCIPALS-DESIGN.md`'s own
+/// reading of the spec; Stalwart's wire response confirms it.
+#[test]
+fn share_notification_deserializes_a_real_stalwart_response() {
+    use jmap_proto::principals::ShareNotification;
+
+    let wire = serde_json::json!({
+        "id": "jcpvf27cebqb",
+        "created": "2026-09-01T04:02:09Z",
+        "changedBy": {
+            "name": "alice@agent-sharing-probe.test",
+            "email": "alice@agent-sharing-probe.test",
+            "principalId": "c"
+        },
+        "objectType": "AddressBook",
+        "objectId": "c",
+        "objectAccountId": "c",
+        "name": "",
+        "oldRights": {"mayRead": false, "mayWrite": false, "mayShare": false, "mayDelete": false},
+        "newRights": {"mayRead": true, "mayWrite": false, "mayShare": false, "mayDelete": false}
+    });
+
+    let notif: ShareNotification = serde_json::from_value(wire).unwrap();
+    assert_eq!(notif.object_account_id.as_str(), "c");
+    assert_eq!(notif.object_id.as_str(), "c");
+    assert_eq!(
+        notif.changed_by.unwrap().email.as_deref(),
+        Some("alice@agent-sharing-probe.test")
     );
 }

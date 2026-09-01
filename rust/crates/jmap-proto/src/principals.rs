@@ -270,7 +270,10 @@ pub struct ShareNotification {
     pub changed_by: Option<Principal>,
     pub object_type: String,
     pub object_id: Id,
-    pub account_id: Id,
+    /// The account the shared object lives in (RFC 9670 §4). Spelled
+    /// `objectAccountId` on the wire, not `accountId` — verified against a
+    /// real Stalwart response (Track E Phase C's probe).
+    pub object_account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -286,7 +289,7 @@ impl ShareNotification {
         created: impl Into<UtcDate>,
         object_type: impl Into<String>,
         object_id: impl Into<Id>,
-        account_id: impl Into<Id>,
+        object_account_id: impl Into<Id>,
     ) -> Self {
         Self {
             id: None,
@@ -294,7 +297,7 @@ impl ShareNotification {
             changed_by: None,
             object_type: object_type.into(),
             object_id: object_id.into(),
-            account_id: account_id.into(),
+            object_account_id: object_account_id.into(),
             name: None,
             old_rights: None,
             new_rights: None,
