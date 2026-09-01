@@ -275,6 +275,10 @@ impl ServerState {
                         "ShareNotification",
                         account.share_notifications.state_counter(),
                     ),
+                    (
+                        "VacationResponse",
+                        account.vacation_response.state_counter(),
+                    ),
                 ]);
                 (id.clone(), types)
             })
@@ -391,6 +395,12 @@ pub struct AccountState {
     pub emails: Store<jmap_proto::mail::Email>,
     pub identities: Store<jmap_proto::mail::Identity>,
     pub submissions: Store<jmap_proto::mail::EmailSubmission>,
+    /// The `VacationResponse` singleton (RFC 8621 §8.1). Always holds exactly
+    /// one object, seeded at account creation under the fixed id
+    /// `"singleton"`, since the type has no create or destroy: `Store<T>`'s
+    /// state counter and changes log are reused unchanged rather than
+    /// building a separate mechanism for one object.
+    pub vacation_response: Store<jmap_proto::mail::VacationResponse>,
     /// Every accepted `EmailSubmission` — what a real server would hand to
     /// its SMTP queue. Tests assert against this.
     pub outbox: Vec<RecordedSubmission>,
@@ -418,12 +428,18 @@ pub struct AccountState {
 
 impl AccountState {
     pub fn new(name: impl Into<String>) -> Self {
+        let mut vacation_response = Store::new("VR");
+        vacation_response.seed_with_id(
+            Id::from("singleton"),
+            jmap_proto::mail::VacationResponse::new(false).with_id("singleton"),
+        );
         Self {
             name: name.into(),
             mailboxes: Store::new("M"),
             emails: Store::new("E"),
             identities: Store::new("I"),
             submissions: Store::new("S"),
+            vacation_response,
             outbox: Vec::new(),
             address_books: Store::new("AB"),
             contact_cards: Store::new("C"),
