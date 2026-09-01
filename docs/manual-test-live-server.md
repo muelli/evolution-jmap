@@ -32,7 +32,7 @@ singular-object wire shape, jscalendarbis §3.3.3, against a real server), and
 account (see step 3) so they can never touch whatever account the read-only
 tests are pointed at.
 
-A fifth test, `send_email_delivers_to_a_second_account_on_the_real_server`,
+One further test, `send_email_delivers_to_a_second_account_on_the_real_server`,
 writes to *two* throwaway accounts: it sends a message via `Client::send_email`
 from the write-test account to a second one (step 3's "send-email test"
 below) and polls the recipient's Inbox until the message actually arrives —
@@ -44,9 +44,9 @@ Stalwart deployment, so delivery never leaves it.
 
 Two ways, either is fine:
 
-- **The disposable Stalwart VM** this project provisions for exactly this:
+- **The disposable Stalwart VM** the harness repository provisions for exactly this:
   ```console
-  $ ./infra/gcp/create-stalwart.sh
+  $ ./harness/gcp/create-stalwart.sh
   ```
   reports the VM's IP once it is up. Read its generated admin password with
   ```console
@@ -96,15 +96,15 @@ routine option.
 
 ## 3. (optional) Enable the write-path tests
 
-The six mutating tests are skipped, not failed, unless a *separate*
+The seven mutating tests are skipped, not failed, unless a *separate*
 login is given for them — deliberately not the same variables step 2
 sets, so pointing the read-only tests at a real mailbox can never also
 point the mutating tests at it. Seed a throwaway account for this alone
-(the Stalwart VM's `infra/stalwart/stw seed` wrapper needs `stalwart-cli`
-on `PATH`; see that script's header for where to get it):
+(the harness repository's `harness/stalwart/stw seed` wrapper needs
+`stalwart-cli` on `PATH`; see that script's header for where to get it):
 
 ```console
-$ ./infra/stalwart/stw seed agent-livewrite.net agent1 '<a fresh password>'
+$ ./harness/stalwart/stw seed agent-livewrite.net agent1 '<a fresh password>'
 $ export JMAP_LIVE_SERVER_WRITE_USER=agent1@agent-livewrite.net
 $ export JMAP_LIVE_SERVER_WRITE_PASSWORD='<that password>'
 ```
@@ -123,7 +123,7 @@ it — on the same domain, so delivery stays intra-server and needs no
 outbound relay:
 
 ```console
-$ ./infra/stalwart/stw seed agent-livewrite.net agent2 '<a different fresh password>'
+$ ./harness/stalwart/stw seed agent-livewrite.net agent2 '<a different fresh password>'
 $ export JMAP_LIVE_SERVER_RECIPIENT_USER=agent2@agent-livewrite.net
 $ export JMAP_LIVE_SERVER_RECIPIENT_PASSWORD='<that password>'
 ```
