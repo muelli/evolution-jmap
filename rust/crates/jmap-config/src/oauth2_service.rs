@@ -38,7 +38,7 @@
 //!   what the RFC 6749 default already does — build the query and both token
 //!   forms from `get_client_id`/`get_client_secret`/`get_redirect_uri`,
 //!   accept or decline a source by its `[Authentication] method`, decline
-//!   every hostname guess — does not need to fill these at all. `can_process`
+//!   every hostname guess, does not need to fill these at all. `can_process`
 //!   and `guess_can_process` are exactly that case and stay unfilled: matching
 //!   on `[Authentication] method` is all this service wants, and no hostname
 //!   pattern is worth guessing (every deployment is a different server).
@@ -47,7 +47,7 @@
 //!   out to want parameters the RFC 6749 default knows nothing about: a `scope`
 //!   (`error=invalid_scope`), an RFC 8707 `resource` (`error=invalid_target`)
 //!   and RFC 7636 PKCE (`error=invalid_request`), all three observed against
-//!   Fastmail on 2026-08-23. Filling them is additive only — see the next
+//!   Fastmail on 2026-08-23. Filling them is additive only: see the next
 //!   section for the rule that makes it safe, and
 //!   `e-oauth2-service-google.c`/`-outlook.c` for EDS's own services keeping
 //!   the same rule.
@@ -61,7 +61,7 @@
 //! So seven vfuncs are filled, all of them either a `'static` constant or a
 //! borrow of [`oauth2`]'s own storage — none compute a string that would need
 //! freeing, which is the condition the previous session's storage work
-//! existed to reach. Three more — the `prepare_*` trio — are filled as
+//! existed to reach. Three more, the `prepare_*` trio, are filled as
 //! *additive hooks*, per the next section.
 //!
 //! ## An additive hook, not a chain link
@@ -71,7 +71,7 @@
 //! (3.52.3) installs `eos_default_prepare_authentication_uri_query` and its two
 //! siblings into the interface vtable (`e-oauth2-service.c:320`, `:322`,
 //! `:324`), so the slot a subclass's `interface_init` receives is already
-//! non-NULL — but each public wrapper (`:648`, `:822`, `:895`) calls its
+//! non-NULL. But each public wrapper (`:648`, `:822`, `:895`) calls its
 //! `eos_default_*` body *directly and unconditionally* before dispatching to
 //! the vtable, and skips the vtable only when it still literally holds that
 //! same default (`:654`, `:828`, `:901`). A filled slot that also invoked the
@@ -81,10 +81,10 @@
 //! wrapper: `eos_google_prepare_authentication_uri_query` and
 //! `eos_outlook_prepare_authentication_uri_query`/`_prepare_refresh_token_form`
 //! each set only their own keys, and neither saves nor invokes the default.
-//! This crate does the same. The double call it used to make was benign —
+//! This crate does the same. The double call it used to make was benign:
 //! `e_oauth2_service_util_set_to_form` is insert-or-remove, so repeating it is
 //! idempotent, and it is invisible through the wrapper for exactly that
-//! reason — but it doubled every `get_client_id`/`get_client_secret`/
+//! reason. But it doubled every `get_client_id`/`get_client_secret`/
 //! `get_redirect_uri` dispatch and would silently corrupt any future default
 //! that appended rather than replaced. `tests/oauth2_service.rs` pins the rule
 //! by dispatching the slots directly.
@@ -203,7 +203,7 @@ unsafe impl InterfaceImpl for Vtable {
         // `e_oauth2_service_default_init`), which build the standard RFC 6749
         // query and both token forms. Displacing them loses nothing: each
         // public wrapper runs its default *itself*, unconditionally, before
-        // dispatching here — see the "additive hook, not a chain link"
+        // dispatching here. See the "additive hook, not a chain link"
         // section of the module docs. So these override bodies only add.
         vtable.prepare_authentication_uri_query = Some(prepare_authentication_uri_query);
         vtable.prepare_get_token_form = Some(prepare_get_token_form);
@@ -255,7 +255,7 @@ unsafe extern "C" fn prepare_authentication_uri_query(
             // All-or-nothing: a challenge is only ever added once its verifier
             // is stashed. A uid-less source could not be stashed against, and
             // sending a challenge with nobody able to redeem it is worse than
-            // sending none — RFC 7636 section 4.6 obliges the server to reject
+            // sending none: RFC 7636 section 4.6 obliges the server to reject
             // the code exchange that follows, so this would turn into a silent,
             // unattributable authentication failure rather than the
             // well-defined "no PKCE" request every deployment this project

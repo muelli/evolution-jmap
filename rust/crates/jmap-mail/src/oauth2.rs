@@ -139,8 +139,8 @@ pub unsafe fn access_token(
 /// tests drive [`classify_failure`]. That EDS-side token fetch already traces
 /// `reason`/`escalates_to_consent`; this call site, Camel's
 /// `camel_session_get_oauth2_access_token_sync`, logged nothing at all, so a
-/// failure here — including the stale-D-Bus-proxy shape, which this recognises
-/// identically by reusing [`classify_failure`] — was invisible in the journal
+/// failure here, including the stale-D-Bus-proxy shape, which this recognises
+/// identically by reusing [`classify_failure`], was invisible in the journal
 /// from the mail side even though the equivalent EDS-side fetch names it.
 /// Purely additive: the returned message is unchanged from what this call site
 /// already sent into [`StoreError::OAuth2`].
@@ -149,7 +149,7 @@ pub unsafe fn access_token(
 ///
 /// # Safety
 ///
-/// `error` must be NULL or a valid `GError` this call does not own — read
+/// `error` must be NULL or a valid `GError` this call does not own: read
 /// only, never freed here.
 unsafe fn trace_failure(error: *const GError) -> Option<String> {
     // SAFETY: the contract above is `classify_failure`'s own.
@@ -179,7 +179,7 @@ mod tests {
 
     /// A real `GError`, not a hand-rolled struct: [`trace_failure`] reads
     /// `classify_failure`'s output, which reads the `domain`/`code`/`message`
-    /// fields directly — see `jmap_backend_core::oauth2`'s own tests for why.
+    /// fields directly. See `jmap_backend_core::oauth2`'s own tests for why.
     fn error(domain: glib_sys::GQuark, code: i32, text: &str) -> *mut GError {
         let message = CString::new(text).unwrap();
         // SAFETY: a valid domain and a NUL-terminated message; every caller
@@ -295,7 +295,7 @@ mod tests {
     }
 
     /// A genuine "nobody has consented yet" failure still escalates, and is
-    /// traced saying so — the message this crate has always returned is
+    /// traced saying so. The message this crate has always returned is
     /// unchanged, only the trace is new.
     #[test]
     fn a_missing_consent_is_traced_as_escalating() {
@@ -316,7 +316,7 @@ mod tests {
         );
     }
 
-    /// A NULL `GError*` — `access_token`'s own fallback message covers this,
+    /// A NULL `GError*`. `access_token`'s own fallback message covers this,
     /// [`trace_failure`] must not dereference it.
     #[test]
     fn a_null_error_traces_without_a_message() {

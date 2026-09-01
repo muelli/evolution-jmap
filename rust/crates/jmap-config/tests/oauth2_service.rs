@@ -51,7 +51,7 @@ use jmap_config::oauth2_service::{NAME, Service};
 use tracing::span::{Attributes, Id as SpanId, Record};
 use tracing::{Event, Level, Metadata, Subscriber};
 
-/// A minimal `tracing::Subscriber` that records only each event's level —
+/// A minimal `tracing::Subscriber` that records only each event's level,
 /// enough to pin F17's "missing PKCE verifier escalates to `warn!`, not
 /// `debug!`" fix without needing this crate's full field-visiting machinery
 /// (`tests/tracing_writes.rs` has that shape, for tests that need the field
@@ -290,7 +290,7 @@ fn prepare_authentication_uri_query_names_the_registered_scope() {
         );
         // The wrapper ran EDS's default itself before dispatching to our slot,
         // so the standard query is here alongside our additions. This is the
-        // wrapper's guarantee, not our slot's — see
+        // wrapper's guarantee, not our slot's. See
         // `the_authentication_query_slot_adds_only_this_services_own_keys`,
         // which is the test that would actually catch our slot doing it too.
         let response_type = g_hash_table_lookup(query, c"response_type".as_ptr().cast());
@@ -505,12 +505,12 @@ fn the_registry_finds_this_service_for_a_matching_source_and_nothing_for_another
 
 /// One `EOAuth2ServiceInterface` slot, reached the way EDS's own wrapper
 /// reaches it: `E_OAUTH2_SERVICE_GET_INTERFACE`, i.e. the interface vtable of
-/// [`Service`]'s class — not the interface's *default* vtable, which still
+/// [`Service`]'s class, not the interface's *default* vtable, which still
 /// holds `eos_default_*` for every slot this crate never filled.
 fn vtable() -> &'static EOAuth2ServiceInterface {
     let gtype = register_static::<Service>();
     // SAFETY: a registered class type and the interface it implements; the
-    // class ref taken here is deliberately never dropped — the type is
+    // class ref taken here is deliberately never dropped: the type is
     // process-global and every other test holds an instance of it anyway.
     unsafe {
         let class = g_type_class_ref(gtype);
@@ -547,7 +547,7 @@ fn has_key(table: *mut GHashTable, key: &CStr) -> bool {
 ///
 /// `e_oauth2_service_prepare_authentication_uri_query` (3.52.3,
 /// `e-oauth2-service.c:648`) calls `eos_default_prepare_authentication_uri_query`
-/// itself, unconditionally, *before* dispatching to the vtable — the slot is
+/// itself, unconditionally, *before* dispatching to the vtable. The slot is
 /// only skipped when it still literally holds that default (`:654`). So a
 /// filled slot that also calls the default runs it twice. EDS's own services
 /// are the convention: `eos_google_prepare_authentication_uri_query` and
@@ -593,7 +593,7 @@ fn the_authentication_query_slot_adds_only_this_services_own_keys() {
     unsafe { g_hash_table_destroy(query) };
 }
 
-/// As above for the code grant —
+/// As above for the code grant.
 /// `e_oauth2_service_prepare_get_token_form` (`e-oauth2-service.c:822`) has the
 /// same shape, and so does `prepare_refresh_token_form` (`:895`).
 #[test]
@@ -602,7 +602,7 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
     let source = TestSource::new().written(&config());
 
     // Authorize first, so there is a stashed verifier for the code grant to
-    // redeem — the order the credentials prompter drives these two in.
+    // redeem, the order the credentials prompter drives these two in.
     let query = empty_table();
     let authorize = vtable()
         .prepare_authentication_uri_query
@@ -660,9 +660,9 @@ fn the_token_form_slots_add_only_this_services_own_keys() {
 /// F17 of the 2026-08-28 re-audit: a code exchange prepared with no stashed
 /// PKCE verifier is exactly the failure mode that turns into a repeating,
 /// unattributable consent window, so it must be logged loudly enough to find
-/// in the journal — `warn!`, not `debug!`. A verifier goes missing here only
+/// in the journal: `warn!`, not `debug!`. A verifier goes missing here only
 /// on a second redemption attempt (single-use) or a never-stashed one (no
-/// uid, untestable through EDS's public `ESource` API — see the report), so
+/// uid, which `e_source_new*` never produces, so no test can build one), so
 /// the reachable half this pins is the former: redeeming the same code twice.
 #[test]
 fn a_missing_pkce_verifier_at_redemption_is_logged_at_warn_level() {
