@@ -6,11 +6,12 @@
 //! (`Principal/getAvailability`, draft-ietf-jmap-calendars) and per-source
 //! sharing build on. See `docs/PRINCIPALS-DESIGN.md` for the full design.
 //!
-//! Only `Principal/get` and `Principal/query` are modeled here: resolving an
-//! email/name to a principal id and its capability bag is all Phase 0 needs.
-//! `Principal/set`, `Principal/changes`, `Principal/queryChanges`, and
-//! `ShareNotification` are not — this project never edits principals, and
-//! nothing yet syncs them.
+//! `Principal/get`, `Principal/query` and `ShareNotification/get`/`/query`
+//! (RFC 9670 §4) are modeled here: resolving an email/name to a principal
+//! id and its capability bag, plus reading the notifications a `shareWith`
+//! grant produces, is all Track E Phase C needs. `Principal/set`,
+//! `Principal/changes` and `Principal/queryChanges` are not — this project
+//! never edits principals, and nothing yet syncs them.
 
 use std::collections::BTreeMap;
 
@@ -260,7 +261,7 @@ impl BusyPeriod {
 }
 
 /// A notification that a share was created, updated, or removed (RFC 9670 §4).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ShareNotification {
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -4,8 +4,10 @@
 //! Contact methods (`AddressBook/get`, `ContactCard/get|set|query`,
 //! RFC 9610) and contact seeding helpers.
 
+use std::collections::BTreeMap;
+
 use jmap_proto::Id;
-use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
+use jmap_proto::contacts::{AddressBook, AddressBookRights, ContactCard, ContactCardQueryFilter};
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest};
 use serde_json::Value;
@@ -109,7 +111,23 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let request: SetRequest<AddressBook> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
     let terse_collection_create = state.terse_collection_create;
-    let account = account_mut(state, &request.account_id)?;
+    let account_id = request.account_id.clone();
+    let account = account_mut(state, &account_id)?;
+
+    // Captured before `simple_set` consumes `request.update`, so a
+    // `shareWith` change can be diffed against what it was, for
+    // `ShareNotification` delivery (Track E Phase C step 2, RFC 9670 §4).
+    let old_share_with: BTreeMap<Id, Option<BTreeMap<Id, AddressBookRights>>> = request
+        .update
+        .iter()
+        .flatten()
+        .filter_map(|(id, _)| {
+            account
+                .address_books
+                .get(id)
+                .map(|book| (id.clone(), book.share_with.clone()))
+        })
+        .collect();
 
     let response = simple_set(&mut account.address_books, request, |id, book| {
         if book.id.is_some() {
@@ -126,6 +144,24 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
         }
         Ok(())
     })?;
+
+    if let Some(updated) = &response.updated {
+        for id in updated.keys() {
+            let new_share_with = account
+                .address_books
+                .get(id)
+                .and_then(|book| book.share_with.clone());
+            crate::principals::record_share_changes(
+                account,
+                jmap_proto::principals::share_notification_object_type::ADDRESS_BOOK,
+                id,
+                &account_id,
+                old_share_with.get(id).and_then(Option::as_ref),
+                new_share_with.as_ref(),
+            );
+        }
+    }
+
     let mut result = to_result(&response)?;
 
     // RFC 8620 §5.3: the `created` map need only carry properties the client
