@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `docs/ROADMAP.md` item 41: two JMAP accounts that authenticate as the
+//! Two JMAP accounts that authenticate as the
 //! same `[Authentication] User` share one OAuth2 secret-store slot, because
 //! `eos_generate_secret_uid` (evolution-data-server 3.52.3,
 //! `e-oauth2-service.c:1086`, read rather than assumed) derives that slot's
