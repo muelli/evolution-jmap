@@ -151,8 +151,8 @@ path moved to the harness repository's `harness/`, and the harness
 bookkeeping files moved out of this repository entirely). Grepped for
 TODO/FIXME/XXX, "not yet"/"unwritten"/"has yet to" phrasings (same list as
 the first pass, all findings already-known-fine — see below), `.rs:<N>`
-file:line citations in comments, and `infra/`/`harness/`/`docs/ROADMAP.md`
-path references.
+file:line citations in comments, and stale `infra/`/`harness/` path
+references.
 
 ### Fixed
 
