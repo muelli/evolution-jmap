@@ -51,6 +51,19 @@ use crate::trampoline::log_critical;
 /// }
 /// ```
 ///
+/// A `T` that may be shared between threads but not *moved* between them
+/// cannot go in one, and the bound below is what says so:
+///
+/// ```compile_fail
+/// use std::sync::MutexGuard;
+/// use jmap_backend_core::instance::Slot;
+///
+/// fn assert_sync<T: Sync>() {}
+/// // `MutexGuard` is `Sync` and deliberately not `Send`, so a `Slot` holding
+/// // one must not be `Sync`: see the `Sync` impl below for why.
+/// assert_sync::<Slot<MutexGuard<'static, ()>>>();
+/// ```
+///
 /// [`ObjectSubclass::instance_init`]: crate::subclass::ObjectSubclass::instance_init
 /// [`ObjectSubclass::finalize`]: crate::subclass::ObjectSubclass::finalize
 #[repr(transparent)]
@@ -58,10 +71,34 @@ pub struct Slot<T> {
     /// NULL means empty; otherwise a `Box<T>` this slot owns. Atomic because
     /// EDS calls a backend's vfuncs from more than one thread.
     value: AtomicPtr<T>,
-    /// Makes `Send`/`Sync` follow `T`, which a bare `AtomicPtr<T>` would not:
-    /// it is unconditionally both, and a `&Slot<T>` hands out a `&T`.
+    /// That this slot *owns* a `T`, which a bare `AtomicPtr<T>` does not say.
+    /// Drop-check needs it: [`clear`](Slot::clear) runs `T`'s destructor, so a
+    /// `T` borrowing from something that outlives the slot only by inference
+    /// would otherwise be accepted.
+    ///
+    /// `Send` and `Sync` are *not* left to it; see the two impls below.
     _owns: PhantomData<T>,
 }
+
+// SAFETY: a `Slot<T>` owns a heap `T` and nothing else, so moving one between
+// threads moves that `T`, exactly as `Box<T>` does.
+unsafe impl<T: Send> Send for Slot<T> {}
+
+// SAFETY: `Send` as well as `Sync`, and the `Send` half is the whole reason
+// this impl is written out rather than derived from the `PhantomData<T>` above.
+//
+// `Sync` is what licenses a `&Slot<T>` to cross a thread boundary, and every
+// method here takes `&self`: not only [`get`](Slot::get), which hands out a
+// `&T` and so wants `T: Sync`, but also [`clear`](Slot::clear), which *drops*
+// the `T`, and [`init`](Slot::init), which drops the `T` it was given when the
+// slot is already full. Running a destructor on a thread the value never
+// belonged to is precisely what `Send` governs, so a `T` that is `Sync` but not
+// `Send`, a `MutexGuard` for instance, must not make a `Slot<T>` `Sync`. The
+// derived bound said only `T: Sync` and would have allowed it.
+//
+// Every `Slot` in this project holds a `Mutex`/`RwLock` of owned data, which is
+// both, so this tightens the bound without narrowing any use.
+unsafe impl<T: Send + Sync> Sync for Slot<T> {}
 
 impl<T> Slot<T> {
     /// An empty slot. Byte-for-byte identical to the zeroed field GObject
