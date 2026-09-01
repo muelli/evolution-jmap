@@ -1259,7 +1259,7 @@ fn principals_owner_and_share_notification_forward_compatibility() {
         },
         "objectType": "Calendar",
         "objectId": "cal_marketing",
-        "accountId": "acc_user",
+        "objectAccountId": "acc_user",
         "name": "Marketing Strategy Calendar",
         "oldRights": null,
         "newRights": {
@@ -1277,7 +1277,7 @@ fn principals_owner_and_share_notification_forward_compatibility() {
     assert_eq!(notif.name.as_deref(), Some("Marketing Strategy Calendar"));
     assert_eq!(notif.object_type, "Calendar");
     assert_eq!(notif.object_id.as_str(), "cal_marketing");
-    assert_eq!(notif.account_id.as_str(), "acc_user");
+    assert_eq!(notif.object_account_id.as_str(), "acc_user");
     assert_eq!(notif.changed_by.as_ref().unwrap().name, "Admin Coordinator");
     assert_eq!(notif.extra["notificationPriority"], "high");
     assert_eq!(notif.extra["autoAccept"], true);
