@@ -251,27 +251,51 @@ unsafe extern "C" fn prepare_authentication_uri_query(
             // were already right). The verifier is stashed per source UID
             // for `prepare_get_token_form` to redeem; a repeated
             // authorization attempt simply replaces it.
-            let verifier = PkceVerifier::generate();
-            g_hash_table_replace(
-                uri_query,
-                g_strdup(c"code_challenge".as_ptr()).cast(),
-                g_strdup(cstring_lossy(&verifier.challenge()).as_ptr()).cast(),
-            );
-            g_hash_table_replace(
-                uri_query,
-                g_strdup(c"code_challenge_method".as_ptr()).cast(),
-                g_strdup(c"S256".as_ptr()).cast(),
-            );
-            if let Some(ref uid) = uid {
+            //
+            // All-or-nothing: a challenge is only ever added once its verifier
+            // is stashed. A uid-less source could not be stashed against, and
+            // sending a challenge with nobody able to redeem it is worse than
+            // sending none — RFC 7636 section 4.6 obliges the server to reject
+            // the code exchange that follows, so this would turn into a silent,
+            // unattributable authentication failure rather than the
+            // well-defined "no PKCE" request every deployment this project
+            // targets already tolerates (it is EDS's own default query without
+            // our addition).
+            let has_pkce = if let Some(ref uid) = uid {
+                let verifier = PkceVerifier::generate();
                 pkce_verifiers()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(uid.clone(), verifier.secret().to_owned());
-            }
+                g_hash_table_replace(
+                    uri_query,
+                    g_strdup(c"code_challenge".as_ptr()).cast(),
+                    g_strdup(cstring_lossy(&verifier.challenge()).as_ptr()).cast(),
+                );
+                g_hash_table_replace(
+                    uri_query,
+                    g_strdup(c"code_challenge_method".as_ptr()).cast(),
+                    g_strdup(c"S256".as_ptr()).cast(),
+                );
+                true
+            } else {
+                // Not reached through any path EDS's public API can build
+                // today: `e_source_new*` assigns a uid when the caller passes
+                // none. The fallback is cheap insurance against a source that
+                // somehow has one anyway, and it warns rather than passing
+                // silently, since a plain debug! is exactly what hid the
+                // failure this branch exists to prevent.
+                tracing::warn!(
+                    "source has no uid; omitting the PKCE challenge rather than \
+                     sending one whose verifier cannot be stashed and so can \
+                     never be redeemed"
+                );
+                false
+            };
             tracing::debug!(
                 account_uid = ?uid,
                 has_scope,
-                pkce_challenge_method = "S256",
+                has_pkce,
                 "prepared OAuth 2.0 authentication uri query"
             );
         },
@@ -338,6 +362,19 @@ unsafe extern "C" fn prepare_get_token_form(
             );
             true
         } else {
+            // Loud on purpose. If the authorization request carried a
+            // challenge, RFC 7636 section 4.6 obliges the server to reject the
+            // exchange this form is being built for, and the user sees only a
+            // consent window that reappears. At debug! that is both below what
+            // anything is likely to be capturing and indistinguishable from
+            // the legitimate "this deployment never used PKCE" case, which is
+            // what made the symptom unattributable from the journal.
+            tracing::warn!(
+                account_uid = ?uid,
+                "no stashed PKCE verifier for this account; the authorization \
+                 request may have carried a challenge, in which case the server \
+                 is expected to reject this code exchange"
+            );
             false
         };
         tracing::debug!(
