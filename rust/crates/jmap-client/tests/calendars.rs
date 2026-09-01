@@ -300,3 +300,64 @@ fn event_query_time_range() {
         .ids;
     assert_eq!(ids.len(), 2);
 }
+
+/// Track E Phase C step 2: a `shareWith` grant on a `Calendar` restricts and
+/// grants cross-account visibility the same way it already does for
+/// `AddressBook` and `Mailbox` (`jmap-client/tests/contacts.rs`,
+/// `jmap-client/tests/mail_folders.rs`), matching the live Stalwart probe's
+/// findings (Track E Phase C step 1, recorded in the work queue).
+#[test]
+fn calendar_shared_with_a_principal_is_visible_only_to_them() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder()
+        .bearer_token("alice-token")
+        .bearer_token_as("bob-token", bob.clone())
+        .start();
+    let account_id = server.account_id();
+    let (_personal, work) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let personal = account.seed_calendar("Personal", true);
+        let work = account.seed_calendar("Work", false);
+        (personal, work)
+    };
+
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+    let bob_client = Client::connect(server.origin(), Credentials::bearer("bob-token")).unwrap();
+
+    match bob_client.calendars(&account_id) {
+        Err(Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, "forbidden");
+        }
+        other => panic!("expected forbidden before any grant, got {other:?}"),
+    }
+
+    alice
+        .calendar_update(
+            &account_id,
+            &work,
+            json!({"shareWith": {bob.as_str(): {"mayReadItems": true, "mayReadFreeBusy": true}}}),
+        )
+        .unwrap();
+
+    let bob_calendars = bob_client.calendars(&account_id).unwrap();
+    assert_eq!(
+        bob_calendars.len(),
+        1,
+        "bob only sees the shared calendar, not Personal"
+    );
+    assert_eq!(bob_calendars[0].id.as_ref(), Some(&work));
+    let rights = bob_calendars[0]
+        .my_rights
+        .as_ref()
+        .expect("myRights is computed from the grant");
+    assert_eq!(rights.may_read_items, Some(true));
+    assert_eq!(rights.may_read_free_busy, Some(true));
+
+    assert_eq!(
+        alice.calendars(&account_id).unwrap().len(),
+        2,
+        "the owner's own view still sees both calendars"
+    );
+}

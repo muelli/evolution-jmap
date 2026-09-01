@@ -317,7 +317,7 @@ fn handle_method(
             }?;
             to_result(&response)
         }
-        "Calendar/get" => crate::calendars::calendar_get(state, arguments),
+        "Calendar/get" => crate::calendars::calendar_get(state, arguments, caller),
         "Calendar/set" => crate::calendars::calendar_set(state, arguments),
         "CalendarEvent/get" => crate::calendars::calendar_event_get(state, arguments),
         "CalendarEvent/set" => crate::calendars::calendar_event_set(state, arguments),

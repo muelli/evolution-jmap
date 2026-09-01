@@ -136,3 +136,44 @@ fn mailbox_share_grant_delivers_a_share_notification() {
         Some(&json!(true))
     );
 }
+
+#[test]
+fn calendar_share_grant_delivers_a_share_notification() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder()
+        .bearer_token("alice-token")
+        .bearer_token_as("bob-token", bob.clone())
+        .start();
+    let account_id = server.account_id();
+    let work = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_calendar("Work", false)
+    };
+
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+    let bob_client = Client::connect(server.origin(), Credentials::bearer("bob-token")).unwrap();
+
+    alice
+        .calendar_update(
+            &account_id,
+            &work,
+            json!({"shareWith": {bob.as_str(): {"mayReadItems": true}}}),
+        )
+        .unwrap();
+
+    let notifications = bob_client.share_notifications(&account_id).unwrap();
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0].object_type, "Calendar");
+    assert_eq!(notifications[0].object_id, work);
+    assert_eq!(
+        notifications[0]
+            .new_rights
+            .as_ref()
+            .and_then(|v| v.get("mayReadItems")),
+        Some(&json!(true))
+    );
+}
