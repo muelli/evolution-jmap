@@ -10,6 +10,9 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [lib]
 name = "jmap_backend_cal"
 # rlib only. What EDS dlopens (installed as libecalbackendjmap.so) is the

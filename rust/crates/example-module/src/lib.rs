@@ -12,8 +12,10 @@ mod shell_view_extension;
 /// this symbol; it must remain alive for the duration of the call.
 #[no_mangle]
 pub unsafe extern "C" fn e_module_load(type_module: *mut ffi::GTypeModule) {
-    shell_view_extension::register_type(type_module);
-    msg_composer_extension::register_type(type_module);
+    unsafe {
+        shell_view_extension::register_type(type_module);
+        msg_composer_extension::register_type(type_module);
+    }
 }
 
 /// Called by Evolution just before the module shared library is unloaded.

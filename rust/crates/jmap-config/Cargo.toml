@@ -10,6 +10,9 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [lib]
 name = "jmap_config"
 # rlib only. What Evolution dlopens (installed as

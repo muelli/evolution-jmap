@@ -11,6 +11,9 @@ description = "GNOME Evolution plugin template written in Rust"
 publish = false
 
 # Build a C-compatible shared library (.so) that Evolution loads as a plugin.
+[lints]
+workspace = true
+
 [lib]
 name = "example_module"
 crate-type = ["cdylib"]

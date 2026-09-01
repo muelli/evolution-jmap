@@ -10,6 +10,9 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [lib]
 name = "jmap_backend_book_module"
 # cdylib and nothing else, which is the point of the crate. See src/lib.rs.

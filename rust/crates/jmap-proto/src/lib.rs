@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![forbid(unsafe_code)]
+
 //! JMAP protocol types.
 //!
 //! Pure data types with serde implementations - no I/O. Wire format follows:

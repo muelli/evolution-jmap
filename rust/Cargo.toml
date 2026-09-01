@@ -94,6 +94,13 @@ jmap-backend-collection = { path = "crates/jmap-backend-collection" }
 jmap-config = { path = "crates/jmap-config" }
 jmap-mail = { path = "crates/jmap-mail" }
 
+# Every unsafe operation inside an `unsafe fn` body needs its own `unsafe {}`
+# block and its own SAFETY comment, rather than the whole fn body being an
+# implicit unsafe scope. Edition 2024 already warns on this; deny makes it a
+# hard error regardless of what flags a given `cargo` invocation passes.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
 # Reproducibility: deterministic codegen, no incremental state, no debug paths.
 [profile.release]
 codegen-units = 1

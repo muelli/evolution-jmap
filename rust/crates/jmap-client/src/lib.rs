@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![forbid(unsafe_code)]
+
 //! Blocking JMAP client.
 //!
 //! Talks to a JMAP server over HTTP: session discovery

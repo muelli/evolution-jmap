@@ -37,7 +37,9 @@ struct Private {
 
 /// Destroy notifier called by GLib when the object is finalized.
 unsafe extern "C" fn free_private(ptr: *mut c_void) {
-    drop(Box::from_raw(ptr as *mut Private));
+    unsafe {
+        drop(Box::from_raw(ptr as *mut Private));
+    }
 }
 
 /// Retrieve the `Private` data attached to a GObject instance.
@@ -46,9 +48,11 @@ unsafe extern "C" fn free_private(ptr: *mut c_void) {
 /// `obj` must be a live `MShellViewExtension` instance with private data
 /// already attached.
 unsafe fn get_private(obj: *mut ffi::GObject) -> &'static mut Private {
-    let ptr = ffi::g_object_get_data(obj, PRIV_KEY.as_ptr());
-    debug_assert!(!ptr.is_null(), "MShellViewExtension: private data is null");
-    &mut *(ptr as *mut Private)
+    unsafe {
+        let ptr = ffi::g_object_get_data(obj, PRIV_KEY.as_ptr());
+        debug_assert!(!ptr.is_null(), "MShellViewExtension: private data is null");
+        &mut *(ptr as *mut Private)
+    }
 }
 
 // ── UI XML strings ────────────────────────────────────────────────────────────
@@ -129,7 +133,7 @@ unsafe extern "C" fn action_calendar_menu_cb(
 ///
 /// Equivalent to the C macro `G_TYPE_FROM_INSTANCE`.
 unsafe fn instance_gtype(instance: *mut c_void) -> ffi::GType {
-    (*(*instance.cast::<ffi::GTypeInstance>()).g_class).g_type
+    unsafe { (*(*instance.cast::<ffi::GTypeInstance>()).g_class).g_type }
 }
 
 /// Called once per extension instance the first time its view is activated.
@@ -141,75 +145,78 @@ unsafe fn init_view_ui(
     shell_view: *mut ffi::EShellView,
     shell_window: *mut ffi::EShellWindow,
 ) -> Option<&'static str> {
-    let view_gtype = instance_gtype(shell_view as *mut c_void);
+    unsafe {
+        let view_gtype = instance_gtype(shell_view as *mut c_void);
 
-    if ffi::g_type_is_a(view_gtype, ffi::e_mail_shell_view_get_type()) != 0 {
-        // ── Mail view ─────────────────────────────────────────────────────────
-        let action_group = ffi::e_shell_window_get_action_group(shell_window, c"mail".as_ptr());
+        if ffi::g_type_is_a(view_gtype, ffi::e_mail_shell_view_get_type()) != 0 {
+            // ── Mail view ─────────────────────────────────────────────────────────
+            let action_group = ffi::e_shell_window_get_action_group(shell_window, c"mail".as_ptr());
 
-        let entries: [ffi::GtkActionEntry; 2] = [
-            ffi::GtkActionEntry {
-                name: c"my-mail-ui-folder-action".as_ptr(),
-                stock_id: c"folder-new".as_ptr(),
-                label: c"M_y Maildir Folder Action...".as_ptr(),
-                accelerator: std::ptr::null(),
-                tooltip: c"My Maildir Folder Action".as_ptr(),
-                callback: Some(action_mail_folder_cb),
-            },
-            ffi::GtkActionEntry {
-                name: c"my-mail-ui-message-action".as_ptr(),
-                stock_id: c"document-new".as_ptr(),
-                label: c"M_y Message Action...".as_ptr(),
-                accelerator: std::ptr::null(),
-                tooltip: c"My Message Action".as_ptr(),
-                callback: Some(action_mail_message_cb),
-            },
-        ];
+            let entries: [ffi::GtkActionEntry; 2] = [
+                ffi::GtkActionEntry {
+                    name: c"my-mail-ui-folder-action".as_ptr(),
+                    stock_id: c"folder-new".as_ptr(),
+                    label: c"M_y Maildir Folder Action...".as_ptr(),
+                    accelerator: std::ptr::null(),
+                    tooltip: c"My Maildir Folder Action".as_ptr(),
+                    callback: Some(action_mail_folder_cb),
+                },
+                ffi::GtkActionEntry {
+                    name: c"my-mail-ui-message-action".as_ptr(),
+                    stock_id: c"document-new".as_ptr(),
+                    label: c"M_y Message Action...".as_ptr(),
+                    accelerator: std::ptr::null(),
+                    tooltip: c"My Message Action".as_ptr(),
+                    callback: Some(action_mail_message_cb),
+                },
+            ];
 
-        ffi::e_action_group_add_actions_localized(
-            action_group,
-            GETTEXT_PACKAGE.as_ptr(),
-            entries.as_ptr(),
-            entries.len() as c_uint,
-            shell_view as *mut c_void,
-        );
+            ffi::e_action_group_add_actions_localized(
+                action_group,
+                GETTEXT_PACKAGE.as_ptr(),
+                entries.as_ptr(),
+                entries.len() as c_uint,
+                shell_view as *mut c_void,
+            );
 
-        Some(MAIL_UI_DEF)
-    } else if ffi::g_type_is_a(view_gtype, ffi::e_cal_shell_view_get_type()) != 0 {
-        // ── Calendar view ─────────────────────────────────────────────────────
-        let action_group = ffi::e_shell_window_get_action_group(shell_window, c"calendar".as_ptr());
+            Some(MAIL_UI_DEF)
+        } else if ffi::g_type_is_a(view_gtype, ffi::e_cal_shell_view_get_type()) != 0 {
+            // ── Calendar view ─────────────────────────────────────────────────────
+            let action_group =
+                ffi::e_shell_window_get_action_group(shell_window, c"calendar".as_ptr());
 
-        let entries: [ffi::GtkActionEntry; 2] = [
-            ffi::GtkActionEntry {
-                name: c"my-calendar-ui-event-action".as_ptr(),
-                stock_id: c"folder-new".as_ptr(),
-                label: c"M_y Event Action...".as_ptr(),
-                accelerator: std::ptr::null(),
-                tooltip: c"My Event Action".as_ptr(),
-                callback: Some(action_calendar_event_cb),
-            },
-            ffi::GtkActionEntry {
-                name: c"my-calendar-ui-action".as_ptr(),
-                stock_id: c"document-new".as_ptr(),
-                label: c"M_y Calendar Action...".as_ptr(),
-                accelerator: std::ptr::null(),
-                tooltip: c"My Calendar Action".as_ptr(),
-                callback: Some(action_calendar_menu_cb),
-            },
-        ];
+            let entries: [ffi::GtkActionEntry; 2] = [
+                ffi::GtkActionEntry {
+                    name: c"my-calendar-ui-event-action".as_ptr(),
+                    stock_id: c"folder-new".as_ptr(),
+                    label: c"M_y Event Action...".as_ptr(),
+                    accelerator: std::ptr::null(),
+                    tooltip: c"My Event Action".as_ptr(),
+                    callback: Some(action_calendar_event_cb),
+                },
+                ffi::GtkActionEntry {
+                    name: c"my-calendar-ui-action".as_ptr(),
+                    stock_id: c"document-new".as_ptr(),
+                    label: c"M_y Calendar Action...".as_ptr(),
+                    accelerator: std::ptr::null(),
+                    tooltip: c"My Calendar Action".as_ptr(),
+                    callback: Some(action_calendar_menu_cb),
+                },
+            ];
 
-        ffi::e_action_group_add_actions_localized(
-            action_group,
-            GETTEXT_PACKAGE.as_ptr(),
-            entries.as_ptr(),
-            entries.len() as c_uint,
-            shell_view as *mut c_void,
-        );
+            ffi::e_action_group_add_actions_localized(
+                action_group,
+                GETTEXT_PACKAGE.as_ptr(),
+                entries.as_ptr(),
+                entries.len() as c_uint,
+                shell_view as *mut c_void,
+            );
 
-        Some(CALENDAR_UI_DEF)
-    } else {
-        // Tasks, memos, contacts, … are not handled by this template.
-        None
+            Some(CALENDAR_UI_DEF)
+        } else {
+            // Tasks, memos, contacts, … are not handled by this template.
+            None
+        }
     }
 }
 
@@ -223,47 +230,49 @@ unsafe extern "C" fn shell_view_toggled_cb(
     shell_view: *mut ffi::EShellView,
     extension: *mut ffi::GObject,
 ) {
-    let shell_window = ffi::e_shell_view_get_shell_window(shell_view);
-    let ui_manager = ffi::e_shell_window_get_ui_manager(shell_window);
-    let priv_ = get_private(extension);
+    unsafe {
+        let shell_window = ffi::e_shell_view_get_shell_window(shell_view);
+        let ui_manager = ffi::e_shell_window_get_ui_manager(shell_window);
+        let priv_ = get_private(extension);
 
-    // Remove any UI we merged during a previous activation.
-    let need_update = priv_.current_ui_id != 0;
-    if priv_.current_ui_id != 0 {
-        ffi::gtk_ui_manager_remove_ui(ui_manager, priv_.current_ui_id);
-        priv_.current_ui_id = 0;
-    }
-
-    let is_active = ffi::e_shell_view_is_active(shell_view) != 0;
-    if !is_active {
-        if need_update {
-            ffi::gtk_ui_manager_ensure_update(ui_manager);
+        // Remove any UI we merged during a previous activation.
+        let need_update = priv_.current_ui_id != 0;
+        if priv_.current_ui_id != 0 {
+            ffi::gtk_ui_manager_remove_ui(ui_manager, priv_.current_ui_id);
+            priv_.current_ui_id = 0;
         }
-        return;
-    }
 
-    // On first activation: detect view type and register GtkActions.
-    if !priv_.actions_initialized {
-        priv_.view_ui_def = init_view_ui(shell_view, shell_window);
-        priv_.actions_initialized = true;
-    }
-
-    // Merge the UI definition (XML) into the UI manager.
-    if let Some(ui_def) = priv_.view_ui_def {
-        let mut error: *mut ffi::GError = std::ptr::null_mut();
-        priv_.current_ui_id = ffi::gtk_ui_manager_add_ui_from_string(
-            ui_manager,
-            ui_def.as_ptr() as *const c_char,
-            -1,
-            &mut error,
-        );
-        if !error.is_null() {
-            eprintln!("shell_view_toggled_cb: failed to merge UI definition");
-            ffi::g_error_free(error);
+        let is_active = ffi::e_shell_view_is_active(shell_view) != 0;
+        if !is_active {
+            if need_update {
+                ffi::gtk_ui_manager_ensure_update(ui_manager);
+            }
+            return;
         }
-    }
 
-    ffi::gtk_ui_manager_ensure_update(ui_manager);
+        // On first activation: detect view type and register GtkActions.
+        if !priv_.actions_initialized {
+            priv_.view_ui_def = init_view_ui(shell_view, shell_window);
+            priv_.actions_initialized = true;
+        }
+
+        // Merge the UI definition (XML) into the UI manager.
+        if let Some(ui_def) = priv_.view_ui_def {
+            let mut error: *mut ffi::GError = std::ptr::null_mut();
+            priv_.current_ui_id = ffi::gtk_ui_manager_add_ui_from_string(
+                ui_manager,
+                ui_def.as_ptr() as *const c_char,
+                -1,
+                &mut error,
+            );
+            if !error.is_null() {
+                eprintln!("shell_view_toggled_cb: failed to merge UI definition");
+                ffi::g_error_free(error);
+            }
+        }
+
+        ffi::gtk_ui_manager_ensure_update(ui_manager);
+    }
 }
 
 // ── GObject virtual-method overrides ─────────────────────────────────────────
@@ -273,35 +282,40 @@ unsafe extern "C" fn shell_view_toggled_cb(
 /// Chains up, attaches private data, then connects to the shell view's
 /// "toggled" signal so we can add/remove UI whenever the view activates.
 unsafe extern "C" fn instance_constructed(object: *mut ffi::GObject) {
-    // Chain up to the parent class.
-    let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
-    if let Some(f) = (*parent).constructed {
-        f(object);
-    }
+    unsafe {
+        // Chain up to the parent class.
+        let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
+        if let Some(f) = (*parent).constructed {
+            f(object);
+        }
 
-    // Connect the "toggled" signal of the EShellView we are extending.
-    let extensible = ffi::e_extension_get_extensible(object as *mut c_void);
-    // `GCallback` is `void (*)(void)` — transmute the concrete type to it.
-    let cb: unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject) = shell_view_toggled_cb;
-    ffi::g_signal_connect_data(
-        extensible as *mut c_void,
-        c"toggled".as_ptr(),
-        Some(std::mem::transmute::<
-            unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject),
-            unsafe extern "C" fn(),
-        >(cb)),
-        object as *mut c_void, // user_data = our extension instance
-        None,
-        0, // G_CONNECT_DEFAULT
-    );
+        // Connect the "toggled" signal of the EShellView we are extending.
+        let extensible = ffi::e_extension_get_extensible(object as *mut c_void);
+        // `GCallback` is `void (*)(void)` — transmute the concrete type to it.
+        let cb: unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject) =
+            shell_view_toggled_cb;
+        ffi::g_signal_connect_data(
+            extensible as *mut c_void,
+            c"toggled".as_ptr(),
+            Some(std::mem::transmute::<
+                unsafe extern "C" fn(*mut ffi::EShellView, *mut ffi::GObject),
+                unsafe extern "C" fn(),
+            >(cb)),
+            object as *mut c_void, // user_data = our extension instance
+            None,
+            0, // G_CONNECT_DEFAULT
+        );
+    }
 }
 
 /// `GObjectClass.finalize` override — chains up (private data is freed by the
 /// `g_object_set_data_full` destroy notifier).
 unsafe extern "C" fn instance_finalize(object: *mut ffi::GObject) {
-    let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
-    if let Some(f) = (*parent).finalize {
-        f(object);
+    unsafe {
+        let parent = PARENT_CLASS.load(Ordering::Acquire) as *mut ffi::GObjectClass;
+        if let Some(f) = (*parent).finalize {
+            f(object);
+        }
     }
 }
 
@@ -310,20 +324,22 @@ unsafe extern "C" fn instance_finalize(object: *mut ffi::GObject) {
 /// Initialise the *class* struct.  Called once by GLib when the type is first
 /// used.
 unsafe extern "C" fn class_init(klass: *mut c_void, _data: *mut c_void) {
-    // Save the parent class pointer so we can chain-up from our overrides.
-    PARENT_CLASS.store(
-        ffi::g_type_class_peek_parent(klass) as usize,
-        Ordering::Release,
-    );
+    unsafe {
+        // Save the parent class pointer so we can chain-up from our overrides.
+        PARENT_CLASS.store(
+            ffi::g_type_class_peek_parent(klass) as usize,
+            Ordering::Release,
+        );
 
-    // Override GObjectClass virtual methods.
-    let obj_class = &mut *(klass as *mut ffi::GObjectClass);
-    obj_class.constructed = Some(instance_constructed);
-    obj_class.finalize = Some(instance_finalize);
+        // Override GObjectClass virtual methods.
+        let obj_class = &mut *(klass as *mut ffi::GObjectClass);
+        obj_class.constructed = Some(instance_constructed);
+        obj_class.finalize = Some(instance_finalize);
 
-    // Set the extensible type — the type of object this extension attaches to.
-    let ext_class = &mut *(klass as *mut ffi::EExtensionClass);
-    ext_class.extensible_type = ffi::e_shell_view_get_type();
+        // Set the extensible type — the type of object this extension attaches to.
+        let ext_class = &mut *(klass as *mut ffi::EExtensionClass);
+        ext_class.extensible_type = ffi::e_shell_view_get_type();
+    }
 }
 
 /// Finalise the class struct when the module is unloaded.
@@ -331,18 +347,20 @@ unsafe extern "C" fn class_finalize(_klass: *mut c_void, _data: *mut c_void) {}
 
 /// Initialise a new *instance* struct.  Attaches the Rust private data.
 unsafe extern "C" fn instance_init(instance: *mut c_void, _klass: *mut c_void) {
-    let obj = instance as *mut ffi::GObject;
-    let priv_data = Box::new(Private {
-        current_ui_id: 0,
-        actions_initialized: false,
-        view_ui_def: None,
-    });
-    ffi::g_object_set_data_full(
-        obj,
-        PRIV_KEY.as_ptr(),
-        Box::into_raw(priv_data) as *mut c_void,
-        Some(free_private),
-    );
+    unsafe {
+        let obj = instance as *mut ffi::GObject;
+        let priv_data = Box::new(Private {
+            current_ui_id: 0,
+            actions_initialized: false,
+            view_ui_def: None,
+        });
+        ffi::g_object_set_data_full(
+            obj,
+            PRIV_KEY.as_ptr(),
+            Box::into_raw(priv_data) as *mut c_void,
+            Some(free_private),
+        );
+    }
 }
 
 // ── Public: type registration ─────────────────────────────────────────────────
@@ -351,34 +369,36 @@ unsafe extern "C" fn instance_init(instance: *mut c_void, _klass: *mut c_void) {
 ///
 /// Must be called from `e_module_load`.
 pub unsafe fn register_type(type_module: *mut ffi::GTypeModule) {
-    let parent_type = ffi::e_extension_get_type();
+    unsafe {
+        let parent_type = ffi::e_extension_get_type();
 
-    // Query the parent's class/instance sizes so we can use them verbatim
-    // (our type adds no extra inline fields).
-    let mut query = std::mem::MaybeUninit::<ffi::GTypeQuery>::uninit();
-    ffi::g_type_query(parent_type, query.as_mut_ptr());
-    let query = query.assume_init();
+        // Query the parent's class/instance sizes so we can use them verbatim
+        // (our type adds no extra inline fields).
+        let mut query = std::mem::MaybeUninit::<ffi::GTypeQuery>::uninit();
+        ffi::g_type_query(parent_type, query.as_mut_ptr());
+        let query = query.assume_init();
 
-    let type_info = ffi::GTypeInfo {
-        class_size: query.class_size as u16,
-        base_init: None,
-        base_finalize: None,
-        class_init: Some(class_init),
-        class_finalize: Some(class_finalize),
-        class_data: std::ptr::null(),
-        instance_size: query.instance_size as u16,
-        n_preallocs: 0,
-        instance_init: Some(instance_init),
-        value_table: std::ptr::null(),
-    };
+        let type_info = ffi::GTypeInfo {
+            class_size: query.class_size as u16,
+            base_init: None,
+            base_finalize: None,
+            class_init: Some(class_init),
+            class_finalize: Some(class_finalize),
+            class_data: std::ptr::null(),
+            instance_size: query.instance_size as u16,
+            n_preallocs: 0,
+            instance_init: Some(instance_init),
+            value_table: std::ptr::null(),
+        };
 
-    let type_id = ffi::g_type_module_register_type(
-        type_module,
-        parent_type,
-        c"MShellViewExtension".as_ptr(),
-        &type_info,
-        0, // G_TYPE_FLAG_NONE
-    );
+        let type_id = ffi::g_type_module_register_type(
+            type_module,
+            parent_type,
+            c"MShellViewExtension".as_ptr(),
+            &type_info,
+            0, // G_TYPE_FLAG_NONE
+        );
 
-    TYPE_ID.store(type_id, Ordering::Release);
+        TYPE_ID.store(type_id, Ordering::Release);
+    }
 }
