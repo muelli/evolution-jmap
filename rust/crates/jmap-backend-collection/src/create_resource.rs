@@ -107,7 +107,10 @@ use eds_sys::{
     e_source_get_display_name, e_source_get_uid, e_source_registry_server_ref_credentials_provider,
     e_source_set_parent,
 };
-use gio_sys::GCancellable;
+use gio_sys::{
+    G_IO_ERROR_CANCELLED, G_IO_ERROR_NOT_FOUND, G_IO_ERROR_NOT_SUPPORTED, GCancellable,
+    g_io_error_quark,
+};
 use glib_sys::{GError, GFALSE, GTRUE, g_error_free};
 use jmap_backend_core::connect::Collection;
 use jmap_backend_core::error::{cstring_lossy, invalid_arg_gerror, to_gerror};
@@ -379,12 +382,18 @@ pub fn kind_noun(kind: ChildKind) -> &'static str {
 ///
 /// `None` is "there is no password for this account", which for an account that
 /// names a user becomes [`ConnectError::CredentialsRequired`] and so a prompt. A
-/// lookup that *failed* answers `None` too, and says why on GLib's critical
-/// channel rather than in the returned value: from the caller's side the two are
-/// the same situation — this operation has no password — and the actionable
-/// message for the user is the prompt either way, while the real reason (no
-/// credentials source, libsecret unavailable) is a system fault worth having on
-/// the record.
+/// lookup that *failed* answers `None` too, and says why in a log line rather
+/// than in the returned value: from the caller's side the two are the same
+/// situation, this operation has no password, and the actionable message for
+/// the user is the prompt either way.
+///
+/// **Which channel that line goes to is [`classify_lookup_failure`]'s**, and it
+/// is not a detail. Most of that call's failures are not failures of anything:
+/// an OAuth 2.0 account answers `G_IO_ERROR_NOT_SUPPORTED` on the path that then
+/// works perfectly, and a keyring with nothing in it yet answers
+/// `G_IO_ERROR_NOT_FOUND` on the path that becomes a prompt. Only a lookup that
+/// failed for some other reason (no credentials provider at all, libsecret
+/// unreachable) is the system fault GLib's critical channel exists for.
 ///
 /// `context` names the vfunc for the critical channel — the same lookup serves
 /// [`crate::delete_resource`]'s vfunc, and a log line that named the wrong one
@@ -496,13 +505,28 @@ unsafe fn lookup_password(
     };
 
     if looked_up == GFALSE {
+        // Classified before the message is taken, since taking it frees the
+        // `GError` this reads the domain and code off.
+        // SAFETY: the call failed, so `error` is NULL or a live `GError`.
+        let failure = unsafe { classify_lookup_failure(error) };
         // SAFETY: the call failed, so `error` is NULL or a `GError` ownership of
         // which passed to us; its message is a string the struct owns.
         let message = unsafe { take_message(error) };
-        report_critical(
-            account_id,
-            format!("{context}: the account's credentials could not be looked up: {message}"),
-        );
+        match failure {
+            // Not a fault, and the caller's `None` already says everything the
+            // user needs: a prompt, or a token fetch that does not want a
+            // password in the first place.
+            LookupFailure::NoPassword => tracing::debug!(
+                account_id,
+                context,
+                message,
+                "EDS has no stored password for this account"
+            ),
+            LookupFailure::Fault => report_critical(
+                account_id,
+                format!("{context}: the account's credentials could not be looked up: {message}"),
+            ),
+        }
         return None;
     }
 
@@ -526,6 +550,72 @@ unsafe fn lookup_password(
     password
 }
 
+/// What a `FALSE` from `e_source_credentials_provider_lookup_sync` means.
+///
+/// The distinction exists because a great many of that call's failures are not
+/// failures of anything: see [`classify_lookup_failure`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LookupFailure {
+    /// EDS has no password for this account, and that is an ordinary state
+    /// rather than a fault. The caller's answer is `None` either way; what
+    /// changes is which log channel says so.
+    NoPassword,
+    /// Something that should not have failed did, and GLib's critical channel
+    /// is where a system fault belongs.
+    Fault,
+}
+
+/// Which of the two a failed lookup is, by domain and code rather than by
+/// message text.
+///
+/// Three `G_IO_ERROR` codes are ordinary, each for its own reason found in
+/// EDS's source:
+///
+/// - `G_IO_ERROR_NOT_FOUND` is what
+///   `e_source_credentials_provider_impl_password_lookup_sync` sets, verbatim,
+///   when the keyring holds nothing for the source yet. That is the state
+///   [`stored_password_of`] documents as becoming a credentials prompt.
+/// - `G_IO_ERROR_NOT_SUPPORTED` is the abstract
+///   `ESourceCredentialsProviderImpl` default, and it is what an **OAuth 2.0**
+///   account answers: `e_source_credentials_provider_impl_oauth2` matches the
+///   source through `can_process` and then overrides `can_store` and
+///   `can_prompt` only, leaving `lookup_sync` at the base class's refusal. An
+///   OAuth 2.0 account has no password by construction, and
+///   [`crate::authenticate::login_of`] goes on to fetch a token and succeed, so
+///   this arrives on the *success* path of every create and every delete such
+///   an account performs.
+/// - `G_IO_ERROR_CANCELLED` is the user pressing Stop, which reaches libsecret
+///   because the vfunc's own `GCancellable` is passed straight through.
+///
+/// Everything else keeps its critical, including a `FALSE` carrying no `GError`
+/// at all. That shape is what the provider's own `g_return_val_if_fail`
+/// produces when it has no implementation to ask, not even the password
+/// fallback.
+///
+/// # Safety
+///
+/// `error` must be NULL or a valid `GError` that outlives the call.
+unsafe fn classify_lookup_failure(error: *const GError) -> LookupFailure {
+    if error.is_null() {
+        return LookupFailure::Fault;
+    }
+
+    // SAFETY: a live `GError` by the contract above; `g_io_error_quark` takes
+    // no arguments.
+    let (domain, code) = unsafe { ((*error).domain, (*error).code) };
+    // SAFETY: as above.
+    if domain != unsafe { g_io_error_quark() } {
+        return LookupFailure::Fault;
+    }
+
+    match code {
+        G_IO_ERROR_NOT_FOUND | G_IO_ERROR_NOT_SUPPORTED | G_IO_ERROR_CANCELLED => {
+            LookupFailure::NoPassword
+        }
+        _ => LookupFailure::Fault,
+    }
+}
+
 /// The message of a `GError` this call owns, and then frees.
 ///
 /// # Safety
@@ -542,4 +632,103 @@ unsafe fn take_message(error: *mut GError) -> String {
     unsafe { g_error_free(error) };
 
     message.unwrap_or_else(|| "EDS gave no message".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+
+    use gio_sys::{G_IO_ERROR_FAILED, g_dbus_error_quark};
+
+    use super::*;
+
+    /// A real `GError` rather than a hand-rolled struct, since
+    /// [`classify_lookup_failure`] reads its `domain` and `code` fields
+    /// directly. The same helper `jmap_backend_core::oauth2`'s tests use.
+    fn error(domain: glib_sys::GQuark, code: i32) -> *mut GError {
+        let message = CString::new("boom").unwrap();
+        // SAFETY: a valid domain and a NUL-terminated message; every caller
+        // below frees the result.
+        unsafe { glib_sys::g_error_new_literal(domain, code, message.as_ptr()) }
+    }
+
+    fn classify(domain: glib_sys::GQuark, code: i32) -> LookupFailure {
+        let error = error(domain, code);
+        // SAFETY: a live `GError` built above and freed below.
+        let failure = unsafe { classify_lookup_failure(error) };
+        // SAFETY: as above; nothing else holds it.
+        unsafe { g_error_free(error) };
+        failure
+    }
+
+    /// The two shapes EDS answers for an account it simply has no password
+    /// for. `NOT_FOUND` is what
+    /// `e_source_credentials_provider_impl_password_lookup_sync` sets when
+    /// the keyring holds nothing yet; `NOT_SUPPORTED` is the abstract
+    /// `ESourceCredentialsProviderImpl` default, which is what an OAuth 2.0
+    /// account gets, because the OAuth 2.0 impl matches `can_process` and
+    /// then does not override `lookup_sync` at all.
+    ///
+    /// Neither is a fault: the first becomes a credentials prompt and the
+    /// second is followed by a perfectly good token fetch. Reporting them on
+    /// GLib's critical channel puts a `g_critical` in the log of every
+    /// create and every delete that then succeeds, and aborts the registry
+    /// outright under `G_DEBUG=fatal-criticals`.
+    #[test]
+    fn eds_having_no_password_for_an_account_is_not_a_fault() {
+        for code in [G_IO_ERROR_NOT_FOUND, G_IO_ERROR_NOT_SUPPORTED] {
+            assert_eq!(
+                classify(unsafe { g_io_error_quark() }, code),
+                LookupFailure::NoPassword,
+                "expected G_IO_ERROR code {code} to read as no password"
+            );
+        }
+    }
+
+    /// A lookup the user cancelled is not a fault either. Reachable because
+    /// the vfunc's own `GCancellable` goes straight through to libsecret.
+    #[test]
+    fn a_cancelled_lookup_is_not_a_fault() {
+        assert_eq!(
+            classify(unsafe { g_io_error_quark() }, G_IO_ERROR_CANCELLED),
+            LookupFailure::NoPassword
+        );
+    }
+
+    /// Everything else stays on the critical channel, which is the whole
+    /// point of narrowing it: a lookup that failed for a reason EDS did not
+    /// name as one of the above is a system fault worth a report.
+    #[test]
+    fn any_other_failure_is_still_a_fault() {
+        assert_eq!(
+            classify(unsafe { g_io_error_quark() }, G_IO_ERROR_FAILED),
+            LookupFailure::Fault
+        );
+    }
+
+    /// The domain is compared as well as the code, and not as
+    /// belt-and-braces: `G_IO_ERROR` and `G_DBUS_ERROR` are different
+    /// enumerations, so a code alone would read some unrelated bus failure
+    /// as "this account has no password" and silence it.
+    #[test]
+    fn the_same_code_in_another_domain_is_a_fault() {
+        assert_eq!(
+            classify(unsafe { g_dbus_error_quark() }, G_IO_ERROR_NOT_FOUND),
+            LookupFailure::Fault
+        );
+    }
+
+    /// A `FALSE` with no `GError` at all is what
+    /// `e_source_credentials_provider_lookup_sync`'s own
+    /// `g_return_val_if_fail` produces when the provider has no
+    /// implementation to ask, including the password fallback. That really
+    /// is broken, and it keeps its critical.
+    #[test]
+    fn a_failure_with_no_gerror_is_a_fault() {
+        // SAFETY: NULL is this function's documented input.
+        assert_eq!(
+            unsafe { classify_lookup_failure(ptr::null()) },
+            LookupFailure::Fault
+        );
+    }
 }
