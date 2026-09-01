@@ -36,7 +36,7 @@
 //!
 //! `docs/manual-test-live-server.md` has the full recipe, including how to
 //! provision the disposable Stalwart VM this is meant to run against first
-//! (`infra/gcp/create-stalwart.sh`).
+//! (the harness repository's `harness/gcp/create-stalwart.sh`).
 //!
 //! Gated twice over — the `live-server` feature, so a plain `cargo test`
 //! never even compiles this file, and `#[ignore]`, so `cargo test --features
@@ -216,14 +216,14 @@ fn calendars_capable_accounts_can_list_their_calendars() {
     client.calendars(&account_id).unwrap();
 }
 
-/// Credentials for the one test in this file that writes, kept deliberately
+/// Credentials for the tests in this file that write, kept deliberately
 /// separate from [`connect`]'s: those are handed to every read-only test, so
 /// whatever account someone points them at (their own mailbox, an
 /// operator's shared test login) must never be the one a `Mailbox/set`
 /// lands on. This account exists only if `JMAP_LIVE_SERVER_WRITE_USER`/
 /// `_PASSWORD` are set to a login seeded for exactly this purpose — see
 /// `docs/manual-test-live-server.md`'s "write-path test" section for the
-/// `infra/stalwart/stw seed` recipe. Absent, not just empty, so the base
+/// `stw seed` recipe. Absent, not just empty, so the base
 /// read-only suite runs without ever needing them: this returns `None`
 /// rather than panicking, and the caller skips.
 fn connect_for_write() -> Option<Client> {
@@ -247,7 +247,7 @@ fn connect_for_write() -> Option<Client> {
 /// delivery, not just that `EmailSubmission/set` was accepted. Same
 /// present-or-skip shape as `connect_for_write`; see
 /// `docs/manual-test-live-server.md`'s "send-email test" section for how to
-/// seed it (`infra/stalwart/stw seed`, same domain, a different local part).
+/// seed it (`stw seed`, same domain, a different local part).
 fn connect_recipient() -> Option<Client> {
     let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
     let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
@@ -480,7 +480,7 @@ fn address_book_create_then_destroy_round_trips_through_the_real_api() {
 /// Also checks `Client::all_changes` after each mutation, same as
 /// [`mailbox_create_rename_then_destroy_round_trips_through_the_real_api`]:
 /// `jmap-book-sync`'s own polling loop drives `ContactCard/changes`
-/// (`lib.rs:153`), and a real server's state tokens and
+/// (`lib.rs:206`), and a real server's state tokens and
 /// created/updated/destroyed classification for this type had no
 /// live-server coverage until now.
 ///
@@ -713,7 +713,7 @@ fn calendar_create_then_destroy_round_trips_through_the_real_api() {
 ///
 /// Also checks `Client::event_query` right after the create and right after
 /// the destroy: `jmap-cal-sync::list_existing_sync` enumerates a calendar via
-/// exactly `CalendarEventQueryFilter::in_calendar` (`lib.rs:98`), the
+/// exactly `CalendarEventQueryFilter::in_calendar` (`lib.rs:101`), the
 /// backend's actual listing path, which — unlike `get`/`set`/`changes`
 /// above — had no live-server coverage at all before this test. Mirrors the
 /// `ContactCard/query` check
