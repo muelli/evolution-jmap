@@ -12,6 +12,9 @@ publish = false
 # As in eds-sys: build.rs does the linking, so cargo must not invent `-levo-sys`.
 links = "evolution-shell"
 
+[lints]
+workspace = true
+
 [dependencies]
 # Every EDS and GLib type in these headers comes from there rather than being
 # generated a second time; see build.rs for what that costs and buys.

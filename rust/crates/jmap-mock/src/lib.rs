@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![forbid(unsafe_code)]
+
 //! Stateful in-memory mock JMAP server.
 //!
 //! Serves a subset of JMAP sufficient for exercising the Evolution JMAP

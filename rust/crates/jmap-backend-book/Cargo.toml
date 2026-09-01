@@ -10,6 +10,9 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [lib]
 name = "jmap_backend_book"
 # rlib only. What EDS dlopens (installed as libebookbackendjmap.so) is the

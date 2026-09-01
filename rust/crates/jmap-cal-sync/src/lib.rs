@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![forbid(unsafe_code)]
+
 //! Calendar synchronisation, in the shape `ECalMetaBackend` asks for.
 //!
 //! One EDS calendar source is one JMAP calendar, and this crate is the whole

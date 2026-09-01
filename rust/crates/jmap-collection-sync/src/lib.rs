@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![forbid(unsafe_code)]
+
 //! What one JMAP account fans out into.
 //!
 //! M6's collection backend is handed a single `ESource` — one account, one

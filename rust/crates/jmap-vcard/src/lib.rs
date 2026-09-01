@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![forbid(unsafe_code)]
+
 //! JSContact ↔ vCard for the Evolution address book backend.
 //!
 //! `EBookMetaBackend` speaks `EContact`, which is built from and rendered to

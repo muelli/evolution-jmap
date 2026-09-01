@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#![forbid(unsafe_code)]
+
 //! Address book synchronisation, in the shape `EBookMetaBackend` asks for.
 //!
 //! One EDS address book source is one JMAP address book, and this crate is

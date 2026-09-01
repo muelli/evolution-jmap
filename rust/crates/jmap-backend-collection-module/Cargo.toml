@@ -10,6 +10,9 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [lib]
 name = "jmap_backend_collection_module"
 # cdylib and nothing else, which is the point of the crate: `e_module_load` is

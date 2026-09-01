@@ -34,6 +34,42 @@ cargo fmt --check
 echo "== clippy (-D warnings) =="
 cargo clippy --all-targets --locked -- -D warnings
 
+echo "== unsafe-count meter =="
+# rustc/clippy already gate *known* unsafe idioms (forbid(unsafe_code) on the
+# pure crates, deny(unsafe_op_in_unsafe_fn) everywhere); this catches the
+# thing they can't: a crate's unsafe surface growing silently. Growth stays
+# possible, it just needs unsafe-baseline.txt updated in the same commit.
+unsafe_meter_fail=0
+unsafe_meter_pattern='unsafe (fn|impl|\{|extern)'
+while read -r crate baseline_count; do
+    case "$crate" in
+        ""|"#"*) continue ;;
+    esac
+    crate_src="crates/$crate/src"
+    if [ ! -d "$crate_src" ]; then
+        echo "FAIL: unsafe-baseline.txt names '$crate', which has no crates/$crate/src." >&2
+        unsafe_meter_fail=1
+        continue
+    fi
+    actual_count=$(grep -rEo "$unsafe_meter_pattern" "$crate_src" 2>/dev/null | wc -l)
+    if [ "$actual_count" -gt "$baseline_count" ]; then
+        echo "FAIL: $crate grew from $baseline_count to $actual_count unsafe sites." >&2
+        echo "If intentional, update its line in unsafe-baseline.txt in this commit." >&2
+        unsafe_meter_fail=1
+    fi
+done < unsafe-baseline.txt
+for crate_dir in crates/*/; do
+    crate=$(basename "$crate_dir")
+    if ! grep -qE "^$crate " unsafe-baseline.txt; then
+        echo "FAIL: crates/$crate has no line in unsafe-baseline.txt; add one." >&2
+        unsafe_meter_fail=1
+    fi
+done
+if [ "$unsafe_meter_fail" -ne 0 ]; then
+    exit 1
+fi
+echo "-- unsafe-count meter: no crate exceeds its baseline --"
+
 echo "== tests =="
 cargo test --locked
 

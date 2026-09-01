@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Baseline for ci/checks.sh's unsafe-count meter. One line per crate under
+# crates/*/src, counting grep -Eo 'unsafe (fn|impl|\{|extern)' sites. A
+# crate's actual count growing past its baseline fails the gate; regenerate
+# with the loop in ci/checks.sh's meter step and commit the new numbers in
+# the same commit as the unsafe code that earned them.
+eds-sys 24
+evo-sys 0
+example-module 64
+jmap-backend-book 87
+jmap-backend-book-module 4
+jmap-backend-cal 131
+jmap-backend-cal-module 4
+jmap-backend-collection 230
+jmap-backend-collection-module 4
+jmap-backend-core 341
+jmap-book-sync 0
+jmap-cal-sync 0
+jmap-client 0
+jmap-collection-sync 0
+jmap-config 220
+jmap-config-module 4
+jmap-functional 1
+jmap-ical 0
+jmap-mail 483
+jmap-mail-sync 0
+jmap-mock 0
+jmap-proto 0
+jmap-vcard 0
+po-compile 0

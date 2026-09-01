@@ -13,6 +13,9 @@ publish = false
 # invent `-leds-sys` and does not rerun the build script on every file touch.
 links = "evolution-data-server"
 
+[lints]
+workspace = true
+
 [dependencies]
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
