@@ -139,3 +139,99 @@ first grep's wording wouldn't. Verified the higher-risk findings (the M9
 Xvfb-tier claim, the config-lookup "not yet proven" section) by reading
 `ci/gui-smoke.sh` and `jmap-functional/tests/config-lookup.rs` directly
 rather than trusting the comment's own framing.
+
+## 2026-09-01 — re-audit after the item 33(d) sweep and the repository split
+
+Re-checked this file's own 2026-08-19 findings against today's tree (all
+still hold; the code they describe has not moved) and swept `rust/`,
+`cmake/` and `ci/` fresh for the two things that changed since: the item
+33(d) sweep (dozens of module headers rewritten "to state the fact instead
+of citing the log") and the 2026-09-01 repository split (every `infra/`
+path moved to the harness repository's `harness/`, and the harness
+bookkeeping files moved out of this repository entirely). Grepped for
+TODO/FIXME/XXX, "not yet"/"unwritten"/"has yet to" phrasings (same list as
+the first pass, all findings already-known-fine — see below), `.rs:<N>`
+file:line citations in comments, and `infra/`/`harness/`/`docs/ROADMAP.md`
+path references.
+
+### Fixed
+
+1. **`jmap-client/tests/live_server.rs`, three citations of
+   `infra/gcp/create-stalwart.sh` and `infra/stalwart/stw seed`** — both
+   scripts moved to the harness repository's `harness/gcp/` and
+   `harness/stalwart/` in the split; `infra/` no longer exists anywhere.
+   Reworded to name the harness repository instead of a path this
+   repository cannot resolve.
+2. **`jmap-client/tests/live_server.rs:483` and `:716`, two drifted
+   `lib.rs:<N>` citations** into `jmap-book-sync`'s and `jmap-cal-sync`'s
+   `list_existing`/`get_changes`: the `ContactCard/changes` citation named
+   `lib.rs:153`, a line inside an unrelated function, when the
+   `all_changes(&self.account_id, "ContactCard", since)` call it describes
+   is at `lib.rs:206`; the `CalendarEventQueryFilter::in_calendar` citation
+   named `lib.rs:98` (the line above the call) instead of `lib.rs:101` (the
+   call itself). Both corrected to the current line numbers.
+3. **`jmap-client/tests/live_server.rs:219`'s doc on `connect_for_write`**
+   said "Credentials for the one test in this file that writes" — the
+   function is called by all eight mutating tests (grepped every call
+   site), not one. This reads like leftover text from when the live-server
+   suite had a single write test, before it grew. Reworded to "the tests…
+   that write".
+4. **`ci/checks.sh`'s repository-split boundary-lint comment** described
+   itself as "not yet an enforced boundary… a progress meter for the
+   sweep… flip to hard-fail only once the count is zero" — but the code
+   right below it already does hard-fail (`exit 1` on any match), and the
+   failure message a few lines down says outright "the sweep reached zero
+   on 2026-08-31 and this lint now enforces the boundary." The header
+   comment was describing the pre-enforcement state of its own check,
+   contradicting the code and the message beneath it. Rewritten to state
+   what the check does now.
+5. **`docs/manual-test-live-server.md`** — same `infra/` drift as (1), five
+   occurrences, plus two stale test counts: "A fifth test," describing
+   `send_email_delivers_to_a_second_account_on_the_real_server`, when it
+   is preceded by a list of seven (not four) write tests; and "The six
+   mutating tests are skipped," when that list names seven. Reworded the
+   count-dependent sentence to not name a number at all, so it cannot drift
+   again the same way, and corrected "six" to "seven". Out of this item's
+   named scope (`rust/`, `cmake/`, `ci/`) but fixed alongside since it is
+   the doc these very comments point readers to, describing the same
+   drift, at no separate verification cost.
+
+### Looked at, not touched
+
+- `po-compile/tests/gettext.rs`'s `#: rust/crates/jmap-mail/src/provider.rs:65`
+  line inside a `.po` fixture string: the real line is now 67. Not a
+  comment about this project's code, a piece of realistic-looking `.po`
+  syntax the test feeds to glibc's `gettext`, which never reads or checks
+  gettext reference comments; the fixture's correctness does not depend on
+  the number. Left as is.
+- 33(d)'s rewrites: sampled `jmap-mail` (`push.rs`, `store.rs`) and
+  `jmap-backend-cal` (`backend.rs`) directly against `git show` for the
+  commits that touched them — each is a mechanical citation drop with no
+  behaviour-claim change, matching the sweep's stated goal. Did not diff
+  every one of the ~20 commits; the sampled ones give no reason to expect
+  the others differ in kind.
+- Every "not yet"/"unwritten"/"has yet to" hit from a fresh grep matches
+  the first pass's "looked suspicious but fine" list — deliberate
+  Camel/keyfile absent-vs-empty semantics, literal JSON-pointer/tag test
+  fixtures, current parsing behaviour. No new hits outside that set.
+- `// SAFETY:` comments (2242 of them across ~80 files): grepped for
+  `file:line`-style citations that could have drifted the same way the
+  `live_server.rs` ones had; none exist; a SAFETY comment cites the
+  invariant it relies on, not a location. Verifying that each invariant
+  still holds against today's code is the recurring FFI/unsafe audit's own
+  job (Track A5/A6, the periodic re-audit that is item 42 this round,
+  explicitly reserved for escalation) and out of this pass's reach at this
+  scale; not attempted here.
+- No `milestones.rs`, `docs/NIGHT-LOG`, `docs/BACKLOG`, `AGY-TASKS` or
+  other harness-bookkeeping path reference found anywhere in `rust/`,
+  `cmake/` or `ci/` — the boundary lint's own zero count still holds.
+
+### Method
+
+Same grep list as the first pass, plus three new sweeps this round's own
+risk areas called for: `grep -rEn '[A-Za-z0-9_/-]+\.rs:[0-9]+'` across
+`rust/crates/**/*.rs` for file:line citations, checked each one against the
+file and line it names; `grep -rn 'infra/'` across the whole repository;
+and a read of every `item 33(d)` commit's `--stat` plus a sample of the
+larger diffs. `ci/checks.sh` and `cmake/` had no hits from any grep in this
+pass.
