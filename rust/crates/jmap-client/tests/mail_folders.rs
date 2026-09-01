@@ -367,3 +367,67 @@ fn destroying_a_mailbox_that_is_not_there_is_not_found() {
 
     assert_eq!(refusal(destroyed), "notFound");
 }
+
+/// Track E Phase C step 2: `shareWith` on `Mailbox/set` grants cross-account
+/// access in the mock, the same enforcement `AddressBook/get` already has,
+/// adapted to `MailboxRights` (matching the live Stalwart probe recorded in
+/// the work queue, not cited here per the boundary lint): before any grant a
+/// foreign principal gets `forbidden` outright on the owner's account; after
+/// a grant on one mailbox, that principal's own `Mailbox/get` against the
+/// owner's account returns only the shared mailbox, with `myRights` computed
+/// from the grant, while the owner's own view is unaffected.
+#[test]
+fn mailbox_shared_with_a_principal_is_visible_only_to_them() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder()
+        .bearer_token("alice-token")
+        .bearer_token_as("bob-token", bob.clone())
+        .start();
+    let account_id = server.account_id();
+    let (_inbox, archive) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let inbox = account.seed_mailbox("Inbox", Some(role::INBOX));
+        let archive = account.seed_mailbox("Archive", None);
+        (inbox, archive)
+    };
+
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+    let bob_client = Client::connect(server.origin(), Credentials::bearer("bob-token")).unwrap();
+
+    match bob_client.mailbox_get(&account_id) {
+        Err(Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, "forbidden");
+        }
+        other => panic!("expected forbidden before any grant, got {other:?}"),
+    }
+
+    alice
+        .mailbox_update(
+            &account_id,
+            &archive,
+            json!({"shareWith": {bob.as_str(): {"mayReadItems": true, "mayAddItems": true}}}),
+        )
+        .unwrap();
+
+    let bob_mailboxes = bob_client.mailbox_get(&account_id).unwrap().list;
+    assert_eq!(
+        bob_mailboxes.len(),
+        1,
+        "bob only sees the shared mailbox, not Inbox"
+    );
+    assert_eq!(bob_mailboxes[0].id.as_ref(), Some(&archive));
+    let rights = bob_mailboxes[0]
+        .my_rights
+        .as_ref()
+        .expect("myRights is computed from the grant");
+    assert_eq!(rights.may_read_items, Some(true));
+    assert_eq!(rights.may_add_items, Some(true));
+
+    assert_eq!(
+        alice.mailbox_get(&account_id).unwrap().list.len(),
+        2,
+        "the owner's own view still sees both mailboxes"
+    );
+}

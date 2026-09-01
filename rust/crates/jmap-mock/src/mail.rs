@@ -27,9 +27,35 @@ const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 // ── Method handlers ──────────────────────────────────────────────────────────
 
-pub fn mailbox_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+/// `caller` is the identity `Mailbox/get`'s request carried, as resolved by
+/// [`crate::auth::AuthConfig::identity_for`] — `None` (no identity bound to
+/// the credential) reads as "this account's own owner", matching every test
+/// that predates sharing. A caller who *is* a distinct principal only sees
+/// mailboxes that principal's own `shareWith` entry grants, and gets
+/// `forbidden` outright if the account shares nothing with them at all
+/// (same enforcement as `AddressBook/get`, verified against a live Stalwart
+/// server: Track E Phase C step 1's findings, recorded in the work queue).
+pub fn mailbox_get(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
+
+    let is_owner =
+        caller.is_none_or(|caller| account.current_user_principal_id.as_ref() == Some(caller));
+    if !is_owner {
+        let caller = caller.expect("is_owner is false only when caller is Some");
+        let shared_with_caller = account
+            .mailboxes
+            .iter()
+            .any(|(_, mailbox)| mailbox_rights_for(mailbox, caller).is_some());
+        if !shared_with_caller {
+            return Err(MethodError::new(error::method::FORBIDDEN)
+                .with_description("no mailbox in this account is shared with you"));
+        }
+    }
 
     // Message counts are derived, not stored.
     let counted: Vec<Mailbox> = account
@@ -64,7 +90,13 @@ pub fn mailbox_get(state: &mut ServerState, arguments: Value) -> Result<Value, M
         .collect();
 
     let (list, not_found) = match &request.ids {
-        None => (counted, Vec::new()),
+        None => {
+            let list = counted
+                .iter()
+                .filter_map(|mailbox| visible_mailbox(mailbox, is_owner, caller))
+                .collect();
+            (list, Vec::new())
+        }
         Some(ids) => {
             let mut list = Vec::new();
             let mut not_found = Vec::new();
@@ -72,8 +104,9 @@ pub fn mailbox_get(state: &mut ServerState, arguments: Value) -> Result<Value, M
                 match counted
                     .iter()
                     .find(|mailbox| mailbox.id.as_ref() == Some(id))
+                    .and_then(|mailbox| visible_mailbox(mailbox, is_owner, caller))
                 {
-                    Some(mailbox) => list.push(mailbox.clone()),
+                    Some(mailbox) => list.push(mailbox),
                     None => not_found.push(id.clone()),
                 }
             }
@@ -87,6 +120,30 @@ pub fn mailbox_get(state: &mut ServerState, arguments: Value) -> Result<Value, M
         list,
         not_found,
     })
+}
+
+/// The rights `mailbox.share_with` grants `principal`, or `None` if it
+/// grants them nothing (including "not shared at all").
+fn mailbox_rights_for(
+    mailbox: &Mailbox,
+    principal: &Id,
+) -> Option<jmap_proto::mail::MailboxRights> {
+    mailbox.share_with.as_ref()?.get(principal).cloned()
+}
+
+/// The owner sees every mailbox unchanged, exactly as before sharing
+/// existed. A foreign caller sees a mailbox only if it is shared with them,
+/// with `myRights` replaced by the grant itself rather than whatever the
+/// owner's own `myRights` happened to be.
+fn visible_mailbox(mailbox: &Mailbox, is_owner: bool, caller: Option<&Id>) -> Option<Mailbox> {
+    if is_owner {
+        return Some(mailbox.clone());
+    }
+    let caller = caller.expect("is_owner is false only when caller is Some");
+    let rights = mailbox_rights_for(mailbox, caller)?;
+    let mut visible = mailbox.clone();
+    visible.my_rights = Some(rights);
+    Some(visible)
 }
 
 /// `Mailbox/set` (RFC 8621 §2.5): making, changing and removing a folder.
