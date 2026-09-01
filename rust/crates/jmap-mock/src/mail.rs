@@ -9,7 +9,7 @@ use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImportRequest, EmailImportResponse,
     EmailQueryFilter, EmailSubmission, EmailSubmissionSetRequest, Envelope, EnvelopeAddress,
-    Identity, Mailbox, email_import_error,
+    Identity, Mailbox, VacationResponse, email_import_error,
 };
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -632,6 +632,144 @@ pub fn identity_get(state: &mut ServerState, arguments: Value) -> Result<Value, 
         state: account.identities.state(),
         list,
         not_found,
+    })
+}
+
+/// `VacationResponse/get` (RFC 8621 §8.1): the singleton always exists, so an
+/// empty `ids: null` request or one naming `"singleton"` both find it; any
+/// other id is simply not found, the same as `Mailbox/get` with a bogus id.
+pub fn vacation_response_get(
+    state: &mut ServerState,
+    arguments: Value,
+) -> Result<Value, MethodError> {
+    let request: GetRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let mut list = Vec::new();
+    let mut not_found = Vec::new();
+    match &request.ids {
+        None => list.extend(
+            account
+                .vacation_response
+                .iter()
+                .map(|(_, vacation)| vacation.clone()),
+        ),
+        Some(ids) => {
+            for id in ids {
+                match account.vacation_response.get(id) {
+                    Some(vacation) => list.push(vacation.clone()),
+                    None => not_found.push(id.clone()),
+                }
+            }
+        }
+    }
+
+    to_result(&GetResponse {
+        account_id: request.account_id,
+        state: account.vacation_response.state(),
+        list,
+        not_found,
+    })
+}
+
+/// `VacationResponse/set` (RFC 8621 §8.1): "This is a singleton type… A
+/// client MUST NOT attempt to create or destroy" it, so every entry in
+/// `create` and `destroy` is refused with a `singleton` `SetError` before
+/// anything is touched; `update` is the only mutation the store ever sees.
+pub fn vacation_response_set(
+    state: &mut ServerState,
+    arguments: Value,
+) -> Result<Value, MethodError> {
+    let request: SetRequest<VacationResponse> = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let old_state = account.vacation_response.state();
+    if let Some(expected) = &request.if_in_state
+        && expected != &old_state
+    {
+        return Err(MethodError::new(error::method::STATE_MISMATCH));
+    }
+
+    let not_created: BTreeMap<String, SetError> = request
+        .create
+        .unwrap_or_default()
+        .into_keys()
+        .map(|creation_id| {
+            (
+                creation_id,
+                SetError::new(error::set::SINGLETON)
+                    .with_description("VacationResponse cannot be created, it always exists"),
+            )
+        })
+        .collect();
+    let not_destroyed: BTreeMap<Id, SetError> = request
+        .destroy
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| {
+            (
+                id,
+                SetError::new(error::set::SINGLETON)
+                    .with_description("VacationResponse cannot be destroyed"),
+            )
+        })
+        .collect();
+
+    let mut not_updated: BTreeMap<Id, SetError> = BTreeMap::new();
+    let mut to_update: Vec<(Id, VacationResponse)> = Vec::new();
+    for (id, patch) in request.update.unwrap_or_default() {
+        let Some(existing) = account.vacation_response.get(&id) else {
+            not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
+            continue;
+        };
+        let Some(patch_map) = patch.as_object() else {
+            not_updated.insert(id, SetError::new(error::set::INVALID_PATCH));
+            continue;
+        };
+        let mut value = serde_json::to_value(existing).map_err(|e| {
+            MethodError::new(error::method::SERVER_FAIL).with_description(e.to_string())
+        })?;
+        let patched = match apply_patch(&mut value, patch_map)
+            .map_err(|message| SetError::new(error::set::INVALID_PATCH).with_description(message))
+            .and_then(|()| {
+                serde_json::from_value::<VacationResponse>(value).map_err(|e| {
+                    SetError::new(error::set::INVALID_PATCH).with_description(e.to_string())
+                })
+            }) {
+            Ok(patched) => patched,
+            Err(set_error) => {
+                not_updated.insert(id, set_error);
+                continue;
+            }
+        };
+        if patched.id.as_ref() != Some(&id) {
+            not_updated.insert(
+                id,
+                SetError::new(error::set::INVALID_PROPERTIES).with_description("id is immutable"),
+            );
+            continue;
+        }
+        to_update.push((id, patched));
+    }
+
+    let mut updated: BTreeMap<Id, Option<VacationResponse>> = BTreeMap::new();
+    account.vacation_response.transaction(|transaction| {
+        for (id, patched) in to_update {
+            transaction.update(&id, patched);
+            updated.insert(id, None);
+        }
+    });
+
+    to_result(&SetResponse {
+        account_id: request.account_id,
+        old_state: Some(old_state),
+        new_state: account.vacation_response.state(),
+        created: None,
+        updated: (!updated.is_empty()).then_some(updated),
+        destroyed: None,
+        not_created: (!not_created.is_empty()).then_some(not_created),
+        not_updated: (!not_updated.is_empty()).then_some(not_updated),
+        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
     })
 }
 

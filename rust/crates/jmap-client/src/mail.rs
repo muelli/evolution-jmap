@@ -8,14 +8,16 @@ use std::collections::BTreeMap;
 use jmap_proto::error::SetError;
 use jmap_proto::mail::{
     Email, EmailImport, EmailImportRequest, EmailImportResponse, EmailQueryFilter, EmailSubmission,
-    EmailSubmissionSetRequest, Envelope, Identity, Mailbox,
+    EmailSubmissionSetRequest, Envelope, Identity, Mailbox, VacationResponse,
 };
 use jmap_proto::methods::{
     Comparator, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
     UploadResponse,
 };
 use jmap_proto::request::{Request, ResultReference};
-use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION};
+use jmap_proto::session::{
+    CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
+};
 use jmap_proto::{Id, State, UtcDate};
 use serde_json::Value;
 
@@ -228,6 +230,49 @@ impl Client {
         let arguments =
             self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Mailbox/set", request)?;
         Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// Fetch the account's `VacationResponse` (RFC 8621 §8.1).
+    ///
+    /// Returned as the object itself rather than a list or a [`GetResponse`]:
+    /// this is a singleton, so `list` always holds exactly the one object a
+    /// server that follows RFC 8621 answers even before any client has ever
+    /// set anything.
+    pub fn vacation_response_get(&self, account_id: &Id) -> Result<VacationResponse, Error> {
+        let arguments = self.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_VACATION_RESPONSE],
+            "VacationResponse/get",
+            &GetRequest::all(account_id.clone()),
+        )?;
+        let response: GetResponse<VacationResponse> = serde_json::from_value(arguments)?;
+        response.list.into_iter().next().ok_or_else(|| {
+            Error::Protocol("server answered VacationResponse/get with no singleton".to_owned())
+        })
+    }
+
+    /// Change the vacation responder (`VacationResponse/set` update — RFC
+    /// 8621 §8.1 forbids create and destroy outright, so this is the only
+    /// mutation the singleton allows).
+    pub fn vacation_response_update(&self, account_id: &Id, patch: Value) -> Result<(), Error> {
+        let id: Id = "singleton".into();
+        let request =
+            SetRequest::<VacationResponse>::new(account_id.clone()).update(id.clone(), patch);
+        let arguments = self.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_VACATION_RESPONSE],
+            "VacationResponse/set",
+            &request,
+        )?;
+        let response: SetResponse<VacationResponse> = serde_json::from_value(arguments)?;
+        if response
+            .updated
+            .as_ref()
+            .is_some_and(|updated| updated.contains_key(&id))
+        {
+            return Ok(());
+        }
+        Err(crate::contacts::set_failure(
+            response.not_updated.as_ref().and_then(|map| map.get(&id)),
+        ))
     }
 
     /// `Email/query`: matching email ids.
