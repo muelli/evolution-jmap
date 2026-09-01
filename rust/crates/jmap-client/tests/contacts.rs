@@ -305,3 +305,67 @@ fn contact_query_by_addressbook() {
         .ids;
     assert_eq!(by_text, work_ids);
 }
+
+/// Track E Phase C step 2: `shareWith` on `AddressBook/set` actually grants
+/// cross-account access in the mock, matching the live Stalwart probe
+/// (`docs` findings in the work queue, not cited here per the boundary
+/// lint): before any grant a foreign principal gets `forbidden` outright on
+/// the owner's account; after a grant on one address book, that principal's
+/// own `AddressBook/get` against the owner's account returns only the
+/// shared book, with `myRights` computed from the grant, while the owner's
+/// own view is unaffected.
+#[test]
+fn address_book_shared_with_a_principal_is_visible_only_to_them() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder()
+        .bearer_token("alice-token")
+        .bearer_token_as("bob-token", bob.clone())
+        .start();
+    let account_id = server.account_id();
+    let (_personal, work) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let personal = account.seed_address_book("Personal", true);
+        let work = account.seed_address_book("Work", false);
+        (personal, work)
+    };
+
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+    let bob_client = Client::connect(server.origin(), Credentials::bearer("bob-token")).unwrap();
+
+    match bob_client.address_books(&account_id) {
+        Err(Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, "forbidden");
+        }
+        other => panic!("expected forbidden before any grant, got {other:?}"),
+    }
+
+    alice
+        .address_book_update(
+            &account_id,
+            &work,
+            json!({"shareWith": {bob.as_str(): {"mayRead": true, "mayWrite": true}}}),
+        )
+        .unwrap();
+
+    let bob_books = bob_client.address_books(&account_id).unwrap();
+    assert_eq!(
+        bob_books.len(),
+        1,
+        "bob only sees the shared book, not Personal"
+    );
+    assert_eq!(bob_books[0].id.as_ref(), Some(&work));
+    let rights = bob_books[0]
+        .my_rights
+        .as_ref()
+        .expect("myRights is computed from the grant");
+    assert_eq!(rights.may_read, Some(true));
+    assert_eq!(rights.may_write, Some(true));
+
+    assert_eq!(
+        alice.address_books(&account_id).unwrap().len(),
+        2,
+        "the owner's own view still sees both books"
+    );
+}

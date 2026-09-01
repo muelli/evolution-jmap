@@ -50,6 +50,25 @@ impl Client {
         ))
     }
 
+    /// Patch an address book (`AddressBook/set` update) — a raw JSON Patch
+    /// object, the same shape `Client::mailbox_update` takes, so callers can
+    /// write typed fields the client has no dedicated setter for yet, such
+    /// as `shareWith` (RFC 9610 §2, Track E Phase C).
+    pub fn address_book_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
+        let request = SetRequest::<AddressBook>::new(account_id.clone()).update(id.clone(), patch);
+        let response = self.address_book_set(&request)?;
+        if response
+            .updated
+            .as_ref()
+            .is_some_and(|updated| updated.contains_key(id))
+        {
+            return Ok(());
+        }
+        Err(set_failure(
+            response.not_updated.as_ref().and_then(|map| map.get(id)),
+        ))
+    }
+
     /// Destroy an address book.
     pub fn address_book_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = SetRequest::<AddressBook>::new(account_id.clone()).destroy(id.clone());
