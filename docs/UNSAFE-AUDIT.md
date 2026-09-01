@@ -601,3 +601,80 @@ point, so its gaps aren't copied forward.
 `get_private`'s unbounded lifetime) are recorded above but intentionally
 left off this priority list — it's a demo module outside `default-members`,
 and none of the roadmap's real milestones depend on it.
+
+## Delta inventory, 2026-09-01: everything unsafe written since this audit
+
+Containment review, not a re-run of the soundness audit above: every `unsafe`
+site added to the tree since 2026-08-19 that this audit's own inventory did
+not yet cover, tagged KEEP/IMPROVE the same way, checking each against the
+six patterns above before treating anything as new.
+
+- **`jmap-config/src/source_config.rs`** (the two `ESourceConfigBackend`
+  subclasses behind the *New Address Book*/*New Calendar* dialogs) — **KEEP**
+  throughout. Registration goes through the shared `ObjectSubclass` machinery
+  Pattern F already credits, the one `extern "C"` vfunc
+  (`cal_allow_creation`) is wrapped in `trampoline::guard`, and every raw
+  pointer read (`e_source_config_backend_get_config`, the `EExtensionClass`
+  reinterpret-cast) carries a `// SAFETY:` tied to a layout test in
+  `evo-sys/tests/source_config.rs`. No new idiom: this is Pattern F's
+  centralised subclass/trampoline shape applied to a fifth crate.
+- **`jmap-mail/src/push.rs`** (the mail-side JMAP Push refresh worker) —
+  mostly **KEEP**, one **IMPROVE, done in this pass**.
+  `FolderRefresh`/`WeakStore` reach the store through
+  `jmap_backend_core::weak::WeakBackend`, an already-RAII-wrapped primitive
+  (its own `Drop` clears the `GWeakRef`); `dispatch` and the worker's pass
+  are both wrapped in `trampoline::guard`, matching Pattern F. But
+  `refresh_open_folders`'s loop over `camel_store_dup_opened_folders`'s
+  `(transfer full)` array was hand-rolling exactly the shape Pattern C
+  already has a primitive for: take ownership of one `CamelFolder *`, use
+  it, `g_object_unref` it before the next iteration. Converted the loop to
+  `jmap_backend_core::owned::Owned<CamelFolder>` instead of a manual unref,
+  so a future early `continue` added to that loop body cannot skip the
+  release the way it could before. No new primitive needed since `Owned<T>`
+  already exists for this; no behaviour change, and the function has no
+  direct unit test of its own to stay green (it needs a real `CamelStore`,
+  which this crate's test environment cannot construct — see the module's
+  own doc comment on why its tests exercise `FolderRefresh` against a bare
+  `GObject` instead), so this was checked by reading the diff against the
+  contract `Owned::from_raw`/`as_ptr` document, and by the crate's full
+  `cargo test -p jmap-mail` suite staying green unmodified (it does not
+  reach this function, but does reach everything around it: `FolderRefresh`,
+  `dispatch`, `actions_for`).
+- **`jmap-mail/src/sasl.rs`** (`CamelSaslXOAuth2Jmap`, the named mechanism
+  GNOME/evolution#3382 asks providers to register) — **KEEP**. The leaked,
+  `OnceLock`-guarded `CamelServiceAuthType` (`AuthType`, `unsafe impl
+  Send`/`Sync`) is the same shape `jmap-mail/src/provider.rs::Registered`
+  already uses for the same reason (Camel keeps a raw pointer alive for the
+  process lifetime and writes into it exactly once, before publishing it).
+  Two occurrences of a hand-copied idiom is this audit's own trigger for a
+  shared primitive elsewhere (Patterns B/D/E all needed three or more before
+  extracting one) — noted here as a candidate should a third leaked-`OnceLock`
+  site appear, not actioned now. `ObjectSubclass` registration is the same
+  shared machinery as every other subclass in the tree.
+- **`jmap-backend-cal/src/marshal.rs`, free/busy section**
+  (`user_list`/`free_busy_list`, the `get_free_busy_sync` marshalling) —
+  **KEEP**. Both walk a `GSList` of plain `gchar *` strings, not GObject
+  instances, so Pattern C's `Owned<T>` does not apply by its own documented
+  scope; `user_list` borrows through the existing `read_string` and
+  `free_busy_list` hands ownership on through the existing `dup_string`,
+  the same two choke points every other string-marshalling site in this
+  file already uses.
+- **`jmap_backend_core::push`/`jmap_backend_core::weak`** (the
+  account-independent EventSource pump `push.rs` above builds on) — **KEEP**.
+  `WeakBackend` is a new, already-correct RAII wrapper in the `Slot`/`Owned`
+  family (`Drop` clears the `GWeakRef`), with its own doc comment reasoning
+  through the GLib 2.80 dispose-ordering race explicitly; `start_for`/
+  `start_for_with`'s two `unsafe fn`s do nothing beyond constructing a
+  `WeakBackend` and calling the caller-supplied trampoline through it.
+- **The sharing (`AddressBook`/`Mailbox`/`Calendar` `shareWith`,
+  `ShareNotification`) and VacationResponse wiring** — no unsafe surface at
+  all: `jmap-proto`, `jmap-client` and `jmap-mock`, the three crates this
+  work landed in, all carry `#![forbid(unsafe_code)]` (item 44 parts
+  (a)-(c)), so this slice of the delta needed no review beyond confirming
+  that.
+
+**Outcome: one IMPROVE landed (the `push.rs` `Owned<T>` conversion), no new
+primitive needed anywhere else in the delta, no INVESTIGATE-tagged gap
+found.** Everything reviewed either already goes through a pattern this
+audit named in August, or is the zero-unsafe case the forbid-lint now proves
+by construction rather than by review.

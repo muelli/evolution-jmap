@@ -83,8 +83,9 @@ use eds_sys::{
 };
 use glib_sys::g_ptr_array_free;
 use glib_sys::{GError, GFALSE, GTRUE, g_clear_error};
-use gobject_sys::{GObject, g_object_unref};
+use gobject_sys::GObject;
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::owned::Owned;
 
 use crate::store::JmapStore;
 
@@ -278,14 +279,19 @@ pub unsafe fn refresh_open_folders(store: *mut CamelStore) {
         "refreshing the mail store's open folders after a push"
     );
     for index in 0..count {
-        // SAFETY: `index` is below the array's own length, and every element
-        // of this particular array is a `CamelFolder *` (`transfer full`).
-        let folder = unsafe { *(*folders).pdata.add(index) }.cast::<CamelFolder>();
+        // SAFETY: `index` is below the array's own length, every element of
+        // this particular array is a `CamelFolder *` (`transfer full`), and
+        // the reference moves into `folder`, released on drop rather than by
+        // a manual `g_object_unref` at the bottom of the loop.
+        let folder =
+            unsafe { Owned::from_raw((*(*folders).pdata.add(index)).cast::<CamelFolder>()) };
+        let Some(folder) = folder else { continue };
         let mut error: *mut GError = ptr::null_mut();
         // SAFETY: a live folder from the array, no cancellable (documented
         // above), and a valid place to put an error.
-        let refreshed =
-            unsafe { camel_folder_refresh_info_sync(folder, ptr::null_mut(), &raw mut error) };
+        let refreshed = unsafe {
+            camel_folder_refresh_info_sync(folder.as_ptr(), ptr::null_mut(), &raw mut error)
+        };
         if refreshed == GFALSE {
             // SAFETY: `error` is NULL or a `GError` this call now owns, whose
             // `message` is a NUL-terminated string owned by it.
@@ -298,8 +304,6 @@ pub unsafe fn refresh_open_folders(store: *mut CamelStore) {
             // SAFETY: `error` is NULL or an owned `GError`; cleared once.
             unsafe { g_clear_error(&raw mut error) };
         }
-        // SAFETY: releasing the reference the array transferred to us.
-        unsafe { g_object_unref(folder.cast()) };
     }
     // SAFETY: freeing the array itself, whose elements we have already
     // released; `TRUE` frees the backing storage, which is ours now.
@@ -381,7 +385,7 @@ mod tests {
     use std::sync::mpsc::{Receiver, Sender, channel};
     use std::time::{Duration, Instant};
 
-    use gobject_sys::{G_TYPE_OBJECT, g_object_new_with_properties};
+    use gobject_sys::{G_TYPE_OBJECT, g_object_new_with_properties, g_object_unref};
 
     use super::*;
 
