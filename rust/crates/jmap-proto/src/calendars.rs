@@ -51,8 +51,9 @@ pub struct Calendar {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_rights: Option<CalendarRights>,
     /// Rights granted to other principals (calendars draft §4), keyed by
-    /// principal id. Modeled but unread today — writing shares is Phase C,
-    /// deliberately separate from reading `myRights`.
+    /// principal id. `jmap-mock::calendars::calendar_get` enforces it: a
+    /// foreign caller sees only calendars shared with them, computed
+    /// `myRights` and all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share_with: Option<BTreeMap<Id, CalendarRights>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

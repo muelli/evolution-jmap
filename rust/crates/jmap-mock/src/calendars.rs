@@ -4,8 +4,10 @@
 //! Calendar methods (`Calendar/get`, `CalendarEvent/get|set|query`,
 //! draft-ietf-jmap-calendars) and calendar seeding helpers.
 
+use std::collections::BTreeMap;
+
 use jmap_proto::Id;
-use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter};
+use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter, CalendarRights};
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest};
 use serde_json::Value;
@@ -14,23 +16,54 @@ use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
 
-pub fn calendar_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+/// `caller` is the identity `Calendar/get`'s request carried, as resolved by
+/// [`crate::auth::AuthConfig::identity_for`] — `None` (no identity bound to
+/// the credential) reads as "this account's own owner", matching every test
+/// that predates sharing. A caller who *is* a distinct principal only sees
+/// calendars that principal's own `shareWith` entry grants, and gets
+/// `forbidden` outright if the account shares nothing with them at all,
+/// mirroring `contacts::address_book_get` and `mail::mailbox_get` (verified
+/// against a live Stalwart server: Track E Phase C step 1's Calendar probe,
+/// recorded in the work queue).
+pub fn calendar_get(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
+
+    let is_owner =
+        caller.is_none_or(|caller| account.current_user_principal_id.as_ref() == Some(caller));
+    if !is_owner {
+        let caller = caller.expect("is_owner is false only when caller is Some");
+        let shared_with_caller = account
+            .calendars
+            .iter()
+            .any(|(_, calendar)| calendar_rights_for(calendar, caller).is_some());
+        if !shared_with_caller {
+            return Err(MethodError::new(error::method::FORBIDDEN)
+                .with_description("no calendar in this account is shared with you"));
+        }
+    }
 
     let mut list = Vec::new();
     let mut not_found = Vec::new();
     match &request.ids {
-        None => list.extend(
-            account
-                .calendars
-                .iter()
-                .map(|(_, calendar)| calendar.clone()),
-        ),
+        None => {
+            for (_, calendar) in account.calendars.iter() {
+                if let Some(visible) = visible_calendar(calendar, is_owner, caller) {
+                    list.push(visible);
+                }
+            }
+        }
         Some(ids) => {
             for id in ids {
                 match account.calendars.get(id) {
-                    Some(calendar) => list.push(calendar.clone()),
+                    Some(calendar) => match visible_calendar(calendar, is_owner, caller) {
+                        Some(visible) => list.push(visible),
+                        None => not_found.push(id.clone()),
+                    },
                     None => not_found.push(id.clone()),
                 }
             }
@@ -45,6 +78,27 @@ pub fn calendar_get(state: &mut ServerState, arguments: Value) -> Result<Value, 
     })
 }
 
+/// The rights `calendar.share_with` grants `principal`, or `None` if it
+/// grants them nothing (including "not shared at all").
+fn calendar_rights_for(calendar: &Calendar, principal: &Id) -> Option<CalendarRights> {
+    calendar.share_with.as_ref()?.get(principal).cloned()
+}
+
+/// The owner sees every calendar unchanged, exactly as before sharing
+/// existed. A foreign caller sees a calendar only if it is shared with them,
+/// with `myRights` replaced by the grant itself rather than whatever the
+/// owner's own `myRights` happened to be.
+fn visible_calendar(calendar: &Calendar, is_owner: bool, caller: Option<&Id>) -> Option<Calendar> {
+    if is_owner {
+        return Some(calendar.clone());
+    }
+    let caller = caller.expect("is_owner is false only when caller is Some");
+    let rights = calendar_rights_for(calendar, caller)?;
+    let mut visible = calendar.clone();
+    visible.my_rights = Some(rights);
+    Some(visible)
+}
+
 /// `Calendar/set` (draft-ietf-jmap-calendars §4): making and removing a
 /// calendar.
 ///
@@ -56,7 +110,23 @@ pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, 
     let request: SetRequest<Calendar> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
     let terse_collection_create = state.terse_collection_create;
-    let account = account_mut(state, &request.account_id)?;
+    let account_id = request.account_id.clone();
+    let account = account_mut(state, &account_id)?;
+
+    // Captured before `simple_set` consumes `request.update`, so a
+    // `shareWith` change can be diffed against what it was, for
+    // `ShareNotification` delivery (Track E Phase C step 2, RFC 9670 §4).
+    let old_share_with: BTreeMap<Id, Option<BTreeMap<Id, CalendarRights>>> = request
+        .update
+        .iter()
+        .flatten()
+        .filter_map(|(id, _)| {
+            account
+                .calendars
+                .get(id)
+                .map(|calendar| (id.clone(), calendar.share_with.clone()))
+        })
+        .collect();
 
     let response = simple_set(&mut account.calendars, request, |id, calendar| {
         if calendar.id.is_some() {
@@ -73,6 +143,24 @@ pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, 
         }
         Ok(())
     })?;
+
+    if let Some(updated) = &response.updated {
+        for id in updated.keys() {
+            let new_share_with = account
+                .calendars
+                .get(id)
+                .and_then(|calendar| calendar.share_with.clone());
+            crate::principals::record_share_changes(
+                account,
+                jmap_proto::principals::share_notification_object_type::CALENDAR,
+                id,
+                &account_id,
+                old_share_with.get(id).and_then(Option::as_ref),
+                new_share_with.as_ref(),
+            );
+        }
+    }
+
     let mut result = to_result(&response)?;
 
     // RFC 8620 §5.3: the `created` map need only carry properties the client
