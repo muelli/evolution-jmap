@@ -328,14 +328,15 @@ fn prepare_authentication_uri_query_and_token_form_trace_structured_fields() {
             has(&captured_query, Level::DEBUG, "has_scope", "true"),
             "expected has_scope=true in query preparation, got {captured_query:?}"
         );
+        // `has_pkce` rather than the `pkce_challenge_method=S256` this used to
+        // assert: the challenge is now added only when its verifier could be
+        // stashed, so what the query side has to report is whether one was
+        // sent at all. S256 stays the only method this crate ever names, and
+        // `oauth2_service.rs`'s own tests pin the query's `code_challenge_
+        // method` key. The two sides of the flow now log the same field name.
         assert!(
-            has(
-                &captured_query,
-                Level::DEBUG,
-                "pkce_challenge_method",
-                "S256"
-            ),
-            "expected pkce_challenge_method=S256, got {captured_query:?}"
+            has(&captured_query, Level::DEBUG, "has_pkce", "true"),
+            "expected has_pkce=true in query preparation, got {captured_query:?}"
         );
 
         let form = g_hash_table_new_full(
