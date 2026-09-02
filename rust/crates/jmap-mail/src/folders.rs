@@ -85,10 +85,10 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
-use gobject_sys::g_object_unref;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::fail;
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::owned::Owned;
 use jmap_backend_core::trampoline::{guard, guard_ptr};
 use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree};
 
@@ -465,25 +465,26 @@ unsafe extern "C" fn get_folder_sync(
             };
 
             // SAFETY: `store` is the live `CamelStore` borrowed above, which is
-            // what `new_folder` asks for.
-            let folder = new_folder(store, mailbox);
-            if folder.is_null() {
-                return folder;
-            }
+            // what `new_folder` asks for, and the pointer it returns is
+            // transfer-full — exactly what `Owned::from_raw` takes.
+            let Some(folder) = Owned::from_raw(new_folder(store, mailbox)) else {
+                return ptr::null_mut();
+            };
 
             // A folder whose summary holds no state (a freshly added account or a
             // folder never opened before) has nothing in its summary yet. Refresh
             // it on first open so the first view answers a non-empty summary.
-            let summary = camel_folder_get_folder_summary(folder);
+            let summary = camel_folder_get_folder_summary(folder.as_ptr());
             if summary_state(summary).is_none() {
-                let ok = refresh_info_sync(folder, cancellable, error);
+                let ok = refresh_info_sync(folder.as_ptr(), cancellable, error);
                 if ok == GFALSE {
-                    g_object_unref(folder.cast());
+                    // `folder` drops here, releasing the reference `new_folder`
+                    // handed over.
                     return ptr::null_mut();
                 }
             }
 
-            folder
+            folder.into_raw()
         })
     }
 }
