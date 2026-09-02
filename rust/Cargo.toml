@@ -93,6 +93,7 @@ jmap-backend-cal = { path = "crates/jmap-backend-cal" }
 jmap-backend-collection = { path = "crates/jmap-backend-collection" }
 jmap-config = { path = "crates/jmap-config" }
 jmap-mail = { path = "crates/jmap-mail" }
+jmap-ui = { path = "crates/jmap-ui" }
 
 # Every unsafe operation inside an `unsafe fn` body needs its own `unsafe {}`
 # block and its own SAFETY comment, rather than the whole fn body being an

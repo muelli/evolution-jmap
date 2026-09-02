@@ -5,7 +5,9 @@
 //! resolves, and nothing else.
 //!
 //! A `cdylib` and nothing else, holding two `#[unsafe(no_mangle)]` functions
-//! that delegate to [`jmap_config::module`]. The full argument for the split is
+//! that delegate to [`jmap_config::module`] and [`jmap_ui::module`] — the
+//! account-setup extensions and the UI-feature extensions ride in one module,
+//! the way evolution-ews ships one. The full argument for the split is
 //! in `jmap-backend-collection-module`, where the collision that forced it
 //! happened — and this crate's library is the other half of that collision: its
 //! tests link `jmap-backend-collection`'s rlib, both rlibs defined
@@ -26,7 +28,10 @@ use gobject_sys::GTypeModule;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn e_module_load(type_module: *mut GTypeModule) {
     // SAFETY: the caller's obligation is passed straight through.
-    unsafe { jmap_config::module::load(type_module) }
+    unsafe {
+        jmap_config::module::load(type_module);
+        jmap_ui::module::load(type_module);
+    }
 }
 
 /// `e_module_unload`, as Evolution's shell resolves it.
@@ -37,5 +42,8 @@ pub unsafe extern "C" fn e_module_load(type_module: *mut GTypeModule) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn e_module_unload(type_module: *mut GTypeModule) {
     // SAFETY: as `e_module_load`.
-    unsafe { jmap_config::module::unload(type_module) }
+    unsafe {
+        jmap_config::module::unload(type_module);
+        jmap_ui::module::unload(type_module);
+    }
 }

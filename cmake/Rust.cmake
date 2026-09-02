@@ -89,7 +89,7 @@ add_test(
 	COMMAND ${CARGO_EXECUTABLE} test --locked -p eds-sys -p evo-sys
 		-p jmap-backend-core
 		-p jmap-backend-book -p jmap-backend-cal -p jmap-mail
-		-p jmap-backend-collection -p jmap-config
+		-p jmap-backend-collection -p jmap-config -p jmap-ui
 	WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 )
 set_tests_properties(rust-test-eds PROPERTIES ENVIRONMENT "${_test_env}")

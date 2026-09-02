@@ -28,5 +28,6 @@ jmap-mail 518
 jmap-mail-sync 0
 jmap-mock 0
 jmap-proto 0
+jmap-ui 17
 jmap-vcard 0
 po-compile 0
