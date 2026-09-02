@@ -9,7 +9,8 @@ use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailHeader, EmailImportRequest,
     EmailImportResponse, EmailQueryFilter, EmailSubmission, EmailSubmissionSetRequest, Envelope,
-    EnvelopeAddress, Identity, Mailbox, Thread, VacationResponse, email_import_error,
+    EnvelopeAddress, Identity, Mailbox, SearchSnippet, SearchSnippetGetRequest,
+    SearchSnippetGetResponse, Thread, VacationResponse, email_import_error,
 };
 use jmap_proto::methods::{
     Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse, operator,
@@ -518,6 +519,149 @@ pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, Me
         list,
         not_found,
     })
+}
+
+/// `SearchSnippet/get` (RFC 8621 §5.1): highlight, in the subject and body,
+/// the text a `filter`'s leaf conditions matched. `notFound` covers only
+/// email ids that do not exist; a `filter` matching nothing for an email
+/// that does exist still returns a `SearchSnippet` with both fields `null`,
+/// per the RFC.
+pub fn search_snippet_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+    let request: SearchSnippetGetRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let mut list = Vec::new();
+    let mut not_found = Vec::new();
+    for email_id in request.email_ids {
+        let Some(email) = account.emails.get(&email_id) else {
+            not_found.push(email_id);
+            continue;
+        };
+        list.push(match &request.filter {
+            Some(filter) => search_snippet(email_id, email, filter),
+            None => SearchSnippet::new(email_id),
+        });
+    }
+
+    to_result(&SearchSnippetGetResponse {
+        account_id: request.account_id,
+        list,
+        not_found: (!not_found.is_empty()).then_some(not_found),
+    })
+}
+
+/// The plaintext/HTML-escaping snippet cap RFC 8621 §5 puts on `preview`.
+const PREVIEW_MAX_OCTETS: usize = 255;
+
+fn search_snippet(email_id: Id, email: &Email, filter: &Filter<EmailQueryFilter>) -> SearchSnippet {
+    let mut subject_terms = Vec::new();
+    let mut body_terms = Vec::new();
+    collect_snippet_terms(filter, &mut subject_terms, &mut body_terms);
+
+    let subject = email
+        .subject
+        .as_deref()
+        .filter(|subject| subject_terms.iter().any(|term| subject.contains(term)))
+        .map(|subject| mark_matches(subject, &subject_terms));
+
+    let preview = email.body_values.as_ref().and_then(|values| {
+        values
+            .values()
+            .find(|value| body_terms.iter().any(|term| value.value.contains(term)))
+            .map(|value| {
+                truncate_octets(&mark_matches(&value.value, &body_terms), PREVIEW_MAX_OCTETS)
+            })
+    });
+
+    let mut snippet = SearchSnippet::new(email_id);
+    snippet.subject = subject;
+    snippet.preview = preview;
+    snippet
+}
+
+/// The substrings a filter tree's `subject`/`body`/`text` leaves would match
+/// against an Email's subject and body (RFC 8621 §4.4.1): `text` matches
+/// both, `subject` and `body` match only their own field. Every other leaf
+/// (`from`, `header`, `hasKeyword`, size, dates, …) has nothing to highlight
+/// in subject or body text and is ignored here.
+fn collect_snippet_terms<'a>(
+    filter: &'a Filter<EmailQueryFilter>,
+    subject_terms: &mut Vec<&'a str>,
+    body_terms: &mut Vec<&'a str>,
+) {
+    match filter {
+        Filter::Condition(condition) => {
+            if let Some(subject) = &condition.subject {
+                subject_terms.push(subject.as_str());
+            }
+            if let Some(body) = &condition.body {
+                body_terms.push(body.as_str());
+            }
+            if let Some(text) = &condition.text {
+                subject_terms.push(text.as_str());
+                body_terms.push(text.as_str());
+            }
+        }
+        Filter::Operator(op) => {
+            for condition in &op.conditions {
+                collect_snippet_terms(condition, subject_terms, body_terms);
+            }
+        }
+    }
+}
+
+/// HTML-escape `text`, wrapping every non-overlapping occurrence of any
+/// `terms` entry in `<mark></mark>` (RFC 8621 §5's `SearchSnippet` transform).
+/// At each position the longest matching term wins, so `text` = `"terms"` and
+/// `terms` = `["term", "terms"]` marks the whole word once, not `<mark>term
+/// </mark>s`.
+fn mark_matches(text: &str, terms: &[&str]) -> String {
+    let mut result = String::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let longest_match = terms
+            .iter()
+            .filter(|term| !term.is_empty() && rest.starts_with(**term))
+            .max_by_key(|term| term.len());
+        match longest_match {
+            Some(term) => {
+                result.push_str("<mark>");
+                escape_html_into(term, &mut result);
+                result.push_str("</mark>");
+                rest = &rest[term.len()..];
+            }
+            None => {
+                let ch = rest.chars().next().expect("rest is non-empty");
+                escape_html_into(&rest[..ch.len_utf8()], &mut result);
+                rest = &rest[ch.len_utf8()..];
+            }
+        }
+    }
+    result
+}
+
+fn escape_html_into(text: &str, out: &mut String) {
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            other => out.push(other),
+        }
+    }
+}
+
+/// Truncate `text` to at most `max_octets` bytes, never splitting a UTF-8
+/// character.
+fn truncate_octets(text: &str, max_octets: usize) -> String {
+    if text.len() <= max_octets {
+        return text.to_owned();
+    }
+    let mut end = max_octets;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_owned()
 }
 
 pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {

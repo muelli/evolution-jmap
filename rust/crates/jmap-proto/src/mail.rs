@@ -1561,13 +1561,15 @@ impl SearchSnippet {
     }
 }
 
-/// `SearchSnippet/get` arguments (RFC 8621 §5.1).
+/// `SearchSnippet/get` arguments (RFC 8621 §5.1). `filter` is the same
+/// `FilterOperator|FilterCondition|null` as `Email/query`'s, not a bare leaf
+/// condition, so it can be an AND/OR/NOT tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchSnippetGetRequest {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filter: Option<EmailQueryFilter>,
+    pub filter: Option<crate::methods::Filter<EmailQueryFilter>>,
     pub email_ids: Vec<Id>,
 }
 
@@ -1583,8 +1585,11 @@ impl SearchSnippetGetRequest {
         }
     }
 
-    pub fn with_filter(mut self, filter: EmailQueryFilter) -> Self {
-        self.filter = Some(filter);
+    pub fn with_filter(
+        mut self,
+        filter: impl Into<crate::methods::Filter<EmailQueryFilter>>,
+    ) -> Self {
+        self.filter = Some(filter.into());
         self
     }
 }

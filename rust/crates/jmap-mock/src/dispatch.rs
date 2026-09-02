@@ -281,6 +281,7 @@ fn handle_method(
         "Mailbox/set" => crate::mail::mailbox_set(state, arguments),
         "Email/get" => crate::mail::email_get(state, arguments),
         "Thread/get" => crate::mail::thread_get(state, arguments),
+        "SearchSnippet/get" => crate::mail::search_snippet_get(state, arguments),
         "Email/query" => crate::mail::email_query(state, arguments),
         "Email/set" => crate::mail::email_set(state, arguments),
         "Email/import" => crate::mail::email_import(state, arguments),
