@@ -1087,7 +1087,7 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
 
 /// The capability object to advertise for `capability`. An empty placeholder
 /// for everything but Sieve: `SieveCapability::max_size_script` is mandatory
-/// (RFC 9265 §1.1), so an empty object would make `Session::sieve_capability`
+/// (RFC 9661 §1.2.1), so an empty object would make `Session::sieve_capability`
 /// fail to parse it.
 fn capability_value(capability: &str) -> Value {
     if capability == CAPABILITY_SIEVE {

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! RFC 9265 (JMAP for Sieve Scripts) unit and roundtrip tests.
+//! RFC 9661 (JMAP for Sieve Scripts) unit and roundtrip tests.
 
 use jmap_proto::session::{CAPABILITY_SIEVE, Session};
 use jmap_proto::sieve::{
@@ -142,27 +142,8 @@ fn sieve_validate_request_and_response_roundtrip() {
 #[test]
 fn sieve_constants_and_set_error_coverage() {
     assert_eq!(CAPABILITY_SIEVE, "urn:ietf:params:jmap:sieve");
-    assert_eq!(
-        sieve_set_error::CANNOT_DELETE_ACTIVE_SCRIPT,
-        "cannotDeleteActiveScript"
-    );
-    assert_eq!(
-        sieve_set_error::DUPLICATE_SCRIPT_NAME,
-        "duplicateScriptName"
-    );
     assert_eq!(sieve_set_error::INVALID_SIEVE, "invalidSieve");
-    assert_eq!(
-        sieve_set_error::MAX_NUMBER_SCRIPTS_EXCEEDED,
-        "maxNumberScriptsExceeded"
-    );
-    assert_eq!(
-        sieve_set_error::MAX_SIZE_SCRIPT_EXCEEDED,
-        "maxSizeScriptExceeded"
-    );
-    assert_eq!(
-        sieve_set_error::MULTIPLE_ACTIVE_SCRIPTS,
-        "multipleActiveScripts"
-    );
+    assert_eq!(sieve_set_error::SIEVE_IS_ACTIVE, "sieveIsActive");
 }
 
 #[test]

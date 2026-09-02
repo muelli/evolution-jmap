@@ -342,7 +342,7 @@ impl Session {
         serde_json::from_value(val.clone()).ok()
     }
 
-    /// Typed sieve capability struct, if present (RFC 9265 §1.1).
+    /// Typed sieve capability struct, if present (RFC 9661 §1.2.1).
     pub fn sieve_capability(&self) -> Option<crate::sieve::SieveCapability> {
         let val = self.capabilities.get(CAPABILITY_SIEVE)?;
         serde_json::from_value(val.clone()).ok()

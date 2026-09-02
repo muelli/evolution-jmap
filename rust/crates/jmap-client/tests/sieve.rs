@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Sieve (RFC 9265): capability detection and `SieveScript/get`. No
+//! JMAP Sieve (RFC 9661): capability detection and `SieveScript/get`. No
 //! Evolution filters UI consumes this yet; the wiring is a separate
 //! increment.
 
@@ -11,7 +11,7 @@ use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_SIEVE};
 
 /// A server advertises `urn:ietf:params:jmap:sieve` both at session level and
 /// on the account, the same way every other capability does, and the typed
-/// capability parses (its `maxSizeScript` property is mandatory per RFC 9265
+/// capability parses (its `maxSizeScript` property is mandatory per RFC 9661
 /// §1.1, unlike the empty placeholder object most other capabilities here
 /// advertise).
 #[test]
@@ -29,7 +29,7 @@ fn sieve_capability_is_advertised_and_resolves_to_the_account() {
     );
 }
 
-/// A freshly started account has no Sieve scripts (unlike `Quota`, RFC 9265
+/// A freshly started account has no Sieve scripts (unlike `Quota`, RFC 9661
 /// scripts are client-created), so `ids: null` returns an empty list rather
 /// than a seeded fixture.
 #[test]
