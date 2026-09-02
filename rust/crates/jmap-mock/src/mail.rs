@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::mail::{
-    Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImportRequest, EmailImportResponse,
-    EmailQueryFilter, EmailSubmission, EmailSubmissionSetRequest, Envelope, EnvelopeAddress,
-    Identity, Mailbox, VacationResponse, email_import_error,
+    Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailHeader, EmailImportRequest,
+    EmailImportResponse, EmailQueryFilter, EmailSubmission, EmailSubmissionSetRequest, Envelope,
+    EnvelopeAddress, Identity, Mailbox, VacationResponse, email_import_error,
 };
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -589,6 +589,54 @@ fn email_matches(email: &Email, filter: &EmailQueryFilter) -> bool {
     {
         return false;
     }
+    if let Some(cc) = &filter.cc
+        && !address_list_contains(email.cc.as_deref(), cc)
+    {
+        return false;
+    }
+    if let Some(bcc) = &filter.bcc
+        && !address_list_contains(email.bcc.as_deref(), bcc)
+    {
+        return false;
+    }
+    if let Some(min_size) = filter.min_size
+        && email.size.is_none_or(|size| size < min_size)
+    {
+        return false;
+    }
+    if let Some(max_size) = filter.max_size
+        && email.size.is_none_or(|size| size > max_size)
+    {
+        return false;
+    }
+    if let Some(has_attachment) = filter.has_attachment
+        && email.has_attachment.unwrap_or(false) != has_attachment
+    {
+        return false;
+    }
+    if let Some(body) = &filter.body
+        && !body_contains(email, body)
+    {
+        return false;
+    }
+    if let Some(text) = &filter.text
+        && !(address_list_contains(email.from.as_deref(), text)
+            || address_list_contains(email.to.as_deref(), text)
+            || address_list_contains(email.cc.as_deref(), text)
+            || address_list_contains(email.bcc.as_deref(), text)
+            || email
+                .subject
+                .as_ref()
+                .is_some_and(|subject| subject.contains(text.as_str()))
+            || body_contains(email, text))
+    {
+        return false;
+    }
+    if let Some(header) = &filter.header
+        && !header_matches(email, header)
+    {
+        return false;
+    }
     true
 }
 
@@ -600,6 +648,31 @@ fn address_list_contains(addresses: Option<&[EmailAddress]>, needle: &str) -> bo
                     .name
                     .as_ref()
                     .is_some_and(|name| name.contains(needle))
+        })
+    })
+}
+
+/// `body` (RFC 8621 §4.4.1): the text/plain and text/html parts, not headers.
+fn body_contains(email: &Email, needle: &str) -> bool {
+    email
+        .body_values
+        .as_ref()
+        .is_some_and(|values| values.values().any(|value| value.value.contains(needle)))
+}
+
+/// `header` (RFC 8621 §4.4.1): `[name]` matches any message carrying that
+/// header at all; `[name, value]` also requires the value to contain
+/// `value`. Header names are case-insensitive per RFC 5322 §1.2.2.
+fn header_matches(email: &Email, header: &[String]) -> bool {
+    let Some(name) = header.first() else {
+        return false;
+    };
+    email.headers.as_ref().is_some_and(|headers| {
+        headers.iter().any(|candidate| {
+            candidate.name.eq_ignore_ascii_case(name)
+                && header
+                    .get(1)
+                    .is_none_or(|value| candidate.value.contains(value.as_str()))
         })
     })
 }
@@ -1294,10 +1367,13 @@ pub struct EmailSeed {
     pub mailbox_id: Id,
     pub from: EmailAddress,
     pub to: Vec<EmailAddress>,
+    pub cc: Vec<EmailAddress>,
+    pub bcc: Vec<EmailAddress>,
     pub subject: String,
     pub text_body: String,
     pub received_at: UtcDate,
     pub keywords: Vec<String>,
+    pub headers: Vec<EmailHeader>,
     /// (blob id, filename, content type)
     pub attachments: Vec<(Id, String, String)>,
 }
@@ -1314,16 +1390,34 @@ impl EmailSeed {
             mailbox_id: mailbox_id.into(),
             from: EmailAddress::new(Some(from.0), from.1),
             to: vec![EmailAddress::new(Some("Alice"), "alice@example.com")],
+            cc: Vec::new(),
+            bcc: Vec::new(),
             subject: subject.to_owned(),
             text_body: text_body.to_owned(),
             received_at: UtcDate::new(received_at),
             keywords: Vec::new(),
+            headers: Vec::new(),
             attachments: Vec::new(),
         }
     }
 
     pub fn keyword(mut self, keyword: &str) -> Self {
         self.keywords.push(keyword.to_owned());
+        self
+    }
+
+    pub fn cc(mut self, name: &str, email: &str) -> Self {
+        self.cc.push(EmailAddress::new(Some(name), email));
+        self
+    }
+
+    pub fn bcc(mut self, name: &str, email: &str) -> Self {
+        self.bcc.push(EmailAddress::new(Some(name), email));
+        self
+    }
+
+    pub fn header(mut self, name: &str, value: &str) -> Self {
+        self.headers.push(EmailHeader::new(name, value));
         self
     }
 
@@ -1354,6 +1448,14 @@ fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
         let to: Vec<String> = seed.to.iter().map(address).collect();
         message.push_str(&format!("To: {}\r\n", to.join(", ")));
     }
+    if !seed.cc.is_empty() {
+        let cc: Vec<String> = seed.cc.iter().map(address).collect();
+        message.push_str(&format!("Cc: {}\r\n", cc.join(", ")));
+    }
+    if !seed.bcc.is_empty() {
+        let bcc: Vec<String> = seed.bcc.iter().map(address).collect();
+        message.push_str(&format!("Bcc: {}\r\n", bcc.join(", ")));
+    }
     message.push_str(&format!("Subject: {}\r\n", seed.subject));
     if let Some(date) = rfc5322_date(seed.received_at.as_str()) {
         message.push_str(&format!("Date: {date}\r\n"));
@@ -1362,6 +1464,9 @@ fn rfc5322(id: &Id, seed: &EmailSeed) -> String {
     message.push_str("MIME-Version: 1.0\r\n");
     message.push_str("Content-Type: text/plain; charset=utf-8\r\n");
     message.push_str("Content-Transfer-Encoding: 8bit\r\n");
+    for header in &seed.headers {
+        message.push_str(&format!("{}: {}\r\n", header.name, header.value));
+    }
     message.push_str("\r\n");
     message.push_str(&seed.text_body.replace('\n', "\r\n"));
     message.push_str("\r\n");
@@ -1582,11 +1687,14 @@ impl AccountState {
             received_at: Some(seed.received_at),
             from: Some(vec![seed.from]),
             to: Some(seed.to),
+            cc: (!seed.cc.is_empty()).then_some(seed.cc),
+            bcc: (!seed.bcc.is_empty()).then_some(seed.bcc),
             subject: Some(seed.subject),
             has_attachment: Some(!attachments.is_empty()),
             preview: Some(seed.text_body.chars().take(64).collect()),
             body_values: Some([("1".to_owned(), EmailBodyValue::new(seed.text_body))].into()),
             text_body: Some(vec![text_part]),
+            headers: (!seed.headers.is_empty()).then_some(seed.headers),
             attachments: (!attachments.is_empty()).then_some(attachments),
             ..Email::default()
         };

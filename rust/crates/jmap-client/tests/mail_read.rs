@@ -129,6 +129,109 @@ fn receive_email_attachment_blob_download() {
     assert_eq!(downloaded, attachment_bytes);
 }
 
+/// `Email/query` filter fields the mock did not apply until now: `cc`,
+/// `bcc`, `body`, `text`, `header`, `minSize`/`maxSize`, `hasAttachment`.
+/// `from`/`to`/`subject`/`inMailbox`/keyword/date filters are covered above
+/// and elsewhere; this test is only about the fields item 46(b) added.
+#[test]
+fn email_query_filters_the_fields_the_mock_used_to_ignore() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+
+    {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let inbox = account.seed_mailbox("Inbox", Some(role::INBOX));
+        account.seed_email(
+            EmailSeed::new(
+                inbox.clone(),
+                ("Bob", "bob@example.com"),
+                "Short note",
+                "hi",
+                "2026-08-01T10:00:00Z",
+            )
+            .cc("Carol", "carol@example.com")
+            .header("X-Priority", "1"),
+        );
+        let blob_id = account.add_blob("application/pdf", b"fake pdf".to_vec());
+        account.seed_email(
+            EmailSeed::new(
+                inbox,
+                ("Dave", "dave@example.com"),
+                "Longer report",
+                "quarterly numbers attached below",
+                "2026-08-02T09:00:00Z",
+            )
+            .bcc("Eve", "eve@example.com")
+            .attachment(blob_id, "report.pdf", "application/pdf"),
+        );
+    };
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let subjects = |filter: EmailQueryFilter| -> Vec<String> {
+        client
+            .email_query_then_get(&account_id, filter, None, Some(&["subject"]))
+            .unwrap()
+            .into_iter()
+            .map(|email| email.subject.unwrap_or_default())
+            .collect()
+    };
+
+    assert_eq!(
+        subjects(EmailQueryFilter::default().cc("carol@example.com")),
+        vec!["Short note"]
+    );
+    assert_eq!(
+        subjects(EmailQueryFilter::default().bcc("eve@example.com")),
+        vec!["Longer report"]
+    );
+    assert_eq!(
+        subjects(EmailQueryFilter::default().body("quarterly")),
+        vec!["Longer report"]
+    );
+    // `text` reaches into addresses and the subject too, not just the body.
+    assert_eq!(
+        subjects(EmailQueryFilter::default().text("carol@example.com")),
+        vec!["Short note"]
+    );
+    assert_eq!(
+        subjects(EmailQueryFilter::default().header("X-Priority", "1")),
+        vec!["Short note"]
+    );
+    assert_eq!(
+        subjects(EmailQueryFilter::default().has_attachment(true)),
+        vec!["Longer report"]
+    );
+    assert_eq!(
+        subjects(EmailQueryFilter::default().has_attachment(false)),
+        vec!["Short note"]
+    );
+
+    // minSize/maxSize bracket the shorter message's raw size between the two.
+    let sizes = client
+        .email_query_then_get(
+            &account_id,
+            EmailQueryFilter::default(),
+            Some(vec![Comparator::ascending("receivedAt")]),
+            Some(&["size"]),
+        )
+        .unwrap();
+    let short_size = sizes[0].size.unwrap();
+    let long_size = sizes[1].size.unwrap();
+    assert!(short_size < long_size);
+    let threshold = (short_size + long_size) / 2;
+    assert_eq!(
+        subjects(EmailQueryFilter::default().min_size(threshold)),
+        vec!["Longer report"]
+    );
+    assert_eq!(
+        subjects(EmailQueryFilter::default().max_size(threshold)),
+        vec!["Short note"]
+    );
+}
+
 /// The state probe: `Email/get` naming no ids at all, which is how a client
 /// learns what to ask `Email/changes` from without downloading a mailbox first.
 #[test]
