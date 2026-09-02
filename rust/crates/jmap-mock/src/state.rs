@@ -267,6 +267,7 @@ impl ServerState {
                 let types = BTreeMap::from([
                     ("Mailbox", account.mailboxes.state_counter()),
                     ("Email", account.emails.state_counter()),
+                    ("Thread", account.threads.state_counter()),
                     ("ContactCard", account.contact_cards.state_counter()),
                     ("AddressBook", account.address_books.state_counter()),
                     ("Calendar", account.calendars.state_counter()),
@@ -393,6 +394,11 @@ pub struct AccountState {
     pub name: String,
     pub mailboxes: Store<jmap_proto::mail::Mailbox>,
     pub emails: Store<jmap_proto::mail::Email>,
+    /// `Thread` objects (RFC 8621 §3), kept in lockstep with `emails`: this
+    /// mock never merges replies into an existing thread (see
+    /// `crate::mail::thread_get`), so a thread's whole lifecycle is exactly
+    /// its one email's — created and destroyed alongside it, never updated.
+    pub threads: Store<jmap_proto::mail::Thread>,
     pub identities: Store<jmap_proto::mail::Identity>,
     pub submissions: Store<jmap_proto::mail::EmailSubmission>,
     /// The `VacationResponse` singleton (RFC 8621 §8.1). Always holds exactly
@@ -457,6 +463,7 @@ impl AccountState {
             name: name.into(),
             mailboxes: Store::new("M"),
             emails: Store::new("E"),
+            threads: Store::new("T"),
             identities: Store::new("I"),
             submissions: Store::new("S"),
             vacation_response,

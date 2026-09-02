@@ -292,6 +292,7 @@ fn handle_method(
         "ContactCard/query" => crate::contacts::contact_card_query(state, arguments),
         "Mailbox/changes"
         | "Email/changes"
+        | "Thread/changes"
         | "AddressBook/changes"
         | "ContactCard/changes"
         | "Calendar/changes"
@@ -305,6 +306,9 @@ fn handle_method(
                 }
                 "Email/changes" => {
                     crate::setops::store_changes(&account.emails, request, page_size)
+                }
+                "Thread/changes" => {
+                    crate::setops::store_changes(&account.threads, request, page_size)
                 }
                 "AddressBook/changes" => {
                     crate::setops::store_changes(&account.address_books, request, page_size)
