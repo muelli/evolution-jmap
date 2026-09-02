@@ -19,8 +19,23 @@
  * `insert_widgets`'s way of telling the assistant an entry changed so
  * `check_complete` is asked again. Not pulled in by the two includes above:
  * `e-mail-config-service-page.h` reaches `e-mail-config-activity-page.h`,
- * which does not include this one either. */
+ * which does not include this one either.
+ *
+ * Since the vacation page, the *interface struct* is generated too (see
+ * ALLOWED_TYPES): jmap-ui registers its own EMailConfigPage implementer and
+ * fills the vtable's slots, so its layout matters the way a subclassed
+ * class struct's does. The page instance stays an opaque handle. */
 #include <mail/e-mail-config-page.h>
+
+/* The account editor's page container, which jmap-ui's vacation extension
+ * extends (`EExtensionClass::extensible_type = E_TYPE_MAIL_CONFIG_NOTEBOOK`)
+ * and adds its page to. Only the editor builds one — the new-account
+ * assistant composes pages directly — which is exactly the wanted gate: a
+ * vacation responder can only be read from a server an account already
+ * names. The class stays an opaque handle (a GtkNotebook subclass); what is
+ * generated is its GType accessor, `add_page`, and the two source getters
+ * the extension gates and connects with. */
+#include <mail/e-mail-config-notebook.h>
 
 /* The second class this crate's consumers subclass, and the only route by
  * which Evolution's New Address Book and New Calendar dialogs can be made to

@@ -27,8 +27,9 @@ use std::sync::Mutex;
 use glib_sys::{GType, gpointer};
 use gobject_sys::{
     GInterfaceInfo, GInterfaceInitFunc, GObject, GObjectClass, GTypeInfo, GTypeInstance,
-    GTypeModule, g_type_add_interface_static, g_type_class_peek, g_type_from_name,
-    g_type_module_add_interface, g_type_module_register_type, g_type_name, g_type_register_static,
+    GTypeModule, GTypeQuery, g_type_add_interface_static, g_type_class_peek, g_type_class_ref,
+    g_type_class_unref, g_type_from_name, g_type_module_add_interface, g_type_module_register_type,
+    g_type_name, g_type_query, g_type_register_static,
 };
 
 use crate::trampoline::{guard, log_critical};
@@ -106,6 +107,26 @@ pub unsafe trait ObjectSubclass: Sized {
         Vec::new()
     }
 
+    /// The sizes GObject allocates this type's class and instance structs at.
+    ///
+    /// The default is the declared structs' own sizes, which is right whenever
+    /// the parent's structs are generated and embedded as leading fields. A
+    /// subclass of a parent this workspace deliberately knows only as an
+    /// opaque handle — a GTK widget, whose class structs the sys crates
+    /// refuse to generate — has no struct to embed: it overrides this with
+    /// [`TypeSizes::of_parent`], adds no inline fields at all, and keeps its
+    /// state in qdata. `Instance` and `Class` are then only what the
+    /// trampolines cast through (the leading-bytes contract still holds:
+    /// both must *be* prefixes of the parent's structs, `GTypeInstance` and
+    /// `GObjectClass` being the honest choices), never something whose size
+    /// matters.
+    fn type_sizes() -> TypeSizes {
+        TypeSizes {
+            class: size_of::<Self::Class>(),
+            instance: size_of::<Self::Instance>(),
+        }
+    }
+
     /// Runs once, before any instance exists. This is where vfunc slots in
     /// `Class` (and in the parent class reachable through it) get overridden.
     ///
@@ -137,6 +158,41 @@ pub unsafe trait ObjectSubclass: Sized {
     /// `instance` points at an instance struct of this type that is being
     /// finalized; nothing else can still reach it.
     unsafe fn finalize(_instance: *mut Self::Instance) {}
+}
+
+/// What [`ObjectSubclass::type_sizes`] answers: how many bytes GObject
+/// allocates for the class struct and for each instance.
+pub struct TypeSizes {
+    pub class: usize,
+    pub instance: usize,
+}
+
+impl TypeSizes {
+    /// The parent's own sizes, from the running type system, for a subclass
+    /// that adds no inline fields — the shape a subclass of an opaque-handle
+    /// parent (a GTK widget) has to take, its state living in qdata.
+    ///
+    /// The class is referenced first because `g_type_query` fills nothing for
+    /// a classed type whose class was never initialised — the same dance the
+    /// sys crates' layout tests do.
+    pub fn of_parent(parent: GType) -> Self {
+        // SAFETY: `parent` is a registered classed type by the caller's use;
+        // the ref is released after the query and the class stays valid for
+        // the process (the child registered against it keeps it referenced).
+        let query = unsafe {
+            let class = g_type_class_ref(parent);
+            assert!(!class.is_null(), "TypeSizes::of_parent: not a classed type");
+            let mut query = std::mem::zeroed::<GTypeQuery>();
+            g_type_query(parent, &mut query);
+            g_type_class_unref(class);
+            query
+        };
+        assert_ne!(query.type_, 0, "TypeSizes::of_parent: g_type_query failed");
+        Self {
+            class: query.class_size as usize,
+            instance: query.instance_size as usize,
+        }
+    }
 }
 
 /// One interface a type declares, and how the copy of that interface's vtable
@@ -376,6 +432,7 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
     // effect and not for the GTypes they hand back.
     let parent = T::parent_type();
     let interfaces = T::interfaces();
+    let sizes = T::type_sizes();
     let _class_init_types = T::class_init_types();
 
     // A poisoned lock means some other registration panicked; the type system
@@ -400,9 +457,9 @@ unsafe fn register<T: ObjectSubclass>(module: *mut GTypeModule) -> GType {
         }
     }
 
-    let class_size = u16::try_from(size_of::<T::Class>())
+    let class_size = u16::try_from(sizes.class)
         .unwrap_or_else(|_| panic!("{:?}: class struct exceeds GObject's 64 KiB", T::NAME));
-    let instance_size = u16::try_from(size_of::<T::Instance>())
+    let instance_size = u16::try_from(sizes.instance)
         .unwrap_or_else(|_| panic!("{:?}: instance struct exceeds GObject's 64 KiB", T::NAME));
 
     let info = GTypeInfo {
@@ -523,6 +580,48 @@ mod tests {
     use gobject_sys::{G_TYPE_OBJECT, g_type_class_ref, g_type_class_unref};
 
     use super::*;
+
+    /// The shape a GTK-widget subclass takes: sizes from the running type
+    /// system rather than from declared structs, no inline fields of its own.
+    struct QueriedSizes;
+
+    // SAFETY: GTypeInstance and GObjectClass are prefixes of G_TYPE_OBJECT's
+    // structs, and type_sizes() answers that parent's real sizes.
+    unsafe impl ObjectSubclass for QueriedSizes {
+        const NAME: &'static CStr = c"JmapBackendCoreQueriedSizes";
+        type Instance = GTypeInstance;
+        type Class = GObjectClass;
+
+        fn parent_type() -> GType {
+            G_TYPE_OBJECT
+        }
+
+        fn type_sizes() -> TypeSizes {
+            TypeSizes::of_parent(Self::parent_type())
+        }
+    }
+
+    /// `of_parent` answers the parent's own sizes, and a type registered on
+    /// them is allocated at exactly those sizes — the contract the GtkBox
+    /// page in jmap-ui builds on.
+    #[test]
+    fn queried_sizes_match_the_parent() {
+        let sizes = TypeSizes::of_parent(G_TYPE_OBJECT);
+        assert_eq!(sizes.class, size_of::<GObjectClass>());
+        assert_eq!(sizes.instance, size_of::<GObject>());
+
+        let gtype = register_static::<QueriedSizes>();
+        // SAFETY: `gtype` was just registered; the class ref is released.
+        let query = unsafe {
+            let class = g_type_class_ref(gtype);
+            let mut query = std::mem::zeroed::<GTypeQuery>();
+            g_type_query(gtype, &mut query);
+            g_type_class_unref(class);
+            query
+        };
+        assert_eq!(query.instance_size as usize, sizes.instance);
+        assert_eq!(query.class_size as usize, sizes.class);
+    }
 
     /// A type with nothing in it, registered so that something else's
     /// `class_init` can ask for its `GType`.

@@ -15,6 +15,23 @@
 
 use evo_sys::*;
 use std::mem::size_of;
+use std::sync::{Mutex, MutexGuard};
+
+/// GTK 3's hand-written `get_type` once-guards are not thread-safe (the whole
+/// story is in tests/gtk.rs), and two tests here reach GtkScrolledWindow's
+/// initialisation through Evolution's page classes. From parallel harness
+/// threads that deadlocked, not raced: one thread parked in
+/// `g_once_init_enter` while the other, inside the same once-guard, blocked
+/// on the GObject type lock the first still held (observed 2026-09-02, both
+/// stacks through `gtk_scrolled_window_get_type`). Every test here goes
+/// through the type system under this lock.
+static TYPE_SYSTEM: Mutex<()> = Mutex::new(());
+
+fn type_lock() -> MutexGuard<'static, ()> {
+    TYPE_SYSTEM
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// `g_type_query()` fills nothing for a classed type whose class has never been
 /// referenced, so take a class ref first — the same dance as in `eds-sys`.
@@ -32,6 +49,7 @@ fn query(gtype: GType) -> GTypeQuery {
 
 #[test]
 fn service_backend_layout_matches_the_gtype_system() {
+    let _lock = type_lock();
     let q = query(unsafe { e_mail_config_service_backend_get_type() });
     assert_eq!(
         q.instance_size as usize,
@@ -51,6 +69,7 @@ fn service_backend_layout_matches_the_gtype_system() {
 /// lives in Evolution rather than in EDS.
 #[test]
 fn the_parent_is_the_extension_eds_sys_names() {
+    let _lock = type_lock();
     unsafe {
         assert_eq!(
             g_type_parent(e_mail_config_service_backend_get_type()),
@@ -63,6 +82,43 @@ fn the_parent_is_the_extension_eds_sys_names() {
         size_of::<EExtension>() + size_of::<*mut ()>(),
         "the instance struct is no longer an EExtension plus its private pointer"
     );
+}
+
+/// The interface jmap-ui's vacation page fills (`submit`/`submit_finish`
+/// written into its slots), held against the running library — a slot
+/// written at the wrong offset is a wrong vfunc called with the wrong
+/// arguments, inside Evolution's own process.
+///
+/// `g_type_query` answers nothing for interfaces (checked: it fills zero),
+/// so the drift check reads the *default* vtable through our layout instead
+/// and holds every slot against what `e_mail_config_page_default_init`
+/// (3.52) is known to put there: a translated title, `check_complete` and
+/// the three submit slots filled, `setup_defaults` and `commit_changes`
+/// left NULL, and a `page_type` that is a real `GtkAssistantPageType`. A
+/// shifted layout scrambles that NULL/non-NULL pattern.
+#[test]
+fn the_page_interface_defaults_read_correctly_through_our_layout() {
+    let _lock = type_lock();
+    unsafe {
+        let gtype = e_mail_config_page_get_type();
+        let vtable = g_type_default_interface_ref(gtype);
+        assert!(!vtable.is_null(), "no default vtable for EMailConfigPage");
+        let iface = &*vtable.cast::<EMailConfigPageInterface>();
+        assert!(!iface.title.is_null(), "the default title is gone");
+        assert_eq!(iface.sort_order, 0);
+        assert!(
+            iface.page_type <= 5,
+            "page_type is not a GtkAssistantPageType"
+        );
+        assert!(iface.changed.is_none());
+        assert!(iface.setup_defaults.is_none());
+        assert!(iface.check_complete.is_some());
+        assert!(iface.commit_changes.is_none());
+        assert!(iface.submit_sync.is_some());
+        assert!(iface.submit.is_some());
+        assert!(iface.submit_finish.is_some());
+        g_type_default_interface_unref(vtable);
+    }
 }
 
 /// The class field a service backend is *found* by. Evolution's config pages

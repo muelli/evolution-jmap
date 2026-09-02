@@ -23,11 +23,17 @@ name = "jmap_ui"
 crate-type = ["rlib"]
 
 [dependencies]
+eds-sys = { workspace = true }
+# The Evolution side: the notebook the vacation extension extends and the
+# page interface it implements. Every EDS/GLib type comes back out of eds-sys,
+# per that crate's re-export.
+evo-sys = { workspace = true }
+evolution-jmap-client = { workspace = true }
 evolution-jmap-proto = { workspace = true }
+# GTask (the async submit pair) and GCancellable.
+gio-sys = { workspace = true }
 glib-sys = { workspace = true }
 gobject-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
-tracing = { workspace = true }
-
-[dev-dependencies]
 serde_json = { workspace = true }
+tracing = { workspace = true }

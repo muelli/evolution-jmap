@@ -803,7 +803,11 @@ dependencies = [
 name = "jmap-ui"
 version = "0.3.0"
 dependencies = [
+ "eds-sys",
+ "evo-sys",
+ "evolution-jmap-client",
  "evolution-jmap-proto",
+ "gio-sys",
  "glib-sys",
  "gobject-sys",
  "jmap-backend-core",

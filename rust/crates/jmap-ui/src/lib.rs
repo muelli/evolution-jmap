@@ -20,3 +20,4 @@
 pub mod dispatch;
 pub mod module;
 pub mod session_cache;
+pub mod vacation;
