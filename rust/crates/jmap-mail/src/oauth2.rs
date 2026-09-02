@@ -111,15 +111,11 @@ pub unsafe fn access_token(
     };
 
     if ok == GFALSE || token.is_null() {
-        // SAFETY: `error` is NULL or a GError this call owns; reading its
-        // message borrows a string the struct owns, and freeing it afterwards
-        // is what the out-parameter contract asks for.
+        // SAFETY: `error` is NULL or a GError this call owns; `trace_failure`
+        // only reads it, and freeing it afterwards is what the out-parameter
+        // contract asks for.
         let message = unsafe {
-            let message = if error.is_null() {
-                None
-            } else {
-                jmap_backend_core::marshal::read_string((*error).message)
-            };
+            let message = trace_failure(error);
             if !error.is_null() {
                 g_error_free(error);
             }
@@ -133,4 +129,191 @@ pub unsafe fn access_token(
     // SAFETY: `token` is non-NULL by the check above, a g_malloc'd string this
     // call owns; `take_string` copies it and frees the original.
     Ok(unsafe { take_string(token) }.unwrap_or_default())
+}
+
+/// Classifies a failed access-token fetch and traces it, returning the
+/// message [`StoreError::OAuth2`] carries.
+///
+/// Split out of [`access_token`] so the classification can be driven by a
+/// test with a hand-built `GError`, the same way
+/// `jmap_backend_core::oauth2::access_token`'s own tracing is tested — that
+/// EDS-side token fetch already traces `reason`/`escalates_to_consent` (see
+/// its module docs and `docs/ROADMAP.md` item 20's "make every consent
+/// escalation traceable" ask), but this call site, Camel's
+/// `camel_session_get_oauth2_access_token_sync`, logged nothing at all before
+/// this: a failure here — including the item-22 stale-D-Bus-proxy shape,
+/// which this reuses [`jmap_backend_core::oauth2::classify_failure`] to
+/// recognise identically — was invisible in the journal from the mail/Camel
+/// side even though the equivalent EDS-side fetch already names it. Purely
+/// additive: the returned message is unchanged from what this call site
+/// already sent into [`StoreError::OAuth2`].
+///
+/// # Safety
+///
+/// `error` must be NULL or a valid `GError` this call does not own — read
+/// only, never freed here.
+unsafe fn trace_failure(error: *const GError) -> Option<String> {
+    // SAFETY: the contract above is `classify_failure`'s own.
+    let (reason, error_domain, error_domain_name, error_code, message) =
+        unsafe { jmap_backend_core::oauth2::classify_failure(error) };
+    tracing::debug!(
+        reason = reason.as_str(),
+        escalates_to_consent = reason.escalates_to_consent(),
+        error_domain = error_domain.as_deref(),
+        error_domain_name = error_domain_name.as_deref(),
+        error_code,
+        error_message = message.as_deref(),
+        "failed to obtain OAuth 2.0 access token for a mail account"
+    );
+    message
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+    use std::sync::{Arc, Mutex};
+
+    use gio_sys::{G_DBUS_ERROR_SERVICE_UNKNOWN, g_dbus_error_quark, g_io_error_quark};
+    use glib_sys::g_error_new_literal;
+
+    use super::*;
+
+    /// A real `GError`, not a hand-rolled struct: [`trace_failure`] reads
+    /// `classify_failure`'s output, which reads the `domain`/`code`/`message`
+    /// fields directly — see `jmap_backend_core::oauth2`'s own tests for why.
+    fn error(domain: glib_sys::GQuark, code: i32, text: &str) -> *mut GError {
+        let message = CString::new(text).unwrap();
+        // SAFETY: a valid domain and a NUL-terminated message; every caller
+        // below frees the result.
+        unsafe { g_error_new_literal(domain, code, message.as_ptr()) }
+    }
+
+    /// Records every event's field name → value, duplicated from
+    /// `jmap_mail::service`'s own harness for the same reason that one
+    /// gives: this crate depends on `tracing`, not `tracing-subscriber`.
+    struct CapturingSubscriber {
+        captured: Arc<Mutex<Vec<(String, String)>>>,
+    }
+
+    struct Recorder<'a> {
+        sink: &'a Mutex<Vec<(String, String)>>,
+    }
+
+    impl tracing::field::Visit for Recorder<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.sink
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), format!("{value:?}")));
+        }
+
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.sink
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), value.to_string()));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.sink
+                .lock()
+                .unwrap()
+                .push((field.name().to_owned(), value.to_owned()));
+        }
+    }
+
+    impl tracing::Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut Recorder {
+                sink: &self.captured,
+            });
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    fn run_captured(error: *const GError) -> (Option<String>, Vec<(String, String)>) {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = CapturingSubscriber {
+            captured: captured.clone(),
+        };
+        let message =
+            tracing::subscriber::with_default(subscriber, || unsafe { trace_failure(error) });
+        let captured = captured.lock().unwrap().clone();
+        (message, captured)
+    }
+
+    /// The item-22 shape: a dead D-Bus peer behind the OAuth2 token fetch.
+    /// Traced as `secret_store_failure`/`escalates_to_consent=false`, exactly
+    /// as `jmap_backend_core::oauth2::access_token` already traces the same
+    /// failure on the EDS side — this call site had no trace at all before.
+    #[test]
+    fn a_dead_dbus_peer_is_traced_as_a_secret_store_failure() {
+        let error = error(
+            unsafe { g_dbus_error_quark() },
+            G_DBUS_ERROR_SERVICE_UNKNOWN,
+            "The name :1.4 was not provided by any .service files",
+        );
+        let (message, captured) = run_captured(error);
+        unsafe { g_error_free(error) };
+
+        assert_eq!(
+            message.as_deref(),
+            Some("The name :1.4 was not provided by any .service files")
+        );
+        assert!(
+            captured.contains(&("reason".to_owned(), "secret_store_failure".to_owned())),
+            "expected reason=secret_store_failure, got {captured:?}"
+        );
+        assert!(
+            captured.contains(&("escalates_to_consent".to_owned(), "false".to_owned())),
+            "expected escalates_to_consent=false, got {captured:?}"
+        );
+    }
+
+    /// A genuine "nobody has consented yet" failure still escalates, and is
+    /// traced saying so — the message this crate has always returned is
+    /// unchanged, only the trace is new.
+    #[test]
+    fn a_missing_consent_is_traced_as_escalating() {
+        let error = error(
+            unsafe { g_io_error_quark() },
+            gio_sys::G_IO_ERROR_NOT_SUPPORTED,
+            "no registered OAuth2 service",
+        );
+        let (message, captured) = run_captured(error);
+        unsafe { g_error_free(error) };
+
+        assert_eq!(message.as_deref(), Some("no registered OAuth2 service"));
+        assert!(
+            captured.contains(&("escalates_to_consent".to_owned(), "true".to_owned())),
+            "expected escalates_to_consent=true, got {captured:?}"
+        );
+    }
+
+    /// A NULL `GError*` — `access_token`'s own fallback message covers this,
+    /// [`trace_failure`] must not dereference it.
+    #[test]
+    fn a_null_error_traces_without_a_message() {
+        let (message, captured) = run_captured(std::ptr::null());
+        assert_eq!(message, None);
+        assert!(
+            captured.contains(&("reason".to_owned(), "null_error".to_owned())),
+            "expected reason=null_error, got {captured:?}"
+        );
+    }
 }
