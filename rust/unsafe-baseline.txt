@@ -24,7 +24,7 @@ jmap-config 220
 jmap-config-module 4
 jmap-functional 1
 jmap-ical 0
-jmap-mail 498
+jmap-mail 509
 jmap-mail-sync 0
 jmap-mock 0
 jmap-proto 0

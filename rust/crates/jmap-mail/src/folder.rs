@@ -36,6 +36,8 @@
 use std::ffi::CStr;
 use std::ptr;
 
+#[cfg(camel_folder_search_object)]
+use eds_sys::camel_pstring_strdup;
 use eds_sys::{
     CAMEL_FOLDER_FILTER_JUNK, CAMEL_FOLDER_FILTER_RECENT, CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY,
     CamelFolder, CamelFolderClass, CamelFolderFlags, CamelOfflineFolder, CamelOfflineFolderClass,
@@ -43,17 +45,31 @@ use eds_sys::{
     camel_offline_folder_get_type, camel_service_get_user_cache_dir,
 };
 use glib_sys::{GType, gchar};
+#[cfg(camel_folder_search_object)]
+use glib_sys::{g_ptr_array_new, g_ptr_array_set_size};
 use gobject_sys::g_object_new;
+#[cfg(camel_folder_search_object)]
+use jmap_backend_core::cancel::observe;
+#[cfg(camel_folder_search_object)]
+use jmap_backend_core::error::fail;
 use jmap_backend_core::instance::Slot;
+#[cfg(camel_folder_search_object)]
+use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::marshal::{checked_borrow, dispatched_borrow};
 #[cfg(camel_folder_search_object)]
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+#[cfg(camel_folder_search_object)]
+use jmap_backend_core::trampoline::guard_ptr;
 use jmap_mail_sync::{FolderInfo, FolderRole};
 use jmap_proto::Id;
 
 use crate::cache::MessageCache;
+#[cfg(camel_folder_search_object)]
+use crate::connect::StoreError;
 use crate::folder_info::c_string;
+#[cfg(camel_folder_search_object)]
+use crate::search_sexp;
 use crate::store::{JmapStore, store_type};
 use crate::summary::attach_summary;
 
@@ -285,16 +301,81 @@ unsafe impl ObjectSubclass for JmapFolder {
 /// `CamelFolderClass.search_by_expression`, up to EDS 3.52: which of this
 /// folder's messages match `expression`.
 ///
-/// A `CamelFolderSearch` over the folder's own summary, which is what a local
-/// search *is* — the rows are already here, and an expression over flags or
-/// headers needs nothing from the server. Built and dropped per call rather than
-/// kept on the folder: the object holds the folder it was pointed at, and a
-/// cached one would be a second owner of state Camel expects the search to read
-/// fresh.
+/// Tries the server first: [`search_sexp::translate`] turns `expression` into
+/// a JMAP filter when RFC 8621's contains-only conditions can express it, and
+/// `Email/query` answers over the whole mailbox rather than the cached
+/// summary, the one case a local search cannot get right, since a body it
+/// never downloaded is not there to search. Falls back to the local
+/// `CamelFolderSearch` this always ran, over the folder's own summary, when
+/// the expression cannot be translated or the folder/store are not in a state
+/// to ask, but never on a server error, which is reported rather than
+/// silently answered with a possibly-wrong local match set.
 ///
-/// Gone from 3.58, where the base class does this itself — see `class_init`.
+/// Gone from 3.58, where the base class does this itself: see `class_init`.
 #[cfg(camel_folder_search_object)]
 unsafe extern "C" fn search_by_expression(
+    folder: *mut CamelFolder,
+    expression: *const gchar,
+    cancellable: *mut gio_sys::GCancellable,
+    error: *mut *mut glib_sys::GError,
+) -> *mut glib_sys::GPtrArray {
+    unsafe {
+        guard_ptr("search_by_expression", error, || {
+            let _cancel = observe(cancellable);
+            match server_matches(folder, expression, None) {
+                Some(Ok(uids)) => pstring_uid_array(&uids),
+                Some(Err(failure)) => fail(error, &failure, StoreError::to_gerror),
+                None => local_search_by_expression(folder, expression, cancellable, error),
+            }
+        })
+    }
+}
+
+/// `CamelFolderClass.search_by_uids`: the same question narrowed to a list of
+/// uids, tried the same way. `Email/query` has no notion of "one of these
+/// ids", so a server match set is narrowed to `uids` afterwards, the one
+/// extra step the local path gets from `camel_folder_search_search`'s own
+/// extra argument.
+///
+/// Gone from 3.58 alongside its sibling.
+#[cfg(camel_folder_search_object)]
+unsafe extern "C" fn search_by_uids(
+    folder: *mut CamelFolder,
+    expression: *const gchar,
+    uids: *mut glib_sys::GPtrArray,
+    cancellable: *mut gio_sys::GCancellable,
+    error: *mut *mut glib_sys::GError,
+) -> *mut glib_sys::GPtrArray {
+    unsafe {
+        guard_ptr("search_by_uids", error, || {
+            let _cancel = observe(cancellable);
+            // SAFETY: `uids` is NULL or a live `GPtrArray` of NUL-terminated
+            // strings, by the contract of the vfunc this backs.
+            let restrict = (!uids.is_null()).then(|| uid_strings(uids));
+            match server_matches(folder, expression, restrict.as_deref()) {
+                Some(Ok(matched)) => pstring_uid_array(&matched),
+                Some(Err(failure)) => fail(error, &failure, StoreError::to_gerror),
+                None => local_search_by_uids(folder, expression, uids, cancellable, error),
+            }
+        })
+    }
+}
+
+/// The local `CamelFolderSearch` path both vfuncs above fall back to: a
+/// search over the folder's own summary, which is what a local search *is*,
+/// since the rows are already here and an expression over flags or headers
+/// needs nothing from the server. Built and dropped per call rather than kept
+/// on the folder: the object holds the folder it was pointed at, and a cached
+/// one would be a second owner of state Camel expects the search to read
+/// fresh.
+///
+/// # Safety
+///
+/// `folder` must be live, `expression` NUL-terminated and live for the call,
+/// and `error` NULL or a valid, currently-NULL `GError **`, the same
+/// contract as the vfunc this backs.
+#[cfg(camel_folder_search_object)]
+unsafe fn local_search_by_expression(
     folder: *mut CamelFolder,
     expression: *const gchar,
     cancellable: *mut gio_sys::GCancellable,
@@ -315,13 +396,15 @@ unsafe extern "C" fn search_by_expression(
     }
 }
 
-/// `CamelFolderClass.search_by_uids`: the same question narrowed to a list of
-/// uids, and answered the same way — the uid list is the one extra argument
-/// `camel_folder_search_search` takes.
+/// The same, narrowed to `uids`: [`local_search_by_expression`] with the one
+/// extra argument `camel_folder_search_search` takes.
 ///
-/// Gone from 3.58 alongside its sibling.
+/// # Safety
+///
+/// As [`local_search_by_expression`], plus: `uids` must be NULL or a live
+/// `GPtrArray` of NUL-terminated strings.
 #[cfg(camel_folder_search_object)]
-unsafe extern "C" fn search_by_uids(
+unsafe fn local_search_by_uids(
     folder: *mut CamelFolder,
     expression: *const gchar,
     uids: *mut glib_sys::GPtrArray,
@@ -334,6 +417,93 @@ unsafe extern "C" fn search_by_uids(
         };
         eds_sys::camel_folder_search_set_folder(search.as_ptr(), folder);
         eds_sys::camel_folder_search_search(search.as_ptr(), expression, uids, cancellable, error)
+    }
+}
+
+/// Tries the server for `expression`, scoped to `folder`'s mailbox and, when
+/// given, narrowed further to `restrict`.
+///
+/// `None` means the expression cannot be answered this way: untranslatable,
+/// the folder/store not in a state to ask (mailbox not yet set, or no store
+/// behind the folder at all), or the store disconnected. Either way the
+/// caller falls back to the local search, exactly what it always answered
+/// before server-side search existed. A disconnected store folds to `None`
+/// rather than an error on purpose: it is the offline case the local summary
+/// search exists for, the same way every other read path in this provider
+/// treats no connection as "answer from what is already local" rather than a
+/// hard failure. `Some(Err(_))` means the server *was* asked, over a live
+/// connection, and failed; that is reported rather than masked by a silent
+/// fallback to a possibly stale local answer.
+///
+/// # Safety
+///
+/// `folder` must be live and `expression` NUL-terminated and live for the
+/// call, the same contract as the vfuncs this backs.
+#[cfg(camel_folder_search_object)]
+unsafe fn server_matches(
+    folder: *mut CamelFolder,
+    expression: *const gchar,
+    restrict: Option<&[String]>,
+) -> Option<Result<Vec<String>, StoreError>> {
+    // SAFETY: the contract above.
+    let expression = unsafe { read_string(expression) }?;
+    let filter = search_sexp::translate(&expression)?;
+    // SAFETY: as above.
+    let mailbox = unsafe { JmapFolder::borrow(folder) }?.mailbox()?.clone();
+    // SAFETY: as above.
+    let store = unsafe { parent_store(folder) }?;
+    let matches = match store.search(&mailbox, filter) {
+        Ok(ids) => ids,
+        Err(StoreError::Disconnected) => return None,
+        Err(failure) => return Some(Err(failure)),
+    };
+    let matches = matches.into_iter().map(|id| id.as_str().to_owned());
+    Some(Ok(match restrict {
+        Some(restrict) => matches.filter(|uid| restrict.contains(uid)).collect(),
+        None => matches.collect(),
+    }))
+}
+
+/// The uids of a `GPtrArray` Camel handed over, copied out as strings.
+///
+/// # Safety
+///
+/// `array` must be a live `GPtrArray` of NUL-terminated strings.
+#[cfg(camel_folder_search_object)]
+unsafe fn uid_strings(array: *mut glib_sys::GPtrArray) -> Vec<String> {
+    // SAFETY: the contract above; every element lives at least as long as
+    // the array, which outlives this call.
+    unsafe {
+        (0..(*array).len)
+            .map(|index| {
+                let uid: *const gchar = (*array).pdata.add(index as usize).read().cast();
+                CStr::from_ptr(uid).to_string_lossy().into_owned()
+            })
+            .collect()
+    }
+}
+
+/// Builds the `GPtrArray` a search vfunc returns for a server match set, with
+/// every element allocated through Camel's string pool rather than plain
+/// `g_free`-able memory.
+///
+/// That is not a style choice: this class installs no `search_free` of its
+/// own, so the base implementation frees the result, and it frees each
+/// element with `camel_pstring_free`. A plain `g_strdup`'d string handed
+/// back through this path would be freed the wrong way.
+#[cfg(camel_folder_search_object)]
+fn pstring_uid_array(uids: &[String]) -> *mut glib_sys::GPtrArray {
+    // SAFETY: a fresh array, sized so every slot exists before any is
+    // written, the same shape `transfer.rs`'s `Reported` builds one in.
+    unsafe {
+        let array = g_ptr_array_new();
+        g_ptr_array_set_size(array, uids.len() as std::os::raw::c_int);
+        for (index, uid) in uids.iter().enumerate() {
+            let cuid = c_string(uid);
+            let pooled = camel_pstring_strdup(cuid.as_ptr());
+            *(*array).pdata.add(index) = pooled.cast_mut().cast();
+        }
+        array
     }
 }
 

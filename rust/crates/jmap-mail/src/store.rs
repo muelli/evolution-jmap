@@ -46,6 +46,8 @@ use jmap_mail_sync::{
     Filing, FolderInfo, FolderTree, FolderUpdate, KeywordChange, Keywords, MailSync,
     MessageSummary, MessageUpdate, SyncError,
 };
+use jmap_proto::mail::EmailQueryFilter;
+use jmap_proto::methods::Filter;
 use jmap_proto::{Id, State};
 
 use crate::connect::StoreError;
@@ -758,6 +760,41 @@ impl JmapStore {
             }
             Err(failure) => {
                 tracing::debug!(uid = uid.as_str(), ?failure, "filing message failed");
+                Err(failure.into())
+            }
+        }
+    }
+
+    /// The ids of `mailbox`'s messages matching `filter`, evaluated by the
+    /// server: the round trip behind a folder's `search_by_expression`/
+    /// `search_by_uids` for whatever a Camel search expression translates to.
+    pub fn search(
+        &self,
+        mailbox: &Id,
+        filter: Filter<EmailQueryFilter>,
+    ) -> Result<Vec<Id>, StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let sync = {
+            let guard = read(connection);
+            let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
+            Arc::clone(sync)
+        };
+        tracing::debug!(mailbox_id = mailbox.as_str(), "searching mailbox");
+        match retry_once_after(
+            || sync.search(mailbox, filter.clone()),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(&sync),
+        ) {
+            Ok(ids) => {
+                tracing::debug!(
+                    mailbox_id = mailbox.as_str(),
+                    matches = ids.len(),
+                    "searched mailbox"
+                );
+                Ok(ids)
+            }
+            Err(failure) => {
+                tracing::debug!(mailbox_id = mailbox.as_str(), ?failure, "search failed");
                 Err(failure.into())
             }
         }
