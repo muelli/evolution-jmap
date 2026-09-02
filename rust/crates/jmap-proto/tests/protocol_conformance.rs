@@ -439,11 +439,23 @@ fn email_conformance_required_vs_optional_fields_and_snooze_payload() {
         Some("Follow up with client tomorrow")
     );
 
-    // SnoozeDetails object rides cleanly in extra["snoozed"]
-    let snooze_details = &snoozed_email.extra["snoozed"];
-    assert_eq!(snooze_details["until"], "2026-09-01T09:00:00Z");
-    assert_eq!(snooze_details["moveToMailboxId"], "mbx_inbox");
-    assert_eq!(snooze_details["setKeywords"]["$flagged"], true);
+    // SnoozeDetails is a typed field now, not a passenger in `extra`.
+    let snooze_details = snoozed_email.snoozed.as_ref().expect("snoozed parsed");
+    assert_eq!(snooze_details.until.as_str(), "2026-09-01T09:00:00Z");
+    assert_eq!(
+        snooze_details
+            .move_to_mailbox_id
+            .as_ref()
+            .map(|id| id.as_str()),
+        Some("mbx_inbox")
+    );
+    assert_eq!(
+        snooze_details
+            .set_keywords
+            .as_ref()
+            .and_then(|keywords| keywords.get("$flagged")),
+        Some(&true)
+    );
     assert_eq!(snoozed_email.extra["aiPriorityScore"], 8.5);
 }
 

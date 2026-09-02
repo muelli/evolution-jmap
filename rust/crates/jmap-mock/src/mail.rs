@@ -10,7 +10,7 @@ use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailHeader, EmailImportRequest,
     EmailImportResponse, EmailQueryFilter, EmailSubmission, EmailSubmissionSetRequest, Envelope,
     EnvelopeAddress, Identity, Mailbox, SearchSnippet, SearchSnippetGetRequest,
-    SearchSnippetGetResponse, Thread, VacationResponse, email_import_error,
+    SearchSnippetGetResponse, Thread, VacationResponse, email_import_error, role,
 };
 use jmap_proto::methods::{
     Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse, operator,
@@ -1069,9 +1069,50 @@ pub fn vacation_response_set(
     })
 }
 
+/// The snooze extension's coupling rule for `Email.snoozed`: without the
+/// extension the property does not exist, and with it a snoozed message must
+/// sit in the snoozed-role mailbox. (Cyrus also refuses the reverse — filing
+/// into that mailbox without snoozing — which is not modeled: an ordinary
+/// move into the folder is what a client without the extension does anyway.)
+fn snooze_refusal(
+    snooze_extension: bool,
+    snoozed_mailbox: Option<&Id>,
+    email: &Email,
+) -> Option<SetError> {
+    email.snoozed.as_ref()?;
+    if !snooze_extension {
+        return Some(
+            SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("snoozed needs the server's snooze extension")
+                .with_properties(["snoozed"]),
+        );
+    }
+    let filed_in_snoozed = snoozed_mailbox.is_some_and(|snoozed_id| {
+        email
+            .mailbox_ids
+            .as_ref()
+            .is_some_and(|mailboxes| mailboxes.get(snoozed_id) == Some(&true))
+    });
+    if filed_in_snoozed {
+        None
+    } else {
+        Some(
+            SetError::new(error::set::INVALID_PROPERTIES)
+                .with_description("a snoozed message must sit in the snoozed-role mailbox")
+                .with_properties(["mailboxIds", "snoozed"]),
+        )
+    }
+}
+
 pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: SetRequest<Email> = parse_arguments(arguments)?;
+    let snooze_extension = state.snooze_extension;
     let account = account_mut(state, &request.account_id)?;
+    let snoozed_mailbox: Option<Id> = account
+        .mailboxes
+        .iter()
+        .find(|(_, mailbox)| mailbox.role.as_deref() == Some(role::SNOOZED))
+        .map(|(id, _)| id.clone());
 
     let old_state = account.emails.state();
     if let Some(expected) = &request.if_in_state
@@ -1089,6 +1130,10 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     let mut to_create_threads: Vec<(Id, Thread)> = Vec::new();
     for (creation_id, mut email) in request.create.unwrap_or_default() {
         if let Err(refusal) = filed_somewhere(account, &email) {
+            not_created.insert(creation_id, refusal);
+            continue;
+        }
+        if let Some(refusal) = snooze_refusal(snooze_extension, snoozed_mailbox.as_ref(), &email) {
             not_created.insert(creation_id, refusal);
             continue;
         }
@@ -1150,9 +1195,12 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
                     SetError::new(error::set::INVALID_PATCH).with_description(e.to_string())
                 })
             }) {
-            Ok(patched) => match filed_somewhere(account, &patched) {
-                Ok(()) => to_update.push((id, patched)),
-                Err(refusal) => {
+            Ok(patched) => match filed_somewhere(account, &patched)
+                .err()
+                .or_else(|| snooze_refusal(snooze_extension, snoozed_mailbox.as_ref(), &patched))
+            {
+                None => to_update.push((id, patched)),
+                Some(refusal) => {
                     not_updated.insert(id, refusal);
                 }
             },

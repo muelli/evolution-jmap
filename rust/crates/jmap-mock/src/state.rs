@@ -200,6 +200,11 @@ pub struct ServerState {
     /// every other test and every deployment that does not support SMTP
     /// FUTURERELEASE.
     pub max_delayed_send: Option<u64>,
+    /// Advertise the Cyrus vendor mail extension and accept `Email.snoozed`,
+    /// as [`crate::MockServerBuilder::snooze_extension`] asked. Off matches
+    /// every deployment without snooze (Stalwart included): the property is
+    /// then refused, not silently stored.
+    pub snooze_extension: bool,
     /// Every currently connected `/eventsource` client (RFC 8620 §7.3), so
     /// [`crate::MockServer::push_state_change`] has someone to push to.
     pub event_source: EventSourceHub,
@@ -231,6 +236,7 @@ impl ServerState {
             terse_calendar_event_create: false,
             terse_collection_create: false,
             max_delayed_send: None,
+            snooze_extension: false,
             event_source: EventSourceHub::new(),
         }
     }

@@ -335,9 +335,57 @@ pub mod role {
     pub const IMPORTANT: &str = "important";
     pub const INBOX: &str = "inbox";
     pub const JUNK: &str = "junk";
+    /// Held for later sending (RFC 9979 §8.2).
+    pub const SCHEDULED: &str = "scheduled";
     pub const SENT: &str = "sent";
+    /// Where snoozed messages wait (RFC 9979 §8.1 — the role is standard,
+    /// the snoozing mechanism is not; see [`super::SnoozeDetails`]).
+    pub const SNOOZED: &str = "snoozed";
     pub const SUBSCRIBED: &str = "subscribed";
     pub const TRASH: &str = "trash";
+}
+
+/// When a snoozed message wakes and where it goes: `Email.snoozed`, per
+/// draft-ietf-extra-email-snooze §4 as Cyrus/Fastmail deploy it behind
+/// [`crate::session::CAPABILITY_CYRUS_MAIL`].
+///
+/// The draft expired in 2024 without replacement, so this shape is vendor
+/// territory. It is modeled in this one place — plus the capability constant —
+/// so that a future RFC is a constant swap and a field check, not a rewrite.
+/// Setting it goes together with moving the message into the
+/// [`role::SNOOZED`] mailbox; the server moves it to `move_to_mailbox_id`
+/// (the inbox when absent) at `until` and applies `set_keywords`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnoozeDetails {
+    pub until: UtcDate,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_to_mailbox_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_keywords: Option<BTreeMap<String, bool>>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+impl SnoozeDetails {
+    pub fn new(until: impl Into<UtcDate>) -> Self {
+        Self {
+            until: until.into(),
+            move_to_mailbox_id: None,
+            set_keywords: None,
+            extra: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_move_to_mailbox_id(mut self, mailbox_id: impl Into<Id>) -> Self {
+        self.move_to_mailbox_id = Some(mailbox_id.into());
+        self
+    }
+
+    pub fn with_set_keywords(mut self, keywords: BTreeMap<String, bool>) -> Self {
+        self.set_keywords = Some(keywords);
+        self
+    }
 }
 
 /// An email message, RFC 8621 §4. All properties are optional because
@@ -356,6 +404,10 @@ pub struct Email {
     pub mailbox_ids: Option<BTreeMap<Id, bool>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<BTreeMap<String, bool>>,
+    /// Vendor extension, absent on the wire unless the account offers
+    /// [`crate::session::CAPABILITY_CYRUS_MAIL`]; see [`SnoozeDetails`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed: Option<SnoozeDetails>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

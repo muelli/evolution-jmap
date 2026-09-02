@@ -33,6 +33,9 @@ pub const CAPABILITY_METADATA: &str = "urn:ietf:params:jmap:metadata";
 pub const CAPABILITY_MAIL_SHARE: &str = "urn:ietf:params:jmap:mail:share";
 pub const CAPABILITY_PRINCIPALS_AVAILABILITY: &str = "urn:ietf:params:jmap:principals:availability";
 pub const CAPABILITY_WEBPUSH_VAPID: &str = "urn:ietf:params:jmap:webpush-vapid";
+/// Cyrus's vendor mail extension (Fastmail): the only deployed capability
+/// naming `Email.snoozed`, with draft-ietf-extra-email-snooze expired.
+pub const CAPABILITY_CYRUS_MAIL: &str = "https://cyrusimap.org/ns/jmap/mail";
 
 /// Server capabilities, available accounts, and endpoint URLs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -634,6 +637,13 @@ impl Account {
             .get(CAPABILITY_SUBMISSION)?
             .get("maxDelayedSend")?
             .as_u64()
+    }
+
+    /// Whether this account claims `capability` among its
+    /// `accountCapabilities` — the RFC 8620 §1.6.2 test every optional
+    /// feature gate starts from.
+    pub fn has_capability(&self, capability: &str) -> bool {
+        self.account_capabilities.contains_key(capability)
     }
 
     /// This account's submission capability object (RFC 8621 §7.1), typed.
