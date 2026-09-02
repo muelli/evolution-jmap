@@ -15,7 +15,7 @@ use jmap_backend_core::i18n::bind;
 use jmap_backend_core::subclass::register_dynamic;
 use jmap_backend_core::trampoline::guard;
 
-use crate::vacation;
+use crate::{send_later, vacation};
 
 /// Register this crate's types against `type_module`, guarded like every
 /// other entry point Evolution calls.
@@ -40,8 +40,9 @@ pub unsafe fn load(type_module: *mut GTypeModule) {
             // notebook.
             register_dynamic::<vacation::page::VacationPage>(type_module);
             register_dynamic::<vacation::extension::JmapVacationExtension>(type_module);
+            register_dynamic::<send_later::extension::JmapSendLaterExtension>(type_module);
         }
-        tracing::trace!("jmap-ui loaded: vacation page registered");
+        tracing::trace!("jmap-ui loaded: vacation page and scheduled send registered");
     });
 }
 

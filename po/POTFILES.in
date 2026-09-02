@@ -61,6 +61,8 @@ rust/crates/jmap-config/src/oauth2_service.rs
 rust/crates/jmap-config/src/oauth2_setup.rs
 rust/crates/jmap-mail/src/provider.rs
 rust/crates/jmap-mail/src/sasl.rs
+rust/crates/jmap-ui/src/link.rs
+rust/crates/jmap-ui/src/send_later/extension.rs
+rust/crates/jmap-ui/src/send_later/submit.rs
 rust/crates/jmap-ui/src/vacation/form.rs
-rust/crates/jmap-ui/src/vacation/io.rs
 rust/crates/jmap-ui/src/vacation/page.rs

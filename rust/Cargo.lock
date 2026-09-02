@@ -806,6 +806,7 @@ dependencies = [
  "eds-sys",
  "evo-sys",
  "evolution-jmap-client",
+ "evolution-jmap-mock",
  "evolution-jmap-proto",
  "gio-sys",
  "glib-sys",

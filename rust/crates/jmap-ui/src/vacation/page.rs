@@ -53,8 +53,9 @@ use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass, 
 use jmap_backend_core::trampoline::{guard, log_critical};
 
 use crate::dispatch;
+use crate::link::{self, AccountLink};
 use crate::vacation::form::VacationForm;
-use crate::vacation::io::{self, AccountLink};
+use crate::vacation::io;
 
 const NAME: &CStr = c"JmapVacationPage";
 const STATE_KEY: &CStr = c"jmap-vacation-page-state";
@@ -338,7 +339,7 @@ pub unsafe fn create(connect_source: *mut ESource) -> *mut EMailConfigPage {
         let source = source;
         // SAFETY: the reference `create` took keeps the source alive for the
         // whole of this closure.
-        let outcome = unsafe { io::connect_account(source.0) }.and_then(|link| {
+        let outcome = unsafe { link::connect_account(source.0) }.and_then(|link| {
             let response = io::load(&link)?;
             Ok((Arc::new(link), VacationForm::from_response(&response)))
         });

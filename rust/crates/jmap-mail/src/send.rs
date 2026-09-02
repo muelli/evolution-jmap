@@ -73,8 +73,8 @@ use jmap_backend_core::trampoline::guard_bool;
 
 use crate::connect::StoreError;
 use crate::envelope::{EnvelopeError, read_envelope};
-use crate::mime::{Unwritable, write_message};
 use crate::transport::JmapTransport;
+use jmap_backend_core::mime::{Unwritable, write_message};
 
 /// Installs the send vfunc on a class whose first member is a
 /// `CamelTransportClass`.

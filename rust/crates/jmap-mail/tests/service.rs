@@ -29,12 +29,12 @@ use std::sync::Arc;
 use common::Account;
 use eds_sys::{
     CAMEL_AUTHENTICATION_ACCEPTED, CAMEL_AUTHENTICATION_ERROR, CAMEL_AUTHENTICATION_REJECTED,
-    CAMEL_SERVICE_ERROR_INVALID, CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_STORE_FOLDER_INFO_REFRESH,
-    CamelNetworkSettings, CamelService, camel_network_settings_set_host,
-    camel_network_settings_set_port, camel_network_settings_set_user, camel_service_error_quark,
-    camel_service_get_name, camel_service_ref_settings,
+    CAMEL_SERVICE_ERROR_UNAVAILABLE, CAMEL_STORE_FOLDER_INFO_REFRESH, CamelNetworkSettings,
+    CamelService, camel_network_settings_set_host, camel_network_settings_set_port,
+    camel_network_settings_set_user, camel_service_error_quark, camel_service_get_name,
+    camel_service_ref_settings,
 };
-use glib_sys::{GError, GFALSE, GTRUE, g_error_free, g_error_new_literal};
+use glib_sys::GError;
 use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_client::{Client, Credentials, Error};
 use jmap_mail::connect::{StoreError, password_credentials};

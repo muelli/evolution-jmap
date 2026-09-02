@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! [`jmap_mail::mime`]: the `CamelMimeMessage` as the octets a JMAP request
+//! [`jmap_backend_core::mime`]: the `CamelMimeMessage` as the octets a JMAP request
 //! uploads.
 //!
 //! Every message this account puts on the server goes through here. Two callers
-//! want it and they are not the same object: [`jmap_mail::append`] is a folder
+//! want it and they are not the same object: `jmap-mail`'s append is a folder
 //! taking a message from outside the account, and a `CamelTransport`'s
 //! `send_to_sync` is a service with no folder at all sending one. Both are
 //! handed an object and both need blob bytes, so the writing is one function
@@ -16,7 +16,7 @@
 //!
 //! The bytes are produced by `camel_data_wrapper_write_to_output_stream_sync`,
 //! Camel's RFC 5322 emitter, reached through the message's `CamelDataWrapper`
-//! face. That is the mirror of the decision [`jmap_mail::message`] makes about
+//! face. That is the mirror of the decision `jmap-mail`'s message module makes about
 //! the parse on the way in: a provider that wrote headers itself would be a
 //! second MIME implementation inside the process, disagreeing with the first
 //! about what a message says — and here the disagreement would be *stored*,
@@ -31,7 +31,7 @@
 //!
 //! ## The error is the caller's to name
 //!
-//! The one thing lifted out of [`jmap_mail::append`] rather than moved: a
+//! The one thing lifted out of `jmap-mail`'s append rather than moved: a
 //! writer that fails without saying why used to produce a `CAMEL_FOLDER_ERROR`,
 //! which is the right answer for a folder and the wrong one for a transport
 //! that has no folder in the call. [`Unwritable::into_gerror`] therefore takes
@@ -40,7 +40,7 @@
 //! implementation, where a failure can be constructed; what cannot be
 //! constructed here is a real `CamelMimeMessage` its own writer refuses.
 //!
-//! [`Unwritable::into_gerror`]: jmap_mail::mime::Unwritable::into_gerror
+//! [`Unwritable::into_gerror`]: jmap_backend_core::mime::Unwritable::into_gerror
 
 use std::ffi::CStr;
 use std::ptr;
@@ -51,7 +51,7 @@ use eds_sys::{
 };
 use glib_sys::{GError, GFALSE, gssize};
 use gobject_sys::g_object_unref;
-use jmap_mail::mime::write_message;
+use jmap_backend_core::mime::write_message;
 
 /// The RFC 5322 bytes of an ordinary message — CRLF line endings, a header
 /// block, a blank line, a body.

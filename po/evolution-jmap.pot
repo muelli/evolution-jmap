@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-31 17:06+0000\n"
+"POT-Creation-Date: 2026-09-02 23:08+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -82,6 +82,10 @@ msgstr ""
 
 #: rust/crates/jmap-backend-core/src/oauth2.rs:566
 #: rust/crates/jmap-backend-core/src/oauth2.rs:676
+#: rust/crates/jmap-ui/src/link.rs:138 rust/crates/jmap-ui/src/link.rs:143
+#: rust/crates/jmap-ui/src/send_later/extension.rs:609
+#: rust/crates/jmap-ui/src/send_later/extension.rs:612
+#: rust/crates/jmap-ui/src/send_later/extension.rs:633
 msgid "no further detail was given"
 msgstr ""
 
@@ -136,14 +140,14 @@ msgstr ""
 
 #. TRANSLATORS: shown when Evolution asks a JMAP account to
 #. create a collection whose kind the request does not state.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:169
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:172
 msgid "the new collection is neither an address book nor a calendar"
 msgstr ""
 
 #. TRANSLATORS: %1$s is "address book" or "calendar". Shown when
 #. the JMAP server behind an account offers no account of that
 #. kind at all, so there is nowhere to create one.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:181
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:184
 #, c-format
 msgid "this account's JMAP server has no place to create %1$s in"
 msgstr ""
@@ -152,7 +156,7 @@ msgstr ""
 #. developer-facing description of the setting that could not be
 #. written. Shown when the collection was made on the server and
 #. the local source describing it could not be completed.
-#: rust/crates/jmap-backend-collection/src/create_resource.rs:190
+#: rust/crates/jmap-backend-collection/src/create_resource.rs:193
 #, c-format
 msgid ""
 "the %1$s was created on the server, but the source for it could not be "
@@ -252,7 +256,7 @@ msgstr ""
 #. TRANSLATORS: the name of an account type, in the list of account types
 #. Evolution offers when adding an account. A protocol name — leave it as it is
 #. unless your language writes it in another script.
-#: rust/crates/jmap-config/src/oauth2_service.rs:391
+#: rust/crates/jmap-config/src/oauth2_service.rs:422
 #: rust/crates/jmap-mail/src/provider.rs:60
 msgid "JMAP"
 msgstr ""
@@ -278,4 +282,134 @@ msgstr ""
 #. TRANSLATORS: the description of the "OAuth2 (JMAP)" authentication method.
 #: rust/crates/jmap-mail/src/sasl.rs:163
 msgid "Uses an OAuth 2.0 access token to connect to the JMAP server."
+msgstr ""
+
+#: rust/crates/jmap-ui/src/link.rs:94
+msgid "the session document names no usable mail account"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:70
+msgid "Checking whether the sending account offers scheduled send…"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:71
+msgid "The selected sending account is not a JMAP account"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:72
+msgid "The account’s server does not offer scheduled send"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the reason the mail server gave.
+#: rust/crates/jmap-ui/src/send_later/extension.rs:74
+#, c-format
+msgid "The account’s server could not be asked: %1$s"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:75
+msgid "The server holds the message and sends it at the chosen time"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:78
+#, c-format
+msgid ""
+"The message could not be scheduled: %1$s (a copy may remain in the server’s "
+"Drafts folder)"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:79
+msgid "The message names no recipients"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:80
+msgid "The message has no From address"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:81
+msgid "The chosen time is further ahead than the server accepts"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:82
+msgid "The local calendar could not name the chosen time"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:155
+msgid "In One _Hour"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:158
+msgid "_Tomorrow Morning"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:163
+msgid "Next _Monday Morning"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:200
+msgid "Send _Later"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/submit.rs:41
+msgid "the server has no Drafts mailbox to stage the message in"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/submit.rs:52
+msgid "the account has no sending identity on the server"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/submit.rs:67
+msgid "the server imported the message without naming its id"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/submit.rs:104
+#, c-format
+msgid ""
+"the server accepted the submission but named no release time (undoStatus "
+"%1$s)"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/form.rs:27
+msgid "Dates take the form YYYY-MM-DD; leave one empty for no limit"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:63
+msgid "Contacting the mail server…"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:64
+msgid "This account’s server does not offer a vacation autoresponder."
+msgstr ""
+
+#. TRANSLATORS: %1$s is the reason the mail server gave.
+#: rust/crates/jmap-ui/src/vacation/page.rs:66
+#, c-format
+msgid "The autoresponder could not be read: %1$s"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:67
+msgid "YYYY-MM-DD, or empty for no limit"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:160
+msgid "Vacation Responder"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:214
+msgid "Send _automatic replies"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:229
+msgid "_First day:"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:232
+msgid "_Last day:"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:234
+msgid "_Subject:"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/page.rs:237
+msgid "_Message:"
 msgstr ""

@@ -37,3 +37,8 @@ gobject-sys = { workspace = true }
 jmap-backend-core = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+# `tests/send_later.rs` proves the scheduled-send conversation end to end
+# against the stateful mock, HOLDFOR gate included.
+evolution-jmap-mock = { workspace = true }
