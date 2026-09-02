@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 use jmap_proto::error::SetError;
 use jmap_proto::mail::{
     Email, EmailImport, EmailImportRequest, EmailImportResponse, EmailQueryFilter, EmailSubmission,
-    EmailSubmissionSetRequest, Envelope, Identity, Mailbox, Thread, VacationResponse,
+    EmailSubmissionSetRequest, Envelope, Identity, Mailbox, SearchSnippet, SearchSnippetGetRequest,
+    SearchSnippetGetResponse, Thread, VacationResponse,
 };
 use jmap_proto::methods::{
     Comparator, Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest,
@@ -641,6 +642,35 @@ impl Client {
         let arguments =
             self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Thread/get", &request)?;
         let response: GetResponse<Thread> = serde_json::from_value(arguments)?;
+        Ok(response.list)
+    }
+
+    /// Fetch search snippets for the given Email ids (`SearchSnippet/get`,
+    /// RFC 8621 §5.1): the subject/body text a `filter` matched, HTML-escaped
+    /// and `<mark>`-wrapped, for highlighting search results. `filter` should
+    /// be the same filter passed to [`Client::email_query`] to get these ids
+    /// in the first place; `None` asks for no highlighting at all, per the
+    /// RFC's `filter: FilterOperator|FilterCondition|null`.
+    ///
+    /// An id naming no Email is silently absent from the result, the same as
+    /// [`Client::thread_get`] treats a missing id — RFC 8621 §5.1's
+    /// `notFound` carries no other information a caller could act on here.
+    pub fn search_snippet_get(
+        &self,
+        account_id: &Id,
+        email_ids: impl IntoIterator<Item = impl Into<Id>>,
+        filter: Option<impl Into<Filter<EmailQueryFilter>>>,
+    ) -> Result<Vec<SearchSnippet>, Error> {
+        let mut request = SearchSnippetGetRequest::new(account_id.clone(), email_ids);
+        if let Some(filter) = filter {
+            request = request.with_filter(filter);
+        }
+        let arguments = self.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
+            "SearchSnippet/get",
+            &request,
+        )?;
+        let response: SearchSnippetGetResponse = serde_json::from_value(arguments)?;
         Ok(response.list)
     }
 

@@ -857,16 +857,10 @@ fn search_snippet_get_request_and_response_roundtrip_and_builders() {
 
     assert_eq!(req.account_id.as_str(), "acc1");
     assert_eq!(req.email_ids.len(), 2);
-    assert_eq!(
-        req.filter
-            .as_ref()
-            .unwrap()
-            .in_mailbox
-            .as_ref()
-            .unwrap()
-            .as_str(),
-        "inbox"
-    );
+    let jmap_proto::methods::Filter::Condition(condition) = req.filter.as_ref().unwrap() else {
+        panic!("a single EmailQueryFilter builds a Filter::Condition, not an operator tree");
+    };
+    assert_eq!(condition.in_mailbox.as_ref().unwrap().as_str(), "inbox");
 
     let req_val = serde_json::to_value(&req).unwrap();
     assert_eq!(req_val["accountId"], "acc1");
