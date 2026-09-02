@@ -9,7 +9,7 @@ use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailHeader, EmailImportRequest,
     EmailImportResponse, EmailQueryFilter, EmailSubmission, EmailSubmissionSetRequest, Envelope,
-    EnvelopeAddress, Identity, Mailbox, VacationResponse, email_import_error,
+    EnvelopeAddress, Identity, Mailbox, Thread, VacationResponse, email_import_error,
 };
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -460,6 +460,56 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
                 }
             }
         }
+    }
+
+    to_result(&GetResponse {
+        account_id: request.account_id,
+        state: account.emails.state(),
+        list,
+        not_found,
+    })
+}
+
+/// `Thread/get` (RFC 8621 §3.1): a Thread is every Email sharing a
+/// `threadId`, `emailIds` sorted by `receivedAt` oldest first. This mock never
+/// merges replies into an existing thread (`email.thread_id` is allocated
+/// fresh per Email, in `email_set`/`email_import`/`AccountState::seed_email`),
+/// so every Thread here holds exactly one Email today, but the grouping below
+/// is written to hold if that changes.
+pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+    let request: GetRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let requested: Vec<Id> = match &request.ids {
+        Some(ids) => ids.clone(),
+        None => {
+            let mut ids: Vec<Id> = account
+                .emails
+                .iter()
+                .filter_map(|(_, email)| email.thread_id.clone())
+                .collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        }
+    };
+
+    let mut list = Vec::new();
+    let mut not_found = Vec::new();
+    for thread_id in requested {
+        let mut members: Vec<&Email> = account
+            .emails
+            .iter()
+            .filter(|(_, email)| email.thread_id.as_ref() == Some(&thread_id))
+            .map(|(_, email)| email)
+            .collect();
+        if members.is_empty() {
+            not_found.push(thread_id);
+            continue;
+        }
+        members.sort_by(|a, b| a.received_at.cmp(&b.received_at));
+        let email_ids = members.into_iter().filter_map(|email| email.id.clone());
+        list.push(Thread::new(thread_id, email_ids));
     }
 
     to_result(&GetResponse {

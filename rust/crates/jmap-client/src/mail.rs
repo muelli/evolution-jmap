@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use jmap_proto::error::SetError;
 use jmap_proto::mail::{
     Email, EmailImport, EmailImportRequest, EmailImportResponse, EmailQueryFilter, EmailSubmission,
-    EmailSubmissionSetRequest, Envelope, Identity, Mailbox, VacationResponse,
+    EmailSubmissionSetRequest, Envelope, Identity, Mailbox, Thread, VacationResponse,
 };
 use jmap_proto::methods::{
     Comparator, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -622,6 +622,21 @@ impl Client {
             response.not_created.as_ref(),
             IMPORTED,
         )
+    }
+
+    /// Fetch Threads by id (`Thread/get`, RFC 8621 §3.1). Ids come from
+    /// `Email::thread_id`; an id naming no thread is silently absent from the
+    /// result, the same as [`Client::email_get`] treats a missing `Email` id.
+    pub fn thread_get(
+        &self,
+        account_id: &Id,
+        ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Result<Vec<Thread>, Error> {
+        let request = GetRequest::ids(account_id.clone(), ids);
+        let arguments =
+            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Thread/get", &request)?;
+        let response: GetResponse<Thread> = serde_json::from_value(arguments)?;
+        Ok(response.list)
     }
 
     /// Fetch the account's sending identities (`Identity/get`).
