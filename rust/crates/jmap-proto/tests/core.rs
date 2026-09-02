@@ -7,7 +7,8 @@
 
 use jmap_proto::error::{MethodError, RequestError};
 use jmap_proto::id::Id;
-use jmap_proto::methods::{Comparator, GetRequest, QueryRequest};
+use jmap_proto::mail::EmailQueryFilter;
+use jmap_proto::methods::{Comparator, Filter, GetRequest, QueryRequest};
 use jmap_proto::push::StateChange;
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::response::Response;
@@ -420,6 +421,80 @@ fn comparator_defaults_to_ascending_when_the_wire_omits_it() {
     let comparator: Comparator =
         serde_json::from_value(serde_json::json!({"property": "foo"})).unwrap();
     assert!(comparator.is_ascending);
+}
+
+/// `Filter::Condition` is untagged (RFC 8620 §5.5): it must serialize as the
+/// bare condition object, not a wrapper, so a query with no operator is
+/// wire-identical to sending the condition type directly.
+#[test]
+fn filter_condition_serializes_as_the_bare_condition() {
+    let condition = EmailQueryFilter::in_mailbox("mailbox1");
+    let filter = Filter::Condition(condition.clone());
+
+    let filter_json = serde_json::to_value(&filter).unwrap();
+    let condition_json = serde_json::to_value(&condition).unwrap();
+    assert_eq!(filter_json, condition_json);
+}
+
+/// A flat filter object on the wire (no `operator`/`conditions`) deserializes
+/// as `Filter::Condition`, so callers that never nest filters see no change.
+#[test]
+fn filter_deserializes_a_flat_condition_as_a_condition() {
+    let json = serde_json::json!({"inMailbox": "mailbox1"});
+    let filter: Filter<EmailQueryFilter> = serde_json::from_value(json).unwrap();
+    assert_eq!(
+        filter,
+        Filter::Condition(EmailQueryFilter::in_mailbox("mailbox1"))
+    );
+}
+
+/// `Filter::and`/`or`/`not` nest to arbitrary depth and round-trip through
+/// the RFC 8620 §5.5 `FilterOperator` wire shape (`operator` + `conditions`).
+#[test]
+fn filter_operator_and_or_not_round_trip_rfc8620() {
+    let filter = Filter::or([
+        Filter::condition(EmailQueryFilter::in_mailbox("mailbox1")),
+        Filter::not([Filter::condition(EmailQueryFilter::in_mailbox("mailbox2"))]),
+    ]);
+
+    let json = serde_json::to_value(&filter).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "operator": "OR",
+            "conditions": [
+                {"inMailbox": "mailbox1"},
+                {
+                    "operator": "NOT",
+                    "conditions": [{"inMailbox": "mailbox2"}]
+                }
+            ]
+        })
+    );
+
+    let roundtrip: Filter<EmailQueryFilter> = serde_json::from_value(json).unwrap();
+    assert_eq!(roundtrip, filter);
+}
+
+/// `Filter::and` with more than one condition nests correctly and is
+/// distinguishable from `or`/`not` by the `operator` field alone.
+#[test]
+fn filter_operator_and_combines_multiple_conditions() {
+    let filter = Filter::and([
+        Filter::condition(EmailQueryFilter::in_mailbox("mailbox1")),
+        Filter::condition(EmailQueryFilter::default().has_attachment(true)),
+    ]);
+
+    let json = serde_json::to_value(&filter).unwrap();
+    assert_eq!(json["operator"], "AND");
+    assert_eq!(
+        json["conditions"][0],
+        serde_json::json!({"inMailbox": "mailbox1"})
+    );
+    assert_eq!(
+        json["conditions"][1],
+        serde_json::json!({"hasAttachment": true})
+    );
 }
 
 /// The fallback also excludes an account that claims the capability but is

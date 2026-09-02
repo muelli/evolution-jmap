@@ -362,6 +362,66 @@ impl Comparator {
     }
 }
 
+/// A `Foo/query` filter (RFC 8620 §5.5): either a leaf condition of type `F`
+/// or a boolean combination of nested filters. Untagged, so a leaf condition
+/// serializes exactly as `F` would on its own, with no wrapper; only an
+/// object carrying `operator`/`conditions` parses as the operator variant.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Filter<F> {
+    Operator(FilterOperator<F>),
+    Condition(F),
+}
+
+/// RFC 8620 §5.5 `FilterOperator`. `operator` is one of the `operator`
+/// module constants.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterOperator<F> {
+    pub operator: String,
+    pub conditions: Vec<Filter<F>>,
+}
+
+/// `FilterOperator::operator` values (RFC 8620 §5.5).
+pub mod operator {
+    pub const AND: &str = "AND";
+    pub const OR: &str = "OR";
+    pub const NOT: &str = "NOT";
+}
+
+impl<F> Filter<F> {
+    pub fn condition(condition: F) -> Self {
+        Filter::Condition(condition)
+    }
+
+    pub fn and(conditions: impl IntoIterator<Item = Filter<F>>) -> Self {
+        Filter::Operator(FilterOperator {
+            operator: operator::AND.to_string(),
+            conditions: conditions.into_iter().collect(),
+        })
+    }
+
+    pub fn or(conditions: impl IntoIterator<Item = Filter<F>>) -> Self {
+        Filter::Operator(FilterOperator {
+            operator: operator::OR.to_string(),
+            conditions: conditions.into_iter().collect(),
+        })
+    }
+
+    pub fn not(conditions: impl IntoIterator<Item = Filter<F>>) -> Self {
+        Filter::Operator(FilterOperator {
+            operator: operator::NOT.to_string(),
+            conditions: conditions.into_iter().collect(),
+        })
+    }
+}
+
+impl<F> From<F> for Filter<F> {
+    fn from(condition: F) -> Self {
+        Filter::Condition(condition)
+    }
+}
+
 /// `Foo/query` response (RFC 8620 §5.5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
