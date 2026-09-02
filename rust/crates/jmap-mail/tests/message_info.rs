@@ -41,7 +41,8 @@ use eds_sys::{
 use glib_sys::{GFALSE, GTRUE, g_string_free, g_string_new, gchar};
 use gobject_sys::{g_object_unref, g_type_check_instance_is_a};
 use jmap_mail::message_info::{
-    message_info_type, new_message_info, row_keywords, server_keywords, update_message_info,
+    message_info_type, new_message_info, row_keywords, server_keywords, server_thread_id,
+    update_message_info,
 };
 use jmap_mail_sync::{Keywords, MessageFlags, MessageSummary};
 use jmap_proto::Id;
@@ -1017,6 +1018,100 @@ fn junk_flag_update_round_trips_through_row_keywords() {
             kw_after.iter().collect::<Vec<_>>(),
         );
 
+        g_object_unref(info.cast());
+    }
+}
+
+/// The thread id `Email/get` reported, which is a fifth column and, like the
+/// keywords the server was last seen holding, something only this provider
+/// knows: Camel has no field for a server-assigned thread.
+#[test]
+fn a_row_remembers_the_thread_id_the_listing_carried() {
+    let mut message = row("Em0040");
+    message.thread_id = Some(Id::new("T1"));
+    let info = info_of(&message);
+
+    // SAFETY: `info` is a live message info this test owns.
+    unsafe {
+        assert_eq!(server_thread_id(info), Some(Id::new("T1")));
+        g_object_unref(info.cast());
+    }
+}
+
+/// A message `Email/get` reported no thread for remembers none — not a digest
+/// computed some other way, since only the server can say two messages share a
+/// thread.
+#[test]
+fn a_row_with_no_thread_id_remembers_none() {
+    let info = info_of(&row("Em0041"));
+
+    // SAFETY: `info` is a live message info this test owns.
+    unsafe {
+        assert_eq!(server_thread_id(info), None);
+        g_object_unref(info.cast());
+    }
+}
+
+/// The thread id survives the same round trip through the summary database
+/// the keywords column does, through the same `save`/`load` entry points.
+#[test]
+fn the_thread_id_survives_a_trip_through_the_summary_database() {
+    let mut message = row("Em0042");
+    message.thread_id = Some(Id::new("T42"));
+    let info = info_of(&message);
+    let restored = info_of(&row("Em0042"));
+
+    // SAFETY: both infos are live and owned here. The record is zeroed, which
+    // is the state Camel hands `save` one in, and every string `save` leaves in
+    // it is read back before it goes out of scope.
+    unsafe {
+        let mut record: CamelSummaryMessageRecord = std::mem::zeroed();
+        let bdata = g_string_new(ptr::null());
+        assert_ne!(
+            camel_message_info_save(info, ptr::addr_of_mut!(record), bdata),
+            GFALSE,
+            "the row would not save"
+        );
+
+        record.bdata = (*bdata).str;
+        let mut cursor = record.bdata;
+        assert_ne!(
+            camel_message_info_load(restored, ptr::addr_of!(record), ptr::addr_of_mut!(cursor)),
+            GFALSE,
+            "the row would not load"
+        );
+
+        assert_eq!(server_thread_id(restored), Some(Id::new("T42")));
+        g_string_free(bdata, GTRUE);
+        g_object_unref(restored.cast());
+        g_object_unref(info.cast());
+    }
+}
+
+/// A row stored without the column — one written before it existed — loads as
+/// a row that remembers no thread id, the same conservative answer the
+/// keywords column falls back to.
+#[test]
+fn a_row_stored_without_the_thread_column_loads_as_remembering_none() {
+    let info = info_of(&row("Em0043"));
+
+    // SAFETY: as above, with a record whose bdata is the empty string a
+    // summary that wrote no provider data leaves behind.
+    unsafe {
+        let mut record: CamelSummaryMessageRecord = std::mem::zeroed();
+        let bdata = g_string_new(c"".as_ptr());
+        record.uid = camel_message_info_get_uid(info);
+        record.bdata = (*bdata).str;
+        let mut cursor = record.bdata;
+
+        assert_ne!(
+            camel_message_info_load(info, ptr::addr_of!(record), ptr::addr_of_mut!(cursor)),
+            GFALSE,
+            "a row with no provider data would not load"
+        );
+
+        assert_eq!(server_thread_id(info), None);
+        g_string_free(bdata, GTRUE);
         g_object_unref(info.cast());
     }
 }

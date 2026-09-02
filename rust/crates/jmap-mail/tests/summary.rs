@@ -44,7 +44,7 @@ use gobject_sys::{
     GTypeInstance, g_object_unref, g_type_class_peek, g_type_class_ref, g_type_class_unref,
 };
 use jmap_mail::folder::new_folder;
-use jmap_mail::message_info::{message_info_type, server_keywords};
+use jmap_mail::message_info::{message_info_type, server_keywords, server_thread_id};
 use jmap_mail::summary::{
     apply_delta, apply_listing, set_summary_state, summary_state, summary_type,
 };
@@ -680,6 +680,33 @@ fn a_row_cloned_into_the_summary_keeps_the_keywords_it_remembered() {
             server_keywords(clone),
             Some(Keywords::new(&listed.flags, &listed.tags))
         );
+        g_object_unref(clone.cast());
+        g_object_unref(info.cast());
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The thread id survives the same clone, for the same reason: a copy that
+/// forgot it would be a row this provider can no longer say which JMAP thread
+/// it belongs to.
+#[test]
+fn a_row_cloned_into_the_summary_keeps_the_thread_id_it_remembered() {
+    let account = Account::open();
+    let folder = open_folder(&account);
+    let mut listed = message("M2002");
+    listed.thread_id = Some(Id::new("T2002"));
+
+    // SAFETY: `folder` is live; the row and its clone are both references this
+    // test owns.
+    unsafe {
+        let summary = summary_of(folder);
+        apply_listing(summary, std::slice::from_ref(&listed));
+        let info = row(summary, "M2002").expect("a row for the message");
+
+        let clone = camel_message_info_clone(info, summary);
+        assert!(!clone.is_null(), "Camel cloned nothing");
+
+        assert_eq!(server_thread_id(clone), Some(Id::new("T2002")));
         g_object_unref(clone.cast());
         g_object_unref(info.cast());
         g_object_unref(folder.cast());

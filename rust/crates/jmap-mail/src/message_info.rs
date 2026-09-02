@@ -68,6 +68,17 @@
 //! a question that answers itself. [`crate::summary`]'s subclass declares this
 //! type, which is what a row read back out of the database comes back as, and
 //! `tests/summary.rs` pins the two answers together.
+//!
+//! ## The thread id the server told us
+//!
+//! A fifth column, stored the same way and for the same reason: Camel has no
+//! field for a server-assigned thread, only its own digest-based guess at one
+//! (`message_id_digest`, above). Unlike the keywords, it is immutable — RFC
+//! 8621 §4.1.1 does not let a message change thread — so [`new_message_info`]
+//! is its only writer and there is no `update_message_info` side to it. Stored
+//! rather than merely held in [`MessageSummary`] so it survives a restart the
+//! keywords column does; consulting it where the summary groups messages into
+//! threads is not yet attempted.
 
 use std::ffi::CStr;
 use std::ptr;
@@ -104,6 +115,7 @@ use jmap_backend_core::owned::Owned;
 use jmap_backend_core::subclass::{self, ObjectSubclass, register_static};
 use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_mail_sync::{KeywordChange, Keywords, MessageFlags, MessageSummary};
+use jmap_proto::Id;
 use jmap_proto::mail::EmailAddress;
 
 use crate::folder_info::c_string;
@@ -121,6 +133,9 @@ pub struct JmapMessageInfo {
     /// this one is written more than once: every refresh renews it, and Camel
     /// drives a folder from more than one thread.
     server: Slot<Mutex<Keywords>>,
+    /// The thread id `Email/get` reported for this message, or `None` for a
+    /// row this provider has not heard one for.
+    thread: Slot<Mutex<Option<Id>>>,
 }
 
 impl JmapMessageInfo {
@@ -183,6 +198,8 @@ unsafe impl ObjectSubclass for JmapMessageInfo {
         // SAFETY: the instance is being constructed, so this is the only
         // reference to it.
         unsafe { (*instance).server.init(Mutex::new(Keywords::default())) };
+        // SAFETY: as above.
+        unsafe { (*instance).thread.init(Mutex::new(None)) };
     }
 
     unsafe fn finalize(instance: *mut Self::Instance) {
@@ -190,6 +207,8 @@ unsafe impl ObjectSubclass for JmapMessageInfo {
         // it and no borrow handed out by `get` is alive. Without this the set
         // leaks — once per row the folder ever listed.
         unsafe { (*instance).server.clear() };
+        // SAFETY: as above.
+        unsafe { (*instance).thread.clear() };
     }
 }
 
@@ -283,6 +302,43 @@ pub(crate) unsafe fn set_server_keywords(info: *mut CamelMessageInfo, keywords: 
     }
 }
 
+/// The thread id `info` was last told the server assigned it, or `None` for a
+/// row this provider has not heard one for.
+///
+/// # Safety
+///
+/// `info` must be NULL or point at a live `CamelMessageInfo`.
+pub unsafe fn server_thread_id(info: *mut CamelMessageInfo) -> Option<Id> {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let row = unsafe { JmapMessageInfo::borrow(info) }?;
+    row.thread
+        .get()?
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// Records the thread id [`new_message_info`] built the row from.
+///
+/// Silently does nothing for a row that is not ours, the same degradation
+/// [`set_server_keywords`] uses for a row loaded from a summary written before
+/// this column existed.
+///
+/// # Safety
+///
+/// `info` must be NULL or point at a live `CamelMessageInfo`.
+unsafe fn set_server_thread_id(info: *mut CamelMessageInfo, thread_id: Option<Id>) {
+    // SAFETY: the contract above, and `borrow` checks the type.
+    let Some(row) = (unsafe { JmapMessageInfo::borrow(info) }) else {
+        return;
+    };
+    if let Some(slot) = row.thread.get() {
+        *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = thread_id;
+    }
+}
+
 /// `CamelMessageInfoClass.save`: appends the column to the row's stored data.
 ///
 /// The count first, then the names, because that is what [`load`] reads and the
@@ -318,6 +374,18 @@ unsafe extern "C" fn save(
             camel_util_bdata_put_number(bdata, keywords.len() as i64);
             for name in keywords.iter() {
                 camel_util_bdata_put_string(bdata, c_string(name).as_ptr());
+            }
+        }
+
+        // SAFETY: `info` is a row of this type, so the field is there; `bdata`
+        // is the same live GString the keywords were just appended to.
+        unsafe {
+            match server_thread_id(info.cast_mut()) {
+                Some(id) => {
+                    camel_util_bdata_put_number(bdata, 1);
+                    camel_util_bdata_put_string(bdata, c_string(id.as_str()).as_ptr());
+                }
+                None => camel_util_bdata_put_number(bdata, 0),
             }
         }
         GTRUE
@@ -371,6 +439,22 @@ unsafe extern "C" fn load(
 
         // SAFETY: `info` is a row of this type, by the guard above.
         unsafe { set_server_keywords(info, names.into_iter().collect()) };
+
+        // SAFETY: the cursor is positioned right after the keywords column by
+        // the reads above, which is where `save` left the thread-id column.
+        let thread_id = unsafe {
+            let present = camel_util_bdata_get_number(cursor, 0) != 0;
+            present
+                .then(|| camel_util_bdata_get_string(cursor, ptr::null()))
+                .filter(|raw| !raw.is_null())
+                .map(|raw| {
+                    let text = CStr::from_ptr(raw).to_string_lossy().into_owned();
+                    g_free(raw.cast());
+                    Id::new(text)
+                })
+        };
+        // SAFETY: `info` is a row of this type, by the guard above.
+        unsafe { set_server_thread_id(info, thread_id) };
         GTRUE
     })
 }
@@ -408,6 +492,9 @@ unsafe extern "C" fn clone(
         unsafe {
             if let Some(keywords) = server_keywords(info.cast_mut()) {
                 set_server_keywords(copy, keywords);
+            }
+            if let Some(thread_id) = server_thread_id(info.cast_mut()) {
+                set_server_thread_id(copy, Some(thread_id));
             }
         }
         copy
@@ -530,6 +617,7 @@ pub fn new_message_info(message: &MessageSummary) -> *mut CamelMessageInfo {
             if !ancestors.is_null() {
                 camel_message_info_take_references(info, ancestors);
             }
+            set_server_thread_id(info, message.thread_id.clone());
         });
     }
 
