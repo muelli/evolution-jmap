@@ -27,6 +27,7 @@ pub mod oauth;
 mod principals;
 mod quota;
 pub mod resolver;
+mod sieve;
 pub mod transport;
 mod url;
 
