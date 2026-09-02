@@ -405,6 +405,9 @@ pub struct AccountState {
     /// RFC defines no `Quota/set`), seeded at account creation the same way
     /// `vacation_response` is.
     pub quotas: Store<jmap_proto::quota::Quota>,
+    /// `SieveScript` objects (RFC 9265 §2). Unlike `quotas`, empty on a fresh
+    /// account: scripts are client-created, so there is nothing to seed.
+    pub sieve_scripts: Store<jmap_proto::sieve::SieveScript>,
     /// Every accepted `EmailSubmission` — what a real server would hand to
     /// its SMTP queue. Tests assert against this.
     pub outbox: Vec<RecordedSubmission>,
@@ -458,6 +461,7 @@ impl AccountState {
             submissions: Store::new("S"),
             vacation_response,
             quotas,
+            sieve_scripts: Store::new("SV"),
             outbox: Vec::new(),
             address_books: Store::new("AB"),
             contact_cards: Store::new("C"),

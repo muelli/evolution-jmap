@@ -338,6 +338,7 @@ fn handle_method(
         "VacationResponse/get" => crate::mail::vacation_response_get(state, arguments),
         "VacationResponse/set" => crate::mail::vacation_response_set(state, arguments),
         "Quota/get" => crate::quota::quota_get(state, arguments),
+        "SieveScript/get" => crate::sieve::sieve_script_get(state, arguments),
         _ => Err(MethodError::new(error::method::UNKNOWN_METHOD)),
     }
 }

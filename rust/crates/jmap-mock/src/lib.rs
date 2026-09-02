@@ -29,6 +29,7 @@ mod principals;
 mod quota;
 mod server;
 mod setops;
+mod sieve;
 mod state;
 
 pub use mail::EmailSeed;

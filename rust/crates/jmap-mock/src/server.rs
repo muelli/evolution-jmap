@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use jmap_proto::session::{
     Account, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
-    CAPABILITY_PRINCIPALS, CAPABILITY_PRINCIPALS_OWNER, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION,
-    CAPABILITY_VACATION_RESPONSE, Session,
+    CAPABILITY_PRINCIPALS, CAPABILITY_PRINCIPALS_OWNER, CAPABILITY_QUOTA, CAPABILITY_SIEVE,
+    CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE, Session,
 };
+use jmap_proto::sieve::SieveCapability;
 use serde_json::{Value, json};
 
 use crate::auth::AuthConfig;
@@ -1081,7 +1082,21 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_CALENDARS,
     CAPABILITY_VACATION_RESPONSE,
     CAPABILITY_QUOTA,
+    CAPABILITY_SIEVE,
 ];
+
+/// The capability object to advertise for `capability`. An empty placeholder
+/// for everything but Sieve: `SieveCapability::max_size_script` is mandatory
+/// (RFC 9265 §1.1), so an empty object would make `Session::sieve_capability`
+/// fail to parse it.
+fn capability_value(capability: &str) -> Value {
+    if capability == CAPABILITY_SIEVE {
+        serde_json::to_value(SieveCapability::new(1_048_576).with_max_number_scripts(32))
+            .expect("SieveCapability serializes")
+    } else {
+        json!({})
+    }
+}
 
 /// Build the RFC 8620 §2 session document from current state.
 ///
@@ -1098,7 +1113,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                 ACCOUNT_CAPABILITIES
                     .iter()
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
-                    .map(|capability| ((*capability).to_owned(), json!({})))
+                    .map(|capability| ((*capability).to_owned(), capability_value(capability)))
                     .collect();
             // Unlike the four above, `principals`/`principals:owner`'s account
             // capability objects carry real content (RFC 9670 §2.5), not an
@@ -1194,7 +1209,7 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     .iter()
                     .chain([&CAPABILITY_PRINCIPALS, &CAPABILITY_PRINCIPALS_OWNER])
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
-                    .map(|capability| ((*capability).to_owned(), json!({}))),
+                    .map(|capability| ((*capability).to_owned(), capability_value(capability))),
             )
             .collect(),
         accounts,
