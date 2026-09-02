@@ -471,6 +471,15 @@ pub fn email_get(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     })
 }
 
+/// The `threadId` a freshly created `email_id` gets. This mock never merges
+/// replies into an existing thread, so every Email mints its own Thread, and
+/// every site that creates or destroys an Email (`email_set`, `email_import`,
+/// `AccountState::seed_email`/`deliver_email`/`destroy_email`) uses this to
+/// keep `AccountState::threads` in lockstep for `Thread/changes`.
+fn new_thread_id(email_id: &Id) -> Id {
+    Id::new(format!("T{}", email_id.as_str()))
+}
+
 /// `Thread/get` (RFC 8621 §3.1): a Thread is every Email sharing a
 /// `threadId`, `emailIds` sorted by `receivedAt` oldest first. This mock never
 /// merges replies into an existing thread (`email.thread_id` is allocated
@@ -1077,12 +1086,14 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     // Server-set properties (ids, blobs) are allocated before the store
     // transaction because blob allocation borrows the account.
     let mut to_create: Vec<(Id, Email)> = Vec::new();
+    let mut to_create_threads: Vec<(Id, Thread)> = Vec::new();
     for (creation_id, mut email) in request.create.unwrap_or_default() {
         if let Err(refusal) = filed_somewhere(account, &email) {
             not_created.insert(creation_id, refusal);
             continue;
         }
         let id = account.emails.alloc_id();
+        let thread_id = new_thread_id(&id);
         let blob_id = account.add_blob("message/rfc822", Vec::new());
         let size = email
             .body_values
@@ -1091,7 +1102,7 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
             .unwrap_or(0);
         email.id = Some(id.clone());
         email.blob_id = Some(blob_id.clone());
-        email.thread_id = Some(Id::new(format!("T{}", id.as_str())));
+        email.thread_id = Some(thread_id.clone());
         email.size = Some(size);
         if email.received_at.is_none() {
             email.received_at = Some(UtcDate::new(MOCK_NOW));
@@ -1108,6 +1119,7 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
                 ..Email::default()
             },
         );
+        to_create_threads.push((thread_id.clone(), Thread::new(thread_id, [id.clone()])));
         to_create.push((id, email));
     }
 
@@ -1150,6 +1162,18 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
         }
     }
 
+    let destroy_ids = request.destroy.unwrap_or_default();
+    let destroy_thread_ids: BTreeMap<Id, Id> = destroy_ids
+        .iter()
+        .filter_map(|id| {
+            account
+                .emails
+                .get(id)
+                .and_then(|email| email.thread_id.clone())
+                .map(|thread_id| (id.clone(), thread_id))
+        })
+        .collect();
+
     account.emails.transaction(|transaction| {
         for (id, email) in to_create {
             transaction.create(id, email);
@@ -1158,11 +1182,25 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
             transaction.update(&id, email);
             updated.insert(id, None);
         }
-        for id in request.destroy.unwrap_or_default() {
+        for id in destroy_ids {
             if transaction.destroy(&id) {
                 destroyed.push(id);
             } else {
                 not_destroyed.insert(id, SetError::new(error::set::NOT_FOUND));
+            }
+        }
+    });
+
+    // Keep `threads` in lockstep with `emails`: this mock's threads never
+    // merge (see `new_thread_id`), so a created Email always mints a Thread
+    // and a destroyed one always ends one.
+    account.threads.transaction(|transaction| {
+        for (id, thread) in to_create_threads {
+            transaction.create(id, thread);
+        }
+        for id in &destroyed {
+            if let Some(thread_id) = destroy_thread_ids.get(id) {
+                transaction.destroy(thread_id);
             }
         }
     });
@@ -1285,9 +1323,25 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
         }
     }
 
+    let to_create_threads: Vec<(Id, Thread)> = to_create
+        .iter()
+        .map(|(id, email)| {
+            let thread_id = email
+                .thread_id
+                .clone()
+                .expect("imported email has a threadId");
+            (thread_id.clone(), Thread::new(thread_id, [id.clone()]))
+        })
+        .collect();
+
     account.emails.transaction(|transaction| {
         for (id, email) in to_create {
             transaction.create(id, email);
+        }
+    });
+    account.threads.transaction(|transaction| {
+        for (id, thread) in to_create_threads {
+            transaction.create(id, thread);
         }
     });
 
@@ -1351,7 +1405,7 @@ fn imported(
     filed_somewhere(account, &email)?;
 
     let id = account.emails.alloc_id();
-    email.thread_id = Some(Id::new(format!("T{}", id.as_str())));
+    email.thread_id = Some(new_thread_id(&id));
     email.id = Some(id);
     Ok(email)
 }
@@ -1820,6 +1874,9 @@ impl AccountState {
     /// returns its id. Does not bump state.
     pub fn seed_email(&mut self, seed: EmailSeed) -> Id {
         let (id, email) = self.build_email(seed);
+        let thread_id = email.thread_id.clone().expect("built email has a threadId");
+        self.threads
+            .seed_with_id(thread_id.clone(), Thread::new(thread_id, [id.clone()]));
         self.emails.seed_with_id(id.clone(), email);
         id
     }
@@ -1835,8 +1892,12 @@ impl AccountState {
     /// test that wants new mail to show up says so directly.
     pub fn deliver_email(&mut self, seed: EmailSeed) -> Id {
         let (id, email) = self.build_email(seed);
+        let thread_id = email.thread_id.clone().expect("built email has a threadId");
         self.emails
             .transaction(|transaction| transaction.create(id.clone(), email));
+        self.threads.transaction(|transaction| {
+            transaction.create(thread_id.clone(), Thread::new(thread_id, [id.clone()]));
+        });
         id
     }
 
@@ -1844,8 +1905,18 @@ impl AccountState {
     /// message. Its blobs are left behind — this is a test helper, not a
     /// server.
     pub fn destroy_email(&mut self, id: &Id) -> bool {
-        self.emails
-            .transaction(|transaction| transaction.destroy(id))
+        let thread_id = self
+            .emails
+            .get(id)
+            .and_then(|email| email.thread_id.clone());
+        let destroyed = self
+            .emails
+            .transaction(|transaction| transaction.destroy(id));
+        if destroyed && let Some(thread_id) = thread_id {
+            self.threads
+                .transaction(|transaction| transaction.destroy(&thread_id));
+        }
+        destroyed
     }
 
     /// The message [`AccountState::seed_email`] and
@@ -1889,7 +1960,7 @@ impl AccountState {
         let email = Email {
             id: Some(id.clone()),
             blob_id: Some(self.add_blob("message/rfc822", source.into_bytes())),
-            thread_id: Some(Id::new(format!("T{}", id.as_str()))),
+            thread_id: Some(new_thread_id(&id)),
             mailbox_ids: Some([(seed.mailbox_id, true)].into()),
             keywords: Some(
                 seed.keywords

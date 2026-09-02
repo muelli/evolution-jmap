@@ -25,7 +25,7 @@ impl Client {
         since_state: &State,
     ) -> Result<ChangesResponse, Error> {
         let capability = match type_name {
-            "Mailbox" | "Email" => CAPABILITY_MAIL,
+            "Mailbox" | "Email" | "Thread" => CAPABILITY_MAIL,
             "AddressBook" | "ContactCard" => CAPABILITY_CONTACTS,
             "Calendar" | "CalendarEvent" => CAPABILITY_CALENDARS,
             other => {
