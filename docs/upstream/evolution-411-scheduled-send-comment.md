@@ -109,3 +109,12 @@ what the protocols underneath can do and where they currently hit a wall"
 rather than as a design demand; you will have context I do not. If there is
 interest in the Camel-side shape, I am happy to do the JMAP-side work against
 whatever it ends up being.
+
+**Follow-up (jmap-ui, not yet posted):** the out-of-tree JMAP module now ships
+a *Send Later* composer action that does this without any Camel change, by
+routing around the transport entirely — it takes the composer's finished
+message, imports it and submits it with a FUTURERELEASE hold directly over
+JMAP, gated on the account's `maxDelayedSend`. That confirms the protocol side
+works end to end today and that the only thing missing for a first-class
+Evolution feature is the Camel-side "send returns a cancellable submission"
+shape described above. Offered as evidence, not as a substitute.
