@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use jmap_proto::error::SetError;
 use jmap_proto::mail::{
     Email, EmailImport, EmailImportRequest, EmailImportResponse, EmailQueryFilter, EmailSubmission,
-    EmailSubmissionSetRequest, Envelope, Identity, Mailbox, SearchSnippet, SearchSnippetGetRequest,
-    SearchSnippetGetResponse, Thread, VacationResponse,
+    EmailSubmissionSetRequest, Envelope, Identity, Mailbox, Schedule, SearchSnippet,
+    SearchSnippetGetRequest, SearchSnippetGetResponse, Thread, VacationResponse,
 };
 use jmap_proto::methods::{
     Comparator, Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest,
@@ -19,7 +19,7 @@ use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
     CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
 };
-use jmap_proto::{Id, State, UtcDate};
+use jmap_proto::{Id, State};
 use serde_json::Value;
 
 use crate::client::Client;
@@ -126,7 +126,6 @@ fn submission_request(
     identity_id: &Id,
     email_id: Id,
     envelope: Option<Envelope>,
-    send_at: Option<UtcDate>,
     on_success_update: Option<Value>,
 ) -> EmailSubmissionSetRequest {
     const SUBMISSION: &str = "submission";
@@ -139,7 +138,9 @@ fn submission_request(
                 email_id,
                 thread_id: None,
                 envelope,
-                send_at,
+                // Server-set (RFC 8621 §7.1): a release time travels as a
+                // FUTURERELEASE envelope parameter, never as this property.
+                send_at: None,
                 undo_status: None,
                 delivery_status: None,
                 extra: Default::default(),
@@ -730,7 +731,6 @@ impl Client {
             identity_id,
             Id::new(format!("#{DRAFT}")),
             None,
-            None,
             on_success_update,
         );
 
@@ -795,7 +795,6 @@ impl Client {
             identity_id,
             email_id.clone(),
             None,
-            None,
             on_success_update,
         );
         let arguments = self.single_call(
@@ -838,39 +837,6 @@ impl Client {
         envelope: Option<Envelope>,
         on_success_update: Option<Value>,
     ) -> Result<EmailSubmission, Error> {
-        self.submit_email_at(
-            account_id,
-            email_id,
-            identity_id,
-            envelope,
-            None,
-            on_success_update,
-        )
-    }
-
-    /// [`Client::submit_email`], with an RFC 8621 §7.1 `sendAt` in the
-    /// future: the server holds the message rather than delivering it
-    /// immediately, and answers with `undoStatus: "pending"` instead of
-    /// `"final"`. Only meaningful against a server whose submission account
-    /// capability names a `maxDelayedSend`
-    /// ([`jmap_proto::session::Account::max_delayed_send`]) — nothing here
-    /// checks that before sending, since a server that never advertised
-    /// support is free to refuse or ignore `sendAt` on its own terms, the
-    /// same as any other capability-gated property.
-    ///
-    /// Nothing in this project's EDS integration calls this yet: Evolution
-    /// has no scheduled-send UI or Camel plumbing to drive it.
-    /// This exists so the client side is ready
-    /// and proven against the day that changes.
-    pub fn submit_email_at(
-        &self,
-        account_id: &Id,
-        email_id: &Id,
-        identity_id: &Id,
-        envelope: Option<Envelope>,
-        send_at: Option<UtcDate>,
-        on_success_update: Option<Value>,
-    ) -> Result<EmailSubmission, Error> {
         const SUBMISSION: &str = "submission";
 
         let submission_set = submission_request(
@@ -878,7 +844,6 @@ impl Client {
             identity_id,
             email_id.clone(),
             envelope,
-            send_at,
             on_success_update,
         );
         let arguments = self.single_call(
@@ -890,6 +855,43 @@ impl Client {
             backfill_submission_created(arguments, SUBMISSION, identity_id, email_id),
         )?;
         expect_created(&response, SUBMISSION)
+    }
+
+    /// [`Client::submit_email`], asking the server to hold the message and
+    /// release it later: SMTP FUTURERELEASE (RFC 4865), carried as the
+    /// [`Schedule`]'s `mailFrom.parameters` entry on `envelope`. The server
+    /// answers with `undoStatus: "pending"` and the release time in `sendAt`
+    /// (which is server-set, the reason this method does not take one), and
+    /// [`Client::cancel_email_submission`] can still call it back until then.
+    ///
+    /// The envelope is not optional here as it is on the plain submit: the
+    /// parameter needs a `mailFrom` to sit on, and only the caller knows the
+    /// sender address that belongs there.
+    ///
+    /// A server offers this when its submission account capability names a
+    /// non-zero `maxDelayedSend`
+    /// ([`jmap_proto::session::Account::max_delayed_send`]) and FUTURERELEASE
+    /// among its `submissionExtensions`
+    /// ([`jmap_proto::mail::SubmissionCapability::supports_future_release`]). Nothing here
+    /// checks either before sending: a server that never advertised support
+    /// refuses on its own terms, the same as any other capability-gated
+    /// request.
+    pub fn submit_email_at(
+        &self,
+        account_id: &Id,
+        email_id: &Id,
+        identity_id: &Id,
+        envelope: Envelope,
+        schedule: &Schedule,
+        on_success_update: Option<Value>,
+    ) -> Result<EmailSubmission, Error> {
+        self.submit_email(
+            account_id,
+            email_id,
+            identity_id,
+            Some(envelope.with_schedule(schedule)),
+            on_success_update,
+        )
     }
 
     /// Attempt to cancel a still-pending [`Client::submit_email_at`] submission

@@ -1375,11 +1375,6 @@ impl EmailSubmission {
         self
     }
 
-    pub fn with_send_at(mut self, send_at: impl Into<UtcDate>) -> Self {
-        self.send_at = Some(send_at.into());
-        self
-    }
-
     pub fn with_undo_status(mut self, undo_status: impl Into<String>) -> Self {
         self.undo_status = Some(undo_status.into());
         self
@@ -1724,6 +1719,54 @@ impl EnvelopeAddress {
     }
 }
 
+/// When the server should release a submission it was asked to hold: SMTP
+/// FUTURERELEASE (RFC 4865), which RFC 8621 §7 carries not as a property of
+/// the `EmailSubmission` but as a `mailFrom.parameters` entry. The property a
+/// client might reach for instead, `sendAt`, is server-set: the server answers
+/// with the release time there, it does not take one.
+///
+/// RFC 4865 offers the two forms below and forbids sending both. Prefer
+/// `HoldFor`: a relative time cannot disagree with the server about what time
+/// it is now, and Stalwart through 0.16.16 misread `HOLDUNTIL` (it expected a
+/// Unix timestamp where the RFC says date-time).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Schedule {
+    /// Hold for this many seconds (RFC 4865 `HOLDFOR`, at most 99999999).
+    HoldFor(u64),
+    /// Hold until this time (RFC 4865 `HOLDUNTIL`).
+    HoldUntil(UtcDate),
+}
+
+impl Schedule {
+    /// The `mailFrom.parameters` entry this schedule is on the wire as.
+    ///
+    /// RFC 8621 §7 types parameter values as `String|null`, so the seconds
+    /// count is carried in decimal, not as a JSON number.
+    pub fn parameter(&self) -> (&'static str, Value) {
+        match self {
+            Self::HoldFor(seconds) => ("HOLDFOR", Value::String(seconds.to_string())),
+            Self::HoldUntil(date) => ("HOLDUNTIL", Value::String(date.as_str().to_owned())),
+        }
+    }
+}
+
+impl Envelope {
+    /// This envelope with `schedule`'s parameter on `mailFrom`, keeping any
+    /// parameters already there.
+    pub fn with_schedule(mut self, schedule: &Schedule) -> Self {
+        let (name, value) = schedule.parameter();
+        let parameters = match self.mail_from.parameters.take() {
+            Some(Value::Object(map)) => map,
+            // `null` is how "no parameters" is spelled on the wire.
+            _ => serde_json::Map::new(),
+        };
+        let mut parameters = parameters;
+        parameters.insert(name.to_owned(), value);
+        self.mail_from.parameters = Some(Value::Object(parameters));
+        self
+    }
+}
+
 /// The `SetError` types RFC 8621 §6.4 adds for `Identity/set`.
 pub mod identity_set_error {
     pub const FORBIDDEN_FROM: &str = "forbiddenFrom";
@@ -1846,6 +1889,19 @@ impl SubmissionCapability {
     pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
         self.extra = extra;
         self
+    }
+
+    /// Whether the server names FUTURERELEASE (RFC 4865) among its
+    /// `submissionExtensions`, which is the other half of offering scheduled
+    /// send beside a non-zero `maxDelayedSend`.
+    ///
+    /// The keys are EHLO names and servers disagree about their case (Stalwart
+    /// advertises `FUTURERELEASE`, Cyrus `futurerelease`), so the comparison
+    /// here is case-insensitive.
+    pub fn supports_future_release(&self) -> bool {
+        self.submission_extensions
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("FUTURERELEASE"))
     }
 }
 

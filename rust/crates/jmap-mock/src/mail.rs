@@ -1410,6 +1410,54 @@ fn imported(
     Ok(email)
 }
 
+/// The FUTURERELEASE ask on a submission's envelope: seconds to hold, from
+/// `HOLDFOR` directly or from `HOLDUNTIL` minus the mock's fixed clock
+/// (RFC 4865). Parameter names are EHLO keywords, so they are matched
+/// case-insensitively, the same latitude real servers take (Stalwart parses
+/// them through its SMTP grammar, Cyrus compares with `strcasecmp`).
+/// `Ok(None)` when the envelope asks for no hold; `Err` is the
+/// `invalidProperties` description.
+fn hold_seconds(envelope: Option<&Envelope>) -> Result<Option<i64>, String> {
+    let Some(Value::Object(parameters)) =
+        envelope.and_then(|envelope| envelope.mail_from.parameters.as_ref())
+    else {
+        return Ok(None);
+    };
+
+    let mut hold_for = None;
+    let mut hold_until = None;
+    for (name, value) in parameters {
+        if name.eq_ignore_ascii_case("HOLDFOR") {
+            hold_for = Some(value);
+        } else if name.eq_ignore_ascii_case("HOLDUNTIL") {
+            hold_until = Some(value);
+        }
+    }
+
+    match (hold_for, hold_until) {
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => {
+            Err("HOLDFOR and HOLDUNTIL are mutually exclusive (RFC 4865 §3)".to_owned())
+        }
+        (Some(value), None) => value
+            .as_str()
+            .and_then(|seconds| seconds.parse::<i64>().ok())
+            .filter(|seconds| (0..=99_999_999).contains(seconds))
+            .map(Some)
+            .ok_or_else(|| {
+                "HOLDFOR takes seconds as a decimal string of at most 99999999".to_owned()
+            }),
+        (None, Some(value)) => {
+            let until = value
+                .as_str()
+                .and_then(crate::time::parse_utc)
+                .ok_or_else(|| "HOLDUNTIL takes an RFC 3339 UTC date-time".to_owned())?;
+            let now = crate::time::parse_utc(MOCK_NOW).expect("MOCK_NOW parses");
+            Ok(Some(until - now))
+        }
+    }
+}
+
 pub fn email_submission_set(
     state: &mut ServerState,
     arguments: Value,
@@ -1417,6 +1465,7 @@ pub fn email_submission_set(
 ) -> Result<Value, MethodError> {
     let request: EmailSubmissionSetRequest = parse_arguments(arguments)?;
     let terse_submission_create = state.terse_submission_create;
+    let max_delayed_send = state.max_delayed_send;
     let account = account_mut(state, &request.set.account_id)?;
 
     let old_state = account.submissions.state();
@@ -1466,6 +1515,52 @@ pub fn email_submission_set(
             continue;
         };
 
+        // RFC 8621 §7.1: `sendAt` is server-set. Refusing a client-supplied
+        // one is what a real server does (this crate's own client used to
+        // send one), so the mistake cannot creep back in quietly.
+        if submission.send_at.is_some() {
+            not_created.insert(
+                creation_id,
+                SetError::new(error::set::INVALID_PROPERTIES).with_description(
+                    "sendAt is server-set; hold with a FUTURERELEASE envelope parameter",
+                ),
+            );
+            continue;
+        }
+
+        // SMTP FUTURERELEASE (RFC 4865): how long the envelope asks the
+        // message to be held, gated on the advertised `maxDelayedSend`.
+        let hold = match hold_seconds(submission.envelope.as_ref()) {
+            Ok(hold) => hold,
+            Err(description) => {
+                not_created.insert(
+                    creation_id,
+                    SetError::new(error::set::INVALID_PROPERTIES).with_description(description),
+                );
+                continue;
+            }
+        };
+        if let Some(seconds) = hold {
+            let offered = max_delayed_send.unwrap_or(0);
+            if offered == 0 {
+                not_created.insert(
+                    creation_id,
+                    SetError::new(error::set::INVALID_PROPERTIES)
+                        .with_description("the server offers no FUTURERELEASE"),
+                );
+                continue;
+            }
+            if seconds > 0 && seconds as u64 > offered {
+                not_created.insert(
+                    creation_id,
+                    SetError::new(error::set::INVALID_PROPERTIES).with_description(format!(
+                        "hold exceeds maxDelayedSend ({offered} seconds)"
+                    )),
+                );
+                continue;
+            }
+        }
+
         // Derive the SMTP envelope from the message when absent (RFC 8621 §7).
         let envelope = submission.envelope.clone().unwrap_or_else(|| Envelope {
             mail_from: EnvelopeAddress::new(
@@ -1489,27 +1584,25 @@ pub fn email_submission_set(
         submission.thread_id = email.thread_id.clone();
         submission.envelope = Some(envelope.clone());
 
-        // RFC 8621 §7.1's `sendAt`: a client-requested time in the future
-        // (SMTP FUTURERELEASE, gated on the submission capability's
-        // `maxDelayedSend` — see `jmap_proto::session::Account::
-        // max_delayed_send`) holds the message rather than delivering it
-        // immediately. Absent, or not in the future, behaves exactly as
-        // before this existed: delivered now, `undoStatus: "final"`.
-        let delayed = submission
-            .send_at
-            .as_ref()
-            .is_some_and(|send_at| send_at.as_str() > MOCK_NOW);
-        if delayed {
-            submission.undo_status = Some("pending".to_owned());
-        } else {
-            submission.send_at = Some(UtcDate::new(MOCK_NOW));
-            submission.undo_status = Some("final".to_owned());
-            account.outbox.push(RecordedSubmission {
-                id: id.clone(),
-                email_id: submission.email_id.clone(),
-                identity_id: submission.identity_id.clone(),
-                envelope,
-            });
+        // A positive hold makes the submission `pending`, with the release
+        // time answered in `sendAt`; no hold, or one already in the past
+        // (RFC 4865 §4.1), delivers now with `undoStatus: "final"`.
+        match hold {
+            Some(seconds) if seconds > 0 => {
+                let now = crate::time::parse_utc(MOCK_NOW).expect("MOCK_NOW parses");
+                submission.send_at = Some(UtcDate::new(crate::time::format_utc(now + seconds)));
+                submission.undo_status = Some("pending".to_owned());
+            }
+            _ => {
+                submission.send_at = Some(UtcDate::new(MOCK_NOW));
+                submission.undo_status = Some("final".to_owned());
+                account.outbox.push(RecordedSubmission {
+                    id: id.clone(),
+                    email_id: submission.email_id.clone(),
+                    identity_id: submission.identity_id.clone(),
+                    envelope,
+                });
+            }
         }
 
         created_here.insert(creation_id.clone(), id.clone());
@@ -1520,7 +1613,7 @@ pub fn email_submission_set(
     // RFC 8621 §7.4: the only change a client may ask for on an existing
     // submission is `undoStatus` moving from `pending` to `canceled` — an
     // attempt to cancel a submission the mock already treated as `final`
-    // (no `sendAt` in the future), or to touch any other property, is
+    // (never held), or to touch any other property, is
     // `forbidden`, the same refusal a real server gives once a message has
     // gone out. Canceling never removes anything from `outbox`: a `pending`
     // submission was never pushed there in the first place.

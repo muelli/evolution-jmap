@@ -618,9 +618,9 @@ impl Account {
         self
     }
 
-    /// The furthest into the future an `EmailSubmission`'s `sendAt` may be set
-    /// (RFC 8621 §7.1, the submission account capability's `maxDelayedSend`,
-    /// in seconds), backed server-side by SMTP FUTURERELEASE (RFC 4865).
+    /// The furthest into the future a submission may be scheduled (RFC 8621
+    /// §7.1, the submission account capability's `maxDelayedSend`, in
+    /// seconds), backed server-side by SMTP FUTURERELEASE (RFC 4865).
     ///
     /// `None` means the server did not name a limit for this account — which
     /// covers two different server shapes a caller cannot tell apart from
@@ -634,5 +634,15 @@ impl Account {
             .get(CAPABILITY_SUBMISSION)?
             .get("maxDelayedSend")?
             .as_u64()
+    }
+
+    /// This account's submission capability object (RFC 8621 §7.1), typed.
+    ///
+    /// The scheduled-send gate reads two of its fields together: a non-zero
+    /// `max_delayed_send` and
+    /// [`crate::mail::SubmissionCapability::supports_future_release`].
+    pub fn submission_capability(&self) -> Option<crate::mail::SubmissionCapability> {
+        let val = self.account_capabilities.get(CAPABILITY_SUBMISSION)?;
+        serde_json::from_value(val.clone()).ok()
     }
 }
