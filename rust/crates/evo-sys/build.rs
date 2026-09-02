@@ -61,6 +61,14 @@ const ALLOWED_TYPES: &[&str] = &[
     "EConfigLookupWorker.*",
     "EConfigLookupResult.*",
     "ESourceConfigBackend.*",
+    // The interface jmap-ui's vacation page implements: like
+    // `EConfigLookupWorker`'s vtable above, its layout matters the way a
+    // subclassed class struct's does, because `interface_init` writes
+    // `submit`/`submit_finish` (and the title and sort order) into its
+    // fields. The exact name, not a prefix: `EMailConfigPage` itself stays an
+    // opaque handle in [`EVO_HANDLES`], and [`BLOCKED_EVO_TYPES`]'s pattern
+    // is carved around this one name.
+    "EMailConfigPageInterface",
     // The enum `e_cal_source_config_get_source_type` answers with, and the only
     // type generated here that belongs to EDS rather than Evolution: it is
     // libecal's, but a plain C enum rather than an object, and `eds-sys` does
@@ -141,6 +149,20 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_book_source_config_get_type",
     "e_cal_source_config_get_type",
     "e_cal_source_config_get_source_type",
+    // The notebook, a function at a time like the derived configs above: the
+    // GType the vacation extension's `class_init` writes into
+    // `extensible_type`, the call that puts its page in, and the two sources
+    // the extension gates on (account: backend name) and connects with
+    // (collection: `[Authentication]`/`[Security]`). Deliberately not
+    // `_get_session`/`_get_identity_source`/`_commit` — nothing here calls
+    // them.
+    "e_mail_config_notebook_get_type",
+    "e_mail_config_notebook_add_page",
+    "e_mail_config_notebook_get_account_source",
+    "e_mail_config_notebook_get_collection_source",
+    // The interface's GType, which is what `InterfaceDecl::filled_by` names
+    // when the vacation page registers as an implementer.
+    "e_mail_config_page_get_type",
 ];
 
 /// The GTK calls, named one at a time rather than by prefix.
@@ -201,6 +223,29 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // needs — no `_remove`/`_insert` a dynamic list would call for.
     "gtk_combo_box_text_new",
     "gtk_combo_box_text_append",
+    // The vacation page's own additions. The multi-line body is a text view;
+    // its content is read and written through the buffer's `text` *property*
+    // (plain `g_object_get`/`_set`, already available from gobject-sys), so
+    // no `GtkTextIter` — a caller-allocated sized struct this crate refuses
+    // to claim a layout for — ever crosses the boundary.
+    "gtk_text_view_new",
+    "gtk_text_view_get_buffer",
+    // The page itself is a GtkScrolledWindow subclass — EMailConfigPage's
+    // prerequisite (G_DEFINE_INTERFACE's third argument upstream; the running
+    // 3.52 refuses anything less by exactly that name) — whose one child is a
+    // vertical box these two build and add. GTK3 wraps a non-scrollable child
+    // in a viewport on its own.
+    "gtk_scrolled_window_get_type",
+    "gtk_box_new",
+    "gtk_container_add",
+    // Gating: a control whose server-side feature is absent or not yet known
+    // is desensitized, never hidden — stable geometry, and the tooltip can
+    // say why.
+    "gtk_widget_set_sensitive",
+    "gtk_widget_set_tooltip_text",
+    // The body should take the page's spare height; everything else keeps
+    // its natural size.
+    "gtk_widget_set_vexpand",
     // Not called by the module: these are what `tests/gtk.rs` asks the running
     // GTK to confirm the classes above are, since the opaque handles carry no
     // layout to check the way `tests/layout.rs` checks the EDS structs.
@@ -212,6 +257,8 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_entry_get_type",
     "gtk_check_button_get_type",
     "gtk_combo_box_text_get_type",
+    "gtk_text_view_get_type",
+    "gtk_text_buffer_get_type",
 ];
 
 /// Types that already exist, and must not be minted a second time.
@@ -333,7 +380,16 @@ const BLOCKED_GTK_TYPES: &[&str] = &["Gtk.*", "_Gtk.*"];
 /// what `class_init` writes vfunc pointers into, and `tests/layout.rs` holds
 /// that layout against `g_type_query`.
 const BLOCKED_EVO_TYPES: &[&str] = &[
-    "_?EMailConfig(Page|ActivityPage|ServicePage)[A-Za-z]*",
+    // `EMailConfigPage` is spelled exactly (no `[A-Za-z]*` tail) so that
+    // `EMailConfigPageInterface` stays generatable — it is the one piece of
+    // the page this crate does read fields of, see ALLOWED_TYPES. The
+    // activity and service page families stay blocked whole.
+    "_?EMailConfigPage",
+    "_?EMailConfig(ActivityPage|ServicePage)[A-Za-z]*",
+    // The account editor's notebook: reached only as a pointer (get the two
+    // sources, add a page), so its GtkNotebook-derived structs stay out for
+    // the same reason the service page's do.
+    "_?EMailConfigNotebook[A-Za-z]*",
     // `EConfigLookup`: the object an `EConfigLookupWorker` is registered
     // against and handed back as `run()`'s argument. Not `EConfigLookupWorker`
     // or `EConfigLookupResult(Simple)?` — this pattern has no trailing
@@ -394,6 +450,11 @@ const EVO_HANDLES: &[&str] = &[
     "EMailConfigPage",
     "EConfigLookup",
     "ESourceConfig",
+    // The account editor's page container — the extensible jmap-ui's vacation
+    // extension names and the object it hands its page to. Nothing here
+    // subclasses it or reads a field of it, and it is a GtkNotebook two
+    // classes down, which is [`BLOCKED_GTK_TYPES`]'s whole argument.
+    "EMailConfigNotebook",
     // Its two derived classes, the fifth and sixth, on exactly the argument the
     // fourth makes: both are `ESourceConfig`s and so `GtkBox`es, and the only
     // thing done with either is to name its `GType` or hand its pointer back to
@@ -430,6 +491,11 @@ const GTK_HANDLES: &[&str] = &[
     "GtkLabel",
     "GtkEntry",
     "GtkComboBoxText",
+    "GtkTextView",
+    "GtkTextBuffer",
+    // What `gtk_container_add` takes; the cast at the call site is the C
+    // `GTK_CONTAINER()`.
+    "GtkContainer",
 ];
 
 fn main() {
@@ -530,6 +596,18 @@ fn main() {
             "#[repr(C)]\npub struct {t} {{\n    _opaque: [u8; 0],\n}}"
         ));
     }
+
+    // Two GTK *value* types the surface mentions, supplied rather than
+    // generated: `Gtk.*` is blocklisted wholesale, but a plain C enum has no
+    // layout for two copies to disagree about (`ECalClientSourceType`'s
+    // argument in ALLOWED_TYPES). `GtkAssistantPageType` is a field of the
+    // generated `EMailConfigPageInterface` — never written here, the
+    // interface's own default stands. `GtkOrientation` is what `gtk_box_new`
+    // takes; the one value anything here passes gets its GTK name back.
+    builder = builder
+        .raw_line("pub type GtkAssistantPageType = ::std::os::raw::c_uint;")
+        .raw_line("pub type GtkOrientation = ::std::os::raw::c_uint;")
+        .raw_line("pub const GTK_ORIENTATION_VERTICAL: GtkOrientation = 1;");
 
     // And Evolution's, which need the struct tag as well as the typedef: unlike
     // the GTK ones, which bindgen writes into the signatures under their typedef

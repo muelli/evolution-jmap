@@ -10,12 +10,12 @@
 //! "nothing is registered *with* anything"): putting a type in the type
 //! system before Evolution constructs the extensible *is* the wiring.
 //!
-//! No extension types yet: each feature registers its `EExtension` here as it
-//! lands — the vacation page first.
-
 use gobject_sys::GTypeModule;
 use jmap_backend_core::i18n::bind;
+use jmap_backend_core::subclass::register_dynamic;
 use jmap_backend_core::trampoline::guard;
+
+use crate::vacation;
 
 /// Register this crate's types against `type_module`, guarded like every
 /// other entry point Evolution calls.
@@ -33,8 +33,15 @@ pub unsafe fn load(type_module: *mut GTypeModule) {
     guard("e_module_load (jmap-ui)", (), || {
         jmap_backend_core::logging::init();
         bind();
-        let _ = type_module;
-        tracing::trace!("jmap-ui loaded; no extensions registered yet");
+        // SAFETY: the module is Evolution's, by this function's contract.
+        unsafe {
+            // The page type before the extension that instantiates it, so
+            // `page::create`'s name lookup cannot lose a race with the first
+            // notebook.
+            register_dynamic::<vacation::page::VacationPage>(type_module);
+            register_dynamic::<vacation::extension::JmapVacationExtension>(type_module);
+        }
+        tracing::trace!("jmap-ui loaded: vacation page registered");
     });
 }
 

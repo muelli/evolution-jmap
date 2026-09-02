@@ -40,6 +40,11 @@ const CLASSES: &[(&str, unsafe extern "C" fn() -> GType)] = &[
     ("GtkEntry", gtk_entry_get_type),
     ("GtkCheckButton", gtk_check_button_get_type),
     ("GtkComboBoxText", gtk_combo_box_text_get_type),
+    ("GtkScrolledWindow", gtk_scrolled_window_get_type),
+    ("GtkTextView", gtk_text_view_get_type),
+    // Not a widget — see the is-a test, which exempts it — but named here so
+    // the same once-guarded registration and name check cover it.
+    ("GtkTextBuffer", gtk_text_buffer_get_type),
 ];
 
 /// The classes, registered exactly once — which has to be arranged, because on
@@ -116,6 +121,11 @@ fn the_casts_the_widget_calls_require_are_upcasts_gtk_agrees_with() {
     let widget = class("GtkWidget");
     let container = class("GtkContainer");
     for (name, gtype) in classes() {
+        if *name == "GtkTextBuffer" {
+            // The one plain GObject in the list: reached only through
+            // `gtk_text_view_get_buffer` and the `text` property.
+            continue;
+        }
         assert_eq!(
             unsafe { g_type_is_a(*gtype, widget) },
             GTRUE,
@@ -147,6 +157,21 @@ fn the_widget_handles_carry_no_layout() {
         size_of::<GtkComboBoxText>(),
         0,
         "GtkComboBoxText is no longer opaque"
+    );
+    assert_eq!(
+        size_of::<GtkTextView>(),
+        0,
+        "GtkTextView is no longer opaque"
+    );
+    assert_eq!(
+        size_of::<GtkTextBuffer>(),
+        0,
+        "GtkTextBuffer is no longer opaque"
+    );
+    assert_eq!(
+        size_of::<GtkContainer>(),
+        0,
+        "GtkContainer is no longer opaque"
     );
 }
 
@@ -202,6 +227,25 @@ fn every_widget_entry_point_this_crate_offers_resolves() {
         (
             "gtk_combo_box_text_append",
             gtk_combo_box_text_append as *const (),
+        ),
+        ("gtk_text_view_new", gtk_text_view_new as *const ()),
+        (
+            "gtk_text_view_get_buffer",
+            gtk_text_view_get_buffer as *const (),
+        ),
+        ("gtk_box_new", gtk_box_new as *const ()),
+        ("gtk_container_add", gtk_container_add as *const ()),
+        (
+            "gtk_widget_set_sensitive",
+            gtk_widget_set_sensitive as *const (),
+        ),
+        (
+            "gtk_widget_set_tooltip_text",
+            gtk_widget_set_tooltip_text as *const (),
+        ),
+        (
+            "gtk_widget_set_vexpand",
+            gtk_widget_set_vexpand as *const (),
         ),
     ];
     for (name, address) in entry_points {
