@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "jmap-ui"
+description = "JMAP-only features in Evolution's UI: vacation, scheduled send, snooze"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "jmap_ui"
+# rlib only, on jmap-config's argument: the shared object Evolution dlopens is
+# the companion `jmap-config-module` cdylib, whose `e_module_load` calls this
+# crate's `module::load` beside `jmap_config::module::load`. One module, one
+# .so — the EWS precedent — and the per-account SessionCache is shared by
+# every extension registered out of it.
+crate-type = ["rlib"]
+
+[dependencies]
+evolution-jmap-proto = { workspace = true }
+glib-sys = { workspace = true }
+gobject-sys = { workspace = true }
+jmap-backend-core = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

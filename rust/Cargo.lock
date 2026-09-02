@@ -768,6 +768,7 @@ dependencies = [
  "evo-sys",
  "gobject-sys",
  "jmap-config",
+ "jmap-ui",
 ]
 
 [[package]]
@@ -794,6 +795,18 @@ dependencies = [
  "gobject-sys",
  "jmap-backend-core",
  "jmap-mail",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "jmap-ui"
+version = "0.3.0"
+dependencies = [
+ "evolution-jmap-proto",
+ "glib-sys",
+ "gobject-sys",
+ "jmap-backend-core",
  "serde_json",
  "tracing",
 ]

@@ -20,6 +20,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 jmap-config = { workspace = true }
+# The UI features (vacation page, scheduled send, snooze) ride in the same
+# module: e_module_load below calls both crates' load. See jmap_ui::module.
+jmap-ui = { workspace = true }
 gobject-sys = { workspace = true }
 # Metadata-only, for this crate's own build.rs: not called from any Rust code
 # here, but needs to be a direct (non-build) dependency for Cargo to set
