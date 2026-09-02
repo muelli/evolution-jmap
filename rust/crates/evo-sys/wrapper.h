@@ -37,6 +37,13 @@
  * the extension gates and connects with. */
 #include <mail/e-mail-config-notebook.h>
 
+/* The composer, for jmap-ui's scheduled send: the extensible its extension
+ * names, the editor whose GtkUIManager the "Send Later" actions merge into,
+ * the header table whose identity-uid property re-gates them on every From
+ * switch, and the async pair that builds the final CamelMimeMessage. All of
+ * them opaque handles (GtkWindow/GObject subclasses); see build.rs. */
+#include <composer/e-msg-composer.h>
+
 /* The second class this crate's consumers subclass, and the only route by
  * which Evolution's New Address Book and New Calendar dialogs can be made to
  * offer JMAP at all: `ESourceConfig` builds one candidate per registered

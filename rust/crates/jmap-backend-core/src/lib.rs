@@ -50,6 +50,7 @@ pub mod i18n;
 pub mod instance;
 pub mod logging;
 pub mod marshal;
+pub mod mime;
 pub mod oauth2;
 pub mod owned;
 pub mod push;

@@ -163,6 +163,28 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // The interface's GType, which is what `InterfaceDecl::filled_by` names
     // when the vacation page registers as an implementer.
     "e_mail_config_page_get_type",
+    // The composer, a function at a time, for jmap-ui's scheduled send: the
+    // extensible's GType, the editor the UI merge goes through, the header
+    // table the From gate reads (its `identity-uid`/`registry` are read as
+    // properties, so no further accessors), and the async pair that builds
+    // the message the way Send itself would. Deliberately not
+    // `e_msg_composer_.*`: that prefix is the whole composer.
+    "e_msg_composer_get_type",
+    "e_msg_composer_get_editor",
+    "e_msg_composer_get_header_table",
+    "e_msg_composer_get_message",
+    "e_msg_composer_get_message_finish",
+    "e_html_editor_get_ui_manager",
+    "e_html_editor_get_action_group",
+    // The From gate's registry, by evolution-ews's own chain: the table hands
+    // out its From header, the header hands out the registry it was built
+    // with. (The table itself has no registry accessor or property — checked
+    // against e-composer-header-table.c, which keeps an EClientCache.)
+    "e_composer_header_table_get_header",
+    "e_composer_header_get_registry",
+    // Which identity the From line stands at, re-read on every
+    // `notify::identity-uid`.
+    "e_composer_header_table_dup_identity_uid",
 ];
 
 /// The GTK calls, named one at a time rather than by prefix.
@@ -246,6 +268,22 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // The body should take the page's spare height; everything else keeps
     // its natural size.
     "gtk_widget_set_vexpand",
+    // The scheduled-send actions: GtkAction-era (Evolution 3.52's composer
+    // still merges through GtkUIManager; 3.56 replaced the whole layer, which
+    // is jmap-ui's `menu` seam to port then). Actions are built one by one —
+    // `gtk_action_new` + a `g_signal_connect` on `activate` — rather than
+    // through `gtk_action_group_add_actions`, whose `GtkActionEntry` array is
+    // a struct layout the blocklist keeps out.
+    "gtk_action_new",
+    "gtk_action_group_add_action",
+    "gtk_action_set_sensitive",
+    "gtk_ui_manager_add_ui_from_string",
+    "gtk_ui_manager_ensure_update",
+    // The refusal dialog a failed scheduled send is reported through, and its
+    // teardown; also how a scheduled composer window is closed on success.
+    "gtk_message_dialog_new",
+    "gtk_dialog_run",
+    "gtk_widget_destroy",
     // Not called by the module: these are what `tests/gtk.rs` asks the running
     // GTK to confirm the classes above are, since the opaque handles carry no
     // layout to check the way `tests/layout.rs` checks the EDS structs.
@@ -390,6 +428,17 @@ const BLOCKED_EVO_TYPES: &[&str] = &[
     // sources, add a page), so its GtkNotebook-derived structs stay out for
     // the same reason the service page's do.
     "_?EMailConfigNotebook[A-Za-z]*",
+    // The composer and what its accessors hand back: a GtkWindow subclass, a
+    // GtkGrid subclass and a GtkGrid subclass again — all reached only as
+    // pointers by the scheduled-send extension.
+    "_?EMsgComposer[A-Za-z]*",
+    "_?EHTMLEditor[A-Za-z]*",
+    "_?EComposerHeaderTable[A-Za-z]*",
+    // The header class itself, spelled without a tail so that
+    // `EComposerHeaderType` — the enum `e_composer_header_table_get_header`
+    // takes, a value type — stays generatable.
+    "_?EComposerHeader",
+    "_?EComposerHeader(Class|Private)",
     // `EConfigLookup`: the object an `EConfigLookupWorker` is registered
     // against and handed back as `run()`'s argument. Not `EConfigLookupWorker`
     // or `EConfigLookupResult(Simple)?` — this pattern has no trailing
@@ -463,6 +512,13 @@ const EVO_HANDLES: &[&str] = &[
     // `E_CAL_SOURCE_CONFIG()`-shaped cast in `allow_creation` assumes.
     "EBookSourceConfig",
     "ECalSourceConfig",
+    // The composer trio the scheduled-send extension reaches only as
+    // pointers: the extensible itself, its editor, and the header table whose
+    // `identity-uid`/`registry` are read as plain GObject properties.
+    "EMsgComposer",
+    "EHTMLEditor",
+    "EComposerHeaderTable",
+    "EComposerHeader",
 ];
 
 /// The GTK classes the calls above mention, as opaque handles.
@@ -496,6 +552,16 @@ const GTK_HANDLES: &[&str] = &[
     // What `gtk_container_add` takes; the cast at the call site is the C
     // `GTK_CONTAINER()`.
     "GtkContainer",
+    // The GtkAction era's trio, still what 3.52's composer merges through.
+    "GtkAction",
+    "GtkActionGroup",
+    "GtkUIManager",
+    // The refusal dialog: constructed as a message dialog, run as a dialog,
+    // parented on a window — three names for the same pointer, each cast
+    // written down.
+    "GtkMessageDialog",
+    "GtkDialog",
+    "GtkWindow",
 ];
 
 fn main() {
@@ -607,7 +673,16 @@ fn main() {
     builder = builder
         .raw_line("pub type GtkAssistantPageType = ::std::os::raw::c_uint;")
         .raw_line("pub type GtkOrientation = ::std::os::raw::c_uint;")
-        .raw_line("pub const GTK_ORIENTATION_VERTICAL: GtkOrientation = 1;");
+        .raw_line("pub const GTK_ORIENTATION_VERTICAL: GtkOrientation = 1;")
+        // `gtk_message_dialog_new`'s three enum arguments, same argument as
+        // the two above; only the values the refusal dialog passes are named.
+        .raw_line("pub type GtkDialogFlags = ::std::os::raw::c_uint;")
+        .raw_line("pub const GTK_DIALOG_MODAL: GtkDialogFlags = 1;")
+        .raw_line("pub const GTK_DIALOG_DESTROY_WITH_PARENT: GtkDialogFlags = 2;")
+        .raw_line("pub type GtkMessageType = ::std::os::raw::c_uint;")
+        .raw_line("pub const GTK_MESSAGE_ERROR: GtkMessageType = 3;")
+        .raw_line("pub type GtkButtonsType = ::std::os::raw::c_uint;")
+        .raw_line("pub const GTK_BUTTONS_CLOSE: GtkButtonsType = 2;");
 
     // And Evolution's, which need the struct tag as well as the typedef: unlike
     // the GTK ones, which bindgen writes into the signatures under their typedef

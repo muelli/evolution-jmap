@@ -160,7 +160,6 @@ pub mod folders;
 pub mod manage;
 pub mod message;
 pub mod message_info;
-pub mod mime;
 pub mod module;
 pub mod oauth2;
 pub mod provider;

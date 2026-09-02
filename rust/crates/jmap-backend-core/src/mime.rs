@@ -3,21 +3,25 @@
 
 //! The `CamelMimeMessage` as the octets a JMAP request uploads.
 //!
-//! Everything this account puts on the server arrives as an object and goes up
-//! as a blob, and this is the step between. Two callers need it and they are
-//! not the same kind of thing: [`crate::append`] is a folder taking in a
-//! message from outside the account, and [`crate::transport`]'s `send_to_sync`
-//! is a service with no folder in the call at all sending one out. One function
-//! rather than one each, because a second emitter is a second place a
-//! difference could appear between the message the user filed and the message
-//! they sent.
+//! Everything an account puts on the server arrives as an object and goes up
+//! as a blob, and this is the step between. Three callers need it and they
+//! are not the same kind of thing: the Camel provider's append (a folder
+//! taking in a message from outside the account), its transport's
+//! `send_to_sync` (a service with no folder in the call at all sending one
+//! out), and jmap-ui's scheduled send (a composer handing over a message the
+//! server should hold). One function rather than one each, because a second
+//! emitter is a second place a difference could appear between the message
+//! the user filed and the message they sent — which is also why this lives
+//! here rather than in `jmap-mail`: the UI module cannot link the provider's
+//! rlib (its `camel_provider_module_init` would ride along into a shell
+//! module), and a copy would be that second emitter.
 //!
-//! ## Camel's writer, for [`crate::message`]'s reason turned around
+//! ## Camel's writer, for the reason `jmap-mail::message` gives turned around
 //!
 //! The bytes come from `camel_data_wrapper_write_to_output_stream_sync`, which
 //! is Camel's own RFC 5322 emitter reached through the message's
-//! `CamelDataWrapper` face. That is the mirror of the decision
-//! [`crate::message`] takes about the parse: the object has to agree with every
+//! `CamelDataWrapper` face. That is the mirror of the decision the provider's
+//! `message` module takes about the parse: the object has to agree with every
 //! other part of Camel about what the message says, and a provider that wrote
 //! headers itself would be a second, disagreeing MIME implementation inside the
 //! same process — one whose disagreement is *stored*, because what goes up is
@@ -26,8 +30,8 @@
 //! A `GMemoryOutputStream` rather than a `CamelStreamMem`: the destination is a
 //! buffer either way, and the GIO one is the object Camel's own stream class is
 //! a wrapper around. The whole message is in memory twice for the length of the
-//! upload — the stream's copy and the request's — which is the same cost
-//! [`crate::message`] pays in the other direction.
+//! upload — the stream's copy and the request's — which is the same cost the
+//! provider's `message` module pays in the other direction.
 //!
 //! ## The one thing added to what Camel wrote: the line endings
 //!
@@ -75,13 +79,13 @@ use std::ffi::c_int;
 use std::mem::ManuallyDrop;
 use std::ptr;
 
+use crate::owned::Owned;
 use eds_sys::{CamelDataWrapper, CamelMimeMessage, camel_data_wrapper_write_to_output_stream_sync};
 use gio_sys::{
     GMemoryOutputStream, g_memory_output_stream_get_data, g_memory_output_stream_get_data_size,
     g_memory_output_stream_new_resizable, g_output_stream_flush,
 };
 use glib_sys::{GError, GFALSE, GQuark, g_error_free, g_error_new_literal};
-use jmap_backend_core::owned::Owned;
 
 /// What is reported when Camel refused to write a message out and said nothing
 /// about why.
@@ -178,7 +182,7 @@ impl Unwritable {
     /// a C caller that will — which is what [`set_raw_gerror`] does for a
     /// vfunc's out-parameter.
     ///
-    /// [`set_raw_gerror`]: jmap_backend_core::error::set_raw_gerror
+    /// [`set_raw_gerror`]: crate::error::set_raw_gerror
     pub fn into_gerror(self, domain: GQuark, code: c_int) -> *mut GError {
         // The error is handed on rather than freed, so this value must not run
         // its `Drop`.

@@ -14,7 +14,7 @@
 //! this module does is turn the object into the bytes they need and decide what
 //! the folder makes of the answer.
 //!
-//! ## Camel's writer, which is [`crate::mime`]'s
+//! ## Camel's writer, which is [`jmap_backend_core::mime`]'s
 //!
 //! The message is serialised by [`write_message`], through Camel's own RFC 5322
 //! emitter: the object has to agree with every other part of Camel about what
@@ -87,7 +87,7 @@ use jmap_proto::Id;
 use crate::connect::StoreError;
 use crate::folder::{JmapFolder, parent_store};
 use crate::message_info::row_keywords;
-use crate::mime::{Unwritable, write_message};
+use jmap_backend_core::mime::{Unwritable, write_message};
 
 /// Installs the folder's append vfunc on a class whose first member is a
 /// `CamelFolderClass`.

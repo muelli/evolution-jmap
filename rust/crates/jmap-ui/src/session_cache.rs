@@ -26,10 +26,13 @@ pub struct AccountFeatures {
     pub account_id: Id,
     /// `VacationResponse/get` and `/set` are on offer (RFC 8621 §8).
     pub vacation: bool,
-    /// The most seconds a submission may be held, when scheduled send is on
-    /// offer at all: a non-zero `maxDelayedSend` *and* FUTURERELEASE among the
-    /// `submissionExtensions` — both halves, because this client writes the
-    /// `HOLDFOR` parameter itself (RFC 8621 §7.1, RFC 4865).
+    /// The most seconds a submission may be held: a non-zero
+    /// `maxDelayedSend`, which RFC 8621 §7.1 defines as *the* scheduled-send
+    /// gate ("0 if this feature is not supported"). Deliberately not also
+    /// FUTURERELEASE among the `submissionExtensions`: Fastmail advertises
+    /// `maxDelayedSend: 44236800` beside an *empty* extensions map (checked
+    /// live, 2026-09-02) and accepts `HOLDFOR` all the same, so the stricter
+    /// reading would gate the feature off exactly where it works.
     pub max_hold: Option<u64>,
     /// `Email.snoozed` is on offer: the Cyrus vendor extension
     /// ([`jmap_proto::mail::SnoozeDetails`]). Without it there is no server
@@ -46,14 +49,7 @@ impl AccountFeatures {
     pub fn from_session(session: &Session) -> Option<Self> {
         let account_id = session.resolve_primary_account(CAPABILITY_MAIL)?.clone();
         let account = session.accounts.get(&account_id)?;
-        let max_hold = account
-            .max_delayed_send()
-            .filter(|&seconds| seconds > 0)
-            .filter(|_| {
-                account
-                    .submission_capability()
-                    .is_some_and(|capability| capability.supports_future_release())
-            });
+        let max_hold = account.max_delayed_send().filter(|&seconds| seconds > 0);
         Some(Self {
             vacation: account.has_capability(CAPABILITY_VACATION_RESPONSE),
             snooze: account.has_capability(CAPABILITY_CYRUS_MAIL),
@@ -175,21 +171,24 @@ mod tests {
         assert!(!bare.snooze);
     }
 
-    /// Scheduled send needs both halves: a limit without FUTURERELEASE (this
-    /// client writes the HOLDFOR parameter itself) and a zero limit (RFC 8621:
-    /// "MUST be 0 if this feature is not supported") both gate it off. Cyrus
-    /// lowercases the extension keys, which must not matter.
+    /// The scheduled-send gate is `maxDelayedSend` alone (RFC 8621: "MUST be
+    /// 0 if this feature is not supported"): Fastmail pairs a real limit with
+    /// an *empty* `submissionExtensions`, so the extensions list must not be
+    /// a second requirement.
     #[test]
-    fn scheduled_send_needs_a_limit_and_futurerelease() {
-        let no_extension = session(json!({
+    fn scheduled_send_gates_on_the_limit_alone() {
+        let fastmail_shape = session(json!({
             "urn:ietf:params:jmap:mail": {},
-            "urn:ietf:params:jmap:submission": {"maxDelayedSend": 3600},
+            "urn:ietf:params:jmap:submission": {
+                "maxDelayedSend": 44236800,
+                "submissionExtensions": {},
+            },
         }));
         assert_eq!(
-            AccountFeatures::from_session(&no_extension)
+            AccountFeatures::from_session(&fastmail_shape)
                 .unwrap()
                 .max_hold,
-            None
+            Some(44_236_800)
         );
 
         let zero_limit = session(json!({
@@ -202,18 +201,6 @@ mod tests {
         assert_eq!(
             AccountFeatures::from_session(&zero_limit).unwrap().max_hold,
             None
-        );
-
-        let cyrus_case = session(json!({
-            "urn:ietf:params:jmap:mail": {},
-            "urn:ietf:params:jmap:submission": {
-                "maxDelayedSend": 86400,
-                "submissionExtensions": {"futurerelease": []},
-            },
-        }));
-        assert_eq!(
-            AccountFeatures::from_session(&cyrus_case).unwrap().max_hold,
-            Some(86_400)
         );
     }
 
