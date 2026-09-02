@@ -24,10 +24,15 @@ Rough order of what matters next; none of it is a commitment.
 - **Hardening against real servers**: the client is strict about RFC 8414
   issuer matching by design; deployments whose advertised hostname does not
   match how clients reach them are refused, and the docs say what to fix.
+- **JMAP-only UI features** (`jmap-ui`): the vacation autoresponder, scheduled
+  send and snooze ship as an out-of-tree Evolution module, the way
+  evolution-ews ships its Out-of-Office page. Making these first-class in
+  Evolution itself (GNOME/evolution#411, #374) and adding the extension points
+  that would need (a message-popup placeholder, a shared reader-actions
+  extension) remain upstream asks this module now has a working case for.
 - **Upstream work this project feeds**: a named `CamelSasl` for OAuth-only
-  providers (GNOME/evolution#3382), scheduled send and snooze as first-class
-  Evolution features (GNOME/evolution#411, #374), and the diagnostics and
-  leak reports filed from here (glib#4041, evolution-data-server!243).
+  providers (GNOME/evolution#3382), and the diagnostics and leak reports filed
+  from here (glib#4041, evolution-data-server!243).
 - **Newer Evolution/EDS**: the code builds and tests against both the pinned
   EDS 3.52 and 3.60; a full port forward waits until the plugin's basics are
   boring.

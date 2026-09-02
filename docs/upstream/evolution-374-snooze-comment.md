@@ -107,3 +107,12 @@ Actionable and I'd genuinely rather know.
 Not asking for prioritisation; suggesting it may now be worth reopening for
 tracking, since the "no server-side API exists" reason has expired. Happy to do
 the JMAP-side work if the Evolution-side plumbing ever becomes interesting.
+
+**Follow-up (jmap-ui, not yet posted):** the out-of-tree JMAP module now ships
+a *Snooze* item in the message-list popup, strictly server-side: it appears
+only for accounts whose server offers the extension (Fastmail's, today), and
+moves the message into the server's snoozed mailbox with a wake time. It does
+not attempt a client-side timer for servers without the feature, exactly
+because a flag-plus-timer is the wrong model — which is the Evolution-side cost
+this issue is really about. Offered as evidence that the vendor-supported case
+works and that the open question is the client-side concept, not the protocol.

@@ -31,10 +31,13 @@ round-trip and fuzz tests (`jmap-vcard`/`jmap-ical`); a 2026-08-29 measured
 spike into externalising that layer onto the `calcard` crate's own converter
 found it a worse fit (15% pass rate against our acceptance suite — see
 [docs/CALCARD-SEMANTIC-SPIKE.md](docs/CALCARD-SEMANTIC-SPIKE.md)) and kept
-the hand-written mapping. `docs/MILESTONES.md` is the machine-readable
-completion record; `docs/ROADMAP.md` tracks what's next (JMAP Push and
-scheduled-send/snooze, both blocked on further Evolution/Camel plumbing
-upstream, not this project).
+the hand-written mapping. `docs/ROADMAP.md` tracks what's next.
+
+A `jmap-ui` module puts three JMAP-only features into Evolution's own UI,
+which has no concept of them: a vacation-autoresponder page in the account
+editor, scheduled send in the composer, and snooze in the message-list
+context menu. Each is gated on the account's server actually offering the
+feature; see [docs/manual-test-ui-features.md](docs/manual-test-ui-features.md).
 
 The test suite covers sending and receiving email (including
 `EmailSubmission` with envelope derivation and `onSuccessUpdateEmail`),
