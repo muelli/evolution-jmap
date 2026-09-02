@@ -13,13 +13,23 @@ use std::ffi::{CStr, CString};
 use std::ptr;
 
 use eds_sys::{
-    CamelAddress, CamelInternetAddress, E_SOURCE_CREDENTIAL_PASSWORD, camel_address_new,
+    CamelAddress, CamelInternetAddress, E_SOURCE_CREDENTIAL_PASSWORD,
+    E_SOURCE_EXTENSION_AUTHENTICATION, ESourceAuthentication, camel_address_new,
     camel_internet_address_get_type, camel_internet_address_new, e_named_parameters_free,
-    e_named_parameters_new, e_named_parameters_set,
+    e_named_parameters_new, e_named_parameters_set, e_source_get_extension, e_source_has_extension,
+    e_source_new,
 };
 use glib_sys::{GSList, g_free, g_slist_free_full, g_slist_length, g_slist_nth_data, gchar};
 use gobject_sys::g_object_unref;
 use jmap_backend_core::marshal;
+
+/// A live `CamelInternetAddress`, upcast to `*mut CamelAddress` the way a
+/// vfunc's declared argument type would arrive, for the borrow-helper tests
+/// below. The caller frees it with `g_object_unref`.
+fn internet_address() -> *mut CamelAddress {
+    // SAFETY: `camel_internet_address_new` returns a live, owned instance.
+    unsafe { camel_internet_address_new().cast() }
+}
 
 // ---------------------------------------------------------------------------
 // read_string
@@ -198,4 +208,185 @@ fn a_pointer_of_the_wrong_type_is_the_supplied_error() {
         assert_eq!(result, Err("boom"));
         g_object_unref(plain.cast());
     }
+}
+
+// ---------------------------------------------------------------------------
+// dispatched_borrow
+
+#[test]
+fn dispatched_borrow_reports_null_as_absent() {
+    // SAFETY: NULL is a valid input to a borrow helper.
+    let result = unsafe {
+        marshal::dispatched_borrow::<CamelAddress, CamelInternetAddress>(ptr::null_mut())
+    };
+    assert!(result.is_none());
+}
+
+/// Unlike `checked_borrow`, this helper trusts vfunc dispatch instead of
+/// checking a `GType` — a wrong-type pointer here would already be a GObject
+/// bug, not something this call can catch. What it must still get right is
+/// the cast itself: the returned reference has to be the same address as the
+/// pointer that came in.
+#[test]
+fn dispatched_borrow_casts_a_live_pointer_to_the_same_address() {
+    let address = internet_address();
+    // SAFETY: `address` is a live instance, as `dispatched_borrow` requires.
+    let borrowed =
+        unsafe { marshal::dispatched_borrow::<CamelAddress, CamelInternetAddress>(address) };
+    assert!(std::ptr::eq(
+        borrowed.expect("a live pointer must borrow"),
+        address.cast()
+    ));
+    // SAFETY: nothing above still borrows `address`.
+    unsafe { g_object_unref(address.cast()) };
+}
+
+// ---------------------------------------------------------------------------
+// checked_borrow
+
+#[test]
+fn checked_borrow_reports_null_as_absent() {
+    // SAFETY: NULL is a valid input to a checked-borrow helper.
+    let result = unsafe {
+        marshal::checked_borrow::<CamelAddress, CamelInternetAddress>(
+            ptr::null_mut(),
+            camel_internet_address_get_type(),
+        )
+    };
+    assert!(result.is_none());
+}
+
+#[test]
+fn checked_borrow_accepts_a_pointer_of_the_declared_type() {
+    let address = internet_address();
+    // SAFETY: `address` is a live `CamelInternetAddress`.
+    let borrowed = unsafe {
+        marshal::checked_borrow::<CamelAddress, CamelInternetAddress>(
+            address,
+            camel_internet_address_get_type(),
+        )
+    };
+    assert!(std::ptr::eq(
+        borrowed.expect("a same-type pointer must borrow"),
+        address.cast()
+    ));
+    // SAFETY: nothing above still borrows `address`.
+    unsafe { g_object_unref(address.cast()) };
+}
+
+#[test]
+fn checked_borrow_refuses_a_pointer_of_the_wrong_type() {
+    // SAFETY: a live `CamelAddress` that is not a `CamelInternetAddress`.
+    unsafe {
+        let plain = camel_address_new();
+        let result = marshal::checked_borrow::<CamelAddress, CamelInternetAddress>(
+            plain,
+            camel_internet_address_get_type(),
+        );
+        assert!(result.is_none());
+        g_object_unref(plain.cast());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// checked_borrow_ptr
+
+#[test]
+fn checked_borrow_ptr_reports_null_as_absent() {
+    // SAFETY: NULL is a valid input to a checked-borrow helper.
+    let result = unsafe {
+        marshal::checked_borrow_ptr::<CamelAddress, CamelInternetAddress>(
+            ptr::null_mut(),
+            camel_internet_address_get_type(),
+        )
+    };
+    assert!(result.is_none());
+}
+
+#[test]
+fn checked_borrow_ptr_accepts_a_pointer_of_the_declared_type() {
+    let address = internet_address();
+    // SAFETY: `address` is a live `CamelInternetAddress`.
+    let result = unsafe {
+        marshal::checked_borrow_ptr::<CamelAddress, CamelInternetAddress>(
+            address,
+            camel_internet_address_get_type(),
+        )
+    };
+    assert_eq!(result, Some(address.cast()));
+    // SAFETY: nothing above still borrows `address`.
+    unsafe { g_object_unref(address.cast()) };
+}
+
+#[test]
+fn checked_borrow_ptr_refuses_a_pointer_of_the_wrong_type() {
+    // SAFETY: a live `CamelAddress` that is not a `CamelInternetAddress`.
+    unsafe {
+        let plain = camel_address_new();
+        let result = marshal::checked_borrow_ptr::<CamelAddress, CamelInternetAddress>(
+            plain,
+            camel_internet_address_get_type(),
+        );
+        assert!(result.is_none());
+        g_object_unref(plain.cast());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// extension_if_present
+
+/// `e_source_get_extension` creates the extension it cannot find, which is
+/// wrong for a read-only lookup — this is the property `extension_if_present`
+/// exists to add. A freshly created source has no `Authentication` extension
+/// until something asks to write one.
+#[test]
+fn extension_if_present_does_not_create_the_extension_it_cannot_find() {
+    let mut error = ptr::null_mut();
+    // SAFETY: the documented arguments — no D-Bus object, the default main
+    // context, and a `GError` out-parameter.
+    let source = unsafe { e_source_new(ptr::null_mut(), ptr::null_mut(), &mut error) };
+    assert!(!source.is_null());
+
+    // SAFETY: `source` is live and outlives the call.
+    let found = unsafe {
+        marshal::extension_if_present::<ESourceAuthentication>(
+            source,
+            E_SOURCE_EXTENSION_AUTHENTICATION,
+        )
+    };
+    assert!(found.is_none());
+    // SAFETY: only reading whether the lookup above created the extension.
+    assert_eq!(
+        unsafe { e_source_has_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()) },
+        glib_sys::GFALSE,
+        "extension_if_present created the extension it was only asked to look up"
+    );
+    // SAFETY: nothing above still borrows `source`.
+    unsafe { g_object_unref(source.cast()) };
+}
+
+#[test]
+fn extension_if_present_returns_the_extension_once_it_exists() {
+    let mut error = ptr::null_mut();
+    // SAFETY: as above.
+    let source = unsafe { e_source_new(ptr::null_mut(), ptr::null_mut(), &mut error) };
+    assert!(!source.is_null());
+
+    // SAFETY: `source` is live; this is the ordinary, extension-creating call.
+    let created = unsafe {
+        e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr())
+            .cast::<ESourceAuthentication>()
+    };
+    assert!(!created.is_null());
+
+    // SAFETY: `source` is live and outlives the call.
+    let found = unsafe {
+        marshal::extension_if_present::<ESourceAuthentication>(
+            source,
+            E_SOURCE_EXTENSION_AUTHENTICATION,
+        )
+    };
+    assert_eq!(found, Some(created));
+    // SAFETY: nothing above still borrows `source`.
+    unsafe { g_object_unref(source.cast()) };
 }

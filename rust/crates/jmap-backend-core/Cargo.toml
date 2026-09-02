@@ -40,4 +40,8 @@ libc = "0.2.189"
 # `push`'s pump is tested against a real EventSource connection, which needs
 # a real server; the mock needs no EDS headers of its own.
 evolution-jmap-mock = { workspace = true }
+# Self dev-dependency to turn on `testing` (and so `instance::zeroed_box`) for
+# this crate's own test builds only — the same trick the five consumer crates
+# use to reach through to this feature from theirs.
+jmap-backend-core = { path = ".", features = ["testing"] }
 

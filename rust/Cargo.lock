@@ -732,6 +732,7 @@ dependencies = [
  "gio-sys",
  "glib-sys",
  "gobject-sys",
+ "jmap-backend-core",
  "libc",
  "tracing",
  "tracing-journald",
