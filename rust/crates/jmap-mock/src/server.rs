@@ -9,9 +9,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use jmap_proto::session::{
-    Account, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
-    CAPABILITY_PRINCIPALS, CAPABILITY_PRINCIPALS_OWNER, CAPABILITY_QUOTA, CAPABILITY_SIEVE,
-    CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE, Session,
+    Account, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_CYRUS_MAIL,
+    CAPABILITY_MAIL, CAPABILITY_PRINCIPALS, CAPABILITY_PRINCIPALS_OWNER, CAPABILITY_QUOTA,
+    CAPABILITY_SIEVE, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE, Session,
 };
 use jmap_proto::sieve::SieveCapability;
 use serde_json::{Value, json};
@@ -106,6 +106,7 @@ pub struct MockServerBuilder {
     terse_calendar_event_create: bool,
     terse_collection_create: bool,
     max_delayed_send: Option<u64>,
+    snooze_extension: bool,
 }
 
 impl MockServerBuilder {
@@ -459,6 +460,16 @@ impl MockServerBuilder {
         self
     }
 
+    /// Advertise the Cyrus vendor mail extension
+    /// (`jmap_proto::session::CAPABILITY_CYRUS_MAIL`) and accept
+    /// `Email.snoozed`, the snooze shape Fastmail deploys. Off by default:
+    /// most servers (Stalwart included) have no snooze, and the capability
+    /// gate is exactly what clients must prove they read.
+    pub fn snooze_extension(mut self) -> Self {
+        self.snooze_extension = true;
+        self
+    }
+
     /// Bind to localhost and start serving on a background thread. The
     /// server stops when the returned handle is dropped.
     pub fn start(self) -> MockServer {
@@ -482,6 +493,7 @@ impl MockServerBuilder {
         state.terse_calendar_event_create = self.terse_calendar_event_create;
         state.terse_collection_create = self.terse_collection_create;
         state.max_delayed_send = self.max_delayed_send;
+        state.snooze_extension = self.snooze_extension;
         let state = Arc::new(Mutex::new(state));
 
         let server = tiny_http::Server::http(format!("127.0.0.1:{}", self.port))
@@ -554,6 +566,7 @@ impl MockServer {
             terse_calendar_event_create: false,
             terse_collection_create: false,
             max_delayed_send: None,
+            snooze_extension: false,
         }
     }
 
@@ -1136,6 +1149,9 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     }),
                 );
             }
+            if state.snooze_extension {
+                account_capabilities.insert(CAPABILITY_CYRUS_MAIL.to_owned(), json!({}));
+            }
             if !state.omitted_capabilities.contains(CAPABILITY_PRINCIPALS) {
                 account_capabilities.insert(
                     CAPABILITY_PRINCIPALS.to_owned(),
@@ -1206,8 +1222,8 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
 
     let advertised = state.advertise_origin.as_deref().unwrap_or(origin);
 
-    Session {
-        capabilities: [(CAPABILITY_CORE.to_owned(), core)]
+    let mut capabilities: std::collections::BTreeMap<String, Value> =
+        [(CAPABILITY_CORE.to_owned(), core)]
             .into_iter()
             .chain(
                 ACCOUNT_CAPABILITIES
@@ -1216,7 +1232,13 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
                     .filter(|capability| !state.omitted_capabilities.contains(**capability))
                     .map(|capability| ((*capability).to_owned(), capability_value(capability))),
             )
-            .collect(),
+            .collect();
+    if state.snooze_extension {
+        capabilities.insert(CAPABILITY_CYRUS_MAIL.to_owned(), json!({}));
+    }
+
+    Session {
+        capabilities,
         accounts,
         primary_accounts,
         username: first_account

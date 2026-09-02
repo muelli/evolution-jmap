@@ -28,6 +28,7 @@ mod principals;
 mod quota;
 pub mod resolver;
 mod sieve;
+mod snooze;
 pub mod transport;
 mod url;
 
