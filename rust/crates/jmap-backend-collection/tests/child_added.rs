@@ -23,7 +23,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_AUTHENTICATION,
     E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication, ESourceSecurity,
-    e_source_authentication_get_host, e_source_authentication_get_type,
+    e_source_authentication_get_credential_name, e_source_authentication_get_host,
+    e_source_authentication_get_type, e_source_authentication_set_credential_name,
     e_source_authentication_set_host, e_source_authentication_set_method,
     e_source_authentication_set_port, e_source_authentication_set_user, e_source_get_extension,
     e_source_has_extension, e_source_new_with_uid, e_source_security_get_type,
@@ -134,6 +135,19 @@ impl Source {
         let auth: *mut ESourceAuthentication = self.authentication();
         // SAFETY: as above.
         unsafe { e_source_authentication_set_method(auth, method.as_ptr()) };
+    }
+
+    fn set_credential_name(&self, name: &str) {
+        let name = CString::new(name).expect("no NUL in a literal");
+        let auth: *mut ESourceAuthentication = self.authentication();
+        // SAFETY: as above.
+        unsafe { e_source_authentication_set_credential_name(auth, name.as_ptr()) };
+    }
+
+    fn credential_name(&self) -> Option<String> {
+        let auth: *mut ESourceAuthentication = self.extension(E_SOURCE_EXTENSION_AUTHENTICATION);
+        // SAFETY: a live extension; the string is owned by it.
+        unsafe { read_string(e_source_authentication_get_credential_name(auth)) }
     }
 
     fn set_secure(&self, secure: bool) {
@@ -358,6 +372,26 @@ fn the_authentication_method_follows_too() {
         // SAFETY: a live extension; the string is owned by it.
         let method = unsafe { read_string(eds_sys::e_source_authentication_get_method(auth)) };
         assert_eq!(method.as_deref(), Some("OAuth2"));
+    });
+}
+
+#[test]
+fn the_credential_name_follows_too() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // eds#663: the token-storage key an OAuth2 account's credentials are
+        // filed under is the account's own uid, and a child that did not
+        // follow it would look its own token up under a key of its own — or
+        // under none at all — rather than the account's.
+        let (account, child) = bound();
+
+        account.set_credential_name("jmap-account");
+
+        assert_eq!(
+            child.credential_name().as_deref(),
+            Some("jmap-account"),
+            "the child looks its OAuth2 token up under a different key than its account"
+        );
     });
 }
 

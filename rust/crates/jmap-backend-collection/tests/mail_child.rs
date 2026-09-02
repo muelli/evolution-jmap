@@ -30,9 +30,10 @@ use eds_sys::{
     E_SOURCE_EXTENSION_MAIL_ACCOUNT, E_SOURCE_EXTENSION_MAIL_IDENTITY,
     E_SOURCE_EXTENSION_MAIL_TRANSPORT, E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication,
     ESourceBackend, ESourceCamel, ESourceSecurity, camel_network_settings_get_security_method,
-    e_source_authentication_get_host, e_source_authentication_get_method,
-    e_source_authentication_get_port, e_source_authentication_get_type,
-    e_source_authentication_get_user, e_source_authentication_set_host,
+    e_source_authentication_get_credential_name, e_source_authentication_get_host,
+    e_source_authentication_get_method, e_source_authentication_get_port,
+    e_source_authentication_get_type, e_source_authentication_get_user,
+    e_source_authentication_set_credential_name, e_source_authentication_set_host,
     e_source_authentication_set_method, e_source_authentication_set_port,
     e_source_authentication_set_user, e_source_backend_set_backend_name,
     e_source_camel_generate_subtype, e_source_camel_get_extension_name,
@@ -194,6 +195,23 @@ impl Source {
         unsafe { e_source_authentication_set_method(self.authentication(), method.as_ptr()) };
     }
 
+    fn set_credential_name(&self, name: &str) {
+        let name = CString::new(name).expect("no NUL in a literal");
+        // SAFETY: as above.
+        unsafe {
+            e_source_authentication_set_credential_name(self.authentication(), name.as_ptr())
+        };
+    }
+
+    fn credential_name(&self) -> Option<String> {
+        // SAFETY: as above.
+        unsafe {
+            read_string(e_source_authentication_get_credential_name(
+                self.authentication(),
+            ))
+        }
+    }
+
     fn set_secure(&self, secure: bool) {
         // SAFETY: as above.
         unsafe {
@@ -347,6 +365,33 @@ fn the_mail_sources_the_assistant_leaves_behind_reach_the_accounts_server() {
             assert_eq!(service.host().as_deref(), Some("jmap.example.com"));
             assert_eq!(service.port(), 8443);
             assert_eq!(service.user().as_deref(), Some("vera@example.com"));
+        }
+    });
+}
+
+#[test]
+fn a_mail_sources_credential_name_follows_the_account_too() {
+    with_timeout(|| {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // eds#663's token-cache key, for the two mail sources this module
+        // exists to reach: a mail account or transport that looked its OAuth2
+        // token up under its own key rather than the account's would be the
+        // credential-name counterpart of the `method` gap this module already
+        // works around above.
+        let account = Source::account();
+        account.set_credential_name("jmap-account");
+
+        for extension in SERVICES {
+            let service = Source::service(extension, MAIL_BACKEND_NAME);
+
+            // SAFETY: two live sources.
+            unsafe { follow_collection(account.0, service.0) };
+
+            assert_eq!(
+                service.credential_name().as_deref(),
+                Some("jmap-account"),
+                "{extension:?} looks its OAuth2 token up under a different key than its account"
+            );
         }
     });
 }

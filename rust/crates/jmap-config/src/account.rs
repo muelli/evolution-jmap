@@ -48,6 +48,24 @@
 //! for "ask for a password the ordinary way" — but it is not the identity, and
 //! `tests/account.rs` pins it so rather than pretending otherwise.
 //!
+//! ## `credential-name` is derived, not a field of `Account`
+//!
+//! `ESourceAuthentication:credential-name` gives an OAuth 2.0 account's stored
+//! token a key that is the account's own uid — stable across a server move,
+//! and never shared between two accounts of the same host, which is what the
+//! previous host-derived key could do (eds#663). It is written here rather
+//! than carried as a field of [`Account`] because it names nothing a dialog
+//! could usefully show or a user could usefully edit: it is exactly the
+//! account's own [`auth_method`](Connection::auth_method) turned into a
+//! yes/no, so [`apply`] derives it every time rather than trusting a copy.
+//! Written only for OAuth 2.0 and cleared (NULL) on every other method: EDS's
+//! credentials engine reads a non-empty `credential-name` as the parameter
+//! name it passes to `authenticate`, so a password account carrying one would
+//! have its password looked up under the wrong key. `jmap-backend-collection`'s
+//! `child_added` and `mail_child` bind it from the account onto every child the
+//! same way they bind `host`/`user`/`method`, so every service the account has
+//! shares one token cache entry.
+//!
 //! ## `[Security]` is written as the method, and read as the boolean
 //!
 //! `ESourceSecurity` holds a string — "tls" or "none" — and derives
@@ -92,19 +110,21 @@ use eds_sys::{
     ESource, ESourceAuthentication, ESourceBackend, ESourceCollection, ESourceSecurity,
     e_source_authentication_get_host, e_source_authentication_get_method,
     e_source_authentication_get_port, e_source_authentication_get_type,
-    e_source_authentication_get_user, e_source_authentication_set_host,
-    e_source_authentication_set_method, e_source_authentication_set_port,
-    e_source_authentication_set_user, e_source_backend_set_backend_name,
-    e_source_collection_get_calendar_enabled, e_source_collection_get_contacts_enabled,
-    e_source_collection_get_identity, e_source_collection_get_mail_enabled,
-    e_source_collection_get_type, e_source_collection_set_calendar_enabled,
-    e_source_collection_set_contacts_enabled, e_source_collection_set_identity,
-    e_source_collection_set_mail_enabled, e_source_get_extension, e_source_has_extension,
-    e_source_security_get_secure, e_source_security_get_type, e_source_security_set_method,
+    e_source_authentication_get_user, e_source_authentication_set_credential_name,
+    e_source_authentication_set_host, e_source_authentication_set_method,
+    e_source_authentication_set_port, e_source_authentication_set_user,
+    e_source_backend_set_backend_name, e_source_collection_get_calendar_enabled,
+    e_source_collection_get_contacts_enabled, e_source_collection_get_identity,
+    e_source_collection_get_mail_enabled, e_source_collection_get_type,
+    e_source_collection_set_calendar_enabled, e_source_collection_set_contacts_enabled,
+    e_source_collection_set_identity, e_source_collection_set_mail_enabled, e_source_get_extension,
+    e_source_get_uid, e_source_has_extension, e_source_security_get_secure,
+    e_source_security_get_type, e_source_security_set_method,
 };
 use glib_sys::{GFALSE, GTRUE, gboolean};
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::oauth2::OAUTH2_METHOD;
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 
@@ -222,6 +242,20 @@ pub unsafe fn apply(source: *mut ESource, account: &Account) {
         // Zero is how `[Authentication] Port` spells "not set", and it is what
         // the reader turns back into `None`.
         e_source_authentication_set_port(auth, account.connection.port.unwrap_or(0));
+
+        // `credential-name` (eds#663): only ever the account's own uid, and
+        // only for OAuth 2.0 — see the module comment. NULL on every other
+        // method rather than a skipped write, for the same idempotency reason
+        // the fields above are: an account switched back to a password must
+        // not go on carrying the credential-name a previous OAuth 2.0 commit
+        // left behind, which would change the parameter name the credentials
+        // engine passes to `authenticate` for what is now a plain password.
+        let credential_name = if account.connection.auth_method.as_deref() == Some(OAUTH2_METHOD) {
+            e_source_get_uid(source)
+        } else {
+            ptr::null()
+        };
+        e_source_authentication_set_credential_name(auth, credential_name);
 
         let security: *mut ESourceSecurity =
             e_source_get_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
