@@ -31,6 +31,7 @@ mod server;
 mod setops;
 mod sieve;
 mod state;
+mod time;
 
 pub use mail::EmailSeed;
 pub use server::{

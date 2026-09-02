@@ -446,12 +446,14 @@ impl MockServerBuilder {
         self
     }
 
-    /// Advertise `maxDelayedSend` (in seconds) on the submission account
-    /// capability (RFC 8621 §7.1), so a client can detect support for
-    /// `EmailSubmission.sendAt` before offering scheduled send
-    /// (`jmap_proto::session::Account::max_delayed_send`). `None` (the
-    /// default) advertises an empty submission capability object, matching
-    /// every other test and every deployment without SMTP FUTURERELEASE.
+    /// Advertise `maxDelayedSend` (in seconds) and FUTURERELEASE among the
+    /// `submissionExtensions` on the submission account capability (RFC 8621
+    /// §7.1), so a client can detect scheduled-send support before offering
+    /// it (`jmap_proto::session::Account::max_delayed_send`,
+    /// `SubmissionCapability::supports_future_release`). `None` (the default)
+    /// advertises an empty submission capability object, matching every other
+    /// test and every deployment without SMTP FUTURERELEASE; holds are then
+    /// refused.
     pub fn max_delayed_send(mut self, seconds: u64) -> Self {
         self.max_delayed_send = Some(seconds);
         self
@@ -1128,7 +1130,10 @@ fn session_document(state: &ServerState, origin: &str, authorized: bool) -> Sess
             {
                 account_capabilities.insert(
                     CAPABILITY_SUBMISSION.to_owned(),
-                    json!({"maxDelayedSend": seconds, "submissionExtensions": {}}),
+                    json!({
+                        "maxDelayedSend": seconds,
+                        "submissionExtensions": {"FUTURERELEASE": []},
+                    }),
                 );
             }
             if !state.omitted_capabilities.contains(CAPABILITY_PRINCIPALS) {

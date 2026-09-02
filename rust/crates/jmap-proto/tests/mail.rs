@@ -651,7 +651,7 @@ fn email_set_errors_cover_rfc8621() {
 fn mailbox_identity_and_submission_builders_roundtrip() {
     use jmap_proto::UtcDate;
     use jmap_proto::mail::{
-        EmailAddress, EmailSubmission, Envelope, EnvelopeAddress, Identity, Mailbox,
+        EmailAddress, EmailSubmission, Envelope, EnvelopeAddress, Identity, Mailbox, Schedule,
     };
 
     let mb = Mailbox::new("Projects")
@@ -709,11 +709,13 @@ fn mailbox_identity_and_submission_builders_roundtrip() {
 
     let sub = EmailSubmission::new("ident_1", "email_1")
         .with_thread_id("th_1")
-        .with_envelope(Envelope {
-            mail_from: EnvelopeAddress::new("eng@example.com"),
-            rcpt_to: vec![EnvelopeAddress::new("customer@example.com")],
-        })
-        .with_send_at(UtcDate::new("2026-09-01T12:00:00Z"))
+        .with_envelope(
+            Envelope {
+                mail_from: EnvelopeAddress::new("eng@example.com"),
+                rcpt_to: vec![EnvelopeAddress::new("customer@example.com")],
+            }
+            .with_schedule(&Schedule::HoldUntil(UtcDate::new("2026-09-01T12:00:00Z"))),
+        )
         .with_undo_status("pending");
 
     assert_eq!(sub.identity_id.as_str(), "ident_1");
@@ -723,10 +725,9 @@ fn mailbox_identity_and_submission_builders_roundtrip() {
         sub.envelope.as_ref().unwrap().mail_from.email,
         "eng@example.com"
     );
-    assert_eq!(
-        sub.send_at.as_ref().unwrap().as_str(),
-        "2026-09-01T12:00:00Z"
-    );
+    // The release time travels as an envelope parameter; `sendAt` stays the
+    // server's to answer with.
+    assert!(sub.send_at.is_none());
     assert_eq!(sub.undo_status.as_deref(), Some("pending"));
 
     let sub_val = serde_json::to_value(&sub).unwrap();
@@ -734,10 +735,39 @@ fn mailbox_identity_and_submission_builders_roundtrip() {
     assert_eq!(sub_val["emailId"], "email_1");
     assert_eq!(sub_val["threadId"], "th_1");
     assert_eq!(sub_val["undoStatus"], "pending");
+    assert!(sub_val.get("sendAt").is_none());
+    assert_eq!(
+        sub_val["envelope"]["mailFrom"]["parameters"]["HOLDUNTIL"],
+        "2026-09-01T12:00:00Z"
+    );
     assert_eq!(
         serde_json::from_value::<EmailSubmission>(sub_val).unwrap(),
         sub
     );
+}
+
+/// [`Schedule`]'s two RFC 4865 forms as `mailFrom.parameters` entries, and
+/// that scheduling keeps parameters already on the envelope.
+#[test]
+fn schedule_becomes_a_futurerelease_envelope_parameter() {
+    use jmap_proto::UtcDate;
+    use jmap_proto::mail::{Envelope, EnvelopeAddress, Schedule};
+    use serde_json::json;
+
+    let envelope = Envelope {
+        mail_from: EnvelopeAddress::new("a@example.com").with_parameters(json!({"RET": "HDRS"})),
+        rcpt_to: vec![EnvelopeAddress::new("b@example.com")],
+    }
+    .with_schedule(&Schedule::HoldFor(600));
+
+    assert_eq!(
+        envelope.mail_from.parameters,
+        Some(json!({"RET": "HDRS", "HOLDFOR": "600"}))
+    );
+
+    let (name, value) = Schedule::HoldUntil(UtcDate::new("2027-01-01T00:00:00Z")).parameter();
+    assert_eq!(name, "HOLDUNTIL");
+    assert_eq!(value, json!("2027-01-01T00:00:00Z"));
 }
 
 #[test]
