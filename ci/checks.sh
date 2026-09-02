@@ -51,7 +51,11 @@ while read -r crate baseline_count; do
         unsafe_meter_fail=1
         continue
     fi
-    actual_count=$(grep -rEo "$unsafe_meter_pattern" "$crate_src" 2>/dev/null | wc -l)
+    # `|| true` inside the substitution: grep exits 1 when a crate has zero
+    # unsafe sites (the pure crates: evo-sys, jmap-*-sync), and under
+    # `set -o pipefail` that would abort this whole script mid-loop before the
+    # meter could report anything.
+    actual_count=$({ grep -rEo "$unsafe_meter_pattern" "$crate_src" 2>/dev/null || true; } | wc -l)
     if [ "$actual_count" -gt "$baseline_count" ]; then
         echo "FAIL: $crate grew from $baseline_count to $actual_count unsafe sites." >&2
         echo "If intentional, update its line in unsafe-baseline.txt in this commit." >&2
