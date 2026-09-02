@@ -25,6 +25,7 @@ pub mod limits;
 mod mail;
 pub mod oauth;
 mod principals;
+mod quota;
 pub mod resolver;
 pub mod transport;
 mod url;

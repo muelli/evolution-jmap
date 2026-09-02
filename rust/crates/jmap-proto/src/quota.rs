@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::id::Id;
 
 /// A Quota object (RFC 9425 §2).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Quota {
     pub id: Id,

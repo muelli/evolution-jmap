@@ -26,6 +26,7 @@ mod mail;
 mod message;
 mod patch;
 mod principals;
+mod quota;
 mod server;
 mod setops;
 mod state;
