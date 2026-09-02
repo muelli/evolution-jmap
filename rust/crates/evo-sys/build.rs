@@ -185,6 +185,29 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // Which identity the From line stands at, re-read on every
     // `notify::identity-uid`.
     "e_composer_header_table_dup_identity_uid",
+    // The snooze surfaces, a function at a time. The shell view: its GType is
+    // the first extensible, its name is the "is this the mail view" gate, and
+    // the window is where the 3.52 action/menu layer lives.
+    "e_shell_view_get_type",
+    "e_shell_view_get_name",
+    "e_shell_view_get_shell_window",
+    "e_shell_view_get_shell_content",
+    "e_shell_window_get_ui_manager",
+    "e_shell_window_get_action_group",
+    // The registry the snooze gate resolves the folder's account source
+    // against; the shell singleton is the one place a shell-view extension
+    // can be sure of one.
+    "e_shell_get_default",
+    "e_shell_get_registry",
+    // The detached message window, the second extensible: it merges into a
+    // GtkUIManager of its own and *is* its own EMailReader.
+    "e_mail_browser_get_type",
+    "e_mail_browser_get_ui_manager",
+    // The reader face both surfaces hand the snooze action: the selection,
+    // the folder it sits in, and (for the browser) the action group.
+    "e_mail_reader_get_selected_uids",
+    "e_mail_reader_ref_folder",
+    "e_mail_reader_get_action_group",
 ];
 
 /// The GTK calls, named one at a time rather than by prefix.
@@ -439,6 +462,15 @@ const BLOCKED_EVO_TYPES: &[&str] = &[
     // takes, a value type — stays generatable.
     "_?EComposerHeader",
     "_?EComposerHeader(Class|Private)",
+    // The whole shell family (EShell itself included — a GtkApplication),
+    // and the two mail-window classes the snooze extensions reach only as
+    // pointers. `EMailReader` is spelled exactly, twice, so that
+    // `EMailReaderActionGroup` — the enum `e_mail_reader_get_action_group`
+    // takes — stays generatable.
+    "_?EShell[A-Za-z]*",
+    "_?EMailBrowser[A-Za-z]*",
+    "_?EMailReader",
+    "_?EMailReaderInterface",
     // `EConfigLookup`: the object an `EConfigLookupWorker` is registered
     // against and handed back as `run()`'s argument. Not `EConfigLookupWorker`
     // or `EConfigLookupResult(Simple)?` — this pattern has no trailing
@@ -519,6 +551,14 @@ const EVO_HANDLES: &[&str] = &[
     "EHTMLEditor",
     "EComposerHeaderTable",
     "EComposerHeader",
+    // The snooze surfaces: the shell singleton and the mail window's view
+    // chain, plus the detached message window and the reader face both share.
+    "EShell",
+    "EShellView",
+    "EShellWindow",
+    "EShellContent",
+    "EMailBrowser",
+    "EMailReader",
 ];
 
 /// The GTK classes the calls above mention, as opaque handles.

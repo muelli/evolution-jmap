@@ -77,7 +77,7 @@ fn snoozing_moves_the_message_and_records_the_wake_time() {
     let details = SnoozeDetails::new(UtcDate::new("2026-01-02T08:00:00Z"))
         .with_move_to_mailbox_id(inbox.clone());
     client
-        .snooze_email(&account_id, &email_id, &inbox, &snoozed_id, &details)
+        .snooze_email(&account_id, &email_id, &snoozed_id, &details)
         .unwrap();
 
     let fetched = client
@@ -99,7 +99,7 @@ fn snoozing_moves_the_message_and_records_the_wake_time() {
 fn snoozing_without_the_extension_is_refused() {
     let server = MockServer::builder().start();
     let account_id = server.account_id();
-    let (client, inbox, email_id) = seeded(&server);
+    let (client, _inbox, email_id) = seeded(&server);
 
     // The role alone is an ordinary folder (RFC 9979 §8.1) — creating it
     // works on any server; only `snoozed` itself is gated.
@@ -107,7 +107,7 @@ fn snoozing_without_the_extension_is_refused() {
     let snoozed_id = snoozed_mailbox.id.expect("server assigned a mailbox id");
 
     let details = SnoozeDetails::new(UtcDate::new("2026-01-02T08:00:00Z"));
-    match client.snooze_email(&account_id, &email_id, &inbox, &snoozed_id, &details) {
+    match client.snooze_email(&account_id, &email_id, &snoozed_id, &details) {
         Err(Error::Set(set_error)) => assert_eq!(set_error.error_type, "invalidProperties"),
         other => panic!("expected SetError, got {other:?}"),
     }

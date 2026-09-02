@@ -26,9 +26,12 @@ const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_CYRUS_MAIL
 
 impl Client {
     /// Snooze one message: an `Email/set` update writing `snoozed` and moving
-    /// the message from `from_mailbox_id` into `snoozed_mailbox_id`, the
-    /// combination the extension requires (setting `snoozed` on a message not
-    /// entering the snoozed mailbox is refused server-side).
+    /// the message into `snoozed_mailbox_id` — *only* there, the whole
+    /// `mailboxIds` replaced, which is what snoozing means in every client
+    /// that has it (the message leaves the inbox until it wakes) and spares
+    /// the caller mapping its current folder to a mailbox id. Setting
+    /// `snoozed` on a message not entering the snoozed mailbox is refused
+    /// server-side.
     ///
     /// The server wakes the message at `details.until`, moving it to
     /// `details.move_to_mailbox_id` (its inbox when absent) — nothing on the
@@ -38,19 +41,14 @@ impl Client {
         &self,
         account_id: &Id,
         email_id: &Id,
-        from_mailbox_id: &Id,
         snoozed_mailbox_id: &Id,
         details: &SnoozeDetails,
     ) -> Result<(), Error> {
         let mut patch = serde_json::Map::new();
         patch.insert("snoozed".to_owned(), serde_json::to_value(details)?);
         patch.insert(
-            format!("mailboxIds/{}", snoozed_mailbox_id.as_str()),
-            serde_json::Value::Bool(true),
-        );
-        patch.insert(
-            format!("mailboxIds/{}", from_mailbox_id.as_str()),
-            serde_json::Value::Null,
+            "mailboxIds".to_owned(),
+            serde_json::json!({ snoozed_mailbox_id.as_str(): true }),
         );
         let request = SetRequest::<Email>::new(account_id.clone())
             .update(email_id.clone(), serde_json::Value::Object(patch));
