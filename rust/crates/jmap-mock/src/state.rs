@@ -401,6 +401,10 @@ pub struct AccountState {
     /// state counter and changes log are reused unchanged rather than
     /// building a separate mechanism for one object.
     pub vacation_response: Store<jmap_proto::mail::VacationResponse>,
+    /// `Quota` objects (RFC 9425 §2). Read-only from the client's side (the
+    /// RFC defines no `Quota/set`), seeded at account creation the same way
+    /// `vacation_response` is.
+    pub quotas: Store<jmap_proto::quota::Quota>,
     /// Every accepted `EmailSubmission` — what a real server would hand to
     /// its SMTP queue. Tests assert against this.
     pub outbox: Vec<RecordedSubmission>,
@@ -433,6 +437,19 @@ impl AccountState {
             Id::from("singleton"),
             jmap_proto::mail::VacationResponse::new(false).with_id("singleton"),
         );
+        let mut quotas = Store::new("Q");
+        quotas.seed_with_id(
+            Id::from("Q1"),
+            jmap_proto::quota::Quota::new(
+                "Q1",
+                "Mail",
+                jmap_proto::quota::quota_resource_type::OCTETS,
+                0,
+                1_073_741_824,
+                jmap_proto::quota::quota_scope::ACCOUNT,
+                [jmap_proto::quota::quota_data_type::MAIL],
+            ),
+        );
         Self {
             name: name.into(),
             mailboxes: Store::new("M"),
@@ -440,6 +457,7 @@ impl AccountState {
             identities: Store::new("I"),
             submissions: Store::new("S"),
             vacation_response,
+            quotas,
             outbox: Vec::new(),
             address_books: Store::new("AB"),
             contact_cards: Store::new("C"),
