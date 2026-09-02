@@ -21,7 +21,7 @@
 //! - [RFC 9749] JMAP Web Push VAPID: `WebPushVapidCapability`.
 //! - [RFC 9425] JMAP for Quotas: the `Quota` object and `/query` filter.
 //! - [RFC 9404] JMAP Blob Management: `Blob/get` and `Blob/upload`.
-//! - [RFC 9265] JMAP for Sieve Scripts: `SieveScript`, `SieveScript/validate`.
+//! - [RFC 9661] JMAP for Sieve Scripts: `SieveScript`, `SieveScript/validate`.
 //! - [RFC 8887] JMAP Subprotocol for WebSocket: `Request`, `Response`,
 //!   `RequestError`, `WebSocketPushEnable`, `WebSocketPushDisable`.
 //! - [draft-ietf-jmap-filenode] JMAP File Storage: `FileNode`, `FileNodeCapability`.
@@ -39,7 +39,7 @@
 //! [RFC 9749]: https://www.rfc-editor.org/rfc/rfc9749
 //! [RFC 9425]: https://www.rfc-editor.org/rfc/rfc9425
 //! [RFC 9404]: https://www.rfc-editor.org/rfc/rfc9404
-//! [RFC 9265]: https://www.rfc-editor.org/rfc/rfc9265
+//! [RFC 9661]: https://www.rfc-editor.org/rfc/rfc9661
 //! [RFC 8887]: https://www.rfc-editor.org/rfc/rfc8887
 //! [draft-ietf-jmap-filenode]: https://datatracker.ietf.org/doc/draft-ietf-jmap-filenode/
 //! [draft-ietf-jmap-refplus]: https://datatracker.ietf.org/doc/draft-ietf-jmap-refplus/

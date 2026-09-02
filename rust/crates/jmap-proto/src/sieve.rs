@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! RFC 9265: JMAP for Sieve Scripts.
+//! RFC 9661: JMAP for Sieve Scripts.
 //!
 //! Models the `SieveScript` data type, query filters, `SieveScript/validate`
 //! method envelopes, capability object, and standard error codes.
@@ -15,7 +15,7 @@ use crate::id::Id;
 
 pub const CAPABILITY_SIEVE: &str = "urn:ietf:params:jmap:sieve";
 
-/// Sieve capability properties (RFC 9265 §1.1).
+/// Sieve capability properties (RFC 9661 §1.2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveCapability {
@@ -70,7 +70,7 @@ impl SieveCapability {
     }
 }
 
-/// A Sieve script object (RFC 9265 §2).
+/// A Sieve script object (RFC 9661 §2.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScript {
@@ -112,7 +112,7 @@ impl SieveScript {
     }
 }
 
-/// `SieveScript/query` filter (RFC 9265 §2.4).
+/// `SieveScript/query` filter (RFC 9661 §2.5).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScriptQueryFilter {
@@ -145,7 +145,7 @@ impl SieveScriptQueryFilter {
     }
 }
 
-/// `SieveScript/validate` arguments (RFC 9265 §2.5).
+/// `SieveScript/validate` arguments (RFC 9661 §2.6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScriptValidateRequest {
@@ -192,7 +192,7 @@ impl SieveScriptValidateRequest {
     }
 }
 
-/// `SieveScript/validate` response (RFC 9265 §2.5).
+/// `SieveScript/validate` response (RFC 9661 §2.6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScriptValidateResponse {
@@ -229,7 +229,7 @@ impl SieveScriptValidateResponse {
     }
 }
 
-/// Detailed syntax or semantic error in a Sieve script (RFC 9265 §2.5).
+/// Detailed syntax or semantic error in a Sieve script (RFC 9661 §2.6).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SieveScriptValidateError {
@@ -276,13 +276,18 @@ impl SieveScriptValidateError {
     }
 }
 
-/// The `SetError` types RFC 9265 §2.3.2 adds for `SieveScript/set`.
+/// The two `SetError` types RFC 9661 §2.4 defines for `SieveScript/set`:
+/// `invalidSieve` for a create or update whose content fails to parse, and
+/// `sieveIsActive` for a destroy of the currently active script (it must be
+/// deactivated in a separate call first). The RFC reuses three standard RFC
+/// 8620 §5.3 errors rather than defining Sieve-specific ones for the other
+/// documented failures: `alreadyExists` (duplicate name, with an
+/// `existingId` property), `tooLarge` (over `maxSizeScript`) and `overQuota`
+/// (over `maxNumberScripts` or storage) — see [`crate::error::set`].
+/// Activating two scripts at once cannot arise: `onSuccessActivateScript`
+/// names at most one id per call, so there is no `multipleActiveScripts`
+/// error to report.
 pub mod sieve_set_error {
-    pub const CANNOT_DELETE_ACTIVE_SCRIPT: &str = "cannotDeleteActiveScript";
-    pub const SIEVE_IS_ACTIVE: &str = "sieveIsActive";
-    pub const DUPLICATE_SCRIPT_NAME: &str = "duplicateScriptName";
     pub const INVALID_SIEVE: &str = "invalidSieve";
-    pub const MAX_NUMBER_SCRIPTS_EXCEEDED: &str = "maxNumberScriptsExceeded";
-    pub const MAX_SIZE_SCRIPT_EXCEEDED: &str = "maxSizeScriptExceeded";
-    pub const MULTIPLE_ACTIVE_SCRIPTS: &str = "multipleActiveScripts";
+    pub const SIEVE_IS_ACTIVE: &str = "sieveIsActive";
 }

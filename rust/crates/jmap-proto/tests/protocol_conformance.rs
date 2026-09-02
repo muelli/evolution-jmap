@@ -807,28 +807,8 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
     assert_eq!(task_set_error::TOO_MANY_RECURRENCES, "tooManyRecurrences");
     assert_eq!(task_set_error::TASK_LIST_NOT_FOUND, "taskListNotFound");
 
-    // Sieve set errors (RFC 9265 §2.3.2)
-    assert_eq!(
-        sieve_set_error::CANNOT_DELETE_ACTIVE_SCRIPT,
-        "cannotDeleteActiveScript"
-    );
-    assert_eq!(
-        sieve_set_error::DUPLICATE_SCRIPT_NAME,
-        "duplicateScriptName"
-    );
+    // Sieve set errors (RFC 9661 §2.4)
     assert_eq!(sieve_set_error::INVALID_SIEVE, "invalidSieve");
-    assert_eq!(
-        sieve_set_error::MAX_NUMBER_SCRIPTS_EXCEEDED,
-        "maxNumberScriptsExceeded"
-    );
-    assert_eq!(
-        sieve_set_error::MAX_SIZE_SCRIPT_EXCEEDED,
-        "maxSizeScriptExceeded"
-    );
-    assert_eq!(
-        sieve_set_error::MULTIPLE_ACTIVE_SCRIPTS,
-        "multipleActiveScripts"
-    );
 
     // Calendar free/busy (RFC 8984 §4.1.2)
     assert_eq!(free_busy_status::FREE, "free");
@@ -845,11 +825,11 @@ fn standard_rfc_capability_and_role_constants_exact_values() {
 }
 
 // ===========================================================================
-// RFC 9265 Sieve: Forward Compatibility & Conformance
+// RFC 9661 Sieve: Forward Compatibility & Conformance
 // ===========================================================================
 
 #[test]
-fn rfc9265_sieve_script_and_validation_forward_compatibility() {
+fn rfc9661_sieve_script_and_validation_forward_compatibility() {
     let script_payload = json!({
         "id": "sieve_1",
         "name": "Main Rule",

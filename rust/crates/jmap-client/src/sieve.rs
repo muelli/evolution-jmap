@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Sieve (RFC 9265): `SieveScript/get`. `/set`, `/query` and
+//! JMAP Sieve (RFC 9661): `SieveScript/get`. `/set`, `/query` and
 //! `/validate` are separate increments — Evolution's filters UI is not
 //! wired to any of this yet.
 

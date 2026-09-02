@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `SieveScript/get` (RFC 9265). `/set`, `/query` and `/validate` are
+//! `SieveScript/get` (RFC 9661). `/set`, `/query` and `/validate` are
 //! separate increments.
 
 use jmap_proto::error::MethodError;
@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::dispatch::{account_mut, parse_arguments, to_result};
 use crate::state::ServerState;
 
-/// `SieveScript/get` (RFC 9265 §2.3): an `ids: null` request returns every
+/// `SieveScript/get` (RFC 9661 §2.3): an `ids: null` request returns every
 /// script the account has, which is none on a fresh account since scripts
 /// are client-created; a named id that does not exist is `notFound`, the
 /// same as every other `/get` method.
