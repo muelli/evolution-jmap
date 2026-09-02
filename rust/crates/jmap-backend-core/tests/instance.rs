@@ -117,6 +117,29 @@ fn a_second_init_keeps_the_first_value_and_drops_the_second() {
 }
 
 // ---------------------------------------------------------------------------
+// zeroed_box
+
+/// A stand-in for what each backend's `detached()` builds: fields whose
+/// all-zero bit pattern is a valid value on its own, the same property each
+/// call site has to verify before it may call `zeroed_box` at all.
+#[repr(C)]
+struct ZeroableFields {
+    flag: AtomicU32,
+    pointer: *mut u8,
+    count: usize,
+}
+
+#[test]
+fn zeroed_box_builds_a_value_from_all_zero_bytes_without_running_a_constructor() {
+    // SAFETY: every field of `ZeroableFields` is valid at all-zero bytes — an
+    // `AtomicU32`, a pointer (NULL) and a `usize`.
+    let value: Box<ZeroableFields> = unsafe { jmap_backend_core::instance::zeroed_box() };
+    assert_eq!(value.flag.load(Ordering::SeqCst), 0);
+    assert!(value.pointer.is_null());
+    assert_eq!(value.count, 0);
+}
+
+// ---------------------------------------------------------------------------
 // The same thing again, through the GObject type system rather than by hand.
 // ---------------------------------------------------------------------------
 
