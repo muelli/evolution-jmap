@@ -38,7 +38,7 @@
 //!   what the RFC 6749 default already does — build the query and both token
 //!   forms from `get_client_id`/`get_client_secret`/`get_redirect_uri`,
 //!   accept or decline a source by its `[Authentication] method`, decline
-//!   every hostname guess — does not need to fill these at all. `can_process`
+//!   every hostname guess, does not need to fill these at all. `can_process`
 //!   and `guess_can_process` are exactly that case and stay unfilled: matching
 //!   on `[Authentication] method` is all this service wants, and no hostname
 //!   pattern is worth guessing (every deployment is a different server).
@@ -47,7 +47,7 @@
 //!   out to want parameters the RFC 6749 default knows nothing about: a `scope`
 //!   (`error=invalid_scope`), an RFC 8707 `resource` (`error=invalid_target`)
 //!   and RFC 7636 PKCE (`error=invalid_request`), all three observed against
-//!   Fastmail on 2026-08-23. Filling them is additive only — see the next
+//!   Fastmail on 2026-08-23. Filling them is additive only: see the next
 //!   section for the rule that makes it safe, and
 //!   `e-oauth2-service-google.c`/`-outlook.c` for EDS's own services keeping
 //!   the same rule.
@@ -61,7 +61,7 @@
 //! So seven vfuncs are filled, all of them either a `'static` constant or a
 //! borrow of [`oauth2`]'s own storage — none compute a string that would need
 //! freeing, which is the condition the previous session's storage work
-//! existed to reach. Three more — the `prepare_*` trio — are filled as
+//! existed to reach. Three more, the `prepare_*` trio, are filled as
 //! *additive hooks*, per the next section.
 //!
 //! ## An additive hook, not a chain link
@@ -69,21 +69,22 @@
 //! For the third shape above, the slot a service fills is **not** a chain
 //! link and must not call EDS's default itself. `e_oauth2_service_default_init`
 //! (3.52.3) installs `eos_default_prepare_authentication_uri_query` and its two
-//! siblings into the interface vtable, so the slot a subclass's
-//! `interface_init` receives is already non-NULL — but each public wrapper
-//! (`e-oauth2-service.c:648`, `:822`, `:895`) calls its `eos_default_*` body
-//! *directly and unconditionally* before dispatching to the vtable, and skips
-//! the vtable only when it still literally holds that same default. A filled
-//! slot that also invoked the saved default would therefore run it twice.
+//! siblings into the interface vtable (`e-oauth2-service.c:320`, `:322`,
+//! `:324`), so the slot a subclass's `interface_init` receives is already
+//! non-NULL. But each public wrapper (`:648`, `:822`, `:895`) calls its
+//! `eos_default_*` body *directly and unconditionally* before dispatching to
+//! the vtable, and skips the vtable only when it still literally holds that
+//! same default (`:654`, `:828`, `:901`). A filled slot that also invoked the
+//! saved default would therefore run it twice.
 //!
 //! EDS's own services are the convention, not merely the reading of the
 //! wrapper: `eos_google_prepare_authentication_uri_query` and
 //! `eos_outlook_prepare_authentication_uri_query`/`_prepare_refresh_token_form`
 //! each set only their own keys, and neither saves nor invokes the default.
-//! This crate does the same. The double call it used to make was benign —
+//! This crate does the same. The double call it used to make was benign:
 //! `e_oauth2_service_util_set_to_form` is insert-or-remove, so repeating it is
 //! idempotent, and it is invisible through the wrapper for exactly that
-//! reason — but it doubled every `get_client_id`/`get_client_secret`/
+//! reason. But it doubled every `get_client_id`/`get_client_secret`/
 //! `get_redirect_uri` dispatch and would silently corrupt any future default
 //! that appended rather than replaced. `tests/oauth2_service.rs` pins the rule
 //! by dispatching the slots directly.
@@ -202,7 +203,7 @@ unsafe impl InterfaceImpl for Vtable {
         // `e_oauth2_service_default_init`), which build the standard RFC 6749
         // query and both token forms. Displacing them loses nothing: each
         // public wrapper runs its default *itself*, unconditionally, before
-        // dispatching here — see the "additive hook, not a chain link"
+        // dispatching here. See the "additive hook, not a chain link"
         // section of the module docs. So these override bodies only add.
         vtable.prepare_authentication_uri_query = Some(prepare_authentication_uri_query);
         vtable.prepare_get_token_form = Some(prepare_get_token_form);
@@ -251,16 +252,16 @@ unsafe extern "C" fn prepare_authentication_uri_query(
             // for `prepare_get_token_form` to redeem; a repeated
             // authorization attempt simply replaces it.
             //
-            // All-or-nothing (F16 audit follow-up, `docs/AUDIT-FFI-20260828.md`
-            // "F17"): a challenge is only ever added once its verifier is
-            // stashed. A uid-less source could not be stashed against, and
+            // All-or-nothing: a challenge is only ever added once its verifier
+            // is stashed. A uid-less source could not be stashed against, and
             // sending a challenge with nobody able to redeem it is worse than
-            // sending none — RFC 7636 §4.6 obliges the server to reject the
-            // code exchange that follows, so this would previously turn into
-            // a silent, unattributable authentication failure rather than the
-            // well-defined "no PKCE" request this deployment already tolerates
-            // (it is EDS's own default query without our addition).
-            let verifier = if let Some(ref uid) = uid {
+            // sending none: RFC 7636 section 4.6 obliges the server to reject
+            // the code exchange that follows, so this would turn into a silent,
+            // unattributable authentication failure rather than the
+            // well-defined "no PKCE" request every deployment this project
+            // targets already tolerates (it is EDS's own default query without
+            // our addition).
+            let has_pkce = if let Some(ref uid) = uid {
                 let verifier = PkceVerifier::generate();
                 pkce_verifiers()
                     .lock()
@@ -279,10 +280,11 @@ unsafe extern "C" fn prepare_authentication_uri_query(
                 true
             } else {
                 // Not reached through any path EDS's public API can build
-                // today — `e_source_new*` always assigns a uid — but the
-                // fallback is cheap insurance against a source that somehow
-                // has none, and is exactly the case a plain `debug!` would
-                // have hidden per the audit's own finding below.
+                // today: `e_source_new*` assigns a uid when the caller passes
+                // none. The fallback is cheap insurance against a source that
+                // somehow has one anyway, and it warns rather than passing
+                // silently, since a plain debug! is exactly what hid the
+                // failure this branch exists to prevent.
                 tracing::warn!(
                     "source has no uid; omitting the PKCE challenge rather than \
                      sending one whose verifier cannot be stashed and so can \
@@ -293,7 +295,7 @@ unsafe extern "C" fn prepare_authentication_uri_query(
             tracing::debug!(
                 account_uid = ?uid,
                 has_scope,
-                has_pkce = verifier,
+                has_pkce,
                 "prepared OAuth 2.0 authentication uri query"
             );
         },
@@ -360,25 +362,21 @@ unsafe extern "C" fn prepare_get_token_form(
             );
             true
         } else {
-            false
-        };
-        if !has_pkce {
-            // This is the failure mode that turns into the operator's
-            // repeating consent window (`docs/AUDIT-FFI-20260828.md` "F17"):
-            // every code exchange this service prepares follows a
-            // `prepare_authentication_uri_query` call that stashed a
-            // verifier, so its absence here means either that request never
-            // ran in this process, or the challenge it sent (before the
-            // all-or-nothing fix above) could never be redeemed — either way
-            // the exchange that follows is expected to fail, and `warn!`
-            // (not `debug!`) is what makes that attributable from the
-            // journal alone, per items 20(3)/22(3).
+            // Loud on purpose. If the authorization request carried a
+            // challenge, RFC 7636 section 4.6 obliges the server to reject the
+            // exchange this form is being built for, and the user sees only a
+            // consent window that reappears. At debug! that is both below what
+            // anything is likely to be capturing and indistinguishable from
+            // the legitimate "this deployment never used PKCE" case, which is
+            // what made the symptom unattributable from the journal.
             tracing::warn!(
                 account_uid = ?uid,
-                "no stashed PKCE verifier for this authorization code exchange; \
-                 if a challenge was sent, the server is expected to reject it"
+                "no stashed PKCE verifier for this account; the authorization \
+                 request may have carried a challenge, in which case the server \
+                 is expected to reject this code exchange"
             );
-        }
+            false
+        };
         tracing::debug!(
             account_uid = ?uid,
             has_pkce,
