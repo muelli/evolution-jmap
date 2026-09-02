@@ -824,6 +824,18 @@ impl MailSync {
         OutgoingMailboxes::of(&tree).ok_or(SyncError::NoOutgoingFolder)
     }
 
+    /// Every `Quota` object of the account (RFC 9425 §3) — what
+    /// `get_quota_info_sync` reads to answer a folder's quota, in `jmap-mail`.
+    ///
+    /// One `Quota/get` with `ids: null`, RFC 9425's own way of asking for all
+    /// of them, since a store has no reason to ask about one quota by id
+    /// before it knows which ids the account has. Account-wide rather than
+    /// per-folder, because JMAP quotas are not scoped to a mailbox — the
+    /// caller decides which of them describe the folder Camel asked about.
+    pub fn quotas(&self) -> Result<Vec<jmap_proto::quota::Quota>, SyncError> {
+        Ok(self.client.quotas(&self.account_id)?)
+    }
+
     /// Says whether the user wants to see a folder — the write behind
     /// `CamelSubscribable`'s two vfuncs.
     ///

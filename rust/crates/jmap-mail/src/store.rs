@@ -622,6 +622,37 @@ impl JmapStore {
         }
     }
 
+    /// Every `Quota` object of the account — what `get_quota_info_sync`
+    /// answers a folder's quota question from.
+    ///
+    /// On the store and locked exactly like [`JmapStore::messages`], and
+    /// account-wide rather than per-folder for the reason
+    /// [`MailSync::quotas`]'s own doc gives: JMAP quotas are not scoped to a
+    /// mailbox, so every folder in the account answers from the same list.
+    pub fn quotas(&self) -> Result<Vec<jmap_proto::quota::Quota>, StoreError> {
+        let connection = self.connection().ok_or(StoreError::Disconnected)?;
+        let sync = {
+            let guard = read(connection);
+            let sync = guard.as_ref().ok_or(StoreError::Disconnected)?;
+            Arc::clone(sync)
+        };
+        tracing::debug!("fetching account quotas");
+        match retry_once_after(
+            || sync.quotas(),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(&sync),
+        ) {
+            Ok(quotas) => {
+                tracing::debug!(count = quotas.len(), "fetched account quotas");
+                Ok(quotas)
+            }
+            Err(failure) => {
+                tracing::debug!(?failure, "fetching account quotas failed");
+                Err(failure.into())
+            }
+        }
+    }
+
     /// The RFC 5322 bytes of one message — what `get_message_sync` will parse.
     ///
     /// On the store for the same reason as [`JmapStore::messages`], and locked
