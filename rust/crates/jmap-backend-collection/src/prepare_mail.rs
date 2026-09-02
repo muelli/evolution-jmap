@@ -83,7 +83,7 @@ use eds_sys::{
     ECollectionBackendFactoryClass, ESource, ESourceBackend, e_collection_backend_factory_get_type,
     e_source_backend_set_backend_name, e_source_get_extension,
 };
-use gobject_sys::g_type_class_peek;
+use jmap_backend_core::subclass;
 use jmap_backend_core::trampoline::{guard, log_critical};
 
 /// The `ESourceBackend:backend-name` written on the mail account and the mail
@@ -139,9 +139,12 @@ pub unsafe fn prepare_mail(
     // function.
     // SAFETY: an instance of this subclass exists, so its class does, so the
     // class it derives from is initialised and alive for the process.
-    let parent = unsafe { g_type_class_peek(e_collection_backend_factory_get_type()) }
-        .cast::<ECollectionBackendFactoryClass>();
-    match unsafe { parent.as_ref() }.and_then(|class| class.prepare_mail) {
+    let parent = unsafe {
+        subclass::parent_class::<ECollectionBackendFactoryClass>(
+            e_collection_backend_factory_get_type(),
+        )
+    };
+    match parent.and_then(|class| class.prepare_mail) {
         // SAFETY: the parent's own implementation, called with this vfunc's
         // arguments on an instance of a type derived from it.
         Some(prepare) => unsafe {

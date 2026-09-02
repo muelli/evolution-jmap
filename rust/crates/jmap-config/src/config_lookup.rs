@@ -102,11 +102,11 @@ use evo_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GTRUE, GType, gchar};
-use gobject_sys::{GObject, GObjectClass, g_type_class_peek};
+use gobject_sys::{GObject, GObjectClass};
 use jmap_backend_core::cancel::CancelBridge;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{self, N_, translate_with};
-use jmap_backend_core::subclass::{InterfaceDecl, InterfaceImpl, ObjectSubclass};
+use jmap_backend_core::subclass::{self, InterfaceDecl, InterfaceImpl, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
 use jmap_client::transport::UreqTransport;
 
@@ -286,8 +286,8 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
     guard("JmapConfigLookup::constructed", (), || unsafe {
         // SAFETY: the parent class from a live instance's own class is
         // initialised and alive for as long as any instance is.
-        let parent = g_type_class_peek(JmapConfigLookup::parent_type()).cast::<GObjectClass>();
-        if let Some(chained) = parent.as_ref().and_then(|class| class.constructed) {
+        let parent = subclass::parent_class::<GObjectClass>(JmapConfigLookup::parent_type());
+        if let Some(chained) = parent.and_then(|class| class.constructed) {
             chained(object);
         }
 

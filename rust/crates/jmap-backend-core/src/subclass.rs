@@ -291,6 +291,25 @@ pub unsafe fn register_dynamic<T: ObjectSubclass>(module: *mut GTypeModule) -> G
     unsafe { register::<T>(module) }
 }
 
+/// `class_type`'s class, as the `C` it is known to lead with, for a vfunc
+/// that chains up to a class this crate does not own.
+///
+/// `g_type_class_peek` rather than `_ref`: an initialised class is what
+/// having registered `class_type` (or a subclass of it) already guarantees,
+/// and taking a reference here would mean giving one back on a path that has
+/// no natural place to do so.
+///
+/// # Safety
+///
+/// `class_type`'s class struct must actually lead with a `C`, and an
+/// instance of `class_type` or one of its subclasses must already exist —
+/// which is what guarantees the class is initialised; it then stays alive
+/// for the life of the process.
+pub unsafe fn parent_class<C>(class_type: GType) -> Option<&'static C> {
+    // SAFETY: the contract above.
+    unsafe { g_type_class_peek(class_type).cast::<C>().as_ref() }
+}
+
 /// Serialises the check-then-register pair. GObject's own registration is
 /// thread-safe, but "is it there yet?" followed by "register it" is not, and
 /// losing that race aborts the process.

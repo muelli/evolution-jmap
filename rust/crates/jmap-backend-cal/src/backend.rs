@@ -65,7 +65,6 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar};
-use gobject_sys::g_type_class_peek;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::instance::Slot;
@@ -75,7 +74,7 @@ use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
 use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_on_authentication_failure;
 use jmap_backend_core::source::backend_source;
-use jmap_backend_core::subclass::ObjectSubclass;
+use jmap_backend_core::subclass::{self, ObjectSubclass};
 use jmap_backend_core::trampoline::{guard, guard_bool, guard_value};
 use jmap_cal_sync::CalSync;
 use jmap_client::Credentials;
@@ -316,13 +315,11 @@ unsafe impl ObjectSubclass for JmapCalBackend {
 /// registered a subclass of it guarantees, and taking a reference here would
 /// mean giving one back on a path that has no natural place to do so.
 pub fn parent_class() -> Option<&'static ECalMetaBackendClass> {
-    // SAFETY: peeking a type that has never been referenced returns NULL,
-    // which is handled; otherwise the class is alive for as long as the type
-    // is, which for an EDS type is the life of the process.
+    // SAFETY: the contract above.
     unsafe {
-        g_type_class_peek(<JmapCalBackend as ObjectSubclass>::parent_type())
-            .cast::<ECalMetaBackendClass>()
-            .as_ref()
+        subclass::parent_class::<ECalMetaBackendClass>(
+            <JmapCalBackend as ObjectSubclass>::parent_type(),
+        )
     }
 }
 

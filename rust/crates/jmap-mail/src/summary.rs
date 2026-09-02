@@ -119,11 +119,11 @@ use eds_sys::{
 use glib_sys::{
     GError, GFALSE, GTRUE, GType, g_free, g_string_free, g_string_new, gboolean, gchar,
 };
-use gobject_sys::{g_object_new, g_type_class_peek};
+use gobject_sys::g_object_new;
 use jmap_backend_core::instance::Slot;
 use jmap_backend_core::marshal::checked_borrow;
 use jmap_backend_core::owned::Owned;
-use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::subclass::{self, ObjectSubclass, register_static};
 use jmap_backend_core::trampoline::{guard, log_critical};
 use jmap_mail_sync::MessageSummary;
 use jmap_proto::{Id, State};
@@ -474,13 +474,8 @@ unsafe extern "C" fn summary_header_load(
 /// An instance of this type must exist, which is what guarantees its parent's
 /// class is initialised and alive.
 unsafe fn parent_class<'a>() -> Option<&'a CamelFolderSummaryClass> {
-    // SAFETY: the contract above; the class is owned by the type system and
-    // outlives every instance.
-    unsafe {
-        g_type_class_peek(JmapSummary::parent_type())
-            .cast::<CamelFolderSummaryClass>()
-            .as_ref()
-    }
+    // SAFETY: the contract above.
+    unsafe { subclass::parent_class::<CamelFolderSummaryClass>(JmapSummary::parent_type()) }
 }
 
 /// Runs one vfunc body, refusing to run it at all on a summary that is not
