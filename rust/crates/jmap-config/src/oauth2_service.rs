@@ -38,15 +38,19 @@
 //!   what the RFC 6749 default already does — build the query and both token
 //!   forms from `get_client_id`/`get_client_secret`/`get_redirect_uri`,
 //!   accept or decline a source by its `[Authentication] method`, decline
-//!   every hostname guess — does not need to fill these at all. **JMAP has
-//!   nothing to add**: no OAuth scope parameter (RFC 8620 grants everything
-//!   the token's account can see), no non-standard token endpoint quirks, and
-//!   no hostname pattern worth guessing (every deployment is a different
-//!   server). `e-oauth2-service-google.c` is the confirmation this is the
-//!   real convention and not a theoretical reading of the wrapper: Google's
-//!   own service overrides none of these five either, for exactly this
-//!   reason — its `prepare_authentication_uri_query` override only *adds* a
-//!   scope, on top of what the default already filled in.
+//!   every hostname guess — does not need to fill these at all. `can_process`
+//!   and `guess_can_process` are exactly that case and stay unfilled: matching
+//!   on `[Authentication] method` is all this service wants, and no hostname
+//!   pattern is worth guessing (every deployment is a different server).
+//!
+//!   The other three of the five *are* filled, because live deployments turned
+//!   out to want parameters the RFC 6749 default knows nothing about: a `scope`
+//!   (`error=invalid_scope`), an RFC 8707 `resource` (`error=invalid_target`)
+//!   and RFC 7636 PKCE (`error=invalid_request`), all three observed against
+//!   Fastmail on 2026-08-23. Filling them is additive only — see the next
+//!   section for the rule that makes it safe, and
+//!   `e-oauth2-service-google.c`/`-outlook.c` for EDS's own services keeping
+//!   the same rule.
 //!
 //! `extract_authorization_code` and `extract_error_message` are the fourth
 //! and only remaining pair: no anti-recursion guard, a real default
@@ -57,7 +61,32 @@
 //! So seven vfuncs are filled, all of them either a `'static` constant or a
 //! borrow of [`oauth2`]'s own storage — none compute a string that would need
 //! freeing, which is the condition the previous session's storage work
-//! existed to reach.
+//! existed to reach. Three more — the `prepare_*` trio — are filled as
+//! *additive hooks*, per the next section.
+//!
+//! ## An additive hook, not a chain link
+//!
+//! For the third shape above, the slot a service fills is **not** a chain
+//! link and must not call EDS's default itself. `e_oauth2_service_default_init`
+//! (3.52.3) installs `eos_default_prepare_authentication_uri_query` and its two
+//! siblings into the interface vtable, so the slot a subclass's
+//! `interface_init` receives is already non-NULL — but each public wrapper
+//! (`e-oauth2-service.c:648`, `:822`, `:895`) calls its `eos_default_*` body
+//! *directly and unconditionally* before dispatching to the vtable, and skips
+//! the vtable only when it still literally holds that same default. A filled
+//! slot that also invoked the saved default would therefore run it twice.
+//!
+//! EDS's own services are the convention, not merely the reading of the
+//! wrapper: `eos_google_prepare_authentication_uri_query` and
+//! `eos_outlook_prepare_authentication_uri_query`/`_prepare_refresh_token_form`
+//! each set only their own keys, and neither saves nor invokes the default.
+//! This crate does the same. The double call it used to make was benign —
+//! `e_oauth2_service_util_set_to_form` is insert-or-remove, so repeating it is
+//! idempotent, and it is invisible through the wrapper for exactly that
+//! reason — but it doubled every `get_client_id`/`get_client_secret`/
+//! `get_redirect_uri` dispatch and would silently corrupt any future default
+//! that appended rather than replaced. `tests/oauth2_service.rs` pins the rule
+//! by dispatching the slots directly.
 //!
 //! ## What this crate does not do
 //!
@@ -169,33 +198,17 @@ unsafe impl InterfaceImpl for Vtable {
         vtable.get_authentication_uri = Some(get_authentication_uri);
         vtable.get_refresh_uri = Some(get_refresh_uri);
         vtable.get_redirect_uri = Some(get_redirect_uri);
-        // The interface's own slot arrives pre-filled with EDS's default,
-        // which builds the standard RFC 6749 query but knows nothing of
-        // scope — concrete services add their own (EDS's Google and Outlook
-        // implementations do exactly this). Keep the default reachable and
-        // chain to it, then add ours.
-        if let Some(default) = vtable.prepare_authentication_uri_query {
-            let _ = DEFAULT_PREPARE_AUTHENTICATION_URI_QUERY.set(default);
-        }
+        // These three slots arrive pre-filled with EDS's own defaults (3.52.3
+        // `e_oauth2_service_default_init`), which build the standard RFC 6749
+        // query and both token forms. Displacing them loses nothing: each
+        // public wrapper runs its default *itself*, unconditionally, before
+        // dispatching here — see the "additive hook, not a chain link"
+        // section of the module docs. So these override bodies only add.
         vtable.prepare_authentication_uri_query = Some(prepare_authentication_uri_query);
-        // RFC 8707 names the resource on the token grants too, so both form
-        // builders get the same chain-and-add treatment as the query above.
-        if let Some(default) = vtable.prepare_get_token_form {
-            let _ = DEFAULT_PREPARE_GET_TOKEN_FORM.set(default);
-        }
         vtable.prepare_get_token_form = Some(prepare_get_token_form);
-        if let Some(default) = vtable.prepare_refresh_token_form {
-            let _ = DEFAULT_PREPARE_REFRESH_TOKEN_FORM.set(default);
-        }
         vtable.prepare_refresh_token_form = Some(prepare_refresh_token_form);
     }
 }
-
-/// EDS's own `prepare_authentication_uri_query`, saved by `interface_init`
-/// before being displaced, so the override below can chain to it.
-static DEFAULT_PREPARE_AUTHENTICATION_URI_QUERY: OnceLock<
-    unsafe extern "C" fn(*mut EOAuth2Service, *mut ESource, *mut GHashTable),
-> = OnceLock::new();
 
 /// Adds the RFC 6749 §3.3 `scope` this client registered for (stored on the
 /// source by the discovery worker) to the authorization request, after EDS's
@@ -207,7 +220,7 @@ static DEFAULT_PREPARE_AUTHENTICATION_URI_QUERY: OnceLock<
 /// exactly that omission (observed live 2026-08-23). A source with no stored
 /// scope — a deployment that advertises none — keeps the query untouched.
 unsafe extern "C" fn prepare_authentication_uri_query(
-    service: *mut EOAuth2Service,
+    _service: *mut EOAuth2Service,
     source: *mut ESource,
     uri_query: *mut GHashTable,
 ) {
@@ -216,9 +229,6 @@ unsafe extern "C" fn prepare_authentication_uri_query(
         (),
         || unsafe {
             let uid = read_string(e_source_get_uid(source));
-            if let Some(default) = DEFAULT_PREPARE_AUTHENTICATION_URI_QUERY.get() {
-                default(service, source, uri_query);
-            }
             let scope = oauth2::scope(source);
             let has_scope = !scope.is_null() && *scope != 0;
             if has_scope {
@@ -240,27 +250,50 @@ unsafe extern "C" fn prepare_authentication_uri_query(
             // were already right). The verifier is stashed per source UID
             // for `prepare_get_token_form` to redeem; a repeated
             // authorization attempt simply replaces it.
-            let verifier = PkceVerifier::generate();
-            g_hash_table_replace(
-                uri_query,
-                g_strdup(c"code_challenge".as_ptr()).cast(),
-                g_strdup(cstring_lossy(&verifier.challenge()).as_ptr()).cast(),
-            );
-            g_hash_table_replace(
-                uri_query,
-                g_strdup(c"code_challenge_method".as_ptr()).cast(),
-                g_strdup(c"S256".as_ptr()).cast(),
-            );
-            if let Some(ref uid) = uid {
+            //
+            // All-or-nothing (F16 audit follow-up, `docs/AUDIT-FFI-20260828.md`
+            // "F17"): a challenge is only ever added once its verifier is
+            // stashed. A uid-less source could not be stashed against, and
+            // sending a challenge with nobody able to redeem it is worse than
+            // sending none — RFC 7636 §4.6 obliges the server to reject the
+            // code exchange that follows, so this would previously turn into
+            // a silent, unattributable authentication failure rather than the
+            // well-defined "no PKCE" request this deployment already tolerates
+            // (it is EDS's own default query without our addition).
+            let verifier = if let Some(ref uid) = uid {
+                let verifier = PkceVerifier::generate();
                 pkce_verifiers()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .insert(uid.clone(), verifier.secret().to_owned());
-            }
+                g_hash_table_replace(
+                    uri_query,
+                    g_strdup(c"code_challenge".as_ptr()).cast(),
+                    g_strdup(cstring_lossy(&verifier.challenge()).as_ptr()).cast(),
+                );
+                g_hash_table_replace(
+                    uri_query,
+                    g_strdup(c"code_challenge_method".as_ptr()).cast(),
+                    g_strdup(c"S256".as_ptr()).cast(),
+                );
+                true
+            } else {
+                // Not reached through any path EDS's public API can build
+                // today — `e_source_new*` always assigns a uid — but the
+                // fallback is cheap insurance against a source that somehow
+                // has none, and is exactly the case a plain `debug!` would
+                // have hidden per the audit's own finding below.
+                tracing::warn!(
+                    "source has no uid; omitting the PKCE challenge rather than \
+                     sending one whose verifier cannot be stashed and so can \
+                     never be redeemed"
+                );
+                false
+            };
             tracing::debug!(
                 account_uid = ?uid,
                 has_scope,
-                pkce_challenge_method = "S256",
+                has_pkce = verifier,
                 "prepared OAuth 2.0 authentication uri query"
             );
         },
@@ -275,17 +308,6 @@ fn pkce_verifiers() -> &'static Mutex<HashMap<String, String>> {
     static VERIFIERS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
     VERIFIERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
-
-/// EDS's own `prepare_get_token_form`, saved by `interface_init` before being
-/// displaced, so the override below can chain to it.
-static DEFAULT_PREPARE_GET_TOKEN_FORM: OnceLock<
-    unsafe extern "C" fn(*mut EOAuth2Service, *mut ESource, *const c_char, *mut GHashTable),
-> = OnceLock::new();
-
-/// EDS's own `prepare_refresh_token_form`, saved the same way.
-static DEFAULT_PREPARE_REFRESH_TOKEN_FORM: OnceLock<
-    unsafe extern "C" fn(*mut EOAuth2Service, *mut ESource, *const c_char, *mut GHashTable),
-> = OnceLock::new();
 
 /// Adds the stored RFC 8707 `resource` indicator to `table` when the source
 /// carries one; a source without one (a deployment the discovery probe could
@@ -315,16 +337,13 @@ unsafe fn add_resource(source: *mut ESource, table: *mut GHashTable) {
 /// it at both (Fastmail's `error=invalid_target`, observed live 2026-08-23,
 /// is the authorization half of that requirement).
 unsafe extern "C" fn prepare_get_token_form(
-    service: *mut EOAuth2Service,
+    _service: *mut EOAuth2Service,
     source: *mut ESource,
-    authorization_code: *const c_char,
+    _authorization_code: *const c_char,
     form: *mut GHashTable,
 ) {
     guard("JmapOAuth2Service::prepare_get_token_form", (), || unsafe {
         let uid = read_string(e_source_get_uid(source));
-        if let Some(default) = DEFAULT_PREPARE_GET_TOKEN_FORM.get() {
-            default(service, source, authorization_code, form);
-        }
         add_resource(source, form);
         // Redeem the PKCE verifier stashed when the authorization query was
         // built (RFC 7636 §4.5). Taken, not copied: a verifier is single-use.
@@ -343,6 +362,23 @@ unsafe extern "C" fn prepare_get_token_form(
         } else {
             false
         };
+        if !has_pkce {
+            // This is the failure mode that turns into the operator's
+            // repeating consent window (`docs/AUDIT-FFI-20260828.md` "F17"):
+            // every code exchange this service prepares follows a
+            // `prepare_authentication_uri_query` call that stashed a
+            // verifier, so its absence here means either that request never
+            // ran in this process, or the challenge it sent (before the
+            // all-or-nothing fix above) could never be redeemed — either way
+            // the exchange that follows is expected to fail, and `warn!`
+            // (not `debug!`) is what makes that attributable from the
+            // journal alone, per items 20(3)/22(3).
+            tracing::warn!(
+                account_uid = ?uid,
+                "no stashed PKCE verifier for this authorization code exchange; \
+                 if a challenge was sent, the server is expected to reject it"
+            );
+        }
         tracing::debug!(
             account_uid = ?uid,
             has_pkce,
@@ -353,7 +389,7 @@ unsafe extern "C" fn prepare_get_token_form(
 
 /// As [`prepare_get_token_form`], for the refresh grant.
 unsafe extern "C" fn prepare_refresh_token_form(
-    service: *mut EOAuth2Service,
+    _service: *mut EOAuth2Service,
     source: *mut ESource,
     refresh_token: *const c_char,
     form: *mut GHashTable,
@@ -363,9 +399,6 @@ unsafe extern "C" fn prepare_refresh_token_form(
         (),
         || unsafe {
             let uid = read_string(e_source_get_uid(source));
-            if let Some(default) = DEFAULT_PREPARE_REFRESH_TOKEN_FORM.get() {
-                default(service, source, refresh_token, form);
-            }
             add_resource(source, form);
             let has_refresh_token = !refresh_token.is_null() && *refresh_token != 0;
             tracing::debug!(
