@@ -12,7 +12,7 @@ use jmap_proto::mail::{
     EnvelopeAddress, Identity, Mailbox, Thread, VacationResponse, email_import_error,
 };
 use jmap_proto::methods::{
-    GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
+    Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse, operator,
 };
 use jmap_proto::{Id, UtcDate};
 use serde_json::Value;
@@ -521,15 +521,17 @@ pub fn thread_get(state: &mut ServerState, arguments: Value) -> Result<Value, Me
 }
 
 pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
-    let request: QueryRequest<EmailQueryFilter> = parse_arguments(arguments)?;
+    let request: QueryRequest<Filter<EmailQueryFilter>> = parse_arguments(arguments)?;
     let page_size = state.query_page_size;
     let account = account_mut(state, &request.account_id)?;
 
-    let filter = request.filter.unwrap_or_default();
+    let filter = request
+        .filter
+        .unwrap_or_else(|| Filter::condition(EmailQueryFilter::default()));
     let mut matches: Vec<(&Id, &Email)> = account
         .emails
         .iter()
-        .filter(|(_, email)| email_matches(email, &filter))
+        .filter(|(_, email)| filter_matches(email, &filter))
         .collect();
 
     // Default order: receivedAt descending (RFC 8621 servers commonly do
@@ -584,6 +586,24 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
         total: request.calculate_total.then_some(total),
         limit: capped.then(|| page_size.unwrap_or_default()),
     })
+}
+
+/// A `Filter<EmailQueryFilter>` tree (RFC 8620 §5.5): a leaf condition, or an
+/// AND/OR/NOT combination of nested filters. NOT is true iff every one of its
+/// conditions is false — RFC 8620's definition, which is not "negate the
+/// single child" once a NOT has more than one, but every generator in this
+/// codebase and in Camel's own search grammar only ever gives NOT one child,
+/// so the two readings agree in practice.
+fn filter_matches(email: &Email, filter: &Filter<EmailQueryFilter>) -> bool {
+    match filter {
+        Filter::Condition(condition) => email_matches(email, condition),
+        Filter::Operator(op) => match op.operator.as_str() {
+            operator::AND => op.conditions.iter().all(|c| filter_matches(email, c)),
+            operator::OR => op.conditions.iter().any(|c| filter_matches(email, c)),
+            operator::NOT => !op.conditions.iter().any(|c| filter_matches(email, c)),
+            _ => false,
+        },
+    }
 }
 
 fn email_matches(email: &Email, filter: &EmailQueryFilter) -> bool {

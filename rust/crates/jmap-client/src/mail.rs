@@ -11,8 +11,8 @@ use jmap_proto::mail::{
     EmailSubmissionSetRequest, Envelope, Identity, Mailbox, Thread, VacationResponse,
 };
 use jmap_proto::methods::{
-    Comparator, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
-    UploadResponse,
+    Comparator, Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest,
+    SetResponse, UploadResponse,
 };
 use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
@@ -282,15 +282,20 @@ impl Client {
     /// ids than were asked for whether or not the client set a `limit`, and
     /// reports the cap it applied in [`QueryResponse::limit`], so a caller that
     /// wants the whole result set asks again from where the last answer ended.
+    ///
+    /// `filter` takes a plain [`EmailQueryFilter`] or a
+    /// [`Filter<EmailQueryFilter>`] AND/OR/NOT tree (RFC 8620 §5.5) — the
+    /// former converts via [`Filter::condition`], so every existing caller
+    /// passing a flat filter keeps compiling unchanged.
     pub fn email_query(
         &self,
         account_id: &Id,
-        filter: EmailQueryFilter,
+        filter: impl Into<Filter<EmailQueryFilter>>,
         sort: Option<Vec<Comparator>>,
         limit: Option<u64>,
         position: i64,
     ) -> Result<QueryResponse, Error> {
-        let mut request = QueryRequest::new(account_id.clone()).filter(filter);
+        let mut request = QueryRequest::new(account_id.clone()).filter(filter.into());
         request.sort = sort;
         request.limit = limit;
         request.position = position;
@@ -443,11 +448,11 @@ impl Client {
     pub fn email_query_then_get(
         &self,
         account_id: &Id,
-        filter: EmailQueryFilter,
+        filter: impl Into<Filter<EmailQueryFilter>>,
         sort: Option<Vec<Comparator>>,
         properties: Option<&[&str]>,
     ) -> Result<Vec<Email>, Error> {
-        let mut query = QueryRequest::new(account_id.clone()).filter(filter);
+        let mut query = QueryRequest::new(account_id.clone()).filter(filter.into());
         query.sort = sort;
 
         if !self.takes_calls_in_one_request(2) {
@@ -494,7 +499,7 @@ impl Client {
     fn email_query_then_get_separately(
         &self,
         account_id: &Id,
-        query: &QueryRequest<EmailQueryFilter>,
+        query: &QueryRequest<Filter<EmailQueryFilter>>,
         properties: Option<&[&str]>,
     ) -> Result<Vec<Email>, Error> {
         let arguments =
