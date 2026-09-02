@@ -226,6 +226,17 @@ unsafe impl ObjectSubclass for JmapFolder {
         // SAFETY: as above.
         unsafe { crate::expunge::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
+        // And what the account's mailbox quota looks like. Unlike the vfuncs
+        // above, `CamelFolder`'s own base class already fills this one in —
+        // with an implementation that always answers
+        // `G_IO_ERROR_NOT_SUPPORTED` — so without this line a JMAP account is
+        // not broken, only one Evolution's folder-properties dialog shows no
+        // quota row for. This line is what makes it show the account's real
+        // usage where the server reports one.
+        //
+        // SAFETY: as above.
+        unsafe { crate::quota::install_vfuncs(class.cast::<CamelFolderClass>()) };
+
         // And what the folder answers when it is asked which of its messages
         // match an expression — which is not only the search bar: every
         // message-list view is one ("Unread Messages", "Hide Deleted

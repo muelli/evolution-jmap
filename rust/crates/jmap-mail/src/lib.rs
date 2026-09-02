@@ -165,6 +165,7 @@ pub mod module;
 pub mod oauth2;
 pub mod provider;
 pub mod push;
+pub mod quota;
 pub mod refresh;
 pub mod sasl;
 pub mod send;

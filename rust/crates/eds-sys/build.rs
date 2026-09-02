@@ -156,6 +156,12 @@ const ALLOWED_TYPES: &[&str] = &[
     // Plain struct behind a boxed type, like `CamelProvider`, so `g_type_query`
     // knows nothing of it and tests/camel.rs stands in for tests/layout.rs.
     "CamelFolderChangeInfo",
+    // What `get_quota_info_sync` answers with: a `name`/`used`/`total` node
+    // and a `next` pointer chaining one quota to another, its own public
+    // fields rather than an accessor per field. The same boxed-type shape as
+    // `CamelFolderChangeInfo` above, and the same reason tests/layout.rs does
+    // not check it.
+    "CamelFolderQuotaInfo",
     // A third error domain beside `CamelServiceError` and `CamelStoreError`,
     // for the failures that are neither the account's nor the store's:
     // `CAMEL_FOLDER_ERROR_INVALID_UID` in particular, which is how a message
@@ -495,6 +501,18 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // both legs.
     "camel_folder_(get|free|dup)_uids",
     "camel_folder_changed",
+    // The wrapper around the `get_quota_info_sync` vfunc this provider
+    // overrides, named for the same reason as `camel_folder_refresh_info_sync`
+    // above: a test drives it the way Evolution's folder-properties dialog
+    // does, through the wrapper, rather than through the class. What the
+    // vfunc builds its answer out of is `camel_folder_quota_info_new`, one
+    // node per quota chained through the struct's own public `next` field
+    // rather than through a second constructor; `_free` is what a test frees
+    // the chain it is handed with, the same way it owns and frees a `GError`.
+    // `_clone` is not named: nothing here ever needs a second reference to a
+    // chain it already owns outright.
+    "camel_folder_get_quota_info_sync",
+    "camel_folder_quota_info_(new|free)",
     "camel_folder_change_info_.*",
     "camel_folder_summary_.*",
     "camel_offline_folder_get_type",

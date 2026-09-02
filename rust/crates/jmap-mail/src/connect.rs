@@ -149,6 +149,18 @@ pub enum StoreError {
     /// claims: this one is answered by a `CamelTransport`, which is not a
     /// store, and there is no folder Camel asked for to report as missing.
     NoOutgoingFolder,
+    /// `get_quota_info_sync` was called and the account's `Quota` objects
+    /// have none that applies to Mail.
+    ///
+    /// Not a failure of the connection or the account — a server that omits
+    /// the `urn:ietf:params:jmap:quota` capability, or advertises it with
+    /// nothing scoped to Mail, has correctly answered "no quota information
+    /// available", the same case `camel-imapx-folder.c`'s own
+    /// `get_quota_info_sync` reports this way. Reported as
+    /// `G_IO_ERROR_NOT_SUPPORTED`, that file's own domain and code for it,
+    /// so the folder-properties dialog that reads this vfunc treats a JMAP
+    /// account exactly like an IMAP one with quotas turned off.
+    NoQuota,
 }
 
 impl From<SourceError> for StoreError {
@@ -216,6 +228,7 @@ impl fmt::Display for StoreError {
             Self::NoOutgoingFolder => {
                 f.write_str("this account has no Drafts or Sent folder to send a message from")
             }
+            Self::NoQuota => f.write_str("no quota information available for this account"),
         }
     }
 }
@@ -293,6 +306,13 @@ impl StoreError {
             // themselves on first use.
             Self::Client(Error::Cancelled) => unsafe {
                 (gio_sys::g_io_error_quark(), gio_sys::G_IO_ERROR_CANCELLED)
+            },
+            // SAFETY: as above.
+            Self::NoQuota => unsafe {
+                (
+                    gio_sys::g_io_error_quark(),
+                    gio_sys::G_IO_ERROR_NOT_SUPPORTED,
+                )
             },
             // SAFETY: as above.
             Self::NoFolder(_) | Self::NoRole(_) => unsafe {
