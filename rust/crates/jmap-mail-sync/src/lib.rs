@@ -33,7 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_client::Client;
 use jmap_proto::mail::{Email, EmailImport, EmailQueryFilter, Mailbox};
-use jmap_proto::methods::Comparator;
+use jmap_proto::methods::{Comparator, Filter};
 use jmap_proto::{Id, State, UtcDate};
 
 pub use error::SyncError;
@@ -1083,12 +1083,37 @@ impl MailSync {
     /// The ids of a mailbox's messages, oldest first, however many pages the
     /// server answers in.
     fn message_ids(&self, mailbox: &Id) -> Result<Vec<Id>, SyncError> {
+        self.paged_query(Filter::condition(EmailQueryFilter::in_mailbox(
+            mailbox.clone(),
+        )))
+    }
+
+    /// The ids of a mailbox's messages matching `filter`, for server-side
+    /// search (`jmap-mail`'s `folder.rs`, translating a Camel search
+    /// expression). `Email/query` has no notion of "within this listing" on
+    /// its own, so the mailbox scope is folded in with an AND rather than left
+    /// to the caller, the same reason [`Self::message_ids`] builds one
+    /// directly.
+    pub fn search(
+        &self,
+        mailbox: &Id,
+        filter: Filter<EmailQueryFilter>,
+    ) -> Result<Vec<Id>, SyncError> {
+        self.paged_query(Filter::and([
+            Filter::condition(EmailQueryFilter::in_mailbox(mailbox.clone())),
+            filter,
+        ]))
+    }
+
+    /// Pages through `Email/query` for `filter`, oldest first, until the
+    /// server stops reporting a capped answer.
+    fn paged_query(&self, filter: Filter<EmailQueryFilter>) -> Result<Vec<Id>, SyncError> {
         let mut ids: Vec<Id> = Vec::new();
 
         for _ in 0..MAX_QUERY_PAGES {
             let response = self.client.email_query(
                 &self.account_id,
-                EmailQueryFilter::in_mailbox(mailbox.clone()),
+                filter.clone(),
                 Some(vec![Comparator::ascending("receivedAt")]),
                 None,
                 ids.len() as i64,

@@ -24,23 +24,40 @@
 //! rather than argued for in a comment: the same two rows, the same expression,
 //! and the same expected answer on both legs.
 //!
-//! What is *not* claimed: that searching goes to the server. It does not, on
-//! either release — these are searches over the summary the folder already
-//! holds, which is what Camel's own local-search architecture provides and all
-//! any expression over flags needs.
+//! One case now *is* claimed to reach the server: up to EDS 3.52, before
+//! either vfunc touches `CamelFolderSearch`, it tries
+//! `jmap-mail::search_sexp::translate` on the expression, and on a
+//! translatable one, the shapes RFC 8621's contains-only conditions can
+//! express (`header-contains`/`body-contains`/`and`/`or`/`not`), asks
+//! `Email/query` over the whole mailbox instead, since that is the only way
+//! to search a body this provider never downloaded. Everything else,
+//! including a translatable expression asked of a disconnected store, still
+//! answers from the summary exactly as before; the tests below that exercise
+//! the server path are gated to the pre-3.58 leg for that reason; the ones
+//! shared with the 3.58 leg are still testing only the local fallback.
 
 mod common;
 
 use std::ffi::CStr;
+#[cfg(camel_folder_search_object)]
+use std::ffi::CString;
 use std::ptr;
 
 use common::Account;
 use eds_sys::{CamelFolder, camel_folder_get_folder_summary, camel_folder_summary_save};
 use glib_sys::{GError, GPtrArray, gchar};
+#[cfg(camel_folder_search_object)]
+use glib_sys::{GFALSE, g_ptr_array_add, g_ptr_array_free, gpointer};
 use gobject_sys::g_object_unref;
+#[cfg(camel_folder_search_object)]
+use jmap_client::{Client, Credentials};
 use jmap_mail::folder::new_folder;
 use jmap_mail::summary::apply_listing;
+#[cfg(camel_folder_search_object)]
+use jmap_mail_sync::MailSync;
 use jmap_mail_sync::{FolderInfo, MessageFlags, MessageSummary};
+#[cfg(camel_folder_search_object)]
+use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 
 /// The mailbox the folder under test is a view of.
@@ -254,6 +271,187 @@ fn a_search_that_matches_everything_returns_every_row() {
         let mut all = search(folder, c"(match-all #t)");
         all.sort();
         assert_eq!(all, vec!["Msg0001".to_owned(), "Msg0002".to_owned()]);
+
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A folder wired to a live (mock) connection, its mailbox holding two
+/// server-side messages with distinct subjects, one containing "Lunch", one
+/// not, and no local summary rows at all.
+///
+/// That last part is deliberate: a search that silently fell back to the
+/// local `CamelFolderSearch` over an empty summary would find nothing,
+/// regardless of the expression. Only a genuine round trip to the server can
+/// tell the two subjects apart here.
+///
+/// The `MockServer` is part of the return value and not merely used while
+/// building it: dropping it tears down the listener, and every request the
+/// folder makes happens after this function returns.
+///
+/// # Safety
+///
+/// The returned folder outlives the `Account` it hangs off of no longer than
+/// the caller's own use of it; the caller unrefs it.
+#[cfg(camel_folder_search_object)]
+unsafe fn connected_folder_with_two_subjects() -> (MockServer, Account, *mut CamelFolder, Id, Id) {
+    let server = MockServer::builder().start();
+    let (mailbox_id, lunch, other) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&server.account_id()).unwrap();
+        let mailbox = account.seed_mailbox("Inbox", Some("inbox"));
+        let lunch = account.seed_email(EmailSeed::new(
+            mailbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Lunch?",
+            "One o'clock.",
+            "2026-01-15T09:30:00Z",
+        ));
+        let other = account.seed_email(EmailSeed::new(
+            mailbox.clone(),
+            ("Carol", "carol@example.com"),
+            "Status report",
+            "All green.",
+            "2026-01-15T10:00:00Z",
+        ));
+        (mailbox, lunch, other)
+    };
+
+    let account = Account::open();
+    let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
+    account.connect(MailSync::new(client, server.account_id()));
+
+    let info = FolderInfo {
+        id: mailbox_id,
+        path: "Inbox".to_owned(),
+        display_name: "Inbox".to_owned(),
+        role: None,
+        total: 0,
+        unread: 0,
+        subscribed: true,
+        children: Vec::new(),
+    };
+    // SAFETY: `account.store` is a live `CamelStore` for as long as the
+    // `Account` returned alongside it is.
+    let folder = unsafe { new_folder(account.store, &info) };
+    assert!(!folder.is_null(), "no folder for the mailbox");
+    (server, account, folder, lunch, other)
+}
+
+/// A `GPtrArray` of uids, owned for the length of one call: the input shape
+/// `search_by_uids` takes, built the same way `transfer.rs`'s tests build one.
+#[cfg(camel_folder_search_object)]
+struct UidList {
+    array: *mut GPtrArray,
+    uids: Vec<CString>,
+}
+
+#[cfg(camel_folder_search_object)]
+impl UidList {
+    fn of(uids: &[&Id]) -> Self {
+        let uids: Vec<CString> = uids
+            .iter()
+            .map(|uid| CString::new(uid.as_str()).expect("a uid with no NUL"))
+            .collect();
+        // SAFETY: a fresh array, filled with pointers into strings this value
+        // owns and outlives it by.
+        let array = unsafe {
+            let array = glib_sys::g_ptr_array_new();
+            for uid in &uids {
+                g_ptr_array_add(array, uid.as_ptr() as gpointer);
+            }
+            array
+        };
+        Self { array, uids }
+    }
+}
+
+#[cfg(camel_folder_search_object)]
+impl Drop for UidList {
+    fn drop(&mut self) {
+        // SAFETY: the one array, allocated above; FALSE because the pointers
+        // in it belong to `self.uids`.
+        unsafe { g_ptr_array_free(self.array, GFALSE) };
+        self.uids.clear();
+    }
+}
+
+/// A translatable expression is answered by the server, not the (empty)
+/// local summary: the round trip item 46(c2) wires up.
+#[cfg(camel_folder_search_object)]
+#[test]
+fn a_translatable_expression_is_delegated_to_the_server() {
+    // SAFETY: the account outlives the folder, which this test unrefs.
+    unsafe {
+        let (_server, _account, folder, lunch, _other) = connected_folder_with_two_subjects();
+
+        let mut error: *mut GError = ptr::null_mut();
+        let result = eds_sys::camel_folder_search_by_expression(
+            folder,
+            c"(header-contains \"Subject\" \"Lunch\")".as_ptr(),
+            ptr::null_mut(),
+            ptr::addr_of_mut!(error),
+        );
+        assert!(error.is_null(), "the search reported an error");
+        assert!(
+            !result.is_null(),
+            "the search answered with no array at all"
+        );
+        assert_eq!(collect(result), vec![lunch.as_str().to_owned()]);
+        eds_sys::camel_folder_search_free(folder, result);
+
+        g_object_unref(folder.cast());
+    }
+}
+
+/// The same server round trip, narrowed to a uid subset: the extra argument
+/// `search_by_uids` takes and the local path gets from
+/// `camel_folder_search_search` for free.
+#[cfg(camel_folder_search_object)]
+#[test]
+fn a_translatable_expression_over_uids_is_narrowed_to_them() {
+    // SAFETY: as above.
+    unsafe {
+        let (_server, _account, folder, lunch, other) = connected_folder_with_two_subjects();
+
+        // Both uids in the restriction, so the match still has to come from
+        // the filter, not merely from the restriction excluding the other row.
+        let restrict = UidList::of(&[&lunch, &other]);
+        let mut error: *mut GError = ptr::null_mut();
+        let result = eds_sys::camel_folder_search_by_uids(
+            folder,
+            c"(header-contains \"Subject\" \"Lunch\")".as_ptr(),
+            restrict.array,
+            ptr::null_mut(),
+            ptr::addr_of_mut!(error),
+        );
+        assert!(error.is_null(), "the search reported an error");
+        assert!(
+            !result.is_null(),
+            "the search answered with no array at all"
+        );
+        assert_eq!(collect(result), vec![lunch.as_str().to_owned()]);
+        eds_sys::camel_folder_search_free(folder, result);
+
+        // A restriction that excludes the matching row leaves nothing, even
+        // though the same expression matches when unrestricted.
+        let excluding = UidList::of(&[&other]);
+        let mut error: *mut GError = ptr::null_mut();
+        let result = eds_sys::camel_folder_search_by_uids(
+            folder,
+            c"(header-contains \"Subject\" \"Lunch\")".as_ptr(),
+            excluding.array,
+            ptr::null_mut(),
+            ptr::addr_of_mut!(error),
+        );
+        assert!(error.is_null(), "the search reported an error");
+        assert!(
+            !result.is_null(),
+            "the search answered with no array at all"
+        );
+        assert_eq!(collect(result), Vec::<String>::new());
+        eds_sys::camel_folder_search_free(folder, result);
 
         g_object_unref(folder.cast());
     }

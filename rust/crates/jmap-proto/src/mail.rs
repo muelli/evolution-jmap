@@ -1089,7 +1089,7 @@ impl EmailBodyValue {
 
 /// `Email/query` filter conditions (RFC 8621 §4.4.1). This type is a leaf
 /// condition; `methods::Filter<EmailQueryFilter>` adds AND/OR/NOT nesting
-/// (RFC 8620 §5.5), but `Email/query`'s request type does not use it yet.
+/// (RFC 8620 §5.5) on top of it, which `Email/query`'s request type uses.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EmailQueryFilter {
