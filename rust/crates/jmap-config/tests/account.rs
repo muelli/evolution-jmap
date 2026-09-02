@@ -20,7 +20,8 @@ use std::ptr;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
-    ESource, ESourceBackend, ESourceCollection, e_source_backend_get_backend_name,
+    ESource, ESourceAuthentication, ESourceBackend, ESourceCollection,
+    e_source_authentication_get_credential_name, e_source_backend_get_backend_name,
     e_source_collection_get_identity, e_source_get_extension, e_source_has_extension,
     e_source_new_with_uid, e_source_set_enabled,
 };
@@ -80,6 +81,30 @@ impl TestSource {
     fn user(&self) -> Option<String> {
         // SAFETY: a live source.
         unsafe { user_of(self.0) }
+    }
+
+    /// `[Authentication] credential-name`, which the reader has no accessor
+    /// for: nothing downstream of the collection backend reads it back, only
+    /// EDS's own credentials engine does.
+    fn credential_name(&self) -> Option<String> {
+        let auth: *mut ESourceAuthentication = self.authentication();
+        // SAFETY: a live extension; the string is owned by it.
+        unsafe { read_string(e_source_authentication_get_credential_name(auth)) }
+    }
+
+    fn authentication(&self) -> *mut ESourceAuthentication {
+        assert!(
+            self.has_extension(E_SOURCE_EXTENSION_AUTHENTICATION),
+            "no [Authentication] group was written at all"
+        );
+        // SAFETY: the extension is present, so this returns the source's own.
+        unsafe { e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast() }
+    }
+
+    fn uid(&self) -> String {
+        // SAFETY: a live source; the uid is owned by it and never NULL.
+        unsafe { read_string(eds_sys::e_source_get_uid(self.0)) }
+            .expect("a constructed ESource always has a uid")
     }
 
     /// `[Collection]`'s own two fields, which the reader has no accessor for:
@@ -292,6 +317,62 @@ fn an_anonymous_account_is_read_back_as_anonymous() {
     // round-trip through a source as `None`, and a test that expected it to
     // would be describing a `Connection` no `ESource` can hold.
     assert_eq!(server.connection.auth_method.as_deref(), Some("none"));
+}
+
+#[test]
+fn an_oauth2_account_is_given_a_credential_name_of_its_own_uid() {
+    // eds#663: the token-storage key an OAuth2 account's credentials used to
+    // fall out of step with (the account's host) is replaced with its own
+    // uid, stable across a server move and never shared between two accounts
+    // of the same host.
+    let mut account = account();
+    account.connection.auth_method = Some(jmap_backend_core::oauth2::OAUTH2_METHOD.to_owned());
+    let source = TestSource::new().written(&account);
+
+    assert_eq!(
+        source.credential_name().as_deref(),
+        Some(source.uid().as_str())
+    );
+}
+
+#[test]
+fn a_password_account_is_never_given_a_credential_name() {
+    // The CAUTION this design was agreed with: on any method but OAuth2, a
+    // non-empty credential-name changes the parameter name the credentials
+    // engine passes to `authenticate`, so a password account must never carry
+    // one.
+    let source = TestSource::new().written(&account());
+
+    assert_eq!(
+        source.credential_name(),
+        None,
+        "a plain/password account was given a credential-name"
+    );
+}
+
+#[test]
+fn switching_an_account_away_from_oauth2_clears_its_credential_name() {
+    // `apply` is idempotent in the strong sense the module comment states —
+    // after it, the source says this account and nothing of whatever it said
+    // before — and a stale credential-name left behind after the user
+    // switches an account back to a password would be worse than one never
+    // written: it would silently change which key the credentials engine
+    // looks the password up under.
+    let mut oauth2 = account();
+    oauth2.connection.auth_method = Some(jmap_backend_core::oauth2::OAUTH2_METHOD.to_owned());
+    let source = TestSource::new().written(&oauth2);
+    assert!(
+        source.credential_name().is_some(),
+        "the test did not start from an OAuth2 account"
+    );
+
+    let source = source.written(&account());
+
+    assert_eq!(
+        source.credential_name(),
+        None,
+        "a stale credential-name survived switching the account off OAuth2"
+    );
 }
 
 #[test]

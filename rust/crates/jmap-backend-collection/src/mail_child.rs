@@ -122,7 +122,8 @@ pub const MAIL_SECURITY_METHOD_TLS: &CStr = c"ssl-on-alternate-port";
 pub const MAIL_SECURITY_METHOD_NONE: &CStr = c"none";
 
 /// The `[Authentication]` properties a mail source of this account follows —
-/// [`BOUND`](crate::child_added::BOUND)'s four, `method` included.
+/// [`BOUND`](crate::child_added::BOUND)'s five, `method` and `credential-name`
+/// included.
 ///
 /// `method` was once excluded here on the theory that on a mail source it names
 /// a Camel SASL mechanism rather than a credentials provider. But `jmap-mail`
@@ -133,7 +134,13 @@ pub const MAIL_SECURITY_METHOD_NONE: &CStr = c"none";
 /// transport of a Bearer (API-token) account prompting for a password forever
 /// while the receiving account, whose `method` `jmap_config::mail::apply_server`
 /// writes directly, worked. Following it here keeps the two in step.
-pub const BOUND_MAIL_AUTHENTICATION: &[&CStr] = &[c"host", c"port", c"user", c"method"];
+///
+/// `credential-name` follows for exactly the same class of bug: a mail source
+/// that did not carry the account's own uid there would look its OAuth 2.0
+/// token up under a key of its own rather than the account's, the token-cache
+/// counterpart of the `method` gap above (eds#663).
+pub const BOUND_MAIL_AUTHENTICATION: &[&CStr] =
+    &[c"host", c"port", c"user", c"method", c"credential-name"];
 
 /// The two extensions that make a source one of an account's mail *services*.
 ///

@@ -18,7 +18,11 @@
 //! `collection_backend_child_added` binds the display name and the OAuth 2.0
 //! support object the same way. This module is that, for the five properties a
 //! JMAP child's connection is made of — the four of `[Authentication]` and the
-//! one of `[Security]` — bound from the account to the child and never back.
+//! one of `[Security]` — plus a sixth that is not part of the connection at
+//! all: `credential-name`, the account's own uid, bound so every child looks
+//! its OAuth 2.0 token up under the one key the account uses rather than one
+//! each child would otherwise derive on its own (eds#663) — all bound from the
+//! account to the child and never back.
 //!
 //! ## Which sources are bound, and which are left alone
 //!
@@ -72,8 +76,8 @@ use jmap_backend_core::marshal::extension_if_present;
 use crate::mail_child::{follow_server, mail_service_of};
 
 /// The properties bound, per `ESource` extension: everything a
-/// [`Connection`](jmap_collection_sync::child_source::Connection) is, and
-/// nothing else.
+/// [`Connection`](jmap_collection_sync::child_source::Connection) is, and one
+/// property that is not — see the module comment on `credential-name`.
 ///
 /// Spelled as GObject property names rather than as the keyfile keys
 /// [`Setting`](jmap_collection_sync::Setting) uses — `secure` is not a keyfile
@@ -84,7 +88,7 @@ use crate::mail_child::{follow_server, mail_service_of};
 pub const BOUND: [(&CStr, &[&CStr]); 2] = [
     (
         E_SOURCE_EXTENSION_AUTHENTICATION,
-        &[c"host", c"port", c"user", c"method"],
+        &[c"host", c"port", c"user", c"method", c"credential-name"],
     ),
     (E_SOURCE_EXTENSION_SECURITY, &[c"secure"]),
 ];
