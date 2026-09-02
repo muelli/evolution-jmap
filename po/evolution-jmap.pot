@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-02 23:08+0200\n"
+"POT-Creation-Date: 2026-09-03 00:12+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -83,9 +83,9 @@ msgstr ""
 #: rust/crates/jmap-backend-core/src/oauth2.rs:566
 #: rust/crates/jmap-backend-core/src/oauth2.rs:676
 #: rust/crates/jmap-ui/src/link.rs:138 rust/crates/jmap-ui/src/link.rs:143
-#: rust/crates/jmap-ui/src/send_later/extension.rs:609
-#: rust/crates/jmap-ui/src/send_later/extension.rs:612
-#: rust/crates/jmap-ui/src/send_later/extension.rs:633
+#: rust/crates/jmap-ui/src/send_later/extension.rs:619
+#: rust/crates/jmap-ui/src/send_later/extension.rs:622
+#: rust/crates/jmap-ui/src/send_later/extension.rs:643
 msgid "no further detail was given"
 msgstr ""
 
@@ -302,6 +302,7 @@ msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
 #: rust/crates/jmap-ui/src/send_later/extension.rs:74
+#: rust/crates/jmap-ui/src/snooze/action.rs:56
 #, c-format
 msgid "The account’s server could not be asked: %1$s"
 msgstr ""
@@ -317,35 +318,36 @@ msgid ""
 "Drafts folder)"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:79
+#: rust/crates/jmap-ui/src/send_later/extension.rs:80
 msgid "The message names no recipients"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:80
+#: rust/crates/jmap-ui/src/send_later/extension.rs:81
 msgid "The message has no From address"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:81
+#: rust/crates/jmap-ui/src/send_later/extension.rs:82
 msgid "The chosen time is further ahead than the server accepts"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:82
+#: rust/crates/jmap-ui/src/send_later/extension.rs:83
+#: rust/crates/jmap-ui/src/snooze/action.rs:60
 msgid "The local calendar could not name the chosen time"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:155
+#: rust/crates/jmap-ui/src/send_later/extension.rs:156
 msgid "In One _Hour"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:158
+#: rust/crates/jmap-ui/src/send_later/extension.rs:159
 msgid "_Tomorrow Morning"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:163
+#: rust/crates/jmap-ui/src/send_later/extension.rs:164
 msgid "Next _Monday Morning"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:200
+#: rust/crates/jmap-ui/src/send_later/extension.rs:201
 msgid "Send _Later"
 msgstr ""
 
@@ -361,11 +363,53 @@ msgstr ""
 msgid "the server imported the message without naming its id"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:104
+#: rust/crates/jmap-ui/src/send_later/submit.rs:107
 #, c-format
 msgid ""
 "the server accepted the submission but named no release time (undoStatus "
 "%1$s)"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:52
+msgid "The folder does not belong to a JMAP account"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:53
+msgid "Checking whether the account’s server offers snooze…"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:54
+msgid "The account’s server does not offer snooze"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:57
+msgid "The server hides the message until then and wakes it in the inbox"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the reason the mail server gave.
+#: rust/crates/jmap-ui/src/snooze/action.rs:59
+#, c-format
+msgid "The message could not be snoozed: %1$s"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:98
+msgid "For One _Hour"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:101
+msgid "Until _Tomorrow Morning"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:106
+msgid "Until Next _Monday Morning"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:146
+msgid "S_nooze"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/snooze/action.rs:503
+msgid "the server named no id for the snoozed mailbox"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/vacation/form.rs:27

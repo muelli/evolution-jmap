@@ -22,4 +22,5 @@ pub mod link;
 pub mod module;
 pub mod send_later;
 pub mod session_cache;
+pub mod snooze;
 pub mod vacation;

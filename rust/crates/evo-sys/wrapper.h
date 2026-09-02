@@ -44,6 +44,16 @@
  * them opaque handles (GtkWindow/GObject subclasses); see build.rs. */
 #include <composer/e-msg-composer.h>
 
+/* The mail window and the detached message window, for jmap-ui's snooze: the
+ * two extensibles (EShellView, gated to the view named "mail", and
+ * EMailBrowser), the GtkUIManager each merges the popup item into, and the
+ * EMailReader face both hand the action its selection and folder through.
+ * e-shell-view.h reaches e-shell-window.h and e-shell.h itself; everything
+ * stays an opaque handle. */
+#include <shell/e-shell-view.h>
+#include <mail/e-mail-reader.h>
+#include <mail/e-mail-browser.h>
+
 /* The second class this crate's consumers subclass, and the only route by
  * which Evolution's New Address Book and New Calendar dialogs can be made to
  * offer JMAP at all: `ESourceConfig` builds one candidate per registered

@@ -84,6 +84,33 @@ unsafe fn until_morning(now: *mut GDateTime, days: i32) -> Option<u64> {
     }
 }
 
+/// Now plus `seconds`, as the RFC 8620 `UTCDate` string a JMAP property
+/// takes — what snooze writes into `snoozed.until`.
+pub fn utc_in(seconds: u64) -> Option<String> {
+    // SAFETY: plain GLib calendar calls; every object and string released.
+    unsafe {
+        let now = glib_sys::g_date_time_new_now_utc();
+        if now.is_null() {
+            return None;
+        }
+        let target = glib_sys::g_date_time_new_from_unix_utc(
+            glib_sys::g_date_time_to_unix(now) + i64::try_from(seconds).ok()?,
+        );
+        g_date_time_unref(now);
+        if target.is_null() {
+            return None;
+        }
+        // The explicit pattern rather than format_iso8601 (which glib-sys
+        // gates behind a newer-GLib feature): `target` is UTC by
+        // construction, so the literal Z is the truth.
+        let raw = glib_sys::g_date_time_format(target, c"%Y-%m-%dT%H:%M:%SZ".as_ptr());
+        g_date_time_unref(target);
+        let formatted = jmap_backend_core::marshal::read_string(raw);
+        glib_sys::g_free(raw.cast());
+        formatted
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use glib_sys::{
@@ -133,5 +160,15 @@ mod tests {
         assert!(hold > 0 && hold <= 8 * 24 * 3600);
         let (weekday, hour, minute) = lands_at(hold);
         assert_eq!((weekday, hour, minute), (1, 8, 0));
+    }
+
+    /// The string `snoozed.until` gets: RFC 8620's `UTCDate` ends in `Z`,
+    /// which is the part `g_date_time_format_iso8601` only does for a UTC
+    /// GDateTime.
+    #[test]
+    fn utc_in_writes_a_z_terminated_utc_date() {
+        let stamp = utc_in(600).unwrap();
+        assert!(stamp.ends_with('Z'), "not UTC-suffixed: {stamp}");
+        assert!(stamp.len() >= 20, "not a full date-time: {stamp}");
     }
 }

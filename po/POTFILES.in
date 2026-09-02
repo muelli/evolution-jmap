@@ -64,5 +64,6 @@ rust/crates/jmap-mail/src/sasl.rs
 rust/crates/jmap-ui/src/link.rs
 rust/crates/jmap-ui/src/send_later/extension.rs
 rust/crates/jmap-ui/src/send_later/submit.rs
+rust/crates/jmap-ui/src/snooze/action.rs
 rust/crates/jmap-ui/src/vacation/form.rs
 rust/crates/jmap-ui/src/vacation/page.rs

@@ -113,6 +113,13 @@ impl Default for SessionCache {
     }
 }
 
+/// The module-wide cache: every reader window asking about the same account
+/// shares one answer for [`DEFAULT_TTL`].
+pub fn shared() -> &'static SessionCache {
+    static SHARED: std::sync::OnceLock<SessionCache> = std::sync::OnceLock::new();
+    SHARED.get_or_init(SessionCache::default)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
