@@ -72,7 +72,6 @@ use eds_sys::{
 };
 use gio_sys::GCancellable;
 use glib_sys::{GError, GFALSE, GTRUE, g_error_new_literal, gboolean, gchar};
-use gobject_sys::g_type_class_peek;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::{dup_string, read_string};
@@ -550,19 +549,11 @@ unsafe fn instance<'a, T: Connected>(service: *mut CamelService) -> Option<&'a T
 /// vfunc that chains up — `CamelOfflineStoreClass` for the store,
 /// `CamelTransportClass` for the transport.
 ///
-/// `g_type_class_peek` rather than `_ref`: an initialised parent class is what
-/// having registered a subclass of it guarantees, and taking a reference here
-/// would mean giving one back on a path that has no natural place to do so.
+/// `T`'s parent derives from `CamelService`, so its class leads with a
+/// `CamelServiceClass` — the trait's contract.
 fn parent_service_class<T: Connected>() -> Option<&'static CamelServiceClass> {
-    // SAFETY: peeking a type nothing has referenced returns NULL, which is
-    // handled; otherwise the class outlives the type, which for a Camel type is
-    // the life of the process. `T`'s parent derives from `CamelService`, so its
-    // class leads with a `CamelServiceClass` — the trait's contract.
-    unsafe {
-        g_type_class_peek(T::parent_type())
-            .cast::<CamelServiceClass>()
-            .as_ref()
-    }
+    // SAFETY: the contract above.
+    unsafe { jmap_backend_core::subclass::parent_class::<CamelServiceClass>(T::parent_type()) }
 }
 
 /// What a vfunc with no store behind it reports: the code that makes Camel

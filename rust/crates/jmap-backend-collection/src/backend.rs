@@ -37,7 +37,6 @@ use eds_sys::{
 };
 use gio_sys::{GCancellable, GTlsCertificateFlags};
 use glib_sys::{GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar, guint16};
-use gobject_sys::g_type_class_peek;
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, fail_bool, fail_invalid};
 #[cfg(feature = "testing")]
@@ -46,7 +45,7 @@ use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::oauth2::source_uses_oauth2;
 use jmap_backend_core::owned::Owned;
 use jmap_backend_core::source::destination_address;
-use jmap_backend_core::subclass::ObjectSubclass;
+use jmap_backend_core::subclass::{self, ObjectSubclass};
 use jmap_backend_core::trampoline::{
     guard, guard_bool, guard_value, log_critical, log_critical_for_account,
     log_critical_for_resource,
@@ -157,13 +156,11 @@ unsafe impl ObjectSubclass for JmapCollectionBackend {
 /// taking a reference here would mean giving one back on a path that has no
 /// natural place to do so.
 fn parent_class() -> Option<&'static ECollectionBackendClass> {
-    // SAFETY: peeking a type that has never been referenced returns NULL, which
-    // is handled; otherwise the class is alive for as long as the type is, which
-    // for an EDS type is the life of the process.
+    // SAFETY: the contract above.
     unsafe {
-        g_type_class_peek(<JmapCollectionBackend as ObjectSubclass>::parent_type())
-            .cast::<ECollectionBackendClass>()
-            .as_ref()
+        subclass::parent_class::<ECollectionBackendClass>(
+            <JmapCollectionBackend as ObjectSubclass>::parent_type(),
+        )
     }
 }
 
