@@ -902,6 +902,30 @@ proptest! {
     }
 
     #[test]
+    fn arbitrary_json_never_panics_deserializing_data_source(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::DataSource>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_blob_lookup_request(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::BlobLookupRequest>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_blob_lookup_response(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::BlobLookupResponse>(&text);
+    }
+
+    #[test]
+    fn arbitrary_json_never_panics_deserializing_blob_lookup_match(value in json_value()) {
+        let text = value.to_string();
+        let _ = serde_json::from_str::<jmap_proto::blob::BlobLookupMatch>(&text);
+    }
+
+    #[test]
     fn arbitrary_json_never_panics_deserializing_task(value in json_value()) {
         let text = value.to_string();
         let _ = serde_json::from_str::<jmap_proto::tasks::Task>(&text);
