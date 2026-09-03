@@ -58,9 +58,10 @@ libraries:
 cd rust && cargo test
 ```
 
-The full build (including the Evolution module template) needs Evolution
-3.52 development headers (`evolution-dev`, `libecal2.0-dev`, … — see
-[Containerfile.ci](Containerfile.ci) for the complete list):
+The full build (including the Evolution module template) needs Evolution's
+development headers, 3.52 being the pinned floor.
+[`ci/install-deps.sh`](ci/install-deps.sh) is the authoritative list and
+installs them:
 
 ```bash
 cmake -S . -B build -G Ninja
