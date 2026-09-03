@@ -15644,3 +15644,604 @@ fn vtimezone_multiple_observances_corrupt_observance_safe_refusal() {
         "recurrence rule with unresolvable zone UNTIL is refused to prevent silent server corruption"
     );
 }
+
+#[test]
+fn valarm_repeat_and_duration_pairing_and_malformed_variations_matrix() {
+    // 1. Valid RFC 5545 §3.6.6 REPEAT + DURATION pair on ACTION:DISPLAY VALARM.
+    let valid_repeat_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\nUID:repeat-valid\r\nDTSTART:20260115T100000Z\r\n",
+        "SUMMARY:Meeting with repeating reminder\r\n",
+        "BEGIN:VALARM\r\nUID:a1\r\nACTION:DISPLAY\r\n",
+        "TRIGGER:-PT15M\r\n",
+        "REPEAT:4\r\n",
+        "DURATION:PT5M\r\n",
+        "DESCRIPTION:Meeting with repeating reminder\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let event = ical_to_event(valid_repeat_ics).expect("parse valid repeat/duration alarm");
+    let alerts = event.alerts.as_ref().expect("alerts present");
+    assert_eq!(alerts.len(), 1);
+    let alert = &alerts["a1"];
+    assert_eq!(alert["action"], "display");
+    assert_eq!(alert["trigger"]["offset"], "-PT15M");
+    // RFC 8984 dropped REPEAT, so the JSCalendar representation retains the primary trigger.
+    assert!(maps_alerts(&event));
+
+    // Outbound emission: drawn_alert emits the display alarm with primary trigger,
+    // and omits REPEAT/DURATION since JSCalendar Alert has no repeat fields.
+    let out_ics = event_to_ical(&event);
+    assert!(out_ics.contains("BEGIN:VALARM\r\n"));
+    assert!(out_ics.contains("TRIGGER:-PT15M\r\n"));
+    assert!(!out_ics.contains("REPEAT:"));
+    assert!(!out_ics.contains("DURATION:PT5M"));
+
+    // Multi-stage fixed-point roundtrip stability.
+    let reparsed = ical_to_event(&out_ics).expect("reparse");
+    let out_ics2 = event_to_ical(&reparsed);
+    assert_eq!(out_ics, out_ics2);
+    assert_eq!(event.alerts, reparsed.alerts);
+
+    // 2. Malformed RFC 5545 §3.6.6 combinations in inbound streams.
+    // RFC 5545 §3.6.6 requires: DURATION and REPEAT MUST both be specified or both omitted.
+    // Parser must safely extract primary TRIGGER without panicking across all malformed variants.
+    for (name, extra_lines) in [
+        ("repeat_without_duration", "REPEAT:3\r\n"),
+        ("duration_without_repeat", "DURATION:PT5M\r\n"),
+        ("repeat_zero", "REPEAT:0\r\nDURATION:PT5M\r\n"),
+        ("repeat_negative", "REPEAT:-2\r\nDURATION:PT5M\r\n"),
+        ("repeat_non_integer", "REPEAT:three\r\nDURATION:PT5M\r\n"),
+        ("duration_negative", "REPEAT:2\r\nDURATION:-PT5M\r\n"),
+        ("duration_zero", "REPEAT:2\r\nDURATION:PT0S\r\n"),
+        ("lowercase_properties", "repeat:2\r\nduration:pt5m\r\n"),
+        (
+            "multiple_repeat_lines",
+            "REPEAT:2\r\nREPEAT:4\r\nDURATION:PT5M\r\n",
+        ),
+        (
+            "multiple_duration_lines",
+            "REPEAT:2\r\nDURATION:PT5M\r\nDURATION:PT10M\r\n",
+        ),
+    ] {
+        let malformed_ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+             BEGIN:VEVENT\r\nUID:malformed-{name}\r\nDTSTART:20260115T100000Z\r\n\
+             SUMMARY:Malformed Alarm Event\r\n\
+             BEGIN:VALARM\r\nUID:k1\r\nACTION:DISPLAY\r\nTRIGGER:-PT30M\r\n\
+             {extra_lines}END:VALARM\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let parsed = ical_to_event(&malformed_ics)
+            .unwrap_or_else(|e| panic!("failed parsing {name}: {e:?}"));
+        let alerts = parsed
+            .alerts
+            .as_ref()
+            .unwrap_or_else(|| panic!("missing alerts for {name}"));
+        assert_eq!(alerts.len(), 1, "{name} alert count");
+        assert_eq!(
+            alerts["k1"]["trigger"]["offset"], "-PT30M",
+            "{name} trigger offset"
+        );
+    }
+
+    // 3. Outbound refusal by maps_alerts for JSCalendar Alerts with unmodeled repeat/duration fields.
+    // If a client or server injects non-standard repeat or duration fields into JSCalendar Alert,
+    // maps_alerts strictly refuses the event to protect server-side data from whole-property clobbering.
+    let event_with_repeat_field = reminded([(
+        "k1",
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+            "repeat": 4,
+        }),
+    )]);
+    assert!(!maps_alerts(&event_with_repeat_field));
+    assert!(without(
+        &event_to_ical(&event_with_repeat_field),
+        "BEGIN:VALARM"
+    ));
+
+    let event_with_duration_field = reminded([(
+        "k1",
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+            "duration": "PT5M",
+        }),
+    )]);
+    assert!(!maps_alerts(&event_with_duration_field));
+    assert!(without(
+        &event_to_ical(&event_with_duration_field),
+        "BEGIN:VALARM"
+    ));
+}
+
+#[test]
+fn valarm_multiple_alarms_complex_streams_and_id_collision_fidelity() {
+    // 1. Multi-alarm sequences with varied trigger offsets:
+    // -P1W (1 week before), -P1D (1 day before), -PT2H (2 hours before),
+    // -PT15M (15 min before), PT0S (at start), and RELATED=END:PT10M (10 min after end).
+    let multi_alarm_event = reminded([
+        (
+            "k_week",
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-P1W"},
+            }),
+        ),
+        (
+            "k_day",
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-P1D"},
+            }),
+        ),
+        (
+            "k_2h",
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT2H"},
+            }),
+        ),
+        (
+            "k_15m",
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+            }),
+        ),
+        (
+            "k_zero",
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {"@type": "OffsetTrigger", "offset": "PT0S"},
+            }),
+        ),
+        (
+            "k_end",
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {"@type": "OffsetTrigger", "offset": "PT10M", "relativeTo": "end"},
+            }),
+        ),
+    ]);
+    assert!(maps_alerts(&multi_alarm_event));
+
+    let ics = event_to_ical(&multi_alarm_event);
+    assert_eq!(ics.matches("BEGIN:VALARM\r\n").count(), 6);
+    assert!(ics.contains("TRIGGER:-P1W\r\n"));
+    assert!(ics.contains("TRIGGER:-P1D\r\n"));
+    assert!(ics.contains("TRIGGER:-PT2H\r\n"));
+    assert!(ics.contains("TRIGGER:-PT15M\r\n"));
+    assert!(ics.contains("TRIGGER:PT0S\r\n"));
+    assert!(ics.contains("TRIGGER;RELATED=END:PT10M\r\n"));
+
+    let roundtrip = ical_to_event(&ics).expect("parse multi-alarm ics");
+    assert_eq!(roundtrip.alerts, multi_alarm_event.alerts);
+    let ics2 = event_to_ical(&roundtrip);
+    assert_eq!(ics, ics2);
+
+    // 2. Multiple alarms with identical trigger offsets:
+    // Two distinct named alarms sharing the same trigger -PT15M.
+    let identical_offset_event = reminded([
+        ("k1", quarter_of_an_hour_before()),
+        ("k2", quarter_of_an_hour_before()),
+    ]);
+    assert!(maps_alerts(&identical_offset_event));
+    let identical_ics = event_to_ical(&identical_offset_event);
+    assert_eq!(identical_ics.matches("BEGIN:VALARM\r\n").count(), 2);
+    assert_eq!(identical_ics.matches("TRIGGER:-PT15M\r\n").count(), 2);
+    assert!(identical_ics.contains("UID:k1\r\n"));
+    assert!(identical_ics.contains("UID:k2\r\n"));
+
+    let identical_roundtrip = ical_to_event(&identical_ics).expect("parse identical offset ics");
+    assert_eq!(identical_roundtrip.alerts, identical_offset_event.alerts);
+
+    // Two nameless alarms sharing the same trigger -PT15M.
+    let nameless_identical_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\nUID:nameless-identical\r\nDTSTART:20260115T100000Z\r\n",
+        "SUMMARY:Nameless Identical\r\n",
+        "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_nameless = ical_to_event(nameless_identical_ics).expect("parse nameless identical");
+    let nameless_alerts = parsed_nameless.alerts.expect("alerts present");
+    assert_eq!(nameless_alerts.len(), 2);
+    assert!(nameless_alerts.contains_key("a1"));
+    assert!(nameless_alerts.contains_key("a2"));
+    assert_eq!(nameless_alerts["a1"]["trigger"]["offset"], "-PT15M");
+    assert_eq!(nameless_alerts["a2"]["trigger"]["offset"], "-PT15M");
+
+    // 3. High multiplicity scaling: 15 alarms on a single event.
+    let high_count_ics = {
+        let mut lines = String::from(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+             BEGIN:VEVENT\r\nUID:high-multiplicity\r\nDTSTART:20260115T100000Z\r\n\
+             SUMMARY:High Multiplicity Alarm Event\r\n",
+        );
+        for i in 1..=15 {
+            lines.push_str(&format!(
+                "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT{i}M\r\nEND:VALARM\r\n"
+            ));
+        }
+        lines.push_str("END:VEVENT\r\nEND:VCALENDAR\r\n");
+        lines
+    };
+    let high_parsed = ical_to_event(&high_count_ics).expect("parse 15 alarms");
+    let high_alerts = high_parsed.alerts.as_ref().expect("15 alerts present");
+    assert_eq!(high_alerts.len(), 15);
+    for i in 1..=15 {
+        assert!(high_alerts.contains_key(&format!("a{i}")), "contains a{i}");
+    }
+    let high_out_ics = event_to_ical(&high_parsed);
+    assert_eq!(high_out_ics.matches("BEGIN:VALARM\r\n").count(), 15);
+    assert!(high_out_ics.contains("UID:a10\r\n"));
+    assert!(high_out_ics.contains("UID:a15\r\n"));
+
+    // 4. Key synthesis and collision avoidance with non-standard UIDs:
+    // UIDs from real exporters that violate RFC 8984 Id grammar (1..=255 octets [a-zA-Z0-9_-])
+    // must fall back cleanly to positional synthesized keys.
+    let overlong_uid = "k".repeat(256);
+    let non_standard_uid_ics = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+         BEGIN:VEVENT\r\nUID:non-std-uids\r\nDTSTART:20260115T100000Z\r\n\
+         SUMMARY:Non-standard UIDs\r\n\
+         BEGIN:VALARM\r\nUID:urn:uuid:12345678-1234-5678-1234-567812345678\r\n\
+         ACTION:DISPLAY\r\nTRIGGER:-PT5M\r\nEND:VALARM\r\n\
+         BEGIN:VALARM\r\nUID:{{7B8E9D1C-3A4B-5C6D-7E8F-9A0B1C2D3E4F}}\r\n\
+         ACTION:DISPLAY\r\nTRIGGER:-PT10M\r\nEND:VALARM\r\n\
+         BEGIN:VALARM\r\nUID:alarm-notice@calendar.example.org\r\n\
+         ACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\n\
+         BEGIN:VALARM\r\nUID:alarm:v1/sub 1\r\n\
+         ACTION:DISPLAY\r\nTRIGGER:-PT20M\r\nEND:VALARM\r\n\
+         BEGIN:VALARM\r\nUID:\r\n\
+         ACTION:DISPLAY\r\nTRIGGER:-PT25M\r\nEND:VALARM\r\n\
+         BEGIN:VALARM\r\nUID:{overlong_uid}\r\n\
+         ACTION:DISPLAY\r\nTRIGGER:-PT30M\r\nEND:VALARM\r\n\
+         END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_non_std = ical_to_event(&non_standard_uid_ics).expect("parse non-standard UIDs");
+    let non_std_alerts = parsed_non_std.alerts.as_ref().expect("alerts present");
+    assert_eq!(non_std_alerts.len(), 6);
+    // All 6 receive positional keys a1 through a6 because their UIDs violate Id grammar.
+    for i in 1..=6 {
+        assert!(
+            non_std_alerts.contains_key(&format!("a{i}")),
+            "contains a{i}"
+        );
+    }
+    // Outbound emission emits valid RFC 9074 UIDs.
+    let non_std_out = event_to_ical(&parsed_non_std);
+    for i in 1..=6 {
+        assert!(
+            non_std_out.contains(&format!("UID:a{i}\r\n")),
+            "emits UID:a{i}"
+        );
+    }
+
+    // Interleaved explicit UID:a2 with nameless alarms.
+    let interleaved_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\nUID:interleaved\r\nDTSTART:20260115T100000Z\r\n",
+        "SUMMARY:Interleaved\r\n",
+        "BEGIN:VALARM\r\nUID:a2\r\nACTION:DISPLAY\r\nTRIGGER:-PT5M\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT10M\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_interleaved = ical_to_event(interleaved_ics).expect("parse interleaved");
+    let interleaved_alerts = parsed_interleaved.alerts.expect("alerts present");
+    assert_eq!(interleaved_alerts.len(), 3);
+    assert!(interleaved_alerts.contains_key("a1"));
+    assert!(interleaved_alerts.contains_key("a2"));
+    assert!(interleaved_alerts.contains_key("a3"));
+    assert_eq!(interleaved_alerts["a2"]["trigger"]["offset"], "-PT5M");
+    assert_eq!(interleaved_alerts["a1"]["trigger"]["offset"], "-PT10M");
+    assert_eq!(interleaved_alerts["a3"]["trigger"]["offset"], "-PT15M");
+
+    // 5. Duplicate explicit UIDs: second duplicate overwrites first per RFC 9074 §6.
+    let dup_uid_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\nUID:dup-uids\r\nDTSTART:20260115T100000Z\r\n",
+        "SUMMARY:Duplicate UIDs\r\n",
+        "BEGIN:VALARM\r\nUID:custom-key\r\nACTION:DISPLAY\r\nTRIGGER:-PT10M\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nUID:custom-key\r\nACTION:DISPLAY\r\nTRIGGER:-PT20M\r\nEND:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_dup = ical_to_event(dup_uid_ics).expect("parse dup UIDs");
+    let dup_alerts = parsed_dup.alerts.expect("alerts present");
+    assert_eq!(dup_alerts.len(), 1);
+    assert_eq!(dup_alerts["custom-key"]["trigger"]["offset"], "-PT20M");
+
+    // 6. Mixed supported and unsupported alarms in a multi-alarm stream.
+    let mixed_stream_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\nUID:mixed-stream\r\nDTSTART:20260115T100000Z\r\n",
+        "SUMMARY:Mixed Stream Event\r\n",
+        "BEGIN:VALARM\r\nUID:disp1\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nUID:aud1\r\nACTION:AUDIO\r\nTRIGGER:-PT10M\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nUID:disp2\r\nACTION:DISPLAY\r\nTRIGGER:-PT5M\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nUID:mail1\r\nACTION:EMAIL\r\nTRIGGER:-PT1H\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nUID:proc1\r\nACTION:PROCEDURE\r\nTRIGGER:-P1D\r\nEND:VALARM\r\n",
+        "BEGIN:VALARM\r\nUID:abs1\r\nACTION:DISPLAY\r\nTRIGGER;VALUE=DATE-TIME:20260115T094500Z\r\nEND:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed_mixed = ical_to_event(mixed_stream_ics).expect("parse mixed stream");
+    let mixed_alerts = parsed_mixed.alerts.expect("alerts present");
+    assert_eq!(mixed_alerts.len(), 2);
+    assert!(mixed_alerts.contains_key("disp1"));
+    assert!(mixed_alerts.contains_key("disp2"));
+    assert_eq!(mixed_alerts["disp1"]["trigger"]["offset"], "-PT15M");
+    assert_eq!(mixed_alerts["disp2"]["trigger"]["offset"], "-PT5M");
+
+    // Outbound safety: an event with 2 valid alerts and 1 unsupported alert.
+    let mixed_event = reminded([
+        ("k1", quarter_of_an_hour_before()),
+        ("k2", quarter_of_an_hour_before()),
+        (
+            "k_email",
+            json!({
+                "@type": "Alert",
+                "action": "email",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT1H"},
+            }),
+        ),
+    ]);
+    assert!(!maps_alerts(&mixed_event));
+    let mixed_out = event_to_ical(&mixed_event);
+    assert_eq!(mixed_out.matches("BEGIN:VALARM\r\n").count(), 2);
+    assert!(!mixed_out.contains("k_email"));
+
+    // 7. Recurrence series and overrides with multiple alarms:
+    // Master series has 3 alarms.
+    let mut rec_event = recurring_with(json!({
+        // Override 1: inherits all 3 master alarms (no alerts field).
+        "2026-01-22T13:00:00": {
+            "title": "Inherited All Alarms",
+        },
+        // Override 2: replaces with 2 different alarms.
+        "2026-01-29T13:00:00": {
+            "title": "Custom Overridden Alarms",
+            "alerts": {
+                "ov1": {
+                    "@type": "Alert",
+                    "action": "display",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-PT30M"},
+                },
+                "ov2": {
+                    "@type": "Alert",
+                    "action": "display",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-PT2H"},
+                }
+            }
+        },
+        // Override 3: cancels all alarms (alerts: null).
+        "2026-02-05T13:00:00": {
+            "title": "Cancelled Alarms",
+            "alerts": null,
+        }
+    }));
+    rec_event.alerts = Some(
+        [
+            ("k1".to_owned(), quarter_of_an_hour_before()),
+            (
+                "k2".to_owned(),
+                json!({
+                    "@type": "Alert",
+                    "action": "display",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-PT1H"},
+                }),
+            ),
+            (
+                "k3".to_owned(),
+                json!({
+                    "@type": "Alert",
+                    "action": "display",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-P1D"},
+                }),
+            ),
+        ]
+        .into(),
+    );
+
+    let rec_ics = event_to_ical(&rec_event);
+    assert_eq!(vevents(&rec_ics), 4);
+    // Master: 3 VALARMs.
+    assert_eq!(vevent(&rec_ics, 0).matches("BEGIN:VALARM\r\n").count(), 3);
+    // Override 1 (inherited): 3 VALARMs.
+    assert_eq!(vevent(&rec_ics, 1).matches("BEGIN:VALARM\r\n").count(), 3);
+    // Override 2 (custom): 2 VALARMs.
+    assert_eq!(vevent(&rec_ics, 2).matches("BEGIN:VALARM\r\n").count(), 2);
+    assert!(vevent(&rec_ics, 2).contains("UID:ov1\r\n"));
+    assert!(vevent(&rec_ics, 2).contains("UID:ov2\r\n"));
+    // Override 3 (cancelled): 0 VALARMs.
+    assert_eq!(vevent(&rec_ics, 3).matches("BEGIN:VALARM\r\n").count(), 0);
+
+    // Override with one valid and one invalid alert is refused by maps_override.
+    let invalid_override_patch = json!({
+        "alerts": {
+            "ok": quarter_of_an_hour_before(),
+            "bad": {
+                "@type": "Alert",
+                "action": "email",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+            }
+        }
+    });
+    assert!(!maps_override(
+        "2026-01-22T13:00:00",
+        &invalid_override_patch
+    ));
+}
+
+#[test]
+fn valarm_acknowledged_format_variations_and_refusal_boundaries_matrix() {
+    // 1. Inbound parsing of RFC 9074 §6.1 ACKNOWLEDGED:
+    // Exporters emit varied ACKNOWLEDGED forms. Parser must safely ignore ACKNOWLEDGED
+    // and preserve the display alarm without contaminating CalendarEvent.extra.
+    for (name, ack_line) in [
+        ("standard_utc", "ACKNOWLEDGED:20260824T120000Z\r\n"),
+        (
+            "parameterized_datetime",
+            "ACKNOWLEDGED;VALUE=DATE-TIME:20260824T120000Z\r\n",
+        ),
+        (
+            "non_standard_local_tzid",
+            "ACKNOWLEDGED;TZID=Europe/Berlin:20260824T140000\r\n",
+        ),
+        ("lowercase_property", "acknowledged:20260824T120000Z\r\n"),
+        (
+            "malformed_timestamp",
+            "ACKNOWLEDGED:NOT_A_VALID_DATE_TIME\r\n",
+        ),
+        ("empty_acknowledged", "ACKNOWLEDGED:\r\n"),
+        (
+            "multiple_acknowledged_lines",
+            "ACKNOWLEDGED:20260824T120000Z\r\nACKNOWLEDGED:20260825T120000Z\r\n",
+        ),
+        (
+            "with_x_wr_alarmuid",
+            "ACKNOWLEDGED:20260824T120000Z\r\nX-WR-ALARMUID:E451D045-FA1B-475D\r\n",
+        ),
+    ] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+             BEGIN:VEVENT\r\nUID:ack-{name}\r\nDTSTART:20260115T100000Z\r\n\
+             SUMMARY:Ack Test Event\r\n\
+             BEGIN:VALARM\r\nUID:k1\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\n\
+             {ack_line}END:VALARM\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let parsed = ical_to_event(&ics).unwrap_or_else(|e| panic!("failed parsing {name}: {e:?}"));
+        let alerts = parsed
+            .alerts
+            .as_ref()
+            .unwrap_or_else(|| panic!("missing alerts for {name}"));
+        assert_eq!(alerts.len(), 1, "{name} alert count");
+        assert_eq!(alerts["k1"]["action"], "display", "{name} action");
+        assert_eq!(alerts["k1"]["trigger"]["offset"], "-PT15M", "{name} offset");
+        assert!(
+            parsed.extra.is_empty(),
+            "{name} must not pollute event.extra"
+        );
+    }
+
+    // ACKNOWLEDGED on unsupported ACTION:AUDIO is cleanly dropped along with the audio alarm.
+    let audio_ack_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\nUID:audio-ack\r\nDTSTART:20260115T100000Z\r\n",
+        "SUMMARY:Audio Ack Event\r\n",
+        "BEGIN:VALARM\r\nUID:a_audio\r\nACTION:AUDIO\r\nTRIGGER:-PT15M\r\n",
+        "ACKNOWLEDGED:20260824T120000Z\r\nATTACH;VALUE=URI:Basso\r\nEND:VALARM\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    assert_eq!(
+        ical_to_event(audio_ack_ics)
+            .expect("parse audio ack")
+            .alerts,
+        None
+    );
+
+    // 2. Outbound export and refusal boundaries:
+    // Event with single alert carrying acknowledged timestamp:
+    let single_ack_event = reminded([(
+        "k1",
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+            "acknowledged": "2026-08-24T12:00:00Z",
+        }),
+    )]);
+    assert!(!maps_alerts(&single_ack_event));
+    assert!(without(&event_to_ical(&single_ack_event), "BEGIN:VALARM"));
+
+    // Multi-alarm event where 1 of 3 alerts has acknowledged:
+    // Crucial safety boundary: maps_alerts must return false for the ENTIRE event,
+    // and event_to_ical must emit only the 2 unacknowledged alarms.
+    // Refusing the whole event prevents jmap-cal-sync from saving alerts and un-dismissing k2.
+    let partial_ack_event = reminded([
+        ("k1", quarter_of_an_hour_before()),
+        (
+            "k2",
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT1H"},
+                "acknowledged": "2026-08-24T11:00:00Z",
+            }),
+        ),
+        (
+            "k3",
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-P1D"},
+            }),
+        ),
+    ]);
+    assert!(
+        !maps_alerts(&partial_ack_event),
+        "multi-alarm event with one acknowledged alert must be refused by maps_alerts"
+    );
+    let partial_ics = event_to_ical(&partial_ack_event);
+    assert_eq!(partial_ics.matches("BEGIN:VALARM\r\n").count(), 2);
+    assert!(partial_ics.contains("UID:k1\r\n"));
+    assert!(partial_ics.contains("UID:k3\r\n"));
+    assert!(!partial_ics.contains("UID:k2\r\n"));
+    assert!(!partial_ics.contains("ACKNOWLEDGED"));
+
+    // 3. Recurrence overrides where an instance has an acknowledged alert:
+    let override_with_ack = json!({
+        "title": "Instance with Dismissed Alarm",
+        "alerts": {
+            "k1": json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                "acknowledged": "2026-08-24T12:00:00Z",
+            })
+        }
+    });
+    assert!(
+        !maps_override("2026-01-22T13:00:00", &override_with_ack),
+        "recurrence override with acknowledged alert must be refused by maps_override"
+    );
+
+    // 4. Value variations of acknowledged field in JSCalendar:
+    // All variations of acknowledged outside absent/None must be refused.
+    for (name, ack_val) in [
+        ("valid_utc_string", json!("2026-08-24T12:00:00Z")),
+        ("local_string", json!("2026-08-24T12:00:00")),
+        ("empty_string", json!("")),
+        ("null_value", Value::Null),
+        ("boolean_true", json!(true)),
+        ("numeric_timestamp", json!(1724500800)),
+    ] {
+        let mut alert_map = serde_json::Map::new();
+        alert_map.insert("@type".to_owned(), json!("Alert"));
+        alert_map.insert("action".to_owned(), json!("display"));
+        alert_map.insert(
+            "trigger".to_owned(),
+            json!({"@type": "OffsetTrigger", "offset": "-PT15M"}),
+        );
+        alert_map.insert("acknowledged".to_owned(), ack_val);
+
+        let test_event = reminded([("k1", Value::Object(alert_map))]);
+        assert!(
+            !maps_alerts(&test_event),
+            "acknowledged variation {name} must be refused by maps_alerts"
+        );
+    }
+}
