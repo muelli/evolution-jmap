@@ -4,19 +4,28 @@
 //! Calendar methods (`Calendar/get`, `CalendarEvent/get|set|query`,
 //! draft-ietf-jmap-calendars) and calendar seeding helpers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::Id;
 use jmap_proto::calendars::{
-    Calendar, CalendarEvent, CalendarEventParseRequest, CalendarEventQueryFilter, CalendarRights,
+    Calendar, CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
+    CalendarEventParseRequest, CalendarEventQueryFilter, CalendarRights,
+    calendar_event_notification_type,
 };
 use jmap_proto::error::{self, MethodError, SetError};
-use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest};
+use jmap_proto::methods::{
+    GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
+};
+use jmap_proto::state::UtcDate;
 use serde_json::Value;
 
 use crate::dispatch::{account_mut, parse_arguments, project_properties, to_result};
 use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
+
+/// Deterministic stand-in for "now" — the mock has no clock on purpose
+/// (reproducible tests), same value `mail.rs`'s own `MOCK_NOW` uses.
+const MOCK_NOW: &str = "2026-01-01T00:00:00Z";
 
 /// `caller` is the identity `Calendar/get`'s request carried, as resolved by
 /// [`crate::auth::AuthConfig::identity_for`] — `None` (no identity bound to
@@ -218,9 +227,33 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
     })
 }
 
-pub fn calendar_event_set(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+pub fn calendar_event_set(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
     let request: SetRequest<CalendarEvent> = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
+
+    // Captured before `simple_set` consumes `request.destroy`: a destroyed
+    // event's `calendarIds` is needed afterwards, once the event itself is
+    // gone, to know who to send a `CalendarEventNotification` (draft
+    // §8) to.
+    let destroyed_calendar_ids: BTreeMap<Id, Vec<Id>> = request
+        .destroy
+        .iter()
+        .flatten()
+        .filter_map(|id| {
+            account.calendar_events.get(id).map(|event| {
+                let calendar_ids = event
+                    .calendar_ids
+                    .as_ref()
+                    .map(|map| map.keys().cloned().collect())
+                    .unwrap_or_default();
+                (id.clone(), calendar_ids)
+            })
+        })
+        .collect();
 
     let AccountState {
         calendars,
@@ -268,6 +301,67 @@ pub fn calendar_event_set(state: &mut ServerState, arguments: Value) -> Result<V
         }
         Ok(())
     })?;
+
+    // `CalendarEventNotification` (draft-ietf-jmap-calendars §8): tell
+    // everyone else the affected calendar(s) are shared with. `actor` is
+    // whoever made this change (the caller's own principal if the request
+    // carried one, else the account owner, the same fallback
+    // `calendar_get`/`share_notification_get` already use); recipients are
+    // never notified of their own change.
+    let actor = caller
+        .or(account.current_user_principal_id.as_ref())
+        .cloned();
+    if let Some(created) = &response.created {
+        for event in created.values() {
+            if let Some(id) = event.id.clone() {
+                let calendar_ids: Vec<Id> = event
+                    .calendar_ids
+                    .as_ref()
+                    .map(|map| map.keys().cloned().collect())
+                    .unwrap_or_default();
+                record_event_change_notifications(
+                    account,
+                    &id,
+                    &calendar_ids,
+                    actor.as_ref(),
+                    calendar_event_notification_type::CREATED,
+                    Some(event),
+                );
+            }
+        }
+    }
+    if let Some(updated) = &response.updated {
+        for id in updated.keys() {
+            let event = account.calendar_events.get(id).cloned();
+            let calendar_ids: Vec<Id> = event
+                .as_ref()
+                .and_then(|event| event.calendar_ids.as_ref())
+                .map(|map| map.keys().cloned().collect())
+                .unwrap_or_default();
+            record_event_change_notifications(
+                account,
+                id,
+                &calendar_ids,
+                actor.as_ref(),
+                calendar_event_notification_type::UPDATED,
+                event.as_ref(),
+            );
+        }
+    }
+    if let Some(destroyed) = &response.destroyed {
+        for id in destroyed {
+            let calendar_ids = destroyed_calendar_ids.get(id).cloned().unwrap_or_default();
+            record_event_change_notifications(
+                account,
+                id,
+                &calendar_ids,
+                actor.as_ref(),
+                calendar_event_notification_type::DESTROYED,
+                None,
+            );
+        }
+    }
+
     let mut result = to_result(&response)?;
 
     // RFC 8620 §5.3: the `created` map need only carry properties the
@@ -406,6 +500,245 @@ fn event_matches(event: &CalendarEvent, filter: &CalendarEventQueryFilter) -> bo
         }
     }
     true
+}
+
+/// Record a `CalendarEventNotification` (draft-ietf-jmap-calendars §8) for
+/// every principal one of `calendar_ids` is shared with, plus the account
+/// owner, except `actor`. Same per-recipient-tuple store as
+/// `record_share_changes` (`principals.rs`), for the same reason: this mock
+/// has one principal per bearer token in a single account, not a real
+/// server's distinct account per principal. `changed_by` is left unset, the
+/// same simplification `ShareNotification` already makes.
+fn record_event_change_notifications(
+    account: &mut AccountState,
+    event_id: &Id,
+    calendar_ids: &[Id],
+    actor: Option<&Id>,
+    notification_type: &str,
+    event: Option<&CalendarEvent>,
+) {
+    let mut recipients: BTreeSet<Id> = BTreeSet::new();
+    if let Some(owner) = &account.current_user_principal_id {
+        recipients.insert(owner.clone());
+    }
+    for calendar_id in calendar_ids {
+        if let Some(share_with) = account
+            .calendars
+            .get(calendar_id)
+            .and_then(|calendar| calendar.share_with.as_ref())
+        {
+            recipients.extend(share_with.keys().cloned());
+        }
+    }
+    if let Some(actor) = actor {
+        recipients.remove(actor);
+    }
+    if recipients.is_empty() {
+        return;
+    }
+
+    let to_create: Vec<(Id, CalendarEventNotification)> = recipients
+        .into_iter()
+        .map(|recipient| {
+            let mut notification =
+                CalendarEventNotification::new(UtcDate::new(MOCK_NOW), event_id.clone())
+                    .with_notification_type(notification_type);
+            if let Some(event) = event {
+                notification = notification.with_event(event.clone());
+            }
+            (recipient, notification)
+        })
+        .collect();
+
+    account.calendar_event_notifications.transaction(|txn| {
+        for (recipient, notification) in to_create {
+            let id = txn.alloc_id();
+            txn.create(id.clone(), (recipient, notification.with_id(id)));
+        }
+    });
+}
+
+/// `CalendarEventNotification/get` (draft §8): a notification lives in the
+/// recipient's own account in the RFC's model, which this mock does not
+/// have — see [`crate::state::AccountState::calendar_event_notifications`].
+/// The nearest equivalent is filtering to the notifications recorded for
+/// whichever principal `caller` resolves to, the same idiom
+/// `share_notification_get` uses.
+pub fn calendar_event_notification_get(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
+    let request: GetRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+    let viewer = caller.or(account.current_user_principal_id.as_ref());
+
+    let mut list = Vec::new();
+    let mut not_found = Vec::new();
+    match &request.ids {
+        None => {
+            for (_, (recipient, notification)) in account.calendar_event_notifications.iter() {
+                if Some(recipient) == viewer {
+                    list.push(notification.clone());
+                }
+            }
+        }
+        Some(ids) => {
+            for id in ids {
+                match account.calendar_event_notifications.get(id) {
+                    Some((recipient, notification)) if Some(recipient) == viewer => {
+                        list.push(notification.clone());
+                    }
+                    _ => not_found.push(id.clone()),
+                }
+            }
+        }
+    }
+
+    to_result(&GetResponse {
+        account_id: request.account_id,
+        state: account.calendar_event_notifications.state(),
+        list,
+        not_found,
+    })
+}
+
+/// `CalendarEventNotification/query` (draft §8): same viewer filter as
+/// [`calendar_event_notification_get`], narrowed further by
+/// `after`/`before`/`types` (compared as plain strings, same as
+/// `share_notification_query`).
+pub fn calendar_event_notification_query(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
+    let request: QueryRequest<CalendarEventNotificationQueryFilter> = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+    let viewer = caller.or(account.current_user_principal_id.as_ref());
+    let filter = request.filter.unwrap_or_default();
+
+    let visible = |recipient: &Id, notification: &CalendarEventNotification| {
+        Some(recipient) == viewer && notification_matches(notification, &filter)
+    };
+
+    let ids: Vec<Id> = account
+        .calendar_event_notifications
+        .iter()
+        .filter(|(_, (recipient, notification))| visible(recipient, notification))
+        .map(|(id, _)| id.clone())
+        .skip(request.position.max(0) as usize)
+        .take(request.limit.unwrap_or(u64::MAX) as usize)
+        .collect();
+
+    let total = account
+        .calendar_event_notifications
+        .iter()
+        .filter(|(_, (recipient, notification))| visible(recipient, notification))
+        .count() as u64;
+
+    to_result(&QueryResponse {
+        account_id: request.account_id,
+        query_state: account.calendar_event_notifications.state(),
+        can_calculate_changes: false,
+        position: request.position.max(0) as u64,
+        ids,
+        total: request.calculate_total.then_some(total),
+        limit: None,
+    })
+}
+
+fn notification_matches(
+    notification: &CalendarEventNotification,
+    filter: &CalendarEventNotificationQueryFilter,
+) -> bool {
+    if let Some(after) = &filter.after
+        && notification.created.as_str() <= after.as_str()
+    {
+        return false;
+    }
+    if let Some(before) = &filter.before
+        && notification.created.as_str() >= before.as_str()
+    {
+        return false;
+    }
+    if let Some(types) = &filter.types
+        && !notification
+            .notification_type
+            .as_ref()
+            .is_some_and(|kind| types.contains(kind))
+    {
+        return false;
+    }
+    true
+}
+
+/// `CalendarEventNotification/set` (draft §8): the object is entirely
+/// server-created, so create and update are always rejected with
+/// `forbidden` (matching real Stalwart's `calendar_event_notification/set.rs`
+/// exactly — verified against its source, not guessed); only destroy is
+/// processed, and only for a notification `caller` (or the account owner)
+/// is actually the recipient of, mirroring the `get`/`query` viewer filter.
+pub fn calendar_event_notification_set(
+    state: &mut ServerState,
+    arguments: Value,
+    caller: Option<&Id>,
+) -> Result<Value, MethodError> {
+    let request: SetRequest<CalendarEventNotification> = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+    let viewer = caller
+        .or(account.current_user_principal_id.as_ref())
+        .cloned();
+
+    let old_state = account.calendar_event_notifications.state();
+    if let Some(expected) = &request.if_in_state
+        && expected != &old_state
+    {
+        return Err(MethodError::new(error::method::STATE_MISMATCH));
+    }
+
+    let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
+    for creation_id in request.create.unwrap_or_default().into_keys() {
+        not_created.insert(
+            creation_id,
+            SetError::new(error::set::FORBIDDEN)
+                .with_description("CalendarEventNotification objects are server-created"),
+        );
+    }
+    let mut not_updated: BTreeMap<Id, SetError> = BTreeMap::new();
+    for id in request.update.unwrap_or_default().into_keys() {
+        not_updated.insert(
+            id,
+            SetError::new(error::set::FORBIDDEN)
+                .with_description("CalendarEventNotification objects cannot be updated"),
+        );
+    }
+
+    let mut destroyed: Vec<Id> = Vec::new();
+    let mut not_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
+    account.calendar_event_notifications.transaction(|txn| {
+        for id in request.destroy.unwrap_or_default() {
+            let visible = txn
+                .get(&id)
+                .is_some_and(|(recipient, _)| Some(recipient) == viewer.as_ref());
+            if visible && txn.destroy(&id) {
+                destroyed.push(id);
+            } else {
+                not_destroyed.insert(id, SetError::new(error::set::NOT_FOUND));
+            }
+        }
+    });
+
+    to_result(&SetResponse::<CalendarEventNotification> {
+        account_id: request.account_id,
+        old_state: Some(old_state),
+        new_state: account.calendar_event_notifications.state(),
+        created: None,
+        updated: None,
+        destroyed: (!destroyed.is_empty()).then_some(destroyed),
+        not_created: (!not_created.is_empty()).then_some(not_created),
+        not_updated: (!not_updated.is_empty()).then_some(not_updated),
+        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
+    })
 }
 
 impl AccountState {

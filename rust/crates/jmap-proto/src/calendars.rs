@@ -1597,7 +1597,7 @@ fn default_calendar_event_notification_type() -> String {
 }
 
 /// A notification of changes to calendar events (draft-ietf-jmap-calendars-28 §8).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarEventNotification {
     #[serde(default, skip_serializing_if = "Option::is_none")]

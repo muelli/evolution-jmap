@@ -330,9 +330,18 @@ fn handle_method(
         "Calendar/get" => crate::calendars::calendar_get(state, arguments, caller),
         "Calendar/set" => crate::calendars::calendar_set(state, arguments),
         "CalendarEvent/get" => crate::calendars::calendar_event_get(state, arguments),
-        "CalendarEvent/set" => crate::calendars::calendar_event_set(state, arguments),
+        "CalendarEvent/set" => crate::calendars::calendar_event_set(state, arguments, caller),
         "CalendarEvent/query" => crate::calendars::calendar_event_query(state, arguments),
         "CalendarEvent/parse" => crate::calendars::calendar_event_parse(state, arguments),
+        "CalendarEventNotification/get" => {
+            crate::calendars::calendar_event_notification_get(state, arguments, caller)
+        }
+        "CalendarEventNotification/query" => {
+            crate::calendars::calendar_event_notification_query(state, arguments, caller)
+        }
+        "CalendarEventNotification/set" => {
+            crate::calendars::calendar_event_notification_set(state, arguments, caller)
+        }
         "Principal/get" => crate::principals::principal_get(state, arguments),
         "Principal/query" => crate::principals::principal_query(state, arguments),
         "Principal/getAvailability" => {

@@ -5,8 +5,8 @@
 
 use jmap_proto::Id;
 use jmap_proto::calendars::{
-    Calendar, CalendarEvent, CalendarEventParseRequest, CalendarEventParseResponse,
-    CalendarEventQueryFilter,
+    Calendar, CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
+    CalendarEventParseRequest, CalendarEventParseResponse, CalendarEventQueryFilter,
 };
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -176,5 +176,59 @@ impl Client {
     ) -> Result<SetResponse<CalendarEvent>, Error> {
         let arguments = self.single_call(USING, "CalendarEvent/set", request)?;
         Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// Fetch all `CalendarEventNotification`s visible to this credential
+    /// (draft-ietf-jmap-calendars §8) — one appears for each
+    /// create/update/destroy of an event on a calendar shared with this
+    /// principal, made by someone else.
+    pub fn calendar_event_notifications(
+        &self,
+        account_id: &Id,
+    ) -> Result<Vec<CalendarEventNotification>, Error> {
+        let arguments = self.single_call(
+            USING,
+            "CalendarEventNotification/get",
+            &GetRequest::all(account_id.clone()),
+        )?;
+        let response: GetResponse<CalendarEventNotification> = serde_json::from_value(arguments)?;
+        Ok(response.list)
+    }
+
+    /// Resolve `CalendarEventNotification` ids matching `filter`
+    /// (`CalendarEventNotification/query`, draft §8).
+    pub fn calendar_event_notification_query(
+        &self,
+        account_id: &Id,
+        filter: CalendarEventNotificationQueryFilter,
+    ) -> Result<Vec<Id>, Error> {
+        let request = QueryRequest::new(account_id.clone()).filter(filter);
+        let arguments = self.single_call(USING, "CalendarEventNotification/query", &request)?;
+        let response: QueryResponse = serde_json::from_value(arguments)?;
+        Ok(response.ids)
+    }
+
+    /// Dismiss a `CalendarEventNotification`: destroy is the only mutation
+    /// the draft allows on this type (create/update are always rejected as
+    /// `forbidden`, since the object is entirely server-created).
+    pub fn calendar_event_notification_destroy(
+        &self,
+        account_id: &Id,
+        id: &Id,
+    ) -> Result<(), Error> {
+        let request =
+            SetRequest::<CalendarEventNotification>::new(account_id.clone()).destroy(id.clone());
+        let arguments = self.single_call(USING, "CalendarEventNotification/set", &request)?;
+        let response: SetResponse<CalendarEventNotification> = serde_json::from_value(arguments)?;
+        if response
+            .destroyed
+            .as_ref()
+            .is_some_and(|destroyed| destroyed.contains(id))
+        {
+            return Ok(());
+        }
+        Err(set_failure(
+            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
+        ))
     }
 }
