@@ -283,6 +283,10 @@ impl ServerState {
                         account.share_notifications.state_counter(),
                     ),
                     (
+                        "CalendarEventNotification",
+                        account.calendar_event_notifications.state_counter(),
+                    ),
+                    (
                         "VacationResponse",
                         account.vacation_response.state_counter(),
                     ),
@@ -436,6 +440,13 @@ pub struct AccountState {
     /// for is carried alongside it (the `Id`) and used to filter
     /// `ShareNotification/get`/`/query` to only the caller it belongs to.
     pub share_notifications: Store<(Id, jmap_proto::principals::ShareNotification)>,
+    /// `CalendarEventNotification` records (draft-ietf-jmap-calendars §8),
+    /// one per create/update/destroy of an event on a calendar shared with
+    /// someone other than the actor. Same per-recipient-tuple shape as
+    /// [`Self::share_notifications`] and for the same reason: this mock has
+    /// one principal per bearer token in a single account, not a real
+    /// server's distinct account per principal.
+    pub calendar_event_notifications: Store<(Id, jmap_proto::calendars::CalendarEventNotification)>,
     /// The principal that answers RFC 9670 §2.5's `currentUserPrincipalId` —
     /// "which principal is *me* in this account". `None` until a test seeds
     /// one; the session document then omits the property rather than naming a
@@ -482,6 +493,7 @@ impl AccountState {
             calendar_events: Store::new("CE"),
             principals: Store::new("P"),
             share_notifications: Store::new("SN"),
+            calendar_event_notifications: Store::new("CEN"),
             current_user_principal_id: None,
             blobs: BTreeMap::new(),
             next_blob_id: 1,
