@@ -2,8 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Builds the shared CI image and pushes it to ghcr.io. After a successful
-# run, copy the printed digest into ci.yml / .gitlab-ci.yml (the jobs
-# reference the image by digest, never by tag).
+# run, copy the printed digest into release.yml's pin and CI_IMAGE_REPO's
+# consumer, cmake/tests/check-release-workflow.cmake (the release job
+# references the image by digest, never by tag).
+#
+# The package name is ci-image, not ci: the original ci package was
+# orphaned when the repository was re-created in the 2026-09 split and
+# grants this repository no access, in either direction.
 
 name: CI image
 
@@ -33,11 +38,11 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Build image
-        run: docker build -f Containerfile.ci -t "ghcr.io/${{ github.repository }}/ci:latest" .
+        run: docker build -f Containerfile.ci -t "ghcr.io/${{ github.repository }}/ci-image:latest" .
 
       - name: Push image and record digest
         run: |
-          docker push "ghcr.io/${{ github.repository }}/ci:latest"
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "ghcr.io/${{ github.repository }}/ci:latest")
+          docker push "ghcr.io/${{ github.repository }}/ci-image:latest"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "ghcr.io/${{ github.repository }}/ci-image:latest")
           echo "Pushed: ${DIGEST}" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "Update the digest pin in .github/workflows/ci.yml and .gitlab-ci.yml." >> "$GITHUB_STEP_SUMMARY"
+          echo "Update the digest pin in .github/workflows/release.yml and cmake/tests/check-release-workflow.cmake." >> "$GITHUB_STEP_SUMMARY"
