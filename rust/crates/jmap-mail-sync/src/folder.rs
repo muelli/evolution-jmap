@@ -203,6 +203,21 @@ impl FolderTree {
         }
     }
 
+    /// Whether `self` and `other` list the same folders in the same places
+    /// with the same roles and subscriptions — everything Camel's folder
+    /// *tree* is built from — ignoring `total`/`unread`.
+    ///
+    /// What this is for: a pushed `Mailbox` state change is RFC 8620's whole
+    /// type advancing, with no word on which property of which mailbox moved
+    /// it, and a message arriving bumps every mailbox it landed in exactly as
+    /// visibly as a create or a rename would. Counts already reach Camel
+    /// through the open folder's own refresh, so a caller deciding whether to
+    /// tell Camel its folder *list* is stale needs the one question this
+    /// answers: did the shape change, or only a count?
+    pub fn same_shape(&self, other: &Self) -> bool {
+        same_shape(&self.roots, &other.roots)
+    }
+
     /// The folder at a Camel path, if the account has one.
     pub fn find(&self, path: &str) -> Option<&FolderInfo> {
         self.iter().find(|folder| folder.path == path)
@@ -610,6 +625,22 @@ fn saturate(count: Option<u64>) -> u32 {
     u32::try_from(count.unwrap_or(0)).unwrap_or(u32::MAX)
 }
 
+/// [`FolderTree::same_shape`], recursing over sibling slices in the order
+/// [`FolderTree::from_mailboxes`] leaves them in — stable across two listings
+/// of the same underlying mailboxes, since that order never depends on a
+/// count.
+fn same_shape(left: &[FolderInfo], right: &[FolderInfo]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.id == right.id
+                && left.path == right.path
+                && left.display_name == right.display_name
+                && left.role == right.role
+                && left.subscribed == right.subscribed
+                && same_shape(&left.children, &right.children)
+        })
+}
+
 struct Iter<'a> {
     stack: Vec<&'a FolderInfo>,
 }
@@ -621,5 +652,100 @@ impl<'a> Iterator for Iter<'a> {
         let folder = self.stack.pop()?;
         self.stack.extend(folder.children.iter().rev());
         Some(folder)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mailbox(id: &str, name: &str, parent: Option<&str>, total: u64, unread: u64) -> Mailbox {
+        Mailbox {
+            id: Some(Id::from(id)),
+            name: name.to_owned(),
+            parent_id: parent.map(Id::from),
+            total_emails: Some(total),
+            unread_emails: Some(unread),
+            is_subscribed: Some(true),
+            ..Mailbox::default()
+        }
+    }
+
+    /// The property [`FolderTree::same_shape`] exists for: a delivery bumps
+    /// every affected mailbox's counts, and that alone must not read as a
+    /// shape change — see the method's own docs for why.
+    #[test]
+    fn same_shape_ignores_total_and_unread() {
+        let before = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 3, 1)]).unwrap();
+        let after = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 4, 2)]).unwrap();
+
+        assert!(before.same_shape(&after));
+    }
+
+    /// A new mailbox is a shape change: the roadmap's "created" case.
+    #[test]
+    fn same_shape_notices_a_new_mailbox() {
+        let before = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 3, 1)]).unwrap();
+        let after = FolderTree::from_mailboxes(&[
+            mailbox("1", "Inbox", None, 3, 1),
+            mailbox("2", "Receipts", None, 0, 0),
+        ])
+        .unwrap();
+
+        assert!(!before.same_shape(&after));
+    }
+
+    /// A destroyed mailbox is a shape change too.
+    #[test]
+    fn same_shape_notices_a_destroyed_mailbox() {
+        let before = FolderTree::from_mailboxes(&[
+            mailbox("1", "Inbox", None, 3, 1),
+            mailbox("2", "Receipts", None, 0, 0),
+        ])
+        .unwrap();
+        let after = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 3, 1)]).unwrap();
+
+        assert!(!before.same_shape(&after));
+    }
+
+    /// A rename changes `display_name` and, through it, `path` — either is
+    /// enough on its own, and a rename changes both.
+    #[test]
+    fn same_shape_notices_a_rename() {
+        let before = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 3, 1)]).unwrap();
+        let after = FolderTree::from_mailboxes(&[mailbox("1", "Archive", None, 3, 1)]).unwrap();
+
+        assert!(!before.same_shape(&after));
+    }
+
+    /// A move to a new parent changes `path` without touching `display_name`.
+    #[test]
+    fn same_shape_notices_a_move() {
+        let before = FolderTree::from_mailboxes(&[
+            mailbox("1", "Work", None, 0, 0),
+            mailbox("2", "Personal", None, 0, 0),
+            mailbox("3", "Receipts", Some("1"), 3, 1),
+        ])
+        .unwrap();
+        let after = FolderTree::from_mailboxes(&[
+            mailbox("1", "Work", None, 0, 0),
+            mailbox("2", "Personal", None, 0, 0),
+            mailbox("3", "Receipts", Some("2"), 3, 1),
+        ])
+        .unwrap();
+
+        assert!(!before.same_shape(&after));
+    }
+
+    /// A subscription change is a shape change: it is what
+    /// `CAMEL_STORE_FOLDER_INFO_SUBSCRIBED` filters the tree on.
+    #[test]
+    fn same_shape_notices_a_subscription_change() {
+        let mut unsubscribed = mailbox("1", "Inbox", None, 3, 1);
+        unsubscribed.is_subscribed = Some(false);
+        let before = FolderTree::from_mailboxes(&[mailbox("1", "Inbox", None, 3, 1)]).unwrap();
+        let after = FolderTree::from_mailboxes(&[unsubscribed]).unwrap();
+
+        assert!(!before.same_shape(&after));
     }
 }

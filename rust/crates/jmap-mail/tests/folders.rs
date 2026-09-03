@@ -216,6 +216,77 @@ fn a_rebuilt_listing_is_what_the_next_refresh_is_measured_against() {
     );
 }
 
+/// `JmapStore::folder_list_changed_structurally` is what a pushed `Mailbox`
+/// change is checked against before `jmap_mail::push` tells Camel its folder
+/// list is stale — see that module's own docs. With nothing listed yet there
+/// is nothing to compare against, so it reports no change rather than forcing
+/// a listing of its own.
+#[test]
+fn with_no_cached_listing_nothing_is_reported_as_structural() {
+    let (_server, store) = connected();
+
+    assert!(!store.folder_list_changed_structurally());
+}
+
+/// The property item 55 exists to fix: RFC 8621 puts `totalEmails` and
+/// `unreadEmails` on the `Mailbox` object itself, so a delivery bumps the
+/// account's `Mailbox` state exactly as visibly as a folder being created
+/// would — but the shape of the tree does not move. Camel's folder list must
+/// not be told it is stale for that: the open folder's own refresh already
+/// carries the new counts to Camel.
+#[test]
+fn a_delivery_that_only_moves_counts_is_not_structural() {
+    let (server, store) = connected();
+    store.folders(CACHED).expect("listed");
+
+    edit(&server, |account| {
+        let inbox = account
+            .mailboxes
+            .iter()
+            .next()
+            .expect("Inbox seeded")
+            .0
+            .clone();
+        account.seed_email(EmailSeed::new(
+            inbox.clone(),
+            ("Bob", "bob@example.com"),
+            "Hello",
+            "text",
+            "2026-01-15T09:00:00Z",
+        ));
+        // `seed_email` alone does not bump state, so bump it by hand the way
+        // a real server's own delivery would: the mailbox's derived counts
+        // changed, so the account's `Mailbox` state advances with it.
+        let mailbox = account
+            .mailboxes
+            .get(&inbox)
+            .expect("just looked it up")
+            .clone();
+        account.mailboxes.transaction(|transaction| {
+            transaction.update(&inbox, mailbox);
+        });
+    });
+
+    assert!(
+        !store.folder_list_changed_structurally(),
+        "a delivery's count bump alone must not be reported as structural"
+    );
+}
+
+/// A folder actually created is the opposite case: the shape did move, so
+/// this must say so.
+#[test]
+fn a_new_mailbox_is_structural() {
+    let (server, store) = connected();
+    store.folders(CACHED).expect("listed");
+
+    edit(&server, |account| {
+        account.create_mailbox("Receipts", None, None)
+    });
+
+    assert!(store.folder_list_changed_structurally());
+}
+
 /// A listing belongs to the connection it was read over. Camel reconnects a
 /// store whose connection it believes has gone away, and the account behind the
 /// new one may be a different account entirely — the user edited the server, or

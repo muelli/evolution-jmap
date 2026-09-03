@@ -165,11 +165,17 @@ impl JmapStore {
         // function is still running, and a push that finds no worker would be
         // silently dropped.
         //
-        let pass = |object: *mut GObject| {
+        let pass = |object: *mut GObject, work: crate::push::Work| {
             // SAFETY: the store `FolderRefresh` was built for — checked to be
             // a `CamelService`, and so a `CamelStore`, just above — under the
             // strong reference the worker holds across the whole call.
-            unsafe { crate::push::refresh_open_folders(object.cast()) };
+            if work.refresh_messages {
+                unsafe { crate::push::refresh_open_folders(object.cast()) };
+            }
+            // SAFETY: same contract as above.
+            if work.check_folder_list {
+                unsafe { crate::push::refresh_folder_list_if_structural(object.cast()) };
+            }
         };
         // SAFETY: `service` is this live instance typed as its C ancestor —
         // referenced for this call because `self` is borrowed from it — and
@@ -260,15 +266,15 @@ impl JmapStore {
         }
     }
 
-    /// Asks the coalescing worker for a refresh pass. What
-    /// [`crate::push::dispatch`] does for an `Email`/`EmailDelivery` push,
+    /// Asks the coalescing worker for a pass doing `work`. What
+    /// [`crate::push::dispatch`] does for any push that names a watched type,
     /// and the reason the worker lives in a slot of its own — see the
     /// field's own comment.
-    pub fn request_folder_refresh(&self) {
+    pub fn request_folder_refresh(&self, work: crate::push::Work) {
         if let Some(slot) = self.refresher.get()
             && let Some(refresher) = refresher_lock(slot).as_ref()
         {
-            refresher.request();
+            refresher.request(work);
         }
     }
 
@@ -504,6 +510,38 @@ impl JmapStore {
         *write(folders) = Some(listing);
         drop(connection);
         Ok(tree)
+    }
+
+    /// A pushed `Mailbox` change's folder-list half: refreshes the cached
+    /// tree and reports whether what changed was structural — a mailbox
+    /// created, destroyed, renamed, moved, or (un)subscribed — rather than a
+    /// bare count bump, which is what [`crate::push`]'s module docs say
+    /// `camel_store_folder_info_stale` should be reserved for.
+    ///
+    /// `false` with nothing cached yet: Camel has not asked for a folder list
+    /// to begin with, so there is nothing for it to be told is stale.
+    pub fn folder_list_changed_structurally(&self) -> bool {
+        let Some(before) = self.cached_tree() else {
+            return false;
+        };
+        match self.folders(CAMEL_STORE_FOLDER_INFO_REFRESH) {
+            Ok(after) => !before.same_shape(&after),
+            Err(failure) => {
+                tracing::debug!(
+                    ?failure,
+                    "checking whether a pushed folder-list change was structural failed"
+                );
+                false
+            }
+        }
+    }
+
+    /// The folder tree already in hand, if the account has ever been listed.
+    fn cached_tree(&self) -> Option<Arc<FolderTree>> {
+        let folders = self.folder_listing()?;
+        read(folders)
+            .as_ref()
+            .map(|listing| Arc::clone(&listing.tree))
     }
 
     /// Every message in one of the account's mailboxes — what a folder's
