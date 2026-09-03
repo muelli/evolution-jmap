@@ -462,7 +462,7 @@ Reminders and alarms bridge between JSCalendar's `alerts: Id[Alert]` map (RFC 89
 
 ### 7.5 Real-Exporter Alarm Corpus Fidelity & Refused Shapes Isolation
 
-The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_export.ics`, `apple_calendar_export.ics`, `thunderbird_calendar_export.ics`, `sogo_calendar_export.ics`, `evolution_calendar_export.ics`, `nextcloud_calendar_export.ics`) characterizes how alarms emitted by major platforms behave on the bidirectional round-trip:
+The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_export.ics`, `apple_calendar_export.ics`, `thunderbird_calendar_export.ics`, `thunderbird_detached_export.ics`, `sogo_calendar_export.ics`, `evolution_calendar_export.ics`, `nextcloud_calendar_export.ics`, `cyrus_caldav_export.ics`) characterizes how alarms emitted by major platforms behave on the bidirectional round-trip:
 
 1. **Google Calendar (`google_calendar_export.ics`)**:
    - **Shapes Emitted**: Multiple display alarms at standard offsets (`-P1D`, `-PT15M`), email notification alarms (`ACTION:EMAIL` with `ATTENDEE` and `SUMMARY`), and absolute trigger alarms (`TRIGGER;VALUE=DATE-TIME`).
@@ -473,24 +473,32 @@ The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_expo
    - **Mapping Fidelity**: Explicit UIDs and positional keys (`a1`) are faithfully preserved. Generic `DESCRIPTION:REMINDER` is replaced on outbound serialization with the event's summary according to RFC 5545 §3.6.6. `X-WR-ALARMUID` and `ACTION:EMAIL` are dropped cleanly on export. Long UIDs (e.g. 94 octets) fold and unfold cleanly at the RFC 5545 75-octet boundary.
 
 3. **Apple Calendar / macOS (`apple_calendar_export.ics`)**:
-   - **Shapes Emitted**: Multi-alarm sequences (`-P1D`, `-PT2H`, `-PT15M`), Apple `ACKNOWLEDGED` snoozed timestamps (RFC 9074 §6.1), `X-WR-ALARMUID` paired with `UID`, `ACTION:AUDIO` with sound attachments (`ATTACH;VALUE=URI:Basso`), and absolute date-time triggers.
-   - **Mapping Fidelity**: Display alarms with explicit UUID keys are preserved. `ACKNOWLEDGED` timestamps and `X-WR-ALARMUID` properties are ignored on parse to avoid setting `event.extra`. Refused audio and absolute triggers are dropped on export without data loss.
+   - **Shapes Emitted**: Display alarms at diverse offsets (`-P1D`, `-PT2H`, `-PT15M`), `ACTION:AUDIO` with macOS alert sound names (`ATTACH;VALUE=URI:Basso`), absolute trigger alarms (`TRIGGER;VALUE=DATE-TIME`), and `X-WR-ALARMUID` metadata.
+   - **Mapping Fidelity**: Display alarms are mapped losslessly into JSCalendar `Alert` records. Audio and absolute alarms are filtered out cleanly, while standard display reminders survive with exact trigger offsets.
 
-4. **Mozilla Thunderbird (`thunderbird_calendar_export.ics`)**:
-   - **Shapes Emitted**: Display alarms with `ACTION:DISPLAY`, bi-weekly recurrence, timezone-aware `EXDATE`s, conference URIs, and PDF attachments.
-   - **Mapping Fidelity**: Display alarms map cleanly to JSCalendar `Alert` records and roundtrip with fixed-point stability.
+4. **GNOME Evolution Native (`evolution_calendar_export.ics`)**:
+   - **Shapes Emitted**: Native Evolution alarms with explicit `TRIGGER;VALUE=DURATION:-PT15M` and `-PT1H`, RFC 9074 `UID` values, and clean descriptions.
+   - **Mapping Fidelity**: 100% round-trip fidelity. Slotted alert keys (`a1`, `a2`) and explicit UIDs are preserved identically across multi-pass serialization cycles.
 
-5. **SOGo Connector / Radicale (`sogo_calendar_export.ics`)**:
-   - **Shapes Emitted**: Multiple display alarms at `-PT15M` and `-P1D`, French location strings, conference chat endpoints, and monthly ordinal recurrence.
-   - **Mapping Fidelity**: Preserved and roundtripped losslessly.
+5. **Mozilla Thunderbird (`thunderbird_calendar_export.ics`)**:
+   - **Shapes Emitted**: Relative duration alarms (`TRIGGER;VALUE=DURATION:-PT15M`), description matching summary, and Mozilla vendor state (`X-MOZ-LASTACK`, `X-MOZ-SNOOZE-TIME`).
+   - **Mapping Fidelity**: Display alarms map losslessly into JSCalendar `Alert` objects. Mozilla internal snooze and ack timestamps are cleanly omitted from `event.extra` and dropped on export without corrupting the active alert.
 
-6. **GNOME Evolution (`evolution_calendar_export.ics`)**:
-   - **Shapes Emitted**: Native `X-EVOLUTION-ALARM-UID` parameters and explicit `VALUE=DURATION` trigger parameters.
-   - **Mapping Fidelity**: Positional keys (`a1`, `a2`) map cleanly to JSCalendar map IDs and roundtrip with fixed-point stability.
+6. **SOGo / Radicale CalDAV (`sogo_calendar_export.ics`)**:
+   - **Shapes Emitted**: Dual relative display alarms (`-P1D`, `-PT1H`), RFC 5545 parameter syntax (`TRIGGER;VALUE=DURATION:...`), and CalDAV modification stamps (`X-SOGO-COMPONENT-CREATED`, `X-RADICALE-MODIFIED`).
+   - **Mapping Fidelity**: Dual alerts map to distinct `Alert` entries with exact offsets. CalDAV server timestamps do not pollute `event.extra`.
 
 7. **Nextcloud / SabreDAV (`nextcloud_calendar_export.ics`)**:
    - **Shapes Emitted**: Multi-day display offsets (`-P2D`).
    - **Mapping Fidelity**: Preserved and roundtripped losslessly.
+
+8. **Mozilla Thunderbird Detached Overrides (`thunderbird_detached_export.ics`)**:
+   - **Shapes Emitted**: Series with bi-weekly recurrence and multiple detached components (`RECURRENCE-ID`). Rescheduled instance carries an overridden `-PT30M` display alarm, while cancelled instance carries the series `-PT15M` alarm with `STATUS:CANCELLED`.
+   - **Mapping Fidelity**: Custom alert overrides on detached components are preserved in `recurrenceOverrides` patch maps. Outbound emission restores the exact alarm configuration per instance. Fixed-point equality is reached on the first round-trip.
+
+9. **Cyrus IMAP & Fastmail CalDAV (`cyrus_caldav_export.ics`)**:
+   - **Shapes Emitted**: All-day multi-day event (`VALUE=DATE`) with annual recurrence, CalDAV scheduling headers (`SCHEDULE-AGENT=SERVER`), and 1-day advance reminder (`-P1D`).
+   - **Mapping Fidelity**: Display alarm roundtrips losslessly alongside all-day `VALUE=DATE` and `P3D` duration without injecting spurious `TZID` parameters.
 
 ### 7.6 REPEAT and DURATION Pairing and Inbound Malformed Variations (RFC 5545 §3.6.6)
 
@@ -670,6 +678,8 @@ RFC 5545 strictly mandates that all components in a recurring series share the s
 | **SOGo / Radicale CalDAV** | `sogo_calendar_export.ics` | iCalendar 2.0 | • Monthly ordinal recurrence (`FREQ=MONTHLY;BYDAY=1TH;COUNT=6`)<br>• French Unicode location strings with accents<br>• Badge image attachments (`rel: icon`)<br>• Conference chat endpoints<br>• Dual reminder alarms | • 100% lossless retention of recurrence & alarms<br>• Fixed-point convergence: `Export₂ == Export₃` |
 | **Nextcloud / SabreDAV** | `nextcloud_calendar_export.ics` | iCalendar 2.0 | • Standard IANA time zones (`Europe/Berlin`)<br>• Multi-day display reminder alarms (`-P2D`)<br>• Nextcloud Talk virtual locations<br>• Recurrence overrides with detached components | • Lossless roundtrip of recurrence & overrides<br>• Fixed-point convergence: `Export₂ == Export₃` |
 | **GNOME Evolution Native** | `evolution_calendar_export.ics` | iCalendar 2.0 | • Full native Evolution iCalendar 2.0<br>• `X-EVOLUTION-ALARM-UID`<br>• Explicit `VALUE=DURATION` alarm triggers<br>• Full recurrence rules & overrides<br>• Physical & virtual locations | • 100% lossless retention of all Evolution fields<br>• Deterministic `X-JMAP-KEY` preservation<br>• Multi-pass fixpoint: `Export₁ == Export₂ == Export₃` |
+| **Mozilla Thunderbird (Detached Overrides)** | `thunderbird_detached_export.ics` | iCalendar 2.0 | • Multi-component series with detached overrides<br>• Rescheduled occurrence (new start & duration)<br>• Retitled occurrence & custom display alarm<br>• Cancelled occurrence with STATUS:CANCELLED<br>• Mozilla vendor extensions (`X-MOZ-GENERATION`, `X-MOZ-LASTACK`, `X-MOZ-SNOOZE-TIME`, `X-MOZ-SEND-INVITATIONS`) | • `X-MOZ-*` vendor properties dropped cleanly on export<br>• Rescheduled, modified, and cancelled overrides preserved losslessly<br>• Fixed-point convergence: `Export₂ == Export₃` |
+| **Cyrus IMAP / Fastmail CalDAV** | `cyrus_caldav_export.ics` | iCalendar 2.0 / CalDAV | • All-day multi-day recurring symposium (`VALUE=DATE`, duration `P3D`)<br>• `TRANSP:TRANSPARENT` mapping to `freeBusyStatus: "free"`<br>• RFC 6638 CalDAV scheduling parameters (`SCHEDULE-AGENT=SERVER`, `SCHEDULE-STATUS`, `SCHEDULE-FORCE-SEND`)<br>• Dual links (PDF attachment + PNG badge image)<br>• Annual recurrence with `EXDATE` exclusion<br>• CalDAV synchronization and cache metadata (`X-CALDAV-*`, `X-FASTMAIL-*`) | • All-day date-only format preserved without spurious `TZID`<br>• CalDAV cache and vendor headers dropped cleanly<br>• Fixed-point convergence: `Export₂ == Export₃` |
 
 ### 11.2 Table-Driven Whole-File Regression Net
 
