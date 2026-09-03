@@ -14327,3 +14327,585 @@ fn windows_time_zone_names_unsendable_by_design_refusal_and_cldr_resolution_matr
         );
     }
 }
+
+#[test]
+fn recurrence_complex_rrule_bysetpos_and_byday_ordinals_matrix() {
+    // 1. BYSETPOS with positive, negative, and multiple positions
+    let monthly_last_workday = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:SETPOS1\r\n",
+        "DTSTART:20260101T090000Z\r\n",
+        "RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1\r\n",
+        "SUMMARY:Monthly Workday\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed1 = ical_to_event(monthly_last_workday).expect("parse last workday");
+    let rule1 = parsed1.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rule1.by_set_position.as_deref(), Some(&[-1][..]));
+    assert!(maps_recurrence_rule(rule1));
+    let ics1 = event_to_ical(&parsed1);
+    assert!(ics1.contains("RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1\r\n"));
+
+    // 2. BYSETPOS combined with BYDAY ordinals and multiple set positions (first and last)
+    let complex_rule = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_day: Some(vec![
+            NDay {
+                nth_of_period: Some(1),
+                ..NDay::new("mo")
+            },
+            NDay {
+                nth_of_period: Some(3),
+                ..NDay::new("mo")
+            },
+            NDay {
+                nth_of_period: Some(-1),
+                ..NDay::new("fr")
+            },
+        ]),
+        by_set_position: Some(vec![1, -1]),
+        ..RecurrenceRule::new("monthly")
+    };
+    assert!(maps_recurrence_rule(&complex_rule));
+    let event2 = CalendarEvent {
+        id: Some("SETPOS2".into()),
+        start: Some("2026-01-05T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        recurrence_rule: Some(complex_rule.clone()),
+        ..CalendarEvent::default()
+    };
+    let ics2 = event_to_ical(&event2);
+    assert!(ics2.contains("RRULE:FREQ=MONTHLY;BYDAY=1MO,3MO,-1FR;BYSETPOS=1,-1\r\n"));
+    let parsed2 = ical_to_event(&ics2).expect("parse complex setpos");
+    assert_eq!(parsed2.recurrence_rule.as_ref(), Some(&complex_rule));
+
+    // 3. BYSETPOS combined with BYMONTHDAY
+    let monthday_rule = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_month_day: Some(vec![1, 15, 31]),
+        by_set_position: Some(vec![-1]),
+        ..RecurrenceRule::new("monthly")
+    };
+    assert!(maps_recurrence_rule(&monthday_rule));
+    let event3 = CalendarEvent {
+        id: Some("SETPOS3".into()),
+        start: Some("2026-01-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        recurrence_rule: Some(monthday_rule.clone()),
+        ..CalendarEvent::default()
+    };
+    let ics3 = event_to_ical(&event3);
+    assert!(ics3.contains("RRULE:FREQ=MONTHLY;BYMONTHDAY=1,15,31;BYSETPOS=-1\r\n"));
+    let parsed3 = ical_to_event(&ics3).expect("parse monthday setpos");
+    assert_eq!(parsed3.recurrence_rule.as_ref(), Some(&monthday_rule));
+
+    // 4. BYSETPOS combined with BYHOUR and BYMINUTE
+    let time_rule = RecurrenceRule {
+        frequency: "daily".to_owned(),
+        by_hour: Some(vec![9, 13, 17]),
+        by_set_position: Some(vec![1, -1]),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&time_rule));
+    let event4 = CalendarEvent {
+        id: Some("SETPOS4".into()),
+        start: Some("2026-01-01T09:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        recurrence_rule: Some(time_rule.clone()),
+        ..CalendarEvent::default()
+    };
+    let ics4 = event_to_ical(&event4);
+    assert!(ics4.contains("RRULE:FREQ=DAILY;BYHOUR=9,13,17;BYSETPOS=1,-1\r\n"));
+
+    // 5. Boundary limits and refusal
+    for valid_pos in [1, -1, 366, -366] {
+        let rule = RecurrenceRule {
+            frequency: "yearly".to_owned(),
+            by_month: Some(vec!["1".to_owned()]),
+            by_set_position: Some(vec![valid_pos]),
+            ..RecurrenceRule::default()
+        };
+        assert!(maps_recurrence_rule(&rule), "pos {valid_pos} is valid");
+    }
+    for invalid_pos in [0, 367, -367] {
+        let rule = RecurrenceRule {
+            frequency: "yearly".to_owned(),
+            by_month: Some(vec!["1".to_owned()]),
+            by_set_position: Some(vec![invalid_pos]),
+            ..RecurrenceRule::default()
+        };
+        assert!(!maps_recurrence_rule(&rule), "pos {invalid_pos} is refused");
+    }
+
+    // 6. Orphan BYSETPOS refusal (without expanding parts)
+    let orphan_rule = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_set_position: Some(vec![1]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&orphan_rule),
+        "orphan BYSETPOS is refused"
+    );
+
+    // 7. Multi-pass fixed-point stability
+    let ics_loop1 = event_to_ical(&parsed2);
+    let event_loop2 = ical_to_event(&ics_loop1).expect("re-parse");
+    let ics_loop2 = event_to_ical(&event_loop2);
+    assert_eq!(ics_loop1, ics_loop2);
+    assert_eq!(parsed2, event_loop2);
+}
+
+#[test]
+fn recurrence_byday_ordinals_and_wkst_fidelity_matrix() {
+    // 1. Signed positive and negative ordinals in BYDAY
+    let signed_ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:ORDINAL1\r\n",
+        "DTSTART:20260101T090000Z\r\n",
+        "RRULE:FREQ=MONTHLY;BYDAY=+1MO,-1FR,+3WE\r\n",
+        "SUMMARY:Signed Ordinals\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let parsed1 = ical_to_event(signed_ics).expect("parse signed ordinals");
+    let rule1 = parsed1.recurrence_rule.as_ref().unwrap();
+    let days = rule1.by_day.as_ref().unwrap();
+    assert_eq!(days.len(), 3);
+    assert_eq!(days[0].nth_of_period, Some(1));
+    assert_eq!(days[0].day, "mo");
+    assert_eq!(days[1].nth_of_period, Some(-1));
+    assert_eq!(days[1].day, "fr");
+    assert_eq!(days[2].nth_of_period, Some(3));
+    assert_eq!(days[2].day, "we");
+
+    let ics1 = event_to_ical(&parsed1);
+    // Leading plus is normalized away on emission per RFC 5545
+    assert!(ics1.contains("RRULE:FREQ=MONTHLY;BYDAY=1MO,-1FR,3WE\r\n"));
+
+    // 2. Mixed ordinals and bare weekdays
+    let mixed_rule = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_day: Some(vec![
+            NDay {
+                nth_of_period: Some(2),
+                ..NDay::new("tu")
+            },
+            NDay::new("th"),
+        ]),
+        ..RecurrenceRule::new("monthly")
+    };
+    assert!(maps_recurrence_rule(&mixed_rule));
+    let event2 = CalendarEvent {
+        id: Some("MIXED1".into()),
+        start: Some("2026-01-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        recurrence_rule: Some(mixed_rule.clone()),
+        ..CalendarEvent::default()
+    };
+    let ics2 = event_to_ical(&event2);
+    assert!(ics2.contains("RRULE:FREQ=MONTHLY;BYDAY=2TU,TH\r\n"));
+    let parsed2 = ical_to_event(&ics2).expect("parse mixed byday");
+    assert_eq!(parsed2.recurrence_rule.as_ref(), Some(&mixed_rule));
+
+    // 3. Frequency gating for ordinals: valid on monthly and yearly, refused on weekly and daily
+    for valid_freq in ["monthly", "yearly"] {
+        let rule = RecurrenceRule {
+            frequency: valid_freq.to_owned(),
+            by_day: Some(vec![NDay {
+                nth_of_period: Some(1),
+                ..NDay::new("mo")
+            }]),
+            ..RecurrenceRule::default()
+        };
+        assert!(maps_recurrence_rule(&rule), "{valid_freq} allows ordinals");
+    }
+    for invalid_freq in ["weekly", "daily", "hourly"] {
+        let rule = RecurrenceRule {
+            frequency: invalid_freq.to_owned(),
+            by_day: Some(vec![NDay {
+                nth_of_period: Some(1),
+                ..NDay::new("mo")
+            }]),
+            ..RecurrenceRule::default()
+        };
+        assert!(
+            !maps_recurrence_rule(&rule),
+            "{invalid_freq} forbids ordinals"
+        );
+    }
+
+    // 4. WKST non-default emission (SU) and default omission (MO)
+    let wkst_su_rule = RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        interval: Some(2),
+        by_day: Some(vec![NDay::new("tu"), NDay::new("su")]),
+        first_day_of_week: Some("su".to_owned()),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&wkst_su_rule));
+    let event_su = CalendarEvent {
+        id: Some("REC-WKST-1".into()),
+        start: Some("2026-01-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        recurrence_rule: Some(wkst_su_rule),
+        ..CalendarEvent::default()
+    };
+    let ics_su = event_to_ical(&event_su);
+    assert!(ics_su.contains("RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU,SU;WKST=SU\r\n"));
+
+    let wkst_mo_rule = RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        interval: Some(2),
+        by_day: Some(vec![NDay::new("tu"), NDay::new("su")]),
+        first_day_of_week: Some("mo".to_owned()),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&wkst_mo_rule));
+    let event_mo = CalendarEvent {
+        id: Some("REC-WKST-2".into()),
+        start: Some("2026-01-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        recurrence_rule: Some(wkst_mo_rule),
+        ..CalendarEvent::default()
+    };
+    let ics_mo = event_to_ical(&event_mo);
+    assert!(!line(&ics_mo, "RRULE:").contains("WKST"));
+
+    // 5. WKST interaction with BYWEEKNO
+    let weekno_rule = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_week_no: Some(vec![1, 52]),
+        first_day_of_week: Some("su".to_owned()),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&weekno_rule));
+    let event_weekno = CalendarEvent {
+        id: Some("REC-WKST-3".into()),
+        start: Some("2026-01-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        recurrence_rule: Some(weekno_rule),
+        ..CalendarEvent::default()
+    };
+    let ics_weekno = event_to_ical(&event_weekno);
+    assert!(ics_weekno.contains("RRULE:FREQ=YEARLY;BYWEEKNO=1,52;WKST=SU\r\n"));
+
+    // 6. firstDayOfWeek validation: uppercase and invalid strings are refused
+    for bad_wkst in ["MO", "SU", "monday", "sunday", ""] {
+        let rule = RecurrenceRule {
+            frequency: "weekly".to_owned(),
+            first_day_of_week: Some(bad_wkst.to_owned()),
+            ..RecurrenceRule::default()
+        };
+        assert!(
+            !maps_recurrence_rule(&rule),
+            "bad wkst '{bad_wkst}' refused"
+        );
+    }
+}
+
+#[test]
+fn recurrence_rdate_exdate_and_override_interactions_matrix() {
+    // 1. Complex RRULE + multi-line EXDATE + multi-line RDATE + overrides
+    let complex_stream = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:REC-COMPLEX-001\r\n",
+        "DTSTART:20260105T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Biweekly Sprint Planning\r\n",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;WKST=SU\r\n",
+        "EXDATE:20260119T100000Z\r\n",
+        "EXDATE:20260216T100000Z\r\n",
+        "RDATE:20260126T100000Z\r\n",
+        "RDATE:20260223T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\nUID:REC-COMPLEX-001\r\n",
+        "RECURRENCE-ID:20260202T100000Z\r\n",
+        "DTSTART:20260202T140000Z\r\n",
+        "DURATION:PT2H\r\n",
+        "SUMMARY:Extended Sprint Planning\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\nUID:REC-COMPLEX-001\r\n",
+        "RECURRENCE-ID:20260302T100000Z\r\n",
+        "DTSTART:20260302T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "STATUS:CANCELLED\r\n",
+        "SUMMARY:Biweekly Sprint Planning\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let parsed = ical_to_event(complex_stream).expect("parse complex stream");
+    assert_eq!(parsed.title.as_deref(), Some("Biweekly Sprint Planning"));
+    assert_eq!(parsed.duration.as_deref(), Some("PT1H"));
+
+    let overrides = parsed
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides present");
+    // Cancelled instances via EXDATE
+    assert_eq!(
+        overrides.get("2026-01-19T10:00:00"),
+        Some(&json!({"excluded": true}))
+    );
+    assert_eq!(
+        overrides.get("2026-02-16T10:00:00"),
+        Some(&json!({"excluded": true}))
+    );
+    // Added instances via RDATE
+    assert_eq!(overrides.get("2026-01-26T10:00:00"), Some(&json!({})));
+    assert_eq!(overrides.get("2026-02-23T10:00:00"), Some(&json!({})));
+    // Modified instance with rescheduled start and lengthened duration
+    assert_eq!(
+        overrides.get("2026-02-02T10:00:00"),
+        Some(&json!({
+            "title": "Extended Sprint Planning",
+            "start": "2026-02-02T14:00:00",
+            "duration": "PT2H"
+        }))
+    );
+    // Explicit cancelled status detached VEVENT (not excluded: true)
+    assert_eq!(
+        overrides.get("2026-03-02T10:00:00"),
+        Some(&json!({"status": "cancelled"}))
+    );
+
+    // Outbound emission asserts consolidated single EXDATE and RDATE lines
+    let emitted1 = event_to_ical(&parsed);
+    assert!(emitted1.contains("EXDATE:20260119T100000Z,20260216T100000Z\r\n"));
+    assert!(emitted1.contains("RDATE:20260126T100000Z,20260223T100000Z\r\n"));
+    assert!(emitted1.contains("RECURRENCE-ID:20260202T100000Z\r\n"));
+    assert!(emitted1.contains("DTSTART:20260202T140000Z\r\n"));
+    assert!(emitted1.contains("DURATION:PT2H\r\n"));
+    assert!(emitted1.contains("RECURRENCE-ID:20260302T100000Z\r\n"));
+    assert!(emitted1.contains("STATUS:CANCELLED\r\n"));
+
+    // Multi-pass roundtrip fixpoint stability
+    let parsed2 = ical_to_event(&emitted1).expect("parse emitted 1");
+    let emitted2 = event_to_ical(&parsed2);
+    let parsed3 = ical_to_event(&emitted2).expect("parse emitted 2");
+    let emitted3 = event_to_ical(&parsed3);
+
+    assert_eq!(emitted2, emitted3, "iCalendar streams match at fixed point");
+    assert_eq!(
+        parsed2, parsed3,
+        "CalendarEvent models match at fixed point"
+    );
+
+    // 2. Detached VEVENT modifying an RDATE-added occurrence
+    let rdate_mod_stream = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\nUID:REC-RMOD-1\r\n",
+        "DTSTART:20260105T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Base Series\r\n",
+        "RRULE:FREQ=WEEKLY\r\n",
+        "RDATE:20260115T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\nUID:REC-RMOD-1\r\n",
+        "RECURRENCE-ID:20260115T100000Z\r\n",
+        "DTSTART:20260115T113000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Ad-hoc Session\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let parsed_rmod = ical_to_event(rdate_mod_stream).expect("parse rdate mod");
+    let rmod_overrides = parsed_rmod.recurrence_overrides.as_ref().unwrap();
+    assert_eq!(
+        rmod_overrides.get("2026-01-15T10:00:00"),
+        Some(&json!({
+            "title": "Ad-hoc Session",
+            "start": "2026-01-15T11:30:00"
+        }))
+    );
+    let emitted_rmod = event_to_ical(&parsed_rmod);
+    // Modified instance is emitted as detached VEVENT; bare RDATE is omitted
+    assert!(without(&emitted_rmod, "RDATE"));
+    assert!(emitted_rmod.contains("RECURRENCE-ID:20260115T100000Z\r\n"));
+    assert!(emitted_rmod.contains("DTSTART:20260115T113000Z\r\n"));
+
+    // 3. All-day series (VALUE=DATE) with all-day overrides
+    let mut allday_event = CalendarEvent {
+        id: Some("ALLDAY-REC".into()),
+        title: Some("All-Day Series".to_owned()),
+        start: Some("2026-01-01T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        show_without_time: Some(true),
+        recurrence_rule: Some(RecurrenceRule {
+            frequency: "monthly".to_owned(),
+            by_day: Some(vec![NDay {
+                nth_of_period: Some(1),
+                ..NDay::new("mo")
+            }]),
+            ..RecurrenceRule::default()
+        }),
+        recurrence_overrides: Some(BTreeMap::from([
+            ("2026-02-02T00:00:00".to_owned(), json!({"excluded": true})),
+            ("2026-02-09T00:00:00".to_owned(), json!({})),
+            (
+                "2026-03-02T00:00:00".to_owned(),
+                json!({"title": "Rescheduled Holiday"}),
+            ),
+        ])),
+        ..CalendarEvent::default()
+    };
+    let allday_ics = event_to_ical(&allday_event);
+    assert!(allday_ics.contains("DTSTART;VALUE=DATE:20260101\r\n"));
+    assert!(allday_ics.contains("EXDATE;VALUE=DATE:20260202\r\n"));
+    assert!(allday_ics.contains("RDATE;VALUE=DATE:20260209\r\n"));
+    assert!(allday_ics.contains("RECURRENCE-ID;VALUE=DATE:20260302\r\n"));
+    assert!(allday_ics.contains("SUMMARY:Rescheduled Holiday\r\n"));
+
+    let allday_parsed = ical_to_event(&allday_ics).expect("parse allday");
+    assert_eq!(allday_parsed.show_without_time, Some(true));
+
+    // 4. All-day series with a timed override: demotes to DATE-TIME
+    allday_event.recurrence_overrides.as_mut().unwrap().insert(
+        "2026-04-06T00:00:00".to_owned(),
+        json!({
+            "start": "2026-04-06T15:00:00",
+            "title": "Timed Review Session"
+        }),
+    );
+    let demoted_ics = event_to_ical(&allday_event);
+    assert!(demoted_ics.contains("DTSTART:20260101T000000\r\n"));
+    assert!(!demoted_ics.contains("VALUE=DATE"));
+    assert!(demoted_ics.contains("RECURRENCE-ID:20260406T000000\r\n"));
+    assert!(demoted_ics.contains("DTSTART:20260406T150000\r\n"));
+}
+
+#[test]
+fn recurrence_overrides_predicates_and_refusal_boundaries_matrix() {
+    let series = fixture_event();
+
+    // 1. Refusal of unmapped properties in override patch
+    for unmapped_prop in [
+        "locations",
+        "virtualLocations",
+        "participants",
+        "links",
+        "color",
+        "recurrenceRule",
+        "useDefaultAlerts",
+    ] {
+        let bad_patch = json!({ unmapped_prop: "some_value" });
+        assert!(
+            !maps_recurrence_override(&series, "2026-01-15T10:00:00", &bad_patch),
+            "property '{unmapped_prop}' is not in OVERRIDE_PROPERTIES and must be refused"
+        );
+        assert!(
+            !sends_recurrence_override(&series, "2026-01-15T10:00:00", &bad_patch),
+            "property '{unmapped_prop}' is not sendable in override"
+        );
+    }
+
+    // 2. Refusal of excluded: true combined with other patch properties
+    let conflicting_excluded = json!({
+        "excluded": true,
+        "title": "Zombie Event"
+    });
+    assert!(
+        !maps_recurrence_override(&series, "2026-01-15T10:00:00", &conflicting_excluded),
+        "excluded: true cannot be combined with other properties"
+    );
+
+    // 3. Refusal of empty strings (which would silently delete property rather than patch)
+    for empty_prop in ["title", "description", "duration"] {
+        let empty_patch = json!({ empty_prop: "" });
+        assert!(
+            !maps_recurrence_override(&series, "2026-01-15T10:00:00", &empty_patch),
+            "empty string for '{empty_prop}' must be refused"
+        );
+    }
+
+    // 4. Refusal of empty collections (keywords: {}, alerts: {})
+    let empty_keywords = json!({ "keywords": {} });
+    assert!(
+        !maps_recurrence_override(&series, "2026-01-15T10:00:00", &empty_keywords),
+        "empty keywords map in override must be refused"
+    );
+    let empty_alerts = json!({ "alerts": {} });
+    assert!(
+        !maps_recurrence_override(&series, "2026-01-15T10:00:00", &empty_alerts),
+        "empty alerts map in override must be refused"
+    );
+
+    // 5. Refusal of invalid vocabularies
+    let bad_status = json!({ "status": "unknown_status" });
+    assert!(!maps_recurrence_override(
+        &series,
+        "2026-01-15T10:00:00",
+        &bad_status
+    ));
+    let bad_privacy = json!({ "privacy": "super_secret" });
+    assert!(!maps_recurrence_override(
+        &series,
+        "2026-01-15T10:00:00",
+        &bad_privacy
+    ));
+    let bad_fb = json!({ "freeBusyStatus": "partially_busy" });
+    assert!(!maps_recurrence_override(
+        &series,
+        "2026-01-15T10:00:00",
+        &bad_fb
+    ));
+
+    // 6. Refusal of out-of-range or non-integer priority
+    for bad_pri in [json!(10), json!(-1), json!("1"), json!(1.5)] {
+        let pri_patch = json!({ "priority": bad_pri });
+        assert!(!maps_recurrence_override(
+            &series,
+            "2026-01-15T10:00:00",
+            &pri_patch
+        ));
+    }
+
+    // 7. Suppression of alerts when series has useDefaultAlerts: true
+    let mut series_default_alerts = series.clone();
+    series_default_alerts.use_default_alerts = Some(true);
+    let alert_patch = json!({
+        "alerts": {
+            "a1": {
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {
+                    "@type": "OffsetTrigger",
+                    "offset": "-PT15M"
+                }
+            }
+        }
+    });
+    assert!(
+        !maps_recurrence_override(&series_default_alerts, "2026-01-15T10:00:00", &alert_patch),
+        "alerts override refused when series uses default alerts"
+    );
+
+    // 8. Custom solidus timezone in override: refused by maps, allowed by sends when defined
+    let custom_tz = "/example.com/custom_tz";
+    let custom_tz_patch = json!({ "timeZone": custom_tz });
+    assert!(
+        !maps_recurrence_override(&series, "2026-01-15T10:00:00", &custom_tz_patch),
+        "custom solidus timezone without accompanying definition refused by maps_recurrence_override"
+    );
+
+    let mut series_with_tz = series.clone();
+    series_with_tz.time_zones = Some(BTreeMap::from([(
+        custom_tz.to_owned(),
+        json!({
+            "@type": "TimeZone",
+            "tzId": custom_tz,
+            "standard": [{
+                "@type": "TimeZoneRule",
+                "start": "1970-01-01T00:00:00",
+                "offsetFrom": "+0100",
+                "offsetTo": "+0100"
+            }]
+        }),
+    )]));
+    assert!(
+        !maps_recurrence_override(&series_with_tz, "2026-01-15T10:00:00", &custom_tz_patch),
+        "custom solidus timezone still refused by maps_recurrence_override (caller cannot send definition in override patch)"
+    );
+    assert!(
+        sends_recurrence_override(&series_with_tz, "2026-01-15T10:00:00", &custom_tz_patch),
+        "custom solidus timezone allowed by sends_recurrence_override when defined on series"
+    );
+}
