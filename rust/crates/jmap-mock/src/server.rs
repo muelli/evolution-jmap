@@ -8,10 +8,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use jmap_proto::blob::BlobCapability;
 use jmap_proto::session::{
-    Account, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_CYRUS_MAIL,
-    CAPABILITY_MAIL, CAPABILITY_PRINCIPALS, CAPABILITY_PRINCIPALS_OWNER, CAPABILITY_QUOTA,
-    CAPABILITY_SIEVE, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE, Session,
+    Account, CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE,
+    CAPABILITY_CYRUS_MAIL, CAPABILITY_MAIL, CAPABILITY_PRINCIPALS, CAPABILITY_PRINCIPALS_OWNER,
+    CAPABILITY_QUOTA, CAPABILITY_SIEVE, CAPABILITY_SUBMISSION, CAPABILITY_VACATION_RESPONSE,
+    Session,
 };
 use jmap_proto::sieve::SieveCapability;
 use serde_json::{Value, json};
@@ -1098,16 +1100,27 @@ const ACCOUNT_CAPABILITIES: &[&str] = &[
     CAPABILITY_VACATION_RESPONSE,
     CAPABILITY_QUOTA,
     CAPABILITY_SIEVE,
+    CAPABILITY_BLOB,
 ];
 
 /// The capability object to advertise for `capability`. An empty placeholder
-/// for everything but Sieve: `SieveCapability::max_size_script` is mandatory
-/// (RFC 9661 §1.2.1), so an empty object would make `Session::sieve_capability`
-/// fail to parse it.
+/// for everything but Sieve and Blob: `SieveCapability::max_size_script` is
+/// mandatory (RFC 9661 §1.2.1) and `BlobCapability::supported_type_names` is
+/// how a client learns what `Blob/lookup` accepts, so an empty object would
+/// make either one fail to parse or answer nothing useful.
 fn capability_value(capability: &str) -> Value {
     if capability == CAPABILITY_SIEVE {
         serde_json::to_value(SieveCapability::new(1_048_576).with_max_number_scripts(32))
             .expect("SieveCapability serializes")
+    } else if capability == CAPABILITY_BLOB {
+        serde_json::to_value(
+            BlobCapability::new()
+                .with_max_size_blob_set(DEFAULT_SIZE_UPLOAD)
+                .with_max_data_sources(16)
+                .with_supported_type_names(["Email", "Thread", "SieveScript"])
+                .with_supported_digest_algorithms(["sha-256", "sha-512"]),
+        )
+        .expect("BlobCapability serializes")
     } else {
         json!({})
     }
