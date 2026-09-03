@@ -18,6 +18,7 @@
 //! `eventsource` module doc.
 
 mod auth;
+mod blob;
 mod calendars;
 mod contacts;
 mod dispatch;
