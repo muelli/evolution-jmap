@@ -365,6 +365,11 @@ Custom time zones defined under `event.time_zones` bridge between RFC 8984 `Time
 - **JSCalendar 2.0 Interoperability**:
   - In JSCalendar 2.0 (`draft-ietf-calext-jscalendarbis`), custom `timeZones` definitions were rendered obsolete in favor of canonical IANA time zone identifiers.
   - `jmap-ical` safely omits `time_zones` when standard IANA zones are resolved, and preserves custom solidus definitions when required by private server environments.
+- **Multiple Observances per Zone**:
+  - Real-world zone definitions frequently carry multiple `STANDARD` and `DAYLIGHT` subcomponents spanning distinct historical eras (such as US pre-2007 vs post-2007 daylight savings shifts, EU pre-1996 vs post-1996 autumn transitions, or one-off War Time shifts).
+  - Inbound mapping in `read_definition` groups all matching subcomponents into the `standard` and `daylight` arrays under the zone definition.
+  - Outbound serialization via `vtimezone_of` emits every standard and daylight observance child component with its respective `DTSTART`, offsets, and `RRULE`s.
+  - Safety and Refusal Boundary: if any observance within a custom `VTIMEZONE` carries a corrupt offset, unreadable date, or malformed rule, the entire definition is discarded. The event timezone remains undefined, and `maps_time_zone` refuses the unresolvable custom identifier, preventing silently wrong calculations on the server.
 
 ---
 
@@ -373,8 +378,14 @@ Custom time zones defined under `event.time_zones` bridge between RFC 8984 `Time
 RFC 5545 §3.3.10 states recurrence rule `UNTIL` as a UTC instant (`YYYYMMDDTHHMMSSZ`) whenever `DTSTART` specifies a timezone. Conversely, RFC 8984 §4.3.3 / jscalendarbis states `until` as a local date-time string (`YYYY-MM-DDTHH:MM:SS`) in the event's own timezone.
 
 `jmap-ical`'s `zone.rs` module evaluates transition offsets (`TZOFFSETTO` / `TZOFFSETFROM`) directly from the document's `VTIMEZONE` observances:
-- When a Windows TZID (e.g. `W. Europe Standard Time`) is present, `read_vevent` resolves the timezone to its canonical IANA name while looking up observance rules from the matching `VTIMEZONE` in the document.
-- Transitions across standard and daylight savings time (e.g. +0100 to +0200) are applied accurately at the instant of the `UNTIL` timestamp.
+- **Windows TZIDs Feeding Recurrence**: When an event specifies a Windows timezone (e.g. `DTSTART;TZID="Eastern Standard Time":...` or unquoted `DTSTART;TZID=Eastern Standard Time:...`), `read_vevent` resolves the timezone name to its canonical IANA equivalent (`America/New_York`) and binds the matching `VTIMEZONE` observances. `read_until` converts the UTC `UNTIL` instant to local date-time according to the observance rules in force at that instant.
+- **Globally-Unique TZIDs Feeding Recurrence**: When an event carries a globally-unique identifier (e.g. `DTSTART;TZID=/mozilla.org/20050126_1/America/New_York:...` or `DTSTART;TZID=/citadel.org/20250101_1/Europe/Berlin:...`), the suffix extracts the canonical IANA zone while the companion `VTIMEZONE` observances resolve the exact transition offset.
+- **Multi-Observance Era Resolution**: In timezones with multiple historical observances, `zone.rs::offset_at` searches transitions across eras. The onset of the latest transition at or before the target instant decides the offset:
+  - For example, in US Eastern Time (`America/New_York`), March 15 in Era 1 (2005) resolves to Standard Time (`-0500`, yielding `07:00:00`), whereas March 15 in Era 2 (2026) resolves to Daylight Time (`-0400`, yielding `08:00:00`).
+  - Late October in Era 1 (2005) resolves to Standard Time (`-0500`, yielding `07:00:00`), whereas late October in Era 2 (2026) resolves to Daylight Time (`-0400`, yielding `08:00:00`).
+  - Historical one-off transitions without `RRULE` (e.g. 1942 War Time) and Southern Hemisphere daylight transitions spanning calendar year boundaries (e.g. Sydney October to April) resolve accurately.
+- **Override Instance Separation**: Detached recurrence instances (`VEVENT` with `RECURRENCE-ID`) carrying Windows or globally-unique TZIDs maintain independent clocks. `RECURRENCE-ID` evaluates on the master series clock, while the override `DTSTART` evaluates on the instance clock.
+- **Normalization and Refusal**: Outbound emission normalizes all resolved timezones to canonical IANA format without solidus prefixes or Windows display names. If a timezone cannot be resolved and defines no valid `VTIMEZONE`, `read_until` preserves the trailing `Z` marker, which `maps_recurrence_rule` refuses, preventing unsendable or corrupt recurrence rules from reaching the JMAP server.
 
 ---
 
@@ -451,7 +462,7 @@ Reminders and alarms bridge between JSCalendar's `alerts: Id[Alert]` map (RFC 89
 
 ### 7.5 Real-Exporter Alarm Corpus Fidelity & Refused Shapes Isolation
 
-The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_export.ics`, `apple_calendar_export.ics`, `thunderbird_calendar_export.ics`, `sogo_calendar_export.ics`, `evolution_calendar_export.ics`, `nextcloud_calendar_export.ics`) characterizes how alarms emitted by major platforms behave on the bidirectional round-trip:
+The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_export.ics`, `apple_calendar_export.ics`, `thunderbird_calendar_export.ics`, `thunderbird_detached_export.ics`, `sogo_calendar_export.ics`, `evolution_calendar_export.ics`, `nextcloud_calendar_export.ics`, `cyrus_caldav_export.ics`) characterizes how alarms emitted by major platforms behave on the bidirectional round-trip:
 
 1. **Google Calendar (`google_calendar_export.ics`)**:
    - **Shapes Emitted**: Multiple display alarms at standard offsets (`-P1D`, `-PT15M`), email notification alarms (`ACTION:EMAIL` with `ATTENDEE` and `SUMMARY`), and absolute trigger alarms (`TRIGGER;VALUE=DATE-TIME`).
@@ -462,24 +473,59 @@ The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_expo
    - **Mapping Fidelity**: Explicit UIDs and positional keys (`a1`) are faithfully preserved. Generic `DESCRIPTION:REMINDER` is replaced on outbound serialization with the event's summary according to RFC 5545 §3.6.6. `X-WR-ALARMUID` and `ACTION:EMAIL` are dropped cleanly on export. Long UIDs (e.g. 94 octets) fold and unfold cleanly at the RFC 5545 75-octet boundary.
 
 3. **Apple Calendar / macOS (`apple_calendar_export.ics`)**:
-   - **Shapes Emitted**: Multi-alarm sequences (`-P1D`, `-PT2H`, `-PT15M`), Apple `ACKNOWLEDGED` snoozed timestamps (RFC 9074 §6.1), `X-WR-ALARMUID` paired with `UID`, `ACTION:AUDIO` with sound attachments (`ATTACH;VALUE=URI:Basso`), and absolute date-time triggers.
-   - **Mapping Fidelity**: Display alarms with explicit UUID keys are preserved. `ACKNOWLEDGED` timestamps and `X-WR-ALARMUID` properties are ignored on parse to avoid setting `event.extra`. Refused audio and absolute triggers are dropped on export without data loss.
+   - **Shapes Emitted**: Display alarms at diverse offsets (`-P1D`, `-PT2H`, `-PT15M`), `ACTION:AUDIO` with macOS alert sound names (`ATTACH;VALUE=URI:Basso`), absolute trigger alarms (`TRIGGER;VALUE=DATE-TIME`), and `X-WR-ALARMUID` metadata.
+   - **Mapping Fidelity**: Display alarms are mapped losslessly into JSCalendar `Alert` records. Audio and absolute alarms are filtered out cleanly, while standard display reminders survive with exact trigger offsets.
 
-4. **Mozilla Thunderbird (`thunderbird_calendar_export.ics`)**:
-   - **Shapes Emitted**: Display alarms with `ACTION:DISPLAY`, bi-weekly recurrence, timezone-aware `EXDATE`s, conference URIs, and PDF attachments.
-   - **Mapping Fidelity**: Display alarms map cleanly to JSCalendar `Alert` records and roundtrip with fixed-point stability.
+4. **GNOME Evolution Native (`evolution_calendar_export.ics`)**:
+   - **Shapes Emitted**: Native Evolution alarms with explicit `TRIGGER;VALUE=DURATION:-PT15M` and `-PT1H`, RFC 9074 `UID` values, and clean descriptions.
+   - **Mapping Fidelity**: 100% round-trip fidelity. Slotted alert keys (`a1`, `a2`) and explicit UIDs are preserved identically across multi-pass serialization cycles.
 
-5. **SOGo Connector / Radicale (`sogo_calendar_export.ics`)**:
-   - **Shapes Emitted**: Multiple display alarms at `-PT15M` and `-P1D`, French location strings, conference chat endpoints, and monthly ordinal recurrence.
-   - **Mapping Fidelity**: Preserved and roundtripped losslessly.
+5. **Mozilla Thunderbird (`thunderbird_calendar_export.ics`)**:
+   - **Shapes Emitted**: Relative duration alarms (`TRIGGER;VALUE=DURATION:-PT15M`), description matching summary, and Mozilla vendor state (`X-MOZ-LASTACK`, `X-MOZ-SNOOZE-TIME`).
+   - **Mapping Fidelity**: Display alarms map losslessly into JSCalendar `Alert` objects. Mozilla internal snooze and ack timestamps are cleanly omitted from `event.extra` and dropped on export without corrupting the active alert.
 
-6. **GNOME Evolution (`evolution_calendar_export.ics`)**:
-   - **Shapes Emitted**: Native `X-EVOLUTION-ALARM-UID` parameters and explicit `VALUE=DURATION` trigger parameters.
-   - **Mapping Fidelity**: Positional keys (`a1`, `a2`) map cleanly to JSCalendar map IDs and roundtrip with fixed-point stability.
+6. **SOGo / Radicale CalDAV (`sogo_calendar_export.ics`)**:
+   - **Shapes Emitted**: Dual relative display alarms (`-P1D`, `-PT1H`), RFC 5545 parameter syntax (`TRIGGER;VALUE=DURATION:...`), and CalDAV modification stamps (`X-SOGO-COMPONENT-CREATED`, `X-RADICALE-MODIFIED`).
+   - **Mapping Fidelity**: Dual alerts map to distinct `Alert` entries with exact offsets. CalDAV server timestamps do not pollute `event.extra`.
 
 7. **Nextcloud / SabreDAV (`nextcloud_calendar_export.ics`)**:
    - **Shapes Emitted**: Multi-day display offsets (`-P2D`).
    - **Mapping Fidelity**: Preserved and roundtripped losslessly.
+
+8. **Mozilla Thunderbird Detached Overrides (`thunderbird_detached_export.ics`)**:
+   - **Shapes Emitted**: Series with bi-weekly recurrence and multiple detached components (`RECURRENCE-ID`). Rescheduled instance carries an overridden `-PT30M` display alarm, while cancelled instance carries the series `-PT15M` alarm with `STATUS:CANCELLED`.
+   - **Mapping Fidelity**: Custom alert overrides on detached components are preserved in `recurrenceOverrides` patch maps. Outbound emission restores the exact alarm configuration per instance. Fixed-point equality is reached on the first round-trip.
+
+9. **Cyrus IMAP & Fastmail CalDAV (`cyrus_caldav_export.ics`)**:
+   - **Shapes Emitted**: All-day multi-day event (`VALUE=DATE`) with annual recurrence, CalDAV scheduling headers (`SCHEDULE-AGENT=SERVER`), and 1-day advance reminder (`-P1D`).
+   - **Mapping Fidelity**: Display alarm roundtrips losslessly alongside all-day `VALUE=DATE` and `P3D` duration without injecting spurious `TZID` parameters.
+
+### 7.6 REPEAT and DURATION Pairing and Inbound Malformed Variations (RFC 5545 §3.6.6)
+
+RFC 5545 §3.6.6 governs the pairing between `REPEAT` and `DURATION` in `VALARM` components:
+- **Pairing Constraint**: `REPEAT` and `DURATION` must both be specified or both omitted.
+- **Value Types**: `REPEAT` takes a positive integer (`INTEGER` >= 1), defining repetitions after initial trigger. `DURATION` specifies delay between iterations.
+- **JSCalendar Dropped REPEAT**: RFC 8984 dropped `REPEAT` and defines no repeat or interval fields on `Alert`. Inbound parsing extracts the primary `TRIGGER` into an `OffsetTrigger` display alarm, ensuring the user receives the initial notification.
+- **Malformed Inbound Variations**: Exporters sometimes violate RFC 5545 §3.6.6 by emitting `REPEAT` without `DURATION`, `DURATION` without `REPEAT`, non-positive counts (`REPEAT:0`, `REPEAT:-2`), non-integer values, negative durations (`DURATION:-PT5M`), zero durations (`DURATION:PT0S`), or duplicate property lines. `read_alert` safely extracts the primary trigger without crashing, dropping, or panicking.
+- **Outbound Safety Refusal**: If a JSCalendar `Alert` contains unmodeled `"repeat"` or `"duration"` fields in its object representation, `maps_alerts` strictly returns `false`. This protects server-side extensions from being wiped out by whole-property replacement.
+
+### 7.7 Multi-Alarm Density, High Multiplicity Scaling, and Key Synthesis
+
+Multi-alarm sequences across diverse real-world clients exhibit distinct structural patterns:
+1. **Multi-Alarm Density and Ordering**: Events frequently carry sequences of reminders (e.g. 1 week before, 1 day before, 2 hours before, 15 minutes before, at start, and 10 minutes after end). On outbound emission, `drawn_alarms` iterates over `event.alerts` sorted by map key, producing deterministic output. Multi-stage roundtrips converge immediately to fixed-point equality.
+2. **Identical Offset Multiplicity**: Multiple alarms sharing identical trigger offsets (whether named with explicit UIDs or nameless) remain distinct and non-collapsing. Both named entries (`UID:k1` and `UID:k2`) and synthesized entries (`a1` and `a2`) preserve separate alerts and roundtrip stably.
+3. **High Multiplicity Scaling**: Events carrying 10, 15, or more alarms scale cleanly. Positional key allocation increments through multi-digit keys (`a10`, `a11`, ...), maintaining unique non-conflicting map IDs.
+4. **Key Synthesis for Non-Standard UIDs**: Exporter UIDs violating RFC 8984 §1.4.4 `Id` syntax (such as Outlook 94-octet composite binary UIDs, Apple `{GUID}` braces, URIs with colons `urn:uuid:...`, email format UIDs `alarm@domain.com`, or UIDs exceeding 255 octets) are recognized by `names_map_entry` as unmappable to JSCalendar map keys. The parser smoothly falls back to positional synthesized keys (`a1`, `a2`, ...), emitting valid RFC 9074 `UID` values on outbound serialization.
+5. **Duplicate Explicit UIDs**: If an incoming stream contains duplicate explicit UIDs, RFC 9074 §6 uniqueness rules apply, and subsequent duplicates overwrite earlier entries rather than corrupting map state.
+6. **Recurrence Overrides with Multiple Alarms**: Master series alarms are inherited on unmodified instances. Overrides specifying custom alarms replace the entire alarm set for that instance. Overrides setting `"alerts": null` cancel all alarms for that instance. Overrides containing even one unmappable alert are refused by `maps_recurrence_override`, preserving the series alarms.
+
+### 7.8 ACKNOWLEDGED Formats and Whole-Property Replacement Safety (RFC 9074 §6.1)
+
+RFC 9074 §6.1 specifies the `ACKNOWLEDGED` property on `VALARM` components to record when a user dismissed or snoozed a reminder:
+1. **Inbound Format Variations**: Exporters emit `ACKNOWLEDGED` in standard UTC date-time (`ACKNOWLEDGED:20260824T120000Z`), parameterized (`ACKNOWLEDGED;VALUE=DATE-TIME:...`), non-standard local timezone (`ACKNOWLEDGED;TZID=...`), lowercase, or paired with Apple vendor properties (`X-WR-ALARMUID`). Inbound parsing safely ignores `ACKNOWLEDGED`, extracting the display reminder so it can be viewed and scheduled in Evolution without polluting `CalendarEvent.extra`.
+2. **Outbound Refusal Boundary**: In JSCalendar (RFC 8984 §4.5.2), `acknowledged: UTCDateTime` tracks dismissed alarms. Because `event_to_ical` does not emit `ACKNOWLEDGED`, `maps_alerts` strictly refuses any event containing an `acknowledged` alert. If `maps_alerts` allowed the event, an edit by the user would cause `jmap-cal-sync` to replace `alerts` whole, deleting the `acknowledged` timestamp on the JMAP server and un-dismissing the alert.
+3. **Multi-Alarm Isolation**: In an event with multiple alarms, if even one alert carries an `acknowledged` timestamp, `maps_alerts` returns `false` for the entire event. The outbound renderer draws only the non-acknowledged alerts, and `jmap-cal-sync` refuses to save `alerts`, preserving server state.
+4. **Recurrence Overrides Safety**: An instance override carrying an `acknowledged` alert causes `maps_recurrence_override` to return `false`, preventing whole-property replacement of `recurrenceOverrides`.
 
 ---
 
@@ -559,6 +605,12 @@ When an occurrence moves to a different time zone:
 - **`DTSTART`**: Evaluated on the **instance's own clock** (`instance.time_zone`), placing the rescheduled occurrence at its actual local start time.
 - **Windows & Globally-Unique TZIDs**: TZIDs on `RECURRENCE-ID` and instance `DTSTART` resolve through the canonical resolution pipeline (Section 4), tolerating real-world exporter formats across providers.
 
+### 8.5 All-Day Series vs Timed Overrides Value Type Agreement (RFC 5545 §3.8.4.4 / §3.8.5.1 / §3.8.5.2)
+
+RFC 5545 strictly mandates that all components in a recurring series share the same value type (`VALUE=DATE` for all-day series or `DATE-TIME` for timed series):
+- **All-Day Consistency**: When the series is all-day (`show_without_time: true`), `EXDATE`, `RDATE`, and detached `VEVENT` `RECURRENCE-ID` and `DTSTART` properties are emitted with `VALUE=DATE:YYYYMMDD` provided all instance overrides also start at midnight and have whole-day durations.
+- **Timed Demotion**: If any instance override moves to a time other than midnight or specifies a non-whole-day duration, `shows_without_time` returns `false`. This demotes the master series and every instance override to `DATE-TIME`, ensuring compliant iCalendar output across providers.
+
 ---
 
 ## 9. Special Semantics & Product Decision Catalog
@@ -626,6 +678,8 @@ When an occurrence moves to a different time zone:
 | **SOGo / Radicale CalDAV** | `sogo_calendar_export.ics` | iCalendar 2.0 | • Monthly ordinal recurrence (`FREQ=MONTHLY;BYDAY=1TH;COUNT=6`)<br>• French Unicode location strings with accents<br>• Badge image attachments (`rel: icon`)<br>• Conference chat endpoints<br>• Dual reminder alarms | • 100% lossless retention of recurrence & alarms<br>• Fixed-point convergence: `Export₂ == Export₃` |
 | **Nextcloud / SabreDAV** | `nextcloud_calendar_export.ics` | iCalendar 2.0 | • Standard IANA time zones (`Europe/Berlin`)<br>• Multi-day display reminder alarms (`-P2D`)<br>• Nextcloud Talk virtual locations<br>• Recurrence overrides with detached components | • Lossless roundtrip of recurrence & overrides<br>• Fixed-point convergence: `Export₂ == Export₃` |
 | **GNOME Evolution Native** | `evolution_calendar_export.ics` | iCalendar 2.0 | • Full native Evolution iCalendar 2.0<br>• `X-EVOLUTION-ALARM-UID`<br>• Explicit `VALUE=DURATION` alarm triggers<br>• Full recurrence rules & overrides<br>• Physical & virtual locations | • 100% lossless retention of all Evolution fields<br>• Deterministic `X-JMAP-KEY` preservation<br>• Multi-pass fixpoint: `Export₁ == Export₂ == Export₃` |
+| **Mozilla Thunderbird (Detached Overrides)** | `thunderbird_detached_export.ics` | iCalendar 2.0 | • Multi-component series with detached overrides<br>• Rescheduled occurrence (new start & duration)<br>• Retitled occurrence & custom display alarm<br>• Cancelled occurrence with STATUS:CANCELLED<br>• Mozilla vendor extensions (`X-MOZ-GENERATION`, `X-MOZ-LASTACK`, `X-MOZ-SNOOZE-TIME`, `X-MOZ-SEND-INVITATIONS`) | • `X-MOZ-*` vendor properties dropped cleanly on export<br>• Rescheduled, modified, and cancelled overrides preserved losslessly<br>• Fixed-point convergence: `Export₂ == Export₃` |
+| **Cyrus IMAP / Fastmail CalDAV** | `cyrus_caldav_export.ics` | iCalendar 2.0 / CalDAV | • All-day multi-day recurring symposium (`VALUE=DATE`, duration `P3D`)<br>• `TRANSP:TRANSPARENT` mapping to `freeBusyStatus: "free"`<br>• RFC 6638 CalDAV scheduling parameters (`SCHEDULE-AGENT=SERVER`, `SCHEDULE-STATUS`, `SCHEDULE-FORCE-SEND`)<br>• Dual links (PDF attachment + PNG badge image)<br>• Annual recurrence with `EXDATE` exclusion<br>• CalDAV synchronization and cache metadata (`X-CALDAV-*`, `X-FASTMAIL-*`) | • All-day date-only format preserved without spurious `TZID`<br>• CalDAV cache and vendor headers dropped cleanly<br>• Fixed-point convergence: `Export₂ == Export₃` |
 
 ### 11.2 Table-Driven Whole-File Regression Net
 
@@ -634,4 +688,27 @@ The table-driven test suite (`real_exporter_fixture_corpus_table_driven_roundtri
 2. **Outbound Normalization (`event_to_ical`)**: Emits canonical RFC 5545 iCalendar documents.
 3. **Multi-Stage Fixpoint Convergence**: Validates standing invariants:
    $$\text{Export}_2 \equiv \text{Export}_3 \quad \text{and} \quad \text{Event}_2 \equiv \text{Event}_3$$
+
+---
+
+## 12. Recurrence Rules Grammar & Complex Parts Fidelity (RFC 8984 §4.3.3 ↔ RFC 5545 §3.3.10)
+
+`jmap-ical` implements full fidelity mapping for RFC 5545 `RRULE` properties and RFC 8984 `RecurrenceRule` records:
+
+### 12.1 Set Position Filtering (`BYSETPOS` ↔ `bySetPosition`)
+- **Semantics**: Filters occurrences produced by other expanding `BYxxx` rule parts within the frequency period (RFC 5545 §3.3.10).
+- **Valid Range**: RFC 5545 bounds set positions to positive and negative integers within the year (`-366..=-1` and `1..=366`).
+- **Refusal Rules**: Zero (`0`), out-of-bounds positions (`<-366` or `>366`), non-integers, and orphan `BYSETPOS` (rules with `by_set_position` but without expanding parts such as `by_day`, `by_month_day`, `by_year_day`, `by_week_no`, `by_hour`, `by_minute`, or `by_second`) are rejected by `maps_recurrence_rule`.
+- **Normalization**: Leading plus signs (`+1`) on input are canonicalized to unsigned integer values (`1`) on emission.
+
+### 12.2 Day-of-Week Ordinals (`BYDAY` ↔ `byDay` / `NDay`)
+- **Ordinals**: Support signed positive (`+1MO`, `2WE`) and negative (`-1FR`, `-2SU`) week ordinals in monthly or yearly rules. Zero ordinal (`0MO`) is invalid and refused.
+- **Frequency Gating**: Per RFC 5545 §3.3.10, ordinals on `BYDAY` are only valid in `MONTHLY` and `YEARLY` recurrence rules. Ordinals in `DAILY`, `WEEKLY`, `HOURLY`, `MINUTELY`, or `SECONDLY` rules are refused by `maps_recurrence_rule`.
+- **Mixed Lists**: Rules combining ordinal days and bare weekdays (e.g. `BYDAY=2TU,TH`) are fully supported and round-trip losslessly.
+
+### 12.3 Week Start Day (`WKST` ↔ `firstDayOfWeek`)
+- **Default Omission**: RFC 5545 defines `MO` (Monday) as the default `WKST`. To avoid spurious diffs with libical, `jmap-ical` omits `WKST` when `first_day_of_week` is `"mo"`.
+- **Non-Default Emission**: When set to any other weekday (`"su"`, `"tu"`, etc.), `event_to_ical` explicitly emits `WKST=SU`.
+- **Validation**: Values must match lowercase two-letter day tokens (`"mo"`, `"tu"`, `"we"`, `"th"`, `"fr"`, `"sa"`, `"su"`). Uppercase or descriptive day names are refused.
+- **Interaction with `BYWEEKNO`**: Works seamlessly with `byWeekNo` to determine week number boundaries across year transitions.
 

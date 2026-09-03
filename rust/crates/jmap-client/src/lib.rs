@@ -15,6 +15,7 @@
 //! [`Transport`]: transport::Transport
 //! [`CancelFlag`]: transport::CancelFlag
 
+mod blob;
 mod calendars;
 mod changes;
 mod client;
