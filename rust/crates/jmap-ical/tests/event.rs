@@ -14909,3 +14909,738 @@ fn recurrence_overrides_predicates_and_refusal_boundaries_matrix() {
         "custom solidus timezone allowed by sends_recurrence_override when defined on series"
     );
 }
+
+#[test]
+fn vtimezone_multiple_observances_historical_transitions_until_resolution() {
+    // Characterizes VTIMEZONE with multiple historical STANDARD and DAYLIGHT observances:
+    // US Eastern Time (America/New_York):
+    // Era 1 (1987-2006): Daylight from first Sunday of April to last Sunday of October (-0500 to -0400).
+    // Era 2 (2007 onwards): Daylight from second Sunday of March to first Sunday of November (-0500 to -0400).
+    let ny_vtimezone = "BEGIN:VTIMEZONE\r\n\
+         TZID:America/New_York\r\n\
+         BEGIN:STANDARD\r\n\
+         DTSTART:19871025T020000\r\n\
+         TZOFFSETFROM:-0400\r\n\
+         TZOFFSETTO:-0500\r\n\
+         TZNAME:EST\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10;UNTIL=20061029T060000Z\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         DTSTART:19870405T020000\r\n\
+         TZOFFSETFROM:-0500\r\n\
+         TZOFFSETTO:-0400\r\n\
+         TZNAME:EDT\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=4;UNTIL=20060402T070000Z\r\n\
+         END:DAYLIGHT\r\n\
+         BEGIN:STANDARD\r\n\
+         DTSTART:20071104T020000\r\n\
+         TZOFFSETFROM:-0400\r\n\
+         TZOFFSETTO:-0500\r\n\
+         TZNAME:EST\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=11\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         DTSTART:20070311T020000\r\n\
+         TZOFFSETFROM:-0500\r\n\
+         TZOFFSETTO:-0400\r\n\
+         TZNAME:EDT\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=2SU;BYMONTH=3\r\n\
+         END:DAYLIGHT\r\n\
+         END:VTIMEZONE\r\n";
+
+    // 1. Era 1: March 15, 2005 (before April transition): in Standard time (-0500)
+    let ics_era1_march = recurring_in("America/New_York", ny_vtimezone, "20050315T120000Z");
+    let event_era1_march = ical_to_event(&ics_era1_march).expect("parse era1 march");
+    let rule1 = event_era1_march.recurrence_rule.expect("rule era1 march");
+    assert_eq!(
+        rule1.until.as_deref(),
+        Some("2005-03-15T07:00:00"),
+        "Era 1 March 15 is in EST (-0500)"
+    );
+    assert!(maps_recurrence_rule(&rule1));
+
+    // 2. Era 1: April 15, 2005 (after first Sunday of April): in Daylight time (-0400)
+    let ics_era1_april = recurring_in("America/New_York", ny_vtimezone, "20050415T120000Z");
+    let event_era1_april = ical_to_event(&ics_era1_april).expect("parse era1 april");
+    let rule2 = event_era1_april.recurrence_rule.expect("rule era1 april");
+    assert_eq!(
+        rule2.until.as_deref(),
+        Some("2005-04-15T08:00:00"),
+        "Era 1 April 15 is in EDT (-0400)"
+    );
+    assert!(maps_recurrence_rule(&rule2));
+
+    // 3. Era 2: March 15, 2026 (after second Sunday of March): in Daylight time (-0400)
+    // Note difference from Era 1 March 15 above: 08:00:00 EDT vs 07:00:00 EST.
+    let ics_era2_march = recurring_in("America/New_York", ny_vtimezone, "20260315T120000Z");
+    let event_era2_march = ical_to_event(&ics_era2_march).expect("parse era2 march");
+    let rule3 = event_era2_march.recurrence_rule.expect("rule era2 march");
+    assert_eq!(
+        rule3.until.as_deref(),
+        Some("2026-03-15T08:00:00"),
+        "Era 2 March 15 is in EDT (-0400), contrasting with Era 1 EST"
+    );
+    assert!(maps_recurrence_rule(&rule3));
+
+    // 4. Era 1: October 31, 2005 (after last Sunday of October): in Standard time (-0500)
+    let ics_era1_oct = recurring_in("America/New_York", ny_vtimezone, "20051031T120000Z");
+    let event_era1_oct = ical_to_event(&ics_era1_oct).expect("parse era1 oct");
+    let rule4 = event_era1_oct.recurrence_rule.expect("rule era1 oct");
+    assert_eq!(
+        rule4.until.as_deref(),
+        Some("2005-10-31T07:00:00"),
+        "Era 1 October 31 is in EST (-0500)"
+    );
+    assert!(maps_recurrence_rule(&rule4));
+
+    // 5. Era 2: October 28, 2026 (before first Sunday of November): in Daylight time (-0400)
+    // Note difference from Era 1 late October: 08:00:00 EDT vs 07:00:00 EST.
+    let ics_era2_oct = recurring_in("America/New_York", ny_vtimezone, "20261028T120000Z");
+    let event_era2_oct = ical_to_event(&ics_era2_oct).expect("parse era2 oct");
+    let rule5 = event_era2_oct.recurrence_rule.expect("rule era2 oct");
+    assert_eq!(
+        rule5.until.as_deref(),
+        Some("2026-10-28T08:00:00"),
+        "Era 2 late October is in EDT (-0400), contrasting with Era 1 EST"
+    );
+    assert!(maps_recurrence_rule(&rule5));
+
+    // 6. Series spanning eras: started in 2004 (Era 1), ending in 2026 (Era 2)
+    let ics_spanning = format!(
+        "BEGIN:VCALENDAR\r\n\
+         {ny_vtimezone}\
+         BEGIN:VEVENT\r\n\
+         UID:ev-span-eras\r\n\
+         DTSTART;TZID=America/New_York:20040101T100000\r\n\
+         RRULE:FREQ=YEARLY;UNTIL=20260715T120000Z\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let event_spanning = ical_to_event(&ics_spanning).expect("parse spanning");
+    let rule_spanning = event_spanning.recurrence_rule.expect("rule spanning");
+    assert_eq!(
+        rule_spanning.until.as_deref(),
+        Some("2026-07-15T08:00:00"),
+        "July in Era 2 resolves with -0400"
+    );
+    assert!(maps_recurrence_rule(&rule_spanning));
+}
+
+#[test]
+fn vtimezone_multi_observance_with_one_off_and_rdate_transitions() {
+    // Tests multi-observance VTIMEZONE combining one-off historical transitions and recurring rules:
+    // Historical US War Time (1942-1945):
+    // 1. STANDARD prior to Feb 1942: -0500
+    // 2. DAYLIGHT one-off start Feb 9, 1942 (no RRULE): -0400
+    // 3. STANDARD one-off post-war return Aug 14, 1945 (no RRULE): -0500
+    // 4. DAYLIGHT regular yearly from 1967: -0400
+    // 5. STANDARD regular yearly from 1967: -0500
+    let war_time_vtimezone = "BEGIN:VTIMEZONE\r\n\
+         TZID:America/Detroit\r\n\
+         BEGIN:STANDARD\r\n\
+         DTSTART:19420101T000000\r\n\
+         TZOFFSETFROM:-0500\r\n\
+         TZOFFSETTO:-0500\r\n\
+         TZNAME:EST\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         DTSTART:19420209T020000\r\n\
+         TZOFFSETFROM:-0500\r\n\
+         TZOFFSETTO:-0400\r\n\
+         TZNAME:EWT\r\n\
+         END:DAYLIGHT\r\n\
+         BEGIN:STANDARD\r\n\
+         DTSTART:19450814T190000\r\n\
+         TZOFFSETFROM:-0400\r\n\
+         TZOFFSETTO:-0500\r\n\
+         TZNAME:EST\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         DTSTART:19670430T020000\r\n\
+         TZOFFSETFROM:-0500\r\n\
+         TZOFFSETTO:-0400\r\n\
+         TZNAME:EDT\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=4\r\n\
+         END:DAYLIGHT\r\n\
+         BEGIN:STANDARD\r\n\
+         DTSTART:19671029T020000\r\n\
+         TZOFFSETFROM:-0400\r\n\
+         TZOFFSETTO:-0500\r\n\
+         TZNAME:EST\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+
+    // 1. During War Time (1943): offset in force is -0400
+    let ics_1943 = recurring_in("America/Detroit", war_time_vtimezone, "19430601T120000Z");
+    let event_1943 = ical_to_event(&ics_1943).expect("parse 1943");
+    let rule_1943 = event_1943.recurrence_rule.expect("rule 1943");
+    assert_eq!(
+        rule_1943.until.as_deref(),
+        Some("1943-06-01T08:00:00"),
+        "War Time 1943 resolved with -0400"
+    );
+
+    // 2. Post-war before 1967 Uniform Time Act (1950): offset in force is -0500
+    let ics_1950 = recurring_in("America/Detroit", war_time_vtimezone, "19500601T120000Z");
+    let event_1950 = ical_to_event(&ics_1950).expect("parse 1950");
+    let rule_1950 = event_1950.recurrence_rule.expect("rule 1950");
+    assert_eq!(
+        rule_1950.until.as_deref(),
+        Some("1950-06-01T07:00:00"),
+        "Post-war 1950 resolved with -0500"
+    );
+
+    // 3. Modern era (2026 summer): offset in force is -0400
+    let ics_2026 = recurring_in("America/Detroit", war_time_vtimezone, "20260701T120000Z");
+    let event_2026 = ical_to_event(&ics_2026).expect("parse 2026");
+    let rule_2026 = event_2026.recurrence_rule.expect("rule 2026");
+    assert_eq!(
+        rule_2026.until.as_deref(),
+        Some("2026-07-01T08:00:00"),
+        "Modern summer 2026 resolved with -0400"
+    );
+}
+
+#[test]
+fn windows_time_zone_forms_feeding_real_recurrence_matrix() {
+    // Tests diverse Windows standard time zone display names (from Outlook/Exchange)
+    // with quoted and unquoted syntax feeding recurrence UNTIL calculations.
+    let test_cases = [
+        (
+            "Eastern Standard Time",
+            "America/New_York",
+            "-0500",
+            "-0400",
+            3,
+            11,
+            "20260615T120000Z",
+            "2026-06-15T08:00:00",
+        ),
+        (
+            "Central Standard Time",
+            "America/Chicago",
+            "-0600",
+            "-0500",
+            3,
+            11,
+            "20260615T120000Z",
+            "2026-06-15T07:00:00",
+        ),
+        (
+            "Pacific Standard Time",
+            "America/Los_Angeles",
+            "-0800",
+            "-0700",
+            3,
+            11,
+            "20260615T120000Z",
+            "2026-06-15T05:00:00",
+        ),
+        (
+            "W. Europe Standard Time",
+            "Europe/Berlin",
+            "+0100",
+            "+0200",
+            3,
+            10,
+            "20260615T120000Z",
+            "2026-06-15T14:00:00",
+        ),
+        (
+            "Romance Standard Time",
+            "Europe/Paris",
+            "+0100",
+            "+0200",
+            3,
+            10,
+            "20260615T120000Z",
+            "2026-06-15T14:00:00",
+        ),
+        (
+            "Tokyo Standard Time",
+            "Asia/Tokyo",
+            "+0900",
+            "+0900",
+            0,
+            0,
+            "20260615T120000Z",
+            "2026-06-15T21:00:00",
+        ),
+        (
+            "AUS Eastern Standard Time",
+            "Australia/Sydney",
+            "+1000",
+            "+1100",
+            10,
+            4,
+            "20260115T120000Z",
+            "2026-01-15T23:00:00",
+        ),
+    ];
+
+    for (
+        win_name,
+        expected_iana,
+        std_offset,
+        dst_offset,
+        dst_month,
+        std_month,
+        until_utc,
+        expected_until_local,
+    ) in test_cases
+    {
+        let vtz = if dst_month > 0 {
+            format!(
+                "BEGIN:VTIMEZONE\r\n\
+                 TZID:{win_name}\r\n\
+                 BEGIN:STANDARD\r\n\
+                 DTSTART:16010101T020000\r\n\
+                 TZOFFSETFROM:{dst_offset}\r\n\
+                 TZOFFSETTO:{std_offset}\r\n\
+                 RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=1SU;BYMONTH={std_month}\r\n\
+                 END:STANDARD\r\n\
+                 BEGIN:DAYLIGHT\r\n\
+                 DTSTART:16010101T020000\r\n\
+                 TZOFFSETFROM:{std_offset}\r\n\
+                 TZOFFSETTO:{dst_offset}\r\n\
+                 RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=1SU;BYMONTH={dst_month}\r\n\
+                 END:DAYLIGHT\r\n\
+                 END:VTIMEZONE\r\n"
+            )
+        } else {
+            format!(
+                "BEGIN:VTIMEZONE\r\n\
+                 TZID:{win_name}\r\n\
+                 BEGIN:STANDARD\r\n\
+                 DTSTART:16010101T000000\r\n\
+                 TZOFFSETFROM:{std_offset}\r\n\
+                 TZOFFSETTO:{std_offset}\r\n\
+                 END:STANDARD\r\n\
+                 END:VTIMEZONE\r\n"
+            )
+        };
+
+        // Test with quoted TZID syntax (e.g. DTSTART;TZID="Eastern Standard Time":...)
+        let ics_quoted = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n\
+             {vtz}\
+             BEGIN:VEVENT\r\n\
+             UID:rec-win-quoted-{expected_iana}\r\n\
+             DTSTART;TZID=\"{win_name}\":20260101T100000\r\n\
+             RRULE:FREQ=WEEKLY;UNTIL={until_utc}\r\n\
+             SUMMARY:Meeting in {win_name}\r\n\
+             END:VEVENT\r\n\
+             END:VCALENDAR\r\n"
+        );
+        let event_q = ical_to_event(&ics_quoted).expect("parse quoted win tzid");
+        assert_eq!(
+            event_q.time_zone.as_deref(),
+            Some(expected_iana),
+            "Windows name '{win_name}' maps to canonical IANA '{expected_iana}'"
+        );
+        let rule_q = event_q.recurrence_rule.as_ref().expect("rule quoted");
+        assert_eq!(
+            rule_q.until.as_deref(),
+            Some(expected_until_local),
+            "UNTIL in '{win_name}' resolved correctly"
+        );
+        assert!(maps_recurrence_rule(rule_q));
+
+        // Outbound emission normalizes to canonical IANA TZID
+        let out_ics = event_to_ical(&event_q);
+        assert!(!out_ics.contains(&format!("TZID=\"{win_name}\"")));
+        assert!(!out_ics.contains(&format!("TZID={win_name}")));
+
+        // Fixed-point convergence
+        let re_event = ical_to_event(&out_ics).expect("reparse");
+        assert_eq!(re_event.time_zone.as_deref(), Some(expected_iana));
+        assert_eq!(event_to_ical(&re_event), out_ics);
+
+        // Test with unquoted TZID syntax
+        let ics_unquoted = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n\
+             {vtz}\
+             BEGIN:VEVENT\r\n\
+             UID:rec-win-unquoted-{expected_iana}\r\n\
+             DTSTART;TZID={win_name}:20260101T100000\r\n\
+             RRULE:FREQ=WEEKLY;UNTIL={until_utc}\r\n\
+             SUMMARY:Meeting in {win_name}\r\n\
+             END:VEVENT\r\n\
+             END:VCALENDAR\r\n"
+        );
+        let event_u = ical_to_event(&ics_unquoted).expect("parse unquoted win tzid");
+        assert_eq!(event_u.time_zone.as_deref(), Some(expected_iana));
+        let rule_u = event_u.recurrence_rule.expect("rule unquoted");
+        assert_eq!(rule_u.until.as_deref(), Some(expected_until_local));
+    }
+}
+
+#[test]
+fn globally_unique_tzid_forms_feeding_real_recurrence_matrix() {
+    // Tests diverse globally-unique-form TZIDs (RFC 5545 §3.8.3.1) from major exporters
+    // with matching VTIMEZONE feeding recurrence UNTIL calculations.
+    let test_cases = [
+        (
+            "/mozilla.org/20050126_1/America/New_York",
+            "America/New_York",
+            "-0500",
+            "-0400",
+            3,
+            11,
+            "20260615T120000Z",
+            "2026-06-15T08:00:00",
+        ),
+        (
+            "/citadel.org/20250101_1/Europe/Berlin",
+            "Europe/Berlin",
+            "+0100",
+            "+0200",
+            3,
+            10,
+            "20260615T120000Z",
+            "2026-06-15T14:00:00",
+        ),
+        (
+            "/freeassociation.sourceforge.net/Tzfile/America/Chicago",
+            "America/Chicago",
+            "-0600",
+            "-0500",
+            3,
+            11,
+            "20260615T120000Z",
+            "2026-06-15T07:00:00",
+        ),
+        (
+            "/apple.com/timezones/America/Los_Angeles",
+            "America/Los_Angeles",
+            "-0800",
+            "-0700",
+            3,
+            11,
+            "20260615T120000Z",
+            "2026-06-15T05:00:00",
+        ),
+        (
+            "/google.com/20260101_1/Asia/Tokyo",
+            "Asia/Tokyo",
+            "+0900",
+            "+0900",
+            0,
+            0,
+            "20260615T120000Z",
+            "2026-06-15T21:00:00",
+        ),
+    ];
+
+    for (
+        unique_tzid,
+        expected_iana,
+        std_offset,
+        dst_offset,
+        dst_month,
+        std_month,
+        until_utc,
+        expected_until_local,
+    ) in test_cases
+    {
+        let vtz = if dst_month > 0 {
+            format!(
+                "BEGIN:VTIMEZONE\r\n\
+                 TZID:{unique_tzid}\r\n\
+                 BEGIN:STANDARD\r\n\
+                 DTSTART:19701025T020000\r\n\
+                 TZOFFSETFROM:{dst_offset}\r\n\
+                 TZOFFSETTO:{std_offset}\r\n\
+                 RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH={std_month}\r\n\
+                 END:STANDARD\r\n\
+                 BEGIN:DAYLIGHT\r\n\
+                 DTSTART:19700329T020000\r\n\
+                 TZOFFSETFROM:{std_offset}\r\n\
+                 TZOFFSETTO:{dst_offset}\r\n\
+                 RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH={dst_month}\r\n\
+                 END:DAYLIGHT\r\n\
+                 END:VTIMEZONE\r\n"
+            )
+        } else {
+            format!(
+                "BEGIN:VTIMEZONE\r\n\
+                 TZID:{unique_tzid}\r\n\
+                 BEGIN:STANDARD\r\n\
+                 DTSTART:19700101T000000\r\n\
+                 TZOFFSETFROM:{std_offset}\r\n\
+                 TZOFFSETTO:{std_offset}\r\n\
+                 END:STANDARD\r\n\
+                 END:VTIMEZONE\r\n"
+            )
+        };
+
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n\
+             {vtz}\
+             BEGIN:VEVENT\r\n\
+             UID:rec-uniq-{expected_iana}\r\n\
+             DTSTART;TZID={unique_tzid}:20260101T100000\r\n\
+             RRULE:FREQ=WEEKLY;UNTIL={until_utc}\r\n\
+             SUMMARY:Meeting in {unique_tzid}\r\n\
+             END:VEVENT\r\n\
+             END:VCALENDAR\r\n"
+        );
+
+        let event = ical_to_event(&ics).expect("parse unique tzid");
+        assert_eq!(
+            event.time_zone.as_deref(),
+            Some(expected_iana),
+            "Unique TZID '{unique_tzid}' maps to canonical IANA '{expected_iana}'"
+        );
+        let rule = event.recurrence_rule.as_ref().expect("rule");
+        assert_eq!(
+            rule.until.as_deref(),
+            Some(expected_until_local),
+            "UNTIL for '{unique_tzid}' resolved correctly"
+        );
+        assert!(maps_recurrence_rule(rule));
+
+        // Outbound emission normalizes to canonical IANA TZID without solidus
+        let out_ics = event_to_ical(&event);
+        assert!(
+            out_ics.contains(&format!("DTSTART;TZID={expected_iana}:")),
+            "Outbound emits standard canonical IANA TZID, got: {out_ics}"
+        );
+        assert!(!out_ics.contains(&format!("TZID={unique_tzid}")));
+        assert!(!out_ics.contains(&format!("TZID=\"{unique_tzid}\"")));
+
+        // Fixed point convergence
+        let re_event = ical_to_event(&out_ics).expect("reparse");
+        assert_eq!(re_event.time_zone.as_deref(), Some(expected_iana));
+        assert_eq!(event_to_ical(&re_event), out_ics);
+    }
+}
+
+#[test]
+fn custom_solidus_vtimezone_multiple_observances_roundtrip_and_recurrence() {
+    // Tests a custom defined solidus timezone with multiple observances across eras:
+    // /corp.internal/MultiObservance:
+    // Era 1 (1990-2006): Standard (-0500) and Daylight (-0400)
+    // Era 2 (2007 onwards): Standard (-0500) and Daylight (-0400) with adjusted transition dates
+    let custom_tzid = "/corp.internal/MultiObservance";
+    let custom_multi_zone = json!({
+        "@type": "TimeZone",
+        "tzId": custom_tzid,
+        "standard": [
+            {
+                "@type": "TimeZoneRule",
+                "start": "1990-10-28T02:00:00",
+                "offsetFrom": "-0400",
+                "offsetTo": "-0500",
+                "recurrenceRules": [{
+                    "@type": "RecurrenceRule",
+                    "frequency": "yearly",
+                    "until": "2006-10-29T02:00:00",
+                    "byMonth": ["10"],
+                    "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": -1}],
+                }],
+                "names": {"EST": true},
+            },
+            {
+                "@type": "TimeZoneRule",
+                "start": "2007-11-04T02:00:00",
+                "offsetFrom": "-0400",
+                "offsetTo": "-0500",
+                "recurrenceRules": [{
+                    "@type": "RecurrenceRule",
+                    "frequency": "yearly",
+                    "byMonth": ["11"],
+                    "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": 1}],
+                }],
+                "names": {"EST": true},
+            }
+        ],
+        "daylight": [
+            {
+                "@type": "TimeZoneRule",
+                "start": "1990-04-01T02:00:00",
+                "offsetFrom": "-0500",
+                "offsetTo": "-0400",
+                "recurrenceRules": [{
+                    "@type": "RecurrenceRule",
+                    "frequency": "yearly",
+                    "until": "2006-04-02T02:00:00",
+                    "byMonth": ["4"],
+                    "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": 1}],
+                }],
+                "names": {"EDT": true},
+            },
+            {
+                "@type": "TimeZoneRule",
+                "start": "2007-03-11T02:00:00",
+                "offsetFrom": "-0500",
+                "offsetTo": "-0400",
+                "recurrenceRules": [{
+                    "@type": "RecurrenceRule",
+                    "frequency": "yearly",
+                    "byMonth": ["3"],
+                    "byDay": [{"@type": "NDay", "day": "su", "nthOfPeriod": 2}],
+                }],
+                "names": {"EDT": true},
+            }
+        ],
+    });
+
+    let mut event = defining(custom_tzid, json!({custom_tzid: custom_multi_zone}));
+    event.recurrence_rule = Some(RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        until: Some("2026-06-15T08:00:00".to_owned()),
+        ..Default::default()
+    });
+
+    // 1. Serialization to iCalendar
+    let ics = event_to_ical(&event);
+    assert!(ics.contains("BEGIN:VTIMEZONE\r\n"));
+    assert!(ics.contains(&format!("TZID:{custom_tzid}\r\n")));
+    assert_eq!(
+        ics.matches("BEGIN:STANDARD\r\n").count(),
+        2,
+        "emits both standard observances"
+    );
+    assert_eq!(
+        ics.matches("BEGIN:DAYLIGHT\r\n").count(),
+        2,
+        "emits both daylight observances"
+    );
+
+    // 2. Parsing back into CalendarEvent
+    let parsed = ical_to_event(&ics).expect("parse custom multi-observance event");
+    assert_eq!(parsed.time_zone.as_deref(), Some(custom_tzid));
+    assert!(defines_time_zone(&parsed, custom_tzid));
+    assert!(maps_time_zone(&parsed));
+
+    let time_zones = parsed.time_zones.as_ref().expect("time_zones present");
+    let zone_val = time_zones.get(custom_tzid).expect("custom zone in map");
+    let std_rules = zone_val
+        .get("standard")
+        .and_then(Value::as_array)
+        .expect("standard rules");
+    let dst_rules = zone_val
+        .get("daylight")
+        .and_then(Value::as_array)
+        .expect("daylight rules");
+    assert_eq!(std_rules.len(), 2, "both standard observances parsed");
+    assert_eq!(dst_rules.len(), 2, "both daylight observances parsed");
+
+    let parsed_rule = parsed.recurrence_rule.as_ref().expect("recurrence rule");
+    assert_eq!(parsed_rule.until.as_deref(), Some("2026-06-15T08:00:00"));
+    assert!(maps_recurrence_rule(parsed_rule));
+
+    // 3. Multi-pass fixpoint stability
+    let ics2 = event_to_ical(&parsed);
+    let reparsed = ical_to_event(&ics2).expect("reparse");
+    let ics3 = event_to_ical(&reparsed);
+    assert_eq!(ics2, ics3);
+    assert_eq!(parsed.time_zones, reparsed.time_zones);
+}
+
+#[test]
+fn recurrence_overrides_with_windows_and_unique_tzids_fidelity() {
+    // Tests recurrence series and detached VEVENT recurrence overrides carrying Windows/unique TZIDs.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n",
+        "BEGIN:VTIMEZONE\r\nTZID:Eastern Standard Time\r\n",
+        "BEGIN:STANDARD\r\nDTSTART:16010101T020000\r\n",
+        "TZOFFSETFROM:-0400\r\nTZOFFSETTO:-0500\r\n",
+        "RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=1SU;BYMONTH=11\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\nDTSTART:16010101T020000\r\n",
+        "TZOFFSETFROM:-0500\r\nTZOFFSETTO:-0400\r\n",
+        "RRULE:FREQ=YEARLY;INTERVAL=1;BYDAY=2SU;BYMONTH=3\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\nUID:series-win-override\r\n",
+        "DTSTART;TZID=\"Eastern Standard Time\":20260309T100000\r\n",
+        "DURATION:PT1H\r\n",
+        "RRULE:FREQ=WEEKLY;COUNT=5\r\n",
+        "SUMMARY:Weekly Team Sync\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\nUID:series-win-override\r\n",
+        "RECURRENCE-ID;TZID=\"Eastern Standard Time\":20260316T100000\r\n",
+        "DTSTART;TZID=\"Eastern Standard Time\":20260316T140000\r\n",
+        "DURATION:PT2H\r\n",
+        "SUMMARY:Rescheduled Strategy Session\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let event = ical_to_event(ics).expect("parse series and override");
+    assert_eq!(event.time_zone.as_deref(), Some("America/New_York"));
+    assert_eq!(event.title.as_deref(), Some("Weekly Team Sync"));
+
+    let overrides = event.recurrence_overrides.as_ref().expect("overrides map");
+    let patch = overrides
+        .get("2026-03-16T10:00:00")
+        .expect("override patch");
+    assert_eq!(
+        patch.get("title").and_then(Value::as_str),
+        Some("Rescheduled Strategy Session")
+    );
+    assert_eq!(patch.get("duration").and_then(Value::as_str), Some("PT2H"));
+    assert_eq!(
+        patch.get("start").and_then(Value::as_str),
+        Some("2026-03-16T14:00:00")
+    );
+
+    // Outbound emission normalizes both master VEVENT and override VEVENT to canonical IANA TZID
+    let out = event_to_ical(&event);
+    assert!(out.contains("DTSTART;TZID=America/New_York:20260309T100000\r\n"));
+    assert!(out.contains("RECURRENCE-ID;TZID=America/New_York:20260316T100000\r\n"));
+    assert!(out.contains("DTSTART;TZID=America/New_York:20260316T140000\r\n"));
+    assert!(!out.contains("Eastern Standard Time"));
+}
+
+#[test]
+fn vtimezone_multiple_observances_corrupt_observance_safe_refusal() {
+    // 1. Multi-observance custom zone with one corrupt observance (bad offset)
+    // Refuses the entire zone definition rather than silently calculating wrong offsets.
+    let custom_tzid = "/example.com/CorruptObservance";
+    let bad_vtz = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n\
+         BEGIN:VTIMEZONE\r\n\
+         TZID:/example.com/CorruptObservance\r\n\
+         BEGIN:STANDARD\r\n\
+         DTSTART:19701025T030000\r\n\
+         TZOFFSETFROM:+0200\r\n\
+         TZOFFSETTO:+0100\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+         END:STANDARD\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         DTSTART:19700329T020000\r\n\
+         TZOFFSETFROM:+0100\r\n\
+         TZOFFSETTO:invalid-offset\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+         END:DAYLIGHT\r\n\
+         END:VTIMEZONE\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:ev-corrupt-tz\r\n\
+         DTSTART;TZID=/example.com/CorruptObservance:20260101T100000\r\n\
+         RRULE:FREQ=DAILY;UNTIL=20260105T120000Z\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n";
+
+    let event = ical_to_event(bad_vtz).expect("parse corrupt zone");
+    assert_eq!(event.time_zone.as_deref(), Some(custom_tzid));
+    assert_eq!(
+        event.time_zones, None,
+        "corrupt observance invalidates the whole zone definition"
+    );
+    assert!(
+        !maps_time_zone(&event),
+        "maps_time_zone refuses unsendable undefined custom zone"
+    );
+
+    // Recurrence rule UNTIL retains trailing Z because zone could not be resolved,
+    // which maps_recurrence_rule safely refuses.
+    let rule = event.recurrence_rule.expect("recurrence rule");
+    assert_eq!(rule.until.as_deref(), Some("2026-01-05T12:00:00Z"));
+    assert!(
+        !maps_recurrence_rule(&rule),
+        "recurrence rule with unresolvable zone UNTIL is refused to prevent silent server corruption"
+    );
+}
