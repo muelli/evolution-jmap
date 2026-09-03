@@ -20,6 +20,7 @@ have been operator-verified against a real JMAP server.**
 | Mail provider (Camel store/transport) | `jmap-mail(-sync)` | ✅ |
 | Collection backend (one account, all three above) | `jmap-backend-collection(-module)`, `jmap-collection-sync` | ✅ |
 | Account-setup UI (`module-jmap-configuration.so`), incl. OAuth2 | `jmap-config(-module)` | ✅ |
+| JMAP-only UI features (vacation autoresponder, scheduled send, snooze) | `jmap-ui` | ✅ |
 | vCard/iCalendar mapping (JSContact/JSCalendar) | `jmap-vcard`, `jmap-ical` | ✅ |
 | Evolution UI module template (Rust port of the wiki example, unused by the above) | `example-module` | ✅ |
 
@@ -130,6 +131,8 @@ rust/crates/
 │                                       out into the three backends above
 ├── jmap-config(-module)/       account-setup UI (EMailConfigServiceBackend,
 │                                EConfigLookup) incl. OAuth2 discovery/registration
+├── jmap-ui/                    vacation, scheduled send and snooze in Evolution's
+│                                own UI; rides in jmap-config-module's .so
 ├── jmap-functional/             functional tests driving the built .so modules
 │                                against a real EDS registry (no display needed)
 └── example-module/              Evolution UI module template (hand-written FFI,
