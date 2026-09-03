@@ -41,6 +41,24 @@ fn quota_get_returns_the_seeded_fixture() {
     assert_eq!(quota.used, 0);
 }
 
+/// A server that never advertises `urn:ietf:params:jmap:quota` on the
+/// account (Fastmail, in practice) must not be sent a `Quota/get` at all:
+/// naming an unadvertised capability in `using` fails the whole request
+/// (RFC 8620 §3.6.1's `unknownCapability`). `Client::quotas` answers an
+/// empty list instead, which the `jmap-mail` caller already treats as "no
+/// quota to report" for a folder that has none.
+#[test]
+fn quota_get_is_not_sent_when_the_account_does_not_advertise_it() {
+    let server = MockServer::builder()
+        .without_capability(CAPABILITY_QUOTA)
+        .start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    assert!(client.session().quota_capability().is_none());
+    assert_eq!(client.quotas(&account_id).unwrap(), Vec::new());
+}
+
 /// `Quota/get` with an id that names nothing answers `notFound`, the same as
 /// every other `/get` method (RFC 8620 §5.1).
 #[test]
