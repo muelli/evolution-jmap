@@ -559,6 +559,12 @@ When an occurrence moves to a different time zone:
 - **`DTSTART`**: Evaluated on the **instance's own clock** (`instance.time_zone`), placing the rescheduled occurrence at its actual local start time.
 - **Windows & Globally-Unique TZIDs**: TZIDs on `RECURRENCE-ID` and instance `DTSTART` resolve through the canonical resolution pipeline (Section 4), tolerating real-world exporter formats across providers.
 
+### 8.5 All-Day Series vs Timed Overrides Value Type Agreement (RFC 5545 §3.8.4.4 / §3.8.5.1 / §3.8.5.2)
+
+RFC 5545 strictly mandates that all components in a recurring series share the same value type (`VALUE=DATE` for all-day series or `DATE-TIME` for timed series):
+- **All-Day Consistency**: When the series is all-day (`show_without_time: true`), `EXDATE`, `RDATE`, and detached `VEVENT` `RECURRENCE-ID` and `DTSTART` properties are emitted with `VALUE=DATE:YYYYMMDD` provided all instance overrides also start at midnight and have whole-day durations.
+- **Timed Demotion**: If any instance override moves to a time other than midnight or specifies a non-whole-day duration, `shows_without_time` returns `false`. This demotes the master series and every instance override to `DATE-TIME`, ensuring compliant iCalendar output across providers.
+
 ---
 
 ## 9. Special Semantics & Product Decision Catalog
@@ -634,4 +640,27 @@ The table-driven test suite (`real_exporter_fixture_corpus_table_driven_roundtri
 2. **Outbound Normalization (`event_to_ical`)**: Emits canonical RFC 5545 iCalendar documents.
 3. **Multi-Stage Fixpoint Convergence**: Validates standing invariants:
    $$\text{Export}_2 \equiv \text{Export}_3 \quad \text{and} \quad \text{Event}_2 \equiv \text{Event}_3$$
+
+---
+
+## 12. Recurrence Rules Grammar & Complex Parts Fidelity (RFC 8984 §4.3.3 ↔ RFC 5545 §3.3.10)
+
+`jmap-ical` implements full fidelity mapping for RFC 5545 `RRULE` properties and RFC 8984 `RecurrenceRule` records:
+
+### 12.1 Set Position Filtering (`BYSETPOS` ↔ `bySetPosition`)
+- **Semantics**: Filters occurrences produced by other expanding `BYxxx` rule parts within the frequency period (RFC 5545 §3.3.10).
+- **Valid Range**: RFC 5545 bounds set positions to positive and negative integers within the year (`-366..=-1` and `1..=366`).
+- **Refusal Rules**: Zero (`0`), out-of-bounds positions (`<-366` or `>366`), non-integers, and orphan `BYSETPOS` (rules with `by_set_position` but without expanding parts such as `by_day`, `by_month_day`, `by_year_day`, `by_week_no`, `by_hour`, `by_minute`, or `by_second`) are rejected by `maps_recurrence_rule`.
+- **Normalization**: Leading plus signs (`+1`) on input are canonicalized to unsigned integer values (`1`) on emission.
+
+### 12.2 Day-of-Week Ordinals (`BYDAY` ↔ `byDay` / `NDay`)
+- **Ordinals**: Support signed positive (`+1MO`, `2WE`) and negative (`-1FR`, `-2SU`) week ordinals in monthly or yearly rules. Zero ordinal (`0MO`) is invalid and refused.
+- **Frequency Gating**: Per RFC 5545 §3.3.10, ordinals on `BYDAY` are only valid in `MONTHLY` and `YEARLY` recurrence rules. Ordinals in `DAILY`, `WEEKLY`, `HOURLY`, `MINUTELY`, or `SECONDLY` rules are refused by `maps_recurrence_rule`.
+- **Mixed Lists**: Rules combining ordinal days and bare weekdays (e.g. `BYDAY=2TU,TH`) are fully supported and round-trip losslessly.
+
+### 12.3 Week Start Day (`WKST` ↔ `firstDayOfWeek`)
+- **Default Omission**: RFC 5545 defines `MO` (Monday) as the default `WKST`. To avoid spurious diffs with libical, `jmap-ical` omits `WKST` when `first_day_of_week` is `"mo"`.
+- **Non-Default Emission**: When set to any other weekday (`"su"`, `"tu"`, etc.), `event_to_ical` explicitly emits `WKST=SU`.
+- **Validation**: Values must match lowercase two-letter day tokens (`"mo"`, `"tu"`, `"we"`, `"th"`, `"fr"`, `"sa"`, `"su"`). Uppercase or descriptive day names are refused.
+- **Interaction with `BYWEEKNO`**: Works seamlessly with `byWeekNo` to determine week number boundaries across year transitions.
 
