@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jmap_proto::methods::{ChangesRequest, ChangesResponse};
 use jmap_proto::session::{
     CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
+    CAPABILITY_SUBMISSION,
 };
 use jmap_proto::{Id, State};
 
@@ -28,6 +29,7 @@ impl Client {
             "Mailbox" | "Email" | "Thread" => CAPABILITY_MAIL,
             "AddressBook" | "ContactCard" => CAPABILITY_CONTACTS,
             "Calendar" | "CalendarEvent" => CAPABILITY_CALENDARS,
+            "EmailSubmission" => CAPABILITY_SUBMISSION,
             other => {
                 return Err(Error::Protocol(format!(
                     "no known capability for data type {other}"
