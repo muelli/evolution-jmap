@@ -71,6 +71,7 @@ use jmap_proto::methods::Comparator;
 use jmap_proto::session::{
     CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
 };
+use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
 use serde_json::json;
 
 /// A value unique to this process invocation, for naming a record so a
@@ -1220,4 +1221,144 @@ fn send_email_delivers_to_a_second_account_on_the_real_server() {
     recipient
         .email_destroy(&recipient_account_id, &delivered_id)
         .expect("Email/set destroy failed for the recipient's copy");
+}
+
+/// JMAP Sieve (RFC 9661) against a real server: item 48's own live-shape
+/// probe, which nothing before this test ran (`jmap-client/tests/sieve.rs`
+/// covers create/update/destroy/activate against `jmap-mockd` only). Uploads
+/// a trivial valid script (`keep;`, no `require` needed), creates it,
+/// confirms `isActive: false`, activates it via `onSuccessActivateScript`
+/// and confirms `isActive: true`, then destroys it.
+///
+/// Two of this test's assertions pin real Stalwart v1.0.0 behaviour that
+/// diverges from RFC 9661, found while first writing this probe (a plain
+/// `onSuccessActivateScript: null` silently did nothing, so `keep_going`
+/// below had no way to reach a destroyable state until the divergence was
+/// worked around):
+///
+/// - `SieveScript/set` with only `"onSuccessActivateScript": null` and no
+///   accompanying create/update is a no-op on Stalwart: `isActive` stays
+///   `true`. RFC 9661 §2.4 says null "deactivat[es] the currently active
+///   script", unconditionally; `jmap-mockd` implements exactly that (see
+///   `jmap-mock/src/sieve.rs`), and [`Client::sieve_script_deactivate`]
+///   sends exactly the RFC's wire shape. This test does not change that
+///   client method to chase the workaround below, since nothing consumes
+///   `sieve_script_deactivate` yet (no Evolution filters UI exists) and a
+///   future RFC-conformant server must not regress silently if this method
+///   were bent to match Stalwart's bug.
+/// - The workaround that does work against Stalwart — and that this test
+///   uses to reach a destroyable state — is a direct `update: {"isActive":
+///   false}`, even though RFC 9661 §2.1 documents `isActive` as
+///   server-set, and [`Client::sieve_script_update`]'s own doc comment
+///   (written before this test, against the RFC and the mock only) says a
+///   server "rejects" that. Stalwart applies it instead.
+/// - Destroying the active script fails, but the wire error `type` is
+///   `scriptIsActive`, not the RFC-specified `sieveIsActive`
+///   ([`jmap_proto::sieve::sieve_set_error::SIEVE_IS_ACTIVE`]). This test
+///   asserts the literal string Stalwart actually sends, not the constant.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn sieve_script_create_activate_deactivate_then_destroy_round_trips_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_SIEVE) else {
+        eprintln!("server names no primary account for {CAPABILITY_SIEVE}; skipping");
+        return;
+    };
+
+    let name = format!("agent-livewrite-{}", unique_suffix());
+    let upload = client
+        .upload_blob(&account_id, "application/sieve", b"keep;\r\n".to_vec())
+        .expect("blob upload failed against the real server");
+
+    let created = client
+        .sieve_script_create(&account_id, &SieveScript::new(name.clone(), upload.blob_id))
+        .expect("SieveScript/set create failed against the real server");
+    let id = created.id.clone().expect("the server named the new script");
+
+    let round_tripped = client
+        .sieve_scripts(&account_id)
+        .expect("SieveScript/get failed against the real server")
+        .into_iter()
+        .find(|script| script.id.as_ref() == Some(&id))
+        .expect("the created script does not show up in SieveScript/get afterwards");
+    assert_eq!(round_tripped.name, name);
+    assert!(
+        !round_tripped.is_active,
+        "a freshly created script must not start active"
+    );
+
+    client
+        .sieve_script_activate(&account_id, &id)
+        .expect("SieveScript/set activate failed against the real server");
+    let activated = client
+        .sieve_scripts(&account_id)
+        .unwrap()
+        .into_iter()
+        .find(|script| script.id.as_ref() == Some(&id))
+        .expect("the activated script does not show up in SieveScript/get afterwards");
+    assert!(
+        activated.is_active,
+        "the script does not show isActive: true after onSuccessActivateScript"
+    );
+
+    // RFC 9661's own deactivation path: a documented no-op against Stalwart
+    // v1.0.0. See this test's doc comment.
+    client
+        .sieve_script_deactivate(&account_id)
+        .expect("SieveScript/set deactivate (RFC shape) was rejected outright");
+    let still_active_after_rfc_deactivate = client
+        .sieve_scripts(&account_id)
+        .unwrap()
+        .into_iter()
+        .find(|script| script.id.as_ref() == Some(&id))
+        .expect("the script does not show up in SieveScript/get afterwards")
+        .is_active;
+    assert!(
+        still_active_after_rfc_deactivate,
+        "Stalwart's onSuccessActivateScript: null no-op appears to be fixed: \
+         isActive turned false. If this fails, the divergence this test \
+         documents is gone — update the doc comment and use \
+         sieve_script_deactivate below instead of the direct-patch workaround."
+    );
+
+    // Destroying the still-active script is refused; the wire error type is
+    // Stalwart's own `scriptIsActive`, not the RFC's `sieveIsActive`.
+    match client.sieve_script_destroy(&account_id, &id) {
+        Err(jmap_client::Error::Set(set_error)) => {
+            assert_eq!(set_error.error_type, "scriptIsActive")
+        }
+        other => panic!("expected a scriptIsActive SetError, got {other:?}"),
+    }
+
+    // The workaround that actually deactivates on Stalwart: a direct patch,
+    // despite isActive being modeled as server-set in the RFC.
+    client
+        .sieve_script_update(&account_id, &id, serde_json::json!({"isActive": false}))
+        .expect("the direct isActive:false patch workaround was rejected");
+    let deactivated = client
+        .sieve_scripts(&account_id)
+        .unwrap()
+        .into_iter()
+        .find(|script| script.id.as_ref() == Some(&id))
+        .expect("the deactivated script does not show up in SieveScript/get afterwards");
+    assert!(
+        !deactivated.is_active,
+        "the script still shows isActive: true after the direct-patch workaround"
+    );
+
+    client
+        .sieve_script_destroy(&account_id, &id)
+        .expect("SieveScript/set destroy failed against the real server");
+    let still_present = client
+        .sieve_scripts(&account_id)
+        .expect("SieveScript/get failed against the real server")
+        .into_iter()
+        .any(|script| script.id.as_ref() == Some(&id));
+    assert!(
+        !still_present,
+        "the destroyed script still shows up in SieveScript/get afterwards"
+    );
 }
