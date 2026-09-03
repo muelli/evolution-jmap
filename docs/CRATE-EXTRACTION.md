@@ -369,6 +369,72 @@ CTest-driven harness for real EDS daemons, bound to this build tree.
 
 Everything else: keep in-tree, `publish = false`.
 
+## jmap-tools adoption spike (roadmap item 58)
+
+Item 58 asked whether Stalwart's `jmap-tools` (crates.io 0.1.8, Apache-2.0
+OR MIT) should replace the hand-rolled JSON-pointer/PatchObject/
+resultReference code this workspace carries in several places:
+`jmap-mock/src/dispatch.rs` (`eval_pointer`, RFC 8620 section 3.7 pointer
+evaluation with the `*` wildcard), `jmap-mock/src/patch.rs` (`apply_patch`,
+RFC 8620 section 5.3 PatchObject application), and three independent
+RFC 6901 escape helpers (`jmap-mail-sync/src/pointer.rs::member`,
+`jmap-cal-sync/src/patch.rs::escaped`/`member_of`,
+`jmap-book-sync/src/patch.rs::escape`). No production code was changed;
+this section is the recorded verdict.
+
+**Verdict: do not adopt.** Verified against the real crate (cloned
+`github.com/stalwartlabs/jmap-tools`, built a scratch crate pulling
+`jmap-tools = "0.1.8"` and exercising its actual `JsonPointerHandler` impl,
+not just its rustdoc, which is only 12% populated):
+
+- `jmap_tools::Value<P, E>` is its own generic type, parameterised over
+  `Property`/`Element` traits, not `serde_json::Value`. This workspace has
+  no `preserve_order` feature enabled and passes plain `serde_json::Value`
+  pervasively (`jmap-proto`'s wire types, `jmap-mock`'s `Invocation`, every
+  `PatchObject` as `serde_json::Map`). Wiring `jmap-tools` in anywhere means
+  a conversion layer at every boundary, not a drop-in swap.
+- `patch_jptr` (the crate's patch primitive) does not implement RFC 8620
+  section 5.3 semantics: a spike test set `/subject` to `Value::Null` and
+  the key stayed in the object holding a null, where a `PatchObject` must
+  remove it. A second test confirmed it also refuses to create a missing
+  intermediate object (`/keywords/$seen` against `{"subject": "x"}` returns
+  `false`) where `apply_patch` auto-vivifies on purpose. Both are exactly
+  the behaviour our 34-line `apply_patch` exists to get right, so adopting
+  `patch_jptr` would mean wrapping it with the same null-check and
+  auto-vivify logic we already have, for no net simplification.
+- Pointer *evaluation* (`eval_jptr`) is semantically equivalent for the
+  wildcard case, RFC 8620 section 3.7 flattening included: a fixture
+  matching `jmap-mock`'s own `pointer_object_and_array` test round-tripped
+  correctly through the real crate. This part could be adopted, but our
+  `eval_pointer` is 15 lines with its own passing test, and adopting it
+  still needs the `serde_json::Value <-> jmap_tools::Value` conversion
+  above for a 15-line function; not worth the new dependency.
+- The `extra` catch-all-map question (item 58 point 2): `ObjectAsVec` is
+  `Vec<(Key, Value)>` (`json/object_vec.rs:25-26`), so it is
+  order-preserving by construction the same way serde_json's `preserve_order`
+  (backed by `indexmap`) is, but with linear-scan lookup rather than a hash
+  index. For the ~256 `extra: serde_json::Value` edges in `jmap-proto`, at
+  typical JMAP object sizes that is a fine tradeoff either way; it is not a
+  reason on its own to add the dependency, and simply turning on
+  serde_json's own `preserve_order` feature gets the same ordering property
+  without a new type system.
+- One genuine reuse opportunity found along the way:
+  `jmap_tools::JsonPointer::encode` (`pointer/mod.rs:63-83`) is a pure
+  `&str`-escaping utility with the identical RFC 6901 semantics as the three
+  duplicated `.replace('~', "~0").replace('/', "~1")` helpers above. It
+  would deduplicate them without touching the `Value`/pointer-eval
+  machinery. Not taken here either: pulling in a 2,941-line crate (plus its
+  optional `rkyv` machinery) for one string function is worse on the
+  "clarity" axis item 58 itself asks to weigh, against three
+  well-documented, well-tested, two-line functions that already explain in
+  their own doc comments why the escaping is centralised per-crate. If a
+  fourth copy of this helper is ever needed, extracting a shared
+  zero-dependency helper inside this workspace is the better fix.
+
+No cargo-deny entry, no new dependency, and no code changed as a result of
+this spike; the existing hand-rolled implementations and their fixpoint
+tests stand.
+
 ## Maintainer decisions needed
 
 1. **License** (blocking for all candidates): stay GPL-3.0-or-later and
