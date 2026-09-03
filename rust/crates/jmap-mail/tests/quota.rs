@@ -25,10 +25,11 @@ use glib_sys::GError;
 use gobject_sys::g_object_unref;
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::MailSync;
-use jmap_mock::MockServer;
+use jmap_mock::{MockServer, MockServerBuilder};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
 use jmap_proto::quota::{Quota, quota_data_type, quota_resource_type, quota_scope};
+use jmap_proto::session::CAPABILITY_QUOTA;
 
 fn sync_against(server: &MockServer) -> MailSync {
     let client = Client::connect(server.origin(), Credentials::none()).expect("connected");
@@ -40,7 +41,13 @@ fn sync_against(server: &MockServer) -> MailSync {
 /// quota `jmap-mock`'s `AccountState::new` seeds, so no quota seeding of its
 /// own is needed for the success case.
 fn with_inbox() -> (MockServer, Account, *mut CamelFolder) {
-    let server = MockServer::builder().start();
+    with_inbox_on(MockServer::builder())
+}
+
+/// [`with_inbox`], parameterised on the builder, so a test can shape the
+/// server (e.g. leave a capability out) before the folder opens.
+fn with_inbox_on(builder: MockServerBuilder) -> (MockServer, Account, *mut CamelFolder) {
+    let server = builder.start();
     {
         let state = server.state();
         let mut state = state.lock().unwrap();
@@ -158,6 +165,35 @@ fn a_quota_that_says_nothing_about_mail_is_reported_as_unsupported() {
     assert!(
         info.is_null(),
         "a quota that only covers Contacts is not a Mail quota"
+    );
+    assert!(!error.is_null(), "it failed without saying why");
+    // SAFETY: a live GError, and the quark accessor takes no arguments.
+    unsafe {
+        assert_eq!((*error).domain, g_io_error_quark());
+        assert_eq!((*error).code, G_IO_ERROR_NOT_SUPPORTED);
+        glib_sys::g_error_free(error);
+        g_object_unref(folder.cast());
+    }
+}
+
+/// A server that never advertises `urn:ietf:params:jmap:quota` (Fastmail, in
+/// practice) is reported exactly like one that advertises it with nothing
+/// scoped to Mail: `Client::quotas` answers an empty list without a request,
+/// which chains to the same `NoQuota`/`G_IO_ERROR_NOT_SUPPORTED` this vfunc
+/// already returns for [`a_quota_that_says_nothing_about_mail_is_reported_as_unsupported`].
+#[test]
+fn an_account_with_no_quota_capability_is_reported_as_unsupported() {
+    let (_server, _account, folder) =
+        with_inbox_on(MockServer::builder().without_capability(CAPABILITY_QUOTA));
+
+    let mut error: *mut GError = ptr::null_mut();
+    // SAFETY: a live folder, and an out-parameter that is writable and
+    // currently NULL.
+    let info = unsafe { camel_folder_get_quota_info_sync(folder, ptr::null_mut(), &mut error) };
+
+    assert!(
+        info.is_null(),
+        "an account with no quota capability answered anyway"
     );
     assert!(!error.is_null(), "it failed without saying why");
     // SAFETY: a live GError, and the quark accessor takes no arguments.
