@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Sieve (RFC 9661): `SieveScript/get`, `/set` and `/query`. `/validate`
-//! is a separate increment — Evolution's filters UI is not wired to any of
-//! this yet.
+//! JMAP Sieve (RFC 9661): `SieveScript/get`, `/set`, `/query` and
+//! `/validate`. Evolution's filters UI is not wired to any of this yet.
 
 use serde_json::Value;
 
@@ -12,7 +11,10 @@ use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_SIEVE};
-use jmap_proto::sieve::{SieveScript, SieveScriptQueryFilter, SieveScriptSetRequest};
+use jmap_proto::sieve::{
+    SieveScript, SieveScriptQueryFilter, SieveScriptSetRequest, SieveScriptValidateRequest,
+    SieveScriptValidateResponse,
+};
 
 use crate::client::Client;
 use crate::contacts::set_failure;
@@ -121,6 +123,18 @@ impl Client {
         let arguments = self.single_call(USING, "SieveScript/query", &request)?;
         let response: QueryResponse = serde_json::from_value(arguments)?;
         Ok(response.ids)
+    }
+
+    /// Validate a Sieve script by `id`, `blobId` or raw `content` (RFC 9661
+    /// section 2.6). This mock has no real Sieve parser, so a resolvable
+    /// source always answers `isValid: true`; only argument shape and
+    /// blob/id resolution are actually checked.
+    pub fn sieve_script_validate(
+        &self,
+        request: &SieveScriptValidateRequest,
+    ) -> Result<SieveScriptValidateResponse, Error> {
+        let arguments = self.single_call(USING, "SieveScript/validate", request)?;
+        Ok(serde_json::from_value(arguments)?)
     }
 
     fn sieve_script_set(

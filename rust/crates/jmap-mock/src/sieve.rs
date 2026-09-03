@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `SieveScript/get`, `/set` and `/query` (RFC 9661). `/validate` is a
-//! separate increment.
+//! `SieveScript/get`, `/set`, `/query` and `/validate` (RFC 9661).
 
 use std::collections::BTreeMap;
 
@@ -10,7 +9,8 @@ use jmap_proto::Id;
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse, SetResponse};
 use jmap_proto::sieve::{
-    SieveScript, SieveScriptQueryFilter, SieveScriptSetRequest, sieve_set_error,
+    SieveScript, SieveScriptQueryFilter, SieveScriptSetRequest, SieveScriptValidateRequest,
+    SieveScriptValidateResponse, sieve_set_error,
 };
 use serde_json::Value;
 
@@ -283,6 +283,55 @@ fn sieve_script_matches(script: &SieveScript, filter: &SieveScriptQueryFilter) -
         return false;
     }
     true
+}
+
+/// `SieveScript/validate` (RFC 9661 section 2.6): the request must name
+/// exactly one of `id`, `blobId` or `content` as the script's source. This
+/// mock has no real Sieve parser, the same deliberate limitation
+/// `SieveScript/set` already has (it never produces `invalidSieve`), so a
+/// source that resolves is always `isValid: true`; only argument shape and
+/// blob/id resolution are checked, the same `invalidArguments` case
+/// `SieveScript/set`'s `onSuccessActivateScript` already uses for an unknown
+/// reference.
+pub fn sieve_script_validate(
+    state: &mut ServerState,
+    arguments: Value,
+) -> Result<Value, MethodError> {
+    let request: SieveScriptValidateRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let sources = [
+        request.id.is_some(),
+        request.blob_id.is_some(),
+        request.content.is_some(),
+    ]
+    .into_iter()
+    .filter(|present| *present)
+    .count();
+    if sources != 1 {
+        return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
+            .with_description("SieveScript/validate takes exactly one of id, blobId or content"));
+    }
+
+    let blob_id = if let Some(id) = &request.id {
+        let Some(script) = account.sieve_scripts.get(id) else {
+            return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
+                .with_description("id names an unknown SieveScript"));
+        };
+        Some(script.blob_id.clone())
+    } else {
+        request.blob_id.clone()
+    };
+    if let Some(blob_id) = blob_id
+        && !account.blobs.contains_key(&blob_id)
+    {
+        return Err(MethodError::new(error::method::INVALID_ARGUMENTS)
+            .with_description("blobId is not a known blob"));
+    }
+
+    to_result(&SieveScriptValidateResponse::valid(
+        request.account_id.clone(),
+    ))
 }
 
 /// Make `target` the one active script, deactivating whatever else was

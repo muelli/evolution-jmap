@@ -350,6 +350,7 @@ fn handle_method(
         "SieveScript/get" => crate::sieve::sieve_script_get(state, arguments),
         "SieveScript/set" => crate::sieve::sieve_script_set(state, arguments),
         "SieveScript/query" => crate::sieve::sieve_script_query(state, arguments),
+        "SieveScript/validate" => crate::sieve::sieve_script_validate(state, arguments),
         _ => Err(MethodError::new(error::method::UNKNOWN_METHOD)),
     }
 }
