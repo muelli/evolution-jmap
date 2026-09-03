@@ -2911,6 +2911,33 @@ fn camel_sexp_parsing_and_evaluation_in_eds() {
     }
 }
 
+/// Noon on the local calendar day `stamp` falls in.
+///
+/// `camel_folder_search_util_compare_date` compares dates in the local time
+/// zone, so a pair of fixed epoch seconds is only same-day in the zone it was
+/// picked for: 1700000000 and 1700003600 straddle midnight east of UTC.
+#[cfg(camel_folder_search_object)]
+fn local_noon(stamp: i64) -> i64 {
+    // SAFETY: GDateTime constructors and accessors; both instances are unreffed.
+    unsafe {
+        let day = glib_sys::g_date_time_new_from_unix_local(stamp);
+        assert!(!day.is_null());
+        let noon = glib_sys::g_date_time_new_local(
+            glib_sys::g_date_time_get_year(day),
+            glib_sys::g_date_time_get_month(day),
+            glib_sys::g_date_time_get_day_of_month(day),
+            12,
+            0,
+            0.0,
+        );
+        glib_sys::g_date_time_unref(day);
+        assert!(!noon.is_null());
+        let unix = glib_sys::g_date_time_to_unix(noon);
+        glib_sys::g_date_time_unref(noon);
+        unix
+    }
+}
+
 /// Probing `CamelFolderSearch` in EDS 3.52.
 ///
 /// Gone from 3.60, which replaced the whole object with `CamelStoreSearch` and
@@ -2931,12 +2958,10 @@ fn camel_folder_search_utilities_in_eds() {
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, 0);
 
-        // 2. Date comparison helper (date-only comparison)
-        let dt1 = 1700000000i64;
-        let dt2 = 1700003600i64;
-        assert_eq!(camel_folder_search_util_compare_date(dt1, dt2), 0);
-        let dt3 = 1700100000i64; // next day
-        assert!(camel_folder_search_util_compare_date(dt1, dt3) < 0);
+        // 2. Date comparison helper (local date only, hence the noon anchor)
+        let noon = local_noon(1700000000);
+        assert_eq!(camel_folder_search_util_compare_date(noon, noon + 3600), 0);
+        assert!(camel_folder_search_util_compare_date(noon, noon + 86400) < 0);
 
         // 3. Month addition helper
         let now = 1700000000 as eds_sys::time_t;
