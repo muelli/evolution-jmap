@@ -119,5 +119,8 @@ fn refreshing_the_push_headers_lets_a_stalled_subscription_reconnect() {
 fn asking_a_store_with_no_worker_to_refresh_does_nothing() {
     let store = JmapStore::detached();
 
-    store.request_folder_refresh();
+    store.request_folder_refresh(jmap_mail::push::Work {
+        refresh_messages: true,
+        check_folder_list: true,
+    });
 }
