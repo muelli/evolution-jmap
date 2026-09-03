@@ -8,8 +8,10 @@
 //! project's standing rule that every client method is TDD'd against the
 //! mock.
 
-use jmap_client::{Client, Credentials};
+use jmap_client::{Client, Credentials, Error};
 use jmap_proto::blob::{BlobGetRequest, BlobLookupRequest, BlobUploadRequest, DataSource};
+use jmap_proto::error::method;
+use jmap_proto::methods::BlobCopyRequest;
 use jmap_proto::session::CAPABILITY_BLOB;
 
 /// A server advertises `urn:ietf:params:jmap:blob` both at session level and
@@ -189,4 +191,122 @@ fn blob_lookup_distinguishes_known_from_missing_ids() {
     assert_eq!(response.list.len(), 1);
     assert_eq!(response.list[0].id, blob_id);
     assert_eq!(response.list[0].matched_ids.get("Email"), Some(&vec![]));
+}
+
+/// `Blob/copy` (RFC 8620 §5.7) copies a blob's content from one account into
+/// another; the source is untouched, so both accounts answer `Blob/get` with
+/// the same content afterwards. Blob ids are scoped per account (each
+/// account allocates its own sequence), so the copy's id is not asserted to
+/// differ textually from the source's, only that it names a real blob in
+/// the target account.
+#[test]
+fn blob_copy_between_two_accounts_copies_the_content() {
+    let server = jmap_mock::MockServer::builder().start();
+    let from_account_id = server.account_id();
+    let to_account_id = jmap_proto::Id::from("account-2");
+    server
+        .state()
+        .lock()
+        .unwrap()
+        .add_account(to_account_id.clone(), "second account");
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let uploaded = client
+        .blob_upload(
+            &BlobUploadRequest::new(from_account_id.clone()).create_blob(
+                "b0",
+                jmap_proto::blob::UploadBlob::from_text("hello world", "text/plain"),
+            ),
+        )
+        .expect("blob_upload")
+        .created
+        .expect("blob created");
+    let source_id = uploaded.get("b0").expect("b0 was created").id.clone();
+
+    let response = client
+        .blob_copy(&BlobCopyRequest::new(
+            from_account_id.clone(),
+            to_account_id.clone(),
+            [source_id.clone()],
+        ))
+        .expect("blob_copy");
+    let copied = response.copied.expect("the blob was copied");
+    let copy_id = copied.get(&source_id).expect("source id copied").clone();
+    assert!(
+        response
+            .not_copied
+            .is_none_or(|not_copied| not_copied.is_empty())
+    );
+
+    let source_get = client
+        .blob_get(
+            &BlobGetRequest::new(from_account_id, [source_id]).with_properties(["data:asText"]),
+        )
+        .expect("blob_get on source account");
+    let copy_get = client
+        .blob_get(&BlobGetRequest::new(to_account_id, [copy_id]).with_properties(["data:asText"]))
+        .expect("blob_get on target account");
+    assert_eq!(
+        source_get.list[0].data_as_text,
+        copy_get.list[0].data_as_text
+    );
+}
+
+/// A missing blob id in `Blob/copy` is reported per-id in `notCopied`
+/// without failing sibling ids in the same call.
+#[test]
+fn blob_copy_a_missing_id_is_not_copied() {
+    let server = jmap_mock::MockServer::builder().start();
+    let from_account_id = server.account_id();
+    let to_account_id = jmap_proto::Id::from("account-2");
+    server
+        .state()
+        .lock()
+        .unwrap()
+        .add_account(to_account_id.clone(), "second account");
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let uploaded = client
+        .blob_upload(
+            &BlobUploadRequest::new(from_account_id.clone()).create_blob(
+                "b0",
+                jmap_proto::blob::UploadBlob::from_text("hi", "text/plain"),
+            ),
+        )
+        .expect("blob_upload")
+        .created
+        .expect("blob created");
+    let good_id = uploaded.get("b0").expect("b0 was created").id.clone();
+    let missing_id = jmap_proto::Id::from("nonexistent");
+
+    let response = client
+        .blob_copy(&BlobCopyRequest::new(
+            from_account_id,
+            to_account_id,
+            [good_id.clone(), missing_id.clone()],
+        ))
+        .expect("blob_copy");
+    assert!(response.copied.as_ref().unwrap().contains_key(&good_id));
+    let not_copied = response.not_copied.expect("the missing id was reported");
+    assert_eq!(not_copied[&missing_id].error_type, "blobNotFound");
+}
+
+/// An unknown `fromAccountId` is a method-level `fromAccountNotFound`, not a
+/// per-blob error, since the whole call has nowhere to read from.
+#[test]
+fn blob_copy_rejects_an_unknown_from_account() {
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    match client.blob_copy(&BlobCopyRequest::new(
+        "nonexistent-account",
+        account_id,
+        ["b1"],
+    )) {
+        Err(Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, method::FROM_ACCOUNT_NOT_FOUND)
+        }
+        other => panic!("expected Method error, got {other:?}"),
+    }
 }

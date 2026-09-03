@@ -347,6 +347,7 @@ fn handle_method(
         "Blob/get" => crate::blob::blob_get(state, arguments),
         "Blob/upload" => crate::blob::blob_upload(state, arguments),
         "Blob/lookup" => crate::blob::blob_lookup(state, arguments),
+        "Blob/copy" => crate::blob::blob_copy(state, arguments),
         "SieveScript/get" => crate::sieve::sieve_script_get(state, arguments),
         "SieveScript/set" => crate::sieve::sieve_script_set(state, arguments),
         "SieveScript/query" => crate::sieve::sieve_script_query(state, arguments),
