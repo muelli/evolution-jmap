@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `Blob/get`, `Blob/upload`, and `Blob/lookup` (RFC 9404).
+//! `Blob/get`, `Blob/upload`, and `Blob/lookup` (RFC 9404); plus `Blob/copy`
+//! (RFC 8620 §5.7).
 
 use std::collections::BTreeMap;
 
@@ -13,6 +14,7 @@ use jmap_proto::blob::{
     blob_set_error,
 };
 use jmap_proto::error::{self, MethodError, SetError};
+use jmap_proto::methods::{BlobCopyRequest, BlobCopyResponse};
 use serde_json::Value;
 use sha2::{Digest, Sha256, Sha512};
 
@@ -178,4 +180,55 @@ pub fn blob_lookup(
     }
 
     to_result(&BlobLookupResponse::new(request.account_id, list).with_not_found(not_found))
+}
+
+/// `Blob/copy` (RFC 8620 §5.7): copies blobs from `fromAccountId` into
+/// `accountId`, each getting a fresh id in the target account. An unknown
+/// source account fails the whole call with `fromAccountNotFound`, since
+/// there is nowhere to read from; a missing individual blob id only fails
+/// that one entry, reported in `notCopied`.
+pub fn blob_copy(
+    state: &mut crate::state::ServerState,
+    arguments: Value,
+) -> Result<Value, MethodError> {
+    let request: BlobCopyRequest = parse_arguments(arguments)?;
+    let BlobCopyRequest {
+        from_account_id,
+        account_id,
+        blob_ids,
+    } = request;
+
+    let source = state
+        .account(&from_account_id)
+        .ok_or_else(|| MethodError::new(error::method::FROM_ACCOUNT_NOT_FOUND))?;
+    let sources: Vec<Option<(String, Vec<u8>)>> = blob_ids
+        .iter()
+        .map(|id| {
+            source
+                .blobs
+                .get(id)
+                .map(|blob| (blob.content_type.clone(), blob.data.clone()))
+        })
+        .collect();
+    account_mut(state, &account_id)?;
+
+    let mut copied = BTreeMap::new();
+    let mut not_copied = BTreeMap::new();
+    for (id, blob) in blob_ids.into_iter().zip(sources) {
+        match blob {
+            Some((content_type, data)) => {
+                let new_id = account_mut(state, &account_id)?.add_blob(content_type, data);
+                copied.insert(id, new_id);
+            }
+            None => {
+                not_copied.insert(id, SetError::new(blob_set_error::BLOB_NOT_FOUND));
+            }
+        }
+    }
+
+    to_result(
+        &BlobCopyResponse::new(from_account_id, account_id)
+            .with_copied(copied)
+            .with_not_copied(not_copied),
+    )
 }
