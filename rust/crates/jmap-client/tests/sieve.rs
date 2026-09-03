@@ -1,15 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Sieve (RFC 9661): capability detection, `SieveScript/get` and
-//! `/set`. No Evolution filters UI consumes this yet; the wiring is a
-//! separate increment.
+//! JMAP Sieve (RFC 9661): capability detection, `SieveScript/get`, `/set`,
+//! `/query` and `/validate`. No Evolution filters UI consumes this yet; the
+//! wiring is a separate increment.
 
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
-use jmap_proto::error::set;
+use jmap_proto::blob::{BlobUploadRequest, UploadBlob};
+use jmap_proto::error::{method, set};
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_SIEVE};
-use jmap_proto::sieve::{SieveScript, SieveScriptQueryFilter, sieve_set_error};
+use jmap_proto::sieve::{
+    SieveScript, SieveScriptQueryFilter, SieveScriptValidateRequest, sieve_set_error,
+};
 use serde_json::json;
 
 /// A server advertises `urn:ietf:params:jmap:sieve` both at session level and
@@ -283,4 +286,116 @@ fn sieve_script_query_filters_by_is_active() {
         )
         .unwrap();
     assert_eq!(ids, vec![a]);
+}
+
+/// `SieveScript/validate` (RFC 9661 section 2.6) validating raw `content` is
+/// always `isValid: true`: this mock has no real Sieve parser, the same
+/// deliberate limitation `SieveScript/set` already has (it never produces
+/// `invalidSieve`).
+#[test]
+fn sieve_script_validate_by_content_is_always_valid() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let response = client
+        .sieve_script_validate(
+            &SieveScriptValidateRequest::new(account_id).with_content("not actually sieve at all"),
+        )
+        .unwrap();
+    assert!(response.is_valid);
+    assert!(response.error.is_none());
+}
+
+/// Validating by `blobId` resolves the blob against the account's real
+/// store, the one mechanical check this mock can do without a parser.
+#[test]
+fn sieve_script_validate_by_blob_id_resolves_a_real_blob() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let uploaded = client
+        .blob_upload(&BlobUploadRequest::new(account_id.clone()).create_blob(
+            "b0",
+            UploadBlob::from_text("require [\"fileinto\"];", "text/plain"),
+        ))
+        .unwrap();
+    let blob_id = uploaded.created.unwrap().get("b0").unwrap().id.clone();
+
+    let response = client
+        .sieve_script_validate(&SieveScriptValidateRequest::new(account_id).with_blob_id(blob_id))
+        .unwrap();
+    assert!(response.is_valid);
+}
+
+/// An unknown `blobId` is `invalidArguments`: resolving the reference is
+/// mechanical and this mock does check it, unlike script content.
+#[test]
+fn sieve_script_validate_rejects_an_unknown_blob_id() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    match client.sieve_script_validate(
+        &SieveScriptValidateRequest::new(account_id).with_blob_id("nonexistent"),
+    ) {
+        Err(Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, method::INVALID_ARGUMENTS)
+        }
+        other => panic!("expected Method error, got {other:?}"),
+    }
+}
+
+/// Validating by `id` resolves an existing script's own `blobId`.
+#[test]
+fn sieve_script_validate_by_id_resolves_the_scripts_own_blob() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let uploaded = client
+        .blob_upload(&BlobUploadRequest::new(account_id.clone()).create_blob(
+            "b0",
+            UploadBlob::from_text("require [\"fileinto\"];", "text/plain"),
+        ))
+        .unwrap();
+    let blob_id = uploaded.created.unwrap().get("b0").unwrap().id.clone();
+    let script = client
+        .sieve_script_create(&account_id, &SieveScript::new("vacation", blob_id))
+        .unwrap();
+
+    let response = client
+        .sieve_script_validate(
+            &SieveScriptValidateRequest::new(account_id).with_id(script.id.unwrap()),
+        )
+        .unwrap();
+    assert!(response.is_valid);
+}
+
+/// RFC 9661 section 2.6 takes exactly one of `id`, `blobId` or `content`;
+/// giving none is `invalidArguments`, the same as giving more than one.
+#[test]
+fn sieve_script_validate_requires_exactly_one_source() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    match client.sieve_script_validate(&SieveScriptValidateRequest::new(account_id.clone())) {
+        Err(Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, method::INVALID_ARGUMENTS)
+        }
+        other => panic!("expected Method error, got {other:?}"),
+    }
+
+    match client.sieve_script_validate(
+        &SieveScriptValidateRequest::new(account_id)
+            .with_blob_id("b1")
+            .with_content("require [\"fileinto\"];"),
+    ) {
+        Err(Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, method::INVALID_ARGUMENTS)
+        }
+        other => panic!("expected Method error, got {other:?}"),
+    }
 }
