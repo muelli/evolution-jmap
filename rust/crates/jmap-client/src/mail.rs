@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use jmap_proto::error::SetError;
 use jmap_proto::mail::{
     Email, EmailImport, EmailImportRequest, EmailImportResponse, EmailQueryFilter, EmailSubmission,
-    EmailSubmissionSetRequest, Envelope, Identity, Mailbox, Schedule, SearchSnippet,
-    SearchSnippetGetRequest, SearchSnippetGetResponse, Thread, VacationResponse,
+    EmailSubmissionQueryFilter, EmailSubmissionSetRequest, Envelope, Identity, Mailbox, Schedule,
+    SearchSnippet, SearchSnippetGetRequest, SearchSnippetGetResponse, Thread, VacationResponse,
 };
 use jmap_proto::methods::{
     Comparator, Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest,
@@ -927,6 +927,24 @@ impl Client {
                 .as_ref()
                 .and_then(|map| map.get(submission_id)),
         ))
+    }
+
+    /// Resolve submission ids matching `filter` (`EmailSubmission/query`, RFC
+    /// 8621 §7.3) — e.g. by `emailIds` or `undoStatus`, to find a submission
+    /// without already knowing its id.
+    pub fn email_submission_query(
+        &self,
+        account_id: &Id,
+        filter: EmailSubmissionQueryFilter,
+    ) -> Result<Vec<Id>, Error> {
+        let request = QueryRequest::new(account_id.clone()).filter(filter);
+        let arguments = self.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/query",
+            &request,
+        )?;
+        let response: QueryResponse = serde_json::from_value(arguments)?;
+        Ok(response.ids)
     }
 
     /// Upload a blob via the session's `uploadUrl` template (RFC 8620 §6.1).

@@ -8,9 +8,10 @@ use std::collections::BTreeMap;
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailHeader, EmailImportRequest,
-    EmailImportResponse, EmailQueryFilter, EmailSubmission, EmailSubmissionSetRequest, Envelope,
-    EnvelopeAddress, Identity, Mailbox, SearchSnippet, SearchSnippetGetRequest,
-    SearchSnippetGetResponse, Thread, VacationResponse, email_import_error, role,
+    EmailImportResponse, EmailQueryFilter, EmailSubmission, EmailSubmissionQueryFilter,
+    EmailSubmissionSetRequest, Envelope, EnvelopeAddress, Identity, Mailbox, SearchSnippet,
+    SearchSnippetGetRequest, SearchSnippetGetResponse, Thread, VacationResponse,
+    email_import_error, role,
 };
 use jmap_proto::methods::{
     Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse, operator,
@@ -1767,6 +1768,79 @@ pub fn email_submission_set(
     }
 
     Ok(result)
+}
+
+/// `EmailSubmission/query` (RFC 8621 §7.3): filter by `emailIds`,
+/// `identityIds`, `threadIds`, `undoStatus`, or a `sendAt` range.
+pub fn email_submission_query(
+    state: &mut ServerState,
+    arguments: Value,
+) -> Result<Value, MethodError> {
+    let request: QueryRequest<EmailSubmissionQueryFilter> = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let filter = request.filter.unwrap_or_default();
+    let matches = |submission: &EmailSubmission| -> bool {
+        if let Some(identity_ids) = &filter.identity_ids
+            && !identity_ids.contains(&submission.identity_id)
+        {
+            return false;
+        }
+        if let Some(email_ids) = &filter.email_ids
+            && !email_ids.contains(&submission.email_id)
+        {
+            return false;
+        }
+        if let Some(thread_ids) = &filter.thread_ids
+            && !submission
+                .thread_id
+                .as_ref()
+                .is_some_and(|thread_id| thread_ids.contains(thread_id))
+        {
+            return false;
+        }
+        if let Some(undo_status) = &filter.undo_status
+            && submission.undo_status.as_deref() != Some(undo_status.as_str())
+        {
+            return false;
+        }
+        if let Some(before) = &filter.before
+            && !submission.send_at.as_ref().is_some_and(|at| at < before)
+        {
+            return false;
+        }
+        if let Some(after) = &filter.after
+            && !submission.send_at.as_ref().is_some_and(|at| at > after)
+        {
+            return false;
+        }
+        true
+    };
+
+    let ids: Vec<Id> = account
+        .submissions
+        .iter()
+        .filter(|(_, submission)| matches(submission))
+        .map(|(id, _)| id.clone())
+        .skip(request.position.max(0) as usize)
+        .take(request.limit.unwrap_or(u64::MAX) as usize)
+        .collect();
+
+    let total = account
+        .submissions
+        .iter()
+        .filter(|(_, submission)| matches(submission))
+        .count() as u64;
+
+    to_result(&QueryResponse {
+        account_id: request.account_id,
+        query_state: account.submissions.state(),
+        can_calculate_changes: false,
+        position: request.position.max(0) as u64,
+        ids,
+        total: request.calculate_total.then_some(total),
+        limit: None,
+    })
 }
 
 // ── Seeding helpers ──────────────────────────────────────────────────────────
