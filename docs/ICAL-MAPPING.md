@@ -365,6 +365,11 @@ Custom time zones defined under `event.time_zones` bridge between RFC 8984 `Time
 - **JSCalendar 2.0 Interoperability**:
   - In JSCalendar 2.0 (`draft-ietf-calext-jscalendarbis`), custom `timeZones` definitions were rendered obsolete in favor of canonical IANA time zone identifiers.
   - `jmap-ical` safely omits `time_zones` when standard IANA zones are resolved, and preserves custom solidus definitions when required by private server environments.
+- **Multiple Observances per Zone**:
+  - Real-world zone definitions frequently carry multiple `STANDARD` and `DAYLIGHT` subcomponents spanning distinct historical eras (such as US pre-2007 vs post-2007 daylight savings shifts, EU pre-1996 vs post-1996 autumn transitions, or one-off War Time shifts).
+  - Inbound mapping in `read_definition` groups all matching subcomponents into the `standard` and `daylight` arrays under the zone definition.
+  - Outbound serialization via `vtimezone_of` emits every standard and daylight observance child component with its respective `DTSTART`, offsets, and `RRULE`s.
+  - Safety and Refusal Boundary: if any observance within a custom `VTIMEZONE` carries a corrupt offset, unreadable date, or malformed rule, the entire definition is discarded. The event timezone remains undefined, and `maps_time_zone` refuses the unresolvable custom identifier, preventing silently wrong calculations on the server.
 
 ---
 
@@ -373,8 +378,14 @@ Custom time zones defined under `event.time_zones` bridge between RFC 8984 `Time
 RFC 5545 §3.3.10 states recurrence rule `UNTIL` as a UTC instant (`YYYYMMDDTHHMMSSZ`) whenever `DTSTART` specifies a timezone. Conversely, RFC 8984 §4.3.3 / jscalendarbis states `until` as a local date-time string (`YYYY-MM-DDTHH:MM:SS`) in the event's own timezone.
 
 `jmap-ical`'s `zone.rs` module evaluates transition offsets (`TZOFFSETTO` / `TZOFFSETFROM`) directly from the document's `VTIMEZONE` observances:
-- When a Windows TZID (e.g. `W. Europe Standard Time`) is present, `read_vevent` resolves the timezone to its canonical IANA name while looking up observance rules from the matching `VTIMEZONE` in the document.
-- Transitions across standard and daylight savings time (e.g. +0100 to +0200) are applied accurately at the instant of the `UNTIL` timestamp.
+- **Windows TZIDs Feeding Recurrence**: When an event specifies a Windows timezone (e.g. `DTSTART;TZID="Eastern Standard Time":...` or unquoted `DTSTART;TZID=Eastern Standard Time:...`), `read_vevent` resolves the timezone name to its canonical IANA equivalent (`America/New_York`) and binds the matching `VTIMEZONE` observances. `read_until` converts the UTC `UNTIL` instant to local date-time according to the observance rules in force at that instant.
+- **Globally-Unique TZIDs Feeding Recurrence**: When an event carries a globally-unique identifier (e.g. `DTSTART;TZID=/mozilla.org/20050126_1/America/New_York:...` or `DTSTART;TZID=/citadel.org/20250101_1/Europe/Berlin:...`), the suffix extracts the canonical IANA zone while the companion `VTIMEZONE` observances resolve the exact transition offset.
+- **Multi-Observance Era Resolution**: In timezones with multiple historical observances, `zone.rs::offset_at` searches transitions across eras. The onset of the latest transition at or before the target instant decides the offset:
+  - For example, in US Eastern Time (`America/New_York`), March 15 in Era 1 (2005) resolves to Standard Time (`-0500`, yielding `07:00:00`), whereas March 15 in Era 2 (2026) resolves to Daylight Time (`-0400`, yielding `08:00:00`).
+  - Late October in Era 1 (2005) resolves to Standard Time (`-0500`, yielding `07:00:00`), whereas late October in Era 2 (2026) resolves to Daylight Time (`-0400`, yielding `08:00:00`).
+  - Historical one-off transitions without `RRULE` (e.g. 1942 War Time) and Southern Hemisphere daylight transitions spanning calendar year boundaries (e.g. Sydney October to April) resolve accurately.
+- **Override Instance Separation**: Detached recurrence instances (`VEVENT` with `RECURRENCE-ID`) carrying Windows or globally-unique TZIDs maintain independent clocks. `RECURRENCE-ID` evaluates on the master series clock, while the override `DTSTART` evaluates on the instance clock.
+- **Normalization and Refusal**: Outbound emission normalizes all resolved timezones to canonical IANA format without solidus prefixes or Windows display names. If a timezone cannot be resolved and defines no valid `VTIMEZONE`, `read_until` preserves the trailing `Z` marker, which `maps_recurrence_rule` refuses, preventing unsendable or corrupt recurrence rules from reaching the JMAP server.
 
 ---
 
