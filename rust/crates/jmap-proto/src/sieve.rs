@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::id::Id;
+use crate::methods::SetRequest;
 
 pub const CAPABILITY_SIEVE: &str = "urn:ietf:params:jmap:sieve";
 
@@ -108,6 +109,57 @@ impl SieveScript {
 
     pub fn with_extra(mut self, extra: BTreeMap<String, Value>) -> Self {
         self.extra = extra;
+        self
+    }
+}
+
+/// `SieveScript/set` arguments: the standard `/set` shape plus the
+/// `onSuccessActivateScript` extension (RFC 9661 §2.4). A script's `isActive`
+/// is server-set and only ever changes through this argument: `null`
+/// deactivates whatever script is currently active, a plain id activates
+/// that script, and a `#`-prefixed value is a creation id from the same
+/// call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SieveScriptSetRequest {
+    #[serde(flatten)]
+    pub set: SetRequest<SieveScript>,
+    /// `serde`'s blanket `Option<T>` impl treats a JSON `null` the same as
+    /// the key being absent, collapsing both to `None` — indistinguishable
+    /// here, where they mean opposite things ("leave the active script
+    /// alone" vs "deactivate it"). `deserialize_present` only runs when the
+    /// key is there at all, `null` included, so it is the field's presence
+    /// that this `Option` tracks, not whether its value is non-null.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    pub on_success_activate_script: Option<Value>,
+}
+
+fn deserialize_present<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
+}
+
+impl SieveScriptSetRequest {
+    pub fn new(set: SetRequest<SieveScript>) -> Self {
+        Self {
+            set,
+            on_success_activate_script: None,
+        }
+    }
+
+    pub fn activating(mut self, id: impl Into<Id>) -> Self {
+        self.on_success_activate_script = Some(Value::String(id.into().to_string()));
+        self
+    }
+
+    pub fn deactivating(mut self) -> Self {
+        self.on_success_activate_script = Some(Value::Null);
         self
     }
 }
