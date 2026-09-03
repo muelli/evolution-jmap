@@ -1,3 +1,15 @@
+evolution-jmap (0.4.1) unstable; urgency=medium
+
+  * Rebuild of 0.4.0 through the repaired release pipeline; no code changes.
+    The container image the pipeline builds the .deb in was orphaned when
+    the repository was re-created, so 0.4.0's release workflow could not
+    run and its .deb was uploaded by hand, without the pipeline's Sigstore
+    provenance. The image is now published as this repository's own
+    ci-image package and the workflow pins its digest; 0.4.1's artifacts
+    are pipeline-built and attested again.
+
+ -- Tobias Mueller <muelli@cryptobitch.de>  Thu, 03 Sep 2026 12:12:48 -0700
+
 evolution-jmap (0.4.0) unstable; urgency=medium
 
   * JMAP push: the mail, calendar and address-book backends subscribe to the
