@@ -35,7 +35,7 @@ if(NOT DEFINED SOURCE_DIR)
 endif()
 
 set(RELEASE_WORKFLOW ".github/workflows/release.yml")
-set(CI_IMAGE_REPO "ghcr.io/muelli/evolution-jmap/ci")
+set(CI_IMAGE_REPO "ghcr.io/muelli/evolution-jmap/ci-image")
 
 if(NOT EXISTS "${SOURCE_DIR}/${RELEASE_WORKFLOW}")
 	message(FATAL_ERROR "${RELEASE_WORKFLOW} does not exist; nothing publishes a release")
