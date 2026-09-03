@@ -9991,6 +9991,7 @@ struct RealExporterTestCase {
     expected_alerts_count: usize,
     expected_recurrence_rules_count: usize,
     expected_recurrence_overrides_count: usize,
+    expected_show_without_time: Option<bool>,
     unmapped_vendor_properties_dropped_on_export: &'static [&'static str],
 }
 
@@ -10016,6 +10017,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_alerts_count: 2,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 2,
+            expected_show_without_time: None,
             unmapped_vendor_properties_dropped_on_export: &[
                 "X-WR-CALNAME",
                 "X-WR-TIMEZONE",
@@ -10041,6 +10043,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_alerts_count: 2,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 0,
+            expected_show_without_time: None,
             unmapped_vendor_properties_dropped_on_export: &[
                 "X-MS-OLK-FORCEINSPECTOROPEN",
                 "X-MICROSOFT-CDO-BUSYSTATUS",
@@ -10069,6 +10072,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_alerts_count: 3,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 1,
+            expected_show_without_time: None,
             unmapped_vendor_properties_dropped_on_export: &[
                 "X-APPLE-STRUCTURED-LOCATION",
                 "X-APPLE-TRAVEL-ADVISORY-BEHAVIOR",
@@ -10095,6 +10099,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_alerts_count: 1,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 0,
+            expected_show_without_time: None,
             unmapped_vendor_properties_dropped_on_export: &[],
         },
         RealExporterTestCase {
@@ -10116,6 +10121,7 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_alerts_count: 2,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 0,
+            expected_show_without_time: None,
             unmapped_vendor_properties_dropped_on_export: &[],
         },
         RealExporterTestCase {
@@ -10137,10 +10143,38 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_alerts_count: 1,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 1,
+            expected_show_without_time: None,
             unmapped_vendor_properties_dropped_on_export: &[
                 "X-MOZ-GENERATION",
                 "X-MOZ-LASTACK",
                 "X-MOZ-SNOOZE-TIME",
+            ],
+        },
+        RealExporterTestCase {
+            name: "Mozilla Thunderbird Multi-Component Detached Overrides Export (vCalendar 2.0 with Rescheduled and Cancelled Instances)",
+            fixture_file: "thunderbird_detached_export.ics",
+            exporter_name: "Mozilla Thunderbird / Lightning",
+            expected_title: "Mozilla Rust Engine Team Bi-Weekly Sync",
+            expected_start: "2026-10-05T10:00:00",
+            expected_time_zone: Some("Europe/London"),
+            expected_duration: Some("PT1H30M"),
+            expected_privacy: Some("public"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("busy"),
+            expected_priority: Some(1),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 1,
+            expected_keywords_count: 3,
+            expected_alerts_count: 1,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 3,
+            expected_show_without_time: None,
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-MOZ-GENERATION",
+                "X-MOZ-LASTACK",
+                "X-MOZ-SNOOZE-TIME",
+                "X-MOZ-SEND-INVITATIONS",
             ],
         },
         RealExporterTestCase {
@@ -10162,9 +10196,37 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
             expected_alerts_count: 2,
             expected_recurrence_rules_count: 1,
             expected_recurrence_overrides_count: 0,
+            expected_show_without_time: None,
             unmapped_vendor_properties_dropped_on_export: &[
                 "X-SOGO-COMPONENT-CREATED",
                 "X-RADICALE-MODIFIED",
+            ],
+        },
+        RealExporterTestCase {
+            name: "Cyrus IMAP & Fastmail CalDAV Export (vCalendar 2.0 with All-Day Multi-Day Recurrence & CalDAV Scheduling)",
+            fixture_file: "cyrus_caldav_export.ics",
+            exporter_name: "Cyrus IMAP / Fastmail CalDAV",
+            expected_title: "IETF Hackathon & Standards Interop",
+            expected_start: "2026-11-10T00:00:00",
+            expected_time_zone: None,
+            expected_duration: Some("P3D"),
+            expected_privacy: Some("public"),
+            expected_status: Some("confirmed"),
+            expected_free_busy: Some("free"),
+            expected_priority: Some(1),
+            expected_has_location: true,
+            expected_virtual_location_count: 1,
+            expected_links_count: 2,
+            expected_keywords_count: 3,
+            expected_alerts_count: 1,
+            expected_recurrence_rules_count: 1,
+            expected_recurrence_overrides_count: 1,
+            expected_show_without_time: Some(true),
+            unmapped_vendor_properties_dropped_on_export: &[
+                "X-CALDAV-ACCESS-RESTRICTION",
+                "X-CALDAV-SYNC-TOKEN",
+                "X-CALDAV-CTAG",
+                "X-FASTMAIL-CLIENT-ID",
             ],
         },
     ];
@@ -10228,6 +10290,11 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
         assert_eq!(
             event.priority, case.expected_priority,
             "Priority mismatch for {}",
+            case.name
+        );
+        assert_eq!(
+            event.show_without_time, case.expected_show_without_time,
+            "showWithoutTime mismatch for {}",
             case.name
         );
 
@@ -10373,6 +10440,11 @@ fn real_exporter_fixture_corpus_table_driven_roundtrip() {
         assert_eq!(
             event2.priority, event3.priority,
             "Priority preserved losslessly for {}",
+            case.name
+        );
+        assert_eq!(
+            event2.show_without_time, event3.show_without_time,
+            "showWithoutTime preserved losslessly for {}",
             case.name
         );
         assert_eq!(
@@ -10918,6 +10990,201 @@ fn real_exporter_fixture_sogo_caldav_detailed_roundtrip() {
     let export1 = event_to_ical(&event);
     assert!(!export1.contains("X-SOGO-COMPONENT-CREATED"));
     assert!(!export1.contains("X-RADICALE-MODIFIED"));
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_thunderbird_detached_overrides_detailed_roundtrip() {
+    let ics_text = read_fixture("thunderbird_detached_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse Thunderbird detached overrides fixture");
+
+    // 1. Verify clean extra map: unmapped Mozilla vendor properties do not leak
+    assert!(
+        event.extra.is_empty(),
+        "event.extra must be empty, found: {:?}",
+        event.extra
+    );
+
+    // 2. Validate mapped series details
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Mozilla Rust Engine Team Bi-Weekly Sync")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-10-05T10:00:00"));
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/London"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H30M"));
+    assert_eq!(event.privacy.as_deref(), Some("public"));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(event.priority, Some(1));
+    assert_eq!(event.show_without_time, None);
+
+    // 3. Validate conference and attachment link
+    let vlocs = event.virtual_locations.as_ref().expect("virtual_locations");
+    assert_eq!(vlocs.len(), 1);
+    let conf = vlocs.values().next().expect("conference");
+    assert_eq!(conf["uri"], json!("https://meet.mozilla.org/rust-engine"));
+    assert_eq!(conf["features"]["audio"], json!(true));
+    assert_eq!(conf["features"]["video"], json!(true));
+
+    let links = event.links.as_ref().expect("links");
+    assert_eq!(links.len(), 1);
+    let doc = links.values().next().expect("doc");
+    assert_eq!(
+        doc["href"],
+        json!("https://www.thunderbird.net/docs/rust-sync.pdf")
+    );
+    assert_eq!(doc["contentType"], json!("application/pdf"));
+    assert_eq!(doc["size"], json!(153_600));
+
+    // 4. Validate bi-weekly RRULE, EXDATE, rescheduled override, and cancelled override
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
+    assert_eq!(rules[0].frequency, "weekly");
+    assert_eq!(rules[0].interval, Some(2));
+    assert_eq!(rules[0].count, Some(6));
+    let by_day = rules[0].by_day.as_ref().expect("by_day");
+    assert_eq!(by_day.len(), 1);
+    assert_eq!(by_day[0].day, "mo");
+
+    let overrides = event.recurrence_overrides.as_ref().expect("overrides");
+    assert_eq!(overrides.len(), 3);
+
+    // Excluded occurrence via EXDATE
+    assert_eq!(overrides["2026-11-02T10:00:00"], json!({"excluded": true}));
+
+    // Rescheduled and modified occurrence via detached VEVENT
+    let resched = &overrides["2026-10-19T10:00:00"];
+    assert_eq!(resched["start"], json!("2026-10-19T14:00:00"));
+    assert_eq!(resched["duration"], json!("PT2H"));
+    assert_eq!(
+        resched["title"],
+        json!("Mozilla Rust Engine Team Extended Deep-Dive")
+    );
+    assert_eq!(
+        resched["description"],
+        json!("Special extended session focusing on memory allocator benchmarking.")
+    );
+    assert_eq!(resched["priority"], json!(2));
+    assert_eq!(
+        resched["keywords"],
+        json!({"Mozilla": true, "Engineering": true, "Benchmark": true})
+    );
+
+    // Cancelled occurrence via detached VEVENT with STATUS:CANCELLED
+    let cancelled = &overrides["2026-11-16T10:00:00"];
+    assert_eq!(cancelled["status"], json!("cancelled"));
+
+    // 5. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    assert!(!export1.contains("X-MOZ-GENERATION"));
+    assert!(!export1.contains("X-MOZ-LASTACK"));
+    assert!(!export1.contains("X-MOZ-SNOOZE-TIME"));
+    assert!(!export1.contains("X-MOZ-SEND-INVITATIONS"));
+
+    let event2 = ical_to_event(&export1).expect("event2");
+    let export2 = event_to_ical(&event2);
+    let event3 = ical_to_event(&export2).expect("event3");
+    let export3 = event_to_ical(&event3);
+
+    assert_eq!(export2, export3);
+    assert_eq!(event2, event3);
+}
+
+#[test]
+fn real_exporter_fixture_cyrus_caldav_detailed_roundtrip() {
+    let ics_text = read_fixture("cyrus_caldav_export.ics");
+    let event = ical_to_event(&ics_text).expect("parse Cyrus CalDAV fixture");
+
+    // 1. Verify clean extra map: unmapped CalDAV and Fastmail properties do not leak
+    assert!(
+        event.extra.is_empty(),
+        "event.extra must be empty, found: {:?}",
+        event.extra
+    );
+
+    // 2. Validate all-day multi-day mapped details
+    assert_eq!(
+        event.title.as_deref(),
+        Some("IETF Hackathon & Standards Interop")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-11-10T00:00:00"));
+    assert_eq!(event.time_zone, None);
+    assert_eq!(event.show_without_time, Some(true));
+    assert_eq!(event.duration.as_deref(), Some("P3D"));
+    assert_eq!(event.privacy.as_deref(), Some("public"));
+    assert_eq!(event.status.as_deref(), Some("confirmed"));
+    assert_eq!(event.free_busy_status.as_deref(), Some("free"));
+    assert_eq!(event.priority, Some(1));
+
+    // 3. Validate dual links: attachment PDF and badge PNG
+    let links = event.links.as_ref().expect("links");
+    assert_eq!(links.len(), 2);
+    assert!(
+        links
+            .values()
+            .any(|l| l["contentType"] == "application/pdf" && l["size"] == 1_048_576)
+    );
+    assert!(
+        links
+            .values()
+            .any(|l| l["display"] == "badge" && l["contentType"] == "image/png")
+    );
+
+    // 4. Validate virtual location and conference
+    let vlocs = event.virtual_locations.as_ref().expect("virtual_locations");
+    assert_eq!(vlocs.len(), 1);
+    let conf = vlocs.values().next().expect("conf");
+    assert_eq!(
+        conf["uri"],
+        json!("https://meetecho.ietf.example/hackathon")
+    );
+    assert_eq!(conf["features"]["audio"], json!(true));
+    assert_eq!(conf["features"]["video"], json!(true));
+
+    // 5. Validate physical location
+    let locs = event.locations.as_ref().expect("locations");
+    assert_eq!(locs.len(), 1);
+    let loc = locs.values().next().expect("loc");
+    assert_eq!(
+        loc["name"],
+        json!("San Francisco Marriott Marquis, 780 Mission St, San Francisco, CA 94103")
+    );
+
+    // 6. Validate annual recurrence and excluded date
+    let rules = std::slice::from_ref(event.recurrence_rule.as_ref().expect("recurrence_rule"));
+    assert_eq!(rules[0].frequency, "yearly");
+    assert_eq!(rules[0].count, Some(5));
+
+    let overrides = event.recurrence_overrides.as_ref().expect("overrides");
+    assert_eq!(overrides["2028-11-10T00:00:00"], json!({"excluded": true}));
+
+    // 7. Validate 1-day advance display reminder
+    let alerts = event.alerts.as_ref().expect("alerts");
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(
+        alerts.values().next().unwrap()["trigger"]["offset"],
+        json!("-P1D")
+    );
+
+    // 8. Multi-pass roundtrip fixpoint
+    let export1 = event_to_ical(&event);
+    assert!(!export1.contains("X-CALDAV-ACCESS-RESTRICTION"));
+    assert!(!export1.contains("X-CALDAV-SYNC-TOKEN"));
+    assert!(!export1.contains("X-CALDAV-CTAG"));
+    assert!(!export1.contains("X-FASTMAIL-CLIENT-ID"));
+
+    // Ensure all-day event emits VALUE=DATE without TZID
+    assert!(export1.contains("DTSTART;VALUE=DATE:20261110\r\n"));
+    assert!(export1.contains("DURATION:P3D\r\n"));
+    assert!(export1.contains("TRANSP:TRANSPARENT\r\n"));
+    assert!(!export1.contains("TZID"));
+
     let event2 = ical_to_event(&export1).expect("event2");
     let export2 = event_to_ical(&event2);
     let event3 = ical_to_event(&export2).expect("event3");
