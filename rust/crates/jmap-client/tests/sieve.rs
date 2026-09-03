@@ -9,7 +9,7 @@ use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::error::set;
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_SIEVE};
-use jmap_proto::sieve::{SieveScript, sieve_set_error};
+use jmap_proto::sieve::{SieveScript, SieveScriptQueryFilter, sieve_set_error};
 use serde_json::json;
 
 /// A server advertises `urn:ietf:params:jmap:sieve` both at session level and
@@ -201,4 +201,86 @@ fn sieve_script_activate_switches_the_previous_one_off() {
         .map(|script| script.id.clone().unwrap())
         .collect();
     assert_eq!(active, vec![b]);
+}
+
+/// `SieveScript/query` with no filter (RFC 9661 §2.5) returns every script,
+/// the same as `sieve_scripts` but as bare ids.
+#[test]
+fn sieve_script_query_with_no_filter_returns_every_script() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let a = client
+        .sieve_script_create(&account_id, &SieveScript::new("a", "B1"))
+        .unwrap()
+        .id
+        .unwrap();
+    let b = client
+        .sieve_script_create(&account_id, &SieveScript::new("b", "B2"))
+        .unwrap()
+        .id
+        .unwrap();
+
+    let mut ids = client
+        .sieve_script_query(&account_id, SieveScriptQueryFilter::new())
+        .unwrap();
+    ids.sort();
+    let mut expected = vec![a, b];
+    expected.sort();
+    assert_eq!(ids, expected);
+}
+
+/// Filtering by `name` (RFC 9661 §2.5) narrows to scripts whose name
+/// contains the given substring.
+#[test]
+fn sieve_script_query_filters_by_name() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    client
+        .sieve_script_create(&account_id, &SieveScript::new("vacation", "B1"))
+        .unwrap();
+    let out_of_office = client
+        .sieve_script_create(&account_id, &SieveScript::new("out-of-office", "B2"))
+        .unwrap()
+        .id
+        .unwrap();
+
+    let ids = client
+        .sieve_script_query(
+            &account_id,
+            SieveScriptQueryFilter::new().with_name("out-of"),
+        )
+        .unwrap();
+    assert_eq!(ids, vec![out_of_office]);
+}
+
+/// Filtering by `isActive` (RFC 9661 §2.5) narrows to just the one active
+/// script, the same the account's own `SieveScript/set` invariant only ever
+/// allows one of.
+#[test]
+fn sieve_script_query_filters_by_is_active() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let a = client
+        .sieve_script_create(&account_id, &SieveScript::new("a", "B1"))
+        .unwrap()
+        .id
+        .unwrap();
+    client
+        .sieve_script_create(&account_id, &SieveScript::new("b", "B2"))
+        .unwrap();
+    client.sieve_script_activate(&account_id, &a).unwrap();
+
+    let ids = client
+        .sieve_script_query(
+            &account_id,
+            SieveScriptQueryFilter::new().with_is_active(true),
+        )
+        .unwrap();
+    assert_eq!(ids, vec![a]);
 }

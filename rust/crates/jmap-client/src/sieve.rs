@@ -1,16 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! JMAP Sieve (RFC 9661): `SieveScript/get` and `/set`. `/query` and
-//! `/validate` are separate increments — Evolution's filters UI is not
-//! wired to any of this yet.
+//! JMAP Sieve (RFC 9661): `SieveScript/get`, `/set` and `/query`. `/validate`
+//! is a separate increment — Evolution's filters UI is not wired to any of
+//! this yet.
 
 use serde_json::Value;
 
 use jmap_proto::Id;
-use jmap_proto::methods::{GetRequest, GetResponse, SetRequest, SetResponse};
+use jmap_proto::methods::{
+    GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
+};
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_SIEVE};
-use jmap_proto::sieve::{SieveScript, SieveScriptSetRequest};
+use jmap_proto::sieve::{SieveScript, SieveScriptQueryFilter, SieveScriptSetRequest};
 
 use crate::client::Client;
 use crate::contacts::set_failure;
@@ -106,6 +108,19 @@ impl Client {
             SieveScriptSetRequest::new(SetRequest::new(account_id.clone())).deactivating();
         self.sieve_script_set(&request)?;
         Ok(())
+    }
+
+    /// Resolve Sieve script ids matching `filter` (`SieveScript/query`, RFC
+    /// 9661 §2.5) — e.g. by name, or to find the one currently active script.
+    pub fn sieve_script_query(
+        &self,
+        account_id: &Id,
+        filter: SieveScriptQueryFilter,
+    ) -> Result<Vec<Id>, Error> {
+        let request = QueryRequest::new(account_id.clone()).filter(filter);
+        let arguments = self.single_call(USING, "SieveScript/query", &request)?;
+        let response: QueryResponse = serde_json::from_value(arguments)?;
+        Ok(response.ids)
     }
 
     fn sieve_script_set(
