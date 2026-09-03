@@ -4,7 +4,10 @@
 //! Calendar operations (draft-ietf-jmap-calendars).
 
 use jmap_proto::Id;
-use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter};
+use jmap_proto::calendars::{
+    Calendar, CalendarEvent, CalendarEventParseRequest, CalendarEventParseResponse,
+    CalendarEventQueryFilter,
+};
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
@@ -144,6 +147,16 @@ impl Client {
         Err(set_failure(
             response.not_destroyed.as_ref().and_then(|map| map.get(id)),
         ))
+    }
+
+    /// `CalendarEvent/parse` (draft-ietf-jmap-calendars §5.7): reads an
+    /// uploaded iCalendar blob into a JSCalendar `CalendarEvent`.
+    pub fn event_parse(
+        &self,
+        request: &CalendarEventParseRequest,
+    ) -> Result<CalendarEventParseResponse, Error> {
+        let arguments = self.single_call(USING, "CalendarEvent/parse", request)?;
+        Ok(serde_json::from_value(arguments)?)
     }
 
     /// `CalendarEvent/query`: matching event ids (sorted by start).

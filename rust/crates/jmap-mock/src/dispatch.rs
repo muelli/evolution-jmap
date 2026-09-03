@@ -332,6 +332,7 @@ fn handle_method(
         "CalendarEvent/get" => crate::calendars::calendar_event_get(state, arguments),
         "CalendarEvent/set" => crate::calendars::calendar_event_set(state, arguments),
         "CalendarEvent/query" => crate::calendars::calendar_event_query(state, arguments),
+        "CalendarEvent/parse" => crate::calendars::calendar_event_parse(state, arguments),
         "Principal/get" => crate::principals::principal_get(state, arguments),
         "Principal/query" => crate::principals::principal_query(state, arguments),
         "Principal/getAvailability" => {

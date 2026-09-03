@@ -7,12 +7,14 @@
 use std::collections::BTreeMap;
 
 use jmap_proto::Id;
-use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter, CalendarRights};
+use jmap_proto::calendars::{
+    Calendar, CalendarEvent, CalendarEventParseRequest, CalendarEventQueryFilter, CalendarRights,
+};
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest};
 use serde_json::Value;
 
-use crate::dispatch::{account_mut, parse_arguments, to_result};
+use crate::dispatch::{account_mut, parse_arguments, project_properties, to_result};
 use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
 
@@ -285,6 +287,50 @@ pub fn calendar_event_set(state: &mut ServerState, arguments: Value) -> Result<V
     }
 
     Ok(result)
+}
+
+/// `CalendarEvent/parse` (draft-ietf-jmap-calendars §5.7): reads an
+/// uploaded iCalendar blob into a JSCalendar event. Building the response
+/// by hand rather than through the typed `CalendarEventParseResponse`
+/// lets `properties` drop fields from the JSON before it ever reaches a
+/// `CalendarEvent`, the same way `project_properties` already does for
+/// `Email/get`.
+pub fn calendar_event_parse(
+    state: &mut ServerState,
+    arguments: Value,
+) -> Result<Value, MethodError> {
+    let request: CalendarEventParseRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let mut parsed = serde_json::Map::new();
+    let mut not_found = Vec::new();
+    let mut not_parsable = Vec::new();
+    for id in &request.blob_ids {
+        let Some(blob) = account.blobs.get(id) else {
+            not_found.push(id.clone());
+            continue;
+        };
+        let Ok(text) = std::str::from_utf8(&blob.data) else {
+            not_parsable.push(id.clone());
+            continue;
+        };
+        match jmap_ical::ical_to_event(text) {
+            Ok(event) => {
+                parsed.insert(
+                    id.to_string(),
+                    project_properties(&event, request.properties.as_deref())?,
+                );
+            }
+            Err(_) => not_parsable.push(id.clone()),
+        }
+    }
+
+    to_result(&serde_json::json!({
+        "accountId": request.account_id,
+        "parsed": (!parsed.is_empty()).then_some(Value::Object(parsed)),
+        "notParsable": (!not_parsable.is_empty()).then_some(not_parsable),
+        "notFound": (!not_found.is_empty()).then_some(not_found),
+    }))
 }
 
 pub fn calendar_event_query(
