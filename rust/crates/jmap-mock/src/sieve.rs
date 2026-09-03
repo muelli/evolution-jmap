@@ -1,15 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `SieveScript/get` and `/set` (RFC 9661). `/query` and `/validate` are
-//! separate increments.
+//! `SieveScript/get`, `/set` and `/query` (RFC 9661). `/validate` is a
+//! separate increment.
 
 use std::collections::BTreeMap;
 
 use jmap_proto::Id;
 use jmap_proto::error::{self, MethodError, SetError};
-use jmap_proto::methods::{GetRequest, GetResponse, SetResponse};
-use jmap_proto::sieve::{SieveScript, SieveScriptSetRequest, sieve_set_error};
+use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse, SetResponse};
+use jmap_proto::sieve::{
+    SieveScript, SieveScriptQueryFilter, SieveScriptSetRequest, sieve_set_error,
+};
 use serde_json::Value;
 
 use crate::dispatch::{account_mut, parse_arguments, to_result};
@@ -234,6 +236,53 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
         not_updated: (!not_updated.is_empty()).then_some(not_updated),
         not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
     })
+}
+
+/// `SieveScript/query` (RFC 9661 §2.5): filters by `name` (substring match,
+/// the same idiom `principal_query` uses) and/or `isActive`.
+pub fn sieve_script_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+    let request: QueryRequest<SieveScriptQueryFilter> = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let filter = request.filter.unwrap_or_default();
+    let ids: Vec<Id> = account
+        .sieve_scripts
+        .iter()
+        .filter(|(_, script)| sieve_script_matches(script, &filter))
+        .map(|(id, _)| id.clone())
+        .skip(request.position.max(0) as usize)
+        .take(request.limit.unwrap_or(u64::MAX) as usize)
+        .collect();
+
+    let total = account
+        .sieve_scripts
+        .iter()
+        .filter(|(_, script)| sieve_script_matches(script, &filter))
+        .count() as u64;
+
+    to_result(&QueryResponse {
+        account_id: request.account_id,
+        query_state: account.sieve_scripts.state(),
+        can_calculate_changes: false,
+        position: request.position.max(0) as u64,
+        ids,
+        total: request.calculate_total.then_some(total),
+        limit: None,
+    })
+}
+
+fn sieve_script_matches(script: &SieveScript, filter: &SieveScriptQueryFilter) -> bool {
+    if let Some(name) = &filter.name
+        && !script.name.contains(name.as_str())
+    {
+        return false;
+    }
+    if let Some(is_active) = filter.is_active
+        && script.is_active != is_active
+    {
+        return false;
+    }
+    true
 }
 
 /// Make `target` the one active script, deactivating whatever else was
