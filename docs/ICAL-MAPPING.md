@@ -492,6 +492,33 @@ The real-world exporter corpus (`google_calendar_export.ics`, `outlook_m365_expo
    - **Shapes Emitted**: Multi-day display offsets (`-P2D`).
    - **Mapping Fidelity**: Preserved and roundtripped losslessly.
 
+### 7.6 REPEAT and DURATION Pairing and Inbound Malformed Variations (RFC 5545 §3.6.6)
+
+RFC 5545 §3.6.6 governs the pairing between `REPEAT` and `DURATION` in `VALARM` components:
+- **Pairing Constraint**: `REPEAT` and `DURATION` must both be specified or both omitted.
+- **Value Types**: `REPEAT` takes a positive integer (`INTEGER` >= 1), defining repetitions after initial trigger. `DURATION` specifies delay between iterations.
+- **JSCalendar Dropped REPEAT**: RFC 8984 dropped `REPEAT` and defines no repeat or interval fields on `Alert`. Inbound parsing extracts the primary `TRIGGER` into an `OffsetTrigger` display alarm, ensuring the user receives the initial notification.
+- **Malformed Inbound Variations**: Exporters sometimes violate RFC 5545 §3.6.6 by emitting `REPEAT` without `DURATION`, `DURATION` without `REPEAT`, non-positive counts (`REPEAT:0`, `REPEAT:-2`), non-integer values, negative durations (`DURATION:-PT5M`), zero durations (`DURATION:PT0S`), or duplicate property lines. `read_alert` safely extracts the primary trigger without crashing, dropping, or panicking.
+- **Outbound Safety Refusal**: If a JSCalendar `Alert` contains unmodeled `"repeat"` or `"duration"` fields in its object representation, `maps_alerts` strictly returns `false`. This protects server-side extensions from being wiped out by whole-property replacement.
+
+### 7.7 Multi-Alarm Density, High Multiplicity Scaling, and Key Synthesis
+
+Multi-alarm sequences across diverse real-world clients exhibit distinct structural patterns:
+1. **Multi-Alarm Density and Ordering**: Events frequently carry sequences of reminders (e.g. 1 week before, 1 day before, 2 hours before, 15 minutes before, at start, and 10 minutes after end). On outbound emission, `drawn_alarms` iterates over `event.alerts` sorted by map key, producing deterministic output. Multi-stage roundtrips converge immediately to fixed-point equality.
+2. **Identical Offset Multiplicity**: Multiple alarms sharing identical trigger offsets (whether named with explicit UIDs or nameless) remain distinct and non-collapsing. Both named entries (`UID:k1` and `UID:k2`) and synthesized entries (`a1` and `a2`) preserve separate alerts and roundtrip stably.
+3. **High Multiplicity Scaling**: Events carrying 10, 15, or more alarms scale cleanly. Positional key allocation increments through multi-digit keys (`a10`, `a11`, ...), maintaining unique non-conflicting map IDs.
+4. **Key Synthesis for Non-Standard UIDs**: Exporter UIDs violating RFC 8984 §1.4.4 `Id` syntax (such as Outlook 94-octet composite binary UIDs, Apple `{GUID}` braces, URIs with colons `urn:uuid:...`, email format UIDs `alarm@domain.com`, or UIDs exceeding 255 octets) are recognized by `names_map_entry` as unmappable to JSCalendar map keys. The parser smoothly falls back to positional synthesized keys (`a1`, `a2`, ...), emitting valid RFC 9074 `UID` values on outbound serialization.
+5. **Duplicate Explicit UIDs**: If an incoming stream contains duplicate explicit UIDs, RFC 9074 §6 uniqueness rules apply, and subsequent duplicates overwrite earlier entries rather than corrupting map state.
+6. **Recurrence Overrides with Multiple Alarms**: Master series alarms are inherited on unmodified instances. Overrides specifying custom alarms replace the entire alarm set for that instance. Overrides setting `"alerts": null` cancel all alarms for that instance. Overrides containing even one unmappable alert are refused by `maps_recurrence_override`, preserving the series alarms.
+
+### 7.8 ACKNOWLEDGED Formats and Whole-Property Replacement Safety (RFC 9074 §6.1)
+
+RFC 9074 §6.1 specifies the `ACKNOWLEDGED` property on `VALARM` components to record when a user dismissed or snoozed a reminder:
+1. **Inbound Format Variations**: Exporters emit `ACKNOWLEDGED` in standard UTC date-time (`ACKNOWLEDGED:20260824T120000Z`), parameterized (`ACKNOWLEDGED;VALUE=DATE-TIME:...`), non-standard local timezone (`ACKNOWLEDGED;TZID=...`), lowercase, or paired with Apple vendor properties (`X-WR-ALARMUID`). Inbound parsing safely ignores `ACKNOWLEDGED`, extracting the display reminder so it can be viewed and scheduled in Evolution without polluting `CalendarEvent.extra`.
+2. **Outbound Refusal Boundary**: In JSCalendar (RFC 8984 §4.5.2), `acknowledged: UTCDateTime` tracks dismissed alarms. Because `event_to_ical` does not emit `ACKNOWLEDGED`, `maps_alerts` strictly refuses any event containing an `acknowledged` alert. If `maps_alerts` allowed the event, an edit by the user would cause `jmap-cal-sync` to replace `alerts` whole, deleting the `acknowledged` timestamp on the JMAP server and un-dismissing the alert.
+3. **Multi-Alarm Isolation**: In an event with multiple alarms, if even one alert carries an `acknowledged` timestamp, `maps_alerts` returns `false` for the entire event. The outbound renderer draws only the non-acknowledged alerts, and `jmap-cal-sync` refuses to save `alerts`, preserving server state.
+4. **Recurrence Overrides Safety**: An instance override carrying an `acknowledged` alert causes `maps_recurrence_override` to return `false`, preventing whole-property replacement of `recurrenceOverrides`.
+
 ---
 
 ## 8. Recurrence Overrides & RECURRENCE-ID Mapping Architecture (RFC 8984 §4.3.4 ↔ RFC 5545 §3.8.4.4 / §3.8.5)
