@@ -7,7 +7,7 @@ server (`jmap-mockd`), and shipped as installable artifacts.
 
 ## Where it stands
 
-All ten original milestones are complete and **v0.3.0 is released**, built
+All ten original milestones are complete and **v0.4.0 is released**, built
 reproducibly with Sigstore provenance. Against a real Fastmail account, in
 real Evolution: mail (read, send, folders), contacts, calendars and the
 collection account all work end to end, with OAuth 2.0 sign-in, silent token
