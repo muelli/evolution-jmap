@@ -1,3 +1,46 @@
+evolution-jmap (0.4.0) unstable; urgency=medium
+
+  * JMAP push: the mail, calendar and address-book backends subscribe to the
+    server's EventSource channel and refresh when the server announces a
+    change, instead of waiting for the next poll. The folder list picks up
+    mailboxes created or renamed elsewhere, the subscription follows OAuth2
+    token refreshes, and repeated identical announcements are deduplicated.
+  * A delivery arriving over push no longer steals the folder selection: a
+    message landing in a mailbox you were not looking at used to jump the
+    folder tree away from the folder you had selected. The folder list is
+    now marked stale only when the tree's shape actually changed.
+  * Out of Office: a vacation autoresponder page in the account editor, so
+    the server's autoresponder can be switched on, dated and worded without
+    leaving Evolution.
+  * Send Later: the composer can hand a message to the server for delivery
+    at a chosen time, on servers that offer delayed submission.
+  * Snooze: the message-list context menu can put a message aside until a
+    later time, on servers that offer it.
+  * New Address Book / New Calendar: JMAP now appears in the Type list, and
+    editing an existing JMAP book or calendar no longer crashes the dialog.
+  * Folder searches the server can evaluate are answered by Email/query on
+    the server instead of only the locally cached summary.
+  * Folder properties now report the server's quota (RFC 9425), and a server
+    that offers no quota at all is no longer reported as a server error.
+  * Each account keeps its own OAuth 2.0 token slot, so two accounts with
+    the same user name on different servers no longer share one token. This
+    needs evolution-data-server 3.62 or newer to take effect; on 3.52 it is
+    recorded and ignored.
+  * Deleting a collection the server forbids deleting is greyed out instead
+    of failing after the click.
+  * A newly created address book or calendar keeps the name you typed; it
+    could previously show the server's id as its name.
+  * No sign-in window is offered when there is no keyring to keep the token;
+    a PKCE consent that could never be redeemed is refused up front.
+  * Contact photos whose bytes look like base64 are no longer decoded twice,
+    and saving an unchanged contact or event no longer writes a spurious
+    patch to the server.
+  * Rebasing server-reported URLs onto the session origin is now a
+    per-account setting, so a tunnelled self-hosted account and a public
+    account can coexist in one process.
+
+ -- Tobias Mueller <muelli@cryptobitch.de>  Thu, 03 Sep 2026 09:07:46 -0700
+
 evolution-jmap (0.3.0) unstable; urgency=medium
 
   * Fixed the hourly OAuth2 re-consent: a long-lived backend connection kept
