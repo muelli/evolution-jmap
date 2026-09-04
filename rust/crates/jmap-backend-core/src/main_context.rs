@@ -10,14 +10,15 @@
 //! is by design: "the guarantee that nothing leaks applies only if you
 //! eventually iterate the main context". A worker thread that never iterates
 //! one therefore accumulates per call, forever. Holding a [`PrivateContext`]
-//! around such a call gives the bookkeeping a context of its own, drained and
-//! finalized on drop.
+//! around such a call gives the bookkeeping a context of its own, iterated on
+//! drop.
 //!
-//! Private rather than iterating the inherited context on purpose: iterating
-//! a context someone else owns dispatches someone else's sources (the
-//! ownership hazard `jmap-mail/tests/common/signals.rs` documents), and
-//! finalizing our own destroys any straggler source even if a drain raced the
-//! attach.
+//! Iterating is the load-bearing step, not the drop: the pending GTask holds a
+//! reference on the context, so releasing our reference leaves a
+//! context->source->task->context cycle standing; only dispatching the source
+//! breaks it (confirmed on glib!5341). The context is private so that dispatch
+//! does not also run someone else's sources (the ownership hazard
+//! `jmap-mail/tests/common/signals.rs` documents).
 
 use std::ptr::NonNull;
 
@@ -46,11 +47,12 @@ impl PrivateContext {
 
 impl Drop for PrivateContext {
     fn drop(&mut self) {
-        // The drain reliably collects a sync GIO call's completion idle: it is
-        // attached inside g_task_return(), before the condvar wake that lets
-        // the caller reach this drop.
-        // SAFETY: the context pushed in `push`, popped on the same thread; the
-        // unref finalizes it, destroying any source a racing attach left.
+        // Iterating is what reclaims: it dispatches the sync call's completion
+        // idle (attached inside g_task_return, before the condvar wake that
+        // lets the caller reach here), dropping the source's ref on the GTask
+        // and the GTask's ref on this context. Pop and unref then release our
+        // own reference; without the iteration they would free nothing.
+        // SAFETY: the context pushed in `push`, popped on the same thread.
         unsafe {
             while g_main_context_iteration(self.0.as_ptr(), GFALSE) != GFALSE {}
             g_main_context_pop_thread_default(self.0.as_ptr());
