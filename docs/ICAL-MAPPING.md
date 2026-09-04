@@ -1135,6 +1135,80 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Deliberate mapping design. Documented and pinned in `tests/event.rs`.
 
+### 13.28 Divergence 28: `useDefaultAlerts` Default Semantics, Omission vs Explicit False, and Notification Preference Model
+
+- **Observed Behavior**:
+  RFC 8984 §4.5.1 defines `useDefaultAlerts: Boolean (default: false)` to specify whether the user's default reminder alerts should be applied when no explicit alerts are defined. Stalwart v1.0.0 either omits `useDefaultAlerts` or sets it to `false` when parsing incoming `VEVENT` components without custom alert configurations. In contrast, `jmap-ical`'s `ical_to_event`:
+  1. Returns `use_default_alerts: None` on imported `VEVENT` components (both with and without `VALARM`), avoiding spurious diffs against server defaults.
+  2. On outbound export, if an event has `use_default_alerts: Some(true)` (or `useDefaultAlerts: true` in `event.extra`), `drawn_alarms` suppresses all `VALARM` emission (returns an empty alarm set).
+  3. Emitter predicate [`maps_alerts`] strictly returns `false` when `use_default_alerts` is `true`, preventing whole-property replacement that would conflict with server-side default alerts.
+  4. Emitter predicate [`maps_recurrence_override`] refuses alert overrides when the series uses default alerts, protecting instance reminder integrity.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server and desktop calendar clients, default reminder settings are client-side application preferences configured in desktop settings ("Default reminder before event") rather than per-event boolean properties stored in `VEVENT` records.
+  2. RFC 5545 defines no standard property for `useDefaultAlerts`.
+  3. Setting `useDefaultAlerts: true` or `false` explicitly in server state would dictate client notification behaviors across different devices. Returning `None` when unstated prevents `jmap-cal-sync` from proposing patch mutations against server records.
+- **Adjudication**:
+  Deliberate mapping design and synchronization boundary safety. Suppresses `VALARM` when default alerts are active, while keeping `use_default_alerts: None` when unstated to avoid patch churn.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.29 Divergence 29: Document Language and `locale` Tag vs Property-Level `LANGUAGE` Parameter Filtering
+
+- **Observed Behavior**:
+  RFC 8984 §4.1.6 defines `locale: String` (a BCP 47 language tag) specifying the default language for event text properties. RFC 5545 §3.2.10 specifies `LANGUAGE` as a property parameter on text values (e.g. `SUMMARY;LANGUAGE=fr:Réunion`, `DESCRIPTION;LANGUAGE=fr:Discussion`). Stalwart v1.0.0 parses property-level `LANGUAGE` parameters and may infer `event.locale`. In contrast, `jmap-ical`'s `ical_to_event`:
+  1. Reads `SUMMARY` and `DESCRIPTION` text while ignoring `LANGUAGE` parameters, selecting the primary entry in document order and returning `locale: None`.
+  2. Outbound serialization (`event_to_ical`) emits text without `LANGUAGE` parameters, ignoring any `locale` property on `CalendarEvent` and emitting no document language tags.
+  3. Leaves `event.extra` completely clean without polluting custom maps with unmapped language tags.
+- **Specification and Architectural Context**:
+  1. Evolution Data Server runs in the user's active desktop locale environment (`LC_ALL` / `LANG`). EDS appointment components do not expose per-event language metadata or multi-locale text entry in standard UI.
+  2. If `ical_to_event` attempted to infer `locale` or serialize `LANGUAGE` parameters, desktop saves would generate uncoordinated language tags on server records.
+  3. Treating the desktop session as running in a single system locale preserves clean round-trips and keeps `event.extra` unpolluted.
+- **Adjudication**:
+  Deliberate mapping simplification for single-locale desktop environment.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.30 Divergence 30: Floating Time (`None`) vs UTC (`Etc/UTC`) vs Canonical IANA Zone Resolution and Solidus Identifiers
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.5 defines three forms of `DATE-TIME`: floating (local time without zone), UTC (`Z`), and local time with `TZID`. RFC 8984 §1.4.9 and §4.1.4 define `timeZone` as an IANA timezone name, a solidus identifier (`/custom_id`), or `null` for floating/all-day. Stalwart v1.0.0 parses UTC timestamps into `start` and `timeZone: "Etc/UTC"` (or `"UTC"`). In contrast, `jmap-ical`'s `read_start`:
+  1. Floating date-times (no `Z`, no `TZID`) yield `time_zone: None`.
+  2. UTC timestamps (trailing `Z`) yield `time_zone: Some("Etc/UTC")`.
+  3. Windows display names (`TZID="W. Europe Standard Time"`) resolve to canonical IANA names (`Europe/Berlin`) via CLDR mapping table when defined by `VTIMEZONE`.
+  4. Mozilla and Apple unique prefixes (`TZID="/mozilla.org/.../Europe/Madrid"`) normalize to canonical IANA suffixes (`Europe/Madrid`).
+  5. Custom solidus zones are retained verbatim as `time_zone: Some("/org.custom/zone")`.
+  6. Outbound serialization:
+     - UTC (`Etc/UTC` or `UTC`) serializes with `Z` suffix.
+     - Floating time serializes without `TZID` and without `Z`.
+     - Canonical IANA zones serialize with `TZID=<zone>`.
+     - Custom solidus zones serialize with `TZID=<solidus-zone>`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.2.19 requires `TZID` for local times with timezone reference, while forbidding `TZID` on UTC or date-only values.
+  2. In Evolution Data Server, floating events (such as "lunch at 12:00" regardless of travel) must remain floating without being anchored to a specific meridian. Preserving `time_zone: None` ensures floating appointments do not shift across time zones.
+  3. Resolving Windows and globally unique TZIDs to canonical IANA names allows Evolution to look up transition rules directly in the system timezone database.
+- **Adjudication**:
+  Conforming specification validation and canonicalization boundary. Distinguishes floating, UTC, canonical IANA, and custom solidus timezones accurately across import and export.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.31 Divergence 31: `VTIMEZONE` Observance Rules Ingestion, Standard IANA Zone Pruning, and Custom Zone Containment
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.5 specifies `VTIMEZONE` components containing `STANDARD` and `DAYLIGHT` observance subcomponents with transition rules (`TZOFFSETFROM`, `TZOFFSETTO`, `RRULE`, `RDATE`). RFC 8984 §4.7.2 models custom timezone definitions inside `timeZones: Map<TimeZoneId, TimeZone>`. Stalwart v1.0.0 parses `VTIMEZONE` definitions, dropping redundant standard IANA definitions. In contrast, `jmap-ical`'s `read_time_zones`:
+  1. Drops inline `VTIMEZONE` components for recognized standard IANA zone names (`time_zones: None`), preventing multi-kilobyte JSON payload bloat in JMAP event state.
+  2. Preserves `VTIMEZONE` components for custom solidus zones (`/example.com/custom_tz`) with their observance rules (`TZOFFSETFROM`, `TZOFFSETTO`, `RRULE`) in `event.time_zones`.
+  3. Emitter helper [`prune_time_zones`] removes unreferenced custom timezone definitions when neither the master series nor any recurrence override refers to the custom zone.
+  4. Outbound serialization: [`defines_time_zone`] confirms custom zone presence, and `event_to_ical` emits `VTIMEZONE` only for custom solidus zones while omitting redundant standard IANA `VTIMEZONE` blocks.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §1.4.9 states that standard IANA timezone names do not require definitions in `timeZones`. Only custom timezones prefixed with a solidus must provide a definition.
+  2. Including full `VTIMEZONE` definitions for standard zones like `Europe/Berlin` would inflate JMAP objects with redundant historical transition data that both the server and client already possess in their host timezone databases.
+  3. Dropping standard `VTIMEZONE` definitions on import keeps JMAP objects compact, while retaining custom solidus definitions ensures non-standard zones remain fully interpretable.
+- **Adjudication**:
+  Conforming specification boundary and payload optimization. Keeps JMAP event records compact by omitting standard IANA zone definitions while preserving custom solidus timezones.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
