@@ -1320,6 +1320,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Deliberate architectural boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.40 Divergence 40: `VALARM` Repetition Loops (`REPEAT` and `DURATION` Properties) vs Alarm Loop Dropping
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.6.2 and §3.8.6.3 specify `DURATION` (delay interval between repetitions) and `REPEAT` (number of additional times the alarm triggers, e.g. `REPEAT:4`, `DURATION:PT5M` for snoozing 4 times at 5-minute intervals). RFC 8984 §4.5.2 models `Alert` with `trigger` and `action`, but provides no properties for repeat counts or alarm snooze intervals. Stalwart v1.0.0 and server parsers either drop `REPEAT` and `DURATION` or capture them in converted properties or vendor extensions. In contrast, `jmap-ical`'s `read_alert`:
+  1. Ignores `REPEAT` and `DURATION` on inbound `VALARM` components without polluting `event.extra` or the `Alert` object.
+  2. Maps only standard `ACTION` (`"display"`) and `TRIGGER` (`OffsetTrigger`).
+  3. Outbound serialization (`drawn_alert`) strictly checks that alert object keys contain only `@type`, `trigger`, and `action`, refusing any alert with unmodeled repeat loop fields to prevent malformed or invalid `VALARM` output.
+  4. Outbound serialization emits clean `VALARM` blocks containing only `UID`, `ACTION`, `TRIGGER`, and synthesized `DESCRIPTION`, omitting `REPEAT` and `DURATION`.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent` / `libical`), snoozing and alarm repetition are runtime interactive behaviors managed by the desktop notification daemon (`evolution-alarm-notify`) rather than static properties persisted in `VEVENT` records. When a user snoozes an alarm in the desktop UI, the client records a local snooze timer or updates runtime alarm state.
+  2. RFC 8984 explicitly omitted recurring alarm loops from `Alert` because multi-device push notification architectures handle alert delivery at trigger time rather than executing repetitive loops on the server.
+  3. Dropping `REPEAT` and `DURATION` on inbound import prevents `jmap-cal-sync` from attempting to sync unmapped properties to the JMAP server, while ensuring standard `ACTION:DISPLAY` alerts remain fully functional in desktop calendar UI.
+- **Adjudication**:
+  Conforming specification boundary and client-side notification architecture alignment. Desktop notification daemons handle snoozing dynamically, so dropping static `REPEAT` and `DURATION` preserves clean JSCalendar models without loss of interactive reminder functionality.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.41 Divergence 41: `VALARM` Reminder Text (`DESCRIPTION` and `SUMMARY` Properties) vs Event Title Synthesis
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.6.1 mandates that a `VALARM` with `ACTION:DISPLAY` MUST contain a `DESCRIPTION` property specifying the reminder text displayed to the user (e.g. `DESCRIPTION:Meeting with team`). RFC 5545 §3.8.6.2 also allows `SUMMARY` and `DESCRIPTION` on `ACTION:EMAIL`. In contrast, RFC 8984 §4.5.2 does not define a `description` or `summary` property on `Alert`: an alert is modeled as an abstract notification trigger (`trigger`, `action`), and its display text is inherently derived from the parent `CalendarEvent.title`. Stalwart v1.0.0 parses `VALARM` and drops the reminder's `DESCRIPTION` string, treating the alert as a pure trigger for the event. In `jmap-ical`:
+  1. `read_alert` ignores `DESCRIPTION` and `SUMMARY` lines inside `VALARM` components on inbound import, keeping the `Alert` object clean without polluting `event.extra`.
+  2. Outbound serialization (`drawn_alert`) synthesizes `DESCRIPTION` directly from `event.title` (or omits it if title is empty), satisfying the RFC 5545 §3.8.6.1 requirement without storing redundant reminder strings in `event.alerts`.
+  3. If an event has no title (`event.title: None`), `drawn_alert` emits the `VALARM` without `DESCRIPTION` rather than inventing a dummy title string.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server and modern calendar clients, reminder popups display the appointment's summary or title. Storing a duplicate copy of the event title inside every `Alert` object would create data redundancy and introduce divergence risks if the event title is edited without updating each alert's description.
+  2. If `ical_to_event` preserved custom reminder descriptions in `Alert.extra`, `jmap-cal-sync` would fail JMAP server schema validation (`invalidProperties`) on standard servers.
+  3. Synthesizing `DESCRIPTION` from `event.title` on outbound export ensures full compatibility with legacy iCalendar consumers that expect a valid `DESCRIPTION` in `VALARM:DISPLAY` blocks.
+- **Adjudication**:
+  Deliberate mapping design and specification synthesis boundary. Derives reminder text from event title to eliminate redundant storage and prevent synchronization drift while satisfying RFC 5545 wire grammar.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.42 Divergence 42: Recurrence Rule `UNTIL` UTC vs Local `LocalDateTime` Timezone Conversion and Value Formatting
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 states: "If the 'DTSTART' property is specified as a date with local time and time zone reference, then the UNTIL rule part MUST also be specified as a date with UTC time." RFC 8984 §4.3.1 specifies: `until: LocalDateTime... This date-time is in the timezone of the event if the recurrence rule has no timeZone property set... MUST NOT include a time zone offset or 'Z'`. Stalwart v1.0.0's `CalendarEvent/parse` converts incoming UTC `UNTIL` values into local `LocalDateTime` within the event's timezone. In `jmap-ical`:
+  1. `read_until` converts UTC `UNTIL` timestamps to local date-time strings using the observance offset when the timezone definition (`Ends::In(Zoned { ... })` or `Ends::At(offset)`) is available, stripping trailing `Z` and shifting the clock to local time.
+  2. In JSCalendar RFC 8984 §4.3.1, `until` is always modeled as a `LocalDateTime` (`YYYY-MM-DDTHH:MM:SS`), including all-day events (`YYYY-MM-DDT00:00:00`).
+  3. On outbound serialization (`rule_to_rrule`), it renders `UNTIL` as a date-only string (`YYYYMMDD`) for all-day events (`showWithoutTime: true`), as UTC date-time (`YYYYMMDDTHHMMSSZ`) for UTC and observance rules, and as local date-time for zoned events where local representation is required by downstream desktop libical consumers.
+  4. A malformed non-digit `UNTIL` token (e.g. `UNTIL=whenever`) is rejected, preventing invalid recurrence rules from being emitted.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent` / `libical`), recurrence rules for zoned appointments are evaluated using local time bounds aligned with the series start.
+  2. For all-day events (`showWithoutTime: true`), RFC 5545 §3.3.10 requires `UNTIL` to match the value type of `DTSTART` (`VALUE=DATE`). Emitting a date-time for an all-day event's `UNTIL` violates RFC 5545 and causes libical recurrence iterators to miscalculate the final instance.
+  3. Formatting `UNTIL` as date-only for all-day events and converting observance-bound endpoints to UTC guarantees robust recurrence evaluation across both EDS desktop clients and remote JMAP servers.
+- **Adjudication**:
+  Conforming specification conversion and timezone alignment. Converts between UTC wire timestamps and local `LocalDateTime` representations while preserving value-type parity for all-day events.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.43 Divergence 43: Recurrence Rule Ordinal Weekdays (`BYDAY` and `NDay` Modeling) and Weekday Token Normalization
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 defines `BYDAY` with optional signed integer ordinals prefixing two-character weekday codes (such as `2MO` for the second Monday, `-1FR` for the last Friday of the period, or `MO,TU,WE` for recurring days). RFC 8984 §4.3.2 and `draft-ietf-calext-jscalendarbis` model these as `byDay: NDay[]`, where each `NDay` is an object containing `day: String` (`"mo"`, `"tu"`, etc.) and optional `nthOfPeriod: Integer` (`2`, `-1`). Stalwart v1.0.0 parses `BYDAY` tokens into lowercase day strings and `nthOfPeriod` integers. In `jmap-ical`:
+  1. `read_rrule` parses `BYDAY` strings, splits comma-separated tokens, extracts positive and negative ordinals into `nth_of_period`, and normalizes day abbreviations to lowercase tokens.
+  2. On outbound serialization, `by_day_part` converts `NDay` objects back to canonical uppercase RFC 5545 tokens (`2MO`, `-1FR`, `TU`).
+  3. Emitter predicate `maps_recurrence_rule` verifies that all `byDay` elements are valid, refusing rules with invalid weekday names or malformed ordinals to prevent corrupting recurrence state.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server, monthly and yearly recurrence patterns commonly use ordinal weekday rules (e.g. "every second Tuesday of the month" or "last Friday of the quarter").
+  2. RFC 8984 mandates lowercase two-letter strings (`"su"`, `"mo"`, `"tu"`, `"we"`, `"th"`, `"fr"`, `"sa"`) for `day`, while RFC 5545 requires uppercase tokens (`SU`, `MO`, `TU`, etc.).
+  3. Mapping signed ordinals faithfully into `nthOfPeriod` and preserving negative offsets (such as `-1` for the last occurrence) ensures complex recurring appointments survive round-trips without shifting to incorrect calendar dates.
+- **Adjudication**:
+  Conforming specification validation and structured recurrence modeling. Losslessly maps ordinal weekday rules between RFC 5545 `BYDAY` strings and JSCalendar `NDay` structures with strict token normalization.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 

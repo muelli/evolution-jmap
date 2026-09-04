@@ -18717,3 +18717,301 @@ END:VCALENDAR\r\n";
     assert!(without(&out, "BEGIN:VTODO"));
     assert!(without(&out, "UID:todo-in-mixed-stream-002"));
 }
+
+#[test]
+fn differential_oracle_valarm_repeat_and_duration_unmodeled_loop_dropping() {
+    // Divergence 40 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.6.2 and 3.8.6.3 specify REPEAT (repeat count) and DURATION (snooze delay).
+    // RFC 8984 section 4.5.2 models Alert without repetition loops or snooze intervals.
+    // Stalwart v1.0.0 parses VALARM and drops repeat loop properties or captures them in metadata.
+    // In contrast, jmap-ical's read_alert ignores REPEAT and DURATION on inbound import without
+    // polluting event.extra, mapping only the primary trigger. Outbound serialization (drawn_alert)
+    // refuses alerts with unmodeled keys like repeat or duration, and emits clean VALARMs without repeat fields.
+    let repeat_alarm_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:repeat-alarm-event-001\r\n\
+DTSTART:20260905T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Staff Strategy Session\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-repeat-001\r\n\
+ACTION:DISPLAY\r\n\
+TRIGGER:-PT15M\r\n\
+REPEAT:3\r\n\
+DURATION:PT5M\r\n\
+DESCRIPTION:Staff Strategy Session\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(repeat_alarm_ics).expect("parse alarm with repeat and duration");
+    let alerts = ev.alerts.as_ref().expect("alerts must be present");
+    assert_eq!(alerts.len(), 1);
+    let alert = &alerts["alarm-repeat-001"];
+    assert_eq!(alert.get("action").and_then(Value::as_str), Some("display"));
+    assert_eq!(
+        alert
+            .get("trigger")
+            .and_then(|t| t.get("offset"))
+            .and_then(Value::as_str),
+        Some("-PT15M")
+    );
+    assert!(
+        alert.get("repeat").is_none(),
+        "repeat count must be dropped from Alert"
+    );
+    assert!(
+        alert.get("duration").is_none(),
+        "duration loop interval must be dropped from Alert"
+    );
+    assert!(
+        ev.extra.is_empty(),
+        "event extra must remain clean without repeat pollution"
+    );
+    assert!(
+        maps_alerts(&ev),
+        "maps_alerts must accept clean parsed alert"
+    );
+
+    let out = event_to_ical(&ev);
+    assert!(out.contains("BEGIN:VALARM"));
+    assert!(out.contains("ACTION:DISPLAY"));
+    assert!(out.contains("TRIGGER:-PT15M"));
+    assert!(without(&out, "REPEAT:"));
+    assert!(without(&out, "DURATION:PT5M"));
+
+    // If an alert object contains unmodeled repeat keys, drawn_alert refuses it
+    let mut bad_event = ev.clone();
+    if let Some(obj) = bad_event
+        .alerts
+        .as_mut()
+        .and_then(|map| map.get_mut("alarm-repeat-001"))
+        .and_then(Value::as_object_mut)
+    {
+        obj.insert("repeat".to_string(), json!(3));
+    }
+    let bad_out = event_to_ical(&bad_event);
+    assert!(
+        without(&bad_out, "BEGIN:VALARM"),
+        "drawn_alert must refuse alert with unmodeled repeat key"
+    );
+}
+
+#[test]
+fn differential_oracle_valarm_description_summary_and_title_synthesis_boundary() {
+    // Divergence 41 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.6.1 requires ACTION:DISPLAY VALARMs to include a DESCRIPTION property.
+    // RFC 8984 section 4.5.2 defines Alert as an abstract notification trigger without description or summary.
+    // Stalwart v1.0.0 parses VALARM and drops custom reminder descriptions.
+    // In contrast, jmap-ical's read_alert drops custom reminder description strings on inbound parse,
+    // keeping Alert models clean and preventing redundant storage. On outbound export, drawn_alert
+    // synthesizes DESCRIPTION from event.title to strictly satisfy RFC 5545 wire requirements.
+    let valarm_custom_desc_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:valarm-desc-event-001\r\n\
+DTSTART:20260905T140000Z\r\n\
+DURATION:PT45M\r\n\
+SUMMARY:Quarterly Budget Review\r\n\
+DESCRIPTION:Detailed agenda notes for the review meeting.\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-desc-001\r\n\
+ACTION:DISPLAY\r\n\
+TRIGGER:-PT10M\r\n\
+DESCRIPTION:Custom popup text: Bring printouts of ledger!\r\n\
+SUMMARY:Reminder popup header\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev =
+        ical_to_event(valarm_custom_desc_ics).expect("parse valarm with custom desc and summary");
+    assert_eq!(ev.title.as_deref(), Some("Quarterly Budget Review"));
+    assert_eq!(
+        ev.description.as_deref(),
+        Some("Detailed agenda notes for the review meeting.")
+    );
+
+    let alerts = ev.alerts.as_ref().expect("alerts must be present");
+    let alert = &alerts["alarm-desc-001"];
+    assert_eq!(alert.get("action").and_then(Value::as_str), Some("display"));
+    assert!(
+        alert.get("description").is_none(),
+        "Alert must not store custom reminder description"
+    );
+    assert!(
+        alert.get("summary").is_none(),
+        "Alert must not store custom reminder summary"
+    );
+    assert!(ev.extra.is_empty(), "event extra must remain clean");
+
+    // Outbound export synthesizes VALARM DESCRIPTION from event.title
+    let out = event_to_ical(&ev);
+    assert!(out.contains("BEGIN:VALARM"));
+    assert!(out.contains("DESCRIPTION:Quarterly Budget Review"));
+    assert!(without(&out, "Bring printouts of ledger"));
+    assert!(without(&out, "Reminder popup header"));
+
+    // When event has no title, drawn_alert omits DESCRIPTION rather than inventing text
+    let mut untitled_event = ev.clone();
+    untitled_event.title = None;
+    let untitled_out = event_to_ical(&untitled_event);
+    assert!(untitled_out.contains("BEGIN:VALARM"));
+    assert!(without(
+        &untitled_out,
+        "DESCRIPTION:Quarterly Budget Review"
+    ));
+}
+
+#[test]
+fn differential_oracle_rrule_until_timezone_conversion_and_all_day_date_formatting() {
+    // Divergence 42 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 requires UNTIL to be UTC when DTSTART carries a TZID, and date-only
+    // when DTSTART is a DATE. RFC 8984 section 4.3.1 models until as a LocalDateTime without offset or Z.
+    // Stalwart v1.0.0 parses UNTIL into local LocalDateTime.
+    // In contrast, jmap-ical's read_until converts UTC UNTIL into local time using the observance offset
+    // when VTIMEZONE definitions are in scope, and rule_to_rrule formats date-only UNTIL for all-day events
+    // (showWithoutTime: true) to strictly comply with RFC 5545 section 3.3.10 value-type rules.
+    let zoned_rrule_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Europe/Berlin\r\n\
+BEGIN:DAYLIGHT\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+TZNAME:CEST\r\n\
+DTSTART:19700329T020000\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+TZNAME:CET\r\n\
+DTSTART:19701025T030000\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:zoned-until-event-001\r\n\
+DTSTART;TZID=Europe/Berlin:20260601T090000\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Daily Morning Standup\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260610T220000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let zoned_ev = ical_to_event(zoned_rrule_ics).expect("parse zoned rrule with utc until");
+    let rule = zoned_ev
+        .recurrence_rule
+        .as_ref()
+        .expect("rule must be present");
+    // In Berlin CEST (+02:00), 2026-06-10T22:00:00Z converts to local 2026-06-11T00:00:00
+    assert_eq!(rule.until.as_deref(), Some("2026-06-11T00:00:00"));
+
+    // All-day event with date-only UNTIL formatting
+    let allday_rrule_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:allday-until-event-002\r\n\
+DTSTART;VALUE=DATE:20260701\r\n\
+DURATION:P1D\r\n\
+SUMMARY:Weekly Summer Sabbatical\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260831\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let allday_ev = ical_to_event(allday_rrule_ics).expect("parse allday rrule with date until");
+    assert_eq!(allday_ev.show_without_time, Some(true));
+    let allday_rule = allday_ev
+        .recurrence_rule
+        .as_ref()
+        .expect("allday rule present");
+    // In JSCalendar RFC 8984 section 4.3.1, until is always a LocalDateTime ("YYYY-MM-DDTHH:MM:SS")
+    assert_eq!(allday_rule.until.as_deref(), Some("2026-08-31T00:00:00"));
+
+    let out_allday = event_to_ical(&allday_ev);
+    assert!(out_allday.contains("DTSTART;VALUE=DATE:20260701"));
+    assert!(out_allday.contains("RRULE:FREQ=WEEKLY;UNTIL=20260831"));
+    assert!(without(&out_allday, "UNTIL=20260831T"));
+}
+
+#[test]
+fn differential_oracle_rrule_ordinal_weekdays_byday_and_nday_structure_mapping() {
+    // Divergence 43 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 specifies BYDAY with optional positive/negative signed integer ordinals.
+    // RFC 8984 section 4.3.2 models these as byDay: NDay[] with lowercase day codes and nthOfPeriod integers.
+    // Stalwart v1.0.0 parses BYDAY into NDay arrays with lowercase tokens.
+    // In contrast, jmap-ical's read_rrule parses positive and negative ordinals into NDay structs with
+    // lowercase day tokens, by_day_part renders them back to uppercase RFC 5545 format (e.g. 2MO, -1FR),
+    // and maps_recurrence_rule enforces strict weekday token validity, refusing rules with invalid tokens.
+    let ordinal_rrule_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:ordinal-rrule-event-001\r\n\
+DTSTART:20260901T150000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Bi-Monthly Steering Committee\r\n\
+RRULE:FREQ=MONTHLY;BYDAY=2MO,-1FR\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ordinal_rrule_ics).expect("parse ordinal rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule must be present");
+    let by_day = rule.by_day.as_ref().expect("by_day must be present");
+    assert_eq!(by_day.len(), 2);
+    assert_eq!(by_day[0].day.as_str(), "mo");
+    assert_eq!(by_day[0].nth_of_period, Some(2));
+    assert_eq!(by_day[1].day.as_str(), "fr");
+    assert_eq!(by_day[1].nth_of_period, Some(-1));
+    assert!(
+        maps_recurrence_rule(rule),
+        "rule with valid NDays must pass maps_recurrence_rule"
+    );
+
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RRULE:FREQ=MONTHLY;BYDAY=2MO,-1FR"));
+
+    // Multi-day un-ordered list without ordinals
+    let multi_day_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:multi-day-event-002\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT30M\r\n\
+SUMMARY:Tri-Weekly Sync\r\n\
+RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let multi_ev = ical_to_event(multi_day_ics).expect("parse multi-day rrule");
+    let multi_rule = multi_ev
+        .recurrence_rule
+        .as_ref()
+        .expect("multi rule present");
+    let multi_days = multi_rule.by_day.as_ref().expect("multi by_day present");
+    assert_eq!(multi_days.len(), 3);
+    assert_eq!(multi_days[0].day.as_str(), "mo");
+    assert_eq!(multi_days[0].nth_of_period, None);
+    assert_eq!(multi_days[1].day.as_str(), "we");
+    assert_eq!(multi_days[1].nth_of_period, None);
+    assert_eq!(multi_days[2].day.as_str(), "fr");
+    assert_eq!(multi_days[2].nth_of_period, None);
+
+    let multi_out = event_to_ical(&multi_ev);
+    assert!(multi_out.contains("RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR"));
+
+    // Invalid weekday tokens are refused by maps_recurrence_rule
+    let mut invalid_rule = multi_rule.clone();
+    invalid_rule.by_day = Some(vec![NDay::new("zz")]);
+    assert!(
+        !maps_recurrence_rule(&invalid_rule),
+        "invalid weekday token zz must be refused by maps_recurrence_rule"
+    );
+}
