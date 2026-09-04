@@ -8,10 +8,10 @@ use std::collections::BTreeMap;
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailHeader, EmailImportRequest,
-    EmailImportResponse, EmailQueryFilter, EmailSubmission, EmailSubmissionQueryFilter,
-    EmailSubmissionSetRequest, Envelope, EnvelopeAddress, Identity, Mailbox, SearchSnippet,
-    SearchSnippetGetRequest, SearchSnippetGetResponse, Thread, VacationResponse,
-    email_import_error, role,
+    EmailImportResponse, EmailParseRequest, EmailQueryFilter, EmailSubmission,
+    EmailSubmissionQueryFilter, EmailSubmissionSetRequest, Envelope, EnvelopeAddress, Identity,
+    Mailbox, SearchSnippet, SearchSnippetGetRequest, SearchSnippetGetResponse, Thread,
+    VacationResponse, email_import_error, role,
 };
 use jmap_proto::methods::{
     Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse, operator,
@@ -1401,6 +1401,59 @@ pub fn email_import(state: &mut ServerState, arguments: Value) -> Result<Value, 
         created: (!created.is_empty()).then_some(created),
         not_created: (!not_created.is_empty()).then_some(not_created),
     })
+}
+
+/// `Email/parse` (RFC 8621 §4.8): reads an uploaded RFC 5322 blob into an
+/// `Email`, without storing it.
+///
+/// Reuses [`crate::message::Message`], the same reduced-fidelity reader
+/// `email_import` uses below — see that module's doc comment for why there is
+/// no MIME tree here. `textBody`, `htmlBody`, `attachments`, `bodyStructure`
+/// and `bodyValues` are therefore never populated, the same as an imported
+/// message never gets them. `id`, `threadId`, `keywords`, `mailboxIds` and
+/// `receivedAt` stay unset too, matching real Stalwart's own choice for a
+/// message that is parsed but not stored anywhere.
+pub fn email_parse(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
+    let request: EmailParseRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let mut parsed = serde_json::Map::new();
+    let mut not_found = Vec::new();
+    let mut not_parsable = Vec::new();
+    for id in &request.blob_ids {
+        let Some(blob) = account.blobs.get(id) else {
+            not_found.push(id.clone());
+            continue;
+        };
+        let Some(message) = crate::message::Message::read(&blob.data) else {
+            not_parsable.push(id.clone());
+            continue;
+        };
+        let email = Email {
+            blob_id: Some(id.clone()),
+            size: Some(blob.data.len() as u64),
+            message_id: message.message_ids("message-id"),
+            in_reply_to: message.message_ids("in-reply-to"),
+            references: message.message_ids("references"),
+            from: message.addresses("from"),
+            to: message.addresses("to"),
+            cc: message.addresses("cc"),
+            subject: message.subject(),
+            preview: message.preview(),
+            ..Email::default()
+        };
+        parsed.insert(
+            id.to_string(),
+            project_properties(&email, request.properties.as_deref())?,
+        );
+    }
+
+    to_result(&serde_json::json!({
+        "accountId": request.account_id,
+        "parsed": (!parsed.is_empty()).then_some(Value::Object(parsed)),
+        "notParsable": (!not_parsable.is_empty()).then_some(not_parsable),
+        "notFound": (!not_found.is_empty()).then_some(not_found),
+    }))
 }
 
 /// The `Email` one `EmailImport` becomes, or the server's reason for refusing it.
