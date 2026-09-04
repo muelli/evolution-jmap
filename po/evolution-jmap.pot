@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-04 02:10+0200\n"
+"POT-Creation-Date: 2026-09-04 05:30+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -82,7 +82,7 @@ msgstr ""
 
 #: rust/crates/jmap-backend-core/src/oauth2.rs:566
 #: rust/crates/jmap-backend-core/src/oauth2.rs:676
-#: rust/crates/jmap-ui/src/link.rs:138 rust/crates/jmap-ui/src/link.rs:143
+#: rust/crates/jmap-ui/src/link.rs:269 rust/crates/jmap-ui/src/link.rs:274
 #: rust/crates/jmap-ui/src/send_later/extension.rs:619
 #: rust/crates/jmap-ui/src/send_later/extension.rs:622
 #: rust/crates/jmap-ui/src/send_later/extension.rs:643
@@ -284,7 +284,29 @@ msgstr ""
 msgid "Uses an OAuth 2.0 access token to connect to the JMAP server."
 msgstr ""
 
-#: rust/crates/jmap-ui/src/link.rs:94
+#: rust/crates/jmap-ui/src/link.rs:47
+msgid ""
+"the server rejected the account's credentials — it may need to be signed in "
+"again"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/link.rs:50
+msgid "the server refused: this account is not allowed to do that"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the network error the transport reported.
+#: rust/crates/jmap-ui/src/link.rs:54
+#, c-format
+msgid "the server could not be reached: %1$s"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the reason the mail server gave.
+#: rust/crates/jmap-ui/src/link.rs:63
+#, c-format
+msgid "the server rejected the change: %1$s"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/link.rs:212
 msgid "the session document names no usable mail account"
 msgstr ""
 
@@ -351,19 +373,19 @@ msgstr ""
 msgid "Send _Later"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:41
+#: rust/crates/jmap-ui/src/send_later/submit.rs:40
 msgid "the server has no Drafts mailbox to stage the message in"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:52
+#: rust/crates/jmap-ui/src/send_later/submit.rs:51
 msgid "the account has no sending identity on the server"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:67
+#: rust/crates/jmap-ui/src/send_later/submit.rs:64
 msgid "the server imported the message without naming its id"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:107
+#: rust/crates/jmap-ui/src/send_later/submit.rs:106
 #, c-format
 msgid ""
 "the server accepted the submission but named no release time (undoStatus "
@@ -408,7 +430,7 @@ msgstr ""
 msgid "S_nooze"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:503
+#: rust/crates/jmap-ui/src/snooze/action.rs:502
 msgid "the server named no id for the snoozed mailbox"
 msgstr ""
 
