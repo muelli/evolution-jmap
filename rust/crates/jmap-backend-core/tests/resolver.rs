@@ -76,3 +76,74 @@ fn fastmail_publishes_its_jmap_host_via_srv() {
     assert_eq!(target.host, "api.fastmail.com");
     assert_eq!(target.port, 443);
 }
+
+/// Bytes this process has allocated and not returned. `mallinfo2().uordblks`
+/// rather than RSS for jmap-backend-cal/tests/references.rs's reason: a leaked
+/// completion source is ~519 bytes, invisible at page granularity.
+fn allocated_bytes() -> u64 {
+    // SAFETY: no preconditions; returns a plain struct of counters.
+    unsafe { libc::mallinfo2() }.uordblks as u64
+}
+
+/// glib#4041, pinned: the sync `g_resolver_lookup_service` parks a `GTask`
+/// plus its completion-idle `GSource` (~519 bytes per call) on the calling
+/// thread's thread-default main context, reclaimed only once that context is
+/// iterated, which an EDS worker thread never does. GLib answered "works as
+/// designed; iterate the context", so the lookup now runs under a private,
+/// drained context, and this test is what fails if that regresses.
+///
+/// Windowed retention as in `references.rs`: pass when any window's growth is
+/// noise. Unfixed, every window retains ~512 x 519 B, eight times the floor.
+/// The resolver's per-lookup 30 s timeout source (self-draining, on GLib's own
+/// worker context, outside our reach) is disabled up front with timeout 0 so
+/// pending-but-not-leaked timeouts cannot masquerade as retention here.
+#[test]
+fn repeated_lookups_retain_nothing_on_the_callers_context() {
+    // A reference over-released by the fix's Drop would surface as a GLib
+    // critical; make those abort the run rather than scroll past.
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: no preconditions; the previous mask is returned and ignored.
+        unsafe {
+            glib_sys::g_log_set_always_fatal(
+                glib_sys::G_LOG_LEVEL_CRITICAL | glib_sys::G_LOG_LEVEL_WARNING,
+            )
+        };
+    });
+    // Declared locally: the workspace's gio-sys predates this GLib 2.78
+    // symbol, but every supported runtime (Ubuntu 24.04's 2.80 up) has it.
+    unsafe extern "C" {
+        fn g_resolver_set_timeout(resolver: *mut gio_sys::GResolver, timeout_ms: std::ffi::c_uint);
+    }
+    // SAFETY: get_default returns a strong reference, balanced by the unref;
+    // timeout 0 disables the per-lookup timeout source.
+    unsafe {
+        let resolver = gio_sys::g_resolver_get_default();
+        g_resolver_set_timeout(resolver, 0);
+        gobject_sys::g_object_unref(resolver.cast());
+    }
+
+    const LOOKUPS: u64 = 512;
+    const WINDOWS: usize = 6;
+    const NOISE_FLOOR: u64 = 32 * 1024;
+    let mut retained = Vec::with_capacity(WINDOWS);
+    for _ in 0..WINDOWS {
+        let before = allocated_bytes();
+        for _ in 0..LOOKUPS {
+            assert_eq!(
+                SystemResolver.lookup_srv("no-jmap-here.evolution-jmap-test.invalid"),
+                None
+            );
+        }
+        let growth = allocated_bytes().saturating_sub(before);
+        if growth <= NOISE_FLOOR {
+            return;
+        }
+        retained.push(growth);
+    }
+    panic!(
+        "no window of {LOOKUPS} lookups retained less than the {NOISE_FLOOR}-byte noise floor; \
+         bytes retained per window: {retained:?}. glib#4041's completion sources are ~519 B per \
+         call, and only a drained private context keeps a window under the floor."
+    );
+}
