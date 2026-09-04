@@ -1260,6 +1260,67 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.36 Divergence 36: `IMAGE` Property (RFC 7986 §5.10) vs `ATTACH` and `Link` `rel: "icon"` / `display` Parameter Mapping
+
+- **Observed Behavior**:
+  RFC 7986 §5.10 defines the `IMAGE` property to associate graphic badges, event logos, or illustrations with a calendar component, requiring `VALUE=URI` on URI forms and admitting optional `DISPLAY` (`BADGE`, `GRAPHIC`, `FULLSIZE`, `THUMBNAIL`). RFC 8984 §1.4.11 and §4.2.7 model external resources as `links: Map<Id, Link>`, where `rel` indicates relationship (`"icon"` for graphic emblems and `"enclosure"` for standard document attachments) and `display` specifies presentation. Stalwart v1.0.0 parses `ATTACH` and `IMAGE` into `links`, but may treat links uniformly with `rel: "enclosure"` or omit `rel` altogether. In contrast, `jmap-ical`'s `read_links`:
+  1. Identifies `IMAGE` lines and explicitly sets `rel: "icon"`.
+  2. Maps `DISPLAY` parameter tokens case-insensitively to lowercase `display` strings (`"badge"`, `"graphic"`, `"fullsize"`, `"thumbnail"`).
+  3. Leaves `rel` and `display` omitted on standard `ATTACH` lines, preserving default enclosure semantics.
+  4. Outbound serialization (`drawn_link`) inspects `rel`: if `rel == "icon"`, it renders an `IMAGE` property with mandatory `VALUE=URI`, `DISPLAY`, `FMTTYPE`, and `X-JMAP-KEY`. Non-icon links are rendered as standard `ATTACH` properties with `FMTTYPE`, `SIZE`, and `X-JMAP-KEY`.
+- **Specification and Architectural Context**:
+  1. Evolution Data Server and desktop calendar frontends distinguish visually between an event badge or thumbnail icon and a downloadable file attachment.
+  2. If `ical_to_event` stripped `IMAGE` property semantics down to generic attachments, round-tripping an appointment would convert graphic badges into regular file attachments, cluttering the attachment list and losing the icon association.
+  3. Enforcing mandatory `VALUE=URI` on outbound `IMAGE` lines strictly conforms to the grammar requirements of RFC 7986 §5.10, ensuring interoperability with RFC 7986 compliant parsers.
+- **Adjudication**:
+  Conforming specification boundary and rich media representation fidelity. Preserves the visual distinction between icons and document attachments across round-trips.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.37 Divergence 37: Alternate Text Representations (`ALTREP` Parameter) on Text Properties vs URI-Link Separation
+
+- **Observed Behavior**:
+  RFC 5545 §3.2.2 defines the `ALTREP` parameter on `SUMMARY`, `DESCRIPTION`, and `LOCATION`, specifying an external URI pointing to an alternate representation of the text (e.g. `DESCRIPTION;ALTREP="https://example.com/desc.html":Meeting overview`). Stalwart v1.0.0 parses `ALTREP` and may convert it into `links` with `rel: "alternate"` or capture it in conversion tracking metadata. In contrast, `jmap-ical`'s `read_vevent` extracts only the raw text value of `SUMMARY`, `DESCRIPTION`, and `LOCATION`, silently ignoring `ALTREP` parameters on inbound parse without polluting `event.extra` (`extra` remains completely empty, and `links` is `None` unless standard `ATTACH` or `IMAGE` lines exist). Outbound serialization renders clean text properties without `ALTREP`.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.1.2, §4.1.3, and §4.2.5 model `title`, `description`, and `locations` strictly as plain text strings, without property-level URI parameters.
+  2. In Evolution Data Server (`ECalComponent` / `libical`), appointment text is edited directly in the desktop interface. Retaining unverified external `ALTREP` URIs could trigger unvetted external network requests or confuse the desktop editor with external references.
+  3. In JMAP calendar synchronization (`jmap-cal-sync`), `links` represents user-managed attachments and media. If `ical_to_event` synthesized links from `ALTREP` parameters, local saves from Evolution would propose adding unvetted URI links to the server record, causing synchronization churn.
+- **Adjudication**:
+  Deliberate mapping simplification and synchronization boundary safety. Preserves plain-text integrity in EDS and prevents unauthorized link creation.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.38 Divergence 38: HTML Formatted Descriptions (`X-ALT-DESC` and `STYLED-DESCRIPTION`) vs Canonical Plain Text Description
+
+- **Observed Behavior**:
+  Calendaring clients and exporters (such as Microsoft Outlook, Apple Calendar, Google Calendar, and Thunderbird) frequently attach rich HTML descriptions using vendor extensions like `X-ALT-DESC;FMTTYPE=text/html:<html>...</html>` or RFC 9073 `STYLED-DESCRIPTION;VALUE=TEXT;FMTTYPE=text/html:<html>...</html>`. Stalwart v1.0.0 may convert HTML descriptions, expose them in conversion properties, or populate `descriptionContentType: "text/html"`. In contrast, `jmap-ical`'s `read_vevent` strictly maps standard `DESCRIPTION` to `event.description` as plain text, dropping `X-ALT-DESC` and `STYLED-DESCRIPTION` on inbound import without polluting `event.extra`. Outbound serialization (`event_to_ical`) emits standard `DESCRIPTION` and never synthesizes vendor or styled description lines.
+- **Specification and Architectural Context**:
+  1. Evolution Data Server's appointment editor natively presents and edits plain text descriptions.
+  2. If `ical_to_event` populated `description` with HTML content or preserved `X-ALT-DESC` in `event.extra`, desktop users would be presented with raw HTML markup (tags, styles, entities), or `jmap-cal-sync` would attempt to send non-standard properties in JMAP `CalendarEvent/set` calls.
+  3. Standard JMAP servers reject unknown top-level object properties with `invalidProperties` errors, failing the entire synchronization batch. Maintaining `description` as plain text guarantees clean, readable text in the EDS appointment UI and keeps synchronization safe.
+- **Adjudication**:
+  Deliberate mapping boundary for desktop UI fidelity and synchronization safety. Prevents HTML markup pollution in desktop editors and keeps JMAP event payloads clean.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.39 Divergence 39: Multi-Component Stream Isolation, Non-VEVENT Component Rejection (`VTODO`, `VJOURNAL`), and Single-Event Record Codec Model
+
+- **Observed Behavior**:
+  RFC 5545 §3.4 permits an iCalendar stream to contain arbitrary combinations of `VEVENT`, `VTODO` (tasks), `VJOURNAL` (memos/notes), `VFREEBUSY`, and multiple unrelated `VEVENT` series with distinct `UID`s. Stalwart v1.0.0's `CalendarEvent/parse` processes stream blobs and returns an array of parsed `CalendarEvent` objects (`{"parsed": {<blobId>: [ <Event>, ... ]}}`), extracting all events present in the payload. In contrast, `jmap-ical`'s `ical_to_event` is designed strictly as a single-event record synchronization codec:
+  1. If an incoming stream contains only non-VEVENT components (such as `VTODO` or `VJOURNAL`) and no `VEVENT`, `ical_to_event` returns `Err(ICalError::NoEvent)`.
+  2. If an incoming stream contains mixed components, `ical_to_event` isolates the `VEVENT` series and completely ignores `VTODO` or `VJOURNAL` components without polluting `event.extra`.
+  3. When multiple `VEVENT`s exist, `ical_to_event` identifies the master series and detached recurrence overrides sharing that series, rather than parsing multi-event streams into separate calendar event collections.
+  4. Outbound export (`event_to_ical`) produces a single `VEVENT` component and never emits non-event component blocks.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalMetaBackend`), synchronization is indexed by object ID (`load_component_sync(uid)`, `save_component_sync(uid)`). Each EDS calendar component represents a single master event series.
+  2. Multi-component separation and stream splitting is handled by EDS collection import routines or `libical` component iterators before invoking the record codec.
+  3. Non-event components like tasks (`VTODO`) and memos (`VJOURNAL`) belong to separate EDS source types (`ECalClientSourceType::Tasks`, `Memos`) and distinct JMAP data models (such as JMAP Tasks). Enforcing single-event record isolation prevents cross-type pollution in calendar databases.
+- **Adjudication**:
+  Deliberate architectural boundary and component isolation. Separates single-event record synchronization from collection-level multi-component ingestion.
+- **Status**:
+  Deliberate architectural boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
