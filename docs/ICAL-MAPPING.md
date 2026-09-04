@@ -983,6 +983,84 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Deliberate mapping design. Documented and pinned in `tests/event.rs`.
 
+### 13.20 Divergence 20: `CATEGORIES` Property Splitting, Whitespace Trimming, and Keyword Map Value Filtering
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.1.2 defines `CATEGORIES` as a comma-separated list of category tokens. RFC 8984 §4.4.2 models these as `keywords: Map<String, Boolean>` where each tag maps to `true`. Stalwart v1.0.0 parses multiple `CATEGORIES` lines and splits comma-separated strings into `keywords`. In contrast, `jmap-ical`'s `read_keywords`:
+  1. Trims leading and trailing whitespace from each category (`tag.trim()`) to prevent visually duplicate tags.
+  2. Discards empty category tokens, including consecutive delimiters (`CATEGORIES:A,,B`) and whitespace-only tags.
+  3. Returns `None` (`event.keywords: None`) when no non-empty categories exist, avoiding empty `{}` map emission.
+  4. Outbound serialization ([`maps_keyword`]):
+     - Strictly requires `set == &Value::Bool(true)` and rejects tags with `false` or non-boolean values.
+     - Rejects tags containing carriage returns (`\r`), because `syntax::fold_into` strips carriage returns as a protocol security invariant to prevent CRLF injection.
+     - Emits a single sorted `CATEGORIES` line, escaping commas, semicolons, and newlines.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent` / `libical`), calendar appointment categories are edited through a tag entry interface. Trailing whitespace is invisible to desktop users and accidental.
+  2. RFC 8984 §4.4.2 mandates that keyword values must be boolean `true`.
+  3. In JMAP synchronization (`jmap-cal-sync`), `keywords` is replaced whole if modified. Returning `None` when no categories are specified prevents the client from proposing spurious patch diffs against server records that omit `keywords`.
+- **Adjudication**:
+  Deliberate mapping design and canonicalization boundary. Trimming whitespace and dropping empty tokens avoids duplicate tags and protects against CRLF injection.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.21 Divergence 21: `CONFERENCE` Property and `virtualLocations` Feature Parsing, Label Handling, and Map Key Allocation
+
+- **Observed Behavior**:
+  RFC 7986 §5.11 specifies `CONFERENCE` for audio/video conferencing. RFC 8984 §4.2.6 models these as `virtualLocations: Map<Id, VirtualLocation>`. Stalwart v1.0.0 parses `CONFERENCE` into `virtualLocations`, synthesizing keys using UUID5 hashes or sequence counters. In contrast, `jmap-ical`'s `read_virtual_locations`:
+  1. Preserves the `X-JMAP-KEY` parameter across round-trips to retain the exact server dictionary key.
+  2. If `X-JMAP-KEY` is missing or invalid, allocates deterministic collision-free positional keys (`"v1"`, `"v2"`).
+  3. Validates that the property value is a well-formed URI via `names_a_uri`, dropping invalid non-URI lines.
+  4. Parses `LABEL` parameter into `VirtualLocation.name`.
+  5. Parses `FEATURE` parameter tokens (`AUDIO`, `VIDEO`, `SCREEN`, `CHAT`, `MODERATOR`) into lowercase booleans in `features`.
+  6. Returns `None` when no valid conference endpoints exist.
+  7. Outbound serialization (`drawn_conference`) renders `CONFERENCE;VALUE=URI;X-JMAP-KEY=<key>` with `LABEL` and uppercase `FEATURE` list.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server, meeting URLs are displayed to the user as clickable video conference links.
+  2. If dictionary keys were dynamically hashed from URI content (e.g. UUID5), editing a conference label would generate a new key. This would force `jmap-cal-sync` to delete the old virtual location and insert a new one instead of performing in-place property patching (`virtualLocations/<key>/name`).
+  3. Retaining `X-JMAP-KEY` and using deterministic keys ensures stable patch paths and prevents dictionary churn.
+- **Adjudication**:
+  Deliberate mapping design and synchronization stability boundary. Stable key retention via `X-JMAP-KEY` prevents map churn during synchronization.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.22 Divergence 22: `TRANSP` (Time Transparency) Default Semantics, Omission vs Explicit Busy, and Non-Standard Value Dropping
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.2.7 defines `TRANSP:OPAQUE` (default) and `TRANSP:TRANSPARENT`. RFC 8984 §4.4.6 defines `freeBusyStatus`: `"busy"` (default) and `"free"`. Stalwart v1.0.0 defaults `freeBusyStatus` to `"busy"` during `CalendarEvent/parse` when `TRANSP` is omitted from the incoming `VEVENT`. In contrast, `jmap-ical`'s `read_transparency`:
+  1. Maps `TRANSP:OPAQUE` to `Some("busy")` and `TRANSP:TRANSPARENT` to `Some("free")` case-insensitively.
+  2. If `TRANSP` is omitted, returns `None` (`event.free_busy_status: None`).
+  3. If `TRANSP` contains an unknown or non-standard token (e.g. `TRANSP:TENTATIVE`), drops it and returns `None` without polluting `event.extra`.
+  4. Outbound serialization (`drawn_transparency`) emits `TRANSP:OPAQUE` when `free_busy_status == "busy"`, `TRANSP:TRANSPARENT` when `free_busy_status == "free"`, and omits `TRANSP` when `None`.
+- **Specification and Architectural Context**:
+  1. In JMAP client synchronization (`jmap-cal-sync`), the client detects user edits by computing a structural diff against the server's record.
+  2. If `read_transparency` defaulted an omitted `TRANSP` to `Some("busy")`, an event imported without `TRANSP` would report `freeBusyStatus = "busy"`. If the server originally omitted `freeBusyStatus` (null/default), the client sync engine would generate a superfluous patch operation (`{"freeBusyStatus": "busy"}`).
+  3. Returning `None` when unstated preserves semantic neutrality: what the component did not state is not claimed to be explicitly set.
+- **Adjudication**:
+  Justified architectural deviation for diff-based synchronization fidelity. Emitting `None` when unstated avoids spurious patch operations against server defaults.
+- **Status**:
+  Justified architectural deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.23 Divergence 23: `PRIORITY` Integer Range Clamping, Omission Semantics, and VTODO Task Isolation
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.1.9 defines `PRIORITY` as an integer from 0 to 9 (0 undefined, 1 highest, 9 lowest). RFC 8984 §4.4.1 defines `priority: UnsignedInt` (0 to 9). Stalwart v1.0.0 parses 0 to 9, but behaviors on invalid or out-of-range priorities vary across parsers. In contrast, `jmap-ical`'s `read_priority`:
+  1. Strictly enforces `0..=9`. Any integer outside `0..=9` (`-1`, `10`, `100`) or non-integer string is dropped, returning `None` (`event.priority: None`) without polluting `event.extra`.
+  2. An omitted `PRIORITY` in the component returns `None`, rather than synthesizing `Some(0)`.
+  3. Outbound serialization (`drawn_priority`):
+     - An explicit `priority: Some(0)` in `CalendarEvent` is emitted on the wire as `PRIORITY:0` (explicitly stating undefined priority).
+     - When `event.priority` is `None`, the `PRIORITY` line is omitted from the `VEVENT`.
+     - Invalid out-of-range values in `event.priority` are dropped on export rather than writing invalid iCalendar syntax.
+  4. Non-VEVENT isolation: CalDAV systems frequently place `PRIORITY` on `VTODO` components (tasks); `jmap-ical` strictly scopes parsing to `VEVENT`, discarding non-event components so task priorities do not leak into calendar appointment state.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.1.9 explicitly restricts valid integer priorities to 0..9.
+  2. Evolution Data Server (`ECalComponent` / `libical`) maps priority to a 0..9 scale with predefined UI levels (High: 1-4, Normal: 5, Low: 6-9, Undefined: 0).
+  3. Dropping out-of-bounds numbers on import ensures EDS never enters an invalid state from corrupted third-party calendar exports.
+  4. Preserving the distinction between `None` (omitted) and `Some(0)` (`PRIORITY:0`) ensures exact round-trip fidelity for clients that differentiate between an unstated priority and an explicitly cleared/undefined priority.
+- **Adjudication**:
+  Conforming specification validation and boundary robustness. Strict range enforcement prevents invalid states in desktop UI and ensures clean round-trips.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
 
 
