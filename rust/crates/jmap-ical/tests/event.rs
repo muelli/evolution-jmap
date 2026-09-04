@@ -19015,3 +19015,257 @@ END:VCALENDAR\r\n";
         "invalid weekday token zz must be refused by maps_recurrence_rule"
     );
 }
+
+#[test]
+fn differential_oracle_rrule_bysetpos_and_multiple_byparts_set_selection_gating() {
+    // Divergence 44 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 specifies BYSETPOS operating on the set of occurrences within the interval,
+    // and mandates that BYSETPOS MUST only be specified in conjunction with another BYxxx rule part.
+    // RFC 8984 section 4.3.1 models this as bySetPosition: Integer[].
+    // Stalwart v1.0.0 parses BYSETPOS into bySetPosition integer arrays.
+    // In contrast, jmap-ical's read_rrule preserves signed integers (including negative offsets like -1
+    // for last occurrence), outbound by_set_position_part strictly requires another BYxxx part to be present
+    // (selects_from_a_set), and maps_recurrence_rule refuses standalone BYSETPOS, zero values, or out-of-range indices.
+    let bysetpos_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:bysetpos-event-001\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Last Workday of the Month\r\n\
+RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(bysetpos_ics).expect("parse bysetpos rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(rule.by_set_position, Some(vec![-1]));
+    assert!(
+        maps_recurrence_rule(rule),
+        "valid by_set_position with by_day must pass maps_recurrence_rule"
+    );
+
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1"));
+
+    // Multiple set positions
+    let mut multi_pos_rule = rule.clone();
+    multi_pos_rule.by_set_position = Some(vec![1, 3, -1]);
+    assert!(maps_recurrence_rule(&multi_pos_rule));
+    let mut multi_ev = ev.clone();
+    multi_ev.recurrence_rule = Some(multi_pos_rule);
+    let multi_out = event_to_ical(&multi_ev);
+    assert!(multi_out.contains("BYSETPOS=1,3,-1"));
+
+    // Standalone by_set_position without another BYxxx part is refused by maps_recurrence_rule
+    let mut standalone_pos_rule = rule.clone();
+    standalone_pos_rule.by_day = None;
+    standalone_pos_rule.by_month_day = None;
+    assert!(
+        !maps_recurrence_rule(&standalone_pos_rule),
+        "standalone by_set_position without another BYxxx part must be refused"
+    );
+
+    // Zero position is invalid in RFC 5545 and RFC 8984
+    let mut zero_pos_rule = rule.clone();
+    zero_pos_rule.by_set_position = Some(vec![0]);
+    assert!(
+        !maps_recurrence_rule(&zero_pos_rule),
+        "by_set_position with zero must be refused"
+    );
+}
+
+#[test]
+fn differential_oracle_rrule_bymonth_numbers_vs_strings_and_leap_month_refusal() {
+    // Divergence 45 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 specifies BYMONTH as month numbers 1..12.
+    // RFC 8984 section 4.3.1 models byMonth: String[] to admit non-Gregorian leap month qualifiers (e.g. 5L).
+    // Stalwart v1.0.0 parses BYMONTH into byMonth string arrays.
+    // In contrast, jmap-ical's read_rrule maps BYMONTH integer numbers into string arrays, outbound
+    // by_month_part requires canonical month numbers 1..=12 without leading zeros (rejecting 03), and
+    // deliberately refuses leap months (such as 5L) because Gregorian series have no RSCALE calendar system.
+    let bymonth_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:bymonth-event-001\r\n\
+DTSTART:20260101T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Quarterly Audit\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=1,6,12\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(bymonth_ics).expect("parse bymonth rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(
+        rule.by_month.as_deref(),
+        Some(&["1".to_string(), "6".to_string(), "12".to_string()][..])
+    );
+    assert!(
+        maps_recurrence_rule(rule),
+        "canonical by_month must pass maps_recurrence_rule"
+    );
+
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RRULE:FREQ=YEARLY;BYMONTH=1,6,12"));
+
+    // Out of bounds month numbers are refused
+    let mut invalid_month_rule = rule.clone();
+    invalid_month_rule.by_month = Some(vec!["13".to_string()]);
+    assert!(
+        !maps_recurrence_rule(&invalid_month_rule),
+        "month 13 must be refused"
+    );
+
+    // Leading zero formatting is refused to prevent round-trip diffs
+    let mut leading_zero_rule = rule.clone();
+    leading_zero_rule.by_month = Some(vec!["03".to_string()]);
+    assert!(
+        !maps_recurrence_rule(&leading_zero_rule),
+        "month 03 must be refused"
+    );
+
+    // Leap month 5L (RFC 7529 RSCALE) is refused for Gregorian series
+    let mut leap_month_rule = rule.clone();
+    leap_month_rule.by_month = Some(vec!["5L".to_string()]);
+    assert!(
+        !maps_recurrence_rule(&leap_month_rule),
+        "leap month 5L must be refused without RSCALE"
+    );
+}
+
+#[test]
+fn differential_oracle_rrule_wkst_default_monday_omission_and_case_normalization() {
+    // Divergence 46 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 specifies WKST with default MO.
+    // RFC 8984 section 4.3.1 specifies firstDayOfWeek: String (default: "mo") with lowercase two-character day code.
+    // Stalwart v1.0.0 parses WKST and normalizes to lowercase, omitting firstDayOfWeek when it matches "mo".
+    // In contrast, jmap-ical's read_rrule lowercases incoming WKST tokens, but outbound first_day_of_week_part
+    // deliberately suppresses WKST=MO on export because libical strips default WKST=MO upon reading into EDS cache.
+    // Non-Monday days (such as WKST=SU) are exported canonically, and invalid day tokens are refused.
+    let wkst_mo_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:wkst-mo-event-001\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Weekly Planning\r\n\
+RRULE:FREQ=WEEKLY;BYDAY=TU,TH;WKST=MO\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(wkst_mo_ics).expect("parse wkst mo rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(rule.first_day_of_week.as_deref(), Some("mo"));
+    assert!(
+        maps_recurrence_rule(rule),
+        "valid first_day_of_week must pass maps_recurrence_rule"
+    );
+
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RRULE:FREQ=WEEKLY;BYDAY=TU,TH"));
+    assert!(
+        !out.contains("WKST=MO"),
+        "WKST=MO must be suppressed on export to prevent EDS cache-drop diffs"
+    );
+
+    // Non-default work week start (WKST=SU) is serialized
+    let wkst_su_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:wkst-su-event-002\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Sunday Week Start Planning\r\n\
+RRULE:FREQ=WEEKLY;BYDAY=MO,WE;WKST=SU\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let su_ev = ical_to_event(wkst_su_ics).expect("parse wkst su rrule");
+    let su_rule = su_ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(su_rule.first_day_of_week.as_deref(), Some("su"));
+    assert!(maps_recurrence_rule(su_rule));
+    let su_out = event_to_ical(&su_ev);
+    assert!(su_out.contains("RRULE:FREQ=WEEKLY;BYDAY=MO,WE;WKST=SU"));
+
+    // Invalid day codes or uppercase values in JSCalendar model are refused
+    let mut invalid_day_rule = rule.clone();
+    invalid_day_rule.first_day_of_week = Some("invalid".to_string());
+    assert!(
+        !maps_recurrence_rule(&invalid_day_rule),
+        "invalid weekday name must be refused"
+    );
+
+    let mut upper_day_rule = rule.clone();
+    upper_day_rule.first_day_of_week = Some("MO".to_string());
+    assert!(
+        !maps_recurrence_rule(&upper_day_rule),
+        "uppercase weekday code must be refused by weekday_token"
+    );
+}
+
+#[test]
+fn differential_oracle_rrule_frequency_gates_and_incompatible_parts_refusal() {
+    // Divergence 47 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 enforces strict combinatorial rules between FREQ and BYxxx parts:
+    // BYWEEKNO MUST NOT be specified when FREQ is not YEARLY.
+    // BYMONTHDAY MUST NOT be specified when FREQ is WEEKLY.
+    // BYYEARDAY MUST NOT be specified when FREQ is DAILY, WEEKLY, or MONTHLY.
+    // Stalwart v1.0.0 parses rule parts into JSCalendar objects where frequency combinations may be loosely validated.
+    // In contrast, jmap-ical's outbound mapping applies strict frequency gating and maps_recurrence_rule refuses
+    // frequency-incompatible combinations to prevent libical in EDS from rejecting the entire component.
+    let yearly_weekno_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:yearly-weekno-001\r\n\
+DTSTART:20260101T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Yearly Week Number Event\r\n\
+RRULE:FREQ=YEARLY;BYWEEKNO=20,-1\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let yearly_ev = ical_to_event(yearly_weekno_ics).expect("parse yearly weekno ics");
+    let yearly_rule = yearly_ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(yearly_rule.by_week_no, Some(vec![20, -1]));
+    assert!(maps_recurrence_rule(yearly_rule));
+    let yearly_out = event_to_ical(&yearly_ev);
+    assert!(yearly_out.contains("RRULE:FREQ=YEARLY;BYWEEKNO=20,-1"));
+
+    // BYWEEKNO on monthly frequency is refused by by_week_no_part and maps_recurrence_rule
+    let mut monthly_weekno_rule = yearly_rule.clone();
+    monthly_weekno_rule.frequency = "monthly".to_string();
+    assert!(
+        !maps_recurrence_rule(&monthly_weekno_rule),
+        "BYWEEKNO on monthly frequency must be refused"
+    );
+
+    // BYMONTHDAY on weekly frequency is refused by by_month_day_part and maps_recurrence_rule
+    let weekly_monthday_rule = RecurrenceRule {
+        rule_type: Some("RecurrenceRule".to_string()),
+        frequency: "weekly".to_string(),
+        by_month_day: Some(vec![15]),
+        ..Default::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&weekly_monthday_rule),
+        "BYMONTHDAY on weekly frequency must be refused"
+    );
+
+    // BYYEARDAY on daily, weekly, or monthly frequency is refused by by_year_day_part and maps_recurrence_rule
+    let daily_yearday_rule = RecurrenceRule {
+        rule_type: Some("RecurrenceRule".to_string()),
+        frequency: "daily".to_string(),
+        by_year_day: Some(vec![100]),
+        ..Default::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&daily_yearday_rule),
+        "BYYEARDAY on daily frequency must be refused"
+    );
+}
