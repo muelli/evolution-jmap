@@ -4,13 +4,19 @@
 //! Snooze in the message list: put a message away until a chosen morning, on
 //! the server.
 //!
-//! Strictly the *server-side* feature: `Email.snoozed` as Fastmail deploys it
-//! (the Cyrus vendor capability — see [`jmap_proto::mail::SnoozeDetails`] for
-//! the whole standardization story). A server without it, Stalwart included,
-//! has no wake-up machinery, so there the submenu stays insensitive with a
-//! tooltip saying why: a snooze that only this machine remembers would strand
-//! messages in a folder nothing empties, and GNOME/evolution#374 is the
-//! upstream place for a client-side concept.
+//! Strictly the *server-side* feature: `Email.snoozed`, the Cyrus vendor
+//! capability (see [`jmap_proto::mail::SnoozeDetails`] for the whole
+//! standardization story).
+//!
+//! **No server tested so far exposes it**, so in practice this submenu is
+//! insensitive everywhere but the mock: Stalwart implements the mailbox role
+//! and nothing else, and Fastmail's public JMAP rejects the capability even
+//! though its web UI snoozes (the probe is recorded in
+//! `jmap_client::snooze`). That is the honest state of the feature — written
+//! to the extension, ready for a Cyrus install with nonstandard extensions
+//! on. The alternative, a snooze only this machine remembers, would strand
+//! messages in a folder nothing empties; GNOME/evolution#374 is the upstream
+//! place for a client-side concept.
 //!
 //! Two `EExtension`s share one implementation ([`action`]): the mail shell
 //! view and the detached message window (`EMailBrowser`), each merging the

@@ -35,8 +35,12 @@ trip reaching a real server. That is this document.
 
 - **Stalwart** offers vacation and scheduled send, and *not* snooze — the
   useful negative case for the snooze gate. Any Stalwart deployment is fine.
-- **Fastmail** offers all three (snooze is its own Cyrus extension). A Fastmail
-  account is the only way to see the snooze item sensitive.
+- **Fastmail** offers vacation and scheduled send (`maxDelayedSend` is
+  advertised at 512 days). It does **not** expose snooze on its public JMAP
+  API, despite snoozing in its own web UI — see the snooze section below.
+- **Snooze has no known public server.** The submenu can only be seen
+  sensitive against `jmap-mockd` (`MockServer::builder().snooze_extension()`)
+  or a self-hosted Cyrus with `jmap_nonstandard_extensions` enabled.
 
 Install the module the usual way (`cmake --install`, then
 `evolution --force-shutdown` so the shell reloads the `.so`), and run with
@@ -50,9 +54,11 @@ Install the module the usual way (`cmake --install`, then
 3. Selecting it fetches the current `VacationResponse`; the widgets fill and
    become sensitive. A server that does not offer the capability leaves them
    insensitive with a one-line explanation instead.
-4. Toggle *Send automatic replies*, set a first/last day (`YYYY-MM-DD`, either
-   may be blank), a subject and a message, and press **OK**. Only a changed
-   page writes; re-opening the editor shows what the server now holds.
+4. Toggle *Send automatic replies* — the detail fields below it are
+   insensitive until it is on. Set a first/last day with the date pickers
+   (each may be left unset, which is the protocol's "no bound"), a subject
+   and a message, and press **OK**. Only a changed page writes; re-opening
+   the editor shows what the server now holds.
 5. Confirm out of band (the provider's web UI, or `VacationResponse/get`) that
    the autoresponder is set. **Turn it back off afterwards** — this is a live
    setting on a real mailbox.
@@ -76,10 +82,16 @@ Install the module the usual way (`cmake --install`, then
 
 1. In the message list, select one or more messages and open the context menu.
    A **Snooze** submenu carries the same three presets.
-2. It is sensitive only for a folder on a JMAP account whose server offers the
-   snooze extension — Fastmail. On Stalwart (or any server without it) the item
-   stays insensitive, tooltip saying so; the trace logs `snooze gate:
-   capability fetched snooze=false`.
+2. It is sensitive only for a folder on a JMAP account whose server
+   advertises the Cyrus snooze capability. Against Stalwart *and against
+   Fastmail* the item stays insensitive with a tooltip saying so, and the
+   trace logs `snooze gate: capability fetched snooze=false` — that is the
+   expected result on both, not a bug. Fastmail was probed directly
+   (2026-09-04): `using` the capability returns `unknownCapability`,
+   `Email/get` of `snoozed` returns `invalidArguments`, there is no
+   `snoozed`-role mailbox, and `snoozedUntil` is an `unsupportedSort`.
+   To see the item live, point Evolution at `jmap-mockd` started with the
+   snooze extension on.
 3. Pick a preset. The selected messages move into the server's snoozed mailbox
    (created if absent) with a wake time; they leave the inbox and return to it
    when the time comes. The detached message window (double-click a message)

@@ -1,8 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Snoozing mail: `Email.snoozed`, the vendor extension Fastmail deploys
+//! Snoozing mail: `Email.snoozed`, the vendor extension Cyrus implements
 //! (draft-ietf-extra-email-snooze expired without an RFC).
+//!
+//! No server this project has tested exposes it. Cyrus gates the capability
+//! behind `jmap_nonstandard_extensions`, and Fastmail — a Cyrus deployment
+//! whose *web UI* snoozes — does not enable it on the public JMAP API:
+//! probed 2026-09-04, `using` the capability is answered
+//! `unknownCapability` (HTTP 400), `Email/get` of `snoozed` is
+//! `invalidArguments`, there is no `snoozed`-role mailbox, and
+//! `snoozedUntil` is an `unsupportedSort`. Stalwart implements the mailbox
+//! role only. So this path is written to the extension as specified and
+//! exercised against the mock; it lights up for a Cyrus install with
+//! nonstandard extensions on, and correctly stays dark elsewhere.
 //!
 //! Everything snooze-shaped in this client lives here and in
 //! [`jmap_proto::mail::SnoozeDetails`], so the day the draft revives as an
