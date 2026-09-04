@@ -10,8 +10,8 @@
 use std::collections::BTreeMap;
 
 use jmap_ical::{
-    ICalError, OVERRIDE_PROPERTIES, busy_periods_to_vfreebusy, defines_time_zone, event_to_ical,
-    free_busy_type, ical_to_event, maps_alerts, maps_keyword, maps_locations,
+    ICalError, MAX_DEPTH, OVERRIDE_PROPERTIES, busy_periods_to_vfreebusy, defines_time_zone,
+    event_to_ical, free_busy_type, ical_to_event, maps_alerts, maps_keyword, maps_locations,
     maps_recurrence_override, maps_recurrence_rule, maps_time_zone, maps_virtual_locations,
     names_time_zone, prune_time_zones, sends_recurrence_override, time_zone_definition,
     unstateable_until, windows_time_zone_to_iana,
@@ -21991,5 +21991,168 @@ fn differential_oracle_freebusy_fractional_seconds_truncation_and_digit_validati
             &[bad_period]
         ),
         None
+    );
+}
+
+#[test]
+fn differential_oracle_unterminated_and_truncated_component_refusal() {
+    // Divergence 88 against Stalwart differential oracle:
+    // RFC 5545 sections 3.4 and 3.6 require strict syntactic structure where every component
+    // is cleanly enclosed in matching BEGIN:<name> and END:<name> lines within a VCALENDAR envelope.
+    // In jmap-ical:
+    // 1. Inputs lacking BEGIN:VCALENDAR or empty inputs yield ICalError::NotACalendar.
+    // 2. Components without closing END tags before EOF yield ICalError::Unterminated.
+    // 3. Mismatched closing tags yield ICalError::Mismatched.
+    // 4. Trailing data after END:VCALENDAR yields ICalError::Trailing.
+    // In contrast, Stalwart CalendarEvent/parse or CalDAV parsers may attempt best-effort
+    // recovery or report server-level notParsable dictionaries.
+
+    // Empty or non-calendar input
+    assert_eq!(ical_to_event(""), Err(ICalError::NotACalendar));
+    assert_eq!(ical_to_event("   \r\n"), Err(ICalError::NotACalendar));
+    assert_eq!(
+        ical_to_event("VERSION:2.0\r\nSUMMARY:Invalid\r\n"),
+        Err(ICalError::NotACalendar)
+    );
+
+    // Unterminated VEVENT or VCALENDAR
+    let unterminated_vevent = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-unterminated\r\nDTSTART:20260904T100000Z\r\n";
+    assert_eq!(
+        ical_to_event(unterminated_vevent),
+        Err(ICalError::Unterminated("VEVENT".to_string()))
+    );
+
+    let unterminated_vcalendar = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-ok\r\nDTSTART:20260904T100000Z\r\nEND:VEVENT\r\n";
+    assert_eq!(
+        ical_to_event(unterminated_vcalendar),
+        Err(ICalError::Unterminated("VCALENDAR".to_string()))
+    );
+
+    // Mismatched closing component tags
+    let mismatched = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-mismatched\r\nEND:VALARM\r\nEND:VCALENDAR\r\n";
+    assert_eq!(
+        ical_to_event(mismatched),
+        Err(ICalError::Mismatched {
+            expected: "VEVENT".to_string(),
+            found: "VALARM".to_string(),
+        })
+    );
+
+    // Trailing content after END:VCALENDAR
+    let trailing = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:evt-trailing\r\nDTSTART:20260904T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\nEXTRA:AFTER_EOF\r\n";
+    assert!(matches!(
+        ical_to_event(trailing),
+        Err(ICalError::Trailing(_))
+    ));
+}
+
+#[test]
+fn differential_oracle_parser_nesting_depth_limitation_and_stack_protection() {
+    // Divergence 89 against Stalwart differential oracle:
+    // RFC 5545 defines hierarchical calendar objects (VCALENDAR -> VEVENT -> VALARM, depth 3).
+    // In jmap-ical:
+    // 1. check_depth enforces MAX_DEPTH = 32 using an iterative traversal.
+    // 2. Nested components up to MAX_DEPTH parse successfully.
+    // 3. Components exceeding MAX_DEPTH are refused with ICalError::TooDeep to protect against
+    //    stack exhaustion panics on adversarial inputs.
+    assert_eq!(MAX_DEPTH, 32);
+
+    let build_nested = |depth: usize| {
+        let mut ics = String::from("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\n");
+        for _ in 1..depth {
+            ics.push_str("BEGIN:VALARM\r\n");
+        }
+        for _ in 1..depth {
+            ics.push_str("END:VALARM\r\n");
+        }
+        ics.push_str("END:VCALENDAR\r\n");
+        ics
+    };
+
+    // Up to MAX_DEPTH (32) parses without error from depth check
+    let at_limit = build_nested(MAX_DEPTH);
+    let parsed_limit = jmap_ical::event::parse_ical(&at_limit);
+    assert!(parsed_limit.is_ok(), "document at MAX_DEPTH must parse");
+
+    // Exceeding MAX_DEPTH (33) returns TooDeep
+    let over_limit = build_nested(MAX_DEPTH + 1);
+    let parsed_over = jmap_ical::event::parse_ical(&over_limit);
+    assert_eq!(
+        parsed_over.err(),
+        Some(ICalError::TooDeep("VALARM".to_string())),
+        "document exceeding MAX_DEPTH must be refused with TooDeep"
+    );
+}
+
+#[test]
+fn differential_oracle_unbalanced_parameter_quoting_and_delimiter_tolerance() {
+    // Divergence 90 against Stalwart differential oracle:
+    // RFC 5545 section 3.2 mandates double-quoting for parameter values containing delimiters
+    // and forbids bare double quotes.
+    // In real-world exporter streams, broken or missing closing quotes frequently appear.
+    // In jmap-ical:
+    // 1. Parameters with missing closing quotes or inner unescaped quotes parse in bounded time
+    //    (< 1 second) without hanging or crashing.
+    // 2. Core component fields (id, summary, dtstart) are extracted safely.
+    // 3. Outbound serialization formats clean quoted parameters per RFC 5545 rules.
+
+    let missing_closing_quote = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:evt-quote-1\r\nDTSTART;TZID=\"Europe/Berlin:20260904T120000\r\nSUMMARY:Standup Meeting\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let start_time = std::time::Instant::now();
+    let ev1 = ical_to_event(missing_closing_quote).expect("parse with unbalanced quote");
+    assert!(
+        start_time.elapsed() < std::time::Duration::from_secs(1),
+        "parse must complete in bounded time"
+    );
+    assert_eq!(ev1.id.as_ref().map(|id| id.as_str()), Some("evt-quote-1"));
+
+    let inner_quotes = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:evt-quote-2\r\nORGANIZER;CN=\"Alice\"Smith\":mailto:alice@example.com\r\nDTSTART:20260904T120000Z\r\nSUMMARY:Quarterly Review\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev2 = ical_to_event(inner_quotes).expect("parse with inner unescaped quotes");
+    assert_eq!(ev2.id.as_ref().map(|id| id.as_str()), Some("evt-quote-2"));
+    assert_eq!(ev2.title.as_deref(), Some("Quarterly Review"));
+}
+
+#[test]
+fn differential_oracle_content_line_folding_and_crlf_boundary_sanitization() {
+    // Divergence 91 against Stalwart differential oracle:
+    // RFC 5545 section 3.1 specifies line folding at 75 octets via CRLF followed by linear whitespace.
+    // In jmap-ical:
+    // 1. Inbound unfold handles both space and tab continuation lines losslessly.
+    // 2. Empty continuation lines and mixed LF, CRLF, and CR line breaks parse deterministically.
+    // 3. Outbound raw properties (duration, recurrence frequency, timeZone) sanitize or drop
+    //    injected CRLF/LF/CR sequences to prevent property injection.
+
+    // Inbound unfolding with space and tab continuations
+    let folded_ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:evt-fold-1\r\nDTSTART:20260904T100000Z\r\nSUMMARY:Architecture\r\n  Review and Plan\r\nDESCRIPTION:First paragraph line\r\n \r\n \tSecond paragraph line\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let parsed_folded = ical_to_event(folded_ics).expect("parse folded content lines");
+    assert_eq!(
+        parsed_folded.title.as_deref(),
+        Some("Architecture Review and Plan")
+    );
+    assert_eq!(
+        parsed_folded.description.as_deref(),
+        Some("First paragraph line\tSecond paragraph line")
+    );
+
+    // Mixed line endings (LF and CRLF) parse deterministically
+    let mixed_endings = "BEGIN:VCALENDAR\nVERSION:2.0\r\nPRODID:test\nBEGIN:VEVENT\r\nUID:evt-mixed-1\nDTSTART:20260904T100000Z\r\nSUMMARY:Mixed Line Endings\nEND:VEVENT\r\nEND:VCALENDAR\n";
+    let parsed_mixed = ical_to_event(mixed_endings).expect("parse mixed endings");
+    assert_eq!(parsed_mixed.title.as_deref(), Some("Mixed Line Endings"));
+
+    // Outbound raw property injection protection: duration with CRLF is dropped
+    let injected_ev = CalendarEvent {
+        id: Some("evt-inj".into()),
+        start: Some("2026-09-04T10:00:00".into()),
+        duration: Some("PT1H\r\nLOCATION:Injected".into()),
+        time_zone: Some("Europe/Berlin\r\nSUMMARY:Injected".into()),
+        ..CalendarEvent::default()
+    };
+    let ics_out = event_to_ical(&injected_ev);
+    assert!(
+        !ics_out.contains("\r\nLOCATION:Injected"),
+        "injected CRLF in duration must not create a content line"
+    );
+    assert!(
+        !ics_out.contains("\r\nSUMMARY:Injected"),
+        "injected CRLF in timeZone must not create a content line"
     );
 }
