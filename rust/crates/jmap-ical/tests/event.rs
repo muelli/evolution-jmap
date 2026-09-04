@@ -21190,3 +21190,244 @@ END:VCALENDAR\r\n",
         &json!({"showWithoutTime": false})
     ));
 }
+
+#[test]
+fn differential_oracle_participant_sendto_imip_uri_validation_and_crlf_sanitization() {
+    // Divergence 72 against Stalwart differential oracle:
+    // RFC 8984 section 4.4.6 defines sendTo: Map<String, String>.
+    // RFC 5545 section 3.3.3 requires CAL-ADDRESS to be a URI.
+    // In jmap-ical:
+    // 1. calendar_address checks sendTo.imip.
+    // 2. names_a_uri validates RFC 3986 scheme, colon, and no whitespace.
+    // 3. Newlines or carriage returns are rejected to prevent CRLF injection.
+    // 4. Non-imip delivery methods (sms, other) or non-URI strings are dropped.
+    // 5. Inbound ical_to_event leaves participants: None for scheduling safety.
+    let valid_event = attended(json!({
+        "alice": guest("mailto:alice@example.com", "Alice Example", json!({
+            "roles": {"attendee": true},
+        })),
+    }));
+    let ics = event_to_ical(&valid_event);
+    assert_eq!(
+        content_line(&ics, "ATTENDEE"),
+        "ATTENDEE;CN=\"Alice Example\";ROLE=REQ-PARTICIPANT:mailto:alice@example.com",
+        "{ics}"
+    );
+
+    // Dropped participants: missing imip, non-imip keys, bare email, whitespace, or CRLF
+    for bad_participant in [
+        json!({"@type": "Participant", "name": "No SendTo"}),
+        json!({"@type": "Participant", "sendTo": {}}),
+        json!({"@type": "Participant", "sendTo": {"sms": "tel:+1234567890"}}),
+        json!({"@type": "Participant", "sendTo": {"web": "https://example.com/invite"}}),
+        json!({"@type": "Participant", "sendTo": {"imip": "alice@example.com"}}),
+        json!({"@type": "Participant", "sendTo": {"imip": "mailto:"}}),
+        json!({"@type": "Participant", "sendTo": {"imip": "mailto:alice example.com"}}),
+        json!({"@type": "Participant", "sendTo": {"imip": "mailto:alice@example.com\r\nATTENDEE:injected"}}),
+        json!({"@type": "Participant", "sendTo": {"imip": "mailto:alice@example.com\nSUMMARY:Injected"}}),
+    ] {
+        let bad_event = attended(json!({"bad": bad_participant}));
+        let bad_ics = event_to_ical(&bad_event);
+        assert!(
+            without(&bad_ics, "ATTENDEE"),
+            "{bad_participant}: {bad_ics}"
+        );
+        assert!(
+            without(&bad_ics, "ORGANIZER"),
+            "{bad_participant}: {bad_ics}"
+        );
+        assert!(
+            !bad_ics.contains("injected"),
+            "{bad_participant}: {bad_ics}"
+        );
+    }
+
+    // Inbound safety: participants are dropped on import
+    let imported = ical_to_event(&ics).expect("parse valid event with attendee");
+    assert_eq!(imported.participants, None);
+}
+
+#[test]
+fn differential_oracle_participant_owner_role_isolation_and_dual_line_emission() {
+    // Divergence 73 against Stalwart differential oracle:
+    // RFC 8984 section 4.4.6 models organizer via roles: {"owner": true}.
+    // RFC 5545 section 3.6.1 admits at most one ORGANIZER line per VEVENT.
+    // In jmap-ical:
+    // 1. Only the first owner in iteration order gets an ORGANIZER line.
+    // 2. An owner-only participant emits ORGANIZER and no ATTENDEE line.
+    // 3. An owner who also attends (roles: {"owner": true, "attendee": true}) emits both lines.
+    let single_owner_only = attended(json!({
+        "alice": guest("mailto:alice@example.com", "Alice Owner", json!({
+            "roles": {"owner": true},
+        })),
+    }));
+    let ics1 = event_to_ical(&single_owner_only);
+    assert_eq!(
+        content_line(&ics1, "ORGANIZER"),
+        "ORGANIZER;CN=\"Alice Owner\":mailto:alice@example.com",
+        "{ics1}"
+    );
+    assert!(without(&ics1, "ATTENDEE"), "{ics1}");
+
+    // Dual-line emission: attending owner
+    let attending_owner = attended(json!({
+        "alice": guest("mailto:alice@example.com", "Alice Owner", json!({
+            "roles": {"owner": true, "attendee": true},
+            "participationStatus": "accepted",
+        })),
+    }));
+    let ics2 = event_to_ical(&attending_owner);
+    assert_eq!(
+        content_line(&ics2, "ORGANIZER"),
+        "ORGANIZER;CN=\"Alice Owner\":mailto:alice@example.com",
+        "{ics2}"
+    );
+    assert_eq!(
+        content_line(&ics2, "ATTENDEE"),
+        "ATTENDEE;CN=\"Alice Owner\";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:alice@example.com",
+        "{ics2}"
+    );
+
+    // Multiple owners: only the first owner in map key order emits ORGANIZER
+    let multi_owners = attended(json!({
+        "alice": guest("mailto:alice@example.com", "Alice First", json!({
+            "roles": {"owner": true},
+        })),
+        "bob": guest("mailto:bob@example.com", "Bob Second", json!({
+            "roles": {"owner": true, "attendee": true},
+        })),
+    }));
+    let ics3 = event_to_ical(&multi_owners);
+    let organizer_lines: Vec<String> = ics3
+        .replace("\r\n ", "")
+        .split("\r\n")
+        .filter(|line| line.starts_with("ORGANIZER"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        organizer_lines,
+        vec!["ORGANIZER;CN=\"Alice First\":mailto:alice@example.com".to_string()],
+        "{ics3}"
+    );
+    // Bob is second owner: does not get ORGANIZER, but gets ATTENDEE because of attendee role
+    assert_eq!(
+        content_line(&ics3, "ATTENDEE"),
+        "ATTENDEE;CN=\"Bob Second\";ROLE=REQ-PARTICIPANT:mailto:bob@example.com",
+        "{ics3}"
+    );
+}
+
+#[test]
+fn differential_oracle_participant_role_precedence_and_single_role_parameter_clamping() {
+    // Divergence 74 against Stalwart differential oracle:
+    // RFC 8984 section 4.4.6 models roles as a set, admitting multiple roles.
+    // RFC 5545 section 3.2.16 allows only a single ROLE parameter on ATTENDEE.
+    // In jmap-ical:
+    // 1. PARTICIPANT_ROLES precedence order: chair > informational > optional > attendee.
+    // 2. Unknown roles outside standard table are omitted.
+    // 3. Single role set collapses to single ROLE parameter.
+    for (roles, expected_role) in [
+        // Precedence: chair beats all
+        (
+            json!({"chair": true, "attendee": true, "optional": true}),
+            "ROLE=CHAIR",
+        ),
+        // Precedence: informational beats optional and attendee
+        (
+            json!({"informational": true, "optional": true, "attendee": true}),
+            "ROLE=NON-PARTICIPANT",
+        ),
+        // Precedence: optional beats attendee
+        (
+            json!({"optional": true, "attendee": true}),
+            "ROLE=OPT-PARTICIPANT",
+        ),
+        // Attendee only
+        (json!({"attendee": true}), "ROLE=REQ-PARTICIPANT"),
+    ] {
+        let ev = attended(json!({
+            "guest": guest("mailto:guest@example.com", "Guest Person", json!({
+                "roles": roles,
+            })),
+        }));
+        let ics = event_to_ical(&ev);
+        let attendee = content_line(&ics, "ATTENDEE");
+        assert!(attendee.contains(expected_role), "{roles}: {attendee}");
+    }
+
+    // Unknown or non-standard roles are dropped, leaving no ROLE parameter
+    let ev_unknown = attended(json!({
+        "guest": guest("mailto:guest@example.com", "Guest Person", json!({
+            "roles": {"observer": true, "vip": true},
+        })),
+    }));
+    let ics_unknown = event_to_ical(&ev_unknown);
+    let attendee_unknown = content_line(&ics_unknown, "ATTENDEE");
+    assert!(!attendee_unknown.contains("ROLE="), "{ics_unknown}");
+    assert_eq!(
+        attendee_unknown,
+        "ATTENDEE;CN=\"Guest Person\":mailto:guest@example.com"
+    );
+}
+
+#[test]
+fn differential_oracle_participant_cutype_mapping_partstat_and_rsvp_gating() {
+    // Divergence 75 against Stalwart differential oracle:
+    // RFC 8984 section 4.4.6 defines kind, participationStatus, and expectReply.
+    // RFC 5545 defines CUTYPE, PARTSTAT, and RSVP parameters.
+    // In jmap-ical:
+    // 1. kind "location" maps to CUTYPE=ROOM; other kinds map to uppercase.
+    // 2. participationStatus maps to uppercase PARTSTAT closed vocabulary.
+    // 3. expectReply: true maps to RSVP=TRUE; false or omitted drops RSVP parameter.
+    // 4. Non-standard values are filtered out.
+    let ev_full = attended(json!({
+        "room": guest("mailto:boardroom@example.com", "Boardroom", json!({
+            "kind": "location",
+            "participationStatus": "accepted",
+            "expectReply": true,
+            "roles": {"attendee": true},
+        })),
+        "user": guest("mailto:user@example.com", "Regular User", json!({
+            "kind": "individual",
+            "participationStatus": "declined",
+            "expectReply": false,
+            "roles": {"optional": true},
+        })),
+    }));
+    let ics = event_to_ical(&ev_full);
+    let lines: Vec<String> = ics
+        .replace("\r\n ", "")
+        .split("\r\n")
+        .filter(|line| line.starts_with("ATTENDEE"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "ATTENDEE;CN=Boardroom;CUTYPE=ROOM;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;\
+             RSVP=TRUE:mailto:boardroom@example.com".to_string(),
+            "ATTENDEE;CN=\"Regular User\";CUTYPE=INDIVIDUAL;ROLE=OPT-PARTICIPANT;PARTSTAT=DECLINED:\
+             mailto:user@example.com".to_string(),
+        ],
+        "{ics}"
+    );
+
+    // Filter non-standard values
+    let ev_invalid = attended(json!({
+        "guest": guest("mailto:guest@example.com", "Custom Guest", json!({
+            "kind": "unknown-robot",
+            "participationStatus": "undecided",
+            "expectReply": null,
+            "roles": {"attendee": true},
+        })),
+    }));
+    let ics_invalid = event_to_ical(&ev_invalid);
+    let line_invalid = content_line(&ics_invalid, "ATTENDEE");
+    assert!(!line_invalid.contains("CUTYPE="), "{line_invalid}");
+    assert!(!line_invalid.contains("PARTSTAT="), "{line_invalid}");
+    assert!(!line_invalid.contains("RSVP="), "{line_invalid}");
+    assert_eq!(
+        line_invalid,
+        "ATTENDEE;CN=\"Custom Guest\";ROLE=REQ-PARTICIPANT:mailto:guest@example.com"
+    );
+}
