@@ -19525,3 +19525,294 @@ END:VCALENDAR\r\n";
         "recurrence rule with skip must be refused by maps_recurrence_rule"
     );
 }
+
+#[test]
+fn differential_oracle_rrule_bymonthday_positive_and_negative_days_and_weekly_refusal() {
+    // Divergence 52 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 specifies BYMONTHDAY as a list of signed month days (-31..=-1 | 1..=31).
+    // RFC 8984 section 4.3.1 models byMonthDay: Integer[] with identical signed values.
+    // Day zero (0) is invalid in both specifications.
+    // RFC 5545 section 3.3.10 explicitly specifies: "The BYMONTHDAY rule part MUST NOT be specified
+    // when the associated 'FREQ' rule part is set to 'WEEKLY'."
+    // Stalwart v1.0.0 parses BYMONTHDAY into byMonthDay.
+    // In jmap-ical: to_month_day parses tokens, mapping unreadable tokens to sentinel 0;
+    // outbound by_month_day_part verifies that day values fall in -31..=-1 | 1..=31,
+    // refuses day 0, and disallows weekly frequency; and maps_recurrence_rule checks that
+    // all days are valid and frequency is not weekly.
+    let month_day_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:month-day-event-001\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Monthly Bill and Retrospective\r\n\
+RRULE:FREQ=MONTHLY;COUNT=12;BYMONTHDAY=1,15,-1\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(month_day_ics).expect("parse month day rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(rule.by_month_day, Some(vec![1, 15, -1]));
+    assert!(maps_recurrence_rule(rule));
+
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RRULE:FREQ=MONTHLY;COUNT=12;BYMONTHDAY=1,15,-1"));
+
+    // Day zero (0) is rejected by month_day_token and maps_recurrence_rule
+    let mut zero_day_rule = rule.clone();
+    zero_day_rule.by_month_day = Some(vec![1, 0, 15]);
+    assert!(
+        !maps_recurrence_rule(&zero_day_rule),
+        "day zero must be refused by maps_recurrence_rule"
+    );
+
+    // Out-of-bounds day 32 is rejected by month_day_token and maps_recurrence_rule
+    let mut out_of_bounds_pos = rule.clone();
+    out_of_bounds_pos.by_month_day = Some(vec![32]);
+    assert!(
+        !maps_recurrence_rule(&out_of_bounds_pos),
+        "day 32 must be refused by maps_recurrence_rule"
+    );
+
+    // Out-of-bounds day -32 is rejected by month_day_token and maps_recurrence_rule
+    let mut out_of_bounds_neg = rule.clone();
+    out_of_bounds_neg.by_month_day = Some(vec![-32]);
+    assert!(
+        !maps_recurrence_rule(&out_of_bounds_neg),
+        "day -32 must be refused by maps_recurrence_rule"
+    );
+
+    // FREQ=WEEKLY combined with BYMONTHDAY is forbidden by RFC 5545 section 3.3.10
+    let mut weekly_month_day = rule.clone();
+    weekly_month_day.frequency = "weekly".to_string();
+    assert!(
+        !maps_recurrence_rule(&weekly_month_day),
+        "FREQ=WEEKLY with BYMONTHDAY must be refused by maps_recurrence_rule"
+    );
+}
+
+#[test]
+fn differential_oracle_rrule_byyearday_signed_days_leap_366_and_frequency_gating() {
+    // Divergence 53 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 specifies BYYEARDAY as signed integers (-366..=-1 | 1..=366).
+    // RFC 8984 section 4.3.1 models byYearDay: Integer[]. Zero is invalid.
+    // RFC 5545 section 3.3.10 mandates: "The BYYEARDAY rule part MUST NOT be specified
+    // when the associated 'FREQ' rule part is set to 'DAILY', 'WEEKLY', or 'MONTHLY'."
+    // Stalwart v1.0.0 parses BYYEARDAY into byYearDay.
+    // In jmap-ical: inbound rrule_to_rule extracts by_year_day; outbound by_year_day_part
+    // accepts -366..=-1 | 1..=366 (including leap day 366), rejects 0, and enforces
+    // holds_a_year(&rule.frequency); maps_recurrence_rule flags invalid days or invalid frequencies.
+    let year_day_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:year-day-event-001\r\n\
+DTSTART:20260101T000000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Year Day Celebrations\r\n\
+RRULE:FREQ=YEARLY;COUNT=4;BYYEARDAY=1,100,366,-1\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(year_day_ics).expect("parse year day rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(rule.by_year_day, Some(vec![1, 100, 366, -1]));
+    assert!(maps_recurrence_rule(rule));
+
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RRULE:FREQ=YEARLY;COUNT=4;BYYEARDAY=1,100,366,-1"));
+
+    // Day zero (0) is rejected by year_day_token and maps_recurrence_rule
+    let mut zero_day_rule = rule.clone();
+    zero_day_rule.by_year_day = Some(vec![1, 0, 100]);
+    assert!(
+        !maps_recurrence_rule(&zero_day_rule),
+        "year day zero must be refused by maps_recurrence_rule"
+    );
+
+    // Out-of-bounds day 367 is rejected
+    let mut out_of_bounds_pos = rule.clone();
+    out_of_bounds_pos.by_year_day = Some(vec![367]);
+    assert!(
+        !maps_recurrence_rule(&out_of_bounds_pos),
+        "year day 367 must be refused by maps_recurrence_rule"
+    );
+
+    // Out-of-bounds day -367 is rejected
+    let mut out_of_bounds_neg = rule.clone();
+    out_of_bounds_neg.by_year_day = Some(vec![-367]);
+    assert!(
+        !maps_recurrence_rule(&out_of_bounds_neg),
+        "year day -367 must be refused by maps_recurrence_rule"
+    );
+
+    // Forbidden frequencies: daily, weekly, monthly per RFC 5545 section 3.3.10
+    let mut daily_year_day = rule.clone();
+    daily_year_day.frequency = "daily".to_string();
+    assert!(
+        !maps_recurrence_rule(&daily_year_day),
+        "FREQ=DAILY with BYYEARDAY must be refused by maps_recurrence_rule"
+    );
+
+    let mut weekly_year_day = rule.clone();
+    weekly_year_day.frequency = "weekly".to_string();
+    assert!(
+        !maps_recurrence_rule(&weekly_year_day),
+        "FREQ=WEEKLY with BYYEARDAY must be refused by maps_recurrence_rule"
+    );
+
+    let mut monthly_year_day = rule.clone();
+    monthly_year_day.frequency = "monthly".to_string();
+    assert!(
+        !maps_recurrence_rule(&monthly_year_day),
+        "FREQ=MONTHLY with BYYEARDAY must be refused by maps_recurrence_rule"
+    );
+
+    // Sub-day frequency like hourly is permitted alongside BYYEARDAY per RFC 5545
+    let mut hourly_year_day = rule.clone();
+    hourly_year_day.frequency = "hourly".to_string();
+    assert!(
+        maps_recurrence_rule(&hourly_year_day),
+        "FREQ=HOURLY with BYYEARDAY is valid per RFC 5545 table"
+    );
+}
+
+#[test]
+fn differential_oracle_rrule_byweekno_signed_weeks_and_yearly_frequency_gating() {
+    // Divergence 54 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 specifies BYWEEKNO as signed ISO 8601 week ordinals (-53..=-1 | 1..=53).
+    // RFC 8984 section 4.3.1 models byWeekNo: Integer[]. Zero is invalid.
+    // RFC 5545 section 3.3.10 mandates: "The BYWEEKNO rule part MUST NOT be specified
+    // when the associated 'FREQ' rule part is set to anything other than 'YEARLY'."
+    // Stalwart v1.0.0 parses BYWEEKNO into byWeekNo.
+    // In jmap-ical: inbound rrule_to_rule extracts by_week_no; outbound by_week_no_part
+    // accepts -53..=-1 | 1..=53 (including long year 53), rejects 0, and enforces yearly frequency;
+    // maps_recurrence_rule validates that all weeks are valid and frequency is yearly.
+    let week_no_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:week-no-event-001\r\n\
+DTSTART:20260105T090000Z\r\n\
+DURATION:PT2H\r\n\
+SUMMARY:Quarterly Week Reviews\r\n\
+RRULE:FREQ=YEARLY;COUNT=5;BYWEEKNO=1,26,53,-1\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(week_no_ics).expect("parse week no rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(rule.by_week_no, Some(vec![1, 26, 53, -1]));
+    assert!(maps_recurrence_rule(rule));
+
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RRULE:FREQ=YEARLY;COUNT=5;BYWEEKNO=1,26,53,-1"));
+
+    // Week zero (0) is rejected by week_no_token and maps_recurrence_rule
+    let mut zero_week_rule = rule.clone();
+    zero_week_rule.by_week_no = Some(vec![1, 0, 26]);
+    assert!(
+        !maps_recurrence_rule(&zero_week_rule),
+        "week zero must be refused by maps_recurrence_rule"
+    );
+
+    // Out-of-bounds week 54 is rejected
+    let mut out_of_bounds_pos = rule.clone();
+    out_of_bounds_pos.by_week_no = Some(vec![54]);
+    assert!(
+        !maps_recurrence_rule(&out_of_bounds_pos),
+        "week 54 must be refused by maps_recurrence_rule"
+    );
+
+    // Out-of-bounds week -54 is rejected
+    let mut out_of_bounds_neg = rule.clone();
+    out_of_bounds_neg.by_week_no = Some(vec![-54]);
+    assert!(
+        !maps_recurrence_rule(&out_of_bounds_neg),
+        "week -54 must be refused by maps_recurrence_rule"
+    );
+
+    // Non-yearly frequencies are forbidden per RFC 5545 section 3.3.10
+    let mut monthly_week_rule = rule.clone();
+    monthly_week_rule.frequency = "monthly".to_string();
+    assert!(
+        !maps_recurrence_rule(&monthly_week_rule),
+        "FREQ=MONTHLY with BYWEEKNO must be refused by maps_recurrence_rule"
+    );
+
+    let mut weekly_week_rule = rule.clone();
+    weekly_week_rule.frequency = "weekly".to_string();
+    assert!(
+        !maps_recurrence_rule(&weekly_week_rule),
+        "FREQ=WEEKLY with BYWEEKNO must be refused by maps_recurrence_rule"
+    );
+}
+
+#[test]
+fn differential_oracle_rrule_count_positive_bounds_and_unbounded_series_omission() {
+    // Divergence 55 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 specifies COUNT as a positive integer (1 or greater).
+    // RFC 8984 section 4.3.1 defines count: UnsignedInt. Zero and negative counts are invalid.
+    // Stalwart v1.0.0 parses COUNT into an unsigned integer.
+    // In jmap-ical: rrule_to_rule parses COUNT into rule.count; outbound rule_to_rrule
+    // emits COUNT=n when count is set; unbounded series omit COUNT and UNTIL entirely.
+    let count_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:count-bounds-event-001\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Count Bounded Meeting\r\n\
+RRULE:FREQ=DAILY;COUNT=10\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(count_ics).expect("parse count rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(rule.count, Some(10));
+    assert!(maps_recurrence_rule(rule));
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RRULE:FREQ=DAILY;COUNT=10"));
+
+    // Unbounded series: neither count nor until is set
+    let unbounded_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:unbounded-event-002\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Indefinite Recurrence\r\n\
+RRULE:FREQ=DAILY\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let unb_ev = ical_to_event(unbounded_ics).expect("parse unbounded rrule");
+    let unb_rule = unb_ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(unb_rule.count, None);
+    assert_eq!(unb_rule.until, None);
+    assert!(maps_recurrence_rule(unb_rule));
+    let unb_out = event_to_ical(&unb_ev);
+    assert!(unb_out.contains("RRULE:FREQ=DAILY"));
+    assert!(!unb_out.contains("COUNT="));
+    assert!(!unb_out.contains("UNTIL="));
+
+    // Malformed non-numeric count is ignored on parse
+    let malformed_count_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:malformed-count-003\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Malformed Count\r\n\
+RRULE:FREQ=DAILY;COUNT=invalid\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let mal_ev = ical_to_event(malformed_count_ics).expect("parse malformed count");
+    let mal_rule = mal_ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(mal_rule.count, None);
+}

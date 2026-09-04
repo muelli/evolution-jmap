@@ -1517,4 +1517,70 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.52 Divergence 52: Recurrence Rule Month Day Indexing (`BYMONTHDAY` Positive and Negative Days vs Zero Refusal)
 
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 specifies `BYMONTHDAY` as a comma-separated list of days of the month, valid from 1 to 31 or -31 to -1 (where -1 represents the last day of the month, -2 the penultimate day). RFC 8984 §4.3.1 defines `byMonthDay: Integer[]` with identical signed values. Both specifications forbid zero (`0`). RFC 5545 §3.3.10 explicitly mandates: "The BYMONTHDAY rule part MUST NOT be specified when the associated 'FREQ' rule part is set to 'WEEKLY'." Stalwart v1.0.0 parses `BYMONTHDAY` into `byMonthDay`. In `jmap-ical`:
+  1. Inbound parsing (`rrule_to_rule`) parses `BYMONTHDAY` using `to_month_day`. Non-numeric or invalid tokens parse to sentinel `0`.
+  2. Outbound serialization (`by_month_day_part`) validates each day with `month_day_token`, which accepts `-31..=-1 | 1..=31` and returns `None` for `0` or out-of-bounds values.
+  3. Frequency gating: `by_month_day_part` returns `None` if `frequency` is `"weekly"`, satisfying RFC 5545 §3.3.10.
+  4. `maps_recurrence_rule` returns false if `by_month_day` contains `0`, values outside `-31..=31`, or if specified alongside weekly recurrence.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent` / `libical`), calendar weeks do not align with calendar months. Emitting `BYMONTHDAY` with `FREQ=WEEKLY` violates RFC 5545 grammar and causes `libical` to reject the recurrence rule or discard the component.
+  2. Day zero does not exist in any calendar month. Permitting `0` would generate malformed iCalendar syntax that libical rejects.
+  3. Preserving signed negative offsets (such as `-1` for the last day of the month) ensures that month-end recurring appointments calculate correct instances without date drift.
+- **Adjudication**:
+  Conforming specification boundary and libical component safety. Enforces valid signed day ranges `-31..=-1 | 1..=31`, rejects invalid day zero, and filters out weekly frequency combinations to prevent component rejection.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.53 Divergence 53: Recurrence Rule Year Day Indexing (`BYYEARDAY` Positive and Negative Days and Leap Year 366 vs Frequency Restriction)
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 specifies `BYYEARDAY` as a comma-separated list of days of the year, valid from 1 to 366 or -366 to -1 (where 366 represents leap day and -1 represents December 31st). Day zero (`0`) is invalid. RFC 8984 §4.3.1 models `byYearDay: Integer[]`. RFC 5545 §3.3.10 specifies that `BYYEARDAY` MUST NOT be specified when `FREQ` is `DAILY`, `WEEKLY`, or `MONTHLY`. Stalwart v1.0.0 parses `BYYEARDAY` into `byYearDay`. In `jmap-ical`:
+  1. Inbound parsing (`rrule_to_rule`) extracts `BYYEARDAY` tokens into `rule.by_year_day`.
+  2. Outbound serialization (`by_year_day_part`) validates days with `year_day_token`, which accepts `-366..=-1 | 1..=366` and returns `None` for `0` or values outside that range.
+  3. Frequency gating: `holds_a_year(&rule.frequency)` disallows `daily`, `weekly`, and `monthly`, while permitting `yearly` as well as sub-day frequencies (`hourly`, `minutely`, `secondly`) defined in RFC 5545.
+  4. `maps_recurrence_rule` returns false if any year day is invalid or if the frequency cannot contain a year day.
+- **Specification and Architectural Context**:
+  1. Days of the year are defined for intervals that span a year or sub-day intervals within a year. In libical and Evolution Data Server, combining `BYYEARDAY` with daily, weekly, or monthly periods causes recurrence rule parsing to fail.
+  2. Admitting day 366 and -366 is essential for scheduling leap-year specific occurrences.
+  3. Rejecting day zero and enforcing valid bounds protects EDS storage from corrupted recurrence evaluations.
+- **Adjudication**:
+  Conforming specification boundary and calendar arithmetic safety. Supports full signed year-day ranges including leap day 366 while enforcing RFC 5545 frequency restrictions.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.54 Divergence 54: Recurrence Rule ISO Week Number Indexing (`BYWEEKNO` Positive and Negative Week Ordinals vs Zero Refusal and Yearly Frequency Gating)
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 specifies `BYWEEKNO` as ordinals specifying weeks of the year per ISO 8601, valid from 1 to 53 or -53 to -1 (where 53 represents the leap week in long years, and -1 represents the final week). Zero (`0`) is invalid. RFC 8984 §4.3.1 defines `byWeekNo: Integer[]`. RFC 5545 §3.3.10 mandates: "The BYWEEKNO rule part MUST NOT be specified when the associated 'FREQ' rule part is set to anything other than 'YEARLY'." Stalwart v1.0.0 parses `BYWEEKNO` into `byWeekNo`. In `jmap-ical`:
+  1. Inbound parsing (`rrule_to_rule`) parses `BYWEEKNO` into `rule.by_week_no`.
+  2. Outbound serialization (`by_week_no_part`) validates each week with `week_no_token`, accepting `-53..=-1 | 1..=53` and rejecting `0` or numbers exceeding 53.
+  3. Frequency gating: `by_week_no_part` strictly requires `rule.frequency.eq_ignore_ascii_case("yearly")`, refusing all other frequencies (including sub-day and monthly).
+  4. `maps_recurrence_rule` verifies that week numbers are within range and frequency is yearly, flagging incompatible rules.
+- **Specification and Architectural Context**:
+  1. ISO 8601 week numbers exist exclusively in the context of an entire year. In Evolution Data Server (`ECalComponent` / `libical`), specifying `BYWEEKNO` with monthly or daily recurrence rules causes libical to reject the rule.
+  2. Week numbers are coordinated with `firstDayOfWeek` (`WKST`), ensuring week boundaries align with ISO 8601 expectations.
+  3. Refusing week zero and numbers outside 1..53 prevents emitting invalid syntax to libical or downstream JMAP servers.
+- **Adjudication**:
+  Conforming specification boundary and ISO 8601 calendar alignment. Enforces strict yearly frequency gating and signed week number ranges `-53..=-1 | 1..=53`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.55 Divergence 55: Recurrence Rule Recurrence Count Bounds (`COUNT` Positive Integer Requirement vs Zero/Negative Refusal and Unbounded Series)
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 specifies `COUNT` as an optional positive integer (1 or greater) defining the number of occurrences at which to range-bound the recurrence. `COUNT=0` and negative values are prohibited. RFC 8984 §4.3.1 defines `count: UnsignedInt`. Stalwart v1.0.0 parses `COUNT` into an unsigned integer. In `jmap-ical`:
+  1. Inbound parsing (`rrule_to_rule`) parses `COUNT` into `rule.count: Option<u32>`.
+  2. Outbound serialization (`rule_to_rrule`) emits `COUNT=n` when `rule.count` is present.
+  3. Unbounded series representation: when neither `count` nor `until` is set in the JSCalendar model, outbound serialization emits an unbounded recurrence rule without synthesizing a dummy count.
+  4. Non-positive count refusal: `COUNT=0` is not emitted for unbounded series, and non-numeric or negative values are dropped on parse.
+- **Specification and Architectural Context**:
+  1. In RFC 5545 grammar, `COUNT` must be a non-zero positive integer. In Evolution Data Server (`ECalComponent` / `libical`), encountering `COUNT=0` causes libical to reject the recurrence rule or create an empty occurrence set where the appointment vanishes from the calendar view.
+  2. For series intended to repeat indefinitely, omitting `COUNT` and `UNTIL` entirely is the canonical representation across both RFC 5545 and RFC 8984.
+  3. Enforcing positive count integers and unbounded omission prevents synchronization anomalies between EDS and JMAP storage.
+- **Adjudication**:
+  Conforming specification boundary and libical component safety. Restricts count values to positive integers and models unbounded recurrence through property omission.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
