@@ -26,6 +26,10 @@ pub struct VacationForm {
 /// The message behind a refused date entry.
 pub const BAD_DATE: &CStr = N_(c"Dates take the form YYYY-MM-DD; leave one empty for no limit");
 
+/// The message behind a range that runs backwards.
+pub const BACKWARDS: &CStr =
+    N_(c"The last day is before the first day — swap them, or clear one to leave it open");
+
 impl VacationForm {
     /// The server's object as widget values. A missing date is an empty
     /// entry; a missing subject or body is empty text (the server generates
@@ -45,10 +49,21 @@ impl VacationForm {
     /// show is what the server should hold. Empty subject/body are `null` —
     /// "let the server pick" — rather than empty strings.
     pub fn patch(&self) -> Result<Value, &'static CStr> {
+        let from = date_value(&self.from_date)?;
+        let to = date_value(&self.to_date)?;
+        // A range that ends before it starts is a typo, not a request: the
+        // server would take it and simply never reply to anything, which is
+        // the worst kind of "working". Both bounds are `YYYY-MM-DDT…Z`, so
+        // comparing the strings compares the instants.
+        if let (Value::String(from), Value::String(to)) = (&from, &to)
+            && to < from
+        {
+            return Err(BACKWARDS);
+        }
         Ok(json!({
             "isEnabled": self.enabled,
-            "fromDate": date_value(&self.from_date)?,
-            "toDate": date_value(&self.to_date)?,
+            "fromDate": from,
+            "toDate": to,
             "subject": nullable(&self.subject),
             "textBody": nullable(&self.body),
         }))
@@ -136,6 +151,35 @@ mod tests {
         let patch = form.patch().unwrap();
         assert_eq!(patch["subject"], Value::Null);
         assert_eq!(patch["textBody"], Value::Null);
+    }
+
+    /// A range that runs backwards is refused, and the equal-day case — a
+    /// one-day absence — is not: that is a legitimate thing to ask for.
+    #[test]
+    fn a_backwards_range_is_refused_but_a_single_day_is_not() {
+        let backwards = VacationForm {
+            enabled: true,
+            from_date: "2026-09-10".to_owned(),
+            to_date: "2026-09-01".to_owned(),
+            ..VacationForm::default()
+        };
+        assert_eq!(backwards.patch(), Err(BACKWARDS));
+
+        let same_day = VacationForm {
+            to_date: "2026-09-10".to_owned(),
+            ..backwards.clone()
+        };
+        assert!(same_day.patch().is_ok(), "one day off must be allowed");
+
+        // An open-ended range cannot run backwards, in either direction.
+        for (from, to) in [("2026-09-10", ""), ("", "2026-09-01")] {
+            let open = VacationForm {
+                from_date: from.to_owned(),
+                to_date: to.to_owned(),
+                ..VacationForm::default()
+            };
+            assert!(open.patch().is_ok(), "{from:?}..{to:?} must be allowed");
+        }
     }
 
     #[test]
