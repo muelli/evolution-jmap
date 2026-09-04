@@ -17497,3 +17497,272 @@ END:VCALENDAR\r\n",
     assert!(without(&out_nonstandard, "CLASS:"));
     assert!(without(&out_nonstandard, "RESTRICTED"));
 }
+
+#[test]
+fn differential_oracle_categories_whitespace_trimming_and_keyword_map_value_filtering() {
+    // Divergence 20 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.1.2 defines CATEGORIES as comma-separated category strings.
+    // RFC 8984 section 4.4.2 defines keywords as a Map<String, Boolean> where each value is true.
+    // Stalwart v1.0.0 parses multiple CATEGORIES lines and splits on commas into keywords.
+    // In contrast, jmap-ical's read_keywords:
+    // 1. Trims leading and trailing whitespace from each category token.
+    // 2. Discards empty category tokens (including consecutive commas or whitespace-only tags).
+    // 3. Omits keywords completely (None) when no non-empty categories exist, avoiding empty object pollution.
+    // 4. Outbound serialization requires set == true, rejects carriage returns, and sorts tags lexicographically.
+    // Rationale: Desktop users enter tags where trailing whitespace is accidental and invisible.
+    // Trimming prevents pseudo-duplicate tags. Dropping carriage returns preserves security against CRLF injection.
+    let make_ics = |categories_line: &str| -> String {
+        format!(
+            "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-categories-test-001\r\n\
+DTSTART:20260910T170000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Categories and Keywords Test\r\n\
+{}\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+            categories_line
+        )
+    };
+
+    // 1. Whitespace trimming and empty item filtering
+    let ev = ical_to_event(&make_ics("CATEGORIES: ProjectX , Urgent , , Work "))
+        .expect("parse categories");
+    let kw = ev.keywords.as_ref().expect("keywords populated");
+    assert_eq!(kw.len(), 3);
+    assert_eq!(kw.get("ProjectX"), Some(&Value::Bool(true)));
+    assert_eq!(kw.get("Urgent"), Some(&Value::Bool(true)));
+    assert_eq!(kw.get("Work"), Some(&Value::Bool(true)));
+    assert!(ev.extra.is_empty());
+
+    // Outbound serialization emits single sorted line with trimmed tags
+    let out = event_to_ical(&ev);
+    assert_eq!(line(&out, "CATEGORIES:"), "CATEGORIES:ProjectX,Urgent,Work");
+
+    // 2. Bare or whitespace-only CATEGORIES lines result in None (not empty map)
+    let ev_empty = ical_to_event(&make_ics("CATEGORIES:   ,  ")).expect("parse empty categories");
+    assert_eq!(ev_empty.keywords, None);
+    assert!(ev_empty.extra.is_empty());
+    let out_empty = event_to_ical(&ev_empty);
+    assert!(without(&out_empty, "CATEGORIES:"));
+}
+
+#[test]
+fn differential_oracle_conference_virtual_locations_features_labels_and_stable_key_synthesis() {
+    // Divergence 21 against Stalwart differential oracle:
+    // RFC 7986 section 5.11 defines CONFERENCE for audio/video meeting endpoints.
+    // RFC 8984 section 4.2.6 models these as virtualLocations: Map<Id, VirtualLocation>.
+    // Stalwart v1.0.0 parses CONFERENCE into virtualLocations, synthesizing keys using UUID5 or counters.
+    // In contrast, jmap-ical's read_virtual_locations:
+    // 1. Preserves X-JMAP-KEY parameter across round-trips to retain the exact server dictionary key.
+    // 2. If X-JMAP-KEY is missing or invalid, allocates deterministic collision-free keys (v1, v2).
+    // 3. Validates that value is a well-formed URI via names_a_uri, dropping invalid lines.
+    // 4. Parses LABEL parameter into name and maps FEATURE parameters (AUDIO, VIDEO, SCREEN, CHAT, MODERATOR)
+    //    into lowercase boolean entries in features map.
+    // 5. Returns None when no valid conference endpoints are present.
+    // Rationale: In Evolution Data Server, stable keys prevent map churn and diff churn during synchronization.
+    let make_ics = |conf_line: &str| -> String {
+        format!(
+            "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-conference-test-001\r\n\
+DTSTART:20260910T180000Z\r\n\
+DURATION:PT45M\r\n\
+SUMMARY:Conference and VirtualLocation Test\r\n\
+{}\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+            conf_line
+        )
+    };
+
+    // 1. Explicit X-JMAP-KEY, LABEL, and FEATURE tokens
+    let ics_custom = make_ics(
+        "CONFERENCE;VALUE=URI;X-JMAP-KEY=custom-key;LABEL=Planning Room;FEATURE=AUDIO,VIDEO:https://meet.example.com/plan",
+    );
+    let ev_custom = ical_to_event(&ics_custom).expect("parse custom conference");
+    let vl_map = ev_custom
+        .virtual_locations
+        .as_ref()
+        .expect("virtual locations populated");
+    assert_eq!(vl_map.len(), 1);
+    let loc = vl_map.get("custom-key").expect("custom-key present");
+    assert_eq!(loc["uri"], "https://meet.example.com/plan");
+    assert_eq!(loc["name"], "Planning Room");
+    let features = loc["features"].as_object().expect("features object");
+    assert_eq!(features.get("audio"), Some(&Value::Bool(true)));
+    assert_eq!(features.get("video"), Some(&Value::Bool(true)));
+    assert!(ev_custom.extra.is_empty());
+
+    // Outbound serialization preserves X-JMAP-KEY and features
+    let out_custom = event_to_ical(&ev_custom);
+    let conf_out = content_line(&out_custom, "CONFERENCE;");
+    assert!(conf_out.contains("X-JMAP-KEY=custom-key"));
+    assert!(conf_out.contains("https://meet.example.com/plan"));
+
+    // 2. Bare CONFERENCE line without X-JMAP-KEY gets deterministic key v1
+    let ics_bare = make_ics("CONFERENCE:https://meet.example.com/plain");
+    let ev_bare = ical_to_event(&ics_bare).expect("parse bare conference");
+    let vl_bare = ev_bare
+        .virtual_locations
+        .expect("virtual locations populated");
+    assert!(vl_bare.contains_key("v1"));
+    assert_eq!(vl_bare["v1"]["uri"], "https://meet.example.com/plain");
+    assert_eq!(vl_bare["v1"].get("name"), None);
+
+    // 3. Invalid non-URI CONFERENCE value is dropped
+    let ics_invalid = make_ics("CONFERENCE:not-a-valid-uri");
+    let ev_invalid = ical_to_event(&ics_invalid).expect("parse invalid conference");
+    assert_eq!(ev_invalid.virtual_locations, None);
+    assert!(ev_invalid.extra.is_empty());
+}
+
+#[test]
+fn differential_oracle_transparency_default_semantics_omission_and_non_standard_token_dropping() {
+    // Divergence 22 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.2.7 defines TRANSP (OPAQUE default, TRANSPARENT).
+    // RFC 8984 section 4.4.6 defines freeBusyStatus (busy default, free).
+    // Stalwart v1.0.0 defaults freeBusyStatus to "busy" during CalendarEvent/parse when TRANSP is omitted.
+    // In contrast, jmap-ical's read_transparency:
+    // 1. Maps TRANSP:OPAQUE to Some("busy") and TRANSP:TRANSPARENT to Some("free") case-insensitively.
+    // 2. If TRANSP is omitted, returns None (not defaulted to "busy"), avoiding spurious diffs in client sync.
+    // 3. If TRANSP contains an unknown or non-standard token (e.g. TRANSP:TENTATIVE), drops it and returns None.
+    // 4. Outbound serialization emits TRANSP:OPAQUE when busy, TRANSP:TRANSPARENT when free, and omits it when None.
+    // Rationale: Returning None when unstated preserves semantic neutrality and prevents jmap-cal-sync
+    // from generating unwanted patch operations against server defaults.
+    let make_ics = |transp_line: &str| -> String {
+        format!(
+            "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-transp-test-001\r\n\
+DTSTART:20260910T190000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Transparency and FreeBusyStatus Test\r\n\
+{}\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+            transp_line
+        )
+    };
+
+    // 1. TRANSP:OPAQUE maps to busy and emits TRANSP:OPAQUE
+    let ev_opaque = ical_to_event(&make_ics("TRANSP:OPAQUE")).expect("parse opaque");
+    assert_eq!(ev_opaque.free_busy_status.as_deref(), Some("busy"));
+    assert!(ev_opaque.extra.is_empty());
+    let out_opaque = event_to_ical(&ev_opaque);
+    assert_eq!(line(&out_opaque, "TRANSP:"), "TRANSP:OPAQUE");
+
+    // 2. TRANSP:TRANSPARENT maps to free and emits TRANSP:TRANSPARENT
+    let ev_transp = ical_to_event(&make_ics("TRANSP:TRANSPARENT")).expect("parse transparent");
+    assert_eq!(ev_transp.free_busy_status.as_deref(), Some("free"));
+    assert!(ev_transp.extra.is_empty());
+    let out_transp = event_to_ical(&ev_transp);
+    assert_eq!(line(&out_transp, "TRANSP:"), "TRANSP:TRANSPARENT");
+
+    // 3. Omitted TRANSP maps to None (not busy), and outbound emits no TRANSP line
+    let ev_none = ical_to_event(&make_ics("")).expect("parse omitted transp");
+    assert_eq!(ev_none.free_busy_status, None);
+    assert!(ev_none.extra.is_empty());
+    let out_none = event_to_ical(&ev_none);
+    assert!(without(&out_none, "TRANSP:"));
+
+    // 4. Non-standard TRANSP value (e.g. TRANSP:TENTATIVE) is dropped on import
+    let ev_nonstandard =
+        ical_to_event(&make_ics("TRANSP:TENTATIVE")).expect("parse nonstandard transp");
+    assert_eq!(ev_nonstandard.free_busy_status, None);
+    assert!(ev_nonstandard.extra.is_empty());
+    let out_nonstandard = event_to_ical(&ev_nonstandard);
+    assert!(without(&out_nonstandard, "TRANSP:"));
+}
+
+#[test]
+fn differential_oracle_priority_range_clamping_omission_semantics_and_vtodo_isolation() {
+    // Divergence 23 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.1.9 defines PRIORITY as an integer from 0 to 9 (0 undefined, 1 highest, 9 lowest).
+    // RFC 8984 section 4.4.1 defines priority as UnsignedInt (0 to 9).
+    // Stalwart v1.0.0 parses 0 to 9, but behaviors on invalid or out-of-range priorities vary across parsers.
+    // In contrast, jmap-ical's read_priority:
+    // 1. Strictly validates integer parse within 0..=9. Out-of-bounds or non-integer values return None.
+    // 2. An omitted PRIORITY in the component returns None, rather than synthesizing Some(0).
+    // 3. Outbound serialization emits PRIORITY:0 only when priority: Some(0) is explicitly set.
+    //    When priority is None, the PRIORITY line is omitted.
+    // 4. Non-VEVENT components (e.g. VTODO with PRIORITY) are discarded, so task priorities do not leak into appointments.
+    // Rationale: Strict 0..=9 range clamping prevents invalid states in desktop UI and ensures roundtrip fidelity.
+    let make_ics = |priority_line: &str| -> String {
+        format!(
+            "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-priority-test-001\r\n\
+DTSTART:20260910T200000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Priority Range and Clamping Test\r\n\
+{}\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+            priority_line
+        )
+    };
+
+    // 1. Valid priority in 1..=9
+    let ev1 = ical_to_event(&make_ics("PRIORITY:1")).expect("parse priority 1");
+    assert_eq!(ev1.priority, Some(1));
+    assert!(ev1.extra.is_empty());
+    let out1 = event_to_ical(&ev1);
+    assert_eq!(line(&out1, "PRIORITY:"), "PRIORITY:1");
+
+    // 2. Explicit PRIORITY:0 (undefined)
+    let ev0 = ical_to_event(&make_ics("PRIORITY:0")).expect("parse priority 0");
+    assert_eq!(ev0.priority, Some(0));
+    assert!(ev0.extra.is_empty());
+    let out0 = event_to_ical(&ev0);
+    assert_eq!(line(&out0, "PRIORITY:"), "PRIORITY:0");
+
+    // 3. Omitted PRIORITY yields None, and outbound export omits PRIORITY line
+    let ev_none = ical_to_event(&make_ics("")).expect("parse omitted priority");
+    assert_eq!(ev_none.priority, None);
+    assert!(ev_none.extra.is_empty());
+    let out_none = event_to_ical(&ev_none);
+    assert!(without(&out_none, "PRIORITY:"));
+
+    // 4. Out-of-bounds priority (10, -1, non-integer) is dropped on import
+    let ev_high = ical_to_event(&make_ics("PRIORITY:10")).expect("parse priority 10");
+    assert_eq!(ev_high.priority, None);
+    assert!(ev_high.extra.is_empty());
+
+    let ev_neg = ical_to_event(&make_ics("PRIORITY:-1")).expect("parse priority -1");
+    assert_eq!(ev_neg.priority, None);
+    assert!(ev_neg.extra.is_empty());
+
+    let ev_str = ical_to_event(&make_ics("PRIORITY:HIGH")).expect("parse priority string");
+    assert_eq!(ev_str.priority, None);
+    assert!(ev_str.extra.is_empty());
+
+    // 5. VTODO with PRIORITY:5 alongside VEVENT without priority leaves event.priority as None
+    let stream_with_vtodo = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VTODO\r\n\
+UID:todo-item-001\r\n\
+SUMMARY:A separate task\r\n\
+PRIORITY:5\r\n\
+END:VTODO\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-priority-test-002\r\n\
+DTSTART:20260910T210000Z\r\n\
+DURATION:PT30M\r\n\
+SUMMARY:Appointment beside task\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_event = ical_to_event(stream_with_vtodo).expect("parse calendar with vtodo");
+    assert_eq!(ev_event.priority, None);
+    assert!(ev_event.extra.is_empty());
+}
