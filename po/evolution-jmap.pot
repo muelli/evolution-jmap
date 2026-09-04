@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-03 00:12+0200\n"
+"POT-Creation-Date: 2026-09-04 02:10+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -416,22 +416,18 @@ msgstr ""
 msgid "Dates take the form YYYY-MM-DD; leave one empty for no limit"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:63
+#: rust/crates/jmap-ui/src/vacation/page.rs:64
 msgid "Contacting the mail server…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:64
+#: rust/crates/jmap-ui/src/vacation/page.rs:65
 msgid "This account’s server does not offer a vacation autoresponder."
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/vacation/page.rs:66
+#: rust/crates/jmap-ui/src/vacation/page.rs:67
 #, c-format
 msgid "The autoresponder could not be read: %1$s"
-msgstr ""
-
-#: rust/crates/jmap-ui/src/vacation/page.rs:67
-msgid "YYYY-MM-DD, or empty for no limit"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/vacation/page.rs:160
@@ -442,18 +438,18 @@ msgstr ""
 msgid "Send _automatic replies"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:229
+#: rust/crates/jmap-ui/src/vacation/page.rs:231
 msgid "_First day:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:232
+#: rust/crates/jmap-ui/src/vacation/page.rs:233
 msgid "_Last day:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:234
+#: rust/crates/jmap-ui/src/vacation/page.rs:235
 msgid "_Subject:"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/vacation/page.rs:237
+#: rust/crates/jmap-ui/src/vacation/page.rs:238
 msgid "_Message:"
 msgstr ""

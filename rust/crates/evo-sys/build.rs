@@ -208,6 +208,21 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_mail_reader_get_selected_uids",
     "e_mail_reader_ref_folder",
     "e_mail_reader_get_action_group",
+    // Evolution's date entry, for the vacation page's from/to fields. The
+    // "no date set" pair is the load-bearing part: it is how a nullable
+    // `fromDate`/`toDate` is expressed in the UI without the page parsing
+    // typed text. Not `e_date_edit_.*`: the class also carries a time half,
+    // a popup range, and a week-start setting, none of which a date-only
+    // field touches.
+    "e_date_edit_get_type",
+    "e_date_edit_new",
+    "e_date_edit_get_date",
+    "e_date_edit_set_date",
+    "e_date_edit_set_show_time",
+    "e_date_edit_set_allow_no_date_set",
+    // Clearing a field back to "no date": there is no `_set_date_to_none`,
+    // the class spells it as the time_t -1 its own getter answers with.
+    "e_date_edit_set_time",
 ];
 
 /// The GTK calls, named one at a time rather than by prefix.
@@ -471,6 +486,9 @@ const BLOCKED_EVO_TYPES: &[&str] = &[
     "_?EMailBrowser[A-Za-z]*",
     "_?EMailReader",
     "_?EMailReaderInterface",
+    // A GtkHBox subclass: generating its class struct would pull in the GTK
+    // ones BLOCKED_GTK_TYPES exists to keep out.
+    "_?EDateEdit[A-Za-z]*",
     // `EConfigLookup`: the object an `EConfigLookupWorker` is registered
     // against and handed back as `run()`'s argument. Not `EConfigLookupWorker`
     // or `EConfigLookupResult(Simple)?` — this pattern has no trailing
@@ -559,6 +577,8 @@ const EVO_HANDLES: &[&str] = &[
     "EShellContent",
     "EMailBrowser",
     "EMailReader",
+    // The vacation page's date fields; reached only as pointers.
+    "EDateEdit",
 ];
 
 /// The GTK classes the calls above mention, as opaque handles.
