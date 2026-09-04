@@ -2034,6 +2034,78 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.84 Divergence 84: Free/Busy Availability (`VFREEBUSY`) Attendee Address Normalization, Bare Email Tolerance, and Double-Prefix Suppression
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.4.1 and §3.8.4.3 require an `ATTENDEE` line in a `VFREEBUSY` component to specify a `CAL-ADDRESS` (RFC 5545 §3.3.3), which must be a URI (typically `mailto:user@example.com`). In Evolution Data Server (`ECalBackendSync::get_free_busy_sync`), the `users` argument passes attendees as bare email addresses (e.g. `bob@example.com`). In `jmap-ical`:
+  1. Case-insensitive scheme tolerance: `mailto(attendee)` inspects the start of the attendee string. If it begins with `mailto:` (checked via `eq_ignore_ascii_case`), it strips the prefix to extract the bare address.
+  2. Canonical prefix emission: It always prefixes the resulting address with lowercase `mailto:`.
+  3. Double-prefix prevention: Callers passing `mailto:bob@example.com` or `MAILTO:bob@example.com` do not produce duplicate schemes like `mailto:mailto:bob@example.com`.
+  4. Injection sanitization: Newlines (`\r\n`) within the attendee string are escaped by the entry formatter, preventing arbitrary property injection from unvetted input strings.
+  In contrast, Stalwart v1.0.0 CalDAV free/busy handlers expect and emit canonical `mailto:` URIs, failing requests with malformed schemes.
+- **Specification and Architectural Context**:
+  1. Evolution Data Server has three independent calendar backends (the built-in local backend, CalDAV backend, and Microsoft 365 / EWS backend). All three backends format the `ATTENDEE` property for `VFREEBUSY` components by taking the bare address from EDS and prepending `mailto:`.
+  2. Tolerating both bare addresses and `mailto:`-prefixed addresses avoids brittle caller requirements while guaranteeing that the emitted iCalendar stream is strictly valid RFC 5545 syntax.
+  3. Case-insensitive comparison ensures compatibility with legacy or non-conforming clients that emit uppercase `MAILTO:`.
+- **Adjudication**:
+  Conforming specification boundary and caller tolerance design. Normalizes attendee addresses by safely stripping existing `mailto:` prefixes, re-prepending `mailto:`, preventing double-prefixing, and sanitizing against property injection.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.85 Divergence 85: Free/Busy Availability Whole-Component Refusal (`Option<String>`) vs Best-Effort Filtering and False Availability Prevention
+
+- **Observed Behavior**:
+  In general iCalendar and JSCalendar event mapping (`ical_to_event` / `event_to_ical`), unparseable properties or unrecognized values are dropped or skipped to preserve the remainder of the calendar event (a lost property is preferable to dropping an entire meeting). In contrast, `jmap-ical`'s `busy_periods_to_vfreebusy` returns `Option<String>`:
+  1. Window validation: If either `utc_start` or `utc_end` of the requested search window cannot be parsed as a valid UTC instant, the function returns `None`.
+  2. Period validation: If any `BusyPeriod` in the `periods` slice contains an unparseable `utc_start` or `utc_end` (such as invalid format, non-UTC timestamp, or nonexistent calendar dates like month 13 or hour 25), the function immediately returns `None`.
+  3. Refusal vs best-effort: It does not drop the malformed period and emit the remaining valid periods; it refuses the entire component.
+  In contrast, general-purpose iCalendar processors often perform best-effort filtering, dropping malformed entries and returning whatever remains.
+- **Specification and Architectural Context**:
+  1. In meeting scheduling (RFC 5546 iTIP and Evolution meeting scheduling dialogs), a scheduler queries availability to discover open time slots to book an appointment.
+  2. If an unparseable busy period were silently dropped, the attendee would be presented to the scheduler as free during that time interval. The meeting organizer would then book a conflicting meeting into a slot where the attendee is actually busy.
+  3. Refusing the entire component leaves the attendee's free/busy row blank in Evolution ("we do not know"), which truthfully reflects that availability could not be verified, preventing catastrophic double-booking.
+- **Adjudication**:
+  Deliberate mapping design and scheduling safety guarantee. Enforces all-or-nothing whole-component refusal upon unparseable windows or busy periods to prevent false availability reporting and schedule collisions.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.86 Divergence 86: Free/Busy Availability Status Vocabulary Mapping (`BusyPeriod.busyStatus` -> `FBTYPE`) and Fail-Safe `BUSY` Fallback
+
+- **Observed Behavior**:
+  In draft-ietf-jmap-calendars §2.2, `Principal/getAvailability` returns a list of `BusyPeriod` objects, where `busyStatus` takes `"confirmed"`, `"tentative"`, or `"unavailable"`. There is no `"free"` status in `getAvailability`. RFC 5545 §3.2.9 defines the `FBTYPE` parameter on `FREEBUSY` properties, supporting `BUSY`, `BUSY-UNAVAILABLE`, `BUSY-TENTATIVE`, and `FREE`. In `jmap-ical`:
+  1. `"tentative"` maps to `FBTYPE=BUSY-TENTATIVE`.
+  2. `"unavailable"` maps to `FBTYPE=BUSY-UNAVAILABLE`.
+  3. `"confirmed"` maps to `FBTYPE=BUSY`.
+  4. Any unrecognized status token (such as future draft extensions or unknown vendor values) or empty string maps safely to `FBTYPE=BUSY`.
+  Stalwart v1.0.0 parses and translates these statuses between JMAP and CalDAV protocols.
+- **Specification and Architectural Context**:
+  1. Because `Principal/getAvailability` exclusively reports busy intervals, every record returned by the server represents attendee unavailability.
+  2. If a future revision of the JMAP Calendars specification or an extended server implementation introduces a new status token (such as `"working-elsewhere"` or `"focus-time"`), treating an unknown status as anything other than busy could cause scheduling engines to assume the attendee is free.
+  3. Defaulting all unknown statuses to `BUSY` provides fail-safe backward and forward compatibility, ensuring that attendee time remains protected against inadvertent overbooking.
+- **Adjudication**:
+  Conforming specification boundary and forward-compatible scheduling safety. Maps standard draft statuses to RFC 5545 `FBTYPE` tokens and clamps all unknown or empty statuses to `BUSY`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.87 Divergence 87: Free/Busy Availability UTC Date-Time Fractional Seconds Truncation and RFC 3339 / RFC 5545 Harmonization
+
+- **Observed Behavior**:
+  RFC 3339 §5.6 and JMAP `UTCDate` admit fractional seconds (e.g. `2026-08-19T09:00:00.512Z`). RFC 5545 §3.3.5 explicitly specifies the `DATE-TIME` format as `YYYYMMDDTHHMMSSZ` and forbids fractional seconds. Stalwart v1.0.0 and CalDAV servers emit integer-second `DATE-TIME` values. In `jmap-ical`:
+  1. Sub-second detection: `instant(&UtcDate)` checks for a decimal point (`split_once('.')`).
+  2. Digit validation: It verifies that all characters between the decimal point and the terminating `'Z'` are ASCII digits. If non-digit characters appear, validation fails, returning `None`.
+  3. Sub-second truncation: It strips the fractional digits and converts the integer second timestamp into RFC 5545 UTC format `YYYYMMDDTHHMMSSZ`.
+  4. Format compliance: Emitted `FREEBUSY`, `DTSTART`, and `DTEND` properties strictly conform to RFC 5545 date-time syntax without fractional digits.
+- **Specification and Architectural Context**:
+  1. JMAP servers backed by SQL databases or high-resolution clocks often produce timestamps with millisecond or microsecond fractions.
+  2. If `jmap-ical` strictly rejected fractional seconds, harmless sub-second precision from servers would trigger whole-component refusal under Divergence 85, breaking free/busy lookup.
+  3. If `jmap-ical` emitted fractional seconds on `FREEBUSY` lines, RFC 5545 parsers and `libical` in Evolution would fail to parse the `VFREEBUSY` component.
+  4. Validating and truncating fractional seconds harmonizes the RFC 3339 timestamp format with RFC 5545 while preserving availability data.
+- **Adjudication**:
+  Conforming specification boundary and protocol interoperability tolerance. Truncates valid fractional seconds from `UTCDate` timestamps while enforcing strict RFC 5545 integer-second syntax in emitted `VFREEBUSY` components.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 

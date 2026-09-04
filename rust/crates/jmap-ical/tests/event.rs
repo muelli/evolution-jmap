@@ -21809,3 +21809,187 @@ fn differential_oracle_links_file_uri_and_binary_data_suppression_for_privacy() 
     assert_eq!(read_links["img1"]["rel"], "icon");
     assert_eq!(read_links["img1"]["contentType"], "image/png");
 }
+
+#[test]
+fn differential_oracle_freebusy_attendee_normalization_and_injection_prevention() {
+    // Divergence 84 against Stalwart differential oracle:
+    // RFC 5545 sections 3.8.4.1 and 3.8.4.3 require ATTENDEE in VFREEBUSY to be a CAL-ADDRESS URI.
+    // In jmap-ical:
+    // 1. mailto normalizes bare email addresses to mailto: URIs.
+    // 2. Existing mailto: prefixes (case-insensitive) are not doubled (no mailto:mailto:).
+    // 3. Newlines in attendee strings are escaped to prevent property injection.
+    let window_start = UtcDate::new("2026-09-04T08:00:00Z");
+    let window_end = UtcDate::new("2026-09-04T18:00:00Z");
+
+    // Bare email address
+    let ics_bare = busy_periods_to_vfreebusy("alice@example.com", &window_start, &window_end, &[])
+        .expect("render bare attendee");
+    assert!(ics_bare.contains("\r\nATTENDEE:mailto:alice@example.com\r\n"));
+
+    // Case-insensitive scheme tolerance
+    let ics_lower =
+        busy_periods_to_vfreebusy("mailto:alice@example.com", &window_start, &window_end, &[])
+            .expect("render lower mailto");
+    assert!(ics_lower.contains("\r\nATTENDEE:mailto:alice@example.com\r\n"));
+
+    let ics_upper =
+        busy_periods_to_vfreebusy("MAILTO:alice@example.com", &window_start, &window_end, &[])
+            .expect("render upper mailto");
+    assert!(ics_upper.contains("\r\nATTENDEE:mailto:alice@example.com\r\n"));
+
+    // Injection sanitization
+    let ics_injected = busy_periods_to_vfreebusy(
+        "alice@example.com\r\nSUMMARY:Injected",
+        &window_start,
+        &window_end,
+        &[],
+    )
+    .expect("render injected attendee");
+    assert!(
+        !ics_injected
+            .split("\r\n")
+            .any(|l| l.starts_with("SUMMARY:"))
+    );
+}
+
+#[test]
+fn differential_oracle_freebusy_whole_component_refusal_on_invalid_period_or_window() {
+    // Divergence 85 against Stalwart differential oracle:
+    // General iCalendar event mappings drop invalid properties to preserve the event.
+    // In contrast, busy_periods_to_vfreebusy refuses the whole component (Option::None)
+    // if any period or the search window cannot be parsed as a valid UTC date-time.
+    // This prevents schedulers from seeing an attendee as falsely free.
+    let valid_start = UtcDate::new("2026-09-04T08:00:00Z");
+    let valid_end = UtcDate::new("2026-09-04T18:00:00Z");
+    let invalid_date = UtcDate::new("not-a-valid-timestamp");
+    let missing_z = UtcDate::new("2026-09-04T08:00:00");
+    let invalid_hour = UtcDate::new("2026-09-04T25:00:00Z");
+
+    // Invalid search window refuses component
+    assert_eq!(
+        busy_periods_to_vfreebusy("alice@example.com", &invalid_date, &valid_end, &[]),
+        None
+    );
+    assert_eq!(
+        busy_periods_to_vfreebusy("alice@example.com", &valid_start, &invalid_date, &[]),
+        None
+    );
+    assert_eq!(
+        busy_periods_to_vfreebusy("alice@example.com", &missing_z, &valid_end, &[]),
+        None
+    );
+
+    // Invalid busy period refuses component rather than dropping period
+    let bad_period = BusyPeriod {
+        utc_start: invalid_hour,
+        utc_end: valid_end.clone(),
+        busy_status: "confirmed".to_string(),
+        event: None,
+    };
+    assert_eq!(
+        busy_periods_to_vfreebusy("alice@example.com", &valid_start, &valid_end, &[bad_period]),
+        None
+    );
+
+    // Valid empty period slice returns whole component without FREEBUSY lines
+    let empty_component =
+        busy_periods_to_vfreebusy("alice@example.com", &valid_start, &valid_end, &[])
+            .expect("render empty periods");
+    assert!(empty_component.contains("BEGIN:VFREEBUSY"));
+    assert!(empty_component.contains("DTSTART:20260904T080000Z"));
+    assert!(empty_component.contains("DTEND:20260904T180000Z"));
+    assert!(empty_component.contains("ATTENDEE:mailto:alice@example.com"));
+    assert!(
+        !empty_component
+            .split("\r\n")
+            .any(|l| l.starts_with("FREEBUSY"))
+    );
+    assert!(empty_component.contains("END:VFREEBUSY"));
+}
+
+#[test]
+fn differential_oracle_freebusy_status_mapping_and_fail_safe_busy_fallback() {
+    // Divergence 86 against Stalwart differential oracle:
+    // draft-ietf-jmap-calendars section 2.2 defines busyStatus (confirmed, tentative, unavailable).
+    // RFC 5545 section 3.2.9 defines FBTYPE (BUSY, BUSY-TENTATIVE, BUSY-UNAVAILABLE).
+    // In jmap-ical:
+    // 1. confirmed -> BUSY
+    // 2. tentative -> BUSY-TENTATIVE
+    // 3. unavailable -> BUSY-UNAVAILABLE
+    // 4. Unknown or future statuses and empty string fall back safely to BUSY.
+    assert_eq!(free_busy_type("confirmed"), "BUSY");
+    assert_eq!(free_busy_type("tentative"), "BUSY-TENTATIVE");
+    assert_eq!(free_busy_type("unavailable"), "BUSY-UNAVAILABLE");
+    assert_eq!(free_busy_type("focus-time"), "BUSY");
+    assert_eq!(free_busy_type("working-elsewhere"), "BUSY");
+    assert_eq!(free_busy_type(""), "BUSY");
+
+    let window_start = UtcDate::new("2026-09-04T08:00:00Z");
+    let window_end = UtcDate::new("2026-09-04T18:00:00Z");
+    let periods = vec![
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-04T09:00:00Z"),
+            utc_end: UtcDate::new("2026-09-04T10:00:00Z"),
+            busy_status: "tentative".to_string(),
+            event: None,
+        },
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-04T11:00:00Z"),
+            utc_end: UtcDate::new("2026-09-04T12:00:00Z"),
+            busy_status: "unavailable".to_string(),
+            event: None,
+        },
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-04T13:00:00Z"),
+            utc_end: UtcDate::new("2026-09-04T14:00:00Z"),
+            busy_status: "future-extension".to_string(),
+            event: None,
+        },
+    ];
+    let ics = busy_periods_to_vfreebusy("alice@example.com", &window_start, &window_end, &periods)
+        .expect("render periods");
+    assert!(ics.contains("FREEBUSY;FBTYPE=BUSY-TENTATIVE:20260904T090000Z/20260904T100000Z"));
+    assert!(ics.contains("FREEBUSY;FBTYPE=BUSY-UNAVAILABLE:20260904T110000Z/20260904T120000Z"));
+    assert!(ics.contains("FREEBUSY;FBTYPE=BUSY:20260904T130000Z/20260904T140000Z"));
+}
+
+#[test]
+fn differential_oracle_freebusy_fractional_seconds_truncation_and_digit_validation() {
+    // Divergence 87 against Stalwart differential oracle:
+    // RFC 3339 allows fractional seconds, while RFC 5545 DATE-TIME forbids them.
+    // In jmap-ical:
+    // 1. Valid fractional digits before Z are truncated to maintain RFC 5545 compliance.
+    // 2. Non-digit characters in fractional portion cause instant to return None,
+    //    refusing the whole component.
+    let window_start = UtcDate::new("2026-09-04T08:00:00.123Z");
+    let window_end = UtcDate::new("2026-09-04T18:00:00.999Z");
+    let periods = vec![BusyPeriod {
+        utc_start: UtcDate::new("2026-09-04T09:30:00.555Z"),
+        utc_end: UtcDate::new("2026-09-04T10:30:00.001Z"),
+        busy_status: "confirmed".to_string(),
+        event: None,
+    }];
+    let ics = busy_periods_to_vfreebusy("alice@example.com", &window_start, &window_end, &periods)
+        .expect("render with fractional seconds");
+    assert!(ics.contains("DTSTART:20260904T080000Z"));
+    assert!(ics.contains("DTEND:20260904T180000Z"));
+    assert!(ics.contains("FREEBUSY;FBTYPE=BUSY:20260904T093000Z/20260904T103000Z"));
+
+    // Invalid non-digit fractional seconds refuse component
+    let bad_fraction = UtcDate::new("2026-09-04T09:30:00.55aZ");
+    let bad_period = BusyPeriod {
+        utc_start: bad_fraction,
+        utc_end: UtcDate::new("2026-09-04T10:30:00Z"),
+        busy_status: "confirmed".to_string(),
+        event: None,
+    };
+    assert_eq!(
+        busy_periods_to_vfreebusy(
+            "alice@example.com",
+            &window_start,
+            &window_end,
+            &[bad_period]
+        ),
+        None
+    );
+}
