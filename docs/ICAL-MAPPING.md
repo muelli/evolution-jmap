@@ -1846,5 +1846,68 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.72 Divergence 72: Participant `sendTo` `imip` Address URI Scheme Validation, Address Sanitization, and Non-IMIP Delivery Method Omission
+
+- **Observed Behavior**:
+  RFC 8984 §4.4.6 defines `sendTo: Map<String, String>` where keys are delivery methods (such as `"imip"`, `"sms"`, `"other"`), and values are URI strings. RFC 5545 §3.3.3 requires `CAL-ADDRESS` to be a URI (typically `mailto:user@example.com`). Stalwart v1.0.0 parses `ATTENDEE` and `ORGANIZER` lines into `sendTo: {"imip": "<uri>"}`. In `jmap-ical`:
+  1. Address extraction (`calendar_address`): strictly inspects `participant.sendTo.imip`. Participants lacking an `imip` delivery method (such as those specifying only `sms` or `web`), or with an empty `sendTo` map, are dropped from outbound serialization.
+  2. URI scheme validation (`names_a_uri`): requires RFC 3986 syntax consisting of an alphabetic scheme, colon, and non-empty destination. Bare email addresses lacking a scheme (such as `"alice@example.com"` instead of `"mailto:alice@example.com"`) or empty scheme payloads (`"mailto:"`) fail validation and are dropped.
+  3. Whitespace and CRLF sanitization: `names_a_uri` strictly rejects any whitespace, carriage returns (`\r`), or line feeds (`\n`). This prevents malicious or malformed calendar addresses from breaking line boundaries or injecting unauthorized iCalendar properties.
+  4. Inbound drop: upon inbound parse (`ical_to_event`), `participants` is set to `None` for scheduling safety, ensuring client saves never mutate server-managed invitee records.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.3 explicitly mandates that a `CAL-ADDRESS` value type MUST be a valid URI. Attempting to emit a non-URI value violates iCalendar grammar and causes libical parsing failures.
+  2. In Evolution Data Server (`ECalComponent`), attendees without valid `mailto:` addresses cannot be routed by email transport agents. Dropping participants that lack an `imip` address prevents unroutable entries from entering desktop calendar views.
+  3. Sanitizing against CRLF characters is a critical security boundary: injecting unescaped line breaks through address strings could allow arbitrary property spoofing in exported calendar streams.
+- **Adjudication**:
+  Conforming specification boundary and protocol transport safety. Restricts participant calendar addresses strictly to valid `imip` URIs, sanitizes against newline injection, and drops participants lacking a valid calendar address.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.73 Divergence 73: Participant `owner` Role Isolation, Multiple Owner Selection (First-Wins Ordering), and Dual `ORGANIZER` / `ATTENDEE` Line Emission
+
+- **Observed Behavior**:
+  RFC 8984 §4.4.6 has no separate `organizer` property; instead, the organizer is a participant with the `"owner": true` entry in their `roles` set. In RFC 5545, the meeting caller is represented by the dedicated `ORGANIZER` property line (§3.8.4.3), while invitees are represented by `ATTENDEE` lines (§3.8.4.1). Stalwart v1.0.0 parses `ORGANIZER` into a participant with `roles: {"owner": true}`. In `jmap-ical`:
+  1. Multiple owner resolution: RFC 8984 allows multiple participants to have `"owner": true`, but RFC 5545 §3.6.1 permits at most one `ORGANIZER` line per `VEVENT`. `drawn_participants` emits `ORGANIZER` only for the first owner encountered in `participants` map iteration order, suppressing subsequent `ORGANIZER` lines.
+  2. Owner-only participant: A participant whose only role is `owner` (with no attendee or guest roles) emits `ORGANIZER` alone and no `ATTENDEE` line. This represents an event organized on behalf of others where the organizer does not attend.
+  3. Dual-line emission for attending owners: When a participant has both `owner` and an attendee role (such as `"attendee": true`, `"chair": true`, or `"optional": true`), `drawn_participants` emits both an `ORGANIZER` line and an `ATTENDEE` line.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server and RFC 5546 (iTIP), an organizer who attends the meeting must be present on the attendee list so that their participation status (`PARTSTAT=ACCEPTED`) is recorded and meeting room seating accounts for them.
+  2. Emitting multiple `ORGANIZER` lines is invalid iCalendar syntax that libical and external calendar servers reject. Enforcing a deterministic first-wins rule preserves single-organizer compliance while rendering additional owners as attendees if they hold attendance roles.
+- **Adjudication**:
+  Conforming specification boundary and organizer role fidelity. Emits `ORGANIZER` for the first owner in map order, decouples event ownership from guest list presence, and renders dual lines for attending owners.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.74 Divergence 74: Participant Attendee Role Precedence (`chair` > `informational` > `optional` > `attendee`) and Single-Value `ROLE` Parameter Clamping
+
+- **Observed Behavior**:
+  RFC 8984 §4.4.6 models participant roles as a set `roles: Map<String, Boolean>`, admitting multiple simultaneous roles (such as `{"chair": true, "attendee": true, "optional": true}`). RFC 5545 §3.2.16 specifies `ROLE` as a single-valued parameter taking `CHAIR`, `REQ-PARTICIPANT`, `OPT-PARTICIPANT`, or `NON-PARTICIPANT`, defaulting to `REQ-PARTICIPANT` when omitted. Stalwart v1.0.0 parses `ROLE` into the corresponding single role entry in `roles`. In `jmap-ical`:
+  1. Deterministic precedence ordering: Because iCalendar admits only one `ROLE` value on an `ATTENDEE` line, `PARTICIPANT_ROLES` establishes a strict precedence hierarchy: `chair` (`CHAIR`) > `informational` (`NON-PARTICIPANT`) > `optional` (`OPT-PARTICIPANT`) > `attendee` (`REQ-PARTICIPANT`).
+  2. Narrower role preference: When a participant holds both `"attendee"` and `"optional"`, `"optional"` is chosen because `REQ-PARTICIPANT` is the RFC 5545 default and optional attendance represents a narrower, more informative constraint. `"chair"` outranks all roles.
+  3. Non-standard role dropping: Roles outside the standard table (such as vendor-specific or experimental roles) are omitted, falling back to the standard iCalendar default without emitting invalid parameter syntax.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent`), attendees with `ROLE=CHAIR` or `ROLE=OPT-PARTICIPANT` are rendered with distinct UI badges and icons. Passing a single authoritative role token aligns with libical data structures.
+  2. Disambiguating multi-valued role sets via deterministic precedence ensures stable round-trip rendering between JMAP and iCalendar representations.
+- **Adjudication**:
+  Conforming specification boundary and role precedence disambiguation. Collapses multi-valued role sets to a single `ROLE` parameter via deterministic precedence (`chair` > `informational` > `optional` > `attendee`) and drops unknown roles.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.75 Divergence 75: Participant `kind` (`CUTYPE`) Vocabulary Translation (`location` -> `ROOM`), `participationStatus` (`PARTSTAT`), and `expectReply` (`RSVP=TRUE`) Parameter Gating
+
+- **Observed Behavior**:
+  RFC 8984 §4.4.6 defines `kind: String` (`"individual"`, `"group"`, `"resource"`, `"location"`), `participationStatus: String` (`"needs-action"`, `"accepted"`, `"declined"`, `"tentative"`, `"delegated"`), and `expectReply: Boolean`. RFC 5545 defines parameters `CUTYPE` (§3.2.3), `PARTSTAT` (§3.2.12), and `RSVP` (§3.2.17). Stalwart v1.0.0 parses these parameters into the corresponding JSCalendar participant fields. In `jmap-ical`:
+  1. `kind` -> `CUTYPE` vocabulary translation: `"location"` is translated to `CUTYPE=ROOM` (the RFC 5545 calendar user type for physical conference rooms). `"individual"`, `"group"`, and `"resource"` map directly to their uppercase equivalents `INDIVIDUAL`, `GROUP`, and `RESOURCE`. Unknown kinds are dropped, leaving `CUTYPE` omitted (defaulting to `INDIVIDUAL`).
+  2. `participationStatus` -> `PARTSTAT` vocabulary: `"needs-action"`, `"accepted"`, `"declined"`, `"tentative"`, and `"delegated"` map to uppercase `NEEDS-ACTION`, `ACCEPTED`, `DECLINED`, `TENTATIVE`, and `DELEGATED`. Non-standard status tokens are dropped.
+  3. `expectReply` -> `RSVP` parameter gating: RFC 5545 defaults `RSVP` to `FALSE`. In `jmap-ical`, `expects_reply` requires `expectReply == Some(true)`. When `true`, it emits `RSVP=TRUE`; when `false`, `null`, omitted, or non-boolean, the `RSVP` parameter is omitted.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server, conference rooms booked as attendees carry `CUTYPE=ROOM`. Translating JSCalendar `"location"` to `CUTYPE=ROOM` enables EDS to correctly identify room mailboxes and schedule equipment.
+  2. Filtering non-standard status values and omitting default `RSVP=FALSE` keeps iCalendar streams compact and prevents invalid parameter errors across strict CalDAV servers.
+- **Adjudication**:
+  Conforming specification boundary and calendar user parameter fidelity. Maps `kind` with `location` -> `ROOM` vocabulary translation, maps `participationStatus` to `PARTSTAT`, and emits `RSVP=TRUE` only when reply is explicitly expected.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
