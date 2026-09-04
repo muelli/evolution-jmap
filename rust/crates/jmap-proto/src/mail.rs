@@ -346,7 +346,7 @@ pub mod role {
 }
 
 /// When a snoozed message wakes and where it goes: `Email.snoozed`, per
-/// draft-ietf-extra-email-snooze §4 as Cyrus/Fastmail deploy it behind
+/// draft-ietf-extra-email-snooze §4 as Cyrus implements it behind
 /// [`crate::session::CAPABILITY_CYRUS_MAIL`].
 ///
 /// The draft expired in 2024 without replacement, so this shape is vendor

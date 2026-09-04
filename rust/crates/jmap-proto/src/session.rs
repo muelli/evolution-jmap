@@ -33,8 +33,11 @@ pub const CAPABILITY_METADATA: &str = "urn:ietf:params:jmap:metadata";
 pub const CAPABILITY_MAIL_SHARE: &str = "urn:ietf:params:jmap:mail:share";
 pub const CAPABILITY_PRINCIPALS_AVAILABILITY: &str = "urn:ietf:params:jmap:principals:availability";
 pub const CAPABILITY_WEBPUSH_VAPID: &str = "urn:ietf:params:jmap:webpush-vapid";
-/// Cyrus's vendor mail extension (Fastmail): the only deployed capability
-/// naming `Email.snoozed`, with draft-ietf-extra-email-snooze expired.
+/// Cyrus's vendor mail extension: the only capability naming
+/// `Email.snoozed`, with draft-ietf-extra-email-snooze expired. Cyrus hides
+/// it behind `jmap_nonstandard_extensions`, and Fastmail's public API
+/// rejects it outright (see `jmap_client::snooze`), so an account
+/// advertising this is currently the exception rather than the rule.
 pub const CAPABILITY_CYRUS_MAIL: &str = "https://cyrusimap.org/ns/jmap/mail";
 
 /// Server capabilities, available accounts, and endpoint URLs.

@@ -86,12 +86,14 @@ IMAP can store arbitrary metadata: it can, via keywords/annotations, but the
 draft deliberately specifies a mailbox move rather than ad-hoc metadata,
 which is what makes it interoperable.)
 
-**One concrete data point: Evolution already does the read half today, by
-accident.** With a JMAP account, a message snoozed elsewhere (in Fastmail's web
-UI, say) already behaves correctly in Evolution: the `snoozed`-role mailbox is
-a role Evolution doesn't recognise, so it degrades to an ordinary folder, the
-message is visible there, and it returns to the Inbox on time because the
-server moves it. No Evolution code understands snooze for that to work.
+**On the read half:** *if* a server exposes a `snoozed`-role mailbox, Evolution
+already copes with it for free — an unrecognised role degrades to an ordinary
+folder, so the message is visible there and returns to the Inbox on time
+because the server moves it, with no Evolution code understanding snooze. I
+had claimed this as an observed data point about Fastmail; it is not, and I
+have struck it. Fastmail serves no `snoozed`-role mailbox over JMAP (see the
+follow-up below), so the read half is a property of the design rather than
+something anyone can watch working today.
 
 So the remaining gap is narrower than the original report implies. Not
 "implement snoozing". It is just **the action** ("snooze until T"), plus a
@@ -108,11 +110,21 @@ Not asking for prioritisation; suggesting it may now be worth reopening for
 tracking, since the "no server-side API exists" reason has expired. Happy to do
 the JMAP-side work if the Evolution-side plumbing ever becomes interesting.
 
-**Follow-up (jmap-ui, not yet posted):** the out-of-tree JMAP module now ships
-a *Snooze* item in the message-list popup, strictly server-side: it appears
-only for accounts whose server offers the extension (Fastmail's, today), and
-moves the message into the server's snoozed mailbox with a wake time. It does
-not attempt a client-side timer for servers without the feature, exactly
-because a flag-plus-timer is the wrong model — which is the Evolution-side cost
-this issue is really about. Offered as evidence that the vendor-supported case
-works and that the open question is the client-side concept, not the protocol.
+**Follow-up (jmap-ui, not yet posted):** the out-of-tree JMAP module now
+ships a *Snooze* item in the message-list popup, strictly server-side: it
+appears only for accounts whose server advertises the extension, and moves the
+message into the server's snoozed mailbox with a wake time. It deliberately
+does not fall back to a client-side timer, because a flag-plus-timer is the
+wrong model — which is the Evolution-side cost this issue is really about.
+
+The honest finding from building it, though, cuts against my own paragraph
+above: **no public server I can find actually exposes this over JMAP.** Cyrus
+hides the capability behind `jmap_nonstandard_extensions`, and Fastmail —
+whose web UI snoozes — rejects it on its public API outright (probed
+2026-09-04: `unknownCapability` for the `using`, `invalidArguments` for
+`Email/get` of `snoozed`, no `snoozed`-role mailbox in `Mailbox/get`, and
+`unsupportedSort` for `snoozedUntil`). So the protocol side is specified and
+implementable but currently unreachable in practice. If anything that
+strengthens the case that snooze wants a client-side concept in Evolution
+rather than a pure server-capability passthrough — which is the opposite of
+what I argued when I first drafted this.
