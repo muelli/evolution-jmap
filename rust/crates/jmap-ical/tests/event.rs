@@ -20154,3 +20154,293 @@ fn differential_oracle_recurrence_override_timezone_scoping_and_custom_zone_defi
         "custom timezone accepted by sends_recurrence_override when series defines it"
     );
 }
+
+#[test]
+fn differential_oracle_recurrence_override_null_property_removal_and_detached_component_roundtrip()
+{
+    // Divergence 60 against Stalwart differential oracle:
+    // RFC 8984 section 4.3.4 models per-instance modifications as a PatchObject, where setting
+    // a property to null removes or unsets that property on the instance.
+    // In RFC 5545, a detached VEVENT component simply omits the corresponding content line.
+    // In jmap-ical:
+    // 1. maps_recurrence_override admits value.is_null() for restatable override properties
+    //    (status, priority, freeBusyStatus, privacy, keywords, alerts, description, timeZone).
+    // 2. Outbound event_to_ical does not emit the content line on the detached VEVENT when null.
+    // 3. Inbound read_overrides / instance_patch diffs the detached VEVENT against the series,
+    //    generating explicit null values in the patch when properties on the series are absent
+    //    on the detached instance.
+    let series_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:override-null-001\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Full Series Meeting\r\n\
+DESCRIPTION:Series Description\r\n\
+STATUS:CONFIRMED\r\n\
+PRIORITY:1\r\n\
+CLASS:PRIVATE\r\n\
+TRANSP:OPAQUE\r\n\
+CATEGORIES:Work,Projects\r\n\
+RRULE:FREQ=WEEKLY;COUNT=5\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+TRIGGER:-PT15M\r\n\
+DESCRIPTION:Reminder\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:override-null-001\r\n\
+RECURRENCE-ID:20260908T090000Z\r\n\
+DTSTART:20260908T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Detached Instance Without Props\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(series_ics).expect("parse series with stripped detached vevent");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+    let patch = &overrides["2026-09-08T09:00:00"];
+
+    // The detached instance omitted DESCRIPTION, STATUS, PRIORITY, CLASS, TRANSP, CATEGORIES, VALARM.
+    // instance_patch generates null for each property present on series but absent on detached component.
+    assert_eq!(patch.get("description"), Some(&Value::Null));
+    assert_eq!(patch.get("status"), Some(&Value::Null));
+    assert_eq!(patch.get("priority"), Some(&Value::Null));
+    assert_eq!(patch.get("privacy"), Some(&Value::Null));
+    assert_eq!(patch.get("freeBusyStatus"), Some(&Value::Null));
+    assert_eq!(patch.get("keywords"), Some(&Value::Null));
+    assert_eq!(patch.get("alerts"), Some(&Value::Null));
+
+    // maps_recurrence_override validates null removals
+    assert!(maps_recurrence_override(&ev, "2026-09-08T09:00:00", patch));
+
+    // Outbound serialization round-trip: detached VEVENT omits the lines
+    let out = event_to_ical(&ev);
+    let detached = vevent(&out, 1);
+    assert!(without(detached, "DESCRIPTION:"));
+    assert!(without(detached, "STATUS:"));
+    assert!(without(detached, "PRIORITY:"));
+    assert!(without(detached, "CLASS:"));
+    assert!(without(detached, "TRANSP:"));
+    assert!(without(detached, "CATEGORIES:"));
+    assert!(without(detached, "BEGIN:VALARM"));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_empty_string_refusal_for_title_and_description() {
+    // Divergence 61 against Stalwart differential oracle:
+    // In JSON and RFC 8984 section 4.1.1/4.1.2, empty strings ("") are distinct from null.
+    // In RFC 5545, SUMMARY and DESCRIPTION lines cannot represent empty strings distinctly
+    // from absent properties.
+    // In jmap-ical:
+    // 1. maps_override_field refuses empty strings ("") for title and description to prevent
+    //    non-idempotent round-trips where an empty string turns into null or series inheritance.
+    // 2. Non-empty text strings and null deletions are accepted.
+    // 3. event_to_ical suppresses empty strings on master series and detached components.
+    let series = CalendarEvent {
+        title: Some("Bi-weekly Review".to_owned()),
+        description: Some("Review goals and progress".to_owned()),
+        start: Some("2026-09-01T14:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
+        ..CalendarEvent::default()
+    };
+    let id = "2026-09-08T14:00:00";
+
+    // Non-empty string overrides are accepted
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"title": "Rescheduled Review"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"description": "Updated agenda items"})
+    ));
+
+    // Null deletions are accepted
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"title": null})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"description": null})
+    ));
+
+    // Empty strings are refused because RFC 5545 lines cannot represent empty text distinctly from absent
+    assert!(
+        !maps_recurrence_override(&series, id, &json!({"title": ""})),
+        "empty string title must be refused in override patch"
+    );
+    assert!(
+        !maps_recurrence_override(&series, id, &json!({"description": ""})),
+        "empty string description must be refused in override patch"
+    );
+
+    // Serialization verification: empty strings are not emitted as empty lines
+    let mut empty_event = series.clone();
+    empty_event.title = Some("".to_string());
+    empty_event.description = Some("".to_string());
+    let out = event_to_ical(&empty_event);
+    assert!(without(&out, "SUMMARY:"));
+    assert!(without(&out, "DESCRIPTION:"));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_rescheduled_start_time_and_recurrence_id_separation() {
+    // Divergence 62 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.4.4 models recurring instances using RECURRENCE-ID, which identifies
+    // the original recurrence occurrence slot. When an instance is rescheduled, DTSTART specifies
+    // the new time while RECURRENCE-ID retains the original slot.
+    // RFC 8984 section 4.3.4 keys recurrenceOverrides by the original slot (id), and includes
+    // "start" in the PatchObject only when rescheduled to a different time.
+    // In jmap-ical:
+    // 1. Inbound instance_patch suppresses "start" when DTSTART == id, avoiding redundant fields.
+    // 2. Inbound instance_patch includes "start" when DTSTART != id.
+    // 3. Outbound event_to_ical maintains RECURRENCE-ID at the original slot and DTSTART at the
+    //    rescheduled time.
+    // 4. maps_recurrence_override validates that overridden start times parse as valid date-times.
+    let rescheduled_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:rescheduled-001\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Weekly Architecture Sync\r\n\
+RRULE:FREQ=WEEKLY;COUNT=4\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:rescheduled-001\r\n\
+RECURRENCE-ID:20260908T100000Z\r\n\
+DTSTART:20260908T140000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Rescheduled Afternoon Sync\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:rescheduled-001\r\n\
+RECURRENCE-ID:20260915T100000Z\r\n\
+DTSTART:20260915T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Regular Morning Sync\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(rescheduled_ics).expect("parse rescheduled event");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+
+    // Rescheduled occurrence: DTSTART (14:00) != RECURRENCE-ID (10:00) -> "start" is present
+    let patch_rescheduled = &overrides["2026-09-08T10:00:00"];
+    assert_eq!(
+        patch_rescheduled.get("start").and_then(Value::as_str),
+        Some("2026-09-08T14:00:00")
+    );
+    assert_eq!(
+        patch_rescheduled.get("title").and_then(Value::as_str),
+        Some("Rescheduled Afternoon Sync")
+    );
+
+    // Non-rescheduled occurrence: DTSTART (10:00) == RECURRENCE-ID (10:00) -> "start" is omitted
+    let patch_regular = &overrides["2026-09-15T10:00:00"];
+    assert_eq!(patch_regular.get("start"), None);
+    assert_eq!(
+        patch_regular.get("title").and_then(Value::as_str),
+        Some("Regular Morning Sync")
+    );
+
+    // Serialization preserves RECURRENCE-ID and rescheduled DTSTART
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RECURRENCE-ID:20260908T100000Z"));
+    assert!(out.contains("DTSTART:20260908T140000Z"));
+    assert!(out.contains("SUMMARY:Rescheduled Afternoon Sync"));
+
+    // Validation: invalid start date-time strings are refused
+    let bad_start_patch = json!({"start": "invalid-datetime"});
+    assert!(
+        !maps_recurrence_override(&ev, "2026-09-08T10:00:00", &bad_start_patch),
+        "malformed start in override patch must be refused"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_override_duration_modification_and_rdate_period_calculation() {
+    // Divergence 63 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.5.2 permits RDATE values to be discrete dates or periods (start/end).
+    // RFC 8984 section 4.3.4 models extra instances added via RDATE as recurrenceOverrides entries.
+    // If an instance shares the series duration, duration is omitted; if it differs, duration
+    // is explicitly stated.
+    // In jmap-ical:
+    // 1. read_overrides uses period_length to calculate period duration from RDATE start/end bounds.
+    // 2. When an RDATE period duration differs from the series duration, "duration" is set in patch.
+    // 3. When an RDATE period matches series duration, an empty patch ({}) is emitted.
+    // 4. Detached VEVENT with different duration emits "duration" in patch; matching duration omits it.
+    let period_rdate_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:period-rdate-001\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Sprint Planning Series\r\n\
+RRULE:FREQ=WEEKLY;COUNT=3\r\n\
+RDATE;VALUE=PERIOD:20260915T090000Z/20260915T113000Z\r\n\
+RDATE;VALUE=PERIOD:20260922T090000Z/20260922T100000Z\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:period-rdate-001\r\n\
+RECURRENCE-ID:20260908T090000Z\r\n\
+DTSTART:20260908T090000Z\r\n\
+DURATION:PT2H\r\n\
+SUMMARY:Extended Sprint Planning\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(period_rdate_ics).expect("parse event with period rdates");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+
+    // 1. RDATE with 2h30m period differs from 1h series duration -> duration is in patch
+    let rdate_extended = &overrides["2026-09-15T09:00:00"];
+    assert_eq!(
+        rdate_extended.get("duration").and_then(Value::as_str),
+        Some("PT2H30M")
+    );
+
+    // 2. RDATE with 1h period matches 1h series duration -> empty patch
+    let rdate_matching = &overrides["2026-09-22T09:00:00"];
+    assert_eq!(rdate_matching, &json!({}));
+
+    // 3. Detached VEVENT with 2h duration differs from 1h series -> duration is in patch
+    let detached_extended = &overrides["2026-09-08T09:00:00"];
+    assert_eq!(
+        detached_extended.get("duration").and_then(Value::as_str),
+        Some("PT2H")
+    );
+
+    // Validation via maps_recurrence_override
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-15T09:00:00",
+        rdate_extended
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-22T09:00:00",
+        rdate_matching
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T09:00:00",
+        detached_extended
+    ));
+
+    // Serialization verification: detached VEVENT emits custom DURATION
+    let out = event_to_ical(&ev);
+    let detached = vevent(&out, 1);
+    assert!(detached.contains("DURATION:PT2H"));
+}
