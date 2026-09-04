@@ -806,5 +806,71 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Deliberate mapping design. Documented and pinned in `tests/event.rs`.
 
+### 13.7 Divergence 7: `GEO` Coordinates and Location Map Key Synthesis vs Single-String Model
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 parses RFC 5545 §3.8.1.6 `GEO:lat;lon` (and `VLOCATION` subcomponents) into `Location.coordinates` formatted as an RFC 5870 `geo:` URI (e.g. `"coordinates": "geo:37.386013,-122.082932"`). Stalwart synthesizes map keys using UUID5 hashes or `JSID` parameters. In contrast, `jmap-ical` maps incoming `LOCATION` text to `locations` with stable positional keys (`"l1"`, or `X-JMAP-KEY`) and drops `GEO` on import without polluting `event.extra`.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.2.5 defines `Location` supporting `name`, `description`, `coordinates`, and `timeZone`.
+  2. In Evolution Data Server (`ECalMetaBackend` / `libical`), calendar appointments store location as a single unstructured text string accessed via `e_cal_component_get_location`. EDS does not provide a dedicated geographic coordinate entry in its standard appointment editor.
+  3. Generating volatile or content-hashed map keys (such as UUID5) creates churn during desktop client diffing. `jmap-cal-sync` relies on stable keys (`X-JMAP-KEY` or `"l1"`) to perform in-place property patching (`locations/<key>/name`) rather than full-map replacements.
+  4. Outbound serialization emits `LOCATION` with `X-JMAP-KEY: <key>` and omits `GEO` when only `name` is present, maintaining immediate fixpoint stability.
+- **Adjudication**:
+  Justified architectural deviation. Stalwart provides comprehensive standalone conversion for geographic data. `jmap-ical` optimizes for EDS appointment model compatibility and stable in-place synchronization.
+- **Status**:
+  Justified architectural deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.8 Divergence 8: `SEQUENCE` Revision Counter Mapping vs Store-Owned Drop on Import
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 maps incoming `SEQUENCE:n` to JSCalendar `"sequence": n`. In contrast, `jmap-ical` drops `SEQUENCE` on inbound parse without polluting `event.extra`, and does not emit `SEQUENCE` on outbound export.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.7.4 defines `SEQUENCE` as the revision sequence number of a calendar component, incremented when significant changes occur.
+  2. In `draft-ietf-jmap-calendars-28` §5.1 and §5.2, `sequence` is revision state managed and owned by the JMAP server upon commit. When an event is updated without an explicit sequence or with a sequence lower than or equal to the current server value, the server automatically increments the sequence number.
+  3. Populating `sequence` during client-side parsing would cause `jmap-cal-sync` to propose client-dictated revision numbers during updates, interfering with server conflict detection and optimistic concurrency controls.
+- **Adjudication**:
+  Justified architectural deviation. Stalwart acts as an unpersisted format converter. For client-server synchronization, revision sequence numbering is store-owned and strictly managed by the JMAP server.
+- **Status**:
+  Justified architectural deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.9 Divergence 9: `COLOR` Property vs Calendar-Level Source Styling Boundary
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 maps RFC 7986 §5.9 `COLOR` (CSS color names or hex codes) to JSCalendar `event.color` (RFC 8984 §4.4.4). In contrast, `jmap-ical` drops `COLOR` on inbound parse without polluting `event.extra`, and does not emit `COLOR` on export.
+- **Specification and Architectural Context**:
+  1. RFC 7986 §5.9 defines `COLOR` for per-event display styling. RFC 8984 §4.4.4 models this as `color: String`.
+  2. In Evolution Data Server, calendar appointments inherit display color from their parent calendar source via `E_SOURCE_EXTENSION_CALENDAR` (`e_source_get_extension`). EDS does not expose an event-specific color picker in the standard appointment editor.
+  3. Dropping `COLOR` on import avoids displaying inconsistent styling overrides in desktop calendar views while preserving server-side color properties through `PatchObject` isolation.
+- **Adjudication**:
+  Deliberate mapping simplification for desktop UI architecture. Documented and pinned in `tests/event.rs`.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.10 Divergence 10: `RELATED-TO` Mapping vs Unmapped Relation Graph Isolation
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 maps RFC 5545 §3.8.4.5 `RELATED-TO` (parent, child, or sibling relationship) to JSCalendar `event.relatedTo` (RFC 8984 §4.2.2). In contrast, `jmap-ical` drops `RELATED-TO` on inbound parse without polluting `event.extra`.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.2.2 defines `relatedTo` as a map of target UIDs to relation types.
+  2. While `jmap-book-sync` models `relatedTo` extensively for JSContact relationships, Evolution's calendar appointment editor has no facility to inspect or manipulate arbitrary appointment dependency graphs.
+  3. Dropping `RELATED-TO` on inbound parse protects complex server-side relation graphs from uncoordinated whole-property modification during client desktop saves.
+- **Adjudication**:
+  Deliberate mapping boundary. Protects server-side relation structures from uncoordinated client saves.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.11 Divergence 11: `iCalendar` / `convertedProperties` Tracking Object Omission
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 emits the non-normative RFC 8984 Appendix B `"iCalendar"` object (`"convertedProperties"`) to track original property names and parameters that were transformed during conversion. In contrast, `jmap-ical` does not parse, store, or emit `"iCalendar"` tracking metadata.
+- **Specification and Architectural Context**:
+  1. RFC 8984 Appendix B presents the `iCalendar` object as an optional approach for lossless round-trips through systems that do not understand JSCalendar natively.
+  2. `draft-ietf-jmap-calendars-28` defines `CalendarEvent` without requiring or defining the `iCalendar` tracking property.
+  3. `jmap-ical` implements direct, deterministic conversion based strictly on standard JSCalendar property schemas. Omitting parser bookkeeping dictionaries prevents foreign parser artifacts from polluting JMAP account records and avoids schema bloat.
+- **Adjudication**:
+  Conforming serialization boundary practice. Preserves clean protocol state without non-normative tracking objects.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
 

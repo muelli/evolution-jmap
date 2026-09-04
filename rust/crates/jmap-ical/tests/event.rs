@@ -16824,3 +16824,175 @@ END:VCALENDAR\r\n";
     assert!(without(&out, "METHOD"));
     assert!(without(&out, "URL"));
 }
+
+#[test]
+fn differential_oracle_geo_and_locations_coordinates_vs_single_string_name_and_key_synthesis() {
+    // Divergence 7 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.1.6 defines GEO (latitude and longitude).
+    // Stalwart v1.0.0 converts GEO into Location.coordinates (RFC 5870 geo: URI)
+    // and synthesizes map keys from UUID5 or JSID parameters.
+    // In contrast, jmap-ical maps incoming LOCATION text to locations with
+    // a stable positional key ("1" or X-JMAP-KEY) and drops GEO on import.
+    // Rationale: Evolution Data Server models appointment location as a single
+    // string (e_cal_component_get_location). jmap-cal-sync patches
+    // locations/<key>/name in place, so stable keys avoid churn.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-geo-test-001\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Location and Coordinates Test\r\n\
+LOCATION:Conference Room B\r\n\
+GEO:37.386013;-122.082932\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    // Location name is parsed into locations with positional key "l1"
+    let locs = event.locations.as_ref().expect("locations must be present");
+    assert_eq!(locs.len(), 1);
+    let loc = locs.get("l1").expect("key l1");
+    assert_eq!(loc.get("@type").and_then(|v| v.as_str()), Some("Location"));
+    assert_eq!(
+        loc.get("name").and_then(|v| v.as_str()),
+        Some("Conference Room B")
+    );
+    assert_eq!(
+        loc.get("coordinates"),
+        None,
+        "coordinates must not be populated in single-string model"
+    );
+
+    // GEO is dropped on import without polluting extra
+    assert!(!event.extra.contains_key("geo"));
+    assert!(!event.extra.contains_key("GEO"));
+
+    // Outbound emission writes LOCATION with X-JMAP-KEY:l1, omits GEO
+    let out = event_to_ical(&event);
+    assert_eq!(
+        line(&out, "LOCATION;"),
+        "LOCATION;X-JMAP-KEY=l1:Conference Room B"
+    );
+    assert!(without(&out, "GEO"));
+}
+
+#[test]
+fn differential_oracle_sequence_revision_counter_dropped_on_import_for_server_store_ownership() {
+    // Divergence 8 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.7.4 defines SEQUENCE. Stalwart v1.0.0 maps SEQUENCE
+    // to JSCalendar sequence.
+    // In contrast, jmap-ical drops SEQUENCE on import without polluting extra.
+    // Rationale: In JMAP for Calendars (draft-ietf-jmap-calendars-28 sections 5.1 and 5.2),
+    // sequence revision numbers are strictly managed and automatically incremented
+    // by the JMAP server upon commit. A desktop client proposing or persisting
+    // sequence numbers would interfere with server conflict detection.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-sequence-test-001\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Sequence Test\r\n\
+SEQUENCE:5\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    // SEQUENCE is dropped without polluting extra
+    assert!(!event.extra.contains_key("sequence"));
+    assert!(!event.extra.contains_key("SEQUENCE"));
+
+    // Outbound emission omits SEQUENCE, leaving revision control to the JMAP server
+    let out = event_to_ical(&event);
+    assert!(without(&out, "SEQUENCE"));
+}
+
+#[test]
+fn differential_oracle_color_property_and_source_level_styling_boundary() {
+    // Divergence 9 against Stalwart differential oracle:
+    // RFC 7986 section 5.9 defines COLOR. Stalwart v1.0.0 maps COLOR to event.color.
+    // In contrast, jmap-ical drops COLOR on import without polluting extra.
+    // Rationale: In Evolution Data Server, event styling is governed by the parent
+    // calendar source (E_SOURCE_EXTENSION_CALENDAR) rather than per-event attributes.
+    // Dropping per-event COLOR avoids uncoordinated styling overrides in desktop UI.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-color-test-001\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Color Test\r\n\
+COLOR:maroon\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    assert_eq!(event.color, None, "COLOR must be dropped on import");
+    assert!(!event.extra.contains_key("color"));
+    assert!(!event.extra.contains_key("COLOR"));
+
+    let out = event_to_ical(&event);
+    assert!(without(&out, "COLOR"));
+}
+
+#[test]
+fn differential_oracle_related_to_dropped_on_import_to_isolate_relation_graphs() {
+    // Divergence 10 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.4.5 defines RELATED-TO. Stalwart v1.0.0 maps RELATED-TO
+    // to JSCalendar relatedTo.
+    // In contrast, jmap-ical drops RELATED-TO on import without polluting extra.
+    // Rationale: Evolution's appointment editor does not manage appointment relation
+    // graphs. Dropping unmodeled relations protects server-side relation structures
+    // from uncoordinated whole-property replacement.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-related-to-001\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Related-To Test\r\n\
+RELATED-TO;RELTYPE=PARENT:parent-event-uid-999\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    assert!(!event.extra.contains_key("relatedTo"));
+    assert!(!event.extra.contains_key("RELATED-TO"));
+
+    let out = event_to_ical(&event);
+    assert!(without(&out, "RELATED-TO"));
+}
+
+#[test]
+fn differential_oracle_icalendar_converted_properties_tracking_omission() {
+    // Divergence 11 against Stalwart differential oracle:
+    // RFC 8984 Appendix B defines the iCalendar object to track unconverted
+    // properties. Stalwart v1.0.0 emits iCalendar and convertedProperties.
+    // In contrast, jmap-ical does not emit or require iCalendar tracking bags.
+    // Serialization is direct and deterministic from standard JSCalendar properties.
+    // Rationale: Omitting parser bookkeeping bags prevents client-specific metadata
+    // from polluting stored records on the JMAP server while guaranteeing clean,
+    // deterministic iCalendar generation.
+    let path = format!(
+        "{}/tests/fixtures/evolution_calendar_export.ics",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let ics = std::fs::read_to_string(&path).expect("read fixture");
+    let event = ical_to_event(&ics).expect("parse ics");
+
+    assert!(!event.extra.contains_key("iCalendar"));
+    assert!(!event.extra.contains_key("convertedProperties"));
+
+    let out = event_to_ical(&event);
+    assert!(without(&out, "X-JSCALENDAR-CONVERTED"));
+    assert!(without(&out, "convertedProperties"));
+}
