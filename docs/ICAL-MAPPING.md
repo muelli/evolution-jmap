@@ -2105,6 +2105,69 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.88 Divergence 88: Unterminated and Truncated Component Refusal (`ICalError::Unterminated`, `NotACalendar`, `Mismatched`, `Trailing`) vs Permissive Best-Effort Recovery
+
+- **Observed Behavior**:
+  RFC 5545 §3.4 and §3.6 require strict syntactic component envelopes where every component is bracketed by matching `BEGIN:<name>` and `END:<name>` lines within an enclosing `BEGIN:VCALENDAR` / `END:VCALENDAR` envelope. In `jmap-ical`, `check_structure` and `parse_ical` enforce strict structural validation:
+  1. Non-calendar or empty inputs: Empty strings, whitespace-only buffers, or streams lacking `BEGIN:VCALENDAR` return `Err(ICalError::NotACalendar)`.
+  2. Unterminated components: Components lacking closing `END:<name>` delimiters before end-of-file return `Err(ICalError::Unterminated(name))`.
+  3. Mismatched delimiters: Closing tags that do not match the currently open component stack (such as `BEGIN:VEVENT` closed by `END:VALARM`) return `Err(ICalError::Mismatched { expected, found })`.
+  4. Trailing data: Extraneous content outside the outer calendar envelope returns `Err(ICalError::Trailing(line))`.
+  In contrast, general CalDAV processors or Stalwart v1.0.0's `CalendarEvent/parse` may attempt permissive best-effort recovery or report errors under `notParsable: {"<blobId>": ...}`.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server synchronization (`jmap-cal-sync`), attempting to parse and store truncated calendar data could lead to serious data loss, such as silently dropping recurrence rules, alarms, or detached override instances cut off in an interrupted download or network stream.
+  2. Enforcing structured refusal protects the local database from ingesting partial records that could overwrite good server data.
+  3. Strict structural checks precede detailed semantic parsing, providing early rejection of malformed or corrupted payloads.
+- **Adjudication**:
+  Deliberate mapping design and structural data integrity guarantee. Rejects truncated, mismatched, or unterminated calendar payloads immediately with typed `ICalError` variants.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.89 Divergence 89: Parser Nesting Depth Limitation (`MAX_DEPTH = 32`) and Stack Overflow Protection vs Unbounded Recursive Parsing
+
+- **Observed Behavior**:
+  RFC 5545 defines hierarchical calendar objects (`VCALENDAR` contains `VEVENT`, which contains `VALARM`, reaching depth 3; `VCALENDAR` contains `VTIMEZONE`, which contains `STANDARD` or `DAYLIGHT`, reaching depth 3). Real-world RFC 5545 nesting depth never exceeds 3 or 4 levels. In `jmap-ical`, `check_depth` enforces `pub const MAX_DEPTH: usize = 32;` using an iterative breadcrumb traversal. When component depth exceeds 32, it returns `Err(ICalError::TooDeep(component_name))`. In contrast, traditional recursive-descent iCalendar parsers without explicit recursion depth limits can suffer stack overflow panics or memory exhaustion when processing adversarial inputs (such as 100,000 nested components).
+- **Specification and Architectural Context**:
+  1. Evolution Data Server runs as a background system daemon (`evolution-calendar-factory`) servicing multiple desktop applications. A stack overflow caused by processing an untrusted email invitation or shared calendar payload would crash the factory process for all accounts.
+  2. Enforcing a conservative limit of 32 levels easily accommodates any legitimate iCalendar structure while providing hard protection against stack exhaustion attacks.
+  3. The depth check uses an explicit heap-allocated pending work queue rather than thread call frames, ensuring constant stack memory usage regardless of document depth.
+- **Adjudication**:
+  Conforming specification boundary and process availability protection. Rejects deeply nested documents at depth 32 using an iterative check to prevent stack exhaustion.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.90 Divergence 90: Unbalanced Parameter Quoting and Delimiter Tolerance in Property Parameters vs Strict Grammar Rejection
+
+- **Observed Behavior**:
+  RFC 5545 §3.2 mandates that parameter values containing colons, semicolons, or commas must be enclosed in double quotes (`param-value = paramtext / quoted-string`). A quoted string cannot contain unescaped double-quote characters. In real-world feeds (e.g. legacy or third-party exporters), missing closing quotes (e.g. `DTSTART;TZID="Europe/Berlin:20260904T120000`) or unbalanced quotes (e.g. `ORGANIZER;CN="Bob"Jones":mailto:bob@example.com`) are frequently encountered. In `jmap-ical`, parameter parsing handles unbalanced quotes defensively in strictly bounded time (< 1s execution) without panicking or hanging, extracting the component identity and valid fields. On outbound serialization, parameter values containing whitespace or delimiters are quoted cleanly per RFC 5545 §3.2 rules.
+- **Specification and Architectural Context**:
+  1. Rejecting an entire event because of a misplaced quote in an auxiliary parameter (like `CN` or `FMTTYPE`) harms user experience, while hanging or crashing on malformed quotes is a security vulnerability.
+  2. Defensive bounded parameter tokenization allows `jmap-ical` to parse core event properties even from imperfect external feeds.
+  3. Bounded-time guarantees prevent regular expression catastrophic backtracking (ReDoS) or infinite parsing loops on pathological input strings.
+- **Adjudication**:
+  Conforming specification boundary and tolerant parser design. Bounded parsing tolerates unbalanced parameter quotes without hanging or crashing while preserving event identity.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.91 Divergence 91: Content Line Folding (RFC 5545 §3.1 Space and Tab Continuation, Empty Continuations) vs Line Length Limits and Delimiter Splitting
+
+- **Observed Behavior**:
+  RFC 5545 §3.1 specifies that content lines longer than 75 octets should be folded by inserting a CRLF immediately followed by a single linear whitespace character (space or horizontal tab). In `jmap-ical`:
+  1. Inbound unfolding: `unfold` strips either `' '` or `'\t'` from the beginning of continuation lines and appends the remainder to the prior line.
+  2. Unfolding whitespace preservation: Removing only the single leading fold character preserves any subsequent spaces or tabs in the property value (such as indented code snippets or tables).
+  3. Mixed line ending tolerance: It handles `\r\n`, `\n`, or `\r` line breaks uniformly.
+  4. Empty continuation handling: Empty continuation lines (` \r\n`) are tolerated without dropping subsequent content.
+  5. Outbound line formatting: Emits standard CRLF line endings. To prevent CRLF injection on properties written without general character escaping (such as `duration`, `frequency`, and `timeZone`), values containing bare LF or CR characters are sanitized or dropped before line construction.
+- **Specification and Architectural Context**:
+  1. Different email transfer agents and calendar servers use space or tab for line folding, and some produce absurd folding (every 2 octets) or mixed newline conventions.
+  2. Supporting RFC 5545 §3.1 unfolding with space and tab compatibility ensures lossless import across diverse exporters.
+  3. Sanitizing outbound raw properties against CRLF injection prevents header injection attacks into generated calendar files.
+- **Adjudication**:
+  Conforming specification boundary and RFC 5545 §3.1 compliance. Unfolds space and tab continuations losslessly across mixed line endings, tolerates empty continuations, and sanitizes outbound raw properties against CRLF injection.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
