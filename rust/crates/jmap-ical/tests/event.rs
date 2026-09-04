@@ -14,7 +14,7 @@ use jmap_ical::{
     event_to_ical, free_busy_type, ical_to_event, maps_alerts, maps_keyword, maps_locations,
     maps_recurrence_override, maps_recurrence_rule, maps_time_zone, maps_virtual_locations,
     names_time_zone, prune_time_zones, sends_recurrence_override, time_zone_definition,
-    unstateable_until, windows_time_zone_to_iana,
+    unique_tzid_to_iana, unstateable_until, windows_time_zone_to_iana,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use jmap_proto::principals::BusyPeriod;
@@ -22155,4 +22155,313 @@ fn differential_oracle_content_line_folding_and_crlf_boundary_sanitization() {
         !ics_out.contains("\r\nSUMMARY:Injected"),
         "injected CRLF in timeZone must not create a content line"
     );
+}
+
+#[test]
+fn differential_oracle_vtimezone_multi_observance_transition_resolution() {
+    // Divergence 92 against Stalwart differential oracle:
+    // RFC 5545 section 3.6.5 specifies VTIMEZONE components containing multiple STANDARD
+    // and DAYLIGHT observances defining daylight saving transitions.
+    // In jmap-ical:
+    // 1. Evaluates daylight saving transitions directly from in-document VTIMEZONE observances
+    //    without requiring an external zoneinfo database.
+    // 2. Evaluates summer and winter offsets (+0200 vs +0100 for Europe/Berlin) accurately.
+    // 3. Exact transition boundary semantics: at the transition onset, the new offset applies;
+    //    one second before the transition onset, the old offset applies.
+    // 4. Southern-hemisphere seasonal reversals (e.g. Pacific/Auckland) where summer in January
+    //    is governed by the previous year's transition (+1300) and winter in July is governed
+    //    by the April transition (+1200).
+    // 5. Single-observance non-DST zones (e.g. Asia/Kolkata +0530) are handled deterministically.
+    // 6. Outbound serialization writes local UNTIL beside zoned DTSTART.
+
+    let berlin_vtz = "BEGIN:VTIMEZONE\r\n\
+         TZID:Europe/Berlin\r\n\
+         X-LIC-LOCATION:Europe/Berlin\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         TZOFFSETFROM:+0100\r\n\
+         TZOFFSETTO:+0200\r\n\
+         TZNAME:CEST\r\n\
+         DTSTART:19700329T020000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+         END:DAYLIGHT\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0200\r\n\
+         TZOFFSETTO:+0100\r\n\
+         TZNAME:CET\r\n\
+         DTSTART:19701025T030000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+
+    // Summer instant (+0200)
+    let ics_summer = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{berlin_vtz}BEGIN:VEVENT\r\nUID:evt-tz-1\r\nDTSTART;TZID=Europe/Berlin:20260115T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20260331T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let ev_summer = ical_to_event(&ics_summer).expect("parse summer until");
+    let rule_summer = ev_summer
+        .recurrence_rule
+        .as_ref()
+        .cloned()
+        .expect("rule summer");
+    assert_eq!(rule_summer.until.as_deref(), Some("2026-03-31T14:00:00"));
+    assert!(maps_recurrence_rule(&rule_summer));
+
+    // Winter instant (+0100)
+    let ics_winter = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{berlin_vtz}BEGIN:VEVENT\r\nUID:evt-tz-2\r\nDTSTART;TZID=Europe/Berlin:20260115T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20261130T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let ev_winter = ical_to_event(&ics_winter).expect("parse winter until");
+    let rule_winter = ev_winter.recurrence_rule.expect("rule winter");
+    assert_eq!(rule_winter.until.as_deref(), Some("2026-11-30T13:00:00"));
+    assert!(maps_recurrence_rule(&rule_winter));
+
+    // Exactly at spring transition (2026-03-29T01:00:00Z -> new offset +0200 -> 03:00:00)
+    let ics_onset = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{berlin_vtz}BEGIN:VEVENT\r\nUID:evt-tz-3\r\nDTSTART;TZID=Europe/Berlin:20260115T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20260329T010000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let ev_onset = ical_to_event(&ics_onset).expect("parse onset");
+    assert_eq!(
+        ev_onset.recurrence_rule.unwrap().until.as_deref(),
+        Some("2026-03-29T03:00:00")
+    );
+
+    // One second before spring transition (2026-03-29T00:59:59Z -> old offset +0100 -> 01:59:59)
+    let ics_before = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{berlin_vtz}BEGIN:VEVENT\r\nUID:evt-tz-4\r\nDTSTART;TZID=Europe/Berlin:20260115T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20260329T005959Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let ev_before = ical_to_event(&ics_before).expect("parse before onset");
+    assert_eq!(
+        ev_before.recurrence_rule.unwrap().until.as_deref(),
+        Some("2026-03-29T01:59:59")
+    );
+
+    // Southern hemisphere: Pacific/Auckland
+    let auckland_vtz = "BEGIN:VTIMEZONE\r\n\
+         TZID:Pacific/Auckland\r\n\
+         BEGIN:DAYLIGHT\r\n\
+         TZOFFSETFROM:+1200\r\n\
+         TZOFFSETTO:+1300\r\n\
+         TZNAME:NZDT\r\n\
+         DTSTART:20070930T020000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=9\r\n\
+         END:DAYLIGHT\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+1300\r\n\
+         TZOFFSETTO:+1200\r\n\
+         TZNAME:NZST\r\n\
+         DTSTART:20080406T030000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=4\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+
+    // Auckland January (summer, +1300)
+    let ics_auckland_jan = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{auckland_vtz}BEGIN:VEVENT\r\nUID:evt-tz-5\r\nDTSTART;TZID=Pacific/Auckland:20260115T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20260115T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let ev_auck_jan = ical_to_event(&ics_auckland_jan).expect("parse auckland jan");
+    assert_eq!(
+        ev_auck_jan.recurrence_rule.unwrap().until.as_deref(),
+        Some("2026-01-16T01:00:00")
+    );
+
+    // Auckland July (winter, +1200)
+    let ics_auckland_jul = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{auckland_vtz}BEGIN:VEVENT\r\nUID:evt-tz-6\r\nDTSTART;TZID=Pacific/Auckland:20260115T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20260715T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let ev_auck_jul = ical_to_event(&ics_auckland_jul).expect("parse auckland jul");
+    assert_eq!(
+        ev_auck_jul.recurrence_rule.unwrap().until.as_deref(),
+        Some("2026-07-16T00:00:00")
+    );
+
+    // Outbound serialization round trip preserves local UNTIL beside zoned DTSTART
+    let out_ics = event_to_ical(&ev_summer);
+    assert!(out_ics.contains("DTSTART;TZID=Europe/Berlin:20260115T100000\r\n"));
+    assert!(out_ics.contains("RRULE:FREQ=WEEKLY;UNTIL=20260331T140000\r\n"));
+}
+
+#[test]
+fn differential_oracle_vtimezone_transition_day_modeling_and_bounded_search() {
+    // Divergence 93 against Stalwart differential oracle:
+    // Transition rules in VTIMEZONE observances are restricted by convention and grammar to yearly recurrence.
+    // In jmap-ical:
+    // 1. Day representations support Day::Nth (ordinal weekday), Day::WeekdayAmong (tzdata/libical pattern),
+    //    Day::OfMonth (single month day), and Day::OfStart.
+    // 2. Multiple days without limiting filters (e.g. unadorned BYDAY without ordinals in yearly rules)
+    //    are refused as multi-transition sets (Falls::Set).
+    // 3. WKST part in yearly transition rules (Exchange and Zimbra pattern) is ignored safely rather
+    //    than rejecting the rule.
+    // 4. Fixed bounded search window (SEARCH = 40 years) prevents unbounded historical search.
+
+    // WeekdayAmong pattern (libical / tzdata common idiom: first Sunday on or after 23rd)
+    let weekday_among_vtz = "BEGIN:VTIMEZONE\r\n\
+         TZID:CustomZone1\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0200\r\n\
+         TZOFFSETTO:+0100\r\n\
+         DTSTART:19701025T030000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTH=10;BYMONTHDAY=23,24,25,26,27,28,29\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+    let ics_among = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{weekday_among_vtz}BEGIN:VEVENT\r\nUID:evt-day-1\r\nDTSTART;TZID=CustomZone1:20260101T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20261115T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let ev_among = ical_to_event(&ics_among).expect("parse weekday among");
+    assert_eq!(
+        ev_among.recurrence_rule.unwrap().until.as_deref(),
+        Some("2026-11-15T13:00:00")
+    );
+
+    // Exchange / Zimbra pattern with WKST=MO on yearly rule
+    let wkst_vtz = "BEGIN:VTIMEZONE\r\n\
+         TZID:CustomZone2\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0200\r\n\
+         TZOFFSETTO:+0100\r\n\
+         DTSTART:19701025T030000\r\n\
+         RRULE:FREQ=YEARLY;WKST=MO;BYDAY=-1SU;BYMONTH=10\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+    let ics_wkst = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{wkst_vtz}BEGIN:VEVENT\r\nUID:evt-day-2\r\nDTSTART;TZID=CustomZone2:20260101T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20261115T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let ev_wkst = ical_to_event(&ics_wkst).expect("parse wkst tolerated");
+    assert_eq!(
+        ev_wkst.recurrence_rule.unwrap().until.as_deref(),
+        Some("2026-11-15T13:00:00")
+    );
+
+    // Unadorned BYDAY=SU without ordinal in yearly rule names a set of days (every Sunday),
+    // which cannot define a single transition instant and is refused.
+    let set_vtz = "BEGIN:VTIMEZONE\r\n\
+         TZID:CustomZone3\r\n\
+         BEGIN:STANDARD\r\n\
+         TZOFFSETFROM:+0200\r\n\
+         TZOFFSETTO:+0100\r\n\
+         DTSTART:19701025T030000\r\n\
+         RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTH=10\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n";
+    let ics_set = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n{set_vtz}BEGIN:VEVENT\r\nUID:evt-day-3\r\nDTSTART;TZID=CustomZone3:20260101T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20261115T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let ev_set = ical_to_event(&ics_set).expect("parse unresolvable set rule");
+    // Because the rule cannot be resolved, UNTIL retains 'Z' and is refused
+    let rule_set = ev_set.recurrence_rule.unwrap();
+    assert_eq!(rule_set.until.as_deref(), Some("2026-11-15T12:00:00Z"));
+    assert!(!maps_recurrence_rule(&rule_set));
+}
+
+#[test]
+fn differential_oracle_zoned_until_unresolvable_z_preservation_and_refusal() {
+    // Divergence 94 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 requires UNTIL in a zoned event to be stated in UTC ('Z').
+    // RFC 8984 section 4.3.1 requires JSCalendar until to be local LocalDateTime (no 'Z').
+    // In jmap-ical:
+    // 1. If DTSTART names a non-UTC time zone and the document provides no VTIMEZONE definition
+    //    (or an unresolvable definition), read_until preserves the trailing 'Z' marker.
+    // 2. A value with trailing 'Z' is not a valid JSCalendar LocalDateTime, so maps_recurrence_rule
+    //    returns false and unstateable_until returns true, preventing silent schedule corruption.
+    // 3. For UTC events (DTSTART with 'Z'), local digits without 'Z' are returned directly and
+    //    maps_recurrence_rule succeeds.
+    // 4. For floating events (no TZID, no 'Z'), local digits without 'Z' are returned directly and
+    //    maps_recurrence_rule succeeds.
+
+    // Zoned event without VTIMEZONE in document
+    let ics_missing_vtz = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:evt-no-vtz\r\nDTSTART;TZID=Europe/Berlin:20260115T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20260331T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_no_vtz = ical_to_event(ics_missing_vtz).expect("parse missing vtz");
+    let rule_no_vtz = ev_no_vtz.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rule_no_vtz.until.as_deref(), Some("2026-03-31T12:00:00Z"));
+    assert!(
+        !maps_recurrence_rule(rule_no_vtz),
+        "rule with unresolvable UNTIL must be refused by maps_recurrence_rule"
+    );
+    assert!(
+        unstateable_until(rule_no_vtz).is_some(),
+        "event must be flagged by unstateable_until"
+    );
+
+    // UTC event (DTSTART with 'Z'): offset shift is identity, local digits without 'Z'
+    let ics_utc = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:evt-utc\r\nDTSTART:20260115T100000Z\r\nRRULE:FREQ=WEEKLY;UNTIL=20260331T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_utc = ical_to_event(ics_utc).expect("parse utc");
+    let rule_utc = ev_utc.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rule_utc.until.as_deref(), Some("2026-03-31T12:00:00"));
+    assert!(
+        maps_recurrence_rule(rule_utc),
+        "UTC event UNTIL is valid local date-time"
+    );
+    assert!(unstateable_until(rule_utc).is_none());
+
+    // Floating event (no TZID, no 'Z'): no zone to shift, local digits without 'Z'
+    let ics_floating = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:evt-floating\r\nDTSTART:20260115T100000\r\nRRULE:FREQ=WEEKLY;UNTIL=20260331T120000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_floating = ical_to_event(ics_floating).expect("parse floating");
+    let rule_floating = ev_floating.recurrence_rule.as_ref().unwrap();
+    assert_eq!(rule_floating.until.as_deref(), Some("2026-03-31T12:00:00"));
+    assert!(
+        maps_recurrence_rule(rule_floating),
+        "floating event UNTIL is valid local date-time"
+    );
+    assert!(unstateable_until(rule_floating).is_none());
+}
+
+#[test]
+fn differential_oracle_timezone_identifier_translation_precedence_and_peeling() {
+    // Divergence 95 against Stalwart differential oracle:
+    // Calendar clients express timezones in disparate formats: standard IANA names,
+    // X-LIC-LOCATION metadata, Windows display names, and globally unique prefixed URIs.
+    // In jmap-ical:
+    // 1. Literal IANA match priority: if TZID satisfies names_time_zone, it is used directly;
+    //    secondary X-LIC-LOCATION metadata is ignored to prevent geographic drift.
+    // 2. Non-standard TZID with X-LIC-LOCATION: if TZID is non-standard but X-LIC-LOCATION is a valid
+    //    IANA name, X-LIC-LOCATION is selected.
+    // 3. CLDR Windows mapping: Windows timezone display names resolve to canonical IANA zones.
+    // 4. Globally unique prefixed TZID peeling: prefixes (e.g. /mozilla.org/.../) are peeled
+    //    to isolate the canonical IANA zone name.
+    // 5. Custom solidus zones lacking IANA prefixes are preserved verbatim as custom zones.
+
+    // 1. Literal IANA match takes precedence over conflicting X-LIC-LOCATION
+    let ics_iana_priority = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VTIMEZONE\r\nTZID:Europe/Berlin\r\nX-LIC-LOCATION:Asia/Tokyo\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:evt-iana\r\nDTSTART;TZID=Europe/Berlin:20260904T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_iana = ical_to_event(ics_iana_priority).expect("parse iana priority");
+    assert_eq!(ev_iana.time_zone.as_deref(), Some("Europe/Berlin"));
+
+    // 2. Non-standard TZID with valid X-LIC-LOCATION
+    let ics_x_lic = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VTIMEZONE\r\nTZID:Custom Berlin Zone\r\nX-LIC-LOCATION:Europe/Berlin\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:evt-x-lic\r\nDTSTART;TZID=\"Custom Berlin Zone\":20260904T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_x_lic = ical_to_event(ics_x_lic).expect("parse x-lic-location");
+    assert_eq!(ev_x_lic.time_zone.as_deref(), Some("Europe/Berlin"));
+
+    // 3. CLDR Windows mapping
+    assert_eq!(
+        windows_time_zone_to_iana("W. Europe Standard Time"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        windows_time_zone_to_iana("Pacific Standard Time"),
+        Some("America/Los_Angeles")
+    );
+    assert_eq!(
+        windows_time_zone_to_iana("FLE Standard Time"),
+        Some("Europe/Kyiv")
+    );
+    let ics_win = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VTIMEZONE\r\nTZID:W. Europe Standard Time\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:evt-win\r\nDTSTART;TZID=\"W. Europe Standard Time\":20260904T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_win = ical_to_event(ics_win).expect("parse windows zone");
+    assert_eq!(ev_win.time_zone.as_deref(), Some("Europe/Berlin"));
+
+    // 4. Globally unique prefixed TZID peeling
+    assert_eq!(
+        unique_tzid_to_iana("/mozilla.org/20050126_1/Europe/Berlin"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        unique_tzid_to_iana("/citadel.org/2026/America/New_York"),
+        Some("America/New_York")
+    );
+    let ics_peeled = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:evt-peeled\r\nDTSTART;TZID=/mozilla.org/20050126_1/Europe/Berlin:20260904T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_peeled = ical_to_event(ics_peeled).expect("parse peeled tzid");
+    assert_eq!(ev_peeled.time_zone.as_deref(), Some("Europe/Berlin"));
+
+    // 5. Custom solidus zone lacking IANA area prefix is preserved verbatim
+    assert_eq!(unique_tzid_to_iana("/myorg/custom_zone"), None);
+    let ics_custom_solidus = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:evt-custom\r\nDTSTART;TZID=/myorg/custom_zone:20260904T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_custom = ical_to_event(ics_custom_solidus).expect("parse custom solidus");
+    assert_eq!(ev_custom.time_zone.as_deref(), Some("/myorg/custom_zone"));
 }
