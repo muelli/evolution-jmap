@@ -18476,3 +18476,244 @@ END:VCALENDAR\r\n";
     assert!(unfolded.contains("https://example.com/docs/spec.pdf"));
     assert!(unfolded.contains("https://example.com/images/arch.png"));
 }
+
+#[test]
+fn differential_oracle_image_property_rel_icon_and_display_parameter_mapping() {
+    // Divergence 36 against Stalwart differential oracle:
+    // RFC 7986 section 5.10 specifies IMAGE to associate graphics or icons with a component,
+    // requiring VALUE=URI and admitting optional DISPLAY (BADGE, GRAPHIC, FULLSIZE, THUMBNAIL).
+    // RFC 8984 section 1.4.11 and section 4.2.7 model resources as links: Map<Id, Link>, where
+    // rel differentiates icons ("icon") from file attachments ("enclosure").
+    // Stalwart v1.0.0 parses ATTACH and IMAGE, but may treat links uniformly or omit rel.
+    // In contrast, jmap-ical's read_links:
+    // 1. Identifies IMAGE lines and sets rel: "icon".
+    // 2. Maps DISPLAY parameters (BADGE, GRAPHIC, FULLSIZE, THUMBNAIL) to lowercase link.display.
+    // 3. Leaves rel omitted on standard ATTACH lines (preserving default enclosure semantics).
+    // 4. Outbound export emits IMAGE with mandatory VALUE=URI, DISPLAY, and FMTTYPE when rel is "icon",
+    //    and emits ATTACH for non-icon links.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-image-test-001\r\n\
+DTSTART:20260904T190000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Keynote Presentation\r\n\
+ATTACH;FMTTYPE=application/pdf;SIZE=4096:https://example.com/slides.pdf\r\n\
+IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png:https://example.com/badge.png\r\n\
+IMAGE;VALUE=URI;DISPLAY=THUMBNAIL;FMTTYPE=image/jpeg:https://example.com/preview.jpg\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev = ical_to_event(ics).expect("parse event with image and attach");
+    let links = ev.links.as_ref().expect("links map present");
+    assert_eq!(links.len(), 3);
+
+    let k1 = links.get("k1").expect("attach link k1");
+    assert_eq!(
+        k1.get("href").and_then(Value::as_str),
+        Some("https://example.com/slides.pdf")
+    );
+    assert_eq!(
+        k1.get("contentType").and_then(Value::as_str),
+        Some("application/pdf")
+    );
+    assert_eq!(k1.get("size").and_then(Value::as_u64), Some(4096));
+    assert_eq!(k1.get("rel"), None);
+    assert_eq!(k1.get("display"), None);
+
+    let k2 = links.get("k2").expect("image link k2");
+    assert_eq!(
+        k2.get("href").and_then(Value::as_str),
+        Some("https://example.com/badge.png")
+    );
+    assert_eq!(
+        k2.get("contentType").and_then(Value::as_str),
+        Some("image/png")
+    );
+    assert_eq!(k2.get("rel").and_then(Value::as_str), Some("icon"));
+    assert_eq!(k2.get("display").and_then(Value::as_str), Some("badge"));
+
+    let k3 = links.get("k3").expect("image link k3");
+    assert_eq!(
+        k3.get("href").and_then(Value::as_str),
+        Some("https://example.com/preview.jpg")
+    );
+    assert_eq!(
+        k3.get("contentType").and_then(Value::as_str),
+        Some("image/jpeg")
+    );
+    assert_eq!(k3.get("rel").and_then(Value::as_str), Some("icon"));
+    assert_eq!(k3.get("display").and_then(Value::as_str), Some("thumbnail"));
+    assert!(ev.extra.is_empty());
+
+    let out = event_to_ical(&ev);
+    let unfolded = out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded.contains("ATTACH;"));
+    assert!(unfolded.contains("https://example.com/slides.pdf"));
+    assert!(unfolded.contains("IMAGE;VALUE=URI;"));
+    assert!(unfolded.contains("DISPLAY=BADGE"));
+    assert!(unfolded.contains("https://example.com/badge.png"));
+    assert!(unfolded.contains("DISPLAY=THUMBNAIL"));
+    assert!(unfolded.contains("https://example.com/preview.jpg"));
+}
+
+#[test]
+fn differential_oracle_altrep_parameter_on_text_properties_dropped_on_import() {
+    // Divergence 37 against Stalwart differential oracle:
+    // RFC 5545 section 3.2.2 defines ALTREP parameter for SUMMARY, DESCRIPTION, and LOCATION,
+    // providing a URI to an alternate representation of the text content.
+    // RFC 8984 models title, description, and location names as plain strings without URI pointers.
+    // Stalwart v1.0.0 may parse ALTREP into alternate links or tracking metadata.
+    // In contrast, jmap-ical's read_vevent:
+    // 1. Reads the plain text value for SUMMARY, DESCRIPTION, and LOCATION.
+    // 2. Ignores ALTREP parameters on import without creating unwanted link entries or polluting event.extra.
+    // 3. Outbound export renders clean text properties without ALTREP parameters.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-altrep-test-001\r\n\
+DTSTART:20260904T200000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY;ALTREP=\"https://example.com/alt/summary.html\":Strategy Session\r\n\
+DESCRIPTION;ALTREP=\"cid:part1.doc@example.com\":Detailed quarterly planning and priorities.\r\n\
+LOCATION;ALTREP=\"https://example.com/alt/room101.vcf\":Conference Room A\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev = ical_to_event(ics).expect("parse event with altrep parameters");
+    assert_eq!(ev.title.as_deref(), Some("Strategy Session"));
+    assert_eq!(
+        ev.description.as_deref(),
+        Some("Detailed quarterly planning and priorities.")
+    );
+    let locations = ev.locations.as_ref().expect("locations present");
+    let loc = locations.get("l1").expect("location entry l1");
+    assert_eq!(
+        loc.get("name").and_then(Value::as_str),
+        Some("Conference Room A")
+    );
+    assert_eq!(ev.links, None);
+    assert!(ev.extra.is_empty());
+
+    let out = event_to_ical(&ev);
+    assert!(without(&out, "ALTREP="));
+    assert_eq!(line(&out, "SUMMARY:"), "SUMMARY:Strategy Session");
+    assert_eq!(
+        line(&out, "DESCRIPTION:"),
+        "DESCRIPTION:Detailed quarterly planning and priorities."
+    );
+    assert_eq!(
+        line(&out, "LOCATION;"),
+        "LOCATION;X-JMAP-KEY=l1:Conference Room A"
+    );
+}
+
+#[test]
+fn differential_oracle_rich_html_descriptions_x_alt_desc_and_styled_dropped() {
+    // Divergence 38 against Stalwart differential oracle:
+    // Common calendaring software (Outlook, Apple, Google, Thunderbird) exports HTML descriptions
+    // using X-ALT-DESC (with FMTTYPE=text/html) or RFC 9073 STYLED-DESCRIPTION.
+    // Stalwart v1.0.0 may convert HTML descriptions, expose them, or populate descriptionContentType.
+    // In contrast, jmap-ical's read_vevent:
+    // 1. Reads standard DESCRIPTION strictly into event.description as plain text.
+    // 2. Drops X-ALT-DESC and STYLED-DESCRIPTION on import without polluting event.extra.
+    // 3. Outbound export emits standard DESCRIPTION and never synthesizes vendor or styled description lines.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-html-desc-001\r\n\
+DTSTART:20260904T210000Z\r\n\
+DURATION:PT45M\r\n\
+SUMMARY:Engineering Sync\r\n\
+DESCRIPTION:Discussion of database schema migration and cache invalidation.\r\n\
+X-ALT-DESC;FMTTYPE=text/html:<p>Discussion of <b>database schema migration</b> and <i>cache invalidation</i>.</p>\r\n\
+STYLED-DESCRIPTION;VALUE=TEXT;FMTTYPE=text/html:<p>Rich styled description</p>\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev = ical_to_event(ics).expect("parse event with html and styled descriptions");
+    assert_eq!(ev.title.as_deref(), Some("Engineering Sync"));
+    assert_eq!(
+        ev.description.as_deref(),
+        Some("Discussion of database schema migration and cache invalidation.")
+    );
+    assert!(ev.extra.is_empty());
+
+    let out = event_to_ical(&ev);
+    assert_eq!(
+        line(&out, "DESCRIPTION:"),
+        "DESCRIPTION:Discussion of database schema migration and cache invalidation."
+    );
+    assert!(without(&out, "X-ALT-DESC"));
+    assert!(without(&out, "STYLED-DESCRIPTION"));
+}
+
+#[test]
+fn differential_oracle_multi_component_stream_isolation_and_non_vevent_rejection() {
+    // Divergence 39 against Stalwart differential oracle:
+    // RFC 5545 section 3.4 permits calendar streams with mixed components (VEVENT, VTODO, VJOURNAL, VFREEBUSY).
+    // Stalwart v1.0.0's CalendarEvent/parse processes the stream and returns an array of parsed events.
+    // In contrast, jmap-ical's ical_to_event acts as a single-event record synchronization codec:
+    // 1. Streams containing only non-VEVENT components (such as VTODO or VJOURNAL) return Err(ICalError::NoEvent).
+    // 2. Streams with mixed components isolate the VEVENT series and ignore VTODO or VJOURNAL tasks.
+    // 3. Outbound export produces a single VEVENT component and never emits non-event component blocks.
+    let todo_only_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VTODO\r\n\
+UID:todo-item-001\r\n\
+SUMMARY:Complete differential audit\r\n\
+STATUS:NEEDS-ACTION\r\n\
+DUE:20260905T120000Z\r\n\
+END:VTODO\r\n\
+END:VCALENDAR\r\n";
+    let todo_result = ical_to_event(todo_only_ics);
+    assert!(
+        matches!(todo_result, Err(ICalError::NoEvent)),
+        "stream with only VTODO must yield NoEvent error"
+    );
+
+    let journal_only_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VJOURNAL\r\n\
+UID:journal-item-001\r\n\
+SUMMARY:Daily Retrospective Notes\r\n\
+STATUS:DRAFT\r\n\
+END:VJOURNAL\r\n\
+END:VCALENDAR\r\n";
+    let journal_result = ical_to_event(journal_only_ics);
+    assert!(
+        matches!(journal_result, Err(ICalError::NoEvent)),
+        "stream with only VJOURNAL must yield NoEvent error"
+    );
+
+    let mixed_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:event-in-mixed-stream-001\r\n\
+DTSTART:20260904T220000Z\r\n\
+DURATION:PT30M\r\n\
+SUMMARY:Team Architecture Check-in\r\n\
+END:VEVENT\r\n\
+BEGIN:VTODO\r\n\
+UID:todo-in-mixed-stream-002\r\n\
+SUMMARY:Follow-up action item\r\n\
+STATUS:NEEDS-ACTION\r\n\
+END:VTODO\r\n\
+END:VCALENDAR\r\n";
+    let ev = ical_to_event(mixed_ics).expect("parse mixed stream isolating vevent");
+    assert_eq!(
+        ev.id.as_ref().map(|id| id.as_str()),
+        Some("event-in-mixed-stream-001")
+    );
+    assert_eq!(ev.title.as_deref(), Some("Team Architecture Check-in"));
+    assert!(ev.extra.is_empty());
+
+    let out = event_to_ical(&ev);
+    assert!(out.contains("BEGIN:VEVENT"));
+    assert!(out.contains("UID:event-in-mixed-stream-001"));
+    assert!(without(&out, "BEGIN:VTODO"));
+    assert!(without(&out, "UID:todo-in-mixed-stream-002"));
+}
