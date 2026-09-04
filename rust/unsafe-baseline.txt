@@ -15,7 +15,7 @@ jmap-backend-cal 131
 jmap-backend-cal-module 4
 jmap-backend-collection 241
 jmap-backend-collection-module 4
-jmap-backend-core 366
+jmap-backend-core 368
 jmap-book-sync 0
 jmap-cal-sync 0
 jmap-client 0
