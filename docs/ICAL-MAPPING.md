@@ -872,5 +872,63 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.12 Divergence 12: `VALARM` Non-Display Actions (`ACTION:EMAIL`, `ACTION:AUDIO`) vs Display-Only Reminder Model
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 parses RFC 5545 §3.6.6 `ACTION:EMAIL` into JSCalendar `Alert` with `action: "email"` (RFC 8984 §4.5.2), along with summary and recipient attendee parameters. Stalwart may drop or handle `ACTION:AUDIO`. In contrast, `jmap-ical`'s `read_alerts` strictly filters for `ACTION:DISPLAY`, dropping `ACTION:EMAIL`, `ACTION:AUDIO`, and legacy `ACTION:PROCEDURE` on inbound parse without polluting `event.extra`.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.5.2 defines two standard actions for `Alert`: `"display"` and `"email"`.
+  2. In JMAP for Calendars, an email alert instructs the server to dispatch an email notification to designated attendees at the scheduled trigger time.
+  3. Evolution Data Server (`ECalComponentAlarm`) focuses on desktop user notifications (popups and sound cues). The standard appointment editor does not configure automated server-side email dispatch workflows.
+  4. If `ical_to_event` imported email alerts as generic display alerts, client saves would either discard the email recipient list or submit unintended reminder configurations.
+  5. Outbound synchronization safety: [`maps_alerts`] requires `action` to be `"display"` (or omitted, defaulting to display). If an event in server state contains an alert with `action: "email"`, [`maps_alerts`] strictly returns `false`. This prevents `jmap-cal-sync` from performing whole-property replacement on `alerts`, ensuring server-managed email alarms are protected from accidental deletion.
+- **Adjudication**:
+  Deliberate mapping simplification and synchronization boundary. Display alarms are fully supported; server-side email alarms are protected from overwrite via [`maps_alerts`].
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.13 Divergence 13: `VALARM` Absolute Triggers (`TRIGGER;VALUE=DATE-TIME`) vs Relative `OffsetTrigger` Model
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 parses RFC 5545 §3.8.6.3 `TRIGGER;VALUE=DATE-TIME:<iso>` into JSCalendar `AbsoluteTrigger` (RFC 8984 §4.5.4: `{"@type": "AbsoluteTrigger", "when": "<iso>"}`). In contrast, `jmap-ical`'s `read_alert` only parses relative duration triggers (`OffsetTrigger`), dropping absolute date-time triggers on inbound parse without polluting `event.extra`.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.5.3 defines `OffsetTrigger` (firing relative to event start or end), while §4.5.4 defines `AbsoluteTrigger` (firing at a fixed instant in time regardless of event start).
+  2. In Evolution Data Server and desktop calendar workflows, appointment reminders are designed to warn the user relative to event start (e.g. 15 minutes prior). When an appointment is rescheduled, relative reminders automatically shift with the event.
+  3. If an incoming absolute trigger were approximated as an offset from current start time, rescheduling the appointment would incorrectly shift the fixed reminder time. If an absolute trigger were converted lossily, fixed reminder semantics would be violated.
+  4. Outbound synchronization safety: [`maps_alerts`] requires triggers to be `OffsetTrigger`. Any `AbsoluteTrigger` causes [`maps_alerts`] to return `false`, preventing `jmap-cal-sync` from replacing `alerts` whole and keeping server-managed absolute triggers intact.
+- **Adjudication**:
+  Deliberate mapping simplification. Preserves relative trigger semantics for desktop UI and protects server-side absolute triggers via [`maps_alerts`].
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.14 Divergence 14: `VALARM` `ACKNOWLEDGED` Timestamp vs Inbound Drop and Whole-Property Replacement Safety
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 parses RFC 9074 §6.1 `ACKNOWLEDGED:<utc-datetime>` into JSCalendar `Alert.acknowledged: "<utc-datetime>"` (RFC 8984 §4.5.2). In contrast, `jmap-ical`'s `read_alert` drops `ACKNOWLEDGED` on inbound parse without polluting `event.extra`.
+- **Specification and Architectural Context**:
+  1. RFC 9074 §6.1 defines `ACKNOWLEDGED` to record the instant a user dismissed or snoozed a reminder, allowing multiple clients sharing a calendar to synchronize dismissal state.
+  2. Evolution Data Server (`ECalComponentAlarm`) does not store per-alarm acknowledged timestamps in its local SQLite database; snoozing is handled ephemerally by the `evolution-alarm-notify` desktop daemon.
+  3. In JMAP, `alerts` is replaced whole during client synchronization (`PatchObject` replacing the entire `alerts` map). If `ical_to_event` imported `acknowledged` or if EDS saved an event without the acknowledged timestamp, `jmap-cal-sync` would submit a replacement `alerts` map lacking `acknowledged`, un-dismissing snoozed reminders across all user devices.
+  4. To guarantee dismissal safety, [`maps_alerts`] strictly returns `false` whenever any alert contains `acknowledged`. This signals to `jmap-cal-sync` that the alarm set cannot be safely overwritten whole, protecting server-side snooze and dismissal state.
+- **Adjudication**:
+  Justified architectural deviation essential for multi-device alarm dismissal safety.
+- **Status**:
+  Justified architectural deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.15 Divergence 15: `LANGUAGE` / `ALTID` Parameters and `localizations` vs Single-Locale Desktop Model
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 parses multiple `SUMMARY` or `DESCRIPTION` entries carrying `LANGUAGE=<lang>` parameters (RFC 5545 §3.2.10) into JSCalendar `localizations: Map<LanguageTag, PatchObject>` (RFC 8984 §4.6.1). In contrast, `jmap-ical` selects the primary `SUMMARY` and `DESCRIPTION` (first in document order) and drops alternate localized lines without polluting `event.extra`.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.6.1 defines `localizations` as a dictionary mapping BCP 47 language tags to patch objects overriding title, description, etc.
+  2. Evolution Data Server appointments store a single `summary` string and a single `description` string targeted to the desktop user's active session locale. EDS does not provide a multi-language translation editor for appointment text.
+  3. If `ical_to_event` attempted to synthesize localized variants or if the client attempted to patch translations, uncoordinated partial translations would overwrite server records.
+  4. Outbound serialization: `event_to_ical` emits the primary `event.title` and `event.description`. Server-side `localizations` are not modified by `jmap-cal-sync` because patches target only mapped properties (`title`, `description`).
+- **Adjudication**:
+  Deliberate mapping simplification for single-locale desktop environment.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+
 
 
