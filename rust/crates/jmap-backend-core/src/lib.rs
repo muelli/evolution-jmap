@@ -49,6 +49,7 @@ pub mod error;
 pub mod i18n;
 pub mod instance;
 pub mod logging;
+pub mod main_context;
 pub mod marshal;
 pub mod mime;
 pub mod oauth2;
