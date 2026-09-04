@@ -1779,4 +1779,72 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.68 Divergence 68: Recurrence Override `keywords` (`CATEGORIES`) Map Modeling, Tag Validation, Empty Set Refusal, and Series Keyword Removal via `null`
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.1.2 defines `CATEGORIES` as a comma-separated list of categories or tags. RFC 8984 §4.4.5 models keywords as `keywords: Map<String, Boolean>`, where map keys are tag names and values MUST be `true`. Stalwart v1.0.0 parses `CATEGORIES` into `keywords`. In `jmap-ical`:
+  1. Inbound parsing (`instance_patch`): compares `series.keywords` with `instance.keywords`. If differing, it emits `patch.insert("keywords", ...)`. When a detached `VEVENT` specifies `CATEGORIES`, `instance_patch` emits the map of keywords. When a detached `VEVENT` omits `CATEGORIES` while the master series has categories, `instance_patch` emits `{"keywords": null}`, removing all keywords from that occurrence.
+  2. Outbound serialization (`modified_instance` -> `vevent_of`): when an override specifies a keyword map, `vevent_of` formats the tags as a sorted `CATEGORIES:tag1,tag2` line on the detached `VEVENT`. When an override specifies `"keywords": null`, `vevent_of` suppresses the `CATEGORIES` line on the detached component, cleanly clearing categories relative to the series.
+  3. Validation predicate: `maps_override_field` validates `keywords` using `maps_keyword(tag, set)`. It admits `value.is_null()` (unsetting keywords) or a non-empty JSON object where each tag has `set == true`, is non-empty after trimming, and does not contain carriage returns (`\r`).
+  4. Empty map refusal: an empty object `{"keywords": {}}` is explicitly refused by `!tags.is_empty()`. In RFC 5545, there is no distinct representation for an empty categories list versus no `CATEGORIES` property. Setting `{"keywords": {}}` would serialize without `CATEGORIES`, which upon inbound parsing would return `{"keywords": null}`, breaking round-trip idempotence. Clients must specify `null` to clear keywords.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent` / `libical`), categories are assigned to appointments to group them by project, department, or topic. Detached instances can belong to specialized subcategories (such as marking one meeting in a weekly standup series as "Sprint Review").
+  2. Setting `"keywords": null` allows an occurrence to be explicitly filed under no categories, even when the parent recurring series carries categories.
+  3. Refusing empty objects `{"keywords": {}}` enforces fixpoint stability between JMAP patches and iCalendar content lines, ensuring that unfiled occurrences always round-trip as `null`.
+- **Adjudication**:
+  Conforming specification boundary and tag collection fidelity. Maps `keywords` to `CATEGORIES` bi-directionally, validates tag tokens, enforces round-trip idempotence by refusing empty objects, and supports series category clearing via `null`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.69 Divergence 69: Recurrence Override `alerts` (`VALARM`) Subcomponent Modeling, `useDefaultAlerts` Inheritance Gate, Empty Map Refusal, and Per-Instance Reminder Suppression via `null`
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.6 defines `VALARM` subcomponents inside `VEVENT` components. RFC 8984 §4.5.2 models alarms as `alerts: Map<String, Alert>`. Stalwart v1.0.0 parses `VALARM` into `alerts`. In `jmap-ical`:
+  1. Inbound parsing (`instance_patch`): compares `series.alerts` against `instance.alerts`. If differing, it emits `patch.insert("alerts", ...)`. When a detached `VEVENT` specifies custom `VALARM` components, `instance_patch` emits the alert map for the occurrence. When a detached `VEVENT` contains no `VALARM` components while the master series has alarms, `instance_patch` emits `{"alerts": null}`, suppressing reminders for that occurrence.
+  2. Outbound serialization (`modified_instance` -> `vevent_of`): when an override specifies custom alerts, `vevent_of` renders the corresponding `BEGIN:VALARM ... END:VALARM` subcomponents on the detached `VEVENT`. When an override specifies `"alerts": null`, `vevent_of` omits all `VALARM` subcomponents from the detached component.
+  3. Validation predicate: `maps_override_field` validates `alerts` using `drawn_alert(key, alert, None)`. It admits `value.is_null()` (suppressing alarms) or a non-empty object where each alert uses an `OffsetTrigger` (relative reminder) and `display` action. Absolute triggers and unmodeled non-display actions are refused.
+  4. Empty map refusal: an empty object `{"alerts": {}}` is explicitly refused by `!alerts.is_empty()`. An empty alerts map serializes to no `VALARM` subcomponents, which upon parsing reads back as `null`. Refusing `{}` ensures patch idempotence.
+  5. Default alerts gate: if the series specifies `useDefaultAlerts: true`, `maps_override_field` refuses all override alert patches (including `null` and valid alerts) via `!uses_default_alerts(series)`.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent`), alarms on recurring appointments can be individually adjusted or snoozed. If a user silences reminders for an optional occurrence in a recurring series, EDS saves a detached `VEVENT` without `VALARM` blocks. Emitting `{"alerts": null}` in the JMAP patch faithfully informs the server that this occurrence has no alarms.
+  2. Suppressing alerts on occurrences when `useDefaultAlerts` is active preserves RFC 8984 §4.5.1 semantics: when default alerts are enabled, custom alert collections are ignored.
+  3. Refusing empty alert maps `{}` prevents sync loops and patch diff flutter in `jmap-cal-sync`.
+- **Adjudication**:
+  Conforming specification boundary and reminder component fidelity. Maps per-instance `alerts` to `VALARM` subcomponents, gates overrides against `useDefaultAlerts`, enforces patch idempotence by refusing empty maps, and models reminder silencing via `null`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.70 Divergence 70: Recurrence Override `useDefaultAlerts` Document-Level Scoping, Inheritance Across Occurrences, and Override Patch Prohibition
+
+- **Observed Behavior**:
+  RFC 8984 §4.5.1 defines `useDefaultAlerts: Boolean`, indicating whether the user's default alert preferences apply to the event. RFC 5545 has no property corresponding to `useDefaultAlerts`. In `jmap-ical`:
+  1. Document-level scoping: `useDefaultAlerts` is an event-level configuration property, not a per-instance override property. It is deliberately omitted from `OVERRIDE_PROPERTIES` (the 11 vetted override properties: `title`, `description`, `start`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `priority`, `privacy`, `keywords`, `alerts`).
+  2. Override patch prohibition: `maps_override_field` returns `false` for `"useDefaultAlerts"`, refusing any attempt to set or toggle `useDefaultAlerts` in `recurrenceOverrides[id]`.
+  3. Inheritance across occurrences: when `useDefaultAlerts` is set to `true` on the master series, it applies uniformly to all recurring instances. Outbound serialization omits `VALARM` subcomponents across all occurrences, and `maps_override_field` rejects per-instance custom alert definitions.
+- **Specification and Architectural Context**:
+  1. In RFC 5545, detached `VEVENT` components inherit or override `VALARM` subcomponents directly. There is no iCalendar syntax to represent "use default reminders for occurrence A, but not for occurrence B".
+  2. In Evolution Data Server (`ECalComponent`), reminder defaults are managed at the calendar client or source level, not individually per recurring occurrence.
+  3. Permitting per-instance `useDefaultAlerts` overrides would lead to unmappable iCalendar representations, because an occurrence with `useDefaultAlerts: true` cannot be distinguished in RFC 5545 from an occurrence that simply omits `VALARM` (which represents `alerts: null`). Restricting `useDefaultAlerts` to document scope prevents state ambiguity.
+- **Adjudication**:
+  Deliberate mapping design and specification boundary safety. Scopes `useDefaultAlerts` strictly to the top-level event document, prohibits per-instance override patches, and ensures consistent reminder handling across all series occurrences.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.71 Divergence 71: Recurrence Override `showWithoutTime` (All-Day Event) Document-Level Scoping, Date vs Date-Time Alignment, and Override Patch Prohibition
+
+- **Observed Behavior**:
+  RFC 8984 §4.2.1 defines `showWithoutTime: Boolean`, which designates an event as an all-day or floating date event. RFC 5545 §3.8.2.4 represents all-day events by setting `DTSTART;VALUE=DATE:...`. In `jmap-ical`:
+  1. Document-level scoping: all-day status is decided once for the entire event document via `shows_without_time(&event)`. It is excluded from `OVERRIDE_PROPERTIES`.
+  2. Override patch prohibition: `maps_override_field` returns `false` for `"showWithoutTime"`, refusing any attempt to set `"showWithoutTime"` inside an override patch.
+  3. Date vs Date-Time alignment: RFC 5545 §3.8.4.4 mandates that the value type of `RECURRENCE-ID` MUST match the value type of `DTSTART`. If the master event is an all-day event (`VALUE=DATE`), all detached occurrences must have `RECURRENCE-ID;VALUE=DATE:...` and `DTSTART;VALUE=DATE:...`. If the master event is a timed event (`VALUE=DATE-TIME`), all detached occurrences must have `VALUE=DATE-TIME`.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server and libical, recurring appointments cannot mix all-day occurrences and timed occurrences within the same series. Attempting to mix `VALUE=DATE` and `VALUE=DATE-TIME` causes libical to fail recurrence rule expansion or produce corrupted occurrence intervals.
+  2. If a user needs to convert a single occurrence of a recurring timed meeting into an all-day event (or vice versa), EDS and CalDAV workflows split the instance into an independent appointment rather than creating a mixed-mode detached component.
+  3. Enforcing document-wide scoping for `showWithoutTime` preserves RFC 5545 type consistency and guarantees libical recurrence expansion stability.
+- **Adjudication**:
+  Conforming specification boundary and libical component safety. Restricts all-day event status to document-level scoping, prohibits mixed-mode per-instance overrides, and maintains value type alignment between master and detached components.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
