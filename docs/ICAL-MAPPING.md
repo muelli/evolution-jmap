@@ -754,4 +754,57 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Justified architectural deviation. Reconfirmed and pinned in `tests/event.rs`.
 
+### 13.3 Divergence 3: `UID` Mapping to `uid` vs `id`
+
+- **Observed Behavior**:
+  Stalwart v1.0.0's `CalendarEvent/parse` maps incoming iCalendar `UID` to JSCalendar `event.uid` (RFC 8984 §4.1.1), leaving JMAP `id` unset (null or omitted). In contrast, `jmap-ical`'s `ical_to_event` maps incoming iCalendar `UID` to `event.id` (and populates `event.uid` only when `X-JMAP-UID` is present).
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.1.1 defines `uid` as the globally unique identifier for a calendar object (equivalent to RFC 5545 `UID`). RFC 8620 §2 defines `id` as the immutable server-assigned record identifier in a JMAP account. In `CalendarEvent/parse` (draft-ietf-jmap-calendars §5.7), the parsed event has not yet been committed to a calendar, so Stalwart populates `uid` and leaves `id` omitted until `CalendarEvent/set create` assigns one.
+  2. In Evolution Data Server (`ECalMetaBackend` / `libical`), `UID` is the primary key used by EDS to index its local SQLite calendar cache and to route backend vfuncs (`load_component_sync(uid)`, `remove_component_sync(uid)`).
+  3. For synchronization (`jmap-cal-sync`), the EDS component UID must match the JMAP server record `id` so that update and delete operations can directly address the target object on the server. `jmap-ical`'s `event_to_ical` preserves this dual identity by writing `UID: <event.id>` (or `event.uid` if unpersisted) and attaching `X-JMAP-UID: <event.uid>`. On import, `ical_to_event` reads `id` from `UID` and `uid` from `X-JMAP-UID`.
+- **Adjudication**:
+  Justified architectural deviation. Stalwart conforms to standalone stateless parser semantics for unpersisted documents. `jmap-ical` serves as the bidirectional synchronization codec between EDS and JMAP, requiring `id` alignment for local cache routing.
+- **Status**:
+  Justified architectural deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.4 Divergence 4: `ORGANIZER` and `ATTENDEE` Mapping to `participants` vs Scheduling Boundary
+
+- **Observed Behavior**:
+  Stalwart v1.0.0's `CalendarEvent/parse` maps incoming iCalendar `ORGANIZER` and `ATTENDEE` records to JSCalendar `event.participants`. In contrast, `jmap-ical`'s `ical_to_event` deliberately drops `ORGANIZER` and `ATTENDEE` on import, returning `participants: None`. Outbound serialization (`event_to_ical`) does emit `ORGANIZER` and `ATTENDEE` when `event.participants` is populated.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.4 and draft-ietf-jmap-calendars §5.9 define `participants` as the representation of event owners and invitees. In server-side file import, converting attendees into participant objects provides full visibility for archival storage.
+  2. In JMAP scheduling (draft-ietf-jmap-calendars §5.9.2 and RFC 5546 iTIP), participant state and reply status (`PARTSTAT` / `participationStatus`) are scheduling state. Changes to participants trigger iTIP `REQUEST`, `REPLY`, or `CANCEL` notifications.
+  3. `jmap-ical` operates inside the client synchronization pipeline (`jmap-cal-sync`). The desktop client does not manage autonomous server-side iTIP scheduling flows directly through generic property patches. If `ical_to_event` parsed `participants`, every local appointment edit in Evolution would submit a `PatchObject` modifying `participants`, which could cause unauthorized attendee mutations or trigger unsanctioned scheduling messages.
+  4. Omitting `participants` from `MAPPED_PROPERTIES` and dropping them on inbound parse ensures client saves never propose unauthorized mutations to the server's authoritative guest list. Outbound emission continues to render `ORGANIZER` and `ATTENDEE` so the user can see invitees in the desktop UI.
+- **Adjudication**:
+  Justified architectural deviation required for scheduling safety. Stalwart performs full archival ingestion. `jmap-ical` treats scheduling state as server-authoritative and read-only during client synchronization.
+- **Status**:
+  Justified architectural deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.5 Divergence 5: `PRODID`, `CALSCALE`, and `METHOD` Envelope Properties vs Generator Ownership
+
+- **Observed Behavior**:
+  Stalwart v1.0.0's `CalendarEvent/parse` may map `PRODID` to `event.prodId` (RFC 8984 §4.1.2) and `METHOD` to `event.method` (RFC 8984 §4.1.5). `jmap-ical` drops `PRODID`, `CALSCALE`, and `METHOD` on import (`prod_id: None`, `method: None`), and emits canonical `VERSION:2.0` and its own `PRODID` on export.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.7.1 to §3.7.3 specifies `PRODID`, `VERSION`, and `CALSCALE` as calendar stream envelope metadata identifying the serializing software and format version.
+  2. In JMAP, `prodId` identifies the software that created the JSCalendar record. Retaining a third-party generator string from an imported `.ics` file across subsequent round-trips would misattribute documents generated by `jmap-ical` or EDS.
+  3. `METHOD` belongs to MIME iTIP transport envelopes (RFC 5546). Once ingested into calendar store state, component objects do not retain ephemeral transport method wrappers.
+- **Adjudication**:
+  Conforming serialization boundary practice. Generator metadata belongs to the active encoder envelope rather than persistent event state.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.6 Divergence 6: `URL` Property Handling vs `links` Subsystem Isolation
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.4.6 defines `URL` for top-level calendar appointment web links. RFC 8984 §4.2.7 notes that `links` may represent both `ATTACH` and `URL` properties. Stalwart maps `URL` into `links` with `rel: "related"`. In contrast, `jmap-ical`'s `read_links` specifically targets `ATTACH` (enclosures) and `IMAGE` (icons). Top-level `URL` properties are dropped on import without polluting `event.extra`, and `drawn_links` renders `Link` entries as `ATTACH` (or `IMAGE` when `rel == "icon"`).
+- **Specification and Architectural Context**:
+  1. In desktop calendar workflows with Evolution, web meeting endpoints are represented via RFC 7986 `CONFERENCE` lines (which map directly to JSCalendar `virtualLocations`). Web links are also frequently embedded in `DESCRIPTION`.
+  2. Restricting `links` to `ATTACH` and `IMAGE` prevents collision between top-level web URLs and virtual conference URIs, ensuring that every entry in `links` maps unambiguously to an RFC 5545 enclosure or RFC 7986 icon without duplicate content lines.
+- **Adjudication**:
+  Deliberate mapping simplification and isolation. Prevents collisions with `virtualLocations` while preserving document round-trip determinism.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+
 
