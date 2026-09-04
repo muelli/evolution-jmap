@@ -17283,3 +17283,217 @@ END:VCALENDAR\r\n";
     );
     assert!(without(&out, "Colloque bilingue"));
 }
+
+#[test]
+fn differential_oracle_vendor_x_properties_dropped_on_import_to_avoid_extra_pollution() {
+    // Divergence 16 against Stalwart differential oracle:
+    // Calendar exporters emit vendor X- properties (such as X-APPLE-*, X-MICROSOFT-*, X-MOZ-*).
+    // Stalwart v1.0.0 or RFC 8984 Appendix B parsers may collect unmapped properties into extra
+    // or vendor dictionaries.
+    // In contrast, jmap-ical strictly ignores vendor X- properties on inbound parse without
+    // polluting event.extra.
+    // Rationale: Evolution Data Server has no active UI editing support for vendor extensions.
+    // If event.extra were populated with arbitrary vendor keys, jmap-cal-sync would submit them
+    // as top-level JMAP properties, which standard JMAP servers reject with invalidProperties.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-vendor-test-001\r\n\
+DTSTART:20260910T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Vendor Extension Benchmark\r\n\
+X-APPLE-TRAVEL-ADVISORY-BEHAVIOR:AUTOMATIC\r\n\
+X-MICROSOFT-CDO-BUSYSTATUS:BUSY\r\n\
+X-MOZ-GENERATION:2\r\n\
+X-LIC-LOCATION:Europe/London\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    // Standard properties are mapped
+    assert_eq!(event.title.as_deref(), Some("Vendor Extension Benchmark"));
+    assert_eq!(event.duration.as_deref(), Some("PT1H"));
+
+    // event.extra is completely clean: no vendor X- properties leak in
+    assert!(
+        event.extra.is_empty(),
+        "expected event.extra to be empty, found: {:?}",
+        event.extra
+    );
+
+    // Outbound serialization emits clean iCalendar without vendor X- properties
+    let out = event_to_ical(&event);
+    assert!(without(&out, "X-APPLE-TRAVEL-ADVISORY-BEHAVIOR"));
+    assert!(without(&out, "X-MICROSOFT-CDO-BUSYSTATUS"));
+    assert!(without(&out, "X-MOZ-GENERATION"));
+    assert!(without(&out, "X-LIC-LOCATION"));
+}
+
+#[test]
+fn differential_oracle_inline_binary_and_file_uri_attachments_dropped_for_payload_isolation() {
+    // Divergence 17 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.4.1 permits inline base64 binary attachments (VALUE=BINARY;ENCODING=BASE64),
+    // and Evolution desktop clients produce local file:// URIs for un-uploaded files.
+    // Stalwart v1.0.0 uses RFC 9404 Blobs for binary payload management.
+    // In contrast, jmap-ical drops inline binary attachments and filters out local file:// URIs,
+    // preserving only accessible remote URIs (such as https://, http://, or blobId:).
+    // Rationale: Inline binary blobs bloat JSON metadata and violate JMAP protocol architecture.
+    // Local file:// URIs leak workstation paths and cannot be dereferenced by remote recipients.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-attach-test-001\r\n\
+DTSTART:20260910T110000Z\r\n\
+DURATION:PT30M\r\n\
+SUMMARY:Attachment Pipeline Review\r\n\
+ATTACH;FMTTYPE=application/pdf:https://example.org/spec.pdf\r\n\
+ATTACH;VALUE=BINARY;ENCODING=BASE64:VGhpcyBpcyBhbiBpbmxpbmUgYXR0YWNobWVudA==\r\n\
+ATTACH:file:///home/runner/confidential-budget.xlsx\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    // Only the remote https attachment is retained in links
+    let links = event.links.as_ref().expect("links present");
+    assert_eq!(
+        links.len(),
+        1,
+        "expected exactly 1 link, found: {:?}",
+        links
+    );
+
+    let (_, link) = links.iter().next().unwrap();
+    assert_eq!(
+        link.get("href").and_then(Value::as_str),
+        Some("https://example.org/spec.pdf")
+    );
+    assert_eq!(
+        link.get("contentType").and_then(Value::as_str),
+        Some("application/pdf")
+    );
+
+    // event.extra is not polluted by dropped attachments
+    assert!(event.extra.is_empty());
+
+    // Outbound serialization emits ATTACH only for the remote link
+    let out = event_to_ical(&event);
+    assert_eq!(
+        line(&out, "ATTACH;"),
+        "ATTACH;FMTTYPE=application/pdf;X-JMAP-KEY=k1:https://example.org/spec.pdf"
+    );
+    assert!(without(&out, "VGhpcyBpcyBhbi"));
+    assert!(without(&out, "confidential-budget.xlsx"));
+}
+
+#[test]
+fn differential_oracle_stream_container_metadata_dropped_for_relational_isolation() {
+    // Divergence 18 against Stalwart differential oracle:
+    // Calendar exporters emit container metadata on the outer VCALENDAR envelope
+    // (such as X-WR-CALNAME and X-WR-TIMEZONE).
+    // CalDAV servers and archival converters often use X-WR-CALNAME to name calendar collections.
+    // In contrast, jmap-ical maps individual appointment records (VEVENT) and drops outer
+    // VCALENDAR metadata without polluting event.extra.
+    // Rationale: In JMAP (RFC 8620 / draft-ietf-jmap-calendars-28), calendar containers are distinct
+    // first-class objects (Calendar with id, name, color), while CalendarEvent holds calendarIds.
+    // Embedding container names in CalendarEvent causes denormalization and conflicts when events
+    // move across calendars. In Evolution Data Server, collection identity is governed by ESource.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+X-WR-CALNAME:Engineering Team Calendar\r\n\
+X-WR-TIMEZONE:Europe/Berlin\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-calname-test-001\r\n\
+DTSTART:20260910T140000Z\r\n\
+DURATION:PT45M\r\n\
+SUMMARY:Sprint Architecture Discussion\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    // Appointment properties are mapped cleanly
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Sprint Architecture Discussion")
+    );
+    assert_eq!(event.duration.as_deref(), Some("PT45M"));
+
+    // Container metadata does not pollute event.extra
+    assert!(
+        event.extra.is_empty(),
+        "expected clean event.extra, found: {:?}",
+        event.extra
+    );
+
+    // Outbound serialization does not emit container metadata lines
+    let out = event_to_ical(&event);
+    assert!(without(&out, "Engineering Team Calendar"));
+    assert!(without(&out, "X-WR-CALNAME"));
+    assert!(without(&out, "X-WR-TIMEZONE"));
+}
+
+#[test]
+fn differential_oracle_classification_and_privacy_vocabulary_filtering() {
+    // Divergence 19 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.1.3 defines CLASS (PUBLIC, PRIVATE, CONFIDENTIAL, or x-name / iana-token).
+    // RFC 8984 section 4.4.3 models privacy (public, private, secret) with an open vocabulary.
+    // Stalwart v1.0.0 may preserve non-standard CLASS tokens directly in privacy.
+    // In contrast, jmap-ical strictly maps the shared three-value scale (PUBLIC -> public,
+    // PRIVATE -> private, CONFIDENTIAL -> secret) and drops non-standard tokens on import
+    // without polluting event.extra.
+    // Rationale: Evolution Data Server appointment UI exposes a three-option classification menu
+    // (Public, Private, Confidential). Non-standard tokens cannot be presented in desktop UI
+    // and would produce inconsistent round-trips.
+    let make_ics = |class_line: &str| -> String {
+        format!(
+            "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-privacy-test-001\r\n\
+DTSTART:20260910T160000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Privacy Classification Test\r\n\
+{}\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+            class_line
+        )
+    };
+
+    // 1. CONFIDENTIAL maps to secret and serializes back to CLASS:CONFIDENTIAL
+    let ev_conf = ical_to_event(&make_ics("CLASS:CONFIDENTIAL")).expect("parse confidential");
+    assert_eq!(ev_conf.privacy.as_deref(), Some("secret"));
+    assert!(ev_conf.extra.is_empty());
+    let out_conf = event_to_ical(&ev_conf);
+    assert_eq!(line(&out_conf, "CLASS:"), "CLASS:CONFIDENTIAL");
+
+    // 2. PRIVATE maps to private and serializes back to CLASS:PRIVATE
+    let ev_priv = ical_to_event(&make_ics("CLASS:PRIVATE")).expect("parse private");
+    assert_eq!(ev_priv.privacy.as_deref(), Some("private"));
+    assert!(ev_priv.extra.is_empty());
+    let out_priv = event_to_ical(&ev_priv);
+    assert_eq!(line(&out_priv, "CLASS:"), "CLASS:PRIVATE");
+
+    // 3. PUBLIC maps to public and serializes back to CLASS:PUBLIC
+    let ev_pub = ical_to_event(&make_ics("CLASS:PUBLIC")).expect("parse public");
+    assert_eq!(ev_pub.privacy.as_deref(), Some("public"));
+    assert!(ev_pub.extra.is_empty());
+    let out_pub = event_to_ical(&ev_pub);
+    assert_eq!(line(&out_pub, "CLASS:"), "CLASS:PUBLIC");
+
+    // 4. Non-standard tokens (e.g. CLASS:RESTRICTED or CLASS:SECRET) are dropped on import
+    let ev_nonstandard = ical_to_event(&make_ics("CLASS:RESTRICTED")).expect("parse nonstandard");
+    assert_eq!(ev_nonstandard.privacy, None);
+    assert!(ev_nonstandard.extra.is_empty());
+
+    // Outbound serialization of an event without privacy does not emit CLASS
+    let out_nonstandard = event_to_ical(&ev_nonstandard);
+    assert!(without(&out_nonstandard, "CLASS:"));
+    assert!(without(&out_nonstandard, "RESTRICTED"));
+}
