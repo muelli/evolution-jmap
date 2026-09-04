@@ -223,6 +223,9 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // Clearing a field back to "no date": there is no `_set_date_to_none`,
     // the class spells it as the time_t -1 its own getter answers with.
     "e_date_edit_set_time",
+    // The custom-time dialog reads the moment back as a time_t, the one
+    // form that carries date and time together.
+    "e_date_edit_get_time",
 ];
 
 /// The GTK calls, named one at a time rather than by prefix.
@@ -322,6 +325,19 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     "gtk_message_dialog_new",
     "gtk_dialog_run",
     "gtk_widget_destroy",
+    // The custom-time dialog, built rather than described: `gtk_dialog_new`
+    // plus `_add_button` instead of the variadic `_new_with_buttons`, whose
+    // NULL-terminated argument list has no safe spelling here.
+    "gtk_dialog_new",
+    "gtk_dialog_add_button",
+    "gtk_dialog_get_content_area",
+    "gtk_window_set_title",
+    "gtk_window_set_transient_for",
+    // One `activate` handler serves the whole submenu, so it has to ask the
+    // action which item it is; and the labels are re-filled per gate, which
+    // needs the action back out of its group by name.
+    "gtk_action_get_name",
+    "gtk_action_group_get_action",
     // Not called by the module: these are what `tests/gtk.rs` asks the running
     // GTK to confirm the classes above are, since the opaque handles carry no
     // layout to check the way `tests/layout.rs` checks the EDS structs.
@@ -742,7 +758,11 @@ fn main() {
         .raw_line("pub type GtkMessageType = ::std::os::raw::c_uint;")
         .raw_line("pub const GTK_MESSAGE_ERROR: GtkMessageType = 3;")
         .raw_line("pub type GtkButtonsType = ::std::os::raw::c_uint;")
-        .raw_line("pub const GTK_BUTTONS_CLOSE: GtkButtonsType = 2;");
+        .raw_line("pub const GTK_BUTTONS_CLOSE: GtkButtonsType = 2;")
+        // `gtk_dialog_run`'s answer, for the custom-time dialog. Negative
+        // values, as GtkResponseType's built-ins are.
+        .raw_line("pub const GTK_RESPONSE_OK: ::std::os::raw::c_int = -5;")
+        .raw_line("pub const GTK_RESPONSE_CANCEL: ::std::os::raw::c_int = -6;");
 
     // And Evolution's, which need the struct tag as well as the typedef: unlike
     // the GTK ones, which bindgen writes into the signatures under their typedef
