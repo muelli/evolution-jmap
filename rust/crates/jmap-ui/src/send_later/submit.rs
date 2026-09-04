@@ -24,12 +24,11 @@ pub fn schedule_send(
     envelope: Envelope,
     hold: u64,
 ) -> Result<String, String> {
-    let client = &link.client;
     let account_id = &link.features.account_id;
 
-    let mailboxes = client
-        .mailbox_get(account_id)
-        .map_err(|error| error.to_string())?;
+    let mailboxes = link
+        .call(|client| client.mailbox_get(account_id))
+        .map_err(|error| crate::link::describe(&error))?;
     let mailbox_id = |wanted: &str| {
         mailboxes
             .list
@@ -40,9 +39,9 @@ pub fn schedule_send(
     let drafts = mailbox_id(role::DRAFTS)
         .ok_or_else(|| translate(c"the server has no Drafts mailbox to stage the message in"))?;
 
-    let identities = client
-        .identities(account_id)
-        .map_err(|error| error.to_string())?;
+    let identities = link
+        .call(|client| client.identities(account_id))
+        .map_err(|error| crate::link::describe(&error))?;
     let sender = envelope.mail_from.email.as_str();
     let identity_id = identities
         .iter()
@@ -51,17 +50,15 @@ pub fn schedule_send(
         .and_then(|identity| identity.id.clone())
         .ok_or_else(|| translate(c"the account has no sending identity on the server"))?;
 
-    let upload = client
-        .upload_blob(account_id, "message/rfc822", message)
-        .map_err(|error| error.to_string())?;
-    let imported = client
-        .email_import(
-            account_id,
-            &EmailImport::new(upload.blob_id, drafts.clone())
-                .keyword(keyword::DRAFT)
-                .keyword(keyword::SEEN),
-        )
-        .map_err(|error| error.to_string())?;
+    let upload = link
+        .call(|client| client.upload_blob(account_id, "message/rfc822", message.clone()))
+        .map_err(|error| crate::link::describe(&error))?;
+    let import = EmailImport::new(upload.blob_id, drafts.clone())
+        .keyword(keyword::DRAFT)
+        .keyword(keyword::SEEN);
+    let imported = link
+        .call(|client| client.email_import(account_id, &import))
+        .map_err(|error| crate::link::describe(&error))?;
     let email_id = imported
         .id
         .ok_or_else(|| translate(c"the server imported the message without naming its id"))?;
@@ -86,16 +83,18 @@ pub fn schedule_send(
         );
     }
 
-    let submission = client
-        .submit_email_at(
-            account_id,
-            &email_id,
-            &identity_id,
-            envelope,
-            &Schedule::HoldFor(hold),
-            Some(serde_json::Value::Object(on_success)),
-        )
-        .map_err(|error| error.to_string())?;
+    let submission = link
+        .call(|client| {
+            client.submit_email_at(
+                account_id,
+                &email_id,
+                &identity_id,
+                envelope.clone(),
+                &Schedule::HoldFor(hold),
+                Some(serde_json::Value::Object(on_success.clone())),
+            )
+        })
+        .map_err(|error| crate::link::describe(&error))?;
 
     submission
         .send_at

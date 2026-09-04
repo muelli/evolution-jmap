@@ -26,12 +26,45 @@ use eds_sys::{
     e_source_authentication_get_method, e_source_lookup_password_sync,
 };
 use glib_sys::{GError, g_error_free, g_free};
-use jmap_backend_core::i18n::translate;
+use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{extension_if_present, read_string};
-use jmap_backend_core::{api_token, connect, oauth2, source};
+use jmap_backend_core::{api_token, connect, oauth2, retry, source};
 use jmap_client::{Client, Credentials};
 
 use crate::session_cache::AccountFeatures;
+
+/// A [`jmap_client::Error`] as something worth putting in front of a person.
+///
+/// `Error`'s own `Display` is written for a log — "HTTP 401" is accurate and
+/// tells a user nothing, which is exactly what one of them reported. The
+/// cases split out here are the ones a user can act on; everything else falls
+/// back to the underlying text, which at least names the layer that failed.
+pub fn describe(error: &jmap_client::Error) -> String {
+    match error {
+        // Reached only when a refresh has already been tried and failed (see
+        // `AccountLink::call`), so this really is "sign in again".
+        jmap_client::Error::Http { status: 401, .. } => translate(
+            c"the server rejected the account's credentials — it may need to be signed in again",
+        ),
+        jmap_client::Error::Http { status: 403, .. } => {
+            translate(c"the server refused: this account is not allowed to do that")
+        }
+        jmap_client::Error::Transport(detail) => translate_with(
+            // TRANSLATORS: %1$s is the network error the transport reported.
+            c"the server could not be reached: %1$s",
+            &[detail],
+        ),
+        jmap_client::Error::Set(set_error) => {
+            let detail = set_error
+                .description
+                .clone()
+                .unwrap_or_else(|| set_error.error_type.clone());
+            // TRANSLATORS: %1$s is the reason the mail server gave.
+            translate_with(c"the server rejected the change: %1$s", &[&detail])
+        }
+        other => other.to_string(),
+    }
+}
 
 /// A connected client and what the session said about its account — the
 /// page's handle on the server, shared between the load and every later
@@ -39,6 +72,90 @@ use crate::session_cache::AccountFeatures;
 pub struct AccountLink {
     pub client: Client,
     pub features: AccountFeatures,
+    /// The source this connected as, kept alive so an expired OAuth 2.0
+    /// access token can be refreshed and reinstalled — see
+    /// [`AccountLink::call`]. `None` for a method whose credential does not
+    /// expire (a stored password, an API token), where a 401 means the
+    /// credential is wrong rather than old.
+    refreshable: Option<RefreshableSource>,
+}
+
+/// An owned `ESource` reference an [`AccountLink`] may carry across threads.
+///
+/// `ESource` is a GObject: reference counting is atomic, and the getters used
+/// here take the source's own property lock, which is the same ground the EDS
+/// backends read their sources on from worker threads.
+struct RefreshableSource(*mut ESource);
+
+// SAFETY: see the type's own doc — refcounting is thread-safe and every call
+// made through the pointer is one EDS itself makes off its worker threads.
+unsafe impl Send for RefreshableSource {}
+unsafe impl Sync for RefreshableSource {}
+
+impl Drop for RefreshableSource {
+    fn drop(&mut self) {
+        // SAFETY: the reference `connect_account` took, released once.
+        unsafe { gobject_sys::g_object_unref(self.0.cast()) };
+    }
+}
+
+impl AccountLink {
+    /// A link over an already-connected client, with nothing to refresh —
+    /// what a test against the mock has (no `ESource`, no OAuth 2.0), and
+    /// deliberately the only way to build one without [`connect_account`].
+    pub fn without_refresh(client: Client, features: AccountFeatures) -> Self {
+        Self {
+            client,
+            features,
+            refreshable: None,
+        }
+    }
+
+    /// Run one JMAP call, refreshing the account's OAuth 2.0 access token and
+    /// retrying exactly once if the server answers 401.
+    ///
+    /// This is the control flow the EDS backends already share
+    /// ([`jmap_backend_core::retry::retry_once_after`]) and the reason they
+    /// survive a session outliving its token: Fastmail's access tokens last
+    /// about an hour, an account editor or composer can sit open far longer,
+    /// and the stored refresh token is still perfectly good. Without this a
+    /// save an hour into the session fails with a bare 401 — which is exactly
+    /// what it did before this existed.
+    ///
+    /// Every server call in this crate goes through here; a bare
+    /// `link.client` call is the bug this method exists to prevent.
+    pub fn call<T>(
+        &self,
+        mut op: impl FnMut(&Client) -> Result<T, jmap_client::Error>,
+    ) -> Result<T, jmap_client::Error> {
+        retry::retry_once_after(
+            || op(&self.client),
+            |error| matches!(error, jmap_client::Error::Http { status: 401, .. }),
+            || self.refresh_token(),
+        )
+    }
+
+    /// Fetch a fresh access token and install it on the client. `false` when
+    /// there is nothing to refresh or the refresh itself failed, which leaves
+    /// the caller's original 401 to be reported.
+    fn refresh_token(&self) -> bool {
+        let Some(source) = self.refreshable.as_ref() else {
+            return false;
+        };
+        // SAFETY: a live source, kept referenced by `RefreshableSource` for as
+        // long as this link; no cancellable, this thread is ours to block.
+        match unsafe { oauth2::access_token(source.0, ptr::null_mut()) } {
+            Ok(token) => {
+                tracing::debug!("refreshed the UI module's OAuth 2.0 access token");
+                self.client.set_credentials(Credentials::bearer(token));
+                true
+            }
+            Err(failure) => {
+                tracing::debug!(%failure, "could not refresh the access token");
+                false
+            }
+        }
+    }
 }
 
 /// Connect as the account `source` configures.
@@ -69,7 +186,8 @@ pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, Strin
         unsafe { read_string(e_source_authentication_get_method(authentication)) }
     });
 
-    let credentials = if oauth2::method_is_oauth2(method.as_deref()) {
+    let is_oauth2 = oauth2::method_is_oauth2(method.as_deref());
+    let credentials = if is_oauth2 {
         // SAFETY: a valid source; no cancellable, the thread is ours to block.
         let token = unsafe { oauth2::access_token(source, ptr::null_mut()) }
             .map_err(|failure| gerror_message(failure.to_gerror()))?;
@@ -93,7 +211,20 @@ pub unsafe fn connect_account(source: *mut ESource) -> Result<AccountLink, Strin
     let features = AccountFeatures::from_session(client.session())
         .ok_or_else(|| translate(c"the session document names no usable mail account"))?;
 
-    Ok(AccountLink { client, features })
+    // Only the OAuth 2.0 path has a credential that expires; for the others a
+    // 401 means the password or token is wrong, and retrying would just ask
+    // again with the same one.
+    let refreshable = is_oauth2.then(|| {
+        // SAFETY: `source` is valid for this call by the function's contract;
+        // the reference taken here is owned by the link until it drops.
+        RefreshableSource(unsafe { gobject_sys::g_object_ref(source.cast()) }.cast())
+    });
+
+    Ok(AccountLink {
+        client,
+        features,
+        refreshable,
+    })
 }
 
 /// The password (or API token) EDS has stored for `source`, if any.

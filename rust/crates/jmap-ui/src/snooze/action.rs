@@ -495,9 +495,8 @@ fn snooze_all(link: &AccountLink, uids: &[String], until: &str) -> Result<usize,
     }
     let account_id = &link.features.account_id;
     let snoozed = link
-        .client
-        .snoozed_mailbox(account_id)
-        .map_err(|error| error.to_string())?;
+        .call(|client| client.snoozed_mailbox(account_id))
+        .map_err(|error| crate::link::describe(&error))?;
     let snoozed_id = snoozed
         .id
         .ok_or_else(|| translate(c"the server named no id for the snoozed mailbox"))?;
@@ -506,9 +505,9 @@ fn snooze_all(link: &AccountLink, uids: &[String], until: &str) -> Result<usize,
     // the inbox, which is exactly what snooze means here.
     let details = SnoozeDetails::new(until);
     for uid in uids {
-        link.client
-            .snooze_email(account_id, &Id::new(uid.clone()), &snoozed_id, &details)
-            .map_err(|error| error.to_string())?;
+        let email_id = Id::new(uid.clone());
+        link.call(|client| client.snooze_email(account_id, &email_id, &snoozed_id, &details))
+            .map_err(|error| crate::link::describe(&error))?;
     }
     Ok(uids.len())
 }
