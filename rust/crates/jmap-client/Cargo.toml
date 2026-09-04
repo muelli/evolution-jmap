@@ -38,6 +38,7 @@ webpki-roots = { workspace = true }
 
 [dev-dependencies]
 evolution-jmap-mock = { workspace = true }
+evolution-jmap-ical = { workspace = true }
 proptest = { workspace = true }
 tiny_http = { workspace = true }
 
