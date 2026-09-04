@@ -77,7 +77,7 @@ All implementation logic resides in `rust/crates/jmap-ical/src/event.rs`, `rust/
 | **`CATEGORIES`** | — | `event.keywords` (`Set<String>`) | `CATEGORIES` / Categories | `read_keywords`, `drawn_tags`, [`maps_keyword`] | Single sorted line emitted. Comma-separated on wire. Commas, semicolons, and newlines escaped. Tags with leading/trailing whitespace refused by [`maps_keyword`]. |
 | **`ORGANIZER`** | `CN`, `DIR`, `SENT-BY` | `event.participants` (`roles: {"owner": true}`, `name`, `sendTo: {"imip": "mailto:..."}`) | `ORGANIZER` / Organizer | `drawn_participants`, `calendar_address` | Owner participant emitted as `ORGANIZER`. Quoted `CN` for names with spaces/delimiters. Written for EDS display; server manages authoritative participant state. |
 | **`ATTENDEE`** | `CN`, `ROLE`, `PARTSTAT`, `CUTYPE`, `RSVP`, `SENT-BY`, `DELEGATED-TO`, `DELEGATED-FROM` | `event.participants` (`participationStatus`, `roles`, `kind`, `expectReply`, `name`, `sendTo`) | `ATTENDEE` / Attendees | `drawn_participants`, `calendar_address` | Guest list entries emitted as `ATTENDEE` lines. `PARTSTAT` (`ACCEPTED`, `DECLINED`, `TENTATIVE`, `NEEDS-ACTION`), `ROLE` (`CHAIR`, `REQ-PARTICIPANT`, `OPT-PARTICIPANT`, `NON-PARTICIPANT`), `CUTYPE` (`INDIVIDUAL`, `GROUP`, `RESOURCE`, `ROOM`), `RSVP=TRUE`. Written for EDS display. |
-| **`RRULE`** | Recurrence parameters | `event.recurrence_rules` (`RecurrenceRule`) | `RRULE` / Recurrence | `read_rrule`, `drawn_rrule`, [`maps_recurrence_rule`], [`unstateable_until`] | Full RFC 5545 recurrence grammar: `FREQ`, `INTERVAL`, `COUNT`, `UNTIL` (local in series timezone), `BYSECOND`, `BYMINUTE`, `BYHOUR`, `BYDAY` / `NDay`, `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYMONTH`, `BYSETPOS`, `WKST`. |
+| **`RRULE`** | Recurrence parameters | `event.recurrence_rule` (`RecurrenceRule`) | `RRULE` / Recurrence | `read_rrule`, `drawn_rrule`, [`maps_recurrence_rule`], [`unstateable_until`] | Full RFC 5545 recurrence grammar: `FREQ`, `INTERVAL`, `COUNT`, `UNTIL` (local in series timezone), `BYSECOND`, `BYMINUTE`, `BYHOUR`, `BYDAY` / `NDay`, `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYMONTH`, `BYSETPOS`, `WKST`. Singular `recurrenceRule` in JSCalendar 2.0 / jscalendarbis §3.3.3 and JMAP for Calendars §1.4. |
 | **`EXDATE`** | `TZID`, `VALUE=DATE` | `event.recurrence_overrides` (`{"excluded": true}`) | `EXDATE` / Cancelled Occurrence | `read_overrides`, `drawn_exdates`, [`maps_recurrence_override`] | Cancelled occurrences in recurrence series. Single or multi-value comma-separated dates matching master series zone/clock. |
 | **`RDATE`** | `TZID`, `VALUE=DATE` / `VALUE=PERIOD` | `event.recurrence_overrides` (`{}` empty patch or `{"duration": ...}`) | `RDATE` / Added Occurrence | `read_overrides`, `drawn_rdates`, [`maps_recurrence_override`] | Added extra occurrences in recurrence series. Bare dates map to `{}`; period overrides with duration map to `{"duration": ...}`. |
 | **`RECURRENCE-ID`** | `TZID`, `VALUE=DATE` | `event.recurrence_overrides` (Detached `VEVENT` `PatchObject`) | Detached `VEVENT` / Modified Occurrence | `read_overrides`, `instance_patch`, [`maps_recurrence_override`], [`sends_recurrence_override`] | Modified occurrences in recurrence series. `RECURRENCE-ID` evaluated on series master clock; instance `DTSTART` on instance clock. Diffed across 11 [`OVERRIDE_PROPERTIES`]. |
@@ -89,9 +89,9 @@ All implementation logic resides in `rust/crates/jmap-ical/src/event.rs`, `rust/
 | **`CALSCALE`** | — | — | — | — | Calendar scale (`CALSCALE:GREGORIAN`). Defaults to Gregorian; dropped on import/export. |
 | **`METHOD`** | — | — | — | — | iCalendar MIME message method (`REQUEST`, `PUBLISH`, `CANCEL`). Transport envelope metadata; dropped on import/export. |
 | **`SEQUENCE`** | — | — | `SEQUENCE` / Revision | — | Revision sequence number. Strictly managed and owned by JMAP server upon commit. |
-| **`DTSTAMP`** | — | — | `DTSTAMP` / Timestamp | — | Envelope generation timestamp. Strictly managed by server/exporter. |
-| **`CREATED`** | — | `event.created` (RFC 8984 §4.1.3) | `CREATED` / Created | `read_vevent` | Creation timestamp in UTC. Read on import; server owns authoritative creation timestamp. |
-| **`LAST-MODIFIED`** | — | `event.updated` (RFC 8984 §4.1.4) | `LAST-MODIFIED` / Updated | `read_vevent` | Modification timestamp in UTC. Read on import; server owns authoritative update timestamp. |
+| **`DTSTAMP`** | - | `event.updated` (RFC 8984 §4.1.4) | `DTSTAMP` / Timestamp | `event_to_ical` | RFC 5545 §3.8.7.2 required envelope timestamp. Emitted from `event.updated` on export. Dropped on import (`read_vevent`) because timestamps are server-owned and libical stamps local clock. |
+| **`CREATED`** | - | `event.created` (RFC 8984 §4.1.3) | `CREATED` / Created | `event_to_ical` | Creation timestamp in UTC. Emitted from `event.created` on export. Dropped on import (`read_vevent`) to prevent client local clock stamps from claiming server-owned creation instant. |
+| **`LAST-MODIFIED`** | - | `event.updated` (RFC 8984 §4.1.4) | `LAST-MODIFIED` / Updated | `event_to_ical` | Modification timestamp in UTC. Emitted from `event.updated` on export. Dropped on import (`read_vevent`) to prevent client local clock stamps from overriding server-owned update instant. |
 | **`URL`** | — | `event.links` | `URL` / Web Link | — | Top-level appointment URL. Handled via `links` subsystem or dropped without polluting `event.extra`. |
 
 ---
@@ -200,7 +200,11 @@ All implementation logic resides in `rust/crates/jmap-ical/src/event.rs`, `rust/
   - `ORGANIZER` and `ATTENDEE` lines are written onto the iCalendar stream for Evolution's UI to display the meeting owner and guest list.
   - Inbound `ical_to_event` leaves `participants: None` because participant scheduling state, RSVPs, and invitation dispatch are strictly owned and managed by the authoritative JMAP calendar server.
 
-### 3.9 Recurrence Rules (`RRULE` ↔ `recurrenceRules`)
+### 3.9 Recurrence Rules (`RRULE` ↔ `recurrenceRule`)
+- **Model Evolution & Wire Representation**:
+  - RFC 8984 §4.3.1 originally modeled `recurrenceRules` as a plural array.
+  - JSCalendar 2.0 (`draft-ietf-calext-jscalendarbis` §3.3.3) and JMAP for Calendars (`draft-ietf-jmap-calendars-28` §1.4) restructured this to a singular `recurrenceRule` object.
+  - `jmap-proto`'s `CalendarEvent.recurrence_rule` serializes as `"recurrenceRule"` (singular object), matching Stalwart v1.0.0 and modern JMAP implementations.
 - **13 Recurrence Rule Elements**:
   - `FREQ`: `secondly`, `minutely`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`.
   - `INTERVAL`: positive integer step count.
@@ -711,4 +715,43 @@ The table-driven test suite (`real_exporter_fixture_corpus_table_driven_roundtri
 - **Non-Default Emission**: When set to any other weekday (`"su"`, `"tu"`, etc.), `event_to_ical` explicitly emits `WKST=SU`.
 - **Validation**: Values must match lowercase two-letter day tokens (`"mo"`, `"tu"`, `"we"`, `"th"`, `"fr"`, `"sa"`, `"su"`). Uppercase or descriptive day names are refused.
 - **Interaction with `BYWEEKNO`**: Works seamlessly with `byWeekNo` to determine week number boundaries across year transitions.
+
+---
+
+## 13. Differential Server Oracle Adjudications (Stalwart CalendarEvent/parse)
+
+Batch 16 introduces differential verification against live Stalwart v1.0.0 via the `CalendarEvent/parse` method (RFC 9404 Blob transfer and `urn:ietf:params:jmap:calendars:parse`), driven by `jmap-client/examples/calendar-parse-probe.rs`. Stalwart serves as an independent, server-side implementation of `.ics` to JSCalendar conversion.
+
+While "do whatever Stalwart does" is the working rule of thumb, it does not outrank normative RFC specifications where a server exhibits non-standard behavior, and it never outranks the synchronization safety invariants of Evolution Data Server (`libical` / `ECalMetaBackend`).
+
+### 13.1 Divergence 1: `recurrenceRule` (Singular Object) vs `recurrenceRules` (Plural Array)
+
+- **Observed Behavior**:
+  Stalwart v1.0.0's `CalendarEvent/parse` emits `recurrenceRule` as a singular JSON object (e.g. `{"frequency": "weekly", "interval": 2, ...}`).
+- **Specification Context**:
+  1. RFC 8984 §4.3.1 (JSCalendar 1.0, published August 2020) originally specified `recurrenceRules` as a plural array (`RecurrenceRule[]`).
+  2. In `draft-ietf-calext-jscalendarbis` §3.3.3 (JSCalendar 2.0), the CalEXT working group renamed and restructured this property from an array to a singular object (`recurrenceRule: RecurrenceRule`), eliminating the ambiguity and interoperability pitfalls of multi-rule recurrences noted in RFC 5545 §3.8.5.3.
+  3. In `draft-ietf-jmap-calendars-28` §1.4, `CalendarEvent` is formally defined by normative reference to `jscalendarbis` rather than RFC 8984.
+- **Codebase Analysis**:
+  In `jmap-proto`, `CalendarEvent` already defines `pub recurrence_rule: Option<RecurrenceRule>`, which serializes to `"recurrenceRule"`. In `jmap-ical`, `ical_to_event` produces `recurrence_rule: Some(...)`, matching Stalwart's wire shape. In `docs/ICAL-MAPPING.md`, earlier sections retained legacy references to RFC 8984's plural naming.
+  Note: for custom timezone definitions under `event.time_zones`, `TimeZoneRule` in RFC 8984 §4.7.2 and `jscalendarbis` §4.7.2 still retains plural `recurrenceRules`, which `jmap-ical` maintains.
+- **Adjudication**:
+  Stalwart's emission is compliant with `jscalendarbis` §3.3.3 and `draft-ietf-jmap-calendars-28`. It is not a server quirk or bug. `jmap-ical` already emits singular `recurrenceRule` on events. No change to outbound serialization is needed.
+- **Status**:
+  Conforming specification evolution (`jscalendarbis`). Documented and pinned in `tests/event.rs`.
+
+### 13.2 Divergence 2: `DTSTAMP` Mapping to `updated` vs Store-Owned Drop on Import
+
+- **Observed Behavior**:
+  Stalwart v1.0.0's `CalendarEvent/parse` maps incoming iCalendar `DTSTAMP` (and `LAST-MODIFIED`) to `event.updated`. In contrast, `jmap-ical`'s `ical_to_event` drops `DTSTAMP`, `CREATED`, and `LAST-MODIFIED` on parse, returning `created: None` and `updated: None`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.7.2 specifies `DTSTAMP` as the creation or modification timestamp of the calendar component or MIME instance. In standalone archival import (`CalendarEvent/parse`), populating `updated` from `DTSTAMP` provides a sensible initial timestamp for a newly minted event record in the database.
+  2. In Evolution Data Server (`ECalMetaBackend` / `libical`), `ical_to_event` is the synchronization codec between the desktop client and the JMAP server. Whenever an event is loaded, inspected, or edited in Evolution, `libical` stamps `DTSTAMP` with the client machine's local system clock.
+  3. In JMAP (RFC 8620 and `draft-ietf-jmap-calendars`), `created` and `updated` are store-owned metadata managed strictly by the server. If `ical_to_event` mapped `DTSTAMP` to `updated`, every save from Evolution would cause `jmap-cal-sync` to send a `PatchObject` proposing an update timestamp derived from the client's un-synchronized clock, overriding authoritative server state and risking concurrency anomalies.
+  4. Outbound serialization (`event_to_ical`) does emit `DTSTAMP` and `LAST-MODIFIED` whenever `event.updated` is present, fully satisfying RFC 5545 §3.8.7.2 for downstream consumers. When `event.updated` is absent, it omits the line rather than inventing a fluctuating "now" timestamp that would break change detection.
+- **Adjudication**:
+  Stalwart's behavior is appropriate for server-side file ingestion. `jmap-ical`'s drop on import is a deliberate, necessary deviation required by EDS desktop synchronization and JMAP store ownership semantics.
+- **Status**:
+  Justified architectural deviation. Reconfirmed and pinned in `tests/event.rs`.
+
 

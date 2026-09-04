@@ -16512,3 +16512,139 @@ fn valarm_acknowledged_format_variations_and_refusal_boundaries_matrix() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Differential Server Oracle Adjudication Tests (Stalwart CalendarEvent/parse)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn differential_oracle_recurrence_rule_singular_fidelity_and_jscalendar_bis_conformance() {
+    // Audit divergence 1 against live Stalwart oracle:
+    // RFC 8984 §4.3.1 specified recurrenceRules as a plural array.
+    // draft-ietf-calext-jscalendarbis §3.3.3 restructured recurrenceRule as a
+    // singular object, and draft-ietf-jmap-calendars-28 §1.4 mandates this.
+    // Stalwart v1.0.0 emits recurrenceRule (singular object).
+    // This test verifies jmap-ical produces recurrence_rule (singular), serializes
+    // to "recurrenceRule", and roundtrips with fixed-point stability.
+    let path = format!(
+        "{}/tests/fixtures/thunderbird_calendar_export.ics",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let ics = std::fs::read_to_string(&path).expect("read fixture");
+    let event = ical_to_event(&ics).expect("parse ics");
+
+    // 1. Rust model field carries singular RecurrenceRule
+    let rule = event
+        .recurrence_rule
+        .as_ref()
+        .expect("recurrence_rule present");
+    assert_eq!(rule.frequency, "weekly");
+    assert_eq!(rule.interval, Some(2));
+    assert_eq!(rule.until.as_deref(), Some("2026-12-21T09:30:00"));
+
+    // 2. Wire serialization matches Stalwart differential shape:
+    // "recurrenceRule" object, never "recurrenceRules" array.
+    let serialized = serde_json::to_value(&event).expect("serialize event");
+    let obj = serialized.as_object().expect("event object");
+    assert!(
+        obj.contains_key("recurrenceRule"),
+        "must emit singular recurrenceRule matching Stalwart and jscalendarbis"
+    );
+    assert!(
+        !obj.contains_key("recurrenceRules"),
+        "must not emit legacy RFC 8984 plural recurrenceRules array"
+    );
+    assert!(obj.get("recurrenceRule").unwrap().is_object());
+
+    // 3. Round-trip serialization emits standard RFC 5545 RRULE line
+    let out_ics = event_to_ical(&event);
+    assert_eq!(
+        content_line(&out_ics, "RRULE:"),
+        "RRULE:FREQ=WEEKLY;UNTIL=20261221T093000;INTERVAL=2;BYDAY=MO"
+    );
+
+    // 4. Fixed-point stability across repeated passes
+    let event2 = ical_to_event(&out_ics).expect("reparse");
+    assert_eq!(event.recurrence_rule, event2.recurrence_rule);
+
+    // 5. Also verify detached overrides fixture with COUNT
+    let detached_path = format!(
+        "{}/tests/fixtures/thunderbird_detached_export.ics",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let detached_ics = std::fs::read_to_string(&detached_path).expect("read detached fixture");
+    let detached_event = ical_to_event(&detached_ics).expect("parse detached");
+    let detached_serialized = serde_json::to_value(&detached_event).expect("serialize");
+    assert!(detached_serialized.get("recurrenceRule").is_some());
+    assert!(detached_serialized.get("recurrenceRules").is_none());
+    let detached_rule = detached_event.recurrence_rule.unwrap();
+    assert_eq!(detached_rule.frequency, "weekly");
+    assert_eq!(detached_rule.count, Some(6));
+}
+
+#[test]
+fn differential_oracle_dtstamp_and_timestamps_dropped_on_import_reconfirmed_against_real_server() {
+    // Audit divergence 2 against live Stalwart oracle:
+    // Stalwart v1.0.0 maps DTSTAMP to updated during CalendarEvent/parse.
+    // In jmap-ical, ical_to_event deliberately drops DTSTAMP, CREATED, and
+    // LAST-MODIFIED, setting created: None and updated: None.
+    // Reconfirmed rationale: Evolution Data Server (libical) stamps DTSTAMP on
+    // every touch using the client system clock. Reading DTSTAMP into updated
+    // would cause jmap-cal-sync to patch updated back to the JMAP server from
+    // the local clock, violating store-owned timestamp semantics.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-dtstamp-test-001\r\n\
+DTSTAMP:20260904T120000Z\r\n\
+CREATED:20260901T080000Z\r\n\
+LAST-MODIFIED:20260904T113000Z\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Differential Timestamp Oracle Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    // Inbound drop: server-owned metadata is not claimed by client parser
+    assert_eq!(
+        event.created, None,
+        "CREATED must be dropped on inbound parse"
+    );
+    assert_eq!(
+        event.updated, None,
+        "DTSTAMP and LAST-MODIFIED must be dropped on inbound parse"
+    );
+
+    // Extra bag isolation: dropped timestamps must not pollute extra
+    assert!(!event.extra.contains_key("dtstamp"));
+    assert!(!event.extra.contains_key("created"));
+    assert!(!event.extra.contains_key("lastModified"));
+    assert!(!event.extra.contains_key("updated"));
+    assert!(!event.extra.contains_key("DTSTAMP"));
+
+    // Outbound emission when server provides updated timestamp:
+    // RFC 5545 §3.8.7.2 makes DTSTAMP required on VEVENT, and in a calendar
+    // without METHOD it carries updated.
+    let mut server_event = event.clone();
+    server_event.created = Some("2026-09-01T08:00:00Z".to_owned());
+    server_event.updated = Some("2026-09-04T11:30:00Z".to_owned());
+    let out_ics = event_to_ical(&server_event);
+
+    assert_eq!(line(&out_ics, "CREATED:"), "CREATED:20260901T080000Z");
+    assert_eq!(line(&out_ics, "DTSTAMP:"), "DTSTAMP:20260904T113000Z");
+    assert_eq!(
+        line(&out_ics, "LAST-MODIFIED:"),
+        "LAST-MODIFIED:20260904T113000Z"
+    );
+
+    // Outbound omission when server provides no updated timestamp:
+    // Omitted rather than inventing a fluctuating \"now\" timestamp that breaks
+    // save-path diff detection.
+    let out_empty_timestamps = event_to_ical(&event);
+    assert!(without(&out_empty_timestamps, "CREATED"));
+    assert!(without(&out_empty_timestamps, "DTSTAMP"));
+    assert!(without(&out_empty_timestamps, "LAST-MODIFIED"));
+}
