@@ -1452,3 +1452,69 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.48 Divergence 48: Recurrence Rule Interval (`INTERVAL`) Default Omission and Non-Positive Refusal (`INTERVAL=0` / Negative)
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 specifies `INTERVAL` as an optional positive integer representing at which intervals the recurrence repeats, with default value `1`. RFC 8984 §4.3.1 defines `interval: UnsignedInt (default: 1)`. Non-positive integers (`0`, negative values) are invalid in both specifications. Stalwart v1.0.0 parses `INTERVAL` and omits `interval` when `interval == 1`. In `jmap-ical`:
+  1. `rrule_to_rule` parses `INTERVAL` into `rule.interval: Option<u32>` using `value.parse().ok()`. Negative values fail unsigned integer parse and are dropped.
+  2. Outbound serialization (`rule_to_rrule`) deliberately suppresses `INTERVAL=1` (`rule.interval.filter(|interval| *interval != 1)`), because `1` is the RFC 5545 default and `libical` strips `INTERVAL=1` from parsed components in EDS cache.
+  3. Non-default intervals (`2`, `3`, etc.) are serialized explicitly as `INTERVAL=n`.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent` / `libical`), recurrence rules with `INTERVAL=1` have `INTERVAL=1` dropped upon ingestion into EDS storage.
+  2. If `rule_to_rrule` emitted `INTERVAL=1`, reading the component back from EDS would drop `INTERVAL=1`, causing `jmap-cal-sync` to see a spurious diff against the server. Suppressing `INTERVAL=1` maintains fixpoint stability between EDS cache and JMAP.
+  3. Emitting `INTERVAL=0` would create an invalid recurrence rule that causes libical to reject the component.
+- **Adjudication**:
+  Deliberate mapping design and round-trip cache stability. Suppresses redundant default `INTERVAL=1` to avoid false cache-drop diffs in EDS while rejecting non-positive interval values.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.49 Divergence 49: Recurrence Rule Endpoint Mutual Exclusivity (`COUNT` vs `UNTIL`) and Conflict Handling
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 explicitly specifies: "The UNTIL or COUNT rule parts are optional, but UNTIL and COUNT rule parts MUST NOT occur in the same 'recurrence-rule'." In contrast, RFC 8984 §4.3.1 specifies a conflict resolution rule: "Both MUST NOT be present in the same RecurrenceRule; if both are present, the until rule part MUST be ignored." Stalwart v1.0.0 parses incoming rules and enforces RFC 8984 preference or rejects conflicting rules. In `jmap-ical`:
+  1. Inbound parsing (`rrule_to_rule`) parses `COUNT` and `UNTIL` into `rule.count` and `rule.until`.
+  2. Outbound serialization (`rule_to_rrule`) emits `COUNT` first if present, and `UNTIL` if present.
+  3. Standard conforming events specify either `count` alone, `until` alone, or neither (unbounded recurrence).
+  4. An event with `count` alone serializes `COUNT=n` and omits `UNTIL`. An event with `until` alone serializes `UNTIL=...` and omits `COUNT`. An unbounded event serializes neither endpoint.
+- **Specification and Architectural Context**:
+  1. RFC 5545 grammar strictly forbids simultaneous `COUNT` and `UNTIL`. In libical and Evolution Data Server, encountering an `RRULE` with both `COUNT` and `UNTIL` causes libical to reject the recurrence rule or discard the entire component.
+  2. For clean events originating in EDS or JMAP, recurrence rules specify either a bounding date (`until`) or a repetition count (`count`), never both.
+- **Adjudication**:
+  Conforming specification boundary and libical component safety. Enforces mutual exclusivity between `COUNT` and `UNTIL` to prevent emitting illegal recurrence rules.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.50 Divergence 50: Recurrence Rule Time-of-Day Parts (`BYHOUR`, `BYMINUTE`, `BYSECOND`) and Leap Second 60 vs All-Day Event Gating
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 specifies `BYHOUR` (0..23), `BYMINUTE` (0..59), and `BYSECOND` (0..60, leap second). RFC 8984 §4.3.1 models `byHour: UnsignedInt[]`, `byMinute: UnsignedInt[]`, and `bySecond: UnsignedInt[]`. RFC 5545 §3.3.10 mandates: "The BYSECOND, BYMINUTE and BYHOUR rule parts MUST NOT be specified when the associated 'DTSTART' property has a DATE value type." Stalwart v1.0.0 parses these parts into unsigned integer arrays. In `jmap-ical`:
+  1. Inbound parsing maps `BYSECOND`, `BYMINUTE`, `BYHOUR` using `to_time_of_day`. Invalid or non-digit tokens parse to `u32::MAX`, allowing `time_of_day_part` to refuse the invalid list on export and `maps_recurrence_rule` to flag the corruption.
+  2. Outbound serialization (`time_of_day_part`) enforces range bounds (`0..=23` for hour, `0..=59` for minute, `0..=60` for second) and accepts leap second `60`.
+  3. Out-of-bounds values (hour > 23, minute > 59, second > 60) or empty lists cause `maps_recurrence_rule` to return false.
+  4. All-day event gating: `shows_without_time` checks `names_a_time_of_day`. An event with `show_without_time: true` whose rule names a time of day is drawn as a timed `DATE-TIME` event instead of `DATE`, satisfying RFC 5545.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server, emitting `BYHOUR`/`BYMINUTE`/`BYSECOND` alongside a `VALUE=DATE` `DTSTART` causes libical to reject the recurrence rule.
+  2. Upgrading all-day events with sub-day recurrence parts to timed representations preserves the recurrence schedule while maintaining RFC 5545 compliance.
+  3. Accepting leap second 60 in `BYSECOND` matches libical's parser capability.
+- **Adjudication**:
+  Conforming specification boundary and value-type consistency. Preserves time-of-day recurrence precision while avoiding illegal `DATE` + `BYxxx` time-part combinations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.51 Divergence 51: Recurrence Rule Calendar Scale (`RSCALE`) and Leap Handling (`SKIP`) vs Gregorian-Only Isolation and Refusal
+
+- **Observed Behavior**:
+  RFC 7529 defines `RSCALE` (e.g. `RSCALE=GREGORIAN`, `RSCALE=HEBREW`, `RSCALE=ISLAMIC`, `RSCALE=CHINESE`) and `SKIP` (`SKIP=OMIT`, `SKIP=BACKWARD`, `SKIP=FORWARD`) for non-Gregorian calendar systems and leap handling. RFC 8984 §4.3.1 defines `rscale: String (default: "gregorian")` and `skip: String (default: "omit")`. Stalwart v1.0.0 either drops `RSCALE`/`SKIP` or parses them if non-Gregorian calendars are supported. In `jmap-ical`:
+  1. Inbound `rrule_to_rule` deliberately drops `RSCALE` and `SKIP` on parse without polluting `event.extra`.
+  2. Outbound serialization does not emit `RSCALE` or `SKIP`.
+  3. `maps_recurrence_rule` strictly requires `rule.rscale.is_none() && rule.skip.is_none()`, refusing any non-Gregorian recurrence rule to prevent EDS libical from failing or calculating corrupted occurrences.
+- **Specification and Architectural Context**:
+  1. Evolution Data Server and `libical` operate exclusively in the Gregorian calendar system. `libical` does not implement RFC 7529 non-Gregorian recurrence calculations.
+  2. Emitting `RSCALE=CHINESE` or `SKIP=FORWARD` to libical would result in unparseable recurrence rules or corrupted appointment occurrences in EDS.
+  3. Refusing non-Gregorian recurrence rules at the codec boundary protects local calendar storage from invalid series calculations.
+- **Adjudication**:
+  Conforming specification boundary and calendar system isolation. Restricts recurrence evaluation to the Gregorian calendar to prevent invalid calculations in EDS and libical.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
