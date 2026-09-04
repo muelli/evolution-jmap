@@ -2317,6 +2317,69 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.100 Divergence 100: `TimeZone` and `TimeZoneRule` Unmodeled Properties (`aliases`, `url`, `validUntil`, `recurrenceOverrides`, `comments`) Dropped on Import and Export vs Full Lossless AST Preservation
+
+- **Observed Behavior**:
+  RFC 8984 §4.7.2 defines `aliases: Set<String>`, `url: String`, and `validUntil: LocalDateTime` on `TimeZone`, plus `comments: String` and `recurrenceOverrides: Map<LocalDateTime, TimeZoneRule>` on `TimeZoneRule`. In RFC 5545 §3.8.3.5 and §3.8.1.4, `VTIMEZONE` and observance components can carry `TZURL` and `COMMENT`. In `jmap-ical`:
+  1. Inbound drop: `read_definition` and `read_observance` do not read `TZURL` or `COMMENT`, leaving `url`, `comments`, and `aliases` unpopulated.
+  2. Outbound drop: `vtimezone_of` and `observance` drop `aliases`, `url`, `validUntil`, `comments`, and observance `recurrenceOverrides` when serializing to `VTIMEZONE`.
+  3. In contrast, Stalwart v1.0.0 or CalDAV servers may attempt to ingest or store extended timezone metadata in JSON representation.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.7.2 defines timezone objects to allow clients to calculate local time offsets. `aliases`, `url`, and `validUntil` are supplementary administrative metadata that are not required for offset or transition calculation.
+  2. In `jmap-ical`, `vtimezone_of` focuses exclusively on the active observance rules needed to resolve timestamps. Emitting speculative or invented `TZURL` or `COMMENT` lines would introduce non-standard or unvetted text into the iCalendar stream. Observance `recurrenceOverrides` would require synthesizing separate `RDATE` and observance subcomponents per override, describing past historical corrections rather than future recurrence rules. Dropping these unmodeled properties keeps custom timezone definitions compact and safe.
+- **Adjudication**:
+  Deliberate mapping design and scoped timezone model. Drops unmodeled administrative timezone metadata (`aliases`, `url`, `validUntil`, `comments`, observance `recurrenceOverrides`) while faithfully preserving core transition rules and offsets.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.101 Divergence 101: `vtimezone_of` All-or-Nothing Whole-Component Requirement (`Option<Component>`) and At Least One Observance Requirement vs Emitting Incomplete or Empty `VTIMEZONE` Components
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.5 specifies that a `VTIMEZONE` component MUST contain at least one `STANDARD` or `DAYLIGHT` subcomponent. In `jmap-ical`:
+  1. Observance counting: `vtimezone_of` tracks the number of valid `STANDARD` and `DAYLIGHT` observances. If `observances == 0` (such as when both standard and daylight arrays are empty or omitted), `vtimezone_of` returns `None`.
+  2. Abort on invalid rule: If any rule within `standard` or `daylight` arrays cannot be converted to a valid observance component (missing `offsetFrom`, invalid `start`, or unmappable recurrence rule), `vtimezone_of` immediately aborts and returns `None`.
+  3. In contrast, permissive iCalendar serializers or Stalwart v1.0.0 might emit an empty `BEGIN:VTIMEZONE ... END:VTIMEZONE` envelope or omit faulty observances while emitting the remainder of the component.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.5 explicitly mandates at least one subcomponent per `VTIMEZONE`. `libical` strictly refuses any `VTIMEZONE` component that lacks subcomponents, causing component-level parse errors that would fail the entire calendar object in Evolution.
+  2. In calendar semantics, an observance describes the UTC offset between historical transitions. A `VTIMEZONE` that includes some observances but drops others does not represent a partially defined timezone: it defines an entirely different timezone, shifting event times by an hour or more. Failing the whole definition (`None`) signals `maps_time_zone` that the timezone cannot be drawn whole, prompting `jmap-cal-sync` to file the appointment as floating rather than emitting corrupted timezone rules.
+- **Adjudication**:
+  Conforming specification boundary and whole-zone integrity guarantee. Enforces all-or-nothing conversion requiring at least one valid observance and rejecting incomplete rule sets to protect `libical` and prevent silent schedule corruption.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.102 Divergence 102: Observance Transition Rule Recurrence Mapping: `recurrenceRules` (Plural Array) vs `recurrenceRule` (Singular Array or Object) Dual Acceptance and `maps_recurrence_rule` Validation
+
+- **Observed Behavior**:
+  In RFC 8984 §4.7.2, `TimeZoneRule` defines `recurrenceRules: RecurrenceRule[]` (plural array). However, in `jscalendarbis` §3.3.3 and real-world implementations, singular `recurrenceRule` (either as an array or as a singular object) is often used interchangeably on recurrence structures. In `jmap-ical`:
+  1. Inbound dual acceptance on export: In `observance`, `rules_iter` inspects `rule.get("recurrenceRules")` as an array, then falls back to `rule.get("recurrenceRule")` as an array, and then to `rule.get("recurrenceRule")` as a singular object, handling all three variants seamlessly.
+  2. Whole-rule validation: Each recurrence rule is deserialized as `RecurrenceRule` and validated with `maps_recurrence_rule`. If any rule is unmappable, the entire observance returns `None`.
+  3. Canonical RFC 8984 parse: In `read_observance`, inbound iCalendar `RRULE` lines are parsed and inserted as `"recurrenceRules": Value::Array(...)`, conforming strictly to RFC 8984 §4.7.2.
+  4. In contrast, Stalwart v1.0.0 or CalDAV servers may emit or require only one specific representation or reject singular `recurrenceRule` within timezone rules.
+- **Specification and Architectural Context**:
+  1. The CalEXT working group transition from RFC 8984 to `jscalendarbis` unified recurrence modeling, leading to mixed schema usage across servers and test fixtures. Supporting both plural `recurrenceRules` and singular `recurrenceRule` ensures robust interoperability with varying server implementations.
+  2. Gating observance emission on `maps_recurrence_rule` prevents emitting corrupted or partial `RRULE` strings (missing `BYxxx` parts), ensuring that generated timezone recurrence lines match the original schedule exactly.
+- **Adjudication**:
+  Conforming specification boundary and schema interoperability tolerance. Dual-accepts plural and singular recurrence rule variants on `TimeZoneRule`, validates rules with `maps_recurrence_rule`, and emits standard `recurrenceRules` on parse.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.103 Divergence 103: Observance `DTSTART` and `UNTIL` Offset Resolution Against `TZOFFSETFROM` (`Ends::At`) vs Series Timezone Resolution
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.5 dictates that within an observance (`STANDARD` or `DAYLIGHT`), `DTSTART` is a local date-time with no `TZID` parameter, resolved against the observance's own `TZOFFSETFROM`. When an observance `RRULE` contains `UNTIL`, it must be converted to UTC. In `jmap-ical`:
+  1. Local `DTSTART` isolation: `read_observance` parses `DTSTART` using `to_local_date_time` without timezone resolution (`zone_of`), ensuring that observance local time is never conflated with the event's series timezone.
+  2. `Ends::At` arithmetic conversion: In `read_observance`, recurrence rule `UNTIL` values are converted using `rrule_to_rule(&raw, Ends::At(&offset_from))`, performing direct integer arithmetic (`seconds - offset_from`) without external timezone database lookup.
+  3. Outbound `UNTIL` UTC formatting: In `observance` and `rule_to_rrule`, `Ends::At(&offset_from)` converts local `until` back to UTC (`from_offset`) and appends `'Z'`, conforming to RFC 5545 §3.6.5 conventions where observance `UNTIL` is stated in UTC.
+  4. In contrast, general iCalendar parsers or Stalwart differential oracle may resolve recurrence endpoints using global timezone lookups or fail when encountering zoned arithmetic within observance definitions.
+- **Specification and Architectural Context**:
+  1. An observance defines the timezone itself, meaning its transitions cannot depend on an external timezone definition. Resolving `DTSTART` and `UNTIL` strictly against `TZOFFSETFROM` satisfies the mathematical self-containment required by RFC 5545 §3.6.5.
+  2. Operating self-contained with integer arithmetic ensures identical, deterministic results across all platforms without requiring host timezone databases.
+- **Adjudication**:
+  Conforming specification boundary and self-contained observance rule arithmetic. Resolves observance `DTSTART` and `UNTIL` strictly against `TZOFFSETFROM` using `Ends::At` without external database dependencies.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
