@@ -1966,6 +1966,74 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.80 Divergence 80: Location Single-Entry Restriction (`maps_locations`), Multiple Entry Refusal, First-Named Entry Drawing, and Empty Name Suppression
+
+- **Observed Behavior**:
+  RFC 8984 §4.2.5 models physical locations as `locations: Map<String, Location>`, admitting multiple simultaneous venue records for an event. In contrast, RFC 5545 §3.6.1 restricts a `VEVENT` component to at most one `LOCATION` content line. Stalwart v1.0.0 parses multiple location definitions or ingests structured `VLOCATION` subcomponents. In `jmap-ical`:
+  1. Outbound drawing: `drawn_place` selects the first entry in map iteration order that has a non-empty name (`place_name`), ignoring entries without names or with empty strings.
+  2. Multi-entry refusal: `maps_locations` returns `false` if `locations` contains more than one entry (`entries.next().is_none()`). This prevents desktop calendar saves from silently dropping secondary location records.
+  3. Empty name suppression: An entry with `name: ""` or `name: null` produces no `LOCATION` line (`place_name` returns `None`), keeping exported iCalendar streams clean.
+  4. Inbound parse: `read_locations` drops empty `LOCATION:` lines (`name.is_empty() -> None`), avoiding synthesizing empty-string location objects.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.1 explicitly limits `LOCATION` to at most a single occurrence per `VEVENT`. Emitting multiple `LOCATION` lines violates iCalendar grammar and causes libical parse rejections.
+  2. In Evolution Data Server (`ECalComponent`), an appointment holds a single location text string. If a JMAP event defines multiple locations, EDS cannot display or edit the secondary locations in its standard user interface.
+  3. Refusing multiple locations at the `maps_locations` boundary prevents synchronization data loss: a client save will not overwrite a multi-venue server event and discard the unshown venues. Drawing the first named location ensures that users still see where the meeting takes place.
+- **Adjudication**:
+  Conforming specification boundary and single-location component safety. Restricts outbound representation to a single `LOCATION` line, draws the first non-empty named location, suppresses empty names, and flags multi-location maps to protect secondary locations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.81 Divergence 81: Location In-Place Key Tracking (`X-JMAP-KEY`), Invented Key Allocation (`"l1"`), and Patch-in-Place Synchronization Boundary
+
+- **Observed Behavior**:
+  RFC 8984 §4.2.5 keys entries in `locations` by an RFC 8984 §1.4.4 `Id` (1 to 255 octets of ASCII alphanumeric, `-`, or `_`). The RFC 5545 `LOCATION` property has no standard parameter for map keys. Stalwart v1.0.0 parses `LOCATION` and generates keys via UUID5 or internal hashing. In `jmap-ical`:
+  1. Outbound key retention: `drawn_place` attaches the parameter `X-JMAP-KEY: <key>` to the emitted `LOCATION` line, retaining the server's map key across round trips.
+  2. Inbound key recovery: `read_locations` inspects `X-JMAP-KEY`. If the parameter value is a valid RFC 8984 `Id` (`names_map_entry`), it preserves the server's key. If missing, it allocates the stable invented key `INVENTED_KEY` (`"l1"`).
+  3. Invalid key defense: If `X-JMAP-KEY` contains invalid characters (such as spaces, colons, or control characters) or exceeds 255 octets, it is rejected per `names_map_entry` and falls back safely to `"l1"`.
+  4. Patch-in-place boundary: Because a `Location` object can contain unmapped properties like `description`, `coordinates`, `timeZone`, and `locationTypes`, `jmap-cal-sync` patches `locations/<key>/name` in place rather than replacing the entire map.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server and `libical`, editing the location text only changes the string value. If the calendar backend replaced the entire `locations` property on save, all auxiliary metadata stored by the server (such as map coordinates or conference room descriptions) would be lost.
+  2. Using `X-JMAP-KEY` allows `jmap-cal-sync` to target the exact entry on the server. Allocating a stable fallback key (`"l1"`) for external iCalendar imports ensures that new appointments create valid JMAP location entries without collision.
+  3. Validating keys against `names_map_entry` protects against malformed parameters from external clients that could cause the server to reject a `CalendarEvent/set` request with `invalidProperties`.
+- **Adjudication**:
+  Deliberate mapping design and in-place sync boundary fidelity. Retains server map keys via `X-JMAP-KEY`, falls back safely to invented key `"l1"`, and enables in-place patching of location names without disturbing auxiliary server metadata.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.82 Divergence 82: VirtualLocation (`CONFERENCE`) Multiple Line Emission, Mandatory `VALUE=URI` Parameter, Feature Vocabulary Gating (`CONFERENCE_FEATURES`), and Label Mapping
+
+- **Observed Behavior**:
+  RFC 8984 §4.2.6 defines `virtualLocations: Map<String, VirtualLocation>` supporting `uri: String`, `name: String`, and `features: Map<String, Boolean>`. RFC 7986 §5.11 defines the `CONFERENCE` property and allows it multiple times within a `VEVENT`. RFC 7986 §5.11 explicitly mandates `VALUE=URI` in its grammar. Stalwart v1.0.0 parses `CONFERENCE` into `virtualLocations`. In `jmap-ical`:
+  1. Multi-line drawing: Unlike `LOCATION`, every valid entry in `virtual_locations` is emitted as a distinct `CONFERENCE` line in map order (`drawn_conferences`).
+  2. Mandatory parameter: Emits `VALUE=URI` explicitly on every `CONFERENCE` line as required by RFC 7986 §5.11.
+  3. Feature vocabulary gating: Maps `features` to RFC 7986 `FEATURE` parameters using the closed table `CONFERENCE_FEATURES` (`audio` -> `AUDIO`, `chat` -> `CHAT`, `feed` -> `FEED`, `moderator` -> `MODERATOR`, `phone` -> `PHONE`, `screen` -> `SCREEN`, `video` -> `VIDEO`). `maps_virtual_locations` returns `false` if `features` contains unknown features or non-boolean values.
+  4. Label and key mapping: Maps `name` to the `LABEL` parameter and tracks entry keys with `X-JMAP-KEY`. On inbound parse, `read_virtual_locations` extracts `LABEL` into `name` and allocates collision-free positional keys (`v1`, `v2`, ...) when `X-JMAP-KEY` is absent.
+- **Specification and Architectural Context**:
+  1. RFC 7986 §5.11 requires `VALUE=URI` in the `confparam` grammar rule. Omission of this parameter causes strict RFC 7986 parsers to reject the property.
+  2. Virtual conferencing often includes both video links and telephone dial-ins. Supporting multiple `CONFERENCE` lines ensures all join options remain accessible in Evolution.
+  3. Gating features against the closed RFC 7986 vocabulary prevents invalid parameter values from corrupting serialized streams, while `maps_virtual_locations` ensures edits are refused if unsupported features would be dropped.
+- **Adjudication**:
+  Conforming specification boundary and virtual conferencing fidelity. Emits multiple `CONFERENCE` lines with required `VALUE=URI`, maps labels and feature sets bidirectionally, and gates against unmappable conference features.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.83 Divergence 83: Linked Resource (`links`) URI-Only Model, Local `file://` URI Suppression, and Binary Attachment Omission vs Server-Managed Blob References
+
+- **Observed Behavior**:
+  RFC 8984 §4.2.7 defines `links: Map<String, Link>` for external documents and attachments. RFC 5545 §3.8.1.1 defines `ATTACH`, which allows URI references or inline binary attachments (`VALUE=BINARY;ENCODING=BASE64:...`). RFC 7986 §5.10 defines `IMAGE` for event icons and display pictures. Stalwart v1.0.0 parses links and attachments. In `jmap-ical`:
+  1. Local URI suppression: `read_links` checks `fetched_locally(&href)` and drops all `file:` URIs on inbound parse.
+  2. Binary attachment omission: Inline binary attachments (`VALUE=BINARY`) are dropped on inbound parse (`!names_a_uri(&href)`).
+  3. Dual property mapping: Maps entries with `rel: "icon"` to `IMAGE;VALUE=URI` (including `DISPLAY` parameter per RFC 7986 §6.1), while other links map to `ATTACH`.
+  4. Parameter validation: Media types in `FMTTYPE` are validated against RFC 6838 restricted-name rules, and `SIZE` parameters are validated as unsigned integers per RFC 8607 §4.1.
+- **Specification and Architectural Context**:
+  1. When a user attaches a local file in Evolution, EDS creates an `ATTACH:file:///home/...` line. If saved to JMAP, local file paths would leak private usernames and directory structures to external attendees and shared calendars, while remaining inaccessible to any other device. Suppressing local file URIs is an essential privacy and security boundary.
+  2. In JMAP, binary files must be managed via the RFC 9404 Blob API rather than embedding large binary blobs directly in calendar JSON objects or iCalendar text streams. Dropping inline binary attachments prevents calendar database bloat and sync timeouts.
+  3. Enforcing RFC 6838 restricted names on `FMTTYPE` prevents header injection or parameter syntax errors across libical and CalDAV gateways.
+- **Adjudication**:
+  Conforming specification boundary and user privacy safety. Drops local `file://` URIs and inline binary data on import, enforces strict URI and media-type formatting, and decouples calendar event structures from direct binary payload storage.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
 
 
