@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-04 05:30+0200\n"
+"POT-Creation-Date: 2026-09-04 05:33+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -436,6 +436,12 @@ msgstr ""
 
 #: rust/crates/jmap-ui/src/vacation/form.rs:27
 msgid "Dates take the form YYYY-MM-DD; leave one empty for no limit"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/vacation/form.rs:31
+msgid ""
+"The last day is before the first day — swap them, or clear one to leave it "
+"open"
 msgstr ""
 
 #: rust/crates/jmap-ui/src/vacation/page.rs:64
