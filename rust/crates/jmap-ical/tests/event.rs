@@ -21601,3 +21601,211 @@ fn differential_oracle_participant_schedule_agent_parameters_omission() {
     let parsed = ical_to_event(&ics).expect("parse valid event with managed invitee");
     assert_eq!(parsed.participants, None);
 }
+
+#[test]
+fn differential_oracle_location_single_entry_restriction_and_empty_name_suppression() {
+    // Divergence 80 against Stalwart differential oracle:
+    // RFC 8984 section 4.2.5 models locations: Map<String, Location>.
+    // RFC 5545 section 3.6.1 restricts VEVENT to at most one LOCATION line.
+    // In jmap-ical:
+    // 1. drawn_place selects the first entry with a non-empty name.
+    // 2. maps_locations returns false when more than one location entry is present.
+    // 3. An empty name ("") is suppressed on outbound serialization (no LOCATION line).
+    // 4. Inbound ical_to_event returns None for absent or empty LOCATION text.
+    let mut locations = BTreeMap::new();
+    locations.insert(
+        "loc1".to_string(),
+        json!({"@type": "Location", "name": "Primary Room"}),
+    );
+    locations.insert(
+        "loc2".to_string(),
+        json!({"@type": "Location", "name": "Overflow Room"}),
+    );
+    let ev = CalendarEvent {
+        locations: Some(locations),
+        ..CalendarEvent::default()
+    };
+    assert!(!maps_locations(ev.locations.as_ref().unwrap()));
+    let ics = event_to_ical(&ev);
+    assert_eq!(
+        content_line(&ics, "LOCATION"),
+        "LOCATION;X-JMAP-KEY=loc1:Primary Room"
+    );
+    assert!(!ics.contains("Overflow Room"));
+
+    // Empty name suppression
+    let ev_empty = placed("loc1", json!({"@type": "Location", "name": ""}));
+    let ics_empty = event_to_ical(&ev_empty);
+    assert!(without(&ics_empty, "LOCATION"), "{ics_empty}");
+    let parsed_empty = ical_to_event(&ics_empty).expect("parse empty location event");
+    assert_eq!(parsed_empty.locations, None);
+}
+
+#[test]
+fn differential_oracle_location_x_jmap_key_tracking_and_invented_key_allocation() {
+    // Divergence 81 against Stalwart differential oracle:
+    // RFC 8984 section 4.2.5 keys locations by Id.
+    // In jmap-ical:
+    // 1. drawn_place attaches X-JMAP-KEY to retain server entry keys.
+    // 2. read_locations extracts X-JMAP-KEY, preserving round-trip key identity.
+    // 3. When X-JMAP-KEY is absent, invented key "l1" is allocated.
+    // 4. When X-JMAP-KEY contains invalid Id characters, it falls back safely to "l1".
+    let ev = placed(
+        "office_404",
+        json!({"@type": "Location", "name": "Conference Suite 404"}),
+    );
+    let ics = event_to_ical(&ev);
+    assert_eq!(
+        content_line(&ics, "LOCATION"),
+        "LOCATION;X-JMAP-KEY=office_404:Conference Suite 404"
+    );
+    let parsed = ical_to_event(&ics).expect("parse with X-JMAP-KEY");
+    let locs = parsed.locations.expect("locations map present");
+    assert!(locs.contains_key("office_404"));
+    assert_eq!(locs["office_404"]["name"], "Conference Suite 404");
+
+    // Absent X-JMAP-KEY falls back to invented key "l1"
+    let ics_no_key = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+        UID:E1\r\nDTSTART:20260904T120000Z\r\nLOCATION:Main Hall\r\n\
+        END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let parsed_no_key = ical_to_event(ics_no_key).expect("parse location without key");
+    let locs_no_key = parsed_no_key.locations.expect("invented location map");
+    assert_eq!(locs_no_key.keys().collect::<Vec<_>>(), ["l1"]);
+    assert_eq!(locs_no_key["l1"]["name"], "Main Hall");
+
+    // Invalid X-JMAP-KEY (colons, spaces) rejected per names_map_entry, falls back to "l1"
+    let ics_bad_key = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+        UID:E2\r\nDTSTART:20260904T120000Z\r\nLOCATION;X-JMAP-KEY=\"bad key\":Room A\r\n\
+        END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let parsed_bad_key = ical_to_event(ics_bad_key).expect("parse location with bad key");
+    let locs_bad_key = parsed_bad_key.locations.expect("bad key location map");
+    assert_eq!(locs_bad_key.keys().collect::<Vec<_>>(), ["l1"]);
+    assert_eq!(locs_bad_key["l1"]["name"], "Room A");
+}
+
+#[test]
+fn differential_oracle_virtual_location_conference_multi_line_and_feature_vocabulary_gating() {
+    // Divergence 82 against Stalwart differential oracle:
+    // RFC 8984 section 4.2.6 defines virtualLocations.
+    // RFC 7986 section 5.11 defines the CONFERENCE property.
+    // In jmap-ical:
+    // 1. drawn_conferences serializes multiple CONFERENCE lines with VALUE=URI.
+    // 2. FEATURE parameters are mapped from CONFERENCE_FEATURES table.
+    // 3. LABEL parameter is mapped from VirtualLocation.name.
+    // 4. maps_virtual_locations refuses non-standard features or invalid URIs.
+    // 5. read_virtual_locations parses CONFERENCE into virtualLocations with round-trip fidelity.
+    let mut vlocs = BTreeMap::new();
+    vlocs.insert(
+        "conf1".to_string(),
+        json!({
+            "@type": "VirtualLocation",
+            "uri": "https://meet.example.com/standup",
+            "name": "Team Standup",
+            "features": {"video": true, "audio": true, "chat": true},
+        }),
+    );
+    vlocs.insert(
+        "conf2".to_string(),
+        json!({
+            "@type": "VirtualLocation",
+            "uri": "tel:+15551234567",
+            "name": "Phone Bridge",
+            "features": {"phone": true},
+        }),
+    );
+    let ev = CalendarEvent {
+        virtual_locations: Some(vlocs),
+        ..CalendarEvent::default()
+    };
+    assert!(maps_virtual_locations(
+        ev.virtual_locations.as_ref().unwrap()
+    ));
+    let ics = event_to_ical(&ev);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded.contains("CONFERENCE;VALUE=URI"));
+    assert!(unfolded.contains("FEATURE=AUDIO,CHAT,VIDEO"));
+    assert!(unfolded.contains("LABEL=\"Team Standup\""));
+    assert!(unfolded.contains("X-JMAP-KEY=conf1:https://meet.example.com/standup"));
+    assert!(unfolded.contains("FEATURE=PHONE"));
+    assert!(unfolded.contains("LABEL=\"Phone Bridge\""));
+    assert!(unfolded.contains("X-JMAP-KEY=conf2:tel:+15551234567"));
+
+    // Refusal of non-standard features
+    let bad_vloc = BTreeMap::from([(
+        "c1".to_string(),
+        json!({
+            "@type": "VirtualLocation",
+            "uri": "https://meet.example.com/bad",
+            "features": {"whiteboard": true},
+        }),
+    )]);
+    assert!(!maps_virtual_locations(&bad_vloc));
+
+    // Inbound round-trip
+    let parsed = ical_to_event(&ics).expect("parse conferences");
+    let parsed_vlocs = parsed.virtual_locations.expect("virtual locations");
+    assert_eq!(parsed_vlocs.len(), 2);
+    assert_eq!(
+        parsed_vlocs["conf1"]["uri"],
+        "https://meet.example.com/standup"
+    );
+    assert_eq!(parsed_vlocs["conf1"]["name"], "Team Standup");
+    assert_eq!(parsed_vlocs["conf2"]["uri"], "tel:+15551234567");
+    assert_eq!(parsed_vlocs["conf2"]["name"], "Phone Bridge");
+}
+
+#[test]
+fn differential_oracle_links_file_uri_and_binary_data_suppression_for_privacy() {
+    // Divergence 83 against Stalwart differential oracle:
+    // RFC 8984 section 4.2.7 defines links.
+    // RFC 5545 section 3.8.1.1 defines ATTACH; RFC 7986 section 5.10 defines IMAGE.
+    // In jmap-ical:
+    // 1. read_links drops file:// URIs to protect local desktop paths and privacy.
+    // 2. Inline binary attachments (VALUE=BINARY) are dropped on import.
+    // 3. rel: "icon" maps to IMAGE;VALUE=URI while general links map to ATTACH.
+    // 4. FMTTYPE media type validation adheres to RFC 6838 restricted names.
+    let ics_file = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+        UID:E1\r\nDTSTART:20260904T120000Z\r\n\
+        ATTACH:file:///home/runner/Documents/private_notes.pdf\r\n\
+        ATTACH:https://example.com/public_agenda.pdf\r\n\
+        END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let parsed = ical_to_event(ics_file).expect("parse links with local file");
+    let links = parsed.links.expect("links map present");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links["k1"]["href"], "https://example.com/public_agenda.pdf");
+
+    // Inline binary attachment dropped
+    let ics_binary = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+        UID:E2\r\nDTSTART:20260904T120000Z\r\n\
+        ATTACH;VALUE=BINARY;ENCODING=BASE64:SGVsbG8gV29ybGQ=\r\n\
+        END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let parsed_binary = ical_to_event(ics_binary).expect("parse inline binary attachment");
+    assert_eq!(parsed_binary.links, None);
+
+    // IMAGE with rel: "icon" round-trip
+    let mut links_map = BTreeMap::new();
+    links_map.insert(
+        "img1".to_string(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/badge.png",
+            "rel": "icon",
+            "contentType": "image/png",
+            "display": "badge",
+        }),
+    );
+    let ev_link = CalendarEvent {
+        links: Some(links_map),
+        ..CalendarEvent::default()
+    };
+    let ics_link = event_to_ical(&ev_link);
+    assert_eq!(
+        content_line(&ics_link, "IMAGE"),
+        "IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=img1:https://example.com/badge.png"
+    );
+    let parsed_link = ical_to_event(&ics_link).expect("parse image link");
+    let read_links = parsed_link.links.expect("parsed links");
+    assert_eq!(read_links["img1"]["href"], "https://example.com/badge.png");
+    assert_eq!(read_links["img1"]["rel"], "icon");
+    assert_eq!(read_links["img1"]["contentType"], "image/png");
+}
