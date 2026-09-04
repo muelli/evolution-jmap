@@ -16648,3 +16648,179 @@ END:VCALENDAR\r\n";
     assert!(without(&out_empty_timestamps, "DTSTAMP"));
     assert!(without(&out_empty_timestamps, "LAST-MODIFIED"));
 }
+
+#[test]
+fn differential_oracle_uid_mapping_to_id_and_x_jmap_uid_retention() {
+    // Divergence 3 against Stalwart differential oracle:
+    // RFC 8984 section 4.1.1 defines uid as the globally unique event identifier.
+    // RFC 8620 section 2 defines id as the immutable server-assigned record ID.
+    // Stalwart v1.0.0 CalendarEvent/parse produces uid and leaves id unset.
+    // In contrast, jmap-ical produces id (and populates uid only when
+    // X-JMAP-UID is present).
+    // Rationale: Evolution Data Server (libical / ECalMetaBackend) keys its
+    // local cache on UID, which jmap-cal-sync must match against JMAP id for
+    // load_component_sync / remove_component_sync routing.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:google-export-uid-12345@google.com\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Identity Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+    assert_eq!(
+        event.id.as_ref().map(|id| id.as_str()),
+        Some("google-export-uid-12345@google.com")
+    );
+    assert_eq!(
+        event.uid, None,
+        "plain UID must not populate event.uid when X-JMAP-UID is absent"
+    );
+
+    // Outbound emission: emits UID line
+    let out = event_to_ical(&event);
+    assert_eq!(line(&out, "UID:"), "UID:google-export-uid-12345@google.com");
+    assert!(without(&out, "X-JMAP-UID"));
+
+    // When X-JMAP-UID is present: both id and uid are populated
+    let ics_with_x_uid = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:server-id-888\r\n\
+X-JMAP-UID:client-uuid-999\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Identity Test with X-JMAP-UID\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_dual = ical_to_event(ics_with_x_uid).expect("parse ics with x-jmap-uid");
+    assert_eq!(
+        event_dual.id.as_ref().map(|id| id.as_str()),
+        Some("server-id-888")
+    );
+    assert_eq!(event_dual.uid.as_deref(), Some("client-uuid-999"));
+
+    let out_dual = event_to_ical(&event_dual);
+    assert_eq!(line(&out_dual, "UID:"), "UID:server-id-888");
+    assert_eq!(line(&out_dual, "X-JMAP-UID:"), "X-JMAP-UID:client-uuid-999");
+}
+
+#[test]
+fn differential_oracle_organizer_and_attendee_dropped_on_import_for_scheduling_safety() {
+    // Divergence 4 against Stalwart differential oracle:
+    // Stalwart v1.0.0 CalendarEvent/parse converts ORGANIZER and ATTENDEE lines
+    // into JSCalendar participants.
+    // In contrast, jmap-ical's ical_to_event drops them on import (participants: None),
+    // while outbound event_to_ical draws them when event.participants is present.
+    // Rationale: Guest list and reply statuses (PARTSTAT) are scheduling state.
+    // If ical_to_event parsed them, local desktop saves in Evolution would submit
+    // patches mutating participants on the server without sending iTIP messages
+    // (RFC 5546), corrupting server-authoritative guest list and response state.
+    let path = format!(
+        "{}/tests/fixtures/google_calendar_export.ics",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let ics = std::fs::read_to_string(&path).expect("read fixture");
+    let event = ical_to_event(&ics).expect("parse ics");
+
+    // Inbound: participants must be None
+    assert_eq!(
+        event.participants, None,
+        "participants must be dropped on inbound parse to preserve scheduling boundary"
+    );
+
+    // Dropped attendees must not pollute extra
+    assert!(!event.extra.contains_key("attendee"));
+    assert!(!event.extra.contains_key("organizer"));
+    assert!(!event.extra.contains_key("ATTENDEE"));
+    assert!(!event.extra.contains_key("ORGANIZER"));
+
+    // Outbound: when participants is populated, event_to_ical draws ORGANIZER and ATTENDEE
+    let mut with_participants = event.clone();
+    let mut part_map = serde_json::Map::new();
+    let owner = serde_json::json!({
+        "@type": "Participant",
+        "name": "Jane Doe",
+        "roles": {"owner": true},
+        "sendTo": {"imip": "mailto:jane.doe@example.com"}
+    });
+    let guest = serde_json::json!({
+        "@type": "Participant",
+        "name": "Bob Smith",
+        "roles": {"attendee": true},
+        "participationStatus": "accepted",
+        "sendTo": {"imip": "mailto:bob.smith@example.com"}
+    });
+    part_map.insert("p1".to_owned(), owner);
+    part_map.insert("p2".to_owned(), guest);
+    with_participants.participants = Some(
+        part_map
+            .into_iter()
+            .collect::<std::collections::BTreeMap<_, _>>(),
+    );
+
+    let out = event_to_ical(&with_participants);
+    let unfolded = out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(
+        unfolded.contains("ORGANIZER;CN=\"Jane Doe\":mailto:jane.doe@example.com")
+            || unfolded.contains("ORGANIZER;CN=Jane Doe:mailto:jane.doe@example.com")
+    );
+    assert!(
+        unfolded.contains("ATTENDEE;CN=\"Bob Smith\";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:bob.smith@example.com")
+            || (unfolded.contains("ATTENDEE;") && unfolded.contains("mailto:bob.smith@example.com"))
+    );
+}
+
+#[test]
+fn differential_oracle_envelope_properties_and_url_boundary() {
+    // Divergences 5 and 6 against Stalwart differential oracle:
+    // 1. PRODID, CALSCALE, and METHOD are transport envelope properties.
+    // Stalwart may map PRODID to prodId. jmap-ical drops PRODID on import and
+    // emits its own canonical PRODID on export, ensuring foreign generator
+    // tokens do not pollute stored event state.
+    // 2. URL (RFC 5545 section 3.8.4.6) is dropped on import rather than mapped to links,
+    // avoiding collisions with virtualLocations (CONFERENCE) and keeping links
+    // isolated to ATTACH and IMAGE.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Foreign Vendor//Calendar 1.0//EN\r\n\
+CALSCALE:GREGORIAN\r\n\
+METHOD:REQUEST\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-envelope-url-001\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Envelope and URL Test\r\n\
+URL:https://example.com/meeting-details\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    // Envelope properties are dropped without polluting extra
+    assert!(!event.extra.contains_key("prodId"));
+    assert!(!event.extra.contains_key("PRODID"));
+    assert!(!event.extra.contains_key("method"));
+    assert!(!event.extra.contains_key("METHOD"));
+    assert!(!event.extra.contains_key("calscale"));
+    assert!(!event.extra.contains_key("CALSCALE"));
+
+    // URL is dropped without polluting extra or links
+    assert_eq!(event.links, None, "URL must not be imported into links");
+    assert!(!event.extra.contains_key("url"));
+    assert!(!event.extra.contains_key("URL"));
+
+    // Outbound emission: emits canonical PRODID and VERSION, drops foreign CALSCALE/METHOD/URL
+    let out = event_to_ical(&event);
+    assert!(out.contains("VERSION:2.0"));
+    assert!(!out.contains("Foreign Vendor"));
+    assert!(without(&out, "CALSCALE"));
+    assert!(without(&out, "METHOD"));
+    assert!(without(&out, "URL"));
+}
