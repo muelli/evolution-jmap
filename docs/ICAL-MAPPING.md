@@ -1649,3 +1649,68 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and dependency validation. Enforces that custom timezone identifiers in recurrence overrides must be accompanied by explicit definitions in `timeZones`.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.60 Divergence 60: Recurrence Override Property Removal via `null` vs Absent Property Ingestion in Detached Components
+
+- **Observed Behavior**:
+  RFC 8984 §4.3.4 models per-instance modifications as a `PatchObject`. Under RFC 6902 / JSON merge-patch rules, setting a property to `null` deletes or unsets the property on that instance (such as `"status": null`, `"freeBusyStatus": null`, `"priority": null`, `"privacy": null`, `"keywords": null`, `"alerts": null`, `"description": null`, `"timeZone": null`). In contrast, RFC 5545 detached `VEVENT` components have no explicit "null" or "unset" token. When an occurrence clears a property, its detached `VEVENT` component simply omits the corresponding content line. Stalwart v1.0.0 parses detached `VEVENT` components into JSCalendar, setting omitted properties to null in `recurrenceOverrides` when differing from the master series. In `jmap-ical`:
+  1. Inbound parsing (`read_overrides` -> `instance_patch`): compares the detached component against the master series across all restatable properties (`title`, `description`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `privacy`, `priority`, `keywords`, `alerts`). When a property was present on the series but is absent on the detached component, `instance_patch` generates an explicit `null` in the patch object.
+  2. Outbound serialization (`modified_instance` -> `vevent_of`): when an override patch sets a property to `null`, `modified_instance` clears that property on the instance (`instance.status = None`, etc.), and `vevent_of` omits the corresponding content line from the emitted detached `VEVENT`.
+  3. Validation predicate: `maps_override_field` admits `value.is_null()` for restatable properties, ensuring callers can legally clear properties on individual occurrences.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent` / `libical`), an occurrence can have its status, category, alarm, or priority cleared relative to the master series.
+  2. When EDS saves a detached occurrence without `STATUS` or without `CATEGORIES`, converting this to JSCalendar requires generating `null` to inform JMAP that the occurrence does not inherit the parent series property.
+  3. Omitting `null` would cause the server or client sync to falsely inherit parent properties, making deleted alarms or cleared categories reappear after resync.
+- **Adjudication**:
+  Conforming specification mapping and fixpoint round-trip stability. Generates `null` for properties present on the series but omitted on the detached component, and suppresses iCalendar content lines when an override specifies `null`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.61 Divergence 61: Recurrence Override Empty String (`""`) Refusal in `title` and `description` vs `null` Deletion
+
+- **Observed Behavior**:
+  In JSON and RFC 8984 §4.1.1 and §4.1.2, an empty string (`"title": ""`, `"description": ""`) is syntactically distinct from `null` (`"title": null`, `"description": null`). Setting `"title": ""` asserts that the event's title is explicitly the empty string, whereas `"title": null` removes the title property (or reverts to default). However, in RFC 5545 §3.8.1.12 (`SUMMARY`) and §3.8.1.5 (`DESCRIPTION`), a property line with empty text (`SUMMARY:` or `DESCRIPTION:`) is either prohibited by value type grammar, normalized to absent, or dropped by conformant generators. Stalwart v1.0.0 parses empty or missing summary lines as absent in JSCalendar. In `jmap-ical`:
+  1. Outbound serialization (`vevent_of`): filters out empty strings (`filter(|value| !value.is_empty())`), omitting empty `SUMMARY` and `DESCRIPTION` lines from both master and detached components.
+  2. Round-trip hazard: because empty strings are dropped during outbound serialization, a detached component with `"title": ""` would serialize without a `SUMMARY` line. When read back, `instance_patch` would observe `instance.title == None` and emit `{"title": null}` instead of `{"title": ""}`, breaking round-trip idempotence.
+  3. Validation predicate: `maps_override_field` explicitly refuses empty strings for `title` and `description` (`value.is_null() || value.as_str().is_some_and(|text| !text.is_empty())`), while admitting `null`.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server and libical, emitting `SUMMARY:` with empty text causes libical to drop the property or generate invalid syntax.
+  2. Permitting empty strings in JMAP patches would lead to unstable round-trips: saving `{"title": ""}` would serialize to no `SUMMARY`, which upon resync would turn into `{"title": null}` or inherit the series title, triggering spurious change notifications in `jmap-cal-sync`.
+  3. Refusing empty strings at the validation boundary ensures that clients use `null` to clear a title or description.
+- **Adjudication**:
+  Conforming specification boundary and round-trip fixpoint safety. Refuses empty strings `""` in override patches while permitting `null` to remove properties cleanly.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.62 Divergence 62: Recurrence Override Rescheduled Start Time (`start` Property) vs Instance Key (`id` / `RECURRENCE-ID`)
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.4.4 models recurring instances using `RECURRENCE-ID`, which identifies the original recurrence occurrence slot from the pattern. When an instance is rescheduled (e.g. postponed by two hours or moved to another day), the detached `VEVENT` retains `RECURRENCE-ID` pointing to the original recurrence slot, but its `DTSTART` specifies the new, rescheduled start time (`DTSTART != RECURRENCE-ID`). In RFC 8984 §4.3.4, `recurrenceOverrides` is keyed by the original recurrence start time (`id`), matching `RECURRENCE-ID`. An override patch only needs to specify `"start"` if the instance start time actually changed. RFC 8984 §4.3.4 states: "The start property, if present, overrides the start time of the occurrence." Stalwart v1.0.0 parses detached `VEVENT` components where `DTSTART != RECURRENCE-ID` and outputs `recurrenceOverrides[id]` containing `"start": "<new_time>"`. In `jmap-ical`:
+  1. Inbound parsing (`instance_patch`): suppresses `"start"` when `DTSTART == id`, avoiding redundant property churn. When `DTSTART != id`, `instance_patch` includes `"start": "<rescheduled_datetime>"`.
+  2. Outbound serialization (`modified_instance` -> `vevent_of`): defaults `instance.start` to `id` when `"start"` is omitted in the patch; updates `instance.start` when `"start"` is present; and renders `RECURRENCE-ID` at `id` (in series timezone) and `DTSTART` at `instance.start` (in instance timezone).
+  3. Validation predicate: `maps_override_field` verifies that any overridden `"start"` parses as a valid date-time string via `to_ical_date_time`.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server, dragging an occurrence to another hour generates a detached `ECalComponent` with `RECURRENCE-ID` set to the original occurrence and `DTSTART` set to the new time.
+  2. Suppressing redundant `start` when an occurrence is not rescheduled keeps JMAP patch payloads minimal and prevents patch diff noise.
+  3. Correctly decoupling `RECURRENCE-ID` (series recurrence slot) from `DTSTART` (rescheduled instance time) ensures both EDS and remote JMAP servers accurately display rescheduled occurrences without duplicating or detaching them from the series.
+- **Adjudication**:
+  Conforming specification boundary and calendar rescheduling fidelity. Suppresses redundant `start` when matching `id`, emits `start` only when rescheduled, and maintains strict separation between `RECURRENCE-ID` (original slot) and `DTSTART` (effective occurrence time).
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.63 Divergence 63: Recurrence Override Duration Modification and `RDATE` Period Length Calculation vs Series Duration Inheritance
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.5.2 permits `RDATE` to specify occurrences as discrete date-times (such as `RDATE:20260908T100000Z`) or as explicit periods with duration or end time (such as `RDATE;VALUE=PERIOD:20260908T100000Z/PT2H` or `RDATE;VALUE=PERIOD:20260908T100000Z/20260908T120000Z`). In RFC 8984 §4.3.4, extra occurrences added via `RDATE` are modeled as entries in `recurrenceOverrides`. If an added occurrence has the same duration as the series, its patch is `{}` (empty patch). If it has a different duration, its patch is `{"duration": "<length>"}`. Stalwart v1.0.0 parses `RDATE` entries and detached components, omitting `"duration"` in `recurrenceOverrides` when matching the series default. In `jmap-ical`:
+  1. Inbound parsing (`read_overrides`): for `RDATE` entries, `period_length(start, end)` calculates the period duration in seconds from wall-clock difference (`instant(end) - instant(start)`) and formats it as an ISO 8601 duration via `to_duration`. If the period length equals the series duration, an empty patch `{}` is produced. If it differs, `{"duration": length}` is emitted.
+  2. Detached components: `instance_patch` compares `series.duration` vs `instance.duration`. If they differ, `patch.insert("duration", now)` is emitted. If matching, `duration` is omitted, allowing the instance to inherit series duration.
+  3. Outbound serialization (`vevent_of`): an instance with modified duration emits its own `DURATION` line. An override with `{}` (bare `RDATE`) or matching duration emits `RDATE` on the master component without a detached `VEVENT`.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server and libical, recurring appointments with occasional extended sessions (such as an annual board meeting in a recurring monthly series) specify either a detached `VEVENT` with a custom `DURATION`/`DTEND` or an `RDATE;VALUE=PERIOD`.
+  2. Calculating duration from period bounds and suppressing redundant durations that match the series ensures clean JSCalendar models and avoids false diffs in `jmap-cal-sync`.
+  3. Preserving series duration inheritance for unmodified occurrences keeps detached components concise.
+- **Adjudication**:
+  Conforming specification boundary and duration calculation precision. Emits `duration` in override patches only when differing from series duration, calculates period lengths from `RDATE` start/end pairs, and preserves series duration inheritance.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
