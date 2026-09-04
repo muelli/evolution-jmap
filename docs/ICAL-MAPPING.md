@@ -929,6 +929,60 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Deliberate mapping design. Documented and pinned in `tests/event.rs`.
 
+### 13.16 Divergence 16: Vendor Extension Properties (`X-*`) and `CalendarEvent.extra` Cleanliness vs Payload Preservation
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 and general RFC 8984 Appendix B parsers may collect unmapped vendor extension properties (`X-APPLE-*`, `X-MICROSOFT-*`, `X-MOZ-*`, `X-LIC-*`) into custom properties or dictionary records. In contrast, `jmap-ical`'s `ical_to_event` strictly ignores vendor `X-` properties on inbound parse without populating `CalendarEvent.extra` (`event.extra` remains completely empty).
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.8.2 permits experimental and vendor-specific extension properties prefixed with `X-`. RFC 8984 Appendix B describes preservation strategies for round-tripping unmodeled properties.
+  2. In Evolution Data Server (`ECalMetaBackend` / `libical`), calendar appointments provide editing interfaces for standard properties (summary, description, dates, alarms, categories, attendees), but offer no UI editing or validation for foreign vendor extensions.
+  3. If `ical_to_event` preserved arbitrary vendor properties in `event.extra`, the client synchronization pipeline (`jmap-cal-sync`) would serialize them as top-level properties in JMAP `CalendarEvent/set` create or update calls. Standard JMAP servers reject unknown top-level object properties with `invalidProperties` errors, failing the entire synchronization batch.
+  4. Outbound serialization: `event_to_ical` ignores `event.extra` and emits only well-defined RFC 5545 properties.
+- **Adjudication**:
+  Deliberate mapping design and synchronization safety boundary. Keeping `event.extra` unpolluted prevents invalid property errors on JMAP servers.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.17 Divergence 17: Inline Binary Attachments (`ATTACH;VALUE=BINARY;ENCODING=BASE64:...`) and Local `file://` URIs vs Remote Resource Reference Model
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.4.1 permits embedding inline binary attachments directly within `ATTACH` properties using base64 encoding (`ATTACH;VALUE=BINARY;ENCODING=BASE64:...`). Furthermore, Evolution's desktop client generates local `file://` URIs for files selected from the local disk before upload. Stalwart v1.0.0 leverages RFC 9404 Blob storage for binary payload transfer. In contrast, `jmap-ical`'s `read_links` drops inline binary attachments and filters out local `file://` URIs (`fetched_locally`), accepting only valid non-local URIs (`https://`, `http://`, `blobId:`, `data:`).
+- **Specification and Architectural Context**:
+  1. Inlining binary data inside calendar JSON objects bloats synchronization payloads and breaks the JMAP protocol design separating lightweight metadata from binary blobs (RFC 8620 §6 / RFC 9404).
+  2. Publishing local `file://` URIs to a shared calendar leaks the user's local filesystem paths and creates unresolvable dead links for remote attendees.
+  3. Dropping local `file://` URIs and inline base64 data enforces that only accessible network resources or uploaded blobs are shared.
+  4. Outbound synchronization safety: [`maps_links`] verifies that every link has a valid remote URI, and `drawn_links` renders them with `X-JMAP-KEY` for in-place patching.
+- **Adjudication**:
+  Deliberate architectural boundary enforcing network accessibility and payload isolation.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.18 Divergence 18: Stream-Level Container Metadata (`X-WR-CALNAME`, `X-WR-TIMEZONE`) vs Calendar Container Isolation
+
+- **Observed Behavior**:
+  Calendar exporters (such as Google Calendar, Apple Calendar, and Thunderbird) frequently write stream-level metadata on the outer `VCALENDAR` envelope, such as `X-WR-CALNAME` for the calendar title and `X-WR-TIMEZONE` for the calendar default timezone. CalDAV servers and archival converters often use `X-WR-CALNAME` to name an entire imported calendar collection. In contrast, `jmap-ical` maps individual appointment records (`VEVENT`) and drops outer `VCALENDAR` metadata without polluting `event.extra`.
+- **Specification and Architectural Context**:
+  1. In JMAP (RFC 8620 / draft-ietf-jmap-calendars-28), calendar containers are distinct first-class objects (`Calendar` with `id`, `name`, `color`), and appointments belong to containers via `calendarIds: Map<Id, Boolean>`.
+  2. Embedding container names in `CalendarEvent` introduces redundant denormalized data and risks naming conflicts when events are moved between calendars.
+  3. In Evolution Data Server, calendar collection identity is governed by `ESource` objects in the account hierarchy rather than individual appointment components.
+- **Adjudication**:
+  Conforming protocol boundary and relational model isolation.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.19 Divergence 19: Classification and Privacy Vocabularies (`CLASS` vs `privacy`) and Non-Standard Token Filtering
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.1.3 defines classification values `PUBLIC`, `PRIVATE`, and `CONFIDENTIAL`, while admitting x-name or iana-tokens. RFC 8984 §4.4.3 models `privacy` with values `public`, `private`, `secret`, leaving vocabulary open. Stalwart v1.0.0 may preserve non-standard `CLASS` values (e.g. `CLASS:RESTRICTED` or `CLASS:SECRET`) directly into `privacy`. In contrast, `jmap-ical`'s `read_privacy` strictly maps the shared three-value scale (`PUBLIC` to `"public"`, `PRIVATE` to `"private"`, and `CONFIDENTIAL` to `"secret"`), dropping non-standard tokens on import without polluting `event.extra`.
+- **Specification and Architectural Context**:
+  1. Evolution Data Server's appointment UI exposes a three-option classification menu (`Public`, `Private`, `Confidential`). Non-standard tokens cannot be presented in desktop UI and would produce inconsistent round-trips.
+  2. Dropping unknown classifications defaults them safely to public (the default shared by both RFC 5545 and RFC 8984).
+  3. Outbound serialization: `PRIVACIES` only emits the three canonical values, omitting `CLASS` when `event.privacy` is unset.
+- **Adjudication**:
+  Deliberate mapping boundary for desktop UI fidelity and specification interoperability.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
 
 
 
