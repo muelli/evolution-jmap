@@ -7,9 +7,10 @@ use std::collections::BTreeMap;
 
 use jmap_proto::error::SetError;
 use jmap_proto::mail::{
-    Email, EmailImport, EmailImportRequest, EmailImportResponse, EmailQueryFilter, EmailSubmission,
-    EmailSubmissionQueryFilter, EmailSubmissionSetRequest, Envelope, Identity, Mailbox, Schedule,
-    SearchSnippet, SearchSnippetGetRequest, SearchSnippetGetResponse, Thread, VacationResponse,
+    Email, EmailImport, EmailImportRequest, EmailImportResponse, EmailParseRequest,
+    EmailParseResponse, EmailQueryFilter, EmailSubmission, EmailSubmissionQueryFilter,
+    EmailSubmissionSetRequest, Envelope, Identity, Mailbox, Schedule, SearchSnippet,
+    SearchSnippetGetRequest, SearchSnippetGetResponse, Thread, VacationResponse,
 };
 use jmap_proto::methods::{
     Comparator, Filter, GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest,
@@ -629,6 +630,17 @@ impl Client {
             response.not_created.as_ref(),
             IMPORTED,
         )
+    }
+
+    /// `Email/parse` (RFC 8621 §4.8): reads an uploaded RFC 5322 blob into an
+    /// `Email`, without importing it into the mailbox — the read-only
+    /// counterpart to [`Client::email_import`], useful for previewing a
+    /// message (a forwarded attachment, say) before deciding what to do with
+    /// it.
+    pub fn email_parse(&self, request: &EmailParseRequest) -> Result<EmailParseResponse, Error> {
+        let arguments =
+            self.single_call(&[CAPABILITY_CORE, CAPABILITY_MAIL], "Email/parse", request)?;
+        Ok(serde_json::from_value(arguments)?)
     }
 
     /// Fetch Threads by id (`Thread/get`, RFC 8621 §3.1). Ids come from

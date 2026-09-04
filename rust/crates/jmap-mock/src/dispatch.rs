@@ -285,6 +285,7 @@ fn handle_method(
         "Email/query" => crate::mail::email_query(state, arguments),
         "Email/set" => crate::mail::email_set(state, arguments),
         "Email/import" => crate::mail::email_import(state, arguments),
+        "Email/parse" => crate::mail::email_parse(state, arguments),
         "AddressBook/get" => crate::contacts::address_book_get(state, arguments, caller),
         "AddressBook/set" => crate::contacts::address_book_set(state, arguments),
         "ContactCard/get" => crate::contacts::contact_card_get(state, arguments),
