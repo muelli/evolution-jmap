@@ -18029,3 +18029,276 @@ END:VCALENDAR\r\n";
     assert_eq!(ev_taf.recurrence_overrides, None);
     assert!(ev_taf.extra.is_empty());
 }
+
+#[test]
+fn differential_oracle_use_default_alerts_omission_and_notification_preference_boundary() {
+    // Divergence 28 against Stalwart differential oracle:
+    // RFC 8984 section 4.5.1 defines useDefaultAlerts: Boolean (default: false) to indicate
+    // whether the user's default reminder alerts should be applied when no alerts are specified.
+    // Stalwart v1.0.0 either omits useDefaultAlerts or sets it to false when parsing incoming VEVENTs.
+    // In contrast, jmap-ical's ical_to_event:
+    // 1. Returns use_default_alerts: None when parsing incoming VEVENTs (both with and without VALARM),
+    //    avoiding spurious diffs against server defaults.
+    // 2. On outbound export, if an event has use_default_alerts: Some(true), drawn_alarms suppresses
+    //    VALARM emission (returns empty alarm vector).
+    // 3. maps_alerts strictly returns false when use_default_alerts is true, preventing whole-property
+    //    replacement that would conflict with server-side default alerts.
+    // 4. maps_recurrence_override refuses alert overrides when the series uses default alerts.
+    let ics_no_alarms = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-default-alerts-001\r\n\
+DTSTART:20260904T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:No Alarms Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_no_alarms = ical_to_event(ics_no_alarms).expect("parse event without alarms");
+    assert_eq!(ev_no_alarms.use_default_alerts, None);
+    assert_eq!(ev_no_alarms.alerts, None);
+    assert!(ev_no_alarms.extra.is_empty());
+
+    let ics_with_alarm = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-default-alerts-002\r\n\
+DTSTART:20260904T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Meeting With Alarm\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+TRIGGER:-PT15M\r\n\
+DESCRIPTION:Reminder\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_with_alarm = ical_to_event(ics_with_alarm).expect("parse event with alarm");
+    assert_eq!(ev_with_alarm.use_default_alerts, None);
+    assert!(ev_with_alarm.alerts.is_some());
+    assert!(maps_alerts(&ev_with_alarm));
+
+    // Suppressed alarm emission when use_default_alerts is true
+    let mut ev_suppressed = ev_with_alarm.clone();
+    ev_suppressed.use_default_alerts = Some(true);
+    assert!(!maps_alerts(&ev_suppressed));
+    let out_suppressed = event_to_ical(&ev_suppressed);
+    assert!(without(&out_suppressed, "BEGIN:VALARM"));
+
+    // Suppressed when useDefaultAlerts is set in extra
+    let mut ev_extra_default = ev_with_alarm.clone();
+    ev_extra_default
+        .extra
+        .insert("useDefaultAlerts".to_owned(), Value::Bool(true));
+    assert!(!maps_alerts(&ev_extra_default));
+    let out_extra = event_to_ical(&ev_extra_default);
+    assert!(without(&out_extra, "BEGIN:VALARM"));
+}
+
+#[test]
+fn differential_oracle_locale_tag_omission_and_property_language_filtering() {
+    // Divergence 29 against Stalwart differential oracle:
+    // RFC 8984 section 4.1.6 defines locale: String (a BCP 47 language tag) for event properties.
+    // RFC 5545 section 3.2.10 defines LANGUAGE parameters on text properties (e.g. SUMMARY;LANGUAGE=fr).
+    // Stalwart v1.0.0 parses property-level LANGUAGE parameters and may infer event.locale.
+    // In contrast, jmap-ical's ical_to_event:
+    // 1. Reads text properties while ignoring LANGUAGE parameters, returning locale: None.
+    // 2. Outbound export does not emit LANGUAGE parameters from event.locale or add document language tags.
+    // 3. Leaves event.extra completely clean without polluting custom maps.
+    let ics_localized = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-locale-test-001\r\n\
+DTSTART:20260904T140000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY;LANGUAGE=fr:Reunion d'equipe\r\n\
+DESCRIPTION;LANGUAGE=fr:Discussion hebdomadaire des projets en cours.\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev = ical_to_event(ics_localized).expect("parse localized event");
+    assert_eq!(ev.title.as_deref(), Some("Reunion d'equipe"));
+    assert_eq!(
+        ev.description.as_deref(),
+        Some("Discussion hebdomadaire des projets en cours.")
+    );
+    assert_eq!(ev.locale, None);
+    assert!(ev.extra.is_empty());
+
+    // Outbound export does not emit LANGUAGE parameter or document headers
+    let mut ev_with_locale = ev.clone();
+    ev_with_locale.locale = Some("fr".to_owned());
+    let out = event_to_ical(&ev_with_locale);
+    assert_eq!(line(&out, "SUMMARY:"), "SUMMARY:Reunion d'equipe");
+    assert_eq!(
+        line(&out, "DESCRIPTION:"),
+        "DESCRIPTION:Discussion hebdomadaire des projets en cours."
+    );
+    assert!(without(&out, "LANGUAGE="));
+    assert!(without(&out, "X-LIC-LOCATION"));
+}
+
+#[test]
+fn differential_oracle_floating_utc_canonical_iana_and_solidus_timezone_resolution() {
+    // Divergence 30 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.5 defines floating date-time, UTC (Z), and local time with TZID.
+    // RFC 8984 sections 1.4.9 and 4.1.4 define timeZone as an IANA timezone name, a solidus identifier,
+    // or null for floating/all-day.
+    // Stalwart v1.0.0 parses UTC into start and timeZone: "Etc/UTC" (or "UTC").
+    // In contrast, jmap-ical's read_start:
+    // 1. Floating time (no Z, no TZID) yields time_zone: None.
+    // 2. UTC time (trailing Z) yields time_zone: Some("Etc/UTC").
+    // 3. Windows display names resolve to canonical IANA names via CLDR (W. Europe Standard Time -> Europe/Berlin).
+    // 4. Mozilla/Apple unique prefixes normalize to canonical IANA suffixes (/mozilla.org/... -> Europe/Madrid).
+    // 5. Custom solidus zones are retained verbatim as time_zone: Some("/org.custom/zone").
+    // Outbound export:
+    // 1. UTC (Etc/UTC or UTC) serializes with Z suffix.
+    // 2. Floating time serializes without TZID and without Z.
+    // 3. Canonical IANA zones serialize with TZID=<zone>.
+    // 4. Custom solidus zones serialize with TZID=<solidus-zone>.
+
+    // 1. Floating date-time
+    let ics_floating = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\nUID:oracle-floating-001\r\n\
+DTSTART:20260904T120000\r\nDURATION:PT1H\r\nSUMMARY:Floating Lunch\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_floating = ical_to_event(ics_floating).expect("parse floating");
+    assert_eq!(ev_floating.start.as_deref(), Some("2026-09-04T12:00:00"));
+    assert_eq!(ev_floating.time_zone, None);
+    let out_floating = event_to_ical(&ev_floating);
+    assert_eq!(line(&out_floating, "DTSTART:"), "DTSTART:20260904T120000");
+
+    // 2. UTC date-time
+    let ics_utc = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\nUID:oracle-utc-001\r\n\
+DTSTART:20260904T120000Z\r\nDURATION:PT1H\r\nSUMMARY:UTC Sync\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_utc = ical_to_event(ics_utc).expect("parse utc");
+    assert_eq!(ev_utc.start.as_deref(), Some("2026-09-04T12:00:00"));
+    assert_eq!(ev_utc.time_zone.as_deref(), Some("Etc/UTC"));
+    let out_utc = event_to_ical(&ev_utc);
+    assert_eq!(line(&out_utc, "DTSTART:"), "DTSTART:20260904T120000Z");
+
+    // 3. Windows display name resolution
+    let ics_windows = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\nTZID:W. Europe Standard Time\r\n\
+BEGIN:STANDARD\r\nDTSTART:16010101T020000\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\nEND:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\nUID:oracle-win-001\r\n\
+DTSTART;TZID=\"W. Europe Standard Time\":20260904T140000\r\n\
+DURATION:PT1H\r\nSUMMARY:Berlin Sync\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_windows = ical_to_event(ics_windows).expect("parse windows tzid");
+    assert_eq!(ev_windows.time_zone.as_deref(), Some("Europe/Berlin"));
+    let out_windows = event_to_ical(&ev_windows);
+    assert_eq!(
+        line(&out_windows, "DTSTART;"),
+        "DTSTART;TZID=Europe/Berlin:20260904T140000"
+    );
+
+    // 4. Mozilla unique prefix normalization
+    let ics_mozilla = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\nUID:oracle-moz-001\r\n\
+DTSTART;TZID=/mozilla.org/20050126_1/Europe/Madrid:20260904T150000\r\n\
+DURATION:PT1H\r\nSUMMARY:Madrid Sync\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_mozilla = ical_to_event(ics_mozilla).expect("parse mozilla tzid");
+    assert_eq!(ev_mozilla.time_zone.as_deref(), Some("Europe/Madrid"));
+    let out_mozilla = event_to_ical(&ev_mozilla);
+    assert_eq!(
+        line(&out_mozilla, "DTSTART;"),
+        "DTSTART;TZID=Europe/Madrid:20260904T150000"
+    );
+
+    // 5. Custom solidus zone retention
+    let ics_solidus = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\nUID:oracle-solidus-001\r\n\
+DTSTART;TZID=/org.custom/zone:20260904T160000\r\n\
+DURATION:PT1H\r\nSUMMARY:Custom Zone Sync\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_solidus = ical_to_event(ics_solidus).expect("parse solidus tzid");
+    assert_eq!(ev_solidus.time_zone.as_deref(), Some("/org.custom/zone"));
+    let out_solidus = event_to_ical(&ev_solidus);
+    assert_eq!(
+        line(&out_solidus, "DTSTART;"),
+        "DTSTART;TZID=/org.custom/zone:20260904T160000"
+    );
+}
+
+#[test]
+fn differential_oracle_vtimezone_observance_rules_ingestion_and_standard_iana_pruning() {
+    // Divergence 31 against Stalwart differential oracle:
+    // RFC 5545 section 3.6.5 specifies VTIMEZONE with STANDARD/DAYLIGHT observance subcomponents.
+    // RFC 8984 section 4.7.2 models custom timezone definitions inside timeZones.
+    // Stalwart v1.0.0 parses VTIMEZONEs, dropping redundant standard IANA definitions.
+    // In contrast, jmap-ical's read_time_zones:
+    // 1. Drops inline VTIMEZONE components for recognized standard IANA zone names (time_zones: None),
+    //    preventing multi-kilobyte JSON payload bloat in JMAP event state.
+    // 2. Preserves VTIMEZONE components for custom solidus zones (/example.com/custom_tz) with their
+    //    observance rules (TZOFFSETFROM, TZOFFSETTO, RRULE) in event.time_zones.
+    // 3. prune_time_zones removes unreferenced custom timezone definitions when neither the master series
+    //    nor any recurrence override refers to the custom zone.
+    // 4. Outbound export: defines_time_zone confirms custom zone presence, and event_to_ical emits
+    //    VTIMEZONE only for custom solidus zones while omitting redundant standard IANA VTIMEZONE blocks.
+
+    // 1. Standard IANA zone with inline VTIMEZONE is pruned on import
+    let ics_standard = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\nTZID:Europe/Berlin\r\n\
+BEGIN:STANDARD\r\nDTSTART:19701025T030000\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\nEND:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\nDTSTART:19700329T020000\r\nTZOFFSETFROM:+0100\r\nTZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\nEND:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\nUID:oracle-std-tz-001\r\n\
+DTSTART;TZID=Europe/Berlin:20260904T100000\r\nDURATION:PT1H\r\nSUMMARY:Standard IANA Event\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_standard = ical_to_event(ics_standard).expect("parse standard zone with vtimezone");
+    assert_eq!(ev_standard.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(
+        ev_standard.time_zones, None,
+        "standard IANA zone must be pruned from event.time_zones"
+    );
+    assert!(!defines_time_zone(&ev_standard, "Europe/Berlin"));
+    let out_standard = event_to_ical(&ev_standard);
+    assert!(
+        without(&out_standard, "BEGIN:VTIMEZONE"),
+        "standard IANA zone must not emit VTIMEZONE"
+    );
+
+    // 2. Custom solidus zone with inline VTIMEZONE is preserved
+    let custom_tzid = "/example.com/custom_tz";
+    let ics_custom = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\nTZID:{custom_tzid}\r\n\
+BEGIN:STANDARD\r\nDTSTART:19700101T000000\r\nTZOFFSETFROM:+0300\r\nTZOFFSETTO:+0300\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\nUID:oracle-cust-tz-001\r\n\
+DTSTART;TZID={custom_tzid}:20260904T100000\r\nDURATION:PT1H\r\nSUMMARY:Custom Zone Event\r\n\
+END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let mut ev_custom = ical_to_event(&ics_custom).expect("parse custom zone with vtimezone");
+    assert_eq!(ev_custom.time_zone.as_deref(), Some(custom_tzid));
+    assert!(
+        defines_time_zone(&ev_custom, custom_tzid),
+        "custom solidus zone must be defined in event.time_zones"
+    );
+    let time_zones = ev_custom.time_zones.as_ref().expect("time_zones present");
+    assert!(time_zones.contains_key(custom_tzid));
+
+    let out_custom = event_to_ical(&ev_custom);
+    assert!(
+        out_custom.contains("BEGIN:VTIMEZONE"),
+        "custom solidus zone must emit VTIMEZONE"
+    );
+    assert!(out_custom.contains(&format!("TZID:{custom_tzid}")));
+
+    // 3. prune_time_zones removes unreferenced custom timezone definitions
+    ev_custom.time_zone = Some("Europe/Berlin".to_owned());
+    prune_time_zones(&mut ev_custom);
+    assert_eq!(
+        ev_custom.time_zones, None,
+        "unreferenced custom zone must be pruned"
+    );
+}
