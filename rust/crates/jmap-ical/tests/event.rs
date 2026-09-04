@@ -19269,3 +19269,259 @@ END:VCALENDAR\r\n";
         "BYYEARDAY on daily frequency must be refused"
     );
 }
+
+#[test]
+fn differential_oracle_rrule_interval_default_omission_and_custom_interval_emission() {
+    // Divergence 48 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 specifies INTERVAL as an optional positive integer (default: 1).
+    // RFC 8984 section 4.3.1 specifies interval: UnsignedInt (default: 1).
+    // Stalwart v1.0.0 parses INTERVAL and omits interval when equal to 1.
+    // In jmap-ical: rrule_to_rule parses INTERVAL into rule.interval; outbound rule_to_rrule
+    // deliberately suppresses INTERVAL=1 because libical in EDS drops default INTERVAL=1 upon
+    // reading into cache; non-default intervals (such as INTERVAL=3) are emitted explicitly.
+    let int_1_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:interval-1-event-001\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Daily Meeting Default Interval\r\n\
+RRULE:FREQ=DAILY;INTERVAL=1;COUNT=5\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(int_1_ics).expect("parse interval 1 rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(rule.interval, Some(1));
+    assert!(maps_recurrence_rule(rule));
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RRULE:FREQ=DAILY;COUNT=5"));
+    assert!(
+        !out.contains("INTERVAL=1"),
+        "INTERVAL=1 must be suppressed on export to maintain EDS cache fixpoint stability"
+    );
+
+    // Non-default interval (INTERVAL=3) is serialized
+    let int_3_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:interval-3-event-002\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Tri-Daily Meeting\r\n\
+RRULE:FREQ=DAILY;INTERVAL=3;COUNT=5\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev3 = ical_to_event(int_3_ics).expect("parse interval 3 rrule");
+    let rule3 = ev3.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(rule3.interval, Some(3));
+    assert!(maps_recurrence_rule(rule3));
+    let out3 = event_to_ical(&ev3);
+    assert!(out3.contains("RRULE:FREQ=DAILY;COUNT=5;INTERVAL=3"));
+}
+
+#[test]
+fn differential_oracle_rrule_endpoint_count_and_until_mutual_exclusivity_handling() {
+    // Divergence 49 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 explicitly specifies: "The UNTIL or COUNT rule parts are optional,
+    // but UNTIL and COUNT rule parts MUST NOT occur in the same 'recurrence-rule'."
+    // RFC 8984 section 4.3.1 specifies: "Both MUST NOT be present in the same RecurrenceRule;
+    // if both are present, the until rule part MUST be ignored."
+    // Stalwart v1.0.0 enforces RFC 8984 preference or rejects conflicting rules.
+    // In jmap-ical: standard bounded events specify either count or until, or neither (unbounded).
+    // An event with COUNT alone serializes COUNT; an event with UNTIL alone serializes UNTIL;
+    // an unbounded event serializes neither endpoint.
+    let count_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:count-only-event-001\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT30M\r\n\
+SUMMARY:Ten Count Series\r\n\
+RRULE:FREQ=WEEKLY;COUNT=10\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let count_ev = ical_to_event(count_ics).expect("parse count rrule");
+    let count_rule = count_ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(count_rule.count, Some(10));
+    assert_eq!(count_rule.until, None);
+    assert!(maps_recurrence_rule(count_rule));
+    let count_out = event_to_ical(&count_ev);
+    assert!(count_out.contains("RRULE:FREQ=WEEKLY;COUNT=10"));
+    assert!(!count_out.contains("UNTIL="));
+
+    let until_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:until-only-event-002\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT30M\r\n\
+SUMMARY:Year End Series\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20261231T235959Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let until_ev = ical_to_event(until_ics).expect("parse until rrule");
+    let until_rule = until_ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(until_rule.count, None);
+    assert!(until_rule.until.is_some());
+    assert!(maps_recurrence_rule(until_rule));
+    let until_out = event_to_ical(&until_ev);
+    assert!(until_out.contains("RRULE:FREQ=WEEKLY;UNTIL=20261231T235959Z"));
+    assert!(!until_out.contains("COUNT="));
+
+    // Unbounded recurrence: neither count nor until is present
+    let unbounded_rule = RecurrenceRule {
+        rule_type: Some("RecurrenceRule".to_string()),
+        frequency: "monthly".to_string(),
+        ..Default::default()
+    };
+    assert!(maps_recurrence_rule(&unbounded_rule));
+    let mut unbounded_ev = count_ev.clone();
+    unbounded_ev.recurrence_rule = Some(unbounded_rule);
+    let unbounded_out = event_to_ical(&unbounded_ev);
+    assert!(unbounded_out.contains("RRULE:FREQ=MONTHLY"));
+    assert!(!unbounded_out.contains("COUNT="));
+    assert!(!unbounded_out.contains("UNTIL="));
+}
+
+#[test]
+fn differential_oracle_rrule_time_of_day_byparts_leap_second_and_all_day_gating() {
+    // Divergence 50 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 specifies BYHOUR (0..23), BYMINUTE (0..59), and BYSECOND (0..60, leap second).
+    // RFC 8984 section 4.3.1 models byHour, byMinute, bySecond as UnsignedInt[].
+    // RFC 5545 section 3.3.10 mandates: "The BYSECOND, BYMINUTE and BYHOUR rule parts MUST NOT be specified
+    // when the associated 'DTSTART' property has a DATE value type."
+    // Stalwart v1.0.0 parses these parts into unsigned integer arrays.
+    // In jmap-ical:
+    // 1. Inbound parsing maps BYSECOND, BYMINUTE, BYHOUR using to_time_of_day; invalid tokens become u32::MAX.
+    // 2. Outbound time_of_day_part enforces bounds (0..=23, 0..=59, 0..=60) and accepts leap second 60.
+    // 3. Out-of-bounds values (hour > 23, minute > 59, second > 60) or empty lists cause maps_recurrence_rule to return false.
+    // 4. shows_without_time checks names_a_time_of_day: an event with show_without_time: true whose rule names
+    //    a time of day is drawn as a timed DATE-TIME event instead of DATE, satisfying RFC 5545.
+    let time_parts_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:time-parts-event-001\r\n\
+DTSTART:20260901T000000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Sub-Day Recurrence\r\n\
+RRULE:FREQ=DAILY;BYSECOND=0,30,60;BYMINUTE=15,45;BYHOUR=9,17\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(time_parts_ics).expect("parse time parts rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(rule.by_second, Some(vec![0, 30, 60]));
+    assert_eq!(rule.by_minute, Some(vec![15, 45]));
+    assert_eq!(rule.by_hour, Some(vec![9, 17]));
+    assert!(maps_recurrence_rule(rule));
+
+    let out = event_to_ical(&ev);
+    // Emitted in libical's order: BYSECOND, BYMINUTE, BYHOUR
+    assert!(out.contains("RRULE:FREQ=DAILY;BYSECOND=0,30,60;BYMINUTE=15,45;BYHOUR=9,17"));
+
+    // Out-of-range hour (24) is refused by maps_recurrence_rule
+    let mut invalid_hour_rule = rule.clone();
+    invalid_hour_rule.by_hour = Some(vec![9, 24]);
+    assert!(
+        !maps_recurrence_rule(&invalid_hour_rule),
+        "hour 24 must be refused by maps_recurrence_rule"
+    );
+
+    // Out-of-range minute (60) is refused by maps_recurrence_rule
+    let mut invalid_minute_rule = rule.clone();
+    invalid_minute_rule.by_minute = Some(vec![60]);
+    assert!(
+        !maps_recurrence_rule(&invalid_minute_rule),
+        "minute 60 must be refused by maps_recurrence_rule"
+    );
+
+    // Out-of-range second (61) is refused by maps_recurrence_rule
+    let mut invalid_second_rule = rule.clone();
+    invalid_second_rule.by_second = Some(vec![61]);
+    assert!(
+        !maps_recurrence_rule(&invalid_second_rule),
+        "second 61 must be refused by maps_recurrence_rule"
+    );
+
+    // Empty time part list is refused by maps_recurrence_rule (libical would read BYHOUR= as BYHOUR=0)
+    let mut empty_hour_rule = rule.clone();
+    empty_hour_rule.by_hour = Some(vec![]);
+    assert!(
+        !maps_recurrence_rule(&empty_hour_rule),
+        "empty by_hour list must be refused by maps_recurrence_rule"
+    );
+
+    // All-day event gating: show_without_time: true with time-of-day recurrence rule
+    // must NOT be emitted as DATE; it must be emitted as DATE-TIME to conform to RFC 5545 section 3.3.10
+    let mut all_day_ev = ev.clone();
+    all_day_ev.show_without_time = Some(true);
+    let all_day_out = event_to_ical(&all_day_ev);
+    assert!(
+        !all_day_out.contains("VALUE=DATE"),
+        "recurrence rule naming a time of day must force DATE-TIME DTSTART representation"
+    );
+    assert!(all_day_out.contains("DTSTART:20260901T000000Z"));
+}
+
+#[test]
+fn differential_oracle_rrule_rscale_calendar_scale_and_skip_isolation() {
+    // Divergence 51 against Stalwart differential oracle:
+    // RFC 7529 defines RSCALE and SKIP for non-Gregorian recurrence rules.
+    // RFC 8984 section 4.3.1 models rscale: String (default: "gregorian") and skip: String (default: "omit").
+    // Stalwart v1.0.0 parses or drops RSCALE/SKIP depending on calendar engine support.
+    // In jmap-ical:
+    // 1. Inbound rrule_to_rule drops unmodeled RSCALE and SKIP parts without polluting event.extra.
+    // 2. Outbound event_to_ical does not emit RSCALE or SKIP.
+    // 3. maps_recurrence_rule strictly requires rule.rscale.is_none() && rule.skip.is_none(),
+    //    refusing any non-Gregorian recurrence rule to prevent EDS libical from failing or calculating
+    //    corrupted occurrences.
+    let rscale_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:rscale-event-001\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Non-Gregorian Recurrence\r\n\
+RRULE:FREQ=YEARLY;RSCALE=ISLAMIC;SKIP=FORWARD\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(rscale_ics).expect("parse rscale rrule");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(rule.rscale, None);
+    assert_eq!(rule.skip, None);
+    assert!(
+        rule.extra.is_empty(),
+        "RSCALE and SKIP must not pollute event.extra"
+    );
+    assert!(
+        ev.extra.is_empty(),
+        "event.extra must remain empty after dropping RSCALE and SKIP"
+    );
+    assert!(maps_recurrence_rule(rule));
+
+    // If a rule explicitly sets rscale or skip, maps_recurrence_rule refuses it
+    let mut non_gregorian_rule = rule.clone();
+    non_gregorian_rule.rscale = Some("islamic".to_string());
+    assert!(
+        !maps_recurrence_rule(&non_gregorian_rule),
+        "recurrence rule with rscale must be refused by maps_recurrence_rule"
+    );
+
+    let mut skip_rule = rule.clone();
+    skip_rule.skip = Some("forward".to_string());
+    assert!(
+        !maps_recurrence_rule(&skip_rule),
+        "recurrence rule with skip must be refused by maps_recurrence_rule"
+    );
+}
