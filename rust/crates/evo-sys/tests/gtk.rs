@@ -173,6 +173,7 @@ fn the_widget_handles_carry_no_layout() {
         0,
         "GtkContainer is no longer opaque"
     );
+    assert_eq!(size_of::<EDateEdit>(), 0, "EDateEdit is no longer opaque");
 }
 
 /// Every call the page needs, named once. The load-bearing half of this test is
@@ -246,6 +247,18 @@ fn every_widget_entry_point_this_crate_offers_resolves() {
         (
             "gtk_widget_set_vexpand",
             gtk_widget_set_vexpand as *const (),
+        ),
+        ("e_date_edit_new", e_date_edit_new as *const ()),
+        ("e_date_edit_get_date", e_date_edit_get_date as *const ()),
+        ("e_date_edit_set_date", e_date_edit_set_date as *const ()),
+        ("e_date_edit_set_time", e_date_edit_set_time as *const ()),
+        (
+            "e_date_edit_set_show_time",
+            e_date_edit_set_show_time as *const (),
+        ),
+        (
+            "e_date_edit_set_allow_no_date_set",
+            e_date_edit_set_allow_no_date_set as *const (),
         ),
     ];
     for (name, address) in entry_points {

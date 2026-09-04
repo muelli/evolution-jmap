@@ -30,13 +30,14 @@ use std::sync::Arc;
 use eds_sys::ESource;
 use evo_sys::{
     EMailConfigPage, EMailConfigPageInterface, GTK_ORIENTATION_VERTICAL, GtkTextBuffer, GtkWidget,
-    e_mail_config_page_get_type, gtk_box_new, gtk_box_pack_start,
-    gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_entry_new, gtk_grid_attach,
-    gtk_grid_new, gtk_grid_set_column_spacing, gtk_grid_set_row_spacing, gtk_label_new,
-    gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
+    e_date_edit_get_date, e_date_edit_new, e_date_edit_set_allow_no_date_set, e_date_edit_set_date,
+    e_date_edit_set_show_time, e_date_edit_set_time, e_mail_config_page_get_type, gtk_box_new,
+    gtk_box_pack_start, gtk_check_button_new_with_mnemonic, gtk_container_add, gtk_entry_new,
+    gtk_grid_attach, gtk_grid_new, gtk_grid_set_column_spacing, gtk_grid_set_row_spacing,
+    gtk_label_new, gtk_label_new_with_mnemonic, gtk_label_set_mnemonic_widget, gtk_label_set_text,
     gtk_label_set_xalign, gtk_scrolled_window_get_type, gtk_text_view_get_buffer,
-    gtk_text_view_new, gtk_widget_set_hexpand, gtk_widget_set_sensitive,
-    gtk_widget_set_tooltip_text, gtk_widget_set_vexpand, gtk_widget_show_all,
+    gtk_text_view_new, gtk_widget_set_hexpand, gtk_widget_set_sensitive, gtk_widget_set_vexpand,
+    gtk_widget_show_all,
 };
 use gio_sys::{
     GAsyncReadyCallback, GAsyncResult, GCancellable, GTask, g_io_error_quark, g_task_new,
@@ -64,7 +65,6 @@ const CONTACTING: &CStr = N_(c"Contacting the mail server…");
 const NOT_OFFERED: &CStr = N_(c"This account’s server does not offer a vacation autoresponder.");
 // TRANSLATORS: %1$s is the reason the mail server gave.
 const LOAD_FAILED: &CStr = N_(c"The autoresponder could not be read: %1$s");
-const DATE_HINT: &CStr = N_(c"YYYY-MM-DD, or empty for no limit");
 
 /// Everything the page keeps, boxed as qdata: widget pointers (main thread
 /// only) and the account link the load established (shared with `GTask`
@@ -223,12 +223,13 @@ unsafe fn build_widgets(page: *mut GObject) {
         gtk_widget_set_sensitive(grid, GFALSE);
         gtk_box_pack_start(content.cast(), grid, GTRUE, GTRUE, 0);
 
-        let hint = std::ffi::CString::new(translate(DATE_HINT)).unwrap_or_default();
-        let from_date = gtk_entry_new();
-        gtk_widget_set_tooltip_text(from_date, hint.as_ptr());
+        // Evolution's own date entry rather than a bare GtkEntry: it brings a
+        // calendar popup and, more to the point, an explicit "no date set"
+        // state, which is exactly RFC 8621 §8's nullable `fromDate`/`toDate`.
+        // Date only — the vacation object's bounds are days, not instants.
+        let from_date = new_date_field();
         attach_row(grid, 0, N_(c"_First day:"), from_date);
-        let to_date = gtk_entry_new();
-        gtk_widget_set_tooltip_text(to_date, hint.as_ptr());
+        let to_date = new_date_field();
         attach_row(grid, 1, N_(c"_Last day:"), to_date);
         let subject = gtk_entry_new();
         attach_row(grid, 2, N_(c"_Subject:"), subject);
@@ -376,8 +377,8 @@ unsafe fn apply_outcome(
             // SAFETY: the page's own live children.
             unsafe {
                 set_bool(ui.enabled.cast(), form.enabled);
-                set_text(ui.from_date.cast(), &form.from_date);
-                set_text(ui.to_date.cast(), &form.to_date);
+                set_date(ui.from_date, &form.from_date);
+                set_date(ui.to_date, &form.to_date);
                 set_text(ui.subject.cast(), &form.subject);
                 set_text(ui.buffer.cast(), &form.body);
                 gtk_label_set_text(ui.status.cast(), c"".as_ptr());
@@ -532,10 +533,72 @@ unsafe fn snapshot(ui: &UiState) -> VacationForm {
     unsafe {
         VacationForm {
             enabled: get_bool(ui.enabled.cast()),
-            from_date: get_text(ui.from_date.cast()),
-            to_date: get_text(ui.to_date.cast()),
+            from_date: get_date(ui.from_date),
+            to_date: get_date(ui.to_date),
             subject: get_text(ui.subject.cast()),
             body: get_text(ui.buffer.cast()),
+        }
+    }
+}
+
+/// A date-only [`EDateEdit`] that may be left unset — the widget shape RFC
+/// 8621 §8's nullable date bounds ask for.
+///
+/// # Safety
+///
+/// Main thread only; the widget comes back floating, for a container to sink.
+unsafe fn new_date_field() -> *mut GtkWidget {
+    // SAFETY: freshly constructed; both setters take the widget they were
+    // just handed.
+    unsafe {
+        let field = e_date_edit_new();
+        e_date_edit_set_show_time(field.cast(), GFALSE);
+        e_date_edit_set_allow_no_date_set(field.cast(), GTRUE);
+        field
+    }
+}
+
+/// A date field's value as [`VacationForm`] holds it: `YYYY-MM-DD`, or empty
+/// for "no date set".
+///
+/// # Safety
+///
+/// `field` must be a live `EDateEdit`, on the main thread.
+unsafe fn get_date(field: *mut GtkWidget) -> String {
+    let (mut year, mut month, mut day) = (0, 0, 0);
+    // SAFETY: a live field per the contract, three writable out-parameters.
+    // FALSE is the widget's own "no date set", which is the empty string here.
+    let is_set =
+        unsafe { e_date_edit_get_date(field.cast(), &mut year, &mut month, &mut day) } != GFALSE;
+    if is_set {
+        format!("{year:04}-{month:02}-{day:02}")
+    } else {
+        String::new()
+    }
+}
+
+/// The inverse: an empty (or unparseable) string clears the field.
+///
+/// # Safety
+///
+/// `field` must be a live `EDateEdit`, on the main thread.
+unsafe fn set_date(field: *mut GtkWidget, value: &str) {
+    let parsed = {
+        let mut parts = value.split('-');
+        let year = parts.next().and_then(|p| p.parse::<c_int>().ok());
+        let month = parts.next().and_then(|p| p.parse::<c_int>().ok());
+        let day = parts.next().and_then(|p| p.parse::<c_int>().ok());
+        match (year, month, day, parts.next()) {
+            (Some(year), Some(month), Some(day), None) => Some((year, month, day)),
+            _ => None,
+        }
+    };
+    // SAFETY: a live field per the contract. `set_time(-1)` is how this class
+    // spells "no date set" — there is no `_set_date_to_none`.
+    unsafe {
+        match parsed {
+            Some((year, month, day)) => e_date_edit_set_date(field.cast(), year, month, day),
+            None => e_date_edit_set_time(field.cast(), -1),
         }
     }
 }

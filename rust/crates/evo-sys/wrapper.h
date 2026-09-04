@@ -96,3 +96,11 @@
  * `ESourceConfig`s and so `GtkBox`es. */
 #include <e-util/e-book-source-config.h>
 #include <e-util/e-cal-source-config.h>
+
+/* Evolution's own date entry, for the vacation page's from/to fields: a text
+ * entry with a calendar popup, and — the reason it is worth binding rather
+ * than hand-rolling — an explicit "no date set" state, which is exactly what
+ * RFC 8621 §8's nullable `fromDate`/`toDate` mean. Freeing the page from
+ * parsing typed dates at all. It is a GtkHBox subclass, so the class struct
+ * stays out and the type joins EVO_HANDLES (see build.rs). */
+#include <e-util/e-dateedit.h>
