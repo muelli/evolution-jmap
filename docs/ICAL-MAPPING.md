@@ -1208,6 +1208,59 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.32 Divergence 32: `RESOURCES` Equipment and Room Lists vs Unmapped Resource Property Isolation
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.1.10 defines `RESOURCES` as a comma-separated list of equipment or resource names (such as `RESOURCES:EASEL,PROJECTOR,CONFERENCE ROOM A`). In RFC 8984 and `draft-ietf-calext-jscalendarbis` §4.4, resources can be represented as `participants` with `kind: "resource"` and role `"attendee"`, or within `locations` carrying `locationTypes: ["resource"]`. Stalwart v1.0.0's `CalendarEvent/parse` converts `RESOURCES` into resource participant or location entries, or preserves them in conversion tracking dictionaries. In contrast, `jmap-ical`'s `read_vevent` drops `RESOURCES` on inbound parse without polluting `event.extra` (`extra` remains completely empty, `participants` is `None`, and `locations` is `None` unless a standard `LOCATION` property is present). Outbound serialization (`event_to_ical`) does not emit `RESOURCES`.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent` / `libical`), calendar appointments handle room and equipment bookings primarily through attendee scheduling entries or plain text location strings rather than a dedicated multi-value `RESOURCES` field.
+  2. In JMAP calendar synchronization (`jmap-cal-sync`), `participants` are server-managed and read-only on the client side (as established in Section 13.4). If `ical_to_event` mapped `RESOURCES` into `participants` or `locations`, local edits in Evolution would propose modifications to server-authoritative room and equipment bookings.
+  3. Dropping `RESOURCES` on inbound parse protects server-side room and resource scheduling from unsanctioned client mutations during desktop synchronization.
+- **Adjudication**:
+  Deliberate mapping boundary. Protects server-side room and equipment booking state from uncoordinated client synchronization changes.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.33 Divergence 33: `CONTACT` and `SENT-BY` / `DIR` Scheduling Parameters vs Participant Isolation
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.4.2 defines `CONTACT` to represent contact information (e.g. `CONTACT:Jane Doe, +1-555-0199`). RFC 5545 §3.2.18 and §3.2.6 specify `SENT-BY` (acting on behalf of) and `DIR` (directory URI reference) on `ORGANIZER` and `ATTENDEE`. RFC 8984 §4.4 models `sentBy` on `Participant` and participants with `roles: {"contact": true}`. Stalwart v1.0.0 parses `CONTACT` lines into participant entries or related contacts, and maps `SENT-BY` to `Participant.sentBy`. In contrast, `jmap-ical` drops `CONTACT` along with `ORGANIZER` and `ATTENDEE` on import (`participants: None`) without polluting `event.extra`. Outbound serialization renders `ORGANIZER` and `ATTENDEE` when `participants` is populated, but emits no `CONTACT` lines and omits `SENT-BY` and `DIR` parameters.
+- **Specification and Architectural Context**:
+  1. Evolution Data Server appointments do not expose a separate contact person field outside the standard organizer and attendee lists.
+  2. As established in Section 13.4, client synchronization treats `participants` as server-authoritative. The client does not independently execute iTIP scheduling workflows or modify on-behalf-of delegations.
+  3. Dropping `CONTACT`, `SENT-BY`, and `DIR` on inbound parse avoids generating partial or conflicting participant patch operations during client updates.
+- **Adjudication**:
+  Justified architectural deviation. Preserves scheduling boundary safety and avoids unauthorized participant patching during desktop synchronization.
+- **Status**:
+  Justified architectural deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.34 Divergence 34: `COMMENT` Notes vs Description Field Identity and Round-Trip Determinism
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.1.4 defines `COMMENT` for providing non-editorial notes or comments regarding a calendar component. Exporters frequently include both `DESCRIPTION` and one or more `COMMENT` lines. RFC 8984 / `jscalendarbis` has no dedicated top-level `comment` property for events; notes are intended for `description`. Stalwart v1.0.0 may concatenate `COMMENT` into `description` or capture it in converted properties tracking metadata. In contrast, `jmap-ical` maps `DESCRIPTION` strictly to `event.description` and drops `COMMENT` on import without polluting `event.extra`. Outbound serialization emits `DESCRIPTION` and never emits `COMMENT`.
+- **Specification and Architectural Context**:
+  1. Evolution Data Server provides a single multiline description editor for appointments.
+  2. If `ical_to_event` concatenated `COMMENT` into `event.description`, the two distinct iCalendar properties would be permanently conflated. On export, the concatenated text would be emitted as a single `DESCRIPTION`, destroying the original separation and duplicating content across successive imports and exports.
+  3. Keeping `event.description` strictly 1-to-1 with `DESCRIPTION` ensures round-trip determinism and prevents text pollution.
+- **Adjudication**:
+  Deliberate mapping design. Preserves field identity and prevents description pollution and duplicate comment text across round-trips.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.35 Divergence 35: Attachment `FILENAME` / `X-APPLE-FILENAME` Parameters and `title` vs URI-Only Link Model
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.4.1 defines `ATTACH` with URI values. Exporters frequently append filename parameters such as `FILENAME="agenda.pdf"` or Apple's `X-APPLE-FILENAME="meeting-minutes.pdf"`. RFC 8984 §1.4.11 models `Link` with `href`, `title`, `contentType`, and `size`. Stalwart v1.0.0 parses `FILENAME` and `X-APPLE-FILENAME` parameters into `Link.title`. In contrast, `jmap-ical`'s `read_links` extracts `href`, `contentType` (from `FMTTYPE`), and `size` (from `SIZE`), dropping `FILENAME` parameters and leaving `title` omitted from imported links. Outbound serialization (`drawn_link`) renders `ATTACH` with `FMTTYPE`, `SIZE`, and `X-JMAP-KEY`, omitting `FILENAME`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.4.1 does not standardize a `FILENAME` property parameter for `ATTACH` (it is an unstandardized extension or draft convention).
+  2. Evolution Data Server derives attachment display titles directly from the URL or filename path of the attachment URI.
+  3. In JMAP synchronization (`jmap-cal-sync`), attachments are tracked via `X-JMAP-KEY` for in-place property patching of `links/<key>/href`. Because server-side attachments can be remote web links or RFC 9404 blobs, omitting unstandardized filename parameters on export preserves RFC 5545 compliance while avoiding parameter drift.
+- **Adjudication**:
+  Conforming specification boundary and deliberate parameter simplification. Preserves standard RFC 5545 `ATTACH` syntax while maintaining stable link key tracking.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 

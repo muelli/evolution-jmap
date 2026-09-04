@@ -18302,3 +18302,177 @@ END:VEVENT\r\nEND:VCALENDAR\r\n"
         "unreferenced custom zone must be pruned"
     );
 }
+
+#[test]
+fn differential_oracle_resources_equipment_room_lists_dropped_on_import() {
+    // Divergence 32 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.1.10 defines RESOURCES as a comma-separated list of equipment or resource names
+    // (e.g. RESOURCES:EASEL,PROJECTOR,CONFERENCE ROOM A).
+    // In RFC 8984 / jscalendarbis section 4.4, resources can be represented in participants with kind: "resource",
+    // or in locations with locationTypes: ["resource"].
+    // Stalwart v1.0.0 parses RESOURCES into participant or location resource records, or preserves them
+    // in tracking dictionaries.
+    // In contrast, jmap-ical's read_vevent:
+    // 1. Drops RESOURCES on inbound parse without polluting event.extra (extra remains empty).
+    // 2. Leaves participants and locations as None (unless standard LOCATION or ATTENDEE is present).
+    // 3. Outbound export does not emit RESOURCES lines.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-resources-test-001\r\n\
+DTSTART:20260904T150000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Quarterly Strategy All-Hands\r\n\
+RESOURCES:PROJECTOR,SCREEN,MICROPHONE,ROOM-101\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev = ical_to_event(ics).expect("parse event with resources");
+    assert_eq!(ev.title.as_deref(), Some("Quarterly Strategy All-Hands"));
+    assert_eq!(ev.participants, None);
+    assert_eq!(ev.locations, None);
+    assert!(ev.extra.is_empty());
+
+    // Outbound export does not emit RESOURCES
+    let out = event_to_ical(&ev);
+    assert!(without(&out, "RESOURCES"));
+    assert_eq!(
+        line(&out, "SUMMARY:"),
+        "SUMMARY:Quarterly Strategy All-Hands"
+    );
+}
+
+#[test]
+fn differential_oracle_contact_and_scheduling_parameters_sent_by_dir_boundary() {
+    // Divergence 33 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.4.2 defines CONTACT to represent contact information (e.g. CONTACT:Jane Doe, +1-555-0199).
+    // RFC 5545 sections 3.2.18 and 3.2.6 specify SENT-BY and DIR parameters on ORGANIZER and ATTENDEE.
+    // RFC 8984 section 4.4 models sentBy on Participant and participants with roles: {"contact": true}.
+    // Stalwart v1.0.0 parses CONTACT into participant entries or related contacts, and maps SENT-BY to Participant.sentBy.
+    // In contrast, jmap-ical:
+    // 1. Drops CONTACT on inbound parse without polluting event.extra.
+    // 2. Drops ORGANIZER and ATTENDEE on inbound parse (participants: None) for scheduling boundary safety.
+    // 3. Outbound export renders ORGANIZER/ATTENDEE when participants is populated, but emits no CONTACT lines
+    //    and omits SENT-BY and DIR parameters.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-contact-test-001\r\n\
+DTSTART:20260904T160000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Executive Briefing\r\n\
+CONTACT:Event Support Team, support@example.com\r\n\
+ORGANIZER;SENT-BY=\"mailto:assistant@example.com\";DIR=\"ldap://corp.example.com\":mailto:boss@example.com\r\n\
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;DIR=\"ldap://corp.example.com\":mailto:engineer@example.com\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev = ical_to_event(ics).expect("parse event with contact and scheduling parameters");
+    assert_eq!(ev.title.as_deref(), Some("Executive Briefing"));
+    assert_eq!(ev.participants, None);
+    assert!(ev.extra.is_empty());
+
+    let out = event_to_ical(&ev);
+    assert!(without(&out, "CONTACT:"));
+    assert!(without(&out, "SENT-BY"));
+    assert!(without(&out, "DIR="));
+}
+
+#[test]
+fn differential_oracle_comment_notes_dropped_on_import_preserving_description_identity() {
+    // Divergence 34 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.1.4 specifies COMMENT for non-editorial notes or comments regarding a component.
+    // RFC 8984 / jscalendarbis has no dedicated comment property (all notes belong in description).
+    // Stalwart v1.0.0 may concatenate COMMENT into description or capture it in convertedProperties tracking metadata.
+    // In contrast, jmap-ical:
+    // 1. Maps DESCRIPTION strictly to event.description.
+    // 2. Drops COMMENT lines on import without appending them to description or polluting event.extra.
+    // 3. Outbound export emits DESCRIPTION and never synthesizes COMMENT lines, preventing text duplication across round-trips.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-comment-test-001\r\n\
+DTSTART:20260904T170000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Quarterly Review\r\n\
+DESCRIPTION:Q3 performance review and architecture roadmap.\r\n\
+COMMENT:Please arrive 10 minutes early for badge verification.\r\n\
+COMMENT:Bring your team performance sheets.\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev = ical_to_event(ics).expect("parse event with comments");
+    assert_eq!(ev.title.as_deref(), Some("Quarterly Review"));
+    assert_eq!(
+        ev.description.as_deref(),
+        Some("Q3 performance review and architecture roadmap.")
+    );
+    assert!(ev.extra.is_empty());
+
+    let out = event_to_ical(&ev);
+    assert_eq!(
+        line(&out, "DESCRIPTION:"),
+        "DESCRIPTION:Q3 performance review and architecture roadmap."
+    );
+    assert!(without(&out, "COMMENT:"));
+}
+
+#[test]
+fn differential_oracle_attachment_filename_parameter_dropped_for_uri_only_links() {
+    // Divergence 35 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.4.1 defines ATTACH with URI values. Exporters append FILENAME or X-APPLE-FILENAME parameters.
+    // RFC 8984 section 1.4.11 defines Link with href, title, contentType, and size.
+    // Stalwart v1.0.0 parses FILENAME into Link.title.
+    // In contrast, jmap-ical's read_links:
+    // 1. Extracts href, contentType (from FMTTYPE), and size (from SIZE).
+    // 2. Drops FILENAME and X-APPLE-FILENAME parameters, leaving title omitted from imported links.
+    // 3. Synthesizes deterministic stable keys (k1, k2) or preserves X-JMAP-KEY.
+    // 4. Outbound export emits ATTACH with FMTTYPE, SIZE, and X-JMAP-KEY, omitting FILENAME.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-attach-filename-001\r\n\
+DTSTART:20260904T180000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Project Kickoff\r\n\
+ATTACH;FMTTYPE=application/pdf;SIZE=1048576;FILENAME=\"architecture-spec.pdf\":https://example.com/docs/spec.pdf\r\n\
+ATTACH;FMTTYPE=image/png;X-APPLE-FILENAME=\"network-topology.png\":https://example.com/images/arch.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev = ical_to_event(ics).expect("parse event with attachment filenames");
+    let links = ev.links.as_ref().expect("links present");
+    assert_eq!(links.len(), 2);
+
+    let link1 = links.get("k1").expect("first attachment key k1");
+    assert_eq!(
+        link1.get("href").and_then(Value::as_str),
+        Some("https://example.com/docs/spec.pdf")
+    );
+    assert_eq!(
+        link1.get("contentType").and_then(Value::as_str),
+        Some("application/pdf")
+    );
+    assert_eq!(link1.get("size").and_then(Value::as_u64), Some(1048576));
+    assert_eq!(link1.get("title"), None);
+
+    let link2 = links.get("k2").expect("second attachment key k2");
+    assert_eq!(
+        link2.get("href").and_then(Value::as_str),
+        Some("https://example.com/images/arch.png")
+    );
+    assert_eq!(
+        link2.get("contentType").and_then(Value::as_str),
+        Some("image/png")
+    );
+    assert_eq!(link2.get("title"), None);
+    assert!(ev.extra.is_empty());
+
+    let out = event_to_ical(&ev);
+    let unfolded = out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(without(&unfolded, "FILENAME="));
+    assert!(without(&unfolded, "X-APPLE-FILENAME="));
+    assert!(unfolded.contains("ATTACH;"));
+    assert!(unfolded.contains("https://example.com/docs/spec.pdf"));
+    assert!(unfolded.contains("https://example.com/images/arch.png"));
+}
