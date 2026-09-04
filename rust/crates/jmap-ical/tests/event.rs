@@ -20826,3 +20826,367 @@ END:VCALENDAR\r\n";
     assert!(out.contains("CLASS:PRIVATE"));
     assert!(out.contains("CLASS:CONFIDENTIAL"));
 }
+
+#[test]
+fn differential_oracle_recurrence_override_keywords_categories_mapping_and_null_removal() {
+    // Divergence 68 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.1.2 defines CATEGORIES (comma-separated tags).
+    // RFC 8984 section 4.4.5 defines keywords: Map<String, Boolean>.
+    // In jmap-ical:
+    // 1. instance_patch records keywords when differing from series, or null when cleared.
+    // 2. maps_recurrence_override admits non-empty maps with valid boolean true tags, and null.
+    // 3. Empty map {} is refused to preserve round-trip idempotence with null.
+    // 4. Invalid tag names with commas or false values are refused.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:keywords-override-001\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Team Standup\r\n\
+CATEGORIES:Work,Planning\r\n\
+RRULE:FREQ=WEEKLY;COUNT=3\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:keywords-override-001\r\n\
+RECURRENCE-ID:20260908T100000Z\r\n\
+DTSTART:20260908T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Sprint Review Standup\r\n\
+CATEGORIES:Sprint,Review\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:keywords-override-001\r\n\
+RECURRENCE-ID:20260915T100000Z\r\n\
+DTSTART:20260915T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Uncategorized Standup\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse keywords override stream");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+
+    // Occurrence 1 has distinct CATEGORIES:Sprint,Review
+    let patch_sprint = &overrides["2026-09-08T10:00:00"];
+    let kw = patch_sprint
+        .get("keywords")
+        .and_then(Value::as_object)
+        .expect("keywords object");
+    assert_eq!(kw.get("Sprint"), Some(&Value::Bool(true)));
+    assert_eq!(kw.get("Review"), Some(&Value::Bool(true)));
+    assert_eq!(kw.len(), 2);
+
+    // Occurrence 2 omits CATEGORIES while series has it, yielding "keywords": null
+    let patch_uncat = &overrides["2026-09-15T10:00:00"];
+    assert_eq!(patch_uncat.get("keywords"), Some(&Value::Null));
+
+    // Validation: valid non-empty map and null are accepted
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"keywords": {"Focus": true}})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"keywords": null})
+    ));
+
+    // Refusal: empty map {} is refused (must use null for removal)
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"keywords": {}})
+    ));
+
+    // Refusal: empty or whitespace-only tag name, carriage return in tag, non-boolean true value
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"keywords": {"": true}})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"keywords": {"   ": true}})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"keywords": {"tag\rwith\rcarriage": true}})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"keywords": {"valid": false}})
+    ));
+
+    // Serialization: detached component emits CATEGORIES with tags
+    let out = event_to_ical(&ev);
+    assert!(out.contains("CATEGORIES:"));
+    assert!(out.contains("Sprint"));
+    assert!(out.contains("Review"));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_alerts_valarm_mapping_and_null_suppression() {
+    // Divergence 69 against Stalwart differential oracle:
+    // RFC 5545 section 3.6.6 defines VALARM subcomponents.
+    // RFC 8984 section 4.5.2 defines alerts: Map<String, Alert>.
+    // In jmap-ical:
+    // 1. instance_patch records alerts when differing from series, or null when cleared.
+    // 2. maps_recurrence_override admits non-empty maps with valid OffsetTrigger alerts, and null.
+    // 3. Empty map {} is refused to preserve round-trip idempotence with null.
+    // 4. Absolute triggers and non-display actions are unmodeled and refused.
+    // 5. When series uses default alerts, override alerts are refused.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:alerts-override-001\r\n\
+DTSTART:20260901T140000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Client Sync\r\n\
+RRULE:FREQ=WEEKLY;COUNT=3\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Client Sync Reminder\r\n\
+TRIGGER:-PT15M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:alerts-override-001\r\n\
+RECURRENCE-ID:20260908T140000Z\r\n\
+DTSTART:20260908T140000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Client Sync (Early Alert)\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Early Alert\r\n\
+TRIGGER:-PT30M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:alerts-override-001\r\n\
+RECURRENCE-ID:20260915T140000Z\r\n\
+DTSTART:20260915T140000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Client Sync (Silent Instance)\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse alerts override stream");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+
+    // Occurrence 1 has custom 30m reminder
+    let patch_early = &overrides["2026-09-08T14:00:00"];
+    let alerts_map = patch_early
+        .get("alerts")
+        .and_then(Value::as_object)
+        .expect("alerts map");
+    assert!(!alerts_map.is_empty());
+    let (_k, alert_val) = alerts_map.iter().next().unwrap();
+    assert_eq!(
+        alert_val
+            .get("trigger")
+            .and_then(|t| t.get("offset"))
+            .and_then(Value::as_str),
+        Some("-PT30M")
+    );
+
+    // Occurrence 2 has no VALARM while series does, yielding "alerts": null
+    let patch_silent = &overrides["2026-09-15T14:00:00"];
+    assert_eq!(patch_silent.get("alerts"), Some(&Value::Null));
+
+    // Validation: valid non-empty alert map and null are accepted
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T14:00:00",
+        &json!({
+            "alerts": {
+                "alert-1": {
+                    "@type": "Alert",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-PT10M"},
+                    "action": "display"
+                }
+            }
+        })
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T14:00:00",
+        &json!({"alerts": null})
+    ));
+
+    // Refusal: empty map {} is refused (must use null for suppression)
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T14:00:00",
+        &json!({"alerts": {}})
+    ));
+
+    // Refusal: absolute trigger or email action
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T14:00:00",
+        &json!({
+            "alerts": {
+                "alert-abs": {
+                    "@type": "Alert",
+                    "trigger": {"@type": "AbsoluteTrigger", "when": "2026-09-08T13:30:00Z"},
+                    "action": "display"
+                }
+            }
+        })
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T14:00:00",
+        &json!({
+            "alerts": {
+                "alert-email": {
+                    "@type": "Alert",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                    "action": "email"
+                }
+            }
+        })
+    ));
+
+    // Serialization: detached component emits TRIGGER:-PT30M
+    let out = event_to_ical(&ev);
+    assert!(out.contains("TRIGGER:-PT30M"));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_use_default_alerts_document_scoping_and_refusal() {
+    // Divergence 70 against Stalwart differential oracle:
+    // RFC 8984 section 4.5.1 defines useDefaultAlerts: Boolean.
+    // In jmap-ical:
+    // 1. useDefaultAlerts is document-wide and excluded from OVERRIDE_PROPERTIES.
+    // 2. maps_recurrence_override refuses patches specifying useDefaultAlerts.
+    // 3. When useDefaultAlerts is true on the series, no VALARM is emitted anywhere,
+    //    and overriding alerts on any instance is refused.
+    assert!(!OVERRIDE_PROPERTIES.contains(&"useDefaultAlerts"));
+
+    let ev = ical_to_event(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:default-alerts-override-001\r\n\
+DTSTART:20260901T150000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Recurring Review\r\n\
+RRULE:FREQ=WEEKLY;COUNT=2\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+    )
+    .expect("parse base event");
+
+    // Refusal: useDefaultAlerts is not an allowable override property
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"useDefaultAlerts": true})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"useDefaultAlerts": false})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"useDefaultAlerts": null})
+    ));
+
+    // When useDefaultAlerts is set on the series, override alerts are refused
+    let mut ev_with_default = ev.clone();
+    ev_with_default.use_default_alerts = Some(true);
+    assert!(!maps_recurrence_override(
+        &ev_with_default,
+        "2026-09-08T15:00:00",
+        &json!({
+            "alerts": {
+                "alert-1": {
+                    "@type": "Alert",
+                    "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+                    "action": "display"
+                }
+            }
+        })
+    ));
+    assert!(!maps_recurrence_override(
+        &ev_with_default,
+        "2026-09-08T15:00:00",
+        &json!({"alerts": null})
+    ));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_show_without_time_document_scoping_and_refusal() {
+    // Divergence 71 against Stalwart differential oracle:
+    // RFC 8984 section 4.2.1 defines showWithoutTime: Boolean (all-day event flag).
+    // RFC 5545 section 3.8.4.4 requires RECURRENCE-ID value type to match DTSTART.
+    // In jmap-ical:
+    // 1. showWithoutTime is decided once for the entire event document.
+    // 2. showWithoutTime is excluded from OVERRIDE_PROPERTIES.
+    // 3. maps_recurrence_override refuses patches specifying showWithoutTime.
+    assert!(!OVERRIDE_PROPERTIES.contains(&"showWithoutTime"));
+
+    let ev = ical_to_event(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:show-without-time-override-001\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Timed Series\r\n\
+RRULE:FREQ=WEEKLY;COUNT=2\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+    )
+    .expect("parse timed event");
+
+    // Refusal: showWithoutTime cannot be toggled per occurrence
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T09:00:00",
+        &json!({"showWithoutTime": true})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T09:00:00",
+        &json!({"showWithoutTime": false})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T09:00:00",
+        &json!({"showWithoutTime": null})
+    ));
+
+    // Same check for an all-day series
+    let all_day_ev = ical_to_event(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:all-day-override-001\r\n\
+DTSTART;VALUE=DATE:20260901\r\n\
+SUMMARY:All Day Series\r\n\
+RRULE:FREQ=DAILY;COUNT=3\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+    )
+    .expect("parse all day event");
+
+    assert!(!maps_recurrence_override(
+        &all_day_ev,
+        "2026-09-02",
+        &json!({"showWithoutTime": false})
+    ));
+}
