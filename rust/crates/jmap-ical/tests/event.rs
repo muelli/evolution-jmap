@@ -22793,3 +22793,444 @@ fn differential_oracle_timezone_rule_names_map_and_tzname_property_mapping() {
         "suppresses null name: {out_ics}"
     );
 }
+
+#[test]
+fn differential_oracle_timezone_unmodeled_properties_dropped_on_import_and_export() {
+    // Divergence 100 against Stalwart differential oracle:
+    // RFC 8984 section 4.7.2 defines aliases, url, validUntil on TimeZone,
+    // and comments, recurrenceOverrides on TimeZoneRule.
+    // RFC 5545 defines TZURL and COMMENT on VTIMEZONE and observances.
+    // In jmap-ical:
+    // 1. Inbound: TZURL and COMMENT are dropped on parse.
+    // 2. Outbound: unmodeled administrative properties on TimeZone / TimeZoneRule are dropped,
+    //    emitting only core VTIMEZONE properties without TZURL or COMMENT.
+
+    // 1. Inbound drop of TZURL and COMMENT
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.org/custom_admin_tz\r\n\
+TZURL:https://example.org/tz/custom_admin_tz\r\n\
+COMMENT:Global administrative note\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+COMMENT:Winter transition note\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:evt-admin-tz\r\n\
+DTSTART;TZID=/example.org/custom_admin_tz:20260904T100000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse custom admin tz");
+    let zone_def = ev
+        .time_zones
+        .as_ref()
+        .and_then(|z| z.get("/example.org/custom_admin_tz"))
+        .expect("zone def");
+    assert_eq!(
+        zone_def.get("tzId").and_then(Value::as_str),
+        Some("/example.org/custom_admin_tz")
+    );
+    assert!(zone_def.get("url").is_none(), "url dropped on import");
+    assert!(
+        zone_def.get("aliases").is_none(),
+        "aliases unpopulated on import"
+    );
+    let standard = zone_def
+        .get("standard")
+        .and_then(Value::as_array)
+        .expect("standard");
+    assert!(
+        standard[0].get("comments").is_none(),
+        "comments dropped on import"
+    );
+
+    // 2. Outbound drop of extra administrative properties
+    let custom_tz = "/example.org/custom_admin_out";
+    let event = CalendarEvent {
+        time_zone: Some(custom_tz.to_owned()),
+        start: Some("2026-09-04T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            custom_tz.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": custom_tz,
+                "url": "https://example.org/tz/custom_admin_out",
+                "validUntil": "2030-01-01T00:00:00",
+                "aliases": ["Legacy/Admin_Zone"],
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+0200",
+                    "offsetTo": "+0100",
+                    "comments": "Internal rule comment",
+                    "recurrenceOverrides": {}
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+
+    let out_ics = event_to_ical(&event);
+    assert!(out_ics.contains("BEGIN:VTIMEZONE\r\n"));
+    assert!(out_ics.contains("TZID:/example.org/custom_admin_out\r\n"));
+    assert!(out_ics.contains("TZOFFSETFROM:+0200\r\n"));
+    assert!(out_ics.contains("TZOFFSETTO:+0100\r\n"));
+    assert!(!out_ics.contains("TZURL:"), "TZURL not emitted: {out_ics}");
+    assert!(
+        !out_ics.contains("COMMENT:"),
+        "COMMENT not emitted: {out_ics}"
+    );
+    assert!(
+        !out_ics.contains("validUntil"),
+        "validUntil not leaked: {out_ics}"
+    );
+}
+
+#[test]
+fn differential_oracle_vtimezone_whole_component_and_at_least_one_observance_requirement() {
+    // Divergence 101 against Stalwart differential oracle:
+    // RFC 5545 section 3.6.5 requires at least one STANDARD or DAYLIGHT subcomponent.
+    // libical refuses a VTIMEZONE without subcomponents.
+    // In jmap-ical:
+    // 1. A TimeZone definition with 0 observances returns None from vtimezone_of,
+    //    causing defines_time_zone and maps_time_zone to return false.
+    // 2. An invalid rule in standard/daylight aborts the entire definition (whole or nothing).
+    // 3. A valid observance produces a complete VTIMEZONE.
+
+    let custom_tz = "/example.org/empty_observances";
+    // 1. Zero observances
+    let ev_empty = CalendarEvent {
+        time_zone: Some(custom_tz.to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            custom_tz.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": custom_tz,
+                "standard": [],
+                "daylight": []
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    assert!(
+        !defines_time_zone(&ev_empty, custom_tz),
+        "zero observances refused"
+    );
+    assert!(
+        !maps_time_zone(&ev_empty),
+        "maps_time_zone fails on empty observances"
+    );
+    let ics_empty = event_to_ical(&ev_empty);
+    assert!(
+        !ics_empty.contains("BEGIN:VTIMEZONE"),
+        "empty VTIMEZONE is not emitted: {ics_empty}"
+    );
+
+    // 2. Invalid observance rule aborts whole definition
+    let invalid_tz = "/example.org/invalid_observance";
+    let ev_invalid = CalendarEvent {
+        time_zone: Some(invalid_tz.to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            invalid_tz.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": invalid_tz,
+                "standard": [
+                    {
+                        "@type": "TimeZoneRule",
+                        "start": "1970-10-25T03:00:00",
+                        "offsetFrom": "+0200",
+                        "offsetTo": "+0100"
+                    },
+                    {
+                        "@type": "TimeZoneRule"
+                        // Missing start and offsets
+                    }
+                ]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    assert!(
+        !defines_time_zone(&ev_invalid, invalid_tz),
+        "invalid rule fails entire definition"
+    );
+    assert!(!maps_time_zone(&ev_invalid));
+    let ics_invalid = event_to_ical(&ev_invalid);
+    assert!(
+        !ics_invalid.contains("BEGIN:VTIMEZONE"),
+        "partial VTIMEZONE is not emitted: {ics_invalid}"
+    );
+
+    // 3. Valid observance succeeds
+    let valid_tz = "/example.org/valid_observance";
+    let ev_valid = CalendarEvent {
+        time_zone: Some(valid_tz.to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            valid_tz.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": valid_tz,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+0200",
+                    "offsetTo": "+0100"
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    assert!(defines_time_zone(&ev_valid, valid_tz));
+    assert!(maps_time_zone(&ev_valid));
+    let ics_valid = event_to_ical(&ev_valid);
+    assert!(ics_valid.contains("BEGIN:VTIMEZONE\r\n"));
+    assert!(ics_valid.contains("END:VTIMEZONE\r\n"));
+}
+
+#[test]
+fn differential_oracle_timezone_observance_recurrence_rule_plural_and_singular_dual_acceptance() {
+    // Divergence 102 against Stalwart differential oracle:
+    // RFC 8984 section 4.7.2 defines recurrenceRules (plural array) on TimeZoneRule.
+    // jscalendarbis and varied implementations also use recurrenceRule (singular array or object).
+    // In jmap-ical:
+    // 1. observance accepts recurrenceRules array, recurrenceRule array, and recurrenceRule single object.
+    // 2. Unmappable recurrence rules fail defines_time_zone.
+    // 3. Inbound read_observance emits recurrenceRules array.
+
+    let tz_plural = "/example.org/tz_plural";
+    let ev_plural = CalendarEvent {
+        time_zone: Some(tz_plural.to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            tz_plural.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": tz_plural,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+0200",
+                    "offsetTo": "+0100",
+                    "recurrenceRules": [{
+                        "frequency": "yearly",
+                        "byMonth": ["10"],
+                        "byDay": [{"day": "su", "nthOfPeriod": -1}]
+                    }]
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    let ics_plural = event_to_ical(&ev_plural);
+    assert!(
+        ics_plural.contains("RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n"),
+        "emits from recurrenceRules: {ics_plural}"
+    );
+
+    let tz_singular_arr = "/example.org/tz_singular_arr";
+    let ev_singular_arr = CalendarEvent {
+        time_zone: Some(tz_singular_arr.to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            tz_singular_arr.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": tz_singular_arr,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+0200",
+                    "offsetTo": "+0100",
+                    "recurrenceRule": [{
+                        "frequency": "yearly",
+                        "byMonth": ["10"],
+                        "byDay": [{"day": "su", "nthOfPeriod": -1}]
+                    }]
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    let ics_singular_arr = event_to_ical(&ev_singular_arr);
+    assert!(
+        ics_singular_arr.contains("RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n"),
+        "emits from recurrenceRule array: {ics_singular_arr}"
+    );
+
+    let tz_singular_obj = "/example.org/tz_singular_obj";
+    let ev_singular_obj = CalendarEvent {
+        time_zone: Some(tz_singular_obj.to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            tz_singular_obj.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": tz_singular_obj,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+0200",
+                    "offsetTo": "+0100",
+                    "recurrenceRule": {
+                        "frequency": "yearly",
+                        "byMonth": ["10"],
+                        "byDay": [{"day": "su", "nthOfPeriod": -1}]
+                    }
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    let ics_singular_obj = event_to_ical(&ev_singular_obj);
+    assert!(
+        ics_singular_obj.contains("RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n"),
+        "emits from recurrenceRule object: {ics_singular_obj}"
+    );
+
+    // Unmappable recurrence rule fails defines_time_zone
+    let tz_bad_rule = "/example.org/tz_bad_rule";
+    let ev_bad_rule = CalendarEvent {
+        time_zone: Some(tz_bad_rule.to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            tz_bad_rule.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": tz_bad_rule,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+0200",
+                    "offsetTo": "+0100",
+                    "recurrenceRule": {
+                        "frequency": "weekly",
+                        "byMonthDay": [15] // Forbidden on weekly
+                    }
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    assert!(
+        !defines_time_zone(&ev_bad_rule, tz_bad_rule),
+        "unmappable rule fails whole definition"
+    );
+
+    // Inbound parse always produces recurrenceRules array
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.org/parse_rules\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:evt-rules\r\n\
+DTSTART;TZID=/example.org/parse_rules:20260904T100000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_parsed = ical_to_event(ics).expect("parse rules");
+    let zone = ev_parsed
+        .time_zones
+        .as_ref()
+        .unwrap()
+        .get("/example.org/parse_rules")
+        .unwrap();
+    let std_rules = zone.get("standard").unwrap().as_array().unwrap();
+    assert!(std_rules[0].get("recurrenceRules").unwrap().is_array());
+}
+
+#[test]
+fn differential_oracle_timezone_observance_dtstart_and_until_arithmetic_against_offset_from() {
+    // Divergence 103 against Stalwart differential oracle:
+    // RFC 5545 section 3.6.5 specifies that observance DTSTART carries no TZID and resolves against TZOFFSETFROM.
+    // Observance RRULE UNTIL must be in UTC.
+    // In jmap-ical:
+    // 1. Inbound: DTSTART parsed as local date-time without zone lookup; UNTIL converted to local time via Ends::At(&offset_from) arithmetic.
+    // 2. Outbound: UNTIL converted from local time to UTC instant with trailing Z via Ends::At(&offset_from).
+
+    // 1. Inbound: UNTIL at 00:00:00Z with offsetFrom +0200 becomes 02:00:00 local time
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.org/until_tz\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19971026T020000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20051030T000000Z;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:evt-until\r\n\
+DTSTART;TZID=/example.org/until_tz:20260904T100000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse until tz");
+    let zone = ev
+        .time_zones
+        .as_ref()
+        .unwrap()
+        .get("/example.org/until_tz")
+        .unwrap();
+    let std_rules = zone.get("standard").unwrap().as_array().unwrap();
+    assert_eq!(
+        std_rules[0].get("start").unwrap().as_str(),
+        Some("1997-10-26T02:00:00")
+    );
+    let rrules = std_rules[0]
+        .get("recurrenceRules")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        rrules[0].get("until").unwrap().as_str(),
+        Some("2005-10-30T02:00:00"),
+        "UTC 00:00:00Z + 2 hours offsetFrom = local 02:00:00"
+    );
+
+    // 2. Outbound: local UNTIL 02:00:00 with offsetFrom +0200 converted back to UTC 00:00:00Z
+    let custom_tz = "/example.org/until_out_tz";
+    let ev_out = CalendarEvent {
+        time_zone: Some(custom_tz.to_owned()),
+        start: Some("2026-09-04T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            custom_tz.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": custom_tz,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1997-10-26T02:00:00",
+                    "offsetFrom": "+0200",
+                    "offsetTo": "+0100",
+                    "recurrenceRules": [{
+                        "frequency": "yearly",
+                        "until": "2005-10-30T02:00:00",
+                        "byMonth": ["10"],
+                        "byDay": [{"day": "su", "nthOfPeriod": -1}]
+                    }]
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+
+    let out_ics = event_to_ical(&ev_out);
+    assert!(
+        out_ics.contains("RRULE:FREQ=YEARLY;UNTIL=20051030T000000Z;BYDAY=-1SU;BYMONTH=10\r\n"),
+        "converts local UNTIL back to UTC instant with Z suffix: {out_ics}"
+    );
+}
