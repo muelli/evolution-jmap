@@ -1584,3 +1584,68 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and libical component safety. Restricts count values to positive integers and models unbounded recurrence through property omission.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.56 Divergence 56: Recurrence Override Instance Key (`id`) Local Date-Time Modeling vs ISO Instant / UTC Representation
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.4.4 specifies `RECURRENCE-ID` as a date or date-time identifying a recurrence instance. When `DTSTART` uses a local time with timezone, `RECURRENCE-ID` specifies the matching local time with `TZID`. RFC 8984 §4.3.4 models `recurrenceOverrides: Map<LocalDateTime, PatchObject>`, where map keys are `LocalDateTime` strings matching the original instance start time. RFC 8984 §1.4.3 requires that a `LocalDateTime` MUST NOT include a timezone offset or 'Z'. Stalwart v1.0.0 parses `RECURRENCE-ID` into `recurrenceOverrides` using `LocalDateTime` strings. In `jmap-ical`:
+  1. Inbound parsing (`read_overrides`): converts `RECURRENCE-ID` values into local date-time strings (`to_local_date_time`), stripping UTC offsets and trailing `Z` from the map key.
+  2. Outbound serialization (`vevent_of_instance` / `event_to_ical`): validates that the key is a valid date-time (`to_ical_date_time(id)`), and formats `RECURRENCE-ID` with matching `TZID` or `VALUE=DATE` according to the series configuration.
+  3. Validation predicate: `override_maps_by` ensures `to_ical_date_time(id).is_some()`, rejecting unparseable or malformed date-time keys.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent` / `libical`), detached instances must match the exact calculated recurrence instance time of the series.
+  2. Storing UTC timestamps with 'Z' or arbitrary strings as `recurrenceOverrides` keys violates RFC 8984 §4.3.4 and causes key lookup mismatches in EDS.
+  3. Formatting `RECURRENCE-ID` with the proper timezone parameter or `VALUE=DATE` ensures libical locates and binds the detached instance to the series occurrence.
+- **Adjudication**:
+  Conforming specification boundary and libical component alignment. Formats instance keys strictly as RFC 8984 `LocalDateTime` without timezone offset or Z, and renders `RECURRENCE-ID` with matching value type and timezone parameter.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.57 Divergence 57: Recurrence Override Cancellation (`excluded: true`) Purity vs Restated Property Conflict Rejection
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.5.1 models cancelled instances using `EXDATE` lines on the master `VEVENT`. In RFC 8984 §4.3.4, an excluded instance is modeled as `{"excluded": true}` in `recurrenceOverrides`. RFC 8984 §4.3.4 explicitly mandates: "The excluded property, if present, MUST be true. If true, the PatchObject MUST NOT contain any other properties." Stalwart v1.0.0 parses `EXDATE` into `{"excluded": true}`. In `jmap-ical`:
+  1. Inbound parsing: maps `EXDATE` lines to `{"excluded": true}`.
+  2. Outbound serialization (`recurrence_dates`): emits `EXDATE` on the master component for instances with `excluded: true` and never emits detached `VEVENT` blocks for excluded instances.
+  3. Validation predicate: `override_maps_by` enforces single-property purity (`if excluded(patch) { return fields.len() == 1; }`), rejecting patches combining `excluded: true` with other properties or non-boolean values.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server and libical, `EXDATE` cancels an occurrence entirely. There is no detached component in which to store an edited title, location, or alarm for an excluded occurrence.
+  2. Permitting restated properties alongside `excluded: true` would deceive clients into expecting partial overrides on deleted instances or cause JMAP whole-property sync failures.
+  3. Enforcing single-field purity guarantees RFC 8984 §4.3.4 compliance and libical storage safety.
+- **Adjudication**:
+  Conforming specification validation and libical structural integrity. Enforces single-field purity for `excluded: true` to prevent conflicting cancellation and property override states.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.58 Divergence 58: Recurrence Override Property Allowlist (`OVERRIDE_PROPERTIES`) vs Complex Sub-Object and Participant Isolation
+
+- **Observed Behavior**:
+  RFC 8984 §4.3.4 theoretically allows a PatchObject to patch any property defined on `CalendarEvent`. In contrast, RFC 5545 detached `VEVENT` components have limited semantics for per-instance sub-objects like participants, locations, and attachments. Modifying participants on individual occurrences in iCalendar requires full `ATTENDEE` / `ORGANIZER` rescheduling state which is prone to sync loops across servers. Stalwart v1.0.0's parser captures properties present on detached components, but may lose or unfaithfully represent complex sub-object patches. In `jmap-ical`:
+  1. `OVERRIDE_PROPERTIES` defines a strict allowlist of 11 scalar and bounded properties: `title`, `description`, `start`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `priority`, `privacy`, `keywords`, and `alerts`.
+  2. `maps_override_field` returns `false` if any unlisted property (such as `locations`, `virtualLocations`, `participants`, `links`, or `locale`) is present in an override patch.
+  3. Detached instances inherit `locations`, `virtual_locations`, `participants`, and `links` directly from the master series (`event.locations.clone()`, etc.).
+  4. `recurrence_dates` falls back to emitting `RDATE` for overrides that cannot be fully drawn as detached components.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent`), detached instances share attendee lists and physical room locations with the master appointment.
+  2. If an override patched `participants` or `locations` on a single occurrence, writing that to EDS or round-tripping through standard iCalendar would either drop the change or corrupt meeting invitations.
+  3. Restricting override patches to the 11 supported properties prevents data loss and avoids generating invalid patch churn in `jmap-cal-sync`.
+- **Adjudication**:
+  Deliberate mapping design and synchronization boundary safety. Constrains per-instance overrides to properties that cleanly map to RFC 5545 detached components while inheriting complex structures from the parent series.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.59 Divergence 59: Recurrence Override TimeZone Scoping: Custom TimeZone Definitions vs Isolated Patch Rejection (`sends_recurrence_override` vs `maps_recurrence_override`)
+
+- **Observed Behavior**:
+  RFC 8984 §1.4.9 and §4.7.2 require custom timezone identifiers (such as `/example.com/CustomTZ` or vendor timezones) to be accompanied by a timezone definition in the root `timeZones` map. RFC 5545 §3.6.5 defines `VTIMEZONE` components at the `VCALENDAR` root, shared by all `VEVENT` components. Stalwart v1.0.0 parses timezone references and resolves them against root `VTIMEZONE` blocks or server-known zone tables. In `jmap-ical`:
+  1. Isolated patch validation: `maps_recurrence_override` enforces `names_time_zone(tzid)` (standard IANA timezone names only), refusing custom timezones when `recurrenceOverrides` is patched in isolation.
+  2. Full save and serialization: `sends_recurrence_override` uses `draws_override_field`, which accepts custom timezones if the series defines them (`defines_time_zone(series, tzid)`).
+  3. Floating time: setting `"timeZone": null` is accepted, representing an instance that floats without timezone conversion.
+- **Specification and Architectural Context**:
+  1. If an override patch introduced a custom timezone identifier without providing the corresponding `timeZones` definition, the JMAP server would reject the patch (`invalidProperties`), or downstream consumers would fail to compute UTC start times.
+  2. Evolution Data Server relies on libical's timezone cache; an undefined custom `TZID` on a `RECURRENCE-ID` causes recurrence expansion to fail.
+  3. Distinguishing isolated override validation from full-document serialization prevents dangling timezone references.
+- **Adjudication**:
+  Conforming specification boundary and dependency validation. Enforces that custom timezone identifiers in recurrence overrides must be accompanied by explicit definitions in `timeZones`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.

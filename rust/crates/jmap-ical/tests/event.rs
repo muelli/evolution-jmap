@@ -10,11 +10,11 @@
 use std::collections::BTreeMap;
 
 use jmap_ical::{
-    ICalError, busy_periods_to_vfreebusy, defines_time_zone, event_to_ical, free_busy_type,
-    ical_to_event, maps_alerts, maps_keyword, maps_locations, maps_recurrence_override,
-    maps_recurrence_rule, maps_time_zone, maps_virtual_locations, names_time_zone,
-    prune_time_zones, sends_recurrence_override, time_zone_definition, unstateable_until,
-    windows_time_zone_to_iana,
+    ICalError, OVERRIDE_PROPERTIES, busy_periods_to_vfreebusy, defines_time_zone, event_to_ical,
+    free_busy_type, ical_to_event, maps_alerts, maps_keyword, maps_locations,
+    maps_recurrence_override, maps_recurrence_rule, maps_time_zone, maps_virtual_locations,
+    names_time_zone, prune_time_zones, sends_recurrence_override, time_zone_definition,
+    unstateable_until, windows_time_zone_to_iana,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use jmap_proto::principals::BusyPeriod;
@@ -19815,4 +19815,342 @@ END:VCALENDAR\r\n";
     let mal_ev = ical_to_event(malformed_count_ics).expect("parse malformed count");
     let mal_rule = mal_ev.recurrence_rule.as_ref().expect("rule present");
     assert_eq!(mal_rule.count, None);
+}
+
+#[test]
+fn differential_oracle_recurrence_override_instance_key_local_datetime_and_recurrence_id_matching()
+{
+    // Divergence 56 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.4.4 specifies RECURRENCE-ID identifying an instance of a recurrence.
+    // RFC 8984 section 4.3.4 models recurrenceOverrides: Map<LocalDateTime, PatchObject>.
+    // RFC 8984 section 1.4.3 specifies LocalDateTime MUST NOT include a timezone offset or 'Z'.
+    // Stalwart v1.0.0 keys recurrenceOverrides using local date-time strings.
+    // In jmap-ical: read_overrides converts RECURRENCE-ID to local date-time strings without Z;
+    // event_to_ical serializes overrides as detached VEVENT blocks with matching RECURRENCE-ID;
+    // override_maps_by validates that the instance key is a valid date-time via to_ical_date_time.
+    let override_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:rec-override-key-001\r\n\
+DTSTART:20260901T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Team Sync Series\r\n\
+RRULE:FREQ=WEEKLY;COUNT=5\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:rec-override-key-001\r\n\
+RECURRENCE-ID:20260908T090000Z\r\n\
+DTSTART:20260908T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Team Sync Moved Hour\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(override_ics).expect("parse recurrence override");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+    // The key must be a LocalDateTime without trailing 'Z'
+    assert!(overrides.contains_key("2026-09-08T09:00:00"));
+    let patch = &overrides["2026-09-08T09:00:00"];
+    assert_eq!(
+        patch.get("title").and_then(Value::as_str),
+        Some("Team Sync Moved Hour")
+    );
+
+    // Serialization round-trip emits RECURRENCE-ID matching the original key
+    let out = event_to_ical(&ev);
+    assert!(out.contains("RECURRENCE-ID:20260908T090000Z"));
+    assert!(out.contains("SUMMARY:Team Sync Moved Hour"));
+
+    // Key validation in maps_recurrence_override
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T09:00:00",
+        &json!({"title": "Valid Key"})
+    ));
+
+    // Malformed instance keys are refused
+    assert!(
+        !maps_recurrence_override(&ev, "not-a-datetime", &json!({"title": "Bad Key"})),
+        "non-date instance key must be refused"
+    );
+    assert!(
+        !maps_recurrence_override(
+            &ev,
+            "2026-13-45T99:99:99",
+            &json!({"title": "Invalid Date Key"})
+        ),
+        "invalid date tokens must be refused"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_override_excluded_purity_and_property_conflict_refusal() {
+    // Divergence 57 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.5.1 specifies EXDATE for cancelled instances.
+    // RFC 8984 section 4.3.4 specifies: "The excluded property, if present, MUST be true.
+    // If true, the PatchObject MUST NOT contain any other properties."
+    // Stalwart v1.0.0 parses EXDATE into {"excluded": true}.
+    // In jmap-ical: override_maps_by enforces single-field purity for excluded patches;
+    // recurrence_dates emits EXDATE on master VEVENT and never detached components for exclusions.
+    let series = CalendarEvent {
+        title: Some("Bi-weekly Review".to_owned()),
+        start: Some("2026-09-01T14:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
+        ..CalendarEvent::default()
+    };
+    let id = "2026-09-08T14:00:00";
+
+    // Valid pure exclusion: excluded: true alone
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"excluded": true})
+    ));
+
+    // Conflict: excluded: true combined with modified title is refused per RFC 8984 section 4.3.4
+    assert!(
+        !maps_recurrence_override(
+            &series,
+            id,
+            &json!({"excluded": true, "title": "Cancelled Review"})
+        ),
+        "excluded with title must be refused"
+    );
+
+    // Conflict: excluded: true combined with status is refused
+    assert!(
+        !maps_recurrence_override(
+            &series,
+            id,
+            &json!({"excluded": true, "status": "cancelled"})
+        ),
+        "excluded with status must be refused"
+    );
+
+    // Non-boolean or false excluded values are refused
+    assert!(
+        !maps_recurrence_override(&series, id, &json!({"excluded": "true"})),
+        "string excluded must be refused"
+    );
+    assert!(
+        !maps_recurrence_override(&series, id, &json!({"excluded": 1})),
+        "integer excluded must be refused"
+    );
+
+    // Serialization check: excluded instance emits EXDATE, no detached VEVENT
+    let mut ex_ev = series.clone();
+    let mut overrides = BTreeMap::new();
+    overrides.insert(id.to_string(), json!({"excluded": true}));
+    ex_ev.recurrence_overrides = Some(overrides);
+
+    let out = event_to_ical(&ex_ev);
+    assert!(out.contains("EXDATE:20260908T140000"));
+    assert!(!out.contains("RECURRENCE-ID"));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_property_allowlist_and_subobject_isolation() {
+    // Divergence 58 against Stalwart differential oracle:
+    // RFC 8984 section 4.3.4 theoretically permits patching any CalendarEvent property.
+    // In RFC 5545, detached VEVENT components have defined semantics for scalar properties,
+    // but per-instance participant and location mutation creates severe scheduling and sync hazards.
+    // Stalwart v1.0.0 parses properties present on detached components.
+    // In jmap-ical: OVERRIDE_PROPERTIES enforces a strict allowlist of 11 vetted properties:
+    // ["title", "description", "start", "timeZone", "duration", "status", "freeBusyStatus",
+    //  "priority", "privacy", "keywords", "alerts"].
+    // Properties outside this list (such as locations, virtualLocations, participants, links)
+    // are refused by maps_override_field and inherited from the series.
+    let series = CalendarEvent {
+        title: Some("Project Sync".to_owned()),
+        start: Some("2026-09-01T11:00:00".to_owned()),
+        duration: Some("PT45M".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
+        ..CalendarEvent::default()
+    };
+    let id = "2026-09-08T11:00:00";
+
+    // Verify the exact 11 allowed properties in OVERRIDE_PROPERTIES
+    let expected = [
+        "title",
+        "description",
+        "start",
+        "timeZone",
+        "duration",
+        "status",
+        "freeBusyStatus",
+        "priority",
+        "privacy",
+        "keywords",
+        "alerts",
+    ];
+    assert_eq!(OVERRIDE_PROPERTIES, expected);
+
+    // Each allowed property is accepted when valid
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"title": "New Title"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"description": "New Desc"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"start": "2026-09-08T11:30:00"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"timeZone": "UTC"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"duration": "PT30M"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"status": "cancelled"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"freeBusyStatus": "free"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"priority": 5})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"privacy": "private"})
+    ));
+    assert!(maps_recurrence_override(
+        &series,
+        id,
+        &json!({"keywords": {"work": true}})
+    ));
+
+    // Complex sub-objects outside OVERRIDE_PROPERTIES are refused
+    assert!(
+        !maps_recurrence_override(
+            &series,
+            id,
+            &json!({"locations": {"loc1": {"name": "Room B"}}})
+        ),
+        "locations override must be refused"
+    );
+    assert!(
+        !maps_recurrence_override(
+            &series,
+            id,
+            &json!({"virtualLocations": {"vloc1": {"uri": "https://meet.example.com"}}})
+        ),
+        "virtualLocations override must be refused"
+    );
+    assert!(
+        !maps_recurrence_override(
+            &series,
+            id,
+            &json!({"participants": {"p1": {"name": "Alice"}}})
+        ),
+        "participants override must be refused"
+    );
+    assert!(
+        !maps_recurrence_override(
+            &series,
+            id,
+            &json!({"links": {"l1": {"href": "https://example.com/doc"}}})
+        ),
+        "links override must be refused"
+    );
+    assert!(
+        !maps_recurrence_override(&series, id, &json!({"locale": "fr-CA"})),
+        "locale override must be refused"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_override_timezone_scoping_and_custom_zone_definitions() {
+    // Divergence 59 against Stalwart differential oracle:
+    // RFC 8984 section 1.4.9 and 4.7.2 require custom timezone identifiers to be defined
+    // in timeZones. RFC 5545 section 3.6.5 keeps VTIMEZONE at the root VCALENDAR level.
+    // Stalwart v1.0.0 parses timezone references and resolves against root VTIMEZONE.
+    // In jmap-ical: isolated patch checking (maps_recurrence_override) admits standard IANA
+    // zone names and refuses custom timezones because the patch cannot carry definitions;
+    // full serialization (sends_recurrence_override) admits custom zones defined by the series.
+    let series_iana = CalendarEvent {
+        title: Some("Global Standup".to_owned()),
+        start: Some("2026-09-01T15:00:00".to_owned()),
+        time_zone: Some("Europe/London".to_owned()),
+        duration: Some("PT30M".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
+        ..CalendarEvent::default()
+    };
+    let id = "2026-09-08T15:00:00";
+
+    // Standard IANA timezone names are accepted by maps_recurrence_override
+    assert!(maps_recurrence_override(
+        &series_iana,
+        id,
+        &json!({"timeZone": "America/New_York"})
+    ));
+    assert!(maps_recurrence_override(
+        &series_iana,
+        id,
+        &json!({"timeZone": "Asia/Tokyo"})
+    ));
+
+    // Floating timezone (null) is accepted
+    assert!(maps_recurrence_override(
+        &series_iana,
+        id,
+        &json!({"timeZone": null})
+    ));
+
+    // Custom solidus timezone without series definition is refused by both predicates
+    let custom_tz = "/custom.org/CorporateZone";
+    assert!(
+        !maps_recurrence_override(&series_iana, id, &json!({"timeZone": custom_tz})),
+        "custom timezone without definition refused by maps_recurrence_override"
+    );
+    assert!(
+        !sends_recurrence_override(&series_iana, id, &json!({"timeZone": custom_tz})),
+        "custom timezone without definition refused by sends_recurrence_override"
+    );
+
+    // Custom timezone with series definition: refused by maps_recurrence_override (isolated patch),
+    // but accepted by sends_recurrence_override (full document carrying the VTIMEZONE definition)
+    let custom_tz_ics = format!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n\
+         BEGIN:VTIMEZONE\r\nTZID:{custom_tz}\r\n\
+         BEGIN:STANDARD\r\n\
+         DTSTART:20260101T000000\r\n\
+         TZOFFSETFROM:+0200\r\n\
+         TZOFFSETTO:+0200\r\n\
+         END:STANDARD\r\n\
+         END:VTIMEZONE\r\n\
+         BEGIN:VEVENT\r\nUID:custom-series-001\r\n\
+         DTSTART;TZID={custom_tz}:20260901T150000\r\n\
+         DURATION:PT30M\r\nSUMMARY:Custom Zone Event\r\n\
+         END:VEVENT\r\nEND:VCALENDAR\r\n"
+    );
+    let custom_series = ical_to_event(&custom_tz_ics).expect("parse custom series");
+
+    assert!(
+        !maps_recurrence_override(&custom_series, id, &json!({"timeZone": custom_tz})),
+        "custom timezone in isolated patch refused even when series defines it"
+    );
+    assert!(
+        sends_recurrence_override(&custom_series, id, &json!({"timeZone": custom_tz})),
+        "custom timezone accepted by sends_recurrence_override when series defines it"
+    );
 }
