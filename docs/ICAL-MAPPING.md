@@ -2167,6 +2167,87 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.92 Divergence 92: `VTIMEZONE` Multi-Observance Standard/Daylight Transition Resolution (`zone::offset_at`) and In-Document Rule Evaluation vs External Database Reliance
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.5 specifies `VTIMEZONE` components containing multiple `STANDARD` and `DAYLIGHT` observance subcomponents with transition rules (`TZOFFSETFROM`, `TZOFFSETTO`, `RRULE`, `RDATE`). Evaluating recurrence `UNTIL` endpoints or local times in zoned events requires determining the exact UTC offset in force at a given instant. Stalwart v1.0.0 and general CalDAV servers rely on external host or bundled Olson zoneinfo databases (such as `chrono-tz`). In contrast, `jmap-ical`'s `zone::offset_at`:
+  1. Evaluates all transitions directly from the in-document `VTIMEZONE` observances, operating in a completely self-contained manner without shipping or querying an external timezone database.
+  2. Discovers all `STANDARD` and `DAYLIGHT` observances, computing onsets for both `DTSTART` and recurrence rules (`RRULE`) or explicit dates (`RDATE`).
+  3. Selects the latest transition at or before the target UTC instant, returning its `TZOFFSETTO`.
+  4. Exact transition boundary semantics: at the exact transition instant, the new offset applies (per RFC 5545 §3.6.5 `DTSTART` definition); one second before that instant, the previous offset applies.
+  5. Southern-hemisphere seasonal reversals: for zones like `Pacific/Auckland` where daylight saving begins in September and ends in April, a January instant correctly resolves to the previous year's spring transition (+1300), while a July instant resolves to the autumn transition (+1200).
+  6. Non-DST zones: zones with a single `STANDARD` observance (such as `Asia/Kolkata` with constant +0530) evaluate consistently without transition rules.
+  7. Pre-observance fallback: instants prior to the earliest defined transition take the `TZOFFSETFROM` of the earliest observance.
+  8. Outbound serialization: `rule_to_rrule` formats `UNTIL` as a local date-time string beside the zoned `DTSTART`, preserving the exact wall-clock end time expected by RFC 8984 and libical.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.5 explicitly mandates that a `TZID` is defined by the `VTIMEZONE` component in the same calendar object. An invitation author or remote calendar system defines the historical rules it intends to apply.
+  2. Operating self-contained without an external timezone database ensures deterministic behavior across differing OS environments, avoids maintaining a 5MB tzdata database in the mapping crate, and ensures fidelity for private or vendor timezone definitions.
+  3. Strict transition onset boundary calculation guarantees that appointments scheduled across transition boundaries land on the intended hour.
+- **Adjudication**:
+  Deliberate mapping design and self-contained document fidelity. Evaluates multi-observance transitions directly from in-document `VTIMEZONE` definitions without external timezone database dependencies.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.93 Divergence 93: `VTIMEZONE` Transition Rule Day Modeling (`Day::Nth`, `Day::WeekdayAmong`, `Day::OfMonth`, `Day::OfStart`) and Bounded Historical Search (`SEARCH = 40`) vs Unbounded or Heuristic Rule Expansion
+
+- **Observed Behavior**:
+  Transition rules in `VTIMEZONE` observances are restricted by convention and grammar to yearly recurrence describing a single day of a month. In `jmap-ical` (`zone.rs`):
+  1. Day representations support four closed shapes:
+     - `Day::Nth`: Ordinal weekday (e.g. `RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3` for the last Sunday in March, or `1SU` for the first Sunday). An ordinal is strictly required; zero ordinals are rejected.
+     - `Day::WeekdayAmong`: Weekday limiting a set of month days (e.g. `BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29` from tzdata/libical). Ordinals on `BYDAY` here are forbidden per RFC 5545 §3.3.10 and refused.
+     - `Day::OfMonth`: A single month day (positive or negative). Multiple days without `BYDAY` is refused as a set.
+     - `Day::OfStart`: Inherited from `DTSTART` when no `BYxxx` day parts are present.
+  2. Multi-transition set refusal (`Falls::Set`): unadorned `BYDAY=SU` without ordinals or limiting dates names every Sunday in a month, representing a set of transitions. Because an observance transition must occur on a single instant, such rules are refused cleanly.
+  3. Tolerant `WKST` handling: `WKST` appearing on yearly rules (written by Exchange and Zimbra) is ignored rather than causing rule refusal, because RFC 5545 §3.3.10 assigns no meaning to `WKST` in yearly rules without `BYWEEKNO`.
+  4. Restated time of day: `BYHOUR`, `BYMINUTE`, `BYSECOND` expand single values or override `DTSTART` (Lotus Notes pattern); multi-value expansions or leap seconds (60) are refused.
+  5. Bounded search window: `SEARCH = 40` years back. This fixed upper bound covers the full leap-year cycle for rules falling on February 29th while preventing pathological input documents with millennia spans from consuming unbounded CPU time.
+- **Specification and Architectural Context**:
+  1. Real-world iCalendar generators (libical, Exchange, Zimbra, Lotus Notes) write distinct subsets of RFC 5545 transition rules.
+  2. Enforcing single-day transition semantics protects against misinterpreting multi-day sets, which would otherwise corrupt recurrence series boundaries.
+  3. Bounding the historical search to 40 years ensures constant-time performance while completely covering realistic Gregorian calendar recurrence cycles.
+- **Adjudication**:
+  Conforming specification boundary and deterministic transition calculation. Constrains transition rule day representations to single-day semantics with a 40-year bounded search window.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.94 Divergence 94: Zoned Recurrence Rule `UNTIL` Refusal via Trailing `'Z'` Preservation when `VTIMEZONE` is Absent or Unresolvable vs Silent Miscalculation
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 requires `UNTIL` in a zoned event (`DTSTART;TZID=...`) to be stated in UTC (`Z`). RFC 8984 §4.3.1 requires JSCalendar `until: LocalDateTime`, which is in the event's local timezone and MUST NOT include `'Z'`. Converting from UTC to local time requires knowing the timezone offset at `UNTIL`. Stalwart v1.0.0 and CalDAV servers either use internal Olson databases or assume local time equals UTC. In contrast, `jmap-ical`'s `read_until`:
+  1. When an event's start names a non-UTC timezone and the document provides no `VTIMEZONE` definition, or the definition cannot be resolved:
+     `None if zone.name.is_some_and(|name| !is_utc(name)) => format!("{local}Z")`.
+  2. Preserving the trailing `'Z'` produces an invalid JSCalendar `LocalDateTime`.
+  3. Consequently, `maps_recurrence_rule` returns `false` and `unstateable_until` flags the event, notifying the synchronization layer (`jmap-cal-sync`) that the recurrence endpoint cannot be safely mapped.
+  4. For UTC events (`DTSTART:...Z`), `is_utc` is true, so digits without `'Z'` are returned and `maps_recurrence_rule` succeeds.
+  5. For floating events (no `TZID`, no `'Z'`), `zone.name` is `None`, so digits without `'Z'` are returned and `maps_recurrence_rule` succeeds.
+- **Specification and Architectural Context**:
+  1. Guessing an offset or assuming UTC when a timezone definition is absent would shift the recurrence endpoint by one to twelve hours, potentially adding or omitting an entire recurrence occurrence.
+  2. Silently truncating `'Z'` would create a corrupted local timestamp that looks valid but represents the wrong moment in time.
+  3. Preserving `'Z'` deliberately renders the value syntactically invalid for JSCalendar, forcing explicit refusal at the boundary and preventing silent schedule corruption in Evolution calendars.
+- **Adjudication**:
+  Deliberate mapping design and recurrence boundary integrity. Preserves trailing `'Z'` on unresolvable zoned `UNTIL` values to trigger explicit recurrence rule refusal, preventing silent recurrence schedule corruption.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.95 Divergence 95: Timezone Identifier Translation Precedence: Literal IANA Match > `X-LIC-LOCATION` Fallback Gating > CLDR Windows Mapping > Globally Unique Prefix Stripping
+
+- **Observed Behavior**:
+  Calendar clients express timezones in disparate formats: standard IANA names (`Europe/Berlin`), libical location properties (`X-LIC-LOCATION:Europe/Berlin` inside a vendor `TZID`), Microsoft Windows display names (`TZID="W. Europe Standard Time"`), and globally unique prefixed URIs (`TZID="/mozilla.org/20050126_1/Europe/Berlin"` or `TZID="/citadel.org/2026/America/New_York"`). Stalwart v1.0.0 parses these or falls back to server defaults. In `jmap-ical`:
+  1. Priority 1 (Literal IANA match): If `TZID` satisfies `names_time_zone(tzid)` (alphanumeric, `_`, `-`, `+` segments separated by `/`), it is preserved verbatim as the canonical name. Secondary metadata like `X-LIC-LOCATION` is strictly ignored to prevent geographic drift.
+  2. Priority 2 (`X-LIC-LOCATION` gating): If `TZID` is non-standard (e.g. contains spaces or fails `names_time_zone`) and `VTIMEZONE` contains `X-LIC-LOCATION` that satisfies `names_time_zone`, the `X-LIC-LOCATION` value is selected.
+  3. Priority 3 (CLDR Windows mapping): If `TZID` matches one of the 139 standard Windows timezone display names in `WINDOWS_TIME_ZONES` (case-insensitive, surrounding quotes trimmed), `windows_time_zone_to_iana` maps it to its canonical IANA equivalent (e.g. `W. Europe Standard Time` -> `Europe/Berlin`, `Pacific Standard Time` -> `America/Los_Angeles`).
+  4. Priority 4 (Globally unique prefixed TZID peeling): If `TZID` starts with `/` and contains a recognized IANA continental area prefix (`Africa`, `America`, `Europe`, etc.), `unique_tzid_to_iana` strips the vendor prefix and isolates the canonical IANA timezone.
+  5. Fallback retention: An unrecognized custom solidus zone (such as `/myorg/custom_zone`) without a recognized IANA area prefix is retained verbatim as a custom solidus zone for `maps_time_zone` evaluation.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.3.1 permits globally unique TZID format starting with `/`. Extracting the canonical IANA zone suffix allows desktop clients to link the event directly to system timezone databases.
+  2. Prioritizing standard IANA names over `X-LIC-LOCATION` protects against buggy calendar exporters that write mismatched location tags.
+  3. CLDR Windows mapping bridges Exchange and Outlook calendars to standards-compliant IANA nomenclature required by JSCalendar (RFC 8984 §1.4.9).
+- **Adjudication**:
+  Conforming specification boundary and multi-vendor timezone interoperability. Enforces hierarchical timezone translation prioritizing standard IANA names, validated `X-LIC-LOCATION` fallbacks, CLDR Windows mappings, and globally unique prefix peeling.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
