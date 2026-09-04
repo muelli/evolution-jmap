@@ -10,6 +10,29 @@
 //! The draft-first shape is deliberate and is `Client::send_email`'s own: a
 //! submission the server refuses leaves the message visible in Drafts rather
 //! than gone, and the user-facing error text names that residue.
+//!
+//! ## Why Sent and not the `scheduled` mailbox
+//!
+//! RFC 9979 registers a `scheduled` role for exactly "composed but not yet
+//! sent", so filing a held message there instead reads like the better
+//! answer, and it is the obvious thing to try. It was tried, against
+//! Fastmail, which has such a mailbox (2026-09-04): the message sat in
+//! `scheduled` while held, was delivered on time — and then *stayed in
+//! `scheduled`*, never appearing in Sent. That folder is driven by
+//! Fastmail's own scheduled-send feature; a generic RFC 8621 submission is
+//! not wired into it, and nothing moves the copy out.
+//!
+//! Nor can this code move it afterwards. `onSuccessUpdateEmail` fires once,
+//! when the server *accepts* the submission; JMAP has no hook at release,
+//! and the submission record is purged once delivered (watched happen), so
+//! there is not even a marker to reconcile against later. Doing it properly
+//! would mean Evolution keeping its own timer and being running at release
+//! time — the bookkeeping this project keeps refusing, for snooze and here
+//! alike.
+//!
+//! So the message goes to Sent on acceptance. It appears there slightly
+//! before it truly goes out, which is a smaller lie than a sent message that
+//! never appears in Sent at all.
 
 use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_proto::mail::{EmailImport, Envelope, Schedule, keyword, role};
