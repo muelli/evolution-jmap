@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: evolution-jmap\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-04 05:33+0200\n"
+"POT-Creation-Date: 2026-09-05 01:23+0200\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -83,9 +83,9 @@ msgstr ""
 #: rust/crates/jmap-backend-core/src/oauth2.rs:566
 #: rust/crates/jmap-backend-core/src/oauth2.rs:676
 #: rust/crates/jmap-ui/src/link.rs:269 rust/crates/jmap-ui/src/link.rs:274
-#: rust/crates/jmap-ui/src/send_later/extension.rs:619
-#: rust/crates/jmap-ui/src/send_later/extension.rs:622
-#: rust/crates/jmap-ui/src/send_later/extension.rs:643
+#: rust/crates/jmap-ui/src/send_later/extension.rs:803
+#: rust/crates/jmap-ui/src/send_later/extension.rs:806
+#: rust/crates/jmap-ui/src/send_later/extension.rs:827
 msgid "no further detail was given"
 msgstr ""
 
@@ -310,82 +310,112 @@ msgstr ""
 msgid "the session document names no usable mail account"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:70
+#: rust/crates/jmap-ui/src/send_later/extension.rs:74
 msgid "Checking whether the sending account offers scheduled send…"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:71
+#: rust/crates/jmap-ui/src/send_later/extension.rs:75
 msgid "The selected sending account is not a JMAP account"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:72
+#: rust/crates/jmap-ui/src/send_later/extension.rs:76
 msgid "The account’s server does not offer scheduled send"
 msgstr ""
 
 #. TRANSLATORS: %1$s is the reason the mail server gave.
-#: rust/crates/jmap-ui/src/send_later/extension.rs:74
+#: rust/crates/jmap-ui/src/send_later/extension.rs:78
 #: rust/crates/jmap-ui/src/snooze/action.rs:56
 #, c-format
 msgid "The account’s server could not be asked: %1$s"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:75
+#: rust/crates/jmap-ui/src/send_later/extension.rs:79
 msgid "The server holds the message and sends it at the chosen time"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:78
+#: rust/crates/jmap-ui/src/send_later/extension.rs:82
 #, c-format
 msgid ""
 "The message could not be scheduled: %1$s (a copy may remain in the server’s "
 "Drafts folder)"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:80
+#: rust/crates/jmap-ui/src/send_later/extension.rs:84
 msgid "The message names no recipients"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:81
+#: rust/crates/jmap-ui/src/send_later/extension.rs:85
 msgid "The message has no From address"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:82
+#: rust/crates/jmap-ui/src/send_later/extension.rs:86
 msgid "The chosen time is further ahead than the server accepts"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:83
+#: rust/crates/jmap-ui/src/send_later/extension.rs:87
 #: rust/crates/jmap-ui/src/snooze/action.rs:60
 msgid "The local calendar could not name the chosen time"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:156
-msgid "In One _Hour"
+#: rust/crates/jmap-ui/src/send_later/extension.rs:88
+msgid "That time has already passed — choose one in the future"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/extension.rs:159
-msgid "_Tomorrow Morning"
-msgstr ""
-
-#: rust/crates/jmap-ui/src/send_later/extension.rs:164
-msgid "Next _Monday Morning"
-msgstr ""
-
-#: rust/crates/jmap-ui/src/send_later/extension.rs:201
+#: rust/crates/jmap-ui/src/send_later/extension.rs:213
 msgid "Send _Later"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:40
+#: rust/crates/jmap-ui/src/send_later/extension.rs:235
+msgid "_Custom Time…"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:619
+msgid "Send Later"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:623
+msgid "_Cancel"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/extension.rs:628
+msgid "_Send Later"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:102
+msgid "In One _Hour"
+msgstr ""
+
+#. TRANSLATORS: %1$s is a time of day, e.g. "18:00".
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:234
+#, c-format
+msgid "Today, %1$s"
+msgstr ""
+
+#. TRANSLATORS: %1$s is a time of day, e.g. "08:00".
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:238
+#, c-format
+msgid "Tomorrow, %1$s"
+msgstr ""
+
+#. TRANSLATORS: %1$s is a weekday name, %2$s a time of day.
+#: rust/crates/jmap-ui/src/send_later/schedule.rs:248
+#, c-format
+msgid "%1$s, %2$s"
+msgstr ""
+
+#: rust/crates/jmap-ui/src/send_later/submit.rs:63
 msgid "the server has no Drafts mailbox to stage the message in"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:51
+#: rust/crates/jmap-ui/src/send_later/submit.rs:74
 msgid "the account has no sending identity on the server"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:64
+#: rust/crates/jmap-ui/src/send_later/submit.rs:87
 msgid "the server imported the message without naming its id"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/send_later/submit.rs:106
+#: rust/crates/jmap-ui/src/send_later/submit.rs:129
 #, c-format
 msgid ""
 "the server accepted the submission but named no release time (undoStatus "
@@ -430,7 +460,7 @@ msgstr ""
 msgid "S_nooze"
 msgstr ""
 
-#: rust/crates/jmap-ui/src/snooze/action.rs:502
+#: rust/crates/jmap-ui/src/snooze/action.rs:505
 msgid "the server named no id for the snoozed mailbox"
 msgstr ""
 
