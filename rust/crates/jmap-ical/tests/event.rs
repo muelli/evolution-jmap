@@ -22465,3 +22465,331 @@ fn differential_oracle_timezone_identifier_translation_precedence_and_peeling() 
     let ev_custom = ical_to_event(ics_custom_solidus).expect("parse custom solidus");
     assert_eq!(ev_custom.time_zone.as_deref(), Some("/myorg/custom_zone"));
 }
+
+#[test]
+fn differential_oracle_custom_solidus_timezone_definition_ingestion_and_sendability() {
+    // Divergence 96 against Stalwart differential oracle:
+    // RFC 8984 section 1.4.9 admits two forms of TimeZoneId: standard IANA names and solidus-prefixed custom IDs.
+    // RFC 8984 section 4.7.2 requires custom solidus IDs to be defined in timeZones.
+    // In jmap-ical:
+    // 1. Inbound: standard IANA zones (Europe/Berlin) with inline VTIMEZONE are pruned (time_zones: None),
+    //    preventing JSON payload bloat.
+    // 2. Custom solidus zones (/example.org/custom_tz) with complete VTIMEZONE are ingested into time_zones.
+    // 3. defines_time_zone confirms presence of complete custom definition.
+    // 4. maps_time_zone returns true for IANA or defined custom solidus zones; returns false for unmapped Windows zones
+    //    or dangling solidus zones without a definition.
+    // 5. Outbound: event_to_ical emits VTIMEZONE only for defined custom solidus zones.
+
+    // 1. Standard IANA zone with VTIMEZONE: definition pruned from time_zones
+    let ics_iana = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VTIMEZONE\r\nTZID:Europe/Berlin\r\nBEGIN:STANDARD\r\nDTSTART:19701025T030000\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:evt-iana\r\nDTSTART;TZID=Europe/Berlin:20260904T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_iana = ical_to_event(ics_iana).expect("parse iana");
+    assert_eq!(ev_iana.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(ev_iana.time_zones, None);
+    assert!(maps_time_zone(&ev_iana));
+    assert!(!defines_time_zone(&ev_iana, "Europe/Berlin"));
+    let out_iana = event_to_ical(&ev_iana);
+    assert!(!out_iana.contains("BEGIN:VTIMEZONE"));
+
+    // 2. Custom solidus zone with complete VTIMEZONE: ingested into time_zones
+    let ics_custom = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VTIMEZONE\r\nTZID:/example.org/custom_tz\r\nBEGIN:STANDARD\r\nDTSTART:19701025T030000\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:evt-custom\r\nDTSTART;TZID=/example.org/custom_tz:20260904T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_custom = ical_to_event(ics_custom).expect("parse custom");
+    assert_eq!(
+        ev_custom.time_zone.as_deref(),
+        Some("/example.org/custom_tz")
+    );
+    assert!(ev_custom.time_zones.is_some());
+    assert!(defines_time_zone(&ev_custom, "/example.org/custom_tz"));
+    assert!(maps_time_zone(&ev_custom));
+    let out_custom = event_to_ical(&ev_custom);
+    assert!(out_custom.contains("BEGIN:VTIMEZONE"));
+    assert!(out_custom.contains("TZID:/example.org/custom_tz"));
+
+    // 3. Dangling custom solidus zone without definition
+    let ev_dangling = CalendarEvent {
+        time_zone: Some("/example.org/dangling".to_owned()),
+        ..CalendarEvent::default()
+    };
+    assert!(!defines_time_zone(&ev_dangling, "/example.org/dangling"));
+    assert!(!maps_time_zone(&ev_dangling));
+
+    // 4. Non-solidus unmapped custom zone
+    let ev_unmapped = CalendarEvent {
+        time_zone: Some("Unmapped Non Solidus".to_owned()),
+        ..CalendarEvent::default()
+    };
+    assert!(!defines_time_zone(&ev_unmapped, "Unmapped Non Solidus"));
+    assert!(!maps_time_zone(&ev_unmapped));
+}
+
+#[test]
+fn differential_oracle_custom_timezone_pruning_and_override_scope() {
+    // Divergence 97 against Stalwart differential oracle:
+    // prune_time_zones drops definitions not referred to by either the master series or any recurrence override.
+    // Matching supports both exact key and key without leading solidus.
+    // When emptied, time_zones is set to None rather than Some({}).
+
+    let custom_tz = "/example.org/custom_tz";
+    let custom_def = json!({
+        "@type": "TimeZone",
+        "tzId": custom_tz,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100"
+        }]
+    });
+
+    let mut event = CalendarEvent {
+        time_zone: Some(custom_tz.to_owned()),
+        time_zones: Some(BTreeMap::from([
+            (custom_tz.to_owned(), custom_def.clone()),
+            (
+                "/example.org/unused_tz".to_owned(),
+                json!({
+                    "@type": "TimeZone",
+                    "tzId": "/example.org/unused_tz",
+                    "standard": [{
+                        "@type": "TimeZoneRule",
+                        "start": "1970-10-25T03:00:00",
+                        "offsetFrom": "+0300",
+                        "offsetTo": "+0200"
+                    }]
+                }),
+            ),
+        ])),
+        ..CalendarEvent::default()
+    };
+
+    // 1. Prune removes unreferenced zone while retaining master zone
+    prune_time_zones(&mut event);
+    assert_eq!(
+        event
+            .time_zones
+            .as_ref()
+            .map(|z| z.keys().cloned().collect::<Vec<_>>()),
+        Some(vec![custom_tz.to_owned()])
+    );
+
+    // 2. Master clears zone, but recurrence override retains reference
+    event.time_zone = None;
+    event.recurrence_overrides = Some(BTreeMap::from([(
+        "2026-01-16T13:00:00".to_owned(),
+        json!({
+            "start": "2026-01-16T15:00:00",
+            "timeZone": custom_tz
+        }),
+    )]));
+    prune_time_zones(&mut event);
+    assert!(
+        event
+            .time_zones
+            .as_ref()
+            .is_some_and(|zones| zones.contains_key(custom_tz)),
+        "override reference protects custom timezone definition from being pruned"
+    );
+
+    // 3. Normalized matching without leading solidus in definition map
+    let mut event_no_slash = CalendarEvent {
+        time_zone: None,
+        recurrence_overrides: Some(BTreeMap::from([(
+            "2026-01-16T13:00:00".to_owned(),
+            json!({
+                "start": "2026-01-16T15:00:00",
+                "timeZone": custom_tz
+            }),
+        )])),
+        time_zones: Some(BTreeMap::from([(
+            "example.org/custom_tz".to_owned(),
+            custom_def,
+        )])),
+        ..CalendarEvent::default()
+    };
+    prune_time_zones(&mut event_no_slash);
+    assert!(
+        event_no_slash
+            .time_zones
+            .as_ref()
+            .is_some_and(|zones| zones.contains_key("example.org/custom_tz")),
+        "definition key without leading solidus matches referred zone"
+    );
+
+    // 4. When all references are gone, time_zones becomes None
+    event.recurrence_overrides = None;
+    prune_time_zones(&mut event);
+    assert_eq!(
+        event.time_zones, None,
+        "completely unreferenced map is set to None rather than empty object"
+    );
+}
+
+#[test]
+fn differential_oracle_utc_offset_colon_stripping_and_negative_zero_rejection() {
+    // Divergence 98 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.14 requires UTC-OFFSET as [+-]HHMM[SS], forbidding colons and forbidding -0000.
+    // RFC 8984 and ISO 8601 allow or require colons.
+    // jmap-ical:
+    // 1. Strips colons and normalizes 4-digit or 6-digit offsets for RFC 5545 output.
+    // 2. Rejects -0000 and -00:00 (negative zero).
+    // 3. Formats seconds only when non-zero.
+
+    let custom_tz = "/example.org/offset_tz";
+    let event = CalendarEvent {
+        time_zone: Some(custom_tz.to_owned()),
+        start: Some("2026-09-04T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            custom_tz.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": custom_tz,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+02:00",
+                    "offsetTo": "+01:00"
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+
+    let ics = event_to_ical(&event);
+    assert!(
+        ics.contains("TZOFFSETFROM:+0200\r\n"),
+        "colons stripped from offsetFrom: {ics}"
+    );
+    assert!(
+        ics.contains("TZOFFSETTO:+0100\r\n"),
+        "colons stripped from offsetTo: {ics}"
+    );
+
+    // Sub-minute seconds formatting
+    let custom_tz_sec = "/example.org/subminute_tz";
+    let event_sec = CalendarEvent {
+        time_zone: Some(custom_tz_sec.to_owned()),
+        start: Some("2026-09-04T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            custom_tz_sec.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": custom_tz_sec,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+00:09:21",
+                    "offsetTo": "+00:00:00"
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    let ics_sec = event_to_ical(&event_sec);
+    assert!(
+        ics_sec.contains("TZOFFSETFROM:+000921\r\n"),
+        "non-zero seconds preserved in 6-digit offset: {ics_sec}"
+    );
+    assert!(
+        ics_sec.contains("TZOFFSETTO:+0000\r\n"),
+        "zero seconds truncated in 4-digit offset: {ics_sec}"
+    );
+
+    // Negative zero rejection
+    let custom_tz_neg_zero = "/example.org/neg_zero_tz";
+    let event_neg_zero = CalendarEvent {
+        time_zone: Some(custom_tz_neg_zero.to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            custom_tz_neg_zero.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": custom_tz_neg_zero,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "-00:00",
+                    "offsetTo": "+01:00"
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    assert!(
+        !defines_time_zone(&event_neg_zero, custom_tz_neg_zero),
+        "-00:00 is refused as negative zero"
+    );
+}
+
+#[test]
+fn differential_oracle_timezone_rule_names_map_and_tzname_property_mapping() {
+    // Divergence 99 against Stalwart differential oracle:
+    // RFC 8984 section 4.7.2 models observance names as names: Map<String, Boolean>.
+    // RFC 5545 section 3.8.3.2 models names as TZNAME properties, optionally with LANGUAGE parameter.
+    // In jmap-ical:
+    // 1. Inbound: TZNAME properties are parsed into names map with boolean true values; LANGUAGE parameter is omitted.
+    // 2. Outbound: only keys with boolean true value emit TZNAME lines; falsy or non-boolean values are ignored.
+
+    // 1. Inbound parsing collects TZNAME properties and drops LANGUAGE
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VTIMEZONE\r\nTZID:/example.org/named_tz\r\nBEGIN:STANDARD\r\nDTSTART:19701025T030000\r\nTZOFFSETFROM:+0200\r\nTZOFFSETTO:+0100\r\nTZNAME:CET\r\nTZNAME;LANGUAGE=de:MEZ\r\nEND:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:evt-names\r\nDTSTART;TZID=/example.org/named_tz:20260904T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(ics).expect("parse named tz");
+    let zone_def = ev
+        .time_zones
+        .as_ref()
+        .and_then(|z| z.get("/example.org/named_tz"))
+        .expect("zone def");
+    let standard = zone_def
+        .get("standard")
+        .and_then(Value::as_array)
+        .expect("standard rules");
+    let names = standard[0]
+        .get("names")
+        .and_then(Value::as_object)
+        .expect("names map");
+    assert_eq!(names.get("CET"), Some(&Value::Bool(true)));
+    assert_eq!(names.get("MEZ"), Some(&Value::Bool(true)));
+
+    // 2. Outbound emission filters for true boolean values
+    let custom_tz = "/example.org/outbound_names";
+    let event = CalendarEvent {
+        time_zone: Some(custom_tz.to_owned()),
+        start: Some("2026-09-04T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            custom_tz.to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": custom_tz,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+0200",
+                    "offsetTo": "+0100",
+                    "names": {
+                        "EST": true,
+                        "Eastern Standard Time": true,
+                        "OLD_NAME": false,
+                        "INVALID_VAL": null
+                    }
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    let out_ics = event_to_ical(&event);
+    assert!(
+        out_ics.contains("TZNAME:EST\r\n"),
+        "emits true name: {out_ics}"
+    );
+    assert!(
+        out_ics.contains("TZNAME:Eastern Standard Time\r\n"),
+        "emits true name: {out_ics}"
+    );
+    assert!(
+        !out_ics.contains("TZNAME:OLD_NAME\r\n"),
+        "suppresses false name: {out_ics}"
+    );
+    assert!(
+        !out_ics.contains("TZNAME:INVALID_VAL\r\n"),
+        "suppresses null name: {out_ics}"
+    );
+}

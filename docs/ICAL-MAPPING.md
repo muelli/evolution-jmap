@@ -2247,6 +2247,77 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.96 Divergence 96: Custom Solidus `TimeZoneId` (`/prefix/...`) Scoped Definition Requirement (`maps_time_zone`, `defines_time_zone`) and IANA Zone Definition Suppression vs Indiscriminate `VTIMEZONE` Ingestion
+
+- **Observed Behavior**:
+  RFC 8984 §1.4.9 specifies that a `TimeZoneId` has two admissible shapes: an IANA Time Zone Database name, or a custom identifier starting with a solidus (`/`). RFC 8984 §4.7.2 mandates that custom solidus identifiers must be defined in the object's `timeZones` map property. In `jmap-ical`:
+  1. Standard IANA zone definition suppression: When an inbound iCalendar document defines an IANA timezone with a `VTIMEZONE` component, `ical_to_event` extracts `time_zone` but suppresses `time_zones` (`time_zones: None`). Standard IANA names resolve globally against system timezone databases, so omitting redundant definitions prevents multi-kilobyte JSON payload bloat.
+  2. Custom solidus zone definition ingestion: When a document names a custom solidus timezone (`/example.org/custom_tz`) accompanied by a valid, complete `VTIMEZONE` definition, `read_time_zones` ingests the component into `event.time_zones`.
+  3. Complete definition round-trip requirement: `read_time_zones` and `defines_time_zone` enforce that the definition can be serialized back to a `VTIMEZONE` whole via `vtimezone_of`. If a custom definition cannot be drawn whole, it is treated as undefined because partial definitions alter recurrence and offset behavior.
+  4. Save-path sendability validation: `maps_time_zone` verifies that `event.time_zone` is either an IANA name or a validly defined custom solidus zone (`defines_time_zone`). Unmapped Windows display names or dangling solidus zones return `false`, allowing `jmap-cal-sync` to file the event as floating rather than causing the server to reject the entire `CalendarEvent/set` call with `invalidProperties`.
+  5. Outbound serialization: `event_to_ical` emits `BEGIN:VTIMEZONE` exclusively for defined custom solidus zones, omitting redundant `VTIMEZONE` blocks for standard IANA timezones.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §1.4.9 and §4.7.2 require custom solidus identifiers to be paired with valid `TimeZone` objects in `timeZones`. Sending dangling solidus identifiers or unmapped vendor names causes fatal protocol errors on conformant JMAP servers.
+  2. Suppressing definitions for standard IANA zones reduces network traffic and database storage while relying on authoritative host timezone rules.
+  3. Requiring complete round-trip fidelity prevents silent schedule distortion caused by incomplete observance rule sets.
+- **Adjudication**:
+  Conforming specification boundary and scoped timezone definition integrity. Suppresses redundant definitions for standard IANA timezones, admits custom solidus identifiers only when fully defined in `timeZones`, and flags unmappable or dangling zones to protect save operations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.97 Divergence 97: `timeZones` Unreferenced Definition Pruning (`prune_time_zones`), Override Recurrence Zone Retention, and Empty Map Omission vs Dangling Reference Rejection
+
+- **Observed Behavior**:
+  When calendar events are updated, timezone references may change between master series and recurrence override instances. In `jmap-ical`, `prune_time_zones`:
+  1. Reference gathering: `referred_zones` scans both `event.time_zone` and every `timeZone` property present in `recurrence_overrides` patch objects.
+  2. Solidus-normalized matching: A definition in `time_zones` is retained if its key matches any referred timezone either exactly (`tzid == referred`) or without leading solidus (`referred.trim_start_matches('/') == tzid`), ensuring robust resolution across formatting variations.
+  3. Override recurrence retention: If the master series clears its timezone or switches to an IANA zone while a detached override occurrence retains a custom solidus timezone, `prune_time_zones` preserves the custom timezone definition in `time_zones`.
+  4. Unreferenced definition pruning: Definitions not referred to by the series or any override are stripped from `time_zones`.
+  5. Empty map elimination: If all custom definitions are removed, `event.time_zones` is set to `None` rather than emitting an empty JSON object (`{}`), adhering to RFC 8984 conventions where empty maps are omitted.
+- **Specification and Architectural Context**:
+  1. Retaining unreferenced timezone definitions bloats calendar records and transmits irrelevant historical rules.
+  2. Naively clearing `time_zones` when only the series timezone changes would destroy the definition required by detached occurrences, turning the override's timezone into an illegal dangling reference that causes JMAP servers to reject the update.
+  3. Scanning both series and recurrence overrides ensures that all required timezone definitions remain available for detached occurrences.
+- **Adjudication**:
+  Deliberate mapping design and reference integrity optimization. Prunes unreferenced timezone definitions across master series and recurrence overrides, normalizes solidus key matching, and omits empty maps.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.98 Divergence 98: RFC 5545 §3.3.14 UTC-OFFSET Colon Stripping, Negative Zero (`-0000`) Rejection, and Second Truncation (`utc_offset`) vs RFC 8984 / ISO 8601 Colon Preservation
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.14 specifies `UTC-OFFSET` as `[+|-]HHMM[SS]`, explicitly forbidding colon delimiters and forbidding `-0000` (since zero has no direction from UTC). RFC 8984 §4.7.2, RFC 3339 §5.6, and ISO 8601 commonly format offsets with colons (e.g. `+02:00`, `-05:00`). In `jmap-ical`:
+  1. Colon stripping: `utc_offset` removes all colons (`replace(':', "")`) from input offset strings, validating that all characters are ASCII digits following a leading sign (`+` or `-`).
+  2. Negative zero refusal: Strings representing negative zero (`-0000`, `-00:00`, `-000000`) are rejected (`sign == "-" && (hours, minutes, seconds) == (0, 0, 0)`), returning `None`.
+  3. Bounded validation: Validates hours in `0..=23`, minutes in `0..=59`, and seconds in `0..=60` (permitting leap seconds).
+  4. Second truncation and precision formatting: Offsets with zero seconds format as canonical 4-digit strings (`±HHMM`), while offsets with non-zero seconds format as 6-digit strings (`±HHMMSS`). Emitted `TZOFFSETFROM` and `TZOFFSETTO` properties strictly conform to RFC 5545 syntax without colons.
+  5. Arithmetic conversion: `offset_seconds` converts validated offsets into signed integer seconds east of UTC.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.14 syntax for `utc-offset` strictly forbids colons. Passing colon-delimited offsets to `libical` produces parse errors or component rejections in Evolution.
+  2. Rejecting negative zero enforces the mathematical invariant of RFC 5545 §3.3.14.
+  3. Normalizing to 4 digits for whole-minute offsets maintains compatibility with legacy iCalendar parsers while preserving 6-digit precision for historical sub-minute offsets.
+- **Adjudication**:
+  Conforming specification boundary and syntax normalization. Strips colons, rejects `-0000`, validates component ranges, and formats canonical 4-digit or 6-digit offsets for RFC 5545 `TZOFFSETFROM` and `TZOFFSETTO`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.99 Divergence 99: `TimeZoneRule` `names` Map (`{"EST": true}`) to `TZNAME` Property Mapping, Language Parameter Omission, and Boolean Truth-Value Gating
+
+- **Observed Behavior**:
+  RFC 8984 §4.7.2 models timezone observance names as `names: Map<String, Boolean>`, where each key is a timezone abbreviation or display name and the value is `true`. RFC 5545 §3.8.3.2 models display names as one or more `TZNAME` properties within `STANDARD` or `DAYLIGHT` subcomponents, optionally with a `LANGUAGE` parameter (RFC 5545 §3.2.10). In `jmap-ical`:
+  1. Inbound collection: `read_observance` collects all non-empty `TZNAME` properties from an observance, inserting each as `(name, json!(true))` in the `names` map.
+  2. Language parameter omission: RFC 5545 `LANGUAGE` parameters on `TZNAME` properties are omitted on inbound parse because JSCalendar `names` does not model per-name language tags.
+  3. Outbound truth-value filtering: `observance` iterates through `rule.get("names")`, filtering strictly for entries where the value is `Value::Bool(true)`.
+  4. Falsy and null suppression: Map entries with `false`, `null`, or non-boolean values are ignored and emit no `TZNAME` lines.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.7.2 specifies `names` as a set of names mapped to boolean `true`. Gating outbound emission on `wanted == &Value::Bool(true)` ensures that disabled or falsy entries are not emitted as active timezone names.
+  2. Dropping the `LANGUAGE` parameter on inbound parse conforms to JSCalendar's locale-independent representation.
+- **Adjudication**:
+  Conforming specification boundary and timezone name mapping fidelity. Maps `TZNAME` lines bidirectionally with RFC 8984 boolean-true `names` maps, suppressing falsy entries and omitting unmodeled language parameters.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
