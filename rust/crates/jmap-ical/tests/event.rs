@@ -16996,3 +16996,290 @@ fn differential_oracle_icalendar_converted_properties_tracking_omission() {
     assert!(without(&out, "X-JSCALENDAR-CONVERTED"));
     assert!(without(&out, "convertedProperties"));
 }
+
+#[test]
+fn differential_oracle_valarm_non_display_actions_dropped_on_import_and_refused_on_export() {
+    // Divergence 12 against Stalwart differential oracle:
+    // RFC 5545 section 3.6.6 defines ACTION:DISPLAY, ACTION:EMAIL, ACTION:AUDIO,
+    // and ACTION:PROCEDURE. Stalwart v1.0.0 maps ACTION:EMAIL to action: "email"
+    // (RFC 8984 section 4.5.2).
+    // In contrast, jmap-ical only imports ACTION:DISPLAY into event.alerts,
+    // dropping EMAIL, AUDIO, and PROCEDURE on import without polluting extra.
+    // Outbound safety: maps_alerts returns false if any alert has an action
+    // other than "display" (such as "email"), protecting server-side email alarms
+    // from being deleted during whole-property replacement.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-alarm-action-001\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Alarm Actions Test\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-display-1\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Popup Reminder\r\n\
+TRIGGER:-PT15M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-email-1\r\n\
+ACTION:EMAIL\r\n\
+DESCRIPTION:Mail Reminder\r\n\
+SUMMARY:Email Subject\r\n\
+ATTENDEE:mailto:user@example.com\r\n\
+TRIGGER:-P1D\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-audio-1\r\n\
+ACTION:AUDIO\r\n\
+ATTACH;VALUE=URI:Basso\r\n\
+TRIGGER:-PT5M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-procedure-1\r\n\
+ACTION:PROCEDURE\r\n\
+ATTACH;VALUE=URI:file:///bin/beep\r\n\
+TRIGGER:-PT1M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    // Only DISPLAY alarm is imported
+    let alerts = event.alerts.as_ref().expect("alerts present");
+    assert_eq!(alerts.len(), 1);
+    assert!(alerts.contains_key("alarm-display-1"));
+    let display_alert = alerts.get("alarm-display-1").unwrap();
+    assert_eq!(
+        display_alert.get("action").and_then(Value::as_str),
+        Some("display")
+    );
+
+    // Non-display alarms are dropped without polluting extra
+    assert!(!event.extra.contains_key("alarm-email-1"));
+    assert!(!event.extra.contains_key("alarm-audio-1"));
+    assert!(!event.extra.contains_key("alarm-procedure-1"));
+
+    // Event with only display alerts passes maps_alerts
+    assert!(maps_alerts(&event));
+
+    // Event carrying an email alert in server state is refused by maps_alerts
+    let mut server_event = event.clone();
+    let mut server_alerts = alerts.clone();
+    server_alerts.insert(
+        "alarm-email-1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "email",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-P1D"
+            }
+        }),
+    );
+    server_event.alerts = Some(server_alerts);
+    assert!(
+        !maps_alerts(&server_event),
+        "maps_alerts must refuse email action alerts to protect server state"
+    );
+
+    // Outbound emission writes only the display alarm
+    let out = event_to_ical(&event);
+    assert!(out.contains("ACTION:DISPLAY"));
+    assert!(without(&out, "ACTION:EMAIL"));
+    assert!(without(&out, "ACTION:AUDIO"));
+    assert!(without(&out, "ACTION:PROCEDURE"));
+}
+
+#[test]
+fn differential_oracle_valarm_absolute_triggers_dropped_on_import_and_refused_on_export() {
+    // Divergence 13 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.6.3 defines TRIGGER;VALUE=DATE-TIME. Stalwart v1.0.0
+    // maps absolute date-time triggers to JSCalendar AbsoluteTrigger (RFC 8984 section 4.5.4).
+    // In contrast, jmap-ical only supports relative OffsetTrigger, dropping
+    // absolute triggers on import without polluting extra.
+    // Outbound safety: maps_alerts returns false for AbsoluteTrigger objects,
+    // preventing whole-property replacement from destroying server-managed triggers.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-abs-trigger-001\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Absolute Trigger Test\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-rel-1\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Relative Reminder\r\n\
+TRIGGER:-PT15M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-abs-1\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Absolute Reminder\r\n\
+TRIGGER;VALUE=DATE-TIME:20260910T080000Z\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    // Only relative trigger is parsed
+    let alerts = event.alerts.as_ref().expect("alerts present");
+    assert_eq!(alerts.len(), 1);
+    assert!(alerts.contains_key("alarm-rel-1"));
+    let rel_alert = alerts.get("alarm-rel-1").unwrap();
+    let trigger = rel_alert.get("trigger").and_then(Value::as_object).unwrap();
+    assert_eq!(
+        trigger.get("@type").and_then(Value::as_str),
+        Some("OffsetTrigger")
+    );
+
+    // Absolute trigger is dropped without polluting extra
+    assert!(!event.extra.contains_key("alarm-abs-1"));
+
+    // Event with relative trigger passes maps_alerts
+    assert!(maps_alerts(&event));
+
+    // Event with AbsoluteTrigger in server state is refused by maps_alerts
+    let mut server_event = event.clone();
+    let mut server_alerts = alerts.clone();
+    server_alerts.insert(
+        "alarm-abs-1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "AbsoluteTrigger",
+                "when": "2026-09-10T08:00:00Z"
+            }
+        }),
+    );
+    server_event.alerts = Some(server_alerts);
+    assert!(
+        !maps_alerts(&server_event),
+        "maps_alerts must refuse AbsoluteTrigger to prevent moving fixed reminders"
+    );
+
+    let out = event_to_ical(&event);
+    assert!(out.contains("TRIGGER:-PT15M"));
+    assert!(without(&out, "VALUE=DATE-TIME"));
+}
+
+#[test]
+fn differential_oracle_valarm_acknowledged_dropped_on_import_and_refused_by_maps_alerts() {
+    // Divergence 14 against Stalwart differential oracle:
+    // RFC 9074 section 6.1 defines ACKNOWLEDGED timestamp for dismissed/snoozed alarms.
+    // Stalwart v1.0.0 maps ACKNOWLEDGED to Alert.acknowledged (RFC 8984 section 4.5.2).
+    // In contrast, jmap-ical drops ACKNOWLEDGED on import without polluting extra.
+    // Outbound safety: maps_alerts returns false for any event where an alert has
+    // acknowledged set, preventing whole-property replacement from un-dismissing
+    // snoozed alarms on the JMAP server.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-ack-alarm-001\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Acknowledged Alarm Test\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-ack-1\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Snoozed Reminder\r\n\
+TRIGGER:-PT15M\r\n\
+ACKNOWLEDGED:20260904T120000Z\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    let alerts = event.alerts.as_ref().expect("alerts present");
+    let alert = alerts.get("alarm-ack-1").expect("alarm-ack-1 parsed");
+    assert_eq!(
+        alert.get("acknowledged"),
+        None,
+        "ACKNOWLEDGED must be dropped on import"
+    );
+
+    // Dropped ACKNOWLEDGED does not pollute extra
+    assert!(!event.extra.contains_key("ACKNOWLEDGED"));
+    assert!(!event.extra.contains_key("acknowledged"));
+
+    // Event parsed without acknowledged passes maps_alerts
+    assert!(maps_alerts(&event));
+
+    // Server-side event carrying acknowledged is refused by maps_alerts
+    let mut server_event = event.clone();
+    let mut server_alerts = alerts.clone();
+    server_alerts.insert(
+        "alarm-ack-1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            },
+            "acknowledged": "2026-09-04T12:00:00Z"
+        }),
+    );
+    server_event.alerts = Some(server_alerts);
+    assert!(
+        !maps_alerts(&server_event),
+        "maps_alerts must refuse acknowledged alerts to prevent clobbering snooze state"
+    );
+}
+
+#[test]
+fn differential_oracle_language_altid_localization_parameters_vs_single_locale_model() {
+    // Divergence 15 against Stalwart differential oracle:
+    // RFC 5545 section 3.2.10 defines LANGUAGE and section 3.2.2 defines ALTID.
+    // Stalwart v1.0.0 may parse alternate language properties into JSCalendar localizations
+    // (RFC 8984 section 4.6.1: Map<LanguageTag, PatchObject>).
+    // In contrast, jmap-ical selects the first SUMMARY and DESCRIPTION in document order
+    // and drops alternate localized lines without polluting extra.
+    // Rationale: Evolution Data Server stores single strings for SUMMARY and DESCRIPTION
+    // for the user active locale. Dropping alternate languages prevents partial translations
+    // from being modified or corrupted during desktop client synchronization.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-lang-test-001\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY;LANGUAGE=en:Bilingual Colloquium\r\n\
+SUMMARY;LANGUAGE=fr:Colloque bilingue\r\n\
+DESCRIPTION;LANGUAGE=en:Discussions on open standards and protocols.\r\n\
+DESCRIPTION;LANGUAGE=fr:Discussions sur les standards ouverts et protocoles.\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse ics");
+
+    // Primary summary and description are retained
+    assert_eq!(event.title.as_deref(), Some("Bilingual Colloquium"));
+    assert_eq!(
+        event.description.as_deref(),
+        Some("Discussions on open standards and protocols.")
+    );
+
+    // Alternate language properties are dropped without polluting extra
+    assert!(!event.extra.contains_key("localizations"));
+    assert!(!event.extra.contains_key("LANGUAGE"));
+    assert!(!event.extra.contains_key("language"));
+
+    // Outbound emission writes primary summary and description cleanly
+    let out = event_to_ical(&event);
+    assert_eq!(line(&out, "SUMMARY:"), "SUMMARY:Bilingual Colloquium");
+    assert_eq!(
+        line(&out, "DESCRIPTION:"),
+        "DESCRIPTION:Discussions on open standards and protocols."
+    );
+    assert!(without(&out, "Colloque bilingue"));
+}
