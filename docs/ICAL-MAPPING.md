@@ -1908,6 +1908,65 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.76 Divergence 76: Participant `name` Common Name (`CN`) Parameter Mapping, Empty String Suppression, and Whitespace Quoting
+
+- **Observed Behavior**:
+  RFC 8984 §4.4.6 defines `name: String` as the display name of a participant. RFC 5545 §3.2.2 defines the `CN` (Common Name) parameter on `ORGANIZER` and `ATTENDEE` property lines. Stalwart v1.0.0 parses `CN` into `participant.name`. In `jmap-ical`:
+  1. Name mapping: When `participant.name` is present and non-empty, `drawn_participants` emits `CN=...` on the emitted `ORGANIZER` or `ATTENDEE` line via `stated_name`.
+  2. Empty name suppression: When `name` is an empty string (`""`), `stated_name` returns `None`, omitting the `CN` parameter entirely rather than writing invalid empty parameter syntax like `CN=`.
+  3. Whitespace parameter quoting: Names containing spaces (such as `"Alice Organizer"`) are wrapped in double quotes according to RFC 5545 §3.2 quoting rules (`CN="Alice Organizer"`), while single-token names without whitespace or punctuation (such as `Bob`) are emitted unquoted (`CN=Bob`).
+  4. Inbound drop: Upon inbound parse (`ical_to_event`), `participants` is set to `None` for scheduling safety.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.2 states that property parameter values must not be empty. An empty parameter value `CN=` is a syntax violation that libical and strict parsers reject.
+  2. In Evolution Data Server (`ECalComponent`), display names containing spaces must be properly quoted in the underlying libical component to prevent tokenization errors when rendering calendar invitations.
+- **Adjudication**:
+  Conforming specification boundary and display name fidelity. Maps `name` to `CN` parameter, quotes values containing whitespace, and suppresses empty name strings.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.77 Divergence 77: Participant Delegation Parameter Omission (`delegatedTo` / `delegatedFrom` vs `DELEGATED-TO` / `DELEGATED-FROM`) and Scheduling Boundary
+
+- **Observed Behavior**:
+  RFC 8984 §4.4.6 defines `delegatedTo: Map<String, Boolean>` and `delegatedFrom: Map<String, Boolean>`, where map keys are URIs of participants to or from whom participation was delegated. RFC 5545 §3.2.4 (`DELEGATED-TO`) and §3.2.5 (`DELEGATED-FROM`) define parameters holding calendar addresses of delegates. Stalwart v1.0.0 parses these parameters into JSCalendar delegation maps. In `jmap-ical`:
+  1. Outbound omission: `drawn_participants` deliberately omits `DELEGATED-TO` and `DELEGATED-FROM` parameters from outbound `ATTENDEE` lines.
+  2. Inbound drop: `ical_to_event` drops `participants` (`None`) on import.
+- **Specification and Architectural Context**:
+  1. RFC 5546 (iTIP) and RFC 6638 govern the complex protocol flow of invitation delegation, which requires re-issuing invitations, updating organizer tracking records, and coordinating message dispatch.
+  2. In Evolution Data Server, delegation is managed through its email transport backend and interactive iTIP workflows, not through static calendar serialization. Emitting raw delegation parameters without an active iTIP scheduling engine risks desynchronizing server-managed attendee tracking or triggering conflicting calendar notifications.
+- **Adjudication**:
+  Deliberate mapping design and scheduling boundary safety. Omits delegation parameters from outbound attendee lines, leaving delegation handling to server-authoritative scheduling systems.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.78 Divergence 78: Participant Group Membership Parameter Omission (`memberOf` vs `MEMBER`) and Directory Expansion Decoupling
+
+- **Observed Behavior**:
+  RFC 8984 §4.4.6 defines `memberOf: Map<String, Boolean>`, where map keys are URIs of group participants (such as team distribution lists) of which the participant is a member. RFC 5545 §3.2.11 defines the `MEMBER` parameter on `ATTENDEE` lines. Stalwart v1.0.0 parses `MEMBER` into `participant.memberOf`. In `jmap-ical`:
+  1. Outbound omission: `drawn_participants` omits `MEMBER` parameters on `ATTENDEE` lines.
+  2. Inbound drop: `ical_to_event` drops `participants` (`None`) on import.
+- **Specification and Architectural Context**:
+  1. In corporate directory and groupware environments, group expansion is performed server-side when an invitation is addressed to a group mailbox or mailing list.
+  2. Serializing `MEMBER` parameters back to external iCalendar files can leak internal distribution list URIs or conflict with server-side directory expansion logic in CalDAV/JMAP servers.
+- **Adjudication**:
+  Deliberate mapping design and directory privacy safety. Omits group membership `memberOf` parameters from outbound iCalendar lines, leaving group resolution to server-side directory services.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.79 Divergence 79: Participant CalDAV Scheduling Parameters (`scheduleAgent`, `scheduleStatus`, `scheduleForceSend`) Omission
+
+- **Observed Behavior**:
+  RFC 8984 §4.4.6 and RFC 6638 define CalDAV scheduling parameters: `scheduleAgent: String` (`"server"`, `"client"`, `"none"`), `scheduleStatus: String` (e.g. `"1.1;Delivered"`), `scheduleForceSend: String` (`"request"`, `"reply"`), along with sequence and timestamp counters. RFC 6638 §3.2.1 to §3.2.3 define corresponding iCalendar parameters `SCHEDULE-AGENT`, `SCHEDULE-STATUS`, and `SCHEDULE-FORCE-SEND`. Stalwart v1.0.0 parses these parameters into JSCalendar participant records. In `jmap-ical`:
+  1. Outbound omission: `drawn_participants` omits `SCHEDULE-AGENT`, `SCHEDULE-STATUS`, and `SCHEDULE-FORCE-SEND` from outbound `ATTENDEE` lines.
+  2. Inbound drop: `ical_to_event` drops `participants` (`None`) on import.
+- **Specification and Architectural Context**:
+  1. RFC 6638 scheduling parameters are intended strictly for communication between scheduling clients and CalDAV/iTIP scheduling engines.
+  2. In JMAP Calendar deployments, invitation delivery and RSVP management are handled via JMAP scheduling methods (`CalendarEventSend`). Emitting CalDAV-specific scheduling parameters on raw exported iCalendar components could confuse non-CalDAV clients or trigger unwanted automated processing by external iCalendar consumers.
+- **Adjudication**:
+  Deliberate mapping design and CalDAV scheduling isolation. Suppresses protocol-specific scheduling parameters on outbound `ATTENDEE` lines, preventing scheduling desynchronization.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 

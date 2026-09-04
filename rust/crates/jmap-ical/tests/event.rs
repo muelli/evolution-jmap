@@ -21431,3 +21431,173 @@ fn differential_oracle_participant_cutype_mapping_partstat_and_rsvp_gating() {
         "ATTENDEE;CN=\"Custom Guest\";ROLE=REQ-PARTICIPANT:mailto:guest@example.com"
     );
 }
+
+#[test]
+fn differential_oracle_participant_cn_name_mapping_and_empty_suppression() {
+    // Divergence 76 against Stalwart differential oracle:
+    // RFC 8984 section 4.4.6 defines name: String.
+    // RFC 5545 section 3.2.2 defines the CN (Common Name) parameter.
+    // In jmap-ical:
+    // 1. stated_name maps non-empty name to CN on ORGANIZER and ATTENDEE lines.
+    // 2. An empty name ("") is suppressed (omits CN parameter).
+    // 3. Names with whitespace are quoted: CN="Alice Smith".
+    // 4. Inbound ical_to_event leaves participants: None for scheduling safety.
+    let ev = attended(json!({
+        "organizer": json!({
+            "@type": "Participant",
+            "name": "Alice Organizer",
+            "sendTo": {"imip": "mailto:alice@example.com"},
+            "roles": {"owner": true},
+        }),
+        "unquoted": json!({
+            "@type": "Participant",
+            "name": "Bob",
+            "sendTo": {"imip": "mailto:bob@example.com"},
+            "roles": {"attendee": true},
+        }),
+        "empty_name": json!({
+            "@type": "Participant",
+            "name": "",
+            "sendTo": {"imip": "mailto:empty@example.com"},
+            "roles": {"attendee": true},
+        }),
+        "no_name": json!({
+            "@type": "Participant",
+            "sendTo": {"imip": "mailto:noname@example.com"},
+            "roles": {"attendee": true},
+        }),
+    }));
+    let ics = event_to_ical(&ev);
+    assert_eq!(
+        content_line(&ics, "ORGANIZER"),
+        "ORGANIZER;CN=\"Alice Organizer\":mailto:alice@example.com",
+        "{ics}"
+    );
+    let attendee_lines: Vec<String> = ics
+        .replace("\r\n ", "")
+        .split("\r\n")
+        .filter(|line| line.starts_with("ATTENDEE"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        attendee_lines,
+        vec![
+            "ATTENDEE;ROLE=REQ-PARTICIPANT:mailto:empty@example.com".to_string(),
+            "ATTENDEE;ROLE=REQ-PARTICIPANT:mailto:noname@example.com".to_string(),
+            "ATTENDEE;CN=Bob;ROLE=REQ-PARTICIPANT:mailto:bob@example.com".to_string(),
+        ],
+        "{ics}"
+    );
+
+    // Inbound safety: participants dropped on parse
+    let parsed = ical_to_event(&ics).expect("parse valid event with attendees");
+    assert_eq!(parsed.participants, None);
+}
+
+#[test]
+fn differential_oracle_participant_delegation_parameter_omission() {
+    // Divergence 77 against Stalwart differential oracle:
+    // RFC 8984 section 4.4.6 defines delegatedTo and delegatedFrom maps.
+    // RFC 5545 section 3.2.4 and 3.2.5 define DELEGATED-TO and DELEGATED-FROM parameters.
+    // In jmap-ical:
+    // 1. drawn_participants omits DELEGATED-TO and DELEGATED-FROM on ATTENDEE lines.
+    // 2. Inbound ical_to_event drops participants (None) for scheduling boundary safety.
+    let ev = attended(json!({
+        "alice": guest("mailto:alice@example.com", "Alice", json!({
+            "roles": {"attendee": true},
+            "delegatedTo": {
+                "mailto:bob@example.com": true,
+            },
+        })),
+        "bob": guest("mailto:bob@example.com", "Bob", json!({
+            "roles": {"attendee": true},
+            "delegatedFrom": {
+                "mailto:alice@example.com": true,
+            },
+        })),
+    }));
+    let ics = event_to_ical(&ev);
+    assert!(!ics.contains("DELEGATED-TO"), "{ics}");
+    assert!(!ics.contains("DELEGATED-FROM"), "{ics}");
+    let lines: Vec<String> = ics
+        .replace("\r\n ", "")
+        .split("\r\n")
+        .filter(|line| line.starts_with("ATTENDEE"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "ATTENDEE;CN=Alice;ROLE=REQ-PARTICIPANT:mailto:alice@example.com".to_string(),
+            "ATTENDEE;CN=Bob;ROLE=REQ-PARTICIPANT:mailto:bob@example.com".to_string(),
+        ],
+        "{ics}"
+    );
+
+    // Inbound safety: participants dropped on parse
+    let parsed = ical_to_event(&ics).expect("parse valid event with delegated attendees");
+    assert_eq!(parsed.participants, None);
+}
+
+#[test]
+fn differential_oracle_participant_member_of_group_parameter_omission() {
+    // Divergence 78 against Stalwart differential oracle:
+    // RFC 8984 section 4.4.6 defines memberOf map.
+    // RFC 5545 section 3.2.11 defines the MEMBER parameter.
+    // In jmap-ical:
+    // 1. drawn_participants omits MEMBER parameters on ATTENDEE lines.
+    // 2. Inbound ical_to_event drops participants (None).
+    let ev = attended(json!({
+        "member": guest("mailto:developer@example.com", "Dev Team Member", json!({
+            "roles": {"attendee": true},
+            "memberOf": {
+                "mailto:dev-team@example.com": true,
+                "mailto:engineering@example.com": true,
+            },
+        })),
+    }));
+    let ics = event_to_ical(&ev);
+    assert!(!ics.contains("MEMBER="), "{ics}");
+    assert_eq!(
+        content_line(&ics, "ATTENDEE"),
+        "ATTENDEE;CN=\"Dev Team Member\";ROLE=REQ-PARTICIPANT:mailto:developer@example.com",
+        "{ics}"
+    );
+
+    // Inbound safety
+    let parsed = ical_to_event(&ics).expect("parse valid event with member attendee");
+    assert_eq!(parsed.participants, None);
+}
+
+#[test]
+fn differential_oracle_participant_schedule_agent_parameters_omission() {
+    // Divergence 79 against Stalwart differential oracle:
+    // RFC 8984 section 4.4.6 and RFC 6638 define CalDAV scheduling parameters:
+    // scheduleAgent, scheduleStatus, and scheduleForceSend.
+    // In jmap-ical:
+    // 1. drawn_participants omits SCHEDULE-AGENT, SCHEDULE-STATUS, and SCHEDULE-FORCE-SEND.
+    // 2. Inbound ical_to_event drops participants (None).
+    let ev = attended(json!({
+        "server_managed": guest("mailto:managed@example.com", "Managed Invitee", json!({
+            "roles": {"attendee": true},
+            "scheduleAgent": "server",
+            "scheduleStatus": "1.1;Delivered",
+            "scheduleForceSend": "request",
+            "scheduleSequence": 2,
+            "scheduleUpdated": "2026-09-04T12:00:00Z",
+        })),
+    }));
+    let ics = event_to_ical(&ev);
+    assert!(!ics.contains("SCHEDULE-AGENT"), "{ics}");
+    assert!(!ics.contains("SCHEDULE-STATUS"), "{ics}");
+    assert!(!ics.contains("SCHEDULE-FORCE-SEND"), "{ics}");
+    assert_eq!(
+        content_line(&ics, "ATTENDEE"),
+        "ATTENDEE;CN=\"Managed Invitee\";ROLE=REQ-PARTICIPANT:mailto:managed@example.com",
+        "{ics}"
+    );
+
+    // Inbound safety
+    let parsed = ical_to_event(&ics).expect("parse valid event with managed invitee");
+    assert_eq!(parsed.participants, None);
+}
