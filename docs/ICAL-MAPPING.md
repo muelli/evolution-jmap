@@ -1714,3 +1714,69 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.64 Divergence 64: Recurrence Override `status` Property Mapping, Cancellation Semantics (`status: "cancelled"` vs `excluded: true`), and Closed Vocabulary Gating
+
+- **Observed Behavior**:
+  In RFC 5545 §3.8.1.11, `STATUS` on a recurring event's detached `VEVENT` component can take `CONFIRMED`, `CANCELLED`, or `TENTATIVE`. In RFC 8984 §4.4.4, `status` takes `"confirmed"`, `"cancelled"`, or `"tentative"`. In `jmap-ical`:
+  1. Inbound parsing (`instance_patch`): compares `series.status` against `instance.status`. If differing, it emits `patch.insert("status", now.map_or(Value::Null, Value::String))`.
+  2. Cancellation semantics: RFC 8984 §4.3.4 distinguishes `"excluded": true` (an occurrence that does not happen at all, serialized as RFC 5545 `EXDATE` on the master component without a detached `VEVENT`) from `"status": "cancelled"` (an occurrence that remains in the schedule but has been marked cancelled, represented by a detached `VEVENT` with `STATUS:CANCELLED` and `RECURRENCE-ID`). Stalwart v1.0.0 parses a detached `VEVENT` with `STATUS:CANCELLED` as `{"status": "cancelled"}` in `recurrenceOverrides[id]`, preserving the occurrence in the override set.
+  3. Closed vocabulary gating and removal: `maps_override_field` admits `value.is_null()` (which unsets `status` on the instance so it inherits default/absent `STATUS`) or `value.as_str().is_some_and(known_status)`. Any non-standard status (such as `draft`, `needs-action`, `completed`, `in-process`, or invalid strings) is refused (`false`), preventing invalid iCalendar serialization or property pollution.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server (`ECalComponent` / `libical`) and iTIP (RFC 5546), a cancelled meeting instance (`STATUS:CANCELLED`) must be retained in the calendar store so attendees see the meeting strike-through and cancellation notice. If it were treated as `EXDATE` (`excluded: true`), the appointment would silently vanish from the user's view.
+  2. RFC 5545 defines distinct status vocabularies for `VEVENT` vs `VTODO`. Admitting `VTODO` statuses like `COMPLETED` on a `VEVENT` override generates invalid iCalendar that libical rejects.
+  3. Resetting status: a patch specifying `"status": null` removes the `STATUS` line from the detached component, allowing it to inherit default status semantics without conflicting with the series.
+- **Adjudication**:
+  Conforming specification boundary and calendar cancellation fidelity. Correctly decouples detached component cancellation (`status: "cancelled"`) from recurrence exclusion (`excluded: true`), restricts status values to the RFC 8984 / RFC 5545 closed vocabulary, and supports property removal via `null`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.65 Divergence 65: Recurrence Override `freeBusyStatus` (`TRANSP`) Transparency Modeling, Default Opaque Fallback, and Vocabulary Clamping
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.2.7 defines `TRANSP` (`OPAQUE` or `TRANSPARENT`) indicating whether an event blocks time on the calendar. RFC 8984 §4.4.2 defines `freeBusyStatus` (`"busy"` or `"free"`). Both specifications default to busy/opaque when the property is absent. In `jmap-ical`:
+  1. Inbound parsing (`instance_patch`): compares `series.free_busy_status` with `instance.free_busy_status`. If differing, it emits `patch.insert("freeBusyStatus", now.map_or(Value::Null, Value::String))`. If a detached `VEVENT` has `TRANSP:TRANSPARENT` while the series has `TRANSP:OPAQUE` (or default), `instance_patch` emits `{"freeBusyStatus": "free"}`. If the detached component omits `TRANSP` while the series has `freeBusyStatus: "free"`, `instance_patch` emits `{"freeBusyStatus": null}`.
+  2. Outbound serialization (`modified_instance` -> `vevent_of`): when an override specifies `"freeBusyStatus": "free"`, it emits `TRANSP:TRANSPARENT` on the detached `VEVENT`. When `"freeBusyStatus": "busy"`, it emits `TRANSP:OPAQUE`. When `"freeBusyStatus": null`, it omits `TRANSP`, falling back to the standard RFC 5545 default `OPAQUE`.
+  3. Vocabulary validation: `maps_override_field` validates `"freeBusyStatus"` via `known_transparency`, allowing only `"free"`, `"busy"`, or `null`. Non-standard values (such as `"tentative"`, `"out-of-office"`, or arbitrary strings) are refused. Stalwart v1.0.0 parses `TRANSP` into `freeBusyStatus`, dropping unrecognized values.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server, free/busy scheduling is vital for meeting planning. If an occurrence of a recurring series is set to "Show Time as Free" (such as an optional workshop session), libical expects `TRANSP:TRANSPARENT` on that detached occurrence.
+  2. Suppressing `TRANSP` on `null` allows the instance to fall back to the default `OPAQUE` state without serializing redundant lines.
+  3. Refusing unknown transparency values prevents emitting invalid `TRANSP` tokens that break libical calendar queries or free/busy searches.
+- **Adjudication**:
+  Conforming specification boundary and free/busy scheduling fidelity. Maps `freeBusyStatus` to `TRANSP` bi-directionally, handles default omission and `null` resetting, and clamps values strictly to the two-value vocabulary.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.66 Divergence 66: Recurrence Override `priority` Integer Range Clamping (`0..=9`), Non-Integer Refusal, and Series Priority Removal via `null`
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.1.9 defines `PRIORITY` as an integer from 0 to 9, where 0 is undefined, 1 is highest, and 9 is lowest. RFC 8984 §4.4.1 defines `priority: UnsignedInt` (0..9). Both specifications share the same integer scale. Stalwart v1.0.0 parses `PRIORITY` into an integer and omits priority when undefined. In `jmap-ical`:
+  1. Inbound parsing (`instance_patch`): compares `series.priority` against `instance.priority`. If differing, it emits `patch.insert("priority", instance.priority.map_or(Value::Null, Value::from))`. An instance omitting `PRIORITY` when the series states one emits `"priority": null`.
+  2. Numeric type validation: `maps_override_field` inspects `value.as_i64()`. If the value is a string (`"5"`), a floating-point number (`5.5`), or a negative number, `as_i64()` either fails or yields an invalid value, causing `maps_override_field` to refuse the patch.
+  3. Range bounds: `known_priority` strictly checks `0..=9`. Integer values outside this range (such as `10` or higher) are refused.
+  4. Outbound serialization: an instance override with a valid priority emits `PRIORITY:n` on the detached `VEVENT`. An override with `"priority": null` omits `PRIORITY` from the detached component, cleanly clearing the priority relative to the series.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server and libical, `PRIORITY` is stored as an integer. Supplying strings or floats causes libical parse failures or type assertion crashes.
+  2. An occurrence of a recurring task or meeting may be flagged as urgent (`priority: 1`) while the series is ordinary (`priority: 5` or undefined). Preserving per-instance priority ensures high-priority occurrences are highlighted in EDS.
+  3. Setting `"priority": null` cleanly resets an instance whose parent series had an explicit priority, ensuring the detached instance does not retain the parent's priority in EDS.
+- **Adjudication**:
+  Conforming specification boundary and integer range safety. Clamps priority values to `0..=9`, rejects non-integer representations, and supports property removal via `null`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.67 Divergence 67: Recurrence Override `privacy` (`CLASS`) Classification Modeling, Closed Vocabulary Gating, and Confidentiality Isolation
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.1.3 defines `CLASS` with values `PUBLIC`, `PRIVATE`, and `CONFIDENTIAL`. RFC 8984 §4.4.3 defines `privacy` with values `"public"`, `"private"`, and `"secret"`. Both models represent the identical three-tier access scale. Stalwart v1.0.0 parses `CLASS` into `privacy` and maps `CONFIDENTIAL` to `"secret"`. In `jmap-ical`:
+  1. Inbound parsing (`instance_patch`): compares `series.privacy` against `instance.privacy`. If differing, it emits `patch.insert("privacy", now.map_or(Value::Null, Value::String))`. If a series is public and an instance is private, `instance_patch` emits `{"privacy": "private"}`. If a series is private and an instance has no `CLASS` line, `instance_patch` emits `{"privacy": null}` (reverting to default public).
+  2. Outbound serialization (`modified_instance` -> `vevent_of`): maps `"public"` to `CLASS:PUBLIC`, `"private"` to `CLASS:PRIVATE`, and `"secret"` to `CLASS:CONFIDENTIAL` on the detached `VEVENT`. An override with `"privacy": null` omits `CLASS`, reverting to default public classification.
+  3. Security and vocabulary gating: `maps_override_field` validates `privacy` via `known_privacy`, which only accepts `"public"`, `"private"`, `"secret"`, or `null`. Non-standard tokens (such as `RESTRICTED`, `X-PRIVATE`, or arbitrary strings) are refused.
+- **Specification and Architectural Context**:
+  1. In Evolution Data Server and CalDAV / JMAP deployments, classification controls whether meeting details (title, attendees, notes) are visible to delegates, assistants, or free/busy consumers.
+  2. If a detached instance override in a recurring series contains sensitive medical or financial discussions, marking that instance `private` or `secret` must faithfully emit `CLASS:PRIVATE` or `CLASS:CONFIDENTIAL` on the detached `VEVENT`.
+  3. Refusing unknown privacy strings at the validation boundary prevents false security assumptions: an unrecognized privacy tag will not be silently dropped to public visibility without warning.
+- **Adjudication**:
+  Conforming specification boundary and confidentiality access control fidelity. Maps the three-tier classification scale bi-directionally, rejects unmappable privacy strings, and ensures secure inheritance and override of privacy settings.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+

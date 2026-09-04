@@ -20444,3 +20444,385 @@ END:VCALENDAR\r\n";
     let detached = vevent(&out, 1);
     assert!(detached.contains("DURATION:PT2H"));
 }
+
+#[test]
+fn differential_oracle_recurrence_override_status_mapping_and_cancellation_semantics() {
+    // Divergence 64 against Stalwart differential oracle:
+    // In RFC 5545 section 3.8.1.11, STATUS on a recurring detached VEVENT takes CONFIRMED,
+    // CANCELLED, or TENTATIVE. In RFC 8984 section 4.4.4, status takes "confirmed", "cancelled",
+    // or "tentative".
+    // RFC 8984 section 4.3.4 distinguishes "excluded": true (an occurrence completely dropped via
+    // EXDATE) from "status": "cancelled" (an occurrence retained in the schedule as cancelled).
+    // In jmap-ical:
+    // 1. instance_patch records "status": "cancelled" or "tentative" when differing from series.
+    // 2. maps_recurrence_override enforces known_status, admitting null to revert to default.
+    // 3. Invalid status values like "needs-action" or "completed" are refused.
+    let status_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:status-override-001\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Weekly Standup\r\n\
+STATUS:CONFIRMED\r\n\
+RRULE:FREQ=WEEKLY;COUNT=3\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:status-override-001\r\n\
+RECURRENCE-ID:20260908T100000Z\r\n\
+DTSTART:20260908T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Cancelled Standup\r\n\
+STATUS:CANCELLED\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:status-override-001\r\n\
+RECURRENCE-ID:20260915T100000Z\r\n\
+DTSTART:20260915T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Tentative Standup\r\n\
+STATUS:TENTATIVE\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(status_ics).expect("parse status override event");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+
+    // 1. Cancelled occurrence is modeled via status: "cancelled", not excluded: true
+    let patch_cancelled = &overrides["2026-09-08T10:00:00"];
+    assert_eq!(
+        patch_cancelled.get("status").and_then(Value::as_str),
+        Some("cancelled")
+    );
+    assert_eq!(patch_cancelled.get("excluded"), None);
+
+    // 2. Tentative occurrence is modeled via status: "tentative"
+    let patch_tentative = &overrides["2026-09-15T10:00:00"];
+    assert_eq!(
+        patch_tentative.get("status").and_then(Value::as_str),
+        Some("tentative")
+    );
+
+    // 3. Serialization emits detached VEVENTs with STATUS:CANCELLED and STATUS:TENTATIVE
+    let out = event_to_ical(&ev);
+    assert!(out.contains("STATUS:CANCELLED"));
+    assert!(out.contains("STATUS:TENTATIVE"));
+    assert!(!out.contains("EXDATE"));
+
+    // 4. Validation: known_status accepts valid statuses and null, rejects invalid ones
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"status": "cancelled"})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"status": "tentative"})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"status": "confirmed"})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"status": null})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"status": "needs-action"})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T10:00:00",
+        &json!({"status": "completed"})
+    ));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_free_busy_status_and_transparency_mapping() {
+    // Divergence 65 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.2.7 defines TRANSP (OPAQUE or TRANSPARENT).
+    // RFC 8984 section 4.4.2 defines freeBusyStatus ("busy" or "free").
+    // Both specifications default to busy/opaque when omitted.
+    // In jmap-ical:
+    // 1. instance_patch records freeBusyStatus when differing from series.
+    // 2. maps_recurrence_override admits "free", "busy", and null, rejecting non-standard tokens.
+    // 3. Detached VEVENT serialization emits TRANSP:TRANSPARENT for "free", TRANSP:OPAQUE for "busy".
+    let fb_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:fb-override-001\r\n\
+DTSTART:20260901T140000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Office Hours Series\r\n\
+TRANSP:OPAQUE\r\n\
+RRULE:FREQ=WEEKLY;COUNT=3\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:fb-override-001\r\n\
+RECURRENCE-ID:20260908T140000Z\r\n\
+DTSTART:20260908T140000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Open Office Hours (Free)\r\n\
+TRANSP:TRANSPARENT\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:fb-override-001\r\n\
+RECURRENCE-ID:20260915T140000Z\r\n\
+DTSTART:20260915T140000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Busy Office Hours\r\n\
+TRANSP:OPAQUE\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(fb_ics).expect("parse freebusy override event");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+
+    // Occurrence 1 with TRANSP:TRANSPARENT differs from series TRANSP:OPAQUE -> "free"
+    let patch_free = &overrides["2026-09-08T14:00:00"];
+    assert_eq!(
+        patch_free.get("freeBusyStatus").and_then(Value::as_str),
+        Some("free")
+    );
+
+    // Occurrence 2 with TRANSP:OPAQUE matches series -> freeBusyStatus is omitted
+    let patch_busy = &overrides["2026-09-15T14:00:00"];
+    assert_eq!(patch_busy.get("freeBusyStatus"), None);
+
+    // Validation: known_transparency accepts "free", "busy", null; rejects invalid tokens
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T14:00:00",
+        &json!({"freeBusyStatus": "free"})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T14:00:00",
+        &json!({"freeBusyStatus": "busy"})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T14:00:00",
+        &json!({"freeBusyStatus": null})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T14:00:00",
+        &json!({"freeBusyStatus": "tentative"})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T14:00:00",
+        &json!({"freeBusyStatus": "out-of-office"})
+    ));
+
+    // Serialization check: detached VEVENT emits TRANSP:TRANSPARENT
+    let out = event_to_ical(&ev);
+    assert!(out.contains("TRANSP:TRANSPARENT"));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_priority_range_clamping_and_non_integer_refusal() {
+    // Divergence 66 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.1.9 and RFC 8984 section 4.4.1 define priority as integer 0..=9.
+    // In jmap-ical:
+    // 1. instance_patch records priority integer when differing from series, or null when cleared.
+    // 2. maps_recurrence_override enforces integer range 0..=9 and admits null.
+    // 3. String numbers, floating point numbers, and out-of-range integers are refused.
+    let priority_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:priority-override-001\r\n\
+DTSTART:20260901T150000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Team Review Series\r\n\
+PRIORITY:5\r\n\
+RRULE:FREQ=WEEKLY;COUNT=3\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:priority-override-001\r\n\
+RECURRENCE-ID:20260908T150000Z\r\n\
+DTSTART:20260908T150000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Urgent Review\r\n\
+PRIORITY:1\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:priority-override-001\r\n\
+RECURRENCE-ID:20260915T150000Z\r\n\
+DTSTART:20260915T150000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Unprioritized Review\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(priority_ics).expect("parse priority override event");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+
+    // Occurrence 1 has PRIORITY:1 -> patch has "priority": 1
+    let patch_urgent = &overrides["2026-09-08T15:00:00"];
+    assert_eq!(
+        patch_urgent.get("priority").and_then(Value::as_i64),
+        Some(1)
+    );
+
+    // Occurrence 2 omits PRIORITY where series has 5 -> patch has "priority": null
+    let patch_cleared = &overrides["2026-09-15T15:00:00"];
+    assert_eq!(patch_cleared.get("priority"), Some(&Value::Null));
+
+    // Validation: known_priority admits 0..=9 and null
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"priority": 1})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"priority": 0})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"priority": 9})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"priority": null})
+    ));
+
+    // Refusal: out-of-range integer, negative, string number, float
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"priority": 10})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"priority": -1})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"priority": "1"})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T15:00:00",
+        &json!({"priority": 2.5})
+    ));
+
+    // Serialization check: urgent occurrence emits PRIORITY:1; cleared omits PRIORITY
+    let out = event_to_ical(&ev);
+    assert!(out.contains("PRIORITY:1"));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_privacy_classification_and_confidentiality_isolation() {
+    // Divergence 67 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.1.3 defines CLASS (PUBLIC, PRIVATE, CONFIDENTIAL).
+    // RFC 8984 section 4.4.3 defines privacy ("public", "private", "secret").
+    // In jmap-ical:
+    // 1. instance_patch records privacy when differing from series, or null when cleared to default.
+    // 2. maps_recurrence_override admits "public", "private", "secret", and null.
+    // 3. Unrecognized classifications like "confidential" (raw ical name) or "restricted" are refused.
+    let privacy_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:privacy-override-001\r\n\
+DTSTART:20260901T160000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:General 1-on-1 Series\r\n\
+CLASS:PUBLIC\r\n\
+RRULE:FREQ=WEEKLY;COUNT=3\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:privacy-override-001\r\n\
+RECURRENCE-ID:20260908T160000Z\r\n\
+DTSTART:20260908T160000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Private Discussion\r\n\
+CLASS:PRIVATE\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:privacy-override-001\r\n\
+RECURRENCE-ID:20260915T160000Z\r\n\
+DTSTART:20260915T160000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Compensation Review (Secret)\r\n\
+CLASS:CONFIDENTIAL\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(privacy_ics).expect("parse privacy override event");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+
+    // Occurrence 1 CLASS:PRIVATE -> "privacy": "private"
+    let patch_private = &overrides["2026-09-08T16:00:00"];
+    assert_eq!(
+        patch_private.get("privacy").and_then(Value::as_str),
+        Some("private")
+    );
+
+    // Occurrence 2 CLASS:CONFIDENTIAL -> "privacy": "secret"
+    let patch_secret = &overrides["2026-09-15T16:00:00"];
+    assert_eq!(
+        patch_secret.get("privacy").and_then(Value::as_str),
+        Some("secret")
+    );
+
+    // Validation: known_privacy admits "public", "private", "secret", and null
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T16:00:00",
+        &json!({"privacy": "private"})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T16:00:00",
+        &json!({"privacy": "secret"})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T16:00:00",
+        &json!({"privacy": "public"})
+    ));
+    assert!(maps_recurrence_override(
+        &ev,
+        "2026-09-08T16:00:00",
+        &json!({"privacy": null})
+    ));
+
+    // Refusal: raw iCal name "confidential", unknown vendor string, empty string
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T16:00:00",
+        &json!({"privacy": "confidential"})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T16:00:00",
+        &json!({"privacy": "restricted"})
+    ));
+    assert!(!maps_recurrence_override(
+        &ev,
+        "2026-09-08T16:00:00",
+        &json!({"privacy": ""})
+    ));
+
+    // Serialization check: detached VEVENT emits CLASS:PRIVATE and CLASS:CONFIDENTIAL
+    let out = event_to_ical(&ev);
+    assert!(out.contains("CLASS:PRIVATE"));
+    assert!(out.contains("CLASS:CONFIDENTIAL"));
+}
