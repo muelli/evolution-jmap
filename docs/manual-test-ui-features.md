@@ -77,6 +77,16 @@ Install the module the usual way (`cmake --install`, then
 4. Confirm the message is held (`undoStatus: pending`, a future `sendAt`) and
    then delivered at the chosen time. A refusal keeps the composer open and
    names the Drafts residue.
+5. Expect the sent copy to appear in **Sent as soon as the server accepts**,
+   before the hold elapses — `onSuccessUpdateEmail` fires at acceptance, not
+   at release. Filing it into the `scheduled`-role mailbox instead was tested
+   against Fastmail and is worse: the copy is never moved out again. See
+   `send_later/submit.rs` for the whole argument.
+
+Verified live against Fastmail (2026-09-04): `HOLDFOR=120` was accepted with
+`sendAt` two minutes out and the message arrived five seconds after it, so
+Fastmail honours RFC 4865 even though it advertises an empty
+`submissionExtensions`.
 
 ## Snooze
 
