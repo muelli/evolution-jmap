@@ -102,6 +102,10 @@ fn lookup_first_service_target(
         return None;
     }
 
+    // glib#4041: the sync call below parks its completion bookkeeping on the
+    // thread-default context; give it one that is drained when this returns.
+    let _context = crate::main_context::PrivateContext::push();
+
     let mut error: *mut GError = ptr::null_mut();
     // SAFETY: `resolver` is a live `GResolver`; the three names are valid
     // NUL-terminated strings for the duration of the call; a NULL
