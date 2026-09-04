@@ -17766,3 +17766,266 @@ END:VCALENDAR\r\n";
     assert_eq!(ev_event.priority, None);
     assert!(ev_event.extra.is_empty());
 }
+
+#[test]
+fn differential_oracle_status_mapping_omission_and_task_status_rejection() {
+    // Divergence 24 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.1.11 defines STATUS for VEVENT: TENTATIVE, CONFIRMED, CANCELLED.
+    // RFC 8984 section 4.4.5 defines status: String (default: "confirmed").
+    // Stalwart v1.0.0 defaults an omitted STATUS to "confirmed" during CalendarEvent/parse.
+    // In contrast, jmap-ical:
+    // 1. Maps CONFIRMED to "confirmed", CANCELLED to "cancelled", and TENTATIVE to "tentative" (case-insensitive).
+    // 2. Returns status: None when STATUS is omitted from VEVENT, avoiding spurious patch diffs against server records.
+    // 3. Drops task-specific (VTODO) statuses (NEEDS-ACTION, COMPLETED, IN-PROCESS) and unknown tokens to None.
+    // 4. Outbound export emits STATUS only when status is Some("confirmed" | "cancelled" | "tentative"), and omits it when None.
+    let make_ics = |status_line: &str| -> String {
+        format!(
+            "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-status-test-001\r\n\
+DTSTART:20260910T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Status Mapping Test\r\n\
+{}\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+            status_line
+        )
+    };
+
+    // 1. Standard statuses
+    let ev_conf = ical_to_event(&make_ics("STATUS:CONFIRMED")).expect("parse confirmed");
+    assert_eq!(ev_conf.status.as_deref(), Some("confirmed"));
+    assert!(ev_conf.extra.is_empty());
+    let out_conf = event_to_ical(&ev_conf);
+    assert_eq!(line(&out_conf, "STATUS:"), "STATUS:CONFIRMED");
+
+    let ev_canc = ical_to_event(&make_ics("STATUS:CANCELLED")).expect("parse cancelled");
+    assert_eq!(ev_canc.status.as_deref(), Some("cancelled"));
+    assert!(ev_canc.extra.is_empty());
+    let out_canc = event_to_ical(&ev_canc);
+    assert_eq!(line(&out_canc, "STATUS:"), "STATUS:CANCELLED");
+
+    let ev_tent = ical_to_event(&make_ics("STATUS:TENTATIVE")).expect("parse tentative");
+    assert_eq!(ev_tent.status.as_deref(), Some("tentative"));
+    assert!(ev_tent.extra.is_empty());
+    let out_tent = event_to_ical(&ev_tent);
+    assert_eq!(line(&out_tent, "STATUS:"), "STATUS:TENTATIVE");
+
+    // Case-insensitivity
+    let ev_lower = ical_to_event(&make_ics("STATUS:confirmed")).expect("parse lowercase confirmed");
+    assert_eq!(ev_lower.status.as_deref(), Some("confirmed"));
+
+    // 2. Omitted STATUS yields None and is omitted on export
+    let ev_none = ical_to_event(&make_ics("")).expect("parse omitted status");
+    assert_eq!(ev_none.status, None);
+    assert!(ev_none.extra.is_empty());
+    let out_none = event_to_ical(&ev_none);
+    assert!(without(&out_none, "STATUS:"));
+
+    // 3. Task-specific or unknown statuses dropped to None
+    let ev_todo = ical_to_event(&make_ics("STATUS:COMPLETED")).expect("parse completed");
+    assert_eq!(ev_todo.status, None);
+    assert!(ev_todo.extra.is_empty());
+
+    let ev_in_proc = ical_to_event(&make_ics("STATUS:IN-PROCESS")).expect("parse in-process");
+    assert_eq!(ev_in_proc.status, None);
+    assert!(ev_in_proc.extra.is_empty());
+
+    let ev_needs = ical_to_event(&make_ics("STATUS:NEEDS-ACTION")).expect("parse needs-action");
+    assert_eq!(ev_needs.status, None);
+    assert!(ev_needs.extra.is_empty());
+
+    let ev_unknown = ical_to_event(&make_ics("STATUS:BOGUS")).expect("parse bogus");
+    assert_eq!(ev_unknown.status, None);
+    assert!(ev_unknown.extra.is_empty());
+}
+
+#[test]
+fn differential_oracle_duration_dtend_calculation_and_outbound_preference() {
+    // Divergence 25 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.2.2 and 3.8.2.4 permit specifying bounds via DTSTART+DTEND or DTSTART+DURATION.
+    // RFC 8984 section 4.1.4 models event length strictly as duration: Duration (default: "PT0S").
+    // Stalwart v1.0.0 parses DTEND into duration, and emits "PT0S" when duration is zero or unstated.
+    // In contrast, jmap-ical:
+    // 1. Prioritizes explicit DURATION when present, falling back to computing duration from DTEND - DTSTART.
+    // 2. Returns duration: None for zero length (PT0S) and negative lengths, maintaining server omission defaults.
+    // 3. On outbound export, always serializes event.duration as DURATION and never writes DTEND,
+    //    preventing DST transition calculation skew across daylight saving shifts.
+    let make_ics = |extra_lines: &str| -> String {
+        format!(
+            "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-duration-test-001\r\n\
+DTSTART:20260910T100000Z\r\n\
+{}\r\n\
+SUMMARY:Duration vs DTEND Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n",
+            extra_lines
+        )
+    };
+
+    // 1. DTEND converted to duration
+    let ev_dtend = ical_to_event(&make_ics("DTEND:20260910T113000Z")).expect("parse dtend");
+    assert_eq!(ev_dtend.duration.as_deref(), Some("PT1H30M"));
+    assert!(ev_dtend.extra.is_empty());
+    let out_dtend = event_to_ical(&ev_dtend);
+    assert_eq!(line(&out_dtend, "DURATION:"), "DURATION:PT1H30M");
+    assert!(without(&out_dtend, "DTEND:"));
+
+    // 2. Explicit DURATION takes precedence if both are present
+    let ev_both =
+        ical_to_event(&make_ics("DURATION:PT2H\r\nDTEND:20260910T110000Z")).expect("parse both");
+    assert_eq!(ev_both.duration.as_deref(), Some("PT2H"));
+    assert!(ev_both.extra.is_empty());
+
+    // 3. Zero duration: calculated zero duration (DTSTART == DTEND) yields None,
+    // while explicit stated DURATION:PT0S is preserved as Some("PT0S")
+    let ev_zero_end = ical_to_event(&make_ics("DTEND:20260910T100000Z")).expect("parse zero end");
+    assert_eq!(ev_zero_end.duration, None);
+
+    let ev_zero_dur = ical_to_event(&make_ics("DURATION:PT0S")).expect("parse zero dur");
+    assert_eq!(ev_zero_dur.duration.as_deref(), Some("PT0S"));
+    let out_zero_dur = event_to_ical(&ev_zero_dur);
+    assert_eq!(line(&out_zero_dur, "DURATION:"), "DURATION:PT0S");
+
+    // 4. Negative duration (end before start or negative duration) yields None
+    let ev_neg_end =
+        ical_to_event(&make_ics("DTEND:20260910T090000Z")).expect("parse negative end");
+    assert_eq!(ev_neg_end.duration, None);
+
+    let ev_neg_dur = ical_to_event(&make_ics("DURATION:-PT1H")).expect("parse negative duration");
+    assert_eq!(ev_neg_dur.duration, None);
+}
+
+#[test]
+fn differential_oracle_show_without_time_all_day_representation_and_defensive_fallback() {
+    // Divergence 26 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.2.4 defines all-day events using DTSTART;VALUE=DATE:YYYYMMDD.
+    // RFC 8984 section 4.1.5 models all-day events as showWithoutTime: Boolean (default: false),
+    // with start at midnight (00:00:00) and timeZone: null.
+    // Stalwart v1.0.0 parses VALUE=DATE into showWithoutTime: true and timeZone: null.
+    // In contrast, jmap-ical:
+    // 1. Parses VALUE=DATE (no 'T') into start at midnight, time_zone: None, and show_without_time: Some(true).
+    // 2. Timed events (with 'T') return show_without_time: None rather than Some(false), preserving server defaults.
+    // 3. Outbound export validates all all-day invariants: midnight start, whole day duration, no timeZone,
+    //    and no sub-day recurrence rules before writing DTSTART;VALUE=DATE.
+    // 4. If an invariant fails, jmap-ical defensively falls back to writing a timed DTSTART to prevent time truncation.
+    let ics_all_day = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-allday-test-001\r\n\
+DTSTART;VALUE=DATE:20260915\r\n\
+DTEND;VALUE=DATE:20260916\r\n\
+SUMMARY:All Day Conference\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_allday = ical_to_event(ics_all_day).expect("parse all day");
+    assert_eq!(ev_allday.start.as_deref(), Some("2026-09-15T00:00:00"));
+    assert_eq!(ev_allday.time_zone, None);
+    assert_eq!(ev_allday.show_without_time, Some(true));
+    assert_eq!(ev_allday.duration.as_deref(), Some("P1D"));
+    assert!(ev_allday.extra.is_empty());
+
+    let out_allday = event_to_ical(&ev_allday);
+    assert_eq!(
+        line(&out_allday, "DTSTART;VALUE=DATE:"),
+        "DTSTART;VALUE=DATE:20260915"
+    );
+    assert_eq!(line(&out_allday, "DURATION:"), "DURATION:P1D");
+    assert!(without(&out_allday, "TZID="));
+
+    // Timed event has show_without_time: None
+    let ics_timed = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-timed-test-001\r\n\
+DTSTART:20260915T140000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Timed Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_timed = ical_to_event(ics_timed).expect("parse timed");
+    assert_eq!(ev_timed.show_without_time, None);
+
+    // Defensive fallback: show_without_time is Some(true), but start is not at midnight (14:30:00).
+    // Export falls back to timed DTSTART rather than truncating start time.
+    let mut ev_broken = ev_allday.clone();
+    ev_broken.start = Some("2026-09-15T14:30:00".to_owned());
+    let out_broken = event_to_ical(&ev_broken);
+    assert!(without(&out_broken, "VALUE=DATE"));
+    assert_eq!(line(&out_broken, "DTSTART:"), "DTSTART:20260915T143000");
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_exdate_rdate_and_thisandfuture_boundary() {
+    // Divergence 27 against Stalwart differential oracle:
+    // RFC 5545 specifies EXDATE (exceptions), RDATE (additions), and RECURRENCE-ID;RANGE=THISANDFUTURE.
+    // RFC 8984 section 4.3.4 models all instance exceptions within recurrenceOverrides.
+    // Stalwart v1.0.0 maps EXDATE to {"excluded": true} and RDATE to {}.
+    // In contrast, jmap-ical's read_overrides:
+    // 1. Maps EXDATE to {"excluded": true} and RDATE to {}.
+    // 2. Resolves collisions where an instant is in both RDATE and EXDATE by letting EXDATE win (excluded).
+    // 3. Detached VEVENT components override RDATE/EXDATE entries with specific property patches.
+    // 4. Skips RECURRENCE-ID;RANGE=THISANDFUTURE because JSCalendar recurrenceOverrides cannot express
+    //    future series modification or splitting, avoiding corruption of subsequent instances.
+    // 5. Returns recurrence_overrides: None when no overrides exist, avoiding empty map diff churn.
+    let ics_overrides = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-recurrence-test-001\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+RRULE:FREQ=DAILY;COUNT=10\r\n\
+EXDATE:20260903T100000Z\r\n\
+RDATE:20260915T100000Z\r\n\
+SUMMARY:Daily Standup\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev = ical_to_event(ics_overrides).expect("parse series with exdate and rdate");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+    assert_eq!(
+        overrides.get("2026-09-03T10:00:00"),
+        Some(&serde_json::json!({ "excluded": true }))
+    );
+    assert_eq!(
+        overrides.get("2026-09-15T10:00:00"),
+        Some(&serde_json::json!({}))
+    );
+    assert!(ev.extra.is_empty());
+
+    // Outbound export of excluded override emits EXDATE
+    let out = event_to_ical(&ev);
+    assert_eq!(line(&out, "EXDATE:"), "EXDATE:20260903T100000Z");
+
+    // RECURRENCE-ID with RANGE=THISANDFUTURE is skipped to protect series integrity
+    let ics_thisandfuture = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Exporter//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-recurrence-test-002\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+RRULE:FREQ=DAILY;COUNT=10\r\n\
+SUMMARY:Daily Standup Series\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:oracle-recurrence-test-002\r\n\
+RECURRENCE-ID;RANGE=THISANDFUTURE:20260905T100000Z\r\n\
+DTSTART:20260905T110000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Rescheduled Standups\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_taf = ical_to_event(ics_thisandfuture).expect("parse thisandfuture");
+    assert_eq!(ev_taf.recurrence_overrides, None);
+    assert!(ev_taf.extra.is_empty());
+}

@@ -1061,6 +1061,80 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.24 Divergence 24: `STATUS` Property Mapping, Cancellation Semantics, Task-Status Rejection, and Default Status Omission vs Explicit "confirmed"
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.1.11 defines `STATUS` for `VEVENT` with values `TENTATIVE`, `CONFIRMED`, `CANCELLED`. RFC 8984 §4.4.5 defines `status: String (default: "confirmed")` with standard values `"confirmed"`, `"cancelled"`, `"tentative"`. Stalwart v1.0.0's `CalendarEvent/parse` defaults an unstated `STATUS` in incoming `VEVENT` to `"confirmed"` (`status: "confirmed"`). In contrast, `jmap-ical`'s `read_vevent`:
+  1. Case-insensitively maps `CONFIRMED` to `"confirmed"`, `CANCELLED` to `"cancelled"`, and `TENTATIVE` to `"tentative"`.
+  2. When `STATUS` is omitted from `VEVENT`, returns `status: None` rather than synthesizing `Some("confirmed")`.
+  3. If `STATUS` contains unknown values or task-only statuses (such as RFC 5545 `VTODO` values `NEEDS-ACTION`, `COMPLETED`, `IN-PROCESS` or `VJOURNAL` values `DRAFT`, `FINAL`), drops them to `None` without polluting `event.extra`.
+  4. Outbound serialization (`ical_status`):
+     - Emits `STATUS:CONFIRMED`, `STATUS:CANCELLED`, or `STATUS:TENTATIVE` when `event.status` matches one of the three standard values.
+     - When `event.status` is `None` or an unmapped string, omits the `STATUS` line entirely.
+- **Specification and Architectural Context**:
+  1. In RFC 8984 §4.4.5, `status` defaults to `"confirmed"`. However, in JMAP client synchronization (`jmap-cal-sync`), the client detects user modifications by computing diffs against the server record. If `ical_to_event` defaulted an omitted `STATUS` to `"confirmed"`, an appointment imported without `STATUS` would propose `{"status": "confirmed"}` during sync if the server had omitted the property.
+  2. Evolution Data Server (`ECalComponent` / `libical`) tracks appointment status via `e_cal_component_get_status`. Non-event statuses like `COMPLETED` belong to tasks (`VTODO`), not appointments. Dropping them on import ensures EDS appointment caches remain unpolluted.
+  3. Preserving `None` for unstated status maintains semantic neutrality and prevents spurious sync mutations.
+- **Adjudication**:
+  Justified architectural deviation and conforming boundary validation. Emitting `None` when unstated avoids spurious patch operations against server records.
+- **Status**:
+  Justified architectural deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.25 Divergence 25: `DTEND` vs `DURATION` Calculation, Zero-Duration Representation, and Outbound Duration Preference
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.2.2 and §3.8.2.4 permit an event to specify its bounds either using `DTSTART` + `DTEND` or `DTSTART` + `DURATION`. RFC 8984 §4.1.4 models event length strictly as `duration: Duration (default: "PT0S")`, with no standalone `end` property. Stalwart v1.0.0 parses `DTEND` to compute `duration`, and when neither `DTEND` nor `DURATION` is given, or when `DTSTART == DTEND`, it emits `"duration": "PT0S"`. In contrast, `jmap-ical`'s `read_duration`:
+  1. Prioritizes explicit `DURATION` if present via `stated_duration(&value)`.
+  2. If `DURATION` is absent, computes `seconds = end - start` from `DTSTART` and `DTEND`, converting to ISO 8601 duration via `to_duration(seconds)`.
+  3. Calculated zero duration (`DTSTART == DTEND`) or negative duration (end before start) yields `None` (`duration: None`).
+  4. Stated explicit `DURATION:PT0S` is preserved verbatim as `Some("PT0S")`, while negative stated durations (`DURATION:-PT1H`) are rejected as `None`.
+  5. Outbound serialization: `vevent_of` always serializes `event.duration` as `DURATION`, and never emits `DTEND`.
+- **Specification and Architectural Context**:
+  1. In RFC 8984, an event has `start` and `duration`. Serializing `DURATION` on outbound export avoids calculating wall-clock end times across daylight saving transitions or timezone boundaries, where adding seconds to wall clock times can yield incorrect local calendar end dates.
+  2. Returning `None` when duration is calculated as zero or unstated complies with diff-based sync: RFC 8984 defaults `duration` to `"PT0S"`, so omitting it leaves the property at its natural server default without client-asserted property patches.
+  3. Negative durations (events ending before they start) violate temporal coherence; dropping them protects EDS and downstream consumers from malformed calendar data.
+- **Adjudication**:
+  Deliberate mapping design and synchronization fidelity boundary. Serializing `DURATION` avoids DST transition skew, and dropping zero/negative calculated duration preserves server defaults and prevents malformed time intervals.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.26 Divergence 26: `showWithoutTime` (All-Day Event) DATE vs DATE-TIME Representation, Floating Time Zone Stripping, and Midnight Alignment
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.2.4 defines all-day events using `DTSTART;VALUE=DATE:YYYYMMDD` without a time component or `TZID` parameter. RFC 8984 §4.1.5 models all-day events as `showWithoutTime: Boolean (default: false)` with `start` as a `LocalDateTime` at midnight (`00:00:00`) and `timeZone: null`. Stalwart v1.0.0 parses `VALUE=DATE` into `showWithoutTime: true`, setting `timeZone` to null and `start` to midnight. In contrast, `jmap-ical`'s `read_start`:
+  1. Detects `VALUE=DATE` (lack of `'T'` in raw string) and produces `start: Some("YYYY-MM-DDT00:00:00")`, `time_zone: None`, and `show_without_time: Some(true)`.
+  2. For timed events (containing `'T'`), returns `show_without_time: None` rather than `Some(false)`.
+  3. Outbound serialization ([`shows_without_time`]):
+     - Strictly validates that all all-day invariants hold: `show_without_time == Some(true)`, `time_zone.is_none()`, `at_midnight(start)`, `duration` (if present) is whole days, recurrence `UNTIL` is at midnight without time-of-day sub-rules (`BYHOUR`, `BYMINUTE`, `BYSECOND`), and all override instances start at midnight.
+     - If any invariant is violated (for example an event marked `showWithoutTime: true` that starts at 14:00 or has an hourly rule), `jmap-ical` safely falls back to serializing as a timed `DATE-TIME` event rather than generating invalid iCalendar syntax or truncating non-zero times.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.2.19 explicitly forbids `TZID` on `VALUE=DATE` properties.
+  2. In Evolution Data Server, all-day appointments are displayed in the day grid header rather than time slots. If a malformed event arrived with non-midnight start time or non-day duration, coercing it to `VALUE=DATE` would silently drop the start time.
+  3. Falling back to `DATE-TIME` preserves temporal accuracy while allowing `jmap-cal-sync` to round-trip data safely.
+- **Adjudication**:
+  Conforming specification validation and defensive fallback design. Preserves exact timing when all-day invariants are violated, avoiding data truncation.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.27 Divergence 27: `EXDATE` and `RDATE` Instance Modeling via `recurrenceOverrides` (`excluded: true` vs `{}`), Period Durations, and `THISANDFUTURE` Boundary
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.5.1 specifies `EXDATE` (exception dates) and §3.8.5.2 specifies `RDATE` (recurrence dates). RFC 8984 §4.3.4 models individual recurrence exceptions and additions inside `recurrenceOverrides: Map<LocalDateTime, PatchObject>`. Stalwart v1.0.0 maps `EXDATE` lines into `recurrenceOverrides` with `{"excluded": true}`, and `RDATE` lines into `recurrenceOverrides` with `{}`. In contrast, `jmap-ical`'s `read_overrides`:
+  1. Maps `RDATE` values to `{}` (or `{"duration": length}` if `RDATE;VALUE=PERIOD` specifies an instance-specific length).
+  2. Maps `EXDATE` values to `{"excluded": true}`. If an instant appears in both `RDATE` and `EXDATE`, `EXDATE` takes precedence per RFC 5545 §3.8.5.1.
+  3. Detached `VEVENT` components with matching `RECURRENCE-ID` take precedence over `RDATE` and `EXDATE`, populating property-specific patch diffs.
+  4. If a `RECURRENCE-ID` carries `RANGE=THISANDFUTURE` (RFC 5545 §3.2.13), `read_overrides` deliberately skips it rather than applying the patch to only a single occurrence, because JSCalendar `recurrenceOverrides` has no representation for series truncation or future ranges.
+  5. If no overrides, additions, or exceptions exist, `read_overrides` returns `None` (`recurrence_overrides: None`) rather than emitting an empty `{}` map.
+  6. Outbound serialization: emits `EXDATE` for instances with `excluded: true`, and separate `VEVENT` components with `RECURRENCE-ID` for modified instances.
+- **Specification and Architectural Context**:
+  1. JSCalendar models all recurrence exceptions (whether deleted instances, added dates, or modified occurrences) inside a unified `recurrenceOverrides` dictionary keyed by local start time.
+  2. RFC 5545's `RANGE=THISANDFUTURE` splits a recurring series into two series at the given instant. Because `recurrenceOverrides` only modifies individual instances, applying `THISANDFUTURE` to a single key would alter that day but leave all subsequent instances in their unmodified series state, creating a severe semantic divergence.
+  3. Returning `None` when no overrides exist avoids empty `{}` map diff churn in `jmap-cal-sync`.
+- **Adjudication**:
+  Deliberate mapping design and specification boundary safety. Handles `EXDATE` and `RDATE` cleanly while protecting recurrence integrity by skipping unrepresentable `THISANDFUTURE` ranges.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
 
 
 
