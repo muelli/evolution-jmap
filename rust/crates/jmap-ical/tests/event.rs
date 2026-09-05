@@ -29759,3 +29759,268 @@ fn differential_oracle_ical_error_display_formatting_and_diagnostics() {
     let dyn_err: &dyn std::error::Error = &err_no_event;
     assert!(dyn_err.source().is_none());
 }
+
+#[test]
+fn differential_oracle_rrule_entry_transient_wrapper_and_entry_ext() {
+    // Divergence 180 against Stalwart differential oracle:
+    // rrule_entry, Parser, make_entry, and EntryExt:
+    // Synthetic Transient Envelope Isolation for Recurrence Grammar Validation,
+    // and Typed ICalendarEntry AST Parameter Attachment.
+
+    // 1. Valid recurrence rule wrapped and parsed via rrule_entry into typed RecurrenceRule AST node
+    let entry_valid = jmap_ical::event::rrule_entry("FREQ=DAILY;INTERVAL=2;COUNT=5")
+        .expect("valid recurrence rule parses");
+    assert_eq!(entry_valid.name.as_str(), "RRULE");
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(&entry_valid),
+        "FREQ=DAILY;COUNT=5;INTERVAL=2"
+    );
+    assert!(
+        matches!(
+            entry_valid.values.first(),
+            Some(calcard::icalendar::ICalendarValue::RecurrenceRule(_))
+        ),
+        "entry carries typed RecurrenceRule AST value"
+    );
+
+    // 2. Fallback on empty or non-recurrence value maintains valid Text AST entry
+    let entry_empty = jmap_ical::event::rrule_entry("").expect("empty rrule string parses");
+    assert_eq!(entry_empty.name.as_str(), "RRULE");
+    assert_eq!(jmap_ical::event::entry_raw_value(&entry_empty), "");
+    assert!(
+        matches!(
+            entry_empty.values.first(),
+            Some(calcard::icalendar::ICalendarValue::Text(_))
+        ),
+        "empty rule falls back to Text AST entry"
+    );
+
+    // 3. make_entry property creation and fallback for standard and non-standard properties
+    let entry_summary = jmap_ical::event::make_entry("SUMMARY", "Team Meeting");
+    assert_eq!(entry_summary.name.as_str(), "SUMMARY");
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(&entry_summary),
+        "Team Meeting"
+    );
+
+    let entry_custom = jmap_ical::event::make_entry("X-CUSTOM-PROP", "CustomValue");
+    assert_eq!(entry_custom.name.as_str(), "X-CUSTOM-PROP");
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(&entry_custom),
+        "CustomValue"
+    );
+
+    // 4. EntryExt parameter attachment: single and multiple parameters
+    use jmap_ical::event::EntryExt;
+    let entry_with_param = jmap_ical::event::make_entry("LOCATION", "Conference Room A")
+        .with_named_param("X-JMAP-KEY", "loc-123");
+    assert_eq!(
+        jmap_ical::event::entry_param(&entry_with_param, "X-JMAP-KEY").as_deref(),
+        Some("loc-123")
+    );
+
+    let entry_multi_param = jmap_ical::event::make_entry("CONFERENCE", "https://meet.example.com")
+        .with_named_params("FEATURE", ["AUDIO", "VIDEO", "SCREEN"]);
+    let features = jmap_ical::event::entry_param_values(&entry_multi_param, "FEATURE");
+    assert_eq!(features, vec!["AUDIO", "VIDEO", "SCREEN"]);
+}
+
+#[test]
+fn differential_oracle_strip_and_date_time_syntax_validation() {
+    // Divergence 181 against Stalwart differential oracle:
+    // strip, to_ical_date_time, and to_utc_date_time:
+    // Strict Date-Time Separator Stripping, Exact Digit Bounds (digits = 8, 6),
+    // Sub-Second / Timezone Disallowance on Local Forms, and Canonical 'Z' UTC Enforcement.
+
+    // 1. strip helper: exact digit count and separator filtering
+    assert_eq!(
+        jmap_ical::event::strip("2026-09-05", '-', 8),
+        Some("20260905".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::strip("14:30:45", ':', 6),
+        Some("143045".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::strip("2026-09-05-extra", '-', 8),
+        None,
+        "rejects string with extra characters"
+    );
+    assert_eq!(
+        jmap_ical::event::strip("20260905", '-', 8),
+        Some("20260905".to_string()),
+        "accepts digits without separator"
+    );
+    assert_eq!(
+        jmap_ical::event::strip("2026-09-0a", '-', 8),
+        None,
+        "rejects non-ascii-digit characters"
+    );
+
+    // 2. to_ical_date_time: converts ISO 8601 to compact iCalendar form
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2026-09-05T14:30:45"),
+        Some("20260905T143045".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2026-09-05T14:30:45.123"),
+        None,
+        "sub-second fractions are strictly rejected by strip"
+    );
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2026-09-05T14:30:45+02:00"),
+        None,
+        "embedded timezone offsets are rejected by strip"
+    );
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2026-02-30T10:00:00"),
+        None,
+        "nonexistent Gregorian dates rejected by exists"
+    );
+
+    // 3. to_utc_date_time: requires trailing Z/z designator
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-09-05T14:30:45Z"),
+        Some("20260905T143045Z".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-09-05T14:30:45z"),
+        Some("20260905T143045Z".to_string()),
+        "lowercase z normalized to uppercase Z"
+    );
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-09-05T14:30:45"),
+        None,
+        "missing trailing Z is refused"
+    );
+}
+
+#[test]
+fn differential_oracle_ast_case_insensitive_lookup_and_parameter_flattening() {
+    // Divergence 182 against Stalwart differential oracle:
+    // component_entry, component_entries, component_text, entry_param, and entry_param_values:
+    // Case-Insensitive AST Property and Parameter Lookup (eq_ignore_ascii_case),
+    // Multi-Value Parameter Flattening, and Empty Value Filtering.
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:test\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:lookup-182\r\n",
+        "Summary:Team Retrospective\r\n",
+        "description:Discuss sprint accomplishments\r\n",
+        "LOCATION;X-JMap-Key=loc-1;AltId=alt-loc:Room 101\r\n",
+        "CONFERENCE;FEATURE=AUDIO;FEATURE=VIDEO;feature=CHAT:https://meet.example.com\r\n",
+        "CATEGORIES:Engineering,Planning\r\n",
+        "Categories:Remote\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let calendar = jmap_ical::event::parse_ical(ics).expect("parse calendar");
+    let vevent = calendar
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VEVENT"))
+        .expect("vevent component found");
+
+    // 1. Case-insensitive property resolution via component_entry and component_text
+    assert_eq!(
+        jmap_ical::event::component_text(vevent, "SUMMARY").as_deref(),
+        Some("Team Retrospective")
+    );
+    assert_eq!(
+        jmap_ical::event::component_text(vevent, "summary").as_deref(),
+        Some("Team Retrospective")
+    );
+    assert_eq!(
+        jmap_ical::event::component_text(vevent, "DESCRIPTION").as_deref(),
+        Some("Discuss sprint accomplishments")
+    );
+
+    // 2. Iterating multiple properties with varying cases via component_entries
+    let categories: Vec<String> = jmap_ical::event::component_entries(vevent, "categories")
+        .map(jmap_ical::event::entry_text)
+        .collect();
+    assert_eq!(categories, vec!["Engineering,Planning", "Remote"]);
+
+    // 3. Case-insensitive parameter resolution via entry_param
+    let location_entry =
+        jmap_ical::event::component_entry(vevent, "location").expect("location entry found");
+    assert_eq!(
+        jmap_ical::event::entry_param(location_entry, "x-jmap-key").as_deref(),
+        Some("loc-1")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(location_entry, "ALTID").as_deref(),
+        Some("alt-loc")
+    );
+
+    // 4. Multi-value parameter extraction and case-insensitivity via entry_param_values
+    let conf_entry =
+        jmap_ical::event::component_entry(vevent, "conference").expect("conference entry found");
+    let features = jmap_ical::event::entry_param_values(conf_entry, "feature");
+    assert_eq!(features, vec!["AUDIO", "VIDEO", "CHAT"]);
+}
+
+#[test]
+fn differential_oracle_all_day_invariants_and_time_of_day_prohibition() {
+    // Divergence 183 against Stalwart differential oracle:
+    // at_midnight, whole_days, is_utc, and names_a_time_of_day:
+    // Outbound All-Day Invariant Verification: String End Slicing (T000000),
+    // Nominal Duration Day Checking (P<N>D), UTC Identifier Equivalence (Etc/UTC vs UTC),
+    // and Sub-Day Recurrence Time Prohibition.
+
+    // 1. at_midnight helper: checks for T000000 suffix
+    assert!(jmap_ical::event::at_midnight("20260905T000000"));
+    assert!(!jmap_ical::event::at_midnight("20260905T000001"));
+    assert!(!jmap_ical::event::at_midnight("20260905T120000"));
+    assert!(!jmap_ical::event::at_midnight("20260905"));
+
+    // 2. whole_days helper: checks for non-empty day duration without T
+    assert!(jmap_ical::event::whole_days("P1D"));
+    assert!(jmap_ical::event::whole_days("P2W"));
+    assert!(jmap_ical::event::whole_days("p3d"));
+    assert!(
+        !jmap_ical::event::whole_days("PT1H"),
+        "sub-day duration is not whole days"
+    );
+    assert!(
+        !jmap_ical::event::whole_days("P1DT1H"),
+        "combined day and hour is not whole days"
+    );
+    assert!(
+        !jmap_ical::event::whole_days("-P1D"),
+        "negative duration is rejected"
+    );
+    assert!(!jmap_ical::event::whole_days("P"), "bare P is rejected");
+
+    // 3. is_utc helper: case-insensitive match on Etc/UTC and UTC
+    assert!(jmap_ical::event::is_utc("Etc/UTC"));
+    assert!(jmap_ical::event::is_utc("etc/utc"));
+    assert!(jmap_ical::event::is_utc("UTC"));
+    assert!(jmap_ical::event::is_utc("utc"));
+    assert!(!jmap_ical::event::is_utc("Europe/Berlin"));
+    assert!(!jmap_ical::event::is_utc("GMT"));
+
+    // 4. names_a_time_of_day helper: checks if rule specifies BYHOUR, BYMINUTE, or BYSECOND
+    let rule_subday = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_hour: Some(vec![9, 17]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        jmap_ical::event::names_a_time_of_day(&rule_subday),
+        "rule naming BYHOUR carries time of day"
+    );
+
+    let rule_day_only = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        by_day: Some(vec![NDay::new("mo"), NDay::new("we")]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        !jmap_ical::event::names_a_time_of_day(&rule_day_only),
+        "rule naming only BYDAY carries no time of day"
+    );
+}
