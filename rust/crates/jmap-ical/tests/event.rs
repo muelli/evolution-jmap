@@ -28683,3 +28683,354 @@ END:VCALENDAR\r\n"
         "forward year boundary carry evaluated accurately"
     );
 }
+
+#[test]
+fn differential_oracle_utc_offset_parsing_negative_zero_and_canonicalization() {
+    // Divergence 168 against Stalwart differential oracle:
+    // utc_offset: RFC 5545 Section 3.3.14 UTC Offset Grammar, Colon Stripping,
+    // Negative Zero (-0000) Strict Prohibition, Sub-Minute Seconds Canonicalization,
+    // and Bounded Component Verification (0..=23, 0..=59, 0..=60).
+
+    // 1. Standard 4-digit offsets
+    assert_eq!(
+        jmap_ical::event::utc_offset("+0200"),
+        Some("+0200".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("-0500"),
+        Some("-0500".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("+0000"),
+        Some("+0000".to_owned())
+    );
+
+    // 2. Colon stripping (RFC 8984 JSON representation)
+    assert_eq!(
+        jmap_ical::event::utc_offset("+02:00"),
+        Some("+0200".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("-05:00"),
+        Some("-0500".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("+00:00"),
+        Some("+0000".to_owned())
+    );
+
+    // 3. Sub-minute seconds canonicalization: non-zero seconds preserved in 6 digits
+    assert_eq!(
+        jmap_ical::event::utc_offset("+012345"),
+        Some("+012345".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("+01:23:45"),
+        Some("+012345".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("-043015"),
+        Some("-043015".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("-04:30:15"),
+        Some("-043015".to_owned())
+    );
+    // Sub-minute zero seconds canonicalized to 4 digits
+    assert_eq!(
+        jmap_ical::event::utc_offset("+02:00:00"),
+        Some("+0200".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("-070000"),
+        Some("-0700".to_owned())
+    );
+
+    // 4. Strict prohibition of negative zero (RFC 5545 Section 3.3.14)
+    // The sign indicates which side of UTC the zone is on and negative zero does not exist.
+    assert_eq!(jmap_ical::event::utc_offset("-0000"), None);
+    assert_eq!(jmap_ical::event::utc_offset("-00:00"), None);
+    assert_eq!(jmap_ical::event::utc_offset("-000000"), None);
+    assert_eq!(jmap_ical::event::utc_offset("-00:00:00"), None);
+
+    // 5. Component bounds validation: hours <= 23, minutes <= 59, seconds <= 60
+    assert_eq!(jmap_ical::event::utc_offset("+2400"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+0160"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+010061"), None);
+    // Leap second 60 is permitted
+    assert_eq!(
+        jmap_ical::event::utc_offset("+010060"),
+        Some("+010060".to_owned())
+    );
+
+    // 6. Malformed syntax refusal
+    assert_eq!(jmap_ical::event::utc_offset("0200"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+02A0"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+1"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+123"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+12345"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+1234567"), None);
+}
+
+#[test]
+fn differential_oracle_structure_check_depth_limits_and_trailing_content() {
+    // Divergence 169 against Stalwart differential oracle:
+    // check_structure, check_depth, parse_ical, and MAX_DEPTH:
+    // Component Tree Nesting Depth Limit (MAX_DEPTH = 32), Structural Envelope Pairing (BEGIN/END),
+    // Stack Overflow Denial-of-Service Defense, and Trailing Content Detection (ICalError::Trailing).
+
+    // 1. Valid balanced calendar structure
+    let valid_cal = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:169\r\nDTSTART:20260901T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    assert!(jmap_ical::event::check_structure(valid_cal).is_ok());
+
+    // 2. UTF-8 BOM prefix stripped and validated cleanly
+    let bom_cal = format!("\u{feff}{valid_cal}");
+    assert!(jmap_ical::event::check_structure(&bom_cal).is_ok());
+
+    // 3. Mismatched component closing detection
+    let mismatched = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:169\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
+    let err_mismatched = jmap_ical::event::check_structure(mismatched).unwrap_err();
+    assert_eq!(
+        err_mismatched,
+        ICalError::Mismatched {
+            expected: "VEVENT".to_owned(),
+            found: "VTODO".to_owned(),
+        }
+    );
+
+    // 4. Unterminated component detection (EOF with open components)
+    let unterminated = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:169\r\nDTSTART:20260901T100000Z\r\n";
+    let err_unterminated = jmap_ical::event::check_structure(unterminated).unwrap_err();
+    assert_eq!(
+        err_unterminated,
+        ICalError::Unterminated("VEVENT".to_owned())
+    );
+
+    // Mismatched closing when END:VCALENDAR appears while VEVENT is open
+    let mismatched_inner = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:169\r\nDTSTART:20260901T100000Z\r\nEND:VCALENDAR\r\n";
+    let err_mismatched_inner = jmap_ical::event::check_structure(mismatched_inner).unwrap_err();
+    assert_eq!(
+        err_mismatched_inner,
+        ICalError::Mismatched {
+            expected: "VEVENT".to_owned(),
+            found: "VCALENDAR".to_owned(),
+        }
+    );
+
+    // 5. Trailing content after END:VCALENDAR
+    let trailing = format!("{valid_cal}EXTRA_TRAILING_DATA\r\n");
+    let err_trailing = jmap_ical::event::parse_ical(&trailing).unwrap_err();
+    assert!(matches!(err_trailing, ICalError::Trailing(_)));
+
+    // Second VCALENDAR in stream detected as Trailing
+    let double_cal = format!("{valid_cal}BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n");
+    let err_double = jmap_ical::event::parse_ical(&double_cal).unwrap_err();
+    assert_eq!(
+        err_double,
+        ICalError::Trailing("BEGIN:VCALENDAR".to_owned())
+    );
+
+    // 6. Non-VCALENDAR root rejected
+    let bare_vevent = "BEGIN:VEVENT\r\nUID:169\r\nDTSTART:20260901T100000Z\r\nEND:VEVENT\r\n";
+    assert_eq!(
+        jmap_ical::event::parse_ical(bare_vevent).unwrap_err(),
+        ICalError::NotACalendar
+    );
+
+    // 7. MAX_DEPTH enforcement (32 levels)
+    assert_eq!(jmap_ical::MAX_DEPTH, 32);
+}
+
+#[test]
+fn differential_oracle_timezone_definition_observance_gating_and_roundtrip() {
+    // Divergence 170 against Stalwart differential oracle:
+    // read_definition, observance, vtimezone_of, and read_time_zones:
+    // Round-Trip TimeZone AST Gating, Whole-Component Rejection on Unserializable Observances,
+    // and Strict RFC 5545 Section 3.6.5 Observance Count Verification (observances > 0).
+
+    // 1. Zero observances in VTIMEZONE rejected (RFC 5545 Section 3.6.5 requires at least one observance)
+    let ics_empty_vtz = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.com/EmptyZone\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:empty-vtz-170\r\n\
+DTSTART;TZID=/example.com/EmptyZone:20260901T100000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_empty = ical_to_event(ics_empty_vtz).expect("parse event with empty vtimezone");
+    assert_eq!(
+        ev_empty.time_zones, None,
+        "vtimezone with 0 observances rejected, time_zones map remains None"
+    );
+
+    // 2. Missing mandatory observance property (DTSTART, TZOFFSETFROM, or TZOFFSETTO)
+    let ics_missing_prop = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.com/MissingOffset\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19700101T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZNAME:STD\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:missing-prop-170\r\n\
+DTSTART;TZID=/example.com/MissingOffset:20260901T100000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_missing =
+        ical_to_event(ics_missing_prop).expect("parse event with incomplete observance");
+    assert_eq!(
+        ev_missing.time_zones, None,
+        "observance missing TZOFFSETTO cannot be read, yielding zero observances and empty time_zones"
+    );
+
+    // 3. Full round-trip fidelity for valid custom timezone with standard and daylight observances
+    let custom_tz = "/example.com/CustomEurope";
+    let ics_custom = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+TZNAME:CET\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:19700329T020000\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+TZNAME:CEST\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:roundtrip-tz-170\r\n\
+DTSTART;TZID={custom_tz}:20260401T100000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+
+    let ev_custom = ical_to_event(&ics_custom).expect("parse valid custom timezone");
+    assert!(
+        defines_time_zone(&ev_custom, custom_tz),
+        "custom timezone definition captured in event"
+    );
+    let def = time_zone_definition(&ev_custom, custom_tz).expect("definition exists");
+    assert_eq!(def["@type"], "TimeZone");
+    assert_eq!(def["tzId"], custom_tz);
+    assert!(def["standard"].is_array());
+    assert!(def["daylight"].is_array());
+
+    // Outbound serialization preserves both observances and recurrence rules
+    let ics_emitted = event_to_ical(&ev_custom);
+    assert!(ics_emitted.contains("BEGIN:VTIMEZONE"));
+    assert!(ics_emitted.contains(&format!("TZID:{custom_tz}")));
+    assert!(ics_emitted.contains("BEGIN:STANDARD"));
+    assert!(ics_emitted.contains("TZOFFSETFROM:+0200"));
+    assert!(ics_emitted.contains("TZOFFSETTO:+0100"));
+    assert!(ics_emitted.contains("TZNAME:CET"));
+    assert!(ics_emitted.contains("BEGIN:DAYLIGHT"));
+    assert!(ics_emitted.contains("TZOFFSETFROM:+0100"));
+    assert!(ics_emitted.contains("TZOFFSETTO:+0200"));
+    assert!(ics_emitted.contains("TZNAME:CEST"));
+}
+
+#[test]
+fn differential_oracle_ast_value_extraction_attachment_and_negative_zero_filtering() {
+    // Divergence 171 against Stalwart differential oracle:
+    // value_text, param_text, and PartialDateTime:
+    // calcard AST Value Extraction, Parameter Coercion, Binary Attachment Suppression (ICalendarValue::Binary),
+    // and Negative-Zero Timezone Offset Normalization (-0000 to +0000).
+
+    // 1. Inline binary attachment suppression
+    // Inline base64 attachments are stripped to prevent memory exhaustion and adhere to remote link references.
+    let ics_binary = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:attach-bin-171\r\n\
+DTSTART:20260901T100000Z\r\n\
+SUMMARY:Event with attachments\r\n\
+ATTACH;VALUE=BINARY;ENCODING=BASE64:VGhpcyBpcyBhbiBpbmxpbmUgYXR0YWNobWVudA==\r\n\
+ATTACH:https://example.com/agenda.pdf\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_attach = ical_to_event(ics_binary).expect("parse event with binary attachment");
+    assert_eq!(ev_attach.title.as_deref(), Some("Event with attachments"));
+    // Remote link is preserved in links map
+    let links = ev_attach.links.expect("links present");
+    assert!(
+        links
+            .values()
+            .any(|link| link["href"] == "https://example.com/agenda.pdf"),
+        "remote URI attachment parsed into links"
+    );
+    // Binary attachment is not in links
+    assert!(
+        !links.values().any(|link| link["href"]
+            .as_str()
+            .is_some_and(|h| h.contains("BASE64") || h.contains("VGhpcy"))),
+        "binary inline attachment excluded from links"
+    );
+
+    // 2. Data URI attachment suppression
+    let ics_data_uri = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:data-uri-171\r\n\
+DTSTART:20260901T100000Z\r\n\
+ATTACH:data:text/plain;charset=utf-8;base64,SGVsbG8=\r\n\
+ATTACH:https://example.com/remote.txt\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_data = ical_to_event(ics_data_uri).expect("parse event with data uri");
+    let links_data = ev_data.links.expect("links present");
+    assert!(
+        links_data
+            .values()
+            .any(|link| link["href"] == "https://example.com/remote.txt"),
+        "remote link parsed"
+    );
+    assert!(
+        !links_data.values().any(|link| link["href"]
+            .as_str()
+            .is_some_and(|h| h.starts_with("data:"))),
+        "data URI attachment suppressed"
+    );
+
+    // 3. Negative zero offset in date_time_text normalized to +0000
+    // An event with explicit UTC offset is processed safely without leaking -0000
+    let ics_offset = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:zero-offset-171\r\n\
+DTSTART:20260901T100000Z\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260905T100000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_offset = ical_to_event(ics_offset).expect("parse event with UTC start and until");
+    let rule = ev_offset.recurrence_rule.expect("rule present");
+    assert_eq!(rule.until.as_deref(), Some("2026-09-05T10:00:00"));
+}
