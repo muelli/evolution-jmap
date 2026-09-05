@@ -23561,3 +23561,344 @@ END:VCALENDAR\r\n";
         "event referring to dropped custom zone cannot be safely sent"
     );
 }
+
+#[test]
+fn differential_oracle_rrule_malformed_until_break_and_unstateable_date() {
+    // Divergence 108 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 recurrence rule UNTIL boundary handling.
+    // In jmap-ical:
+    // 1. Non-date-time shaped UNTIL (e.g. UNTIL=notadate) halts part parsing (break).
+    //    Trailing rule parts like BYDAY are omitted, preventing un-terminated series explosion.
+    // 2. Date-shaped invalid instant (e.g. UNTIL=20261301T000000Z, month 13) is kept verbatim.
+    //    maps_recurrence_rule flags it as unstateable, preventing corruption on save.
+
+    // 1. Syntactically malformed UNTIL: parsing halts, subsequent BYDAY dropped
+    let malformed_until_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:malformed-until\r\n\
+DTSTART:20260905T100000Z\r\n\
+RRULE:FREQ=DAILY;UNTIL=notadate;BYDAY=MO,TU\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(malformed_until_ics).expect("parse malformed until");
+    let rule = ev.recurrence_rule.expect("rule present");
+    assert_eq!(rule.frequency, "daily");
+    assert_eq!(rule.until, None, "unparseable UNTIL dropped");
+    assert_eq!(
+        rule.by_day, None,
+        "parts after malformed UNTIL are not parsed (break)"
+    );
+
+    // 2. Structurally valid date-time shape with non-existent calendar date
+    let bad_date_until_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:bad-date-until\r\n\
+DTSTART:20260905T100000Z\r\n\
+RRULE:FREQ=DAILY;UNTIL=20261301T000000Z;BYDAY=MO,TU\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev2 = ical_to_event(bad_date_until_ics).expect("parse bad date until");
+    let rule2 = ev2.recurrence_rule.expect("rule present");
+    assert_eq!(rule2.frequency, "daily");
+    assert_eq!(
+        rule2.until.as_deref(),
+        Some("20261301T000000Z"),
+        "date-shaped invalid UNTIL kept verbatim"
+    );
+    assert!(
+        rule2.by_day.is_some(),
+        "subsequent parts parsed when UNTIL is date-shaped"
+    );
+    assert!(
+        !maps_recurrence_rule(&rule2),
+        "rule with invalid UNTIL instant is refused by maps_recurrence_rule"
+    );
+}
+
+#[test]
+fn differential_oracle_utc_datetime_formatting_and_idempotent_timestamps() {
+    // Divergence 109 against Stalwart differential oracle:
+    // RFC 8984 section 1.4.5 UTCDateTime and RFC 5545 section 3.8.7.1, 3.8.7.2, 3.8.7.3.
+    // In jmap-ical:
+    // 1. Valid UTC timestamps format into CREATED, DTSTAMP, and LAST-MODIFIED with trailing Z.
+    // 2. Timestamps lacking trailing Z or carrying sub-second fractions are rejected.
+    // 3. When updated is absent (None), DTSTAMP is omitted rather than inventing local clock time.
+
+    // 1. Valid UTC timestamps
+    let ev_valid = CalendarEvent {
+        created: Some("2026-09-05T10:00:00Z".to_owned()),
+        updated: Some("2026-09-05T12:30:00Z".to_owned()),
+        start: Some("2026-09-05T14:00:00Z".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_valid = event_to_ical(&ev_valid);
+    assert!(
+        ics_valid.contains("CREATED:20260905T100000Z\r\n"),
+        "CREATED emitted with Z: {ics_valid}"
+    );
+    assert!(
+        ics_valid.contains("DTSTAMP:20260905T123000Z\r\n"),
+        "DTSTAMP emitted with updated timestamp: {ics_valid}"
+    );
+    assert!(
+        ics_valid.contains("LAST-MODIFIED:20260905T123000Z\r\n"),
+        "LAST-MODIFIED emitted with updated timestamp: {ics_valid}"
+    );
+
+    // 2. Missing updated timestamp: DTSTAMP omitted to prevent non-deterministic sync churn
+    let ev_no_updated = CalendarEvent {
+        created: Some("2026-09-05T10:00:00Z".to_owned()),
+        updated: None,
+        start: Some("2026-09-05T14:00:00Z".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_no_updated = event_to_ical(&ev_no_updated);
+    assert!(
+        !ics_no_updated.contains("DTSTAMP:"),
+        "DTSTAMP omitted when updated is absent: {ics_no_updated}"
+    );
+    assert!(
+        !ics_no_updated.contains("LAST-MODIFIED:"),
+        "LAST-MODIFIED omitted when updated is absent: {ics_no_updated}"
+    );
+
+    // 3. Timestamps without Z suffix rejected and omitted
+    let ev_no_z = CalendarEvent {
+        created: Some("2026-09-05T10:00:00".to_owned()),
+        updated: Some("2026-09-05T12:30:00".to_owned()),
+        start: Some("2026-09-05T14:00:00Z".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_no_z = event_to_ical(&ev_no_z);
+    assert!(
+        !ics_no_z.contains("CREATED:"),
+        "CREATED without Z suffix omitted: {ics_no_z}"
+    );
+    assert!(
+        !ics_no_z.contains("DTSTAMP:"),
+        "DTSTAMP without Z suffix omitted: {ics_no_z}"
+    );
+
+    // 4. Sub-second fractional timestamps rejected and omitted
+    let ev_frac = CalendarEvent {
+        created: Some("2026-09-05T10:00:00.123Z".to_owned()),
+        updated: Some("2026-09-05T12:30:00.456Z".to_owned()),
+        start: Some("2026-09-05T14:00:00Z".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_frac = event_to_ical(&ev_frac);
+    assert!(
+        !ics_frac.contains("CREATED:"),
+        "CREATED with fractional seconds omitted: {ics_frac}"
+    );
+    assert!(
+        !ics_frac.contains("DTSTAMP:"),
+        "DTSTAMP with fractional seconds omitted: {ics_frac}"
+    );
+}
+
+#[test]
+fn differential_oracle_all_day_multi_property_invariant_gating() {
+    // Divergence 110 against Stalwart differential oracle:
+    // RFC 8984 section 4.2.1 showWithoutTime vs RFC 5545 section 3.8.2.4 VALUE=DATE.
+    // In jmap-ical:
+    // Six invariants must hold for shows_without_time:
+    // 1. show_without_time == Some(true)
+    // 2. time_zone.is_none() (RFC 5545 forbids TZID on date-only values)
+    // 3. at_midnight(start) (start ends with T000000)
+    // 4. duration whole days (no T time designator)
+    // 5. recurrence rule until at midnight and no BYHOUR/BYMINUTE/BYSECOND
+    // 6. all overrides satisfy instance_shows_without_time
+    // Violating any invariant falls back to timed date-time representation.
+
+    // 1. Baseline conforming all-day event emits VALUE=DATE
+    let valid_all_day = CalendarEvent {
+        show_without_time: Some(true),
+        time_zone: None,
+        start: Some("2026-09-05T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_valid = event_to_ical(&valid_all_day);
+    assert!(
+        ics_valid.contains("DTSTART;VALUE=DATE:20260905\r\n"),
+        "conforming all-day event emits VALUE=DATE: {ics_valid}"
+    );
+
+    // 2. Invariant 2 violation: timezone present forces timed representation
+    let tz_all_day = CalendarEvent {
+        show_without_time: Some(true),
+        time_zone: Some("Etc/UTC".to_owned()),
+        start: Some("2026-09-05T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_tz = event_to_ical(&tz_all_day);
+    assert!(
+        ics_tz.contains("DTSTART:20260905T000000Z\r\n"),
+        "timezone present forces timed representation without VALUE=DATE: {ics_tz}"
+    );
+
+    // 3. Invariant 3 violation: non-midnight start forces timed representation
+    let non_midnight = CalendarEvent {
+        show_without_time: Some(true),
+        time_zone: None,
+        start: Some("2026-09-05T09:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_non_midnight = event_to_ical(&non_midnight);
+    assert!(
+        ics_non_midnight.contains("DTSTART:20260905T090000\r\n"),
+        "non-midnight start forces timed representation: {ics_non_midnight}"
+    );
+
+    // 4. Invariant 4 violation: sub-day duration forces timed representation
+    let sub_day_dur = CalendarEvent {
+        show_without_time: Some(true),
+        time_zone: None,
+        start: Some("2026-09-05T00:00:00".to_owned()),
+        duration: Some("PT8H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_sub_day = event_to_ical(&sub_day_dur);
+    assert!(
+        ics_sub_day.contains("DTSTART:20260905T000000\r\n"),
+        "sub-day duration forces timed representation: {ics_sub_day}"
+    );
+
+    // 5. Invariant 5 violation: recurrence rule naming time of day forces timed representation
+    let rrule_time = CalendarEvent {
+        show_without_time: Some(true),
+        time_zone: None,
+        start: Some("2026-09-05T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        recurrence_rule: Some(RecurrenceRule {
+            frequency: "daily".to_owned(),
+            by_hour: Some(vec![9]),
+            ..RecurrenceRule::default()
+        }),
+        ..CalendarEvent::default()
+    };
+    let ics_rrule_time = event_to_ical(&rrule_time);
+    assert!(
+        ics_rrule_time.contains("DTSTART:20260905T000000\r\n"),
+        "recurrence rule with byHour forces timed representation: {ics_rrule_time}"
+    );
+
+    // 6. Invariant 6 violation: override instance with non-midnight start forces timed representation
+    let override_time = CalendarEvent {
+        show_without_time: Some(true),
+        time_zone: None,
+        start: Some("2026-09-05T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        recurrence_overrides: Some(BTreeMap::from([(
+            "2026-09-06T00:00:00".to_owned(),
+            json!({ "start": "2026-09-06T10:00:00" }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    let ics_override_time = event_to_ical(&override_time);
+    assert!(
+        ics_override_time.contains("DTSTART:20260905T000000\r\n"),
+        "override starting at non-midnight forces series timed representation: {ics_override_time}"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_token_plus_prefix_and_sentinel_zero() {
+    // Divergence 111 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.10 recurrence rule signed tokens and sentinel zero.
+    // In jmap-ical:
+    // 1. Explicit + on BYDAY (+2MO) stripped to ordinal 2; + on BYMONTHDAY (+15) parsed to 15.
+    // 2. Unparseable token in BYMONTHDAY mapped to sentinel 0, triggering maps_recurrence_rule refusal.
+    // 3. Ordinal 0 on BYDAY (0MO) preserves raw token, triggering maps_recurrence_rule refusal.
+
+    // 1. Explicit + sign handling
+    let plus_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:plus-tokens\r\n\
+DTSTART:20260905T100000Z\r\n\
+RRULE:FREQ=MONTHLY;BYDAY=+2MO;BYMONTHDAY=+15\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(plus_ics).expect("parse plus tokens");
+    let rule = ev.recurrence_rule.as_ref().expect("rule present");
+    let by_day = rule.by_day.as_ref().expect("by_day present");
+    assert_eq!(by_day[0].day, "mo");
+    assert_eq!(by_day[0].nth_of_period, Some(2));
+    let by_mday = rule.by_month_day.as_ref().expect("by_month_day present");
+    assert_eq!(by_mday, &[15]);
+    assert!(
+        maps_recurrence_rule(rule),
+        "rule with stripped plus prefixes is valid"
+    );
+
+    let out_ics = event_to_ical(&ev);
+    assert!(
+        out_ics.contains("BYDAY=2MO"),
+        "emits canonical 2MO without plus prefix: {out_ics}"
+    );
+    assert!(
+        out_ics.contains("BYMONTHDAY=15"),
+        "emits canonical 15 without plus prefix: {out_ics}"
+    );
+
+    // 2. Unparseable token in BYMONTHDAY maps to sentinel 0
+    let bad_mday_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:bad-mday\r\n\
+DTSTART:20260905T100000Z\r\n\
+RRULE:FREQ=MONTHLY;BYMONTHDAY=1,bad,15\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_bad = ical_to_event(bad_mday_ics).expect("parse bad mday");
+    let rule_bad = ev_bad.recurrence_rule.expect("rule present");
+    assert_eq!(
+        rule_bad.by_month_day.as_deref(),
+        Some(&[1, 0, 15][..]),
+        "bad token parsed as sentinel 0"
+    );
+    assert!(
+        !maps_recurrence_rule(&rule_bad),
+        "rule containing sentinel 0 is refused by maps_recurrence_rule"
+    );
+
+    // 3. Ordinal 0 in BYDAY preserves raw token and triggers refusal
+    let zero_day_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:zero-day\r\n\
+DTSTART:20260905T100000Z\r\n\
+RRULE:FREQ=MONTHLY;BYDAY=0MO\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_zero = ical_to_event(zero_day_ics).expect("parse zero day");
+    let rule_zero = ev_zero.recurrence_rule.expect("rule present");
+    let by_day_zero = rule_zero.by_day.as_ref().expect("by_day present");
+    assert_eq!(
+        by_day_zero[0].day, "0mo",
+        "ordinal 0 preserves raw token as day"
+    );
+    assert_eq!(by_day_zero[0].nth_of_period, None);
+    assert!(
+        !maps_recurrence_rule(&rule_zero),
+        "rule containing 0mo is refused by maps_recurrence_rule"
+    );
+}
