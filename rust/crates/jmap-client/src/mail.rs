@@ -941,6 +941,24 @@ impl Client {
         ))
     }
 
+    /// Fetch EmailSubmissions by id (`EmailSubmission/get`, RFC 8621 §7.4).
+    /// An id naming no submission is silently absent from the result, the
+    /// same as [`Client::thread_get`] treats a missing `Thread` id.
+    pub fn email_submission_get(
+        &self,
+        account_id: &Id,
+        ids: impl IntoIterator<Item = impl Into<Id>>,
+    ) -> Result<Vec<EmailSubmission>, Error> {
+        let request = GetRequest::ids(account_id.clone(), ids);
+        let arguments = self.single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/get",
+            &request,
+        )?;
+        let response: GetResponse<EmailSubmission> = serde_json::from_value(arguments)?;
+        Ok(response.list)
+    }
+
     /// Resolve submission ids matching `filter` (`EmailSubmission/query`, RFC
     /// 8621 §7.3) — e.g. by `emailIds` or `undoStatus`, to find a submission
     /// without already knowing its id.
