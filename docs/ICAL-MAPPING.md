@@ -5119,3 +5119,77 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.260 Divergence 260: `zone::weekday_named`, `zone::weekday`, `zone::length_of`, and `WEEKDAYS`: VTIMEZONE Transition Weekday Arithmetic: Epoch-Relative Civil Day Shifting (+3 Thursday Offset), Euclidean Modulo Invariant (`rem_euclid(7)`), Monday-to-Sunday 0-to-6 Numbering Coordination, and Safe Month Length Bounding
+
+- **Observed Behavior**:
+  Resolving transition onsets for `VTIMEZONE` observances with recurrence rules requires translating two-letter weekday tokens, computing days of the week for arbitrary Gregorian calendar dates, and bounding month lengths safely. In `jmap-ical`:
+  1. Monday-to-Sunday 0-to-6 numbering coordination (`weekday_named` and `WEEKDAYS`): `WEEKDAYS` defines the closed canonical list `["MO", "TU", "WE", "TH", "FR", "SA", "SU"]`. `weekday_named` looks up two-letter tokens case-insensitively, returning indices `0..=6` where `0` is Monday and `6` is Sunday. Tokens with attached ordinals or non-weekday names return `None`.
+  2. Epoch-relative civil day shifting with Thursday alignment (`weekday`): Converts Gregorian dates to days from the 1970-01-01 Unix epoch via Howard Hinnant's algorithm (`days_from_civil`). Because 1970-01-01 was Thursday (index 3 in `WEEKDAYS`), `weekday` adds `3` before applying Euclidean modulo arithmetic: `(days_from_civil(year, month, day) + 3).rem_euclid(7)`. This mathematical mapping functions across all past and future centuries without leap year drift.
+  3. Euclidean modulo invariant (`rem_euclid(7)`): Using `rem_euclid(7)` ensures non-negative remainder outputs even when evaluating historical dates prior to the 1970 epoch where `days_from_civil` is negative. Standard truncated division remainder (`%`) would produce negative values, corrupting array indices.
+  4. Safe month length bounding (`length_of`): Calls `days_in_month(year, month)` after safe signed conversion. If `length <= 0` (such as month 0 or 13), `length_of` returns `None`, rejecting invalid months without panicking.
+  5. In contrast, differential oracles or naive date libraries rely on standard `%` (which fails on pre-1970 dates), misalign weekday indices against Thursday epochs, or crash on non-existent month numbers.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`) and Section 3.6.5 (`Time Zone Component`) specify `BYDAY` parameter tokens and transition observance rules.
+  2. ISO 8601 defines Monday as day 1 and Sunday as day 7. Aligning with index 0 = Monday provides standard civil calendar semantics.
+- **Adjudication**:
+  Conforming specification boundary and transition weekday calculation determinism. Enforces safe two-letter token matching, Euclidean modulo non-negative remainders across epochs, Thursday-aligned epoch shifting, and strict month bounding.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.261 Divergence 261: `zone::parts`, `zone::seconds_at`, and `zone::seconds`: Observance Local Date-Time Decomposition and Epoch Second Translation: Wall-Clock Separation (`T` Delimiting), Strict Calendar Day Existence Gating (`(1..=length_of).contains(&day)`), Non-Existent Rollover Prevention (February 30 Refusal), and Deterministic Linear Second Scaling (86_400)
+
+- **Observed Behavior**:
+  Parsing local timestamps and converting them into seconds from epoch on a local wall clock requires separating date and time components, verifying calendar day existence, and computing linear second counts. In `jmap-ical`:
+  1. Wall-clock separation and field extraction (`parts`): Splits local date-time strings on the literal `'T'` separator, extracting 4-digit year, 2-digit month, 2-digit day, and converting `HH:MM:SS` into second-of-day offsets: `HH * 3600 + MM * 60 + SS`.
+  2. Strict calendar day existence gating (`seconds`): Checks `(1..=length_of(year, month)?).contains(&day)`. If `day` does not exist in the given month and year (such as February 30th, April 31st, or February 29th in a non-leap year like 2026), `seconds` immediately returns `None`.
+  3. Non-existent date rollover prevention: Unlike permissive date libraries that roll February 30th into March 2nd, `zone::seconds` and `seconds_at` reject the invalid onset. Rolling non-existent transition dates into the subsequent month would shift daylight saving boundaries by days, causing recurring calendar events to calculate incorrect offsets.
+  4. Deterministic linear second scaling: Valid civil dates are converted to epoch seconds via `days_from_civil(year, month, day) * 86_400 + of_day`, providing a continuous linear timeline for chronological onset comparison.
+  5. In contrast, differential oracles or permissive parsers silently carry over nonexistent days into following months, corrupting daylight transition onsets, or fail to reject invalid date strings.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.4 (`DATE-TIME`) and Section 3.6.5 (`Time Zone Component`) require valid Gregorian calendar dates on observance components.
+  2. Howard Hinnant's civil calendar algorithm provides exact linear day mappings from 1970-01-01 without leap year lookup tables.
+- **Adjudication**:
+  Conforming specification boundary and local timestamp validation determinism. Enforces strict calendar existence boundaries, refuses invalid date rollovers, and computes exact linear epoch seconds.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.262 Divergence 262: `zone::rule_onsets`, `FREQ=YEARLY`, `INTERVAL=1`, `WKST`, and `last`: Observance Transition Rule Parameter Parsing and Epoch Horizon Bounding: Strict Yearly Frequency and Unit Interval Enforcement, Exchange/Zimbra WKST Tolerance, COUNT and UNTIL Upper Horizon Coordination, Local vs UTC UNTIL Offset Subtraction, and Silent Truncation Refusal (`earliest == start_year`)
+
+- **Observed Behavior**:
+  Evaluating recurrence rules on `STANDARD` and `DAYLIGHT` observance subcomponents requires parsing parameters, bounding occurrences across historical eras, and handling vendor-specific extensions. In `jmap-ical`:
+  1. Strict yearly frequency and unit interval gating: Observance transition rules must recur annually. `rule_onsets` requires `FREQ` to equal `"YEARLY"` (case-insensitive) and `INTERVAL` to equal 1 (or omitted). Any rule specifying non-yearly frequencies (such as `MONTHLY` or `DAILY`) or multi-year intervals (`INTERVAL=2`) returns `None`, refusing ambiguous or unmodeled transition patterns.
+  2. Exchange and Zimbra `WKST` tolerance: RFC 5545 Section 3.3.10 defines `WKST` only for `WEEKLY` rules or `YEARLY` rules with `BYWEEKNO`. On transition rules without `BYWEEKNO`, `WKST` has no semantic effect. However, Microsoft Exchange and Zimbra routinely emit `WKST=MO` or `WKST=SU` on `VTIMEZONE` rules. `rule_onsets` explicitly tolerates `WKST` without error, preventing whole-definition refusal.
+  3. Upper horizon bounding (`COUNT`, `UNTIL`, and `last`): Coordinates the latest search year: `last = min(target_year, count_year, until_year)`. If `COUNT` is present, occurrences terminate after `start_year + count - 1`. If `UNTIL` is present, it is parsed: if UTC (ending in `Z`), it is compared directly; if local, `from` offset is subtracted to normalize to UTC.
+  4. Silent truncation refusal: If no onsets are found within the 40-year search window (`earliest = start_year.max(last - SEARCH + 1)`) and `earliest > start_year`, `rule_onsets` returns `None` rather than returning an empty vector. Reporting an empty list on an improperly truncated scan would cause the zone to fall back to an arbitrary sibling observance, distorting offsets.
+  5. In contrast, differential oracles crash on unexpected `WKST` parameters, miscalculate local `UNTIL` endpoints by failing to subtract `from` offsets, or fall back to incorrect observances when historical searches yield no occurrences.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`) and Section 3.6.5 (`Time Zone Component`) govern recurrence rules within time zone components.
+  2. RFC 8984 Section 4.7.2 (`TimeZoneRule`) specifies observance recurrences.
+- **Adjudication**:
+  Conforming specification boundary and transition rule evaluation fidelity. Enforces yearly frequency and unit interval constraints, tolerates Exchange/Zimbra `WKST`, coordinates `COUNT` and `UNTIL` horizons, and prevents silent truncation fallbacks.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.263 Divergence 263: `zone::Day::of`, `of_month`, `Falls::On`, `Falls::Never`, and `Falls::Set`: Timezone Transition Day Evaluation: Signed Ordinal Weekday Arithmetic (Positive Forward Step from Month Day 1 vs Negative Backward Step from Month Length), Negative Month-End Offset Normalization (`length + 1 + day`), tzdata Date Run Single-Match Gating, and Out-of-Range Skip Handling (`Falls::Never`)
+
+- **Observed Behavior**:
+  Evaluating transition days for a specific year and month from parsed `Day` representations requires signed ordinal weekday stepping, negative month-day offset resolution, and set-size validation. In `jmap-ical`:
+  1. Signed ordinal weekday arithmetic (`Day::Nth`):
+     - Positive ordinals (`nth.signum() == 1`): Computes forward step from day 1: `1 + (wanted - weekday(year, month, 1)).rem_euclid(7) + 7 * (nth - 1)`.
+     - Negative ordinals (`nth.signum() <= 0`): Computes backward step from the last day of the month (`length`): `length - (weekday(year, month, length) - wanted).rem_euclid(7) + 7 * (nth + 1)`.
+     - Out-of-range gating: If `day` falls outside `1..=length` (for example, requesting a 5th Sunday in a month with only 4 Sundays), `Day::of` returns `Falls::Never`, correctly skipping that year without treating it as an invalid rule.
+  2. Negative month-end offset normalization (`of_month`): Converts negative month-day indices into absolute days: `length + 1 + day`. For example, `BYMONTHDAY=-1` produces day 31 in March and October, day 30 in April, day 28 in February 2026, and day 29 in February 2024.
+  3. tzdata date run single-match gating (`Day::WeekdayAmong`): Evaluates date runs (such as `BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29`) by counting how many dates in the run match the target weekday:
+     - Exactly 1 match: Returns `Falls::On(day)`.
+     - 0 matches: Returns `Falls::Never` (e.g. non-occurring year).
+     - 2 or more matches: Returns `Falls::Set`. `rule_onsets` refuses the rule whole, preventing arbitrary selection when multiple transitions would occur in a single month.
+  4. In contrast, differential oracles or naive date math produce negative day numbers on backward steps, mistake missing occurrences (`Falls::Never`) for syntax errors, or arbitrarily pick the first date when multiple days match.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`) and Section 3.6.5 (`Time Zone Component`) specify transition day rules and negative ordinal behaviors.
+  2. RFC 8984 Section 4.7.2 (`TimeZoneRule`) defines observance recurrence patterns.
+- **Adjudication**:
+  Conforming specification boundary and transition day evaluation precision. Accurately evaluates signed ordinal weekdays forward and backward, normalizes negative month-day offsets dynamically against month lengths, skips non-occurring years cleanly, and refuses ambiguous multi-day sets.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
