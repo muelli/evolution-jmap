@@ -356,6 +356,7 @@ fn handle_method(
             crate::principals::share_notification_query(state, arguments, caller)
         }
         "Identity/get" => crate::mail::identity_get(state, arguments),
+        "EmailSubmission/get" => crate::mail::email_submission_get(state, arguments),
         "EmailSubmission/set" => crate::mail::email_submission_set(state, arguments, created_ids),
         "EmailSubmission/query" => crate::mail::email_submission_query(state, arguments),
         "VacationResponse/get" => crate::mail::vacation_response_get(state, arguments),
