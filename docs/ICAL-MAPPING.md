@@ -2657,3 +2657,76 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Deliberate mapping design. Documented and pinned in `tests/event.rs`.
 
+### 13.120 Divergence 120: `fold_overlong_lines`: Outbound Content Line Folding (`MAX_LINE_OCTETS = 75`), UTF-8 Multi-Byte Character Boundary Preservation (`is_char_boundary`), and Backslash Escape Pair Integrity
+
+- **Observed Behavior**:
+  RFC 5545 §3.1 mandates that content lines longer than 75 octets SHOULD be folded using a CRLF immediately followed by a linear whitespace character (space or horizontal tab). In `jmap-ical`:
+  1. Outbound post-processing: `fold_overlong_lines` inspects the serialized iCalendar string output from `to_ics`. If any physical line exceeds 75 octets (`MAX_LINE_OCTETS = 75`), it folds the line into continuation lines prefixed with a single space (`\r\n `), reserving 74 octets of payload per continuation line.
+  2. UTF-8 code point boundary safety: The cut position is adjusted backward via `while cut > 0 && !rest.is_char_boundary(cut) { cut -= 1; }` so that multi-byte UTF-8 sequences (such as emojis or accented characters) are never severed across physical line breaks.
+  3. Backslash escape sequence protection: An odd run of trailing backslashes before a cut (`rest[..cut].bytes().rev().take_while(...).count() % 2 == 1`) indicates that the final backslash escapes the octet on the other side of the cut (e.g. `\,`, `\;`, `\n`, `\\`). `fold_overlong_lines` steps back one byte inside the run (`cut -= 1`), keeping the escape pair intact on the continuation line.
+  4. Stalwart calcard structured value and recurrence rule gap repair: Upstream `calcard` skips folding checks when empty trailing text slots occur in structured values, and emits recurrence rules (`ICalendarValue::RecurrenceRule`) without line folding (upstream issue stalwartlabs/calcard#25). `fold_overlong_lines` guarantees that all lines emitted by `event_to_ical` adhere strictly to the 75-octet limit.
+  5. In contrast, differential oracles or naive CalDAV emitters either leave long recurrence rules and descriptions unfolded (risking buffer overflows in line-oriented consumers) or slice lines at rigid 75-byte offsets regardless of UTF-8 character boundaries or escape sequences, corrupting multi-byte characters and splitting escape pairs.
+- **Specification and Architectural Context**:
+  1. Line folding is defined at the octet layer, but splitting a multi-byte UTF-8 sequence produces invalid byte sequences on each physical line that crash line-by-line loggers or validator tools.
+  2. Splitting an escape sequence across a line break (e.g. `\` at line end, `n` on continuation line) causes many real-world unfolding engines to treat `\` as a literal trailing backslash and `n` as literal text.
+  3. Enforcing UTF-8 character boundaries and keeping escape pairs together ensures maximum interoperability across CalDAV clients, EDS, and legacy mailers.
+- **Adjudication**:
+  Conforming specification boundary and wire formatting defense. Folds long lines at 75 octets while guaranteeing valid UTF-8 boundaries and escape sequence cohesion.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.121 Divergence 121: `media_type` and `restricted_name`: RFC 5545 §3.2.8 `FMTTYPE` Parameter Validation, RFC 6838 Restricted Name Character Enforcement, and Parameter Suffix Stripping
+
+- **Observed Behavior**:
+  RFC 5545 §3.2.8 defines `fmttypeparam = "FMTTYPE" "=" type-name "/" subtype-name`, where both `type-name` and `subtype-name` must conform to RFC 6838 §4.2 `restricted-name`. RFC 8984 §1.4.11 models media types on `Link` objects as arbitrary strings in `contentType` (e.g. `application/pdf`, `text/calendar; charset=utf-8`). In `jmap-ical`:
+  1. RFC 6838 restricted-name validation: `media_type` checks that `contentType` consists of two segments separated by a single `/`. Both `name` and `subtype` must satisfy `restricted_name`: beginning with an ASCII alphanumeric character and consisting exclusively of ASCII alphanumerics or `[!#$&.+-^_]`.
+  2. Media type parameter suppression: If a `contentType` string contains media type parameters (such as `; charset=utf-8` or `; name="document.pdf"`), `split_once('/')` or `restricted_name` fails, and `media_type` returns `None`. The un-spellable media type is omitted from the serialized line (`with_named_params("FMTTYPE", media_type)`), while the primary resource URI (`ATTACH` or `IMAGE`) is preserved intact.
+  3. Parameter value injection defense: Strictly rejecting characters outside RFC 6838 (such as semicolons `;`, colons `:`, double quotes `"`, CR, and LF) prevents malicious or malformed content types from injecting unauthorized iCalendar parameters or corrupting content lines.
+  4. Inbound extraction: `read_links` extracts `FMTTYPE` parameter values from `ATTACH` and `IMAGE` lines into `Link.contentType`.
+  5. In contrast, differential oracles or CalDAV serializers may emit `FMTTYPE=text/calendar; charset=utf-8` without proper quoting or pass through arbitrary strings, violating RFC 5545 §3.2.8 grammar and triggering parser rejections in `libical`.
+- **Specification and Architectural Context**:
+  1. In iCalendar, `FMTTYPE` is informational. A client can still fetch and render an attachment via its `href` URI even if the `FMTTYPE` parameter is omitted.
+  2. Emitting an invalid `FMTTYPE` parameter containing semicolons or spaces breaks parameter parsing for the entire content line, causing libical to discard the entire attachment.
+  3. Enforcing RFC 6838 restricted names preserves attachment URLs while preventing parameter injection vulnerabilities.
+- **Adjudication**:
+  Conforming specification boundary and parameter sanitization safety. Enforces RFC 6838 restricted-name rules on `FMTTYPE`, drops un-spellable parameter suffixes, and protects content line syntax.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.122 Divergence 122: `PARTICIPANT_ROLES` Precedence Ordering (`chair` > `informational` > `optional` > `attendee`): Many-to-One Role Mapping, Owner Role Omission, and Closed Vocabulary Gating
+
+- **Observed Behavior**:
+  RFC 8984 §4.4.6 models participant roles as a Set (`roles: Map<String, Boolean>`), allowing a participant to possess multiple roles simultaneously (e.g. `{"attendee": true, "optional": true}`). RFC 5545 §3.2.16 defines `ROLE` on `ATTENDEE` as a single enumerated parameter (`CHAIR`, `REQ-PARTICIPANT`, `OPT-PARTICIPANT`, `NON-PARTICIPANT`). In `jmap-ical`:
+  1. Deterministic four-tier precedence hierarchy: `spelled(&PARTICIPANT_ROLES, participant.get("roles"))` resolves multi-role sets in strict precedence order:
+     - `chair` -> `ROLE=CHAIR` (meeting leadership must not be demoted);
+     - `informational` -> `ROLE=NON-PARTICIPANT` (information-only recipients take precedence over active participation);
+     - `optional` -> `ROLE=OPT-PARTICIPANT` (optional attendance overrides default required attendance);
+     - `attendee` -> `ROLE=REQ-PARTICIPANT` (baseline participation role).
+  2. Narrowest role selection: An attendee who is marked both `attendee: true` and `optional: true` is emitted as `ROLE=OPT-PARTICIPANT`. The narrower, more specific constraint is prioritized, while redundant baseline roles are suppressed.
+  3. Owner role omission: The `owner` role is explicitly excluded from `PARTICIPANT_ROLES` because the owner is rendered as the distinct `ORGANIZER` line rather than an attendee role.
+  4. In contrast, differential oracles or CalDAV serializers iterating over hash maps without explicit precedence may serialize arbitrary roles based on hash order, causing optional attendees to be promoted to required participants, or may emit invalid duplicate `ROLE` parameters.
+- **Specification and Architectural Context**:
+  1. RFC 5545 grammar restricts each `ATTENDEE` line to at most one `ROLE` parameter.
+  2. In business scheduling, an optional attendee accidentally promoted to `REQ-PARTICIPANT` alters meeting quorum requirements and sends misleading calendar invitations.
+  3. Resolving sets through an ordered hierarchy ensures that the user's intent is accurately conveyed to external calendar participants.
+- **Adjudication**:
+  Conforming specification boundary and role hierarchy fidelity. Resolves multi-role participant sets into single `ROLE` parameters using strict four-tier precedence ordering while reserving `owner` for `ORGANIZER`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.123 Divergence 123: `stated_offset`: Signed Duration Validation (`SignedDuration`), Negative Duration Normalization (`TRIGGER`), and Positive Duration Passthrough vs Inversion Skew
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.6.3 defines `TRIGGER` for alarms as either a duration or an absolute date-time. For duration triggers, RFC 5545 specifies that a reminder scheduled before the event start is expressed as a negative duration (e.g. `-PT15M` for 15 minutes prior to start), while a reminder after start is expressed as a positive duration. RFC 8984 §1.4.7 defines `SignedDuration` as an ISO 8601 duration prefixed with an optional `+` or `-` sign, whereas RFC 8984 §1.4.6 defines `Duration` as unsigned. In `jmap-ical`:
+  1. Signed duration handling: `stated_offset` strips a leading `-` sign via `value.strip_prefix('-')`, validates the positive magnitude through `stated_duration(magnitude)`, and reconstitutes the negative string `format!("-{duration}")`.
+  2. Positive duration normalization: For positive values, `stated_offset` passes the value directly to `stated_duration(value)`. If the input contained an explicit `+` prefix (such as `+PT1H`), `stated_duration` strips `+` per RFC 8984 canonical formatting, returning unsigned `PT1H`.
+  3. Invalid syntax rejection: Durations with empty time dividers (`-PT`), missing units, invalid characters, or multiple sign prefixes (e.g. `--PT15M`) fail validation and return `None`. Unparseable alarm triggers are dropped, preventing invalid `OffsetTrigger` objects from reaching the JMAP server.
+  4. In contrast, differential oracles or CalDAV parsers may fail to distinguish signed from unsigned durations, invert negative offsets into positive durations (triggering alarms after the meeting has started instead of before), or crash on leading `+` signs.
+- **Specification and Architectural Context**:
+  1. In calendar notifications, sign inversion changes a pre-meeting reminder into a post-meeting alert.
+  2. Stripping `-` to validate the structural unit syntax through the existing ISO 8601 state machine (`stated_duration`) ensures full adherence to unit progression and time-divider constraints, while preserving the negative sign required by RFC 8984 §4.5.2 and §1.4.7 for pre-event alarms.
+- **Adjudication**:
+  Conforming specification boundary and alarm trigger fidelity. Normalizes signed durations for `OffsetTrigger`, strips redundant `+` signs, validates negative duration magnitudes, and prevents sign inversion skew.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
