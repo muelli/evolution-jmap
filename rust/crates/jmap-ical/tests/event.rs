@@ -29034,3 +29034,334 @@ END:VCALENDAR\r\n";
     let rule = ev_offset.recurrence_rule.expect("rule present");
     assert_eq!(rule.until.as_deref(), Some("2026-09-05T10:00:00"));
 }
+
+#[test]
+fn differential_oracle_virtual_location_uri_features_and_key_collision() {
+    // Divergence 172 against Stalwart differential oracle:
+    // read_virtual_locations, read_locations, and INVENTED_CONFERENCE_KEY:
+    // Virtual Location Mapping (RFC 7986 Section 5.11 CONFERENCE to RFC 8984 Section 4.2.6 virtualLocations),
+    // URI Validation (names_a_uri), Feature Decoding, Label Parameter Extraction,
+    // Colliding Key Collision Avoidance (k1, k2, ...), and Single Primary LOCATION Ingestion (INVENTED_KEY = "l1").
+
+    // 1. Inbound parsing with multiple CONFERENCE lines, features, labels, and collision avoidance
+    let ics = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:vloc-172\r\n\
+DTSTART:20260901T100000Z\r\n\
+LOCATION;X-JMAP-KEY=loc1:Main Conference Room\r\n\
+CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=Video Room;X-JMAP-KEY=conf-custom:https://meet.example.com/room1\r\n\
+CONFERENCE;VALUE=URI;FEATURE=PHONE;LABEL=Phone Bridge:tel:+15551234567\r\n\
+CONFERENCE;VALUE=URI;FEATURE=CHAT:https://chat.example.com/channel\r\n\
+CONFERENCE;VALUE=URI:not-a-valid-uri-scheme\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = ical_to_event(ics).expect("parse event with locations and conferences");
+
+    // Physical location mapped to single primary entry with preserved key
+    let locations = event.locations.as_ref().expect("locations present");
+    assert_eq!(locations.len(), 1);
+    assert_eq!(locations["loc1"]["@type"], "Location");
+    assert_eq!(locations["loc1"]["name"], "Main Conference Room");
+
+    // Virtual locations mapped with URI validation, features, labels, and collision avoidance
+    let vlocs = event
+        .virtual_locations
+        .as_ref()
+        .expect("virtual locations present");
+    // Invalid URI 'not-a-valid-uri-scheme' was dropped, so exactly 3 entries exist
+    assert_eq!(vlocs.len(), 3);
+
+    // Explicit key preserved
+    let conf_custom = &vlocs["conf-custom"];
+    assert_eq!(conf_custom["@type"], "VirtualLocation");
+    assert_eq!(conf_custom["uri"], "https://meet.example.com/room1");
+    assert_eq!(conf_custom["name"], "Video Room");
+    let features = &conf_custom["features"];
+    assert_eq!(features["audio"], true);
+    assert_eq!(features["video"], true);
+
+    // Invented key v1 for phone bridge
+    let conf_v1 = &vlocs["v1"];
+    assert_eq!(conf_v1["uri"], "tel:+15551234567");
+    assert_eq!(conf_v1["name"], "Phone Bridge");
+    assert_eq!(conf_v1["features"]["phone"], true);
+
+    // Invented key v2 avoids collision with v1
+    let conf_v2 = &vlocs["v2"];
+    assert_eq!(conf_v2["uri"], "https://chat.example.com/channel");
+    assert_eq!(conf_v2["features"]["chat"], true);
+
+    // Outbound serialization preserves VALUE=URI, features, label, and X-JMAP-KEY
+    let ics_emitted = event_to_ical(&event);
+    let unfolded = ics_emitted.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded.contains("LOCATION;X-JMAP-KEY=loc1:Main Conference Room"));
+    assert!(unfolded.contains("CONFERENCE;VALUE=URI"));
+    assert!(unfolded.contains("X-JMAP-KEY=conf-custom:https://meet.example.com/room1"));
+    assert!(unfolded.contains("X-JMAP-KEY=v1:tel:+15551234567"));
+    assert!(unfolded.contains("X-JMAP-KEY=v2:https://chat.example.com/channel"));
+
+    // Empty LOCATION line produces None rather than empty map
+    let ics_empty_loc = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:vloc-empty-172\r\n\
+DTSTART:20260901T100000Z\r\n\
+LOCATION:\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_empty_loc = ical_to_event(ics_empty_loc).expect("parse event with empty location");
+    assert!(ev_empty_loc.locations.is_none());
+}
+
+#[test]
+fn differential_oracle_drawn_links_image_attach_media_type_and_size() {
+    // Divergence 173 against Stalwart differential oracle:
+    // drawn_links, drawn_link, media_type, restricted_name, and stated_size:
+    // Outbound External Resource Serialization (RFC 8984 Section 4.2.7 links to RFC 5545 Section 3.8.1.1 ATTACH
+    // and RFC 7986 Section 5.10 IMAGE), Mandatory VALUE=URI for IMAGE, Default URI Omission for ATTACH,
+    // Media Type RFC 6838 Restricted Name Validation, and Stable X-JMAP-KEY Preservation.
+
+    let mut event = CalendarEvent {
+        uid: Some("links-173".to_string()),
+        start: Some("2026-09-01T10:00:00".to_string()),
+        ..CalendarEvent::default()
+    };
+
+    let mut links = BTreeMap::new();
+    // 1. Icon link -> IMAGE with mandatory VALUE=URI, DISPLAY=BADGE, FMTTYPE, and key
+    links.insert(
+        "icon1".to_string(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/icon.png",
+            "rel": "icon",
+            "display": "badge",
+            "contentType": "image/png"
+        }),
+    );
+    // 2. Attachment link -> ATTACH with default URI (no VALUE=URI), SIZE, FMTTYPE, and key
+    links.insert(
+        "att1".to_string(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/document.pdf",
+            "size": 1048576,
+            "contentType": "application/pdf"
+        }),
+    );
+    // 3. Media type with parameter: RFC 6838 restricted name validation drops FMTTYPE to prevent parameter corruption
+    links.insert(
+        "att2".to_string(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/notes.txt",
+            "contentType": "text/plain; charset=utf-8"
+        }),
+    );
+    event.links = Some(links);
+
+    let ics = event_to_ical(&event);
+
+    // IMAGE line must contain VALUE=URI, DISPLAY=BADGE, FMTTYPE=image/png, X-JMAP-KEY=icon1
+    let image_line = content_line(&ics, "IMAGE;");
+    assert!(image_line.contains("VALUE=URI"));
+    assert!(image_line.contains("DISPLAY=BADGE"));
+    assert!(image_line.contains("FMTTYPE=image/png"));
+    assert!(image_line.contains("X-JMAP-KEY=icon1:https://example.com/icon.png"));
+
+    // ATTACH line for document.pdf must NOT contain VALUE=URI, but must have SIZE and FMTTYPE
+    let pdf_line = content_line(&ics, "ATTACH;FMTTYPE=application/pdf");
+    assert!(!pdf_line.contains("VALUE="));
+    assert!(pdf_line.contains("SIZE=1048576"));
+    assert!(pdf_line.contains("X-JMAP-KEY=att1:https://example.com/document.pdf"));
+
+    // ATTACH line for notes.txt must NOT contain FMTTYPE because of ';' parameter in media type
+    let notes_line = content_line(&ics, "ATTACH;X-JMAP-KEY=att2");
+    assert!(!notes_line.contains("FMTTYPE="));
+    assert!(notes_line.contains("https://example.com/notes.txt"));
+
+    // Round-trip verification: ical_to_event restores links
+    let roundtrip_event = ical_to_event(&ics).expect("parse emitted ics with links");
+    let rt_links = roundtrip_event.links.expect("links preserved in roundtrip");
+    assert_eq!(rt_links["icon1"]["rel"], "icon");
+    assert_eq!(rt_links["icon1"]["display"], "badge");
+    assert_eq!(rt_links["icon1"]["contentType"], "image/png");
+    assert_eq!(rt_links["att1"]["size"], 1048576);
+    assert_eq!(rt_links["att1"]["contentType"], "application/pdf");
+}
+
+#[test]
+fn differential_oracle_recurrence_set_position_and_wkst_default_handling() {
+    // Divergence 174 against Stalwart differential oracle:
+    // by_set_position_part, set_position_token, first_day_of_week_part, and weekday_token:
+    // Recurrence Set Position and Week Start Formatting: RFC 5545 Section 3.3.10 BYSETPOS Gating on Set Selectors
+    // (selects_from_a_set), Bounded Positional Index Verification (-366..=-1 | 1..=366, Rejecting 0),
+    // Default Monday Suppression (WKST=MO Omission for Libical/EDS Cache Stability), and Strict Lowercase Weekday Parsing.
+
+    // 1. BYSETPOS with set selector (BYDAY) -> emitted cleanly
+    let rule_with_set = RecurrenceRule {
+        frequency: "monthly".to_string(),
+        by_day: Some(vec![NDay::new("mo"), NDay::new("fr")]),
+        by_set_position: Some(vec![1, -1]),
+        first_day_of_week: Some("su".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&rule_with_set));
+
+    let event_with_set = CalendarEvent {
+        uid: Some("rrule-174-a".to_string()),
+        start: Some("2026-09-01T10:00:00".to_string()),
+        recurrence_rule: Some(rule_with_set),
+        ..CalendarEvent::default()
+    };
+    let ics_set = event_to_ical(&event_with_set);
+    let rrule_line = content_line(&ics_set, "RRULE:");
+    assert!(rrule_line.contains("BYSETPOS=1,-1"));
+    assert!(rrule_line.contains("WKST=SU"));
+
+    // 2. BYSETPOS WITHOUT set selector (no BYDAY, BYMONTHDAY, etc.) -> omitted per RFC 5545 Section 3.3.10
+    let rule_without_set = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_set_position: Some(vec![1]),
+        ..RecurrenceRule::default()
+    };
+    let event_no_set = CalendarEvent {
+        uid: Some("rrule-174-b".to_string()),
+        start: Some("2026-09-01T10:00:00".to_string()),
+        recurrence_rule: Some(rule_without_set),
+        ..CalendarEvent::default()
+    };
+    let ics_no_set = event_to_ical(&event_no_set);
+    let rrule_line_b = content_line(&ics_no_set, "RRULE:");
+    assert!(!rrule_line_b.contains("BYSETPOS="));
+
+    // 3. BYSETPOS = 0 is invalid and rejected
+    let rule_zero_pos = RecurrenceRule {
+        frequency: "monthly".to_string(),
+        by_day: Some(vec![NDay::new("mo")]),
+        by_set_position: Some(vec![0]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&rule_zero_pos));
+
+    // 4. Default Monday week start (WKST=MO) is suppressed on outbound emission
+    let rule_monday_wkst = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        first_day_of_week: Some("mo".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&rule_monday_wkst));
+    let event_monday = CalendarEvent {
+        uid: Some("rrule-174-c".to_string()),
+        start: Some("2026-09-01T10:00:00".to_string()),
+        recurrence_rule: Some(rule_monday_wkst),
+        ..CalendarEvent::default()
+    };
+    let ics_monday = event_to_ical(&event_monday);
+    let rrule_line_c = content_line(&ics_monday, "RRULE:");
+    assert!(!rrule_line_c.contains("WKST="));
+
+    // 5. Non-lowercase or invalid weekday token is rejected
+    let rule_invalid_wkst = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        first_day_of_week: Some("MO".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&rule_invalid_wkst));
+}
+
+#[test]
+fn differential_oracle_modified_instances_override_expansion_and_dated_types() {
+    // Divergence 175 against Stalwart differential oracle:
+    // modified_instances, modified_instance, recurrence_dates, and dated:
+    // Recurrence Override Detached Component Generation: Base Series Property Inheritance (UID, Timestamps,
+    // Locations, Links, Participants, Default Alerts), Recurrence-ID Relative Start Anchor, Excluded Instance
+    // Suppression (EXDATE Chronological Emission), Granular Patch Application (Title, Description, Duration, Status,
+    // FreeBusyStatus, Privacy, Priority Nullification, Keywords/Alerts Replacement), and Unified Date/DateTime Serialization.
+
+    let mut series = CalendarEvent {
+        uid: Some("series-175".to_string()),
+        title: Some("Team Sync".to_string()),
+        start: Some("2026-09-01T09:00:00".to_string()),
+        time_zone: Some("Etc/UTC".to_string()),
+        duration: Some("PT30M".to_string()),
+        priority: Some(3),
+        recurrence_rule: Some(RecurrenceRule {
+            frequency: "weekly".to_string(),
+            ..RecurrenceRule::default()
+        }),
+        ..CalendarEvent::default()
+    };
+
+    let mut overrides = BTreeMap::new();
+    // 1. Non-excluded modified instance: overrides title, nullifies priority
+    overrides.insert(
+        "2026-09-08T09:00:00".to_string(),
+        json!({
+            "title": "Quarterly Planning",
+            "priority": null
+        }),
+    );
+    // 2. Excluded instance: excluded: true -> should emit EXDATE, not separate VEVENT
+    overrides.insert(
+        "2026-09-15T09:00:00".to_string(),
+        json!({
+            "excluded": true
+        }),
+    );
+    series.recurrence_overrides = Some(overrides);
+
+    let ics = event_to_ical(&series);
+
+    // Series component contains master title and EXDATE with UTC Z
+    assert!(ics.contains("SUMMARY:Team Sync"));
+    assert!(ics.contains("PRIORITY:3"));
+    assert!(ics.contains("EXDATE:20260915T090000Z"));
+
+    // Detached instance component exists with RECURRENCE-ID, new SUMMARY, and no PRIORITY
+    assert!(ics.contains("RECURRENCE-ID:20260908T090000Z"));
+    assert!(ics.contains("SUMMARY:Quarterly Planning"));
+
+    // Excluded instance does NOT have a detached VEVENT with RECURRENCE-ID:20260915T090000Z
+    assert!(!ics.contains("RECURRENCE-ID:20260915T090000Z"));
+
+    // Verify all-day dated formatting for show_without_time
+    let mut all_day_series = CalendarEvent {
+        uid: Some("all-day-175".to_string()),
+        title: Some("Company Holiday".to_string()),
+        start: Some("2026-10-01T00:00:00".to_string()),
+        duration: Some("P1D".to_string()),
+        show_without_time: Some(true),
+        recurrence_rule: Some(RecurrenceRule {
+            frequency: "yearly".to_string(),
+            ..RecurrenceRule::default()
+        }),
+        ..CalendarEvent::default()
+    };
+    let mut all_day_overrides = BTreeMap::new();
+    all_day_overrides.insert(
+        "2027-10-01T00:00:00".to_string(),
+        json!({
+            "title": "Extended Holiday"
+        }),
+    );
+    all_day_overrides.insert(
+        "2028-10-01T00:00:00".to_string(),
+        json!({
+            "excluded": true
+        }),
+    );
+    all_day_series.recurrence_overrides = Some(all_day_overrides);
+
+    let all_day_ics = event_to_ical(&all_day_series);
+    assert!(all_day_ics.contains("DTSTART;VALUE=DATE:20261001"));
+    assert!(all_day_ics.contains("RECURRENCE-ID;VALUE=DATE:20271001"));
+    assert!(all_day_ics.contains("EXDATE;VALUE=DATE:20281001"));
+    assert!(all_day_ics.contains("SUMMARY:Extended Holiday"));
+}
