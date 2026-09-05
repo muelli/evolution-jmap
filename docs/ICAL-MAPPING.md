@@ -4349,4 +4349,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.216 Divergence 216: `drawn_participants`, `calendar_address`, `stated_name`, `holds_role`, and `expects_reply`: Outbound Attendee and Organizer Serialization: Single `ORGANIZER` Selection for Multi-Owner Events, Owner-as-Attendee Filtering when Holding Additional Roles, IMIP Calendar Address Normalization, Role Precedence Hierarchy (`PARTICIPANT_ROLES`), and Conditional `RSVP=TRUE` Attachment
+
+- **Observed Behavior**:
+  Serializing JSCalendar participant records into RFC 5545 meeting invitations requires reconciling multi-owner representations, guest list memberships, and scheduling parameter semantics. In `jmap-ical`:
+  1. Single `ORGANIZER` selection for multi-owner events: RFC 8984 Section 4.4.6 permits multiple participants to hold the `owner` role. RFC 5545 Section 3.6.1 restricts a `VEVENT` to at most one `ORGANIZER` line. `drawn_participants` tracks `organizer_drawn` across the participant map in deterministic map order. Only the first owner encountered emits an `ORGANIZER` line with parameter `CN=<name>`, while subsequent owners do not emit duplicate `ORGANIZER` lines.
+  2. Owner-as-attendee filtering: If a participant's only role is `owner` (`role.is_none()`), the participant is omitted from `ATTENDEE` lines, treating them strictly as the host who called the meeting. If the owner also holds another role (such as `attendee` or `chair`), `drawn_participants` emits an `ATTENDEE` line alongside `ORGANIZER`, reflecting that the organizer is also attending the event.
+  3. IMIP calendar address URI validation: `calendar_address` extracts the URI from `participant.sendTo.imip`. Addresses must satisfy `names_a_uri`. Non-URI addresses or participants lacking an iMIP address are dropped from serialization.
+  4. Role precedence hierarchy: In JSCalendar, `roles` is a set, whereas RFC 5545 `ROLE` is a single scalar parameter. `spelled` resolves roles according to the strict priority order in `PARTICIPANT_ROLES`: `chair` (`CHAIR`), followed by `informational` (`NON-PARTICIPANT`), `optional` (`OPT-PARTICIPANT`), and `attendee` (`REQ-PARTICIPANT`). The most specific role takes precedence.
+  5. Conditional `RSVP=TRUE` parameter attachment: RFC 5545 Section 3.2.17 specifies `FALSE` as the default value for `RSVP`. `drawn_participants` attaches `RSVP=TRUE` only when `expects_reply(participant)` is true (`expectReply: true`). It suppresses the parameter when false or unstated, avoiding redundant parameter clutter.
+  6. In contrast, differential oracles or naive serializers emit multiple `ORGANIZER` lines for multi-owner events (violating RFC 5545 grammar), emit explicit `RSVP=FALSE` parameters, or omit the organizer from attendee lists even when marked with attendee or chair roles.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.1 restricts `ORGANIZER` to a single occurrence. Section 3.2.16 and Section 3.2.17 govern `ROLE` and `RSVP` parameters.
+  2. RFC 8984 Section 4.4.6 defines JSCalendar participant modeling. Enforcing single-organizer selection, role precedence, and conditional RSVP emission ensures valid iMIP scheduling documents across heterogeneous calendar servers.
+- **Adjudication**:
+  Conforming specification boundary and participant serialization fidelity. Emits a single `ORGANIZER` line, attaches `ATTENDEE` for owners with additional roles, validates iMIP calendar addresses, applies role precedence hierarchy, and conditionally emits `RSVP=TRUE`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.217 Divergence 217: `vevent_of`, `entry_raw_value`, `X_JMAP_UID`, and `to_utc_date_time`: Outbound `VEVENT` Core Identity and Timestamp Dual-Emission: Server-Assigned UID Precedence (`UID` vs `X-JMAP-UID`), Primary Component Identity Anchoring, RFC 5545 Dual Timestamp Emission (`CREATED`, `LAST-MODIFIED`, and `DTSTAMP` Generation), and UTC Zulu Timestamp Formatting
+
+- **Observed Behavior**:
+  Serializing core calendar identity and revision metadata requires aligning backend server identifiers with client UID keys and maintaining RFC 5545 timestamp requirements. In `jmap-ical`:
+  1. Server-assigned UID precedence: Evolution Data Server keys its local cache on iCalendar `UID` and references it in sync operations. In `vevent_of`, the server-assigned JMAP id (`event.id`) takes precedence as the primary `UID` property. The client-assigned JSCalendar `uid` is preserved aside in `X-JMAP-UID`. When `event.id` is not yet assigned (such as prior to initial creation), `event.uid` serves as `UID`.
+  2. RFC 5545 dual timestamp emission: RFC 5545 Section 3.8.7.2 mandates `DTSTAMP` on every `VEVENT` component and states that in a calendar without an explicit `METHOD`, `DTSTAMP` is equivalent to `LAST-MODIFIED`. `vevent_of` serializes `event.updated` as both `DTSTAMP` and `LAST-MODIFIED`. If `event.created` is present, it is emitted as `CREATED`. An event with no `updated` timestamp emits neither `DTSTAMP` nor `LAST-MODIFIED`, preventing spurious "now" timestamps that would trigger cache invalidation churn on EDS save cycles.
+  3. Canonical UTC Zulu formatting: Timestamps are converted through `to_utc_date_time`, outputting canonical `YYYYMMDDTHHMMSSZ` format without parameters.
+  4. In contrast, differential oracles or naive formatters overwrite server `id` with client `uid`, omit `LAST-MODIFIED` when `DTSTAMP` is present, synthesize arbitrary current-time stamps on missing fields, or format timestamps with `TZID=Etc/UTC` instead of Zulu suffixing.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.7 defines `UID`. Section 3.8.7.1, 3.8.7.2, and 3.8.7.3 govern `CREATED`, `DTSTAMP`, and `LAST-MODIFIED`.
+  2. RFC 8984 Section 4.1.1 and Section 4.1.2 define `id` and `uid`. Prioritizing server `id` in `UID` while retaining client `uid` in `X-JMAP-UID` preserves backend entity mapping and enables lossless synchronization across EDS and JMAP storage layers.
+- **Adjudication**:
+  Conforming specification boundary and event identity determinism. Keys `UID` on server id, preserves client `uid` via `X-JMAP-UID`, dual-emits `DTSTAMP` and `LAST-MODIFIED` from `updated`, and formats UTC timestamps with Zulu suffixing.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.218 Divergence 218: `ical_status`, `known_status`, `ical_transparency`, `known_transparency`, `ical_privacy`, `known_privacy`, and `known_priority`: Bi-directional Scalar Property Vocabulary Gating (`STATUS`, `TRANSP`, `CLASS`, `PRIORITY`), Cross-Vocabulary Alignment (`CONFIDENTIAL` vs `secret`), Explicit Default Emission, and Integer Range Bounding
+
+- **Observed Behavior**:
+  Translating scalar event properties between JSCalendar and iCalendar requires bidirectional vocabulary normalization, closed vocabulary gating, and integer range validation. In `jmap-ical`:
+  1. Status vocabulary mapping: `ical_status` maps JSCalendar lowercase `"confirmed"`, `"cancelled"`, and `"tentative"` to uppercase RFC 5545 `STATUS:CONFIRMED`, `STATUS:CANCELLED`, and `STATUS:TENTATIVE`. `known_status` validates known strings. Values outside the closed event vocabulary (such as VTODO task statuses `"in-process"` or `"completed"`) return `None` and are dropped from output.
+  2. Transparency vocabulary mapping: `ical_transparency` maps JSCalendar `freeBusyStatus` values `"free"` to `TRANSP:TRANSPARENT` and `"busy"` to `TRANSP:OPAQUE`. An absent or unrecognized status emits no `TRANSP` line, allowing the RFC 5545 default `OPAQUE` to take effect without emitting redundant tokens.
+  3. Privacy cross-vocabulary alignment: JSCalendar RFC 8984 Section 4.4.3 uses `"public"`, `"private"`, and `"secret"`. RFC 5545 Section 3.8.1.3 uses `PUBLIC`, `PRIVATE`, and `CONFIDENTIAL`. `ical_privacy` aligns `"secret"` with `CLASS:CONFIDENTIAL`, and `"public"`/`"private"` with `CLASS:PUBLIC`/`CLASS:PRIVATE`. Unrecognized privacy strings return `None`. In outbound serialization, `CLASS` is emitted even for public events because Evolution's appointment editor sets classification on every save.
+  4. Priority integer range clamping: RFC 5545 Section 3.8.1.9 and RFC 8984 Section 4.4.4 restrict priority to the integer range `0..=9`. `known_priority` enforces `(0..=9).contains(&priority)`. Negative values or integers exceeding 9 are rejected, and are omitted from outbound `PRIORITY` line generation.
+  5. In contrast, differential oracles or permissive parsers permit out-of-range priority numbers (e.g. `10` or `-1`), emit non-standard `CLASS:SECRET` tokens, or map task statuses onto calendar events.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.3, Section 3.8.1.9, Section 3.8.1.11, and Section 3.8.2.7 govern `CLASS`, `PRIORITY`, `STATUS`, and `TRANSP`.
+  2. RFC 8984 Section 4.4 defines JSCalendar scalar properties. Normalizing closed vocabularies, aligning `secret` to `CONFIDENTIAL`, and clamping priority bounds avoids cache invalidation churn and ensures compatibility with strict iCalendar validators.
+- **Adjudication**:
+  Conforming specification boundary and scalar property mapping fidelity. Gates `STATUS`, `TRANSP`, and `CLASS` across closed vocabularies, aligns `secret` with `CONFIDENTIAL`, and enforces `0..=9` integer priority bounds.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.219 Divergence 219: `event_to_ical`, `drawn_time_zones`, `Component::to_ics`, and `VCALENDAR`: Outbound Calendar Stream Serialization: Component Ordering (`VTIMEZONE` Observances Preceding `VEVENT` Components), Standalone Calendar Envelope Delimitation (`BEGIN:VCALENDAR` / `END:VCALENDAR`), Line Length Formatting / CRLF Unfolding Boundary, and Custom Solidus TimeZone Definition Deduplication
+
+- **Observed Behavior**:
+  Serializing complete iCalendar streams requires assembling top-level component envelopes, enforcing component ordering for streaming consumers, deduplicating document-level timezone definitions, and adhering to physical line length and CRLF termination rules. In `jmap-ical`:
+  1. Standalone `VCALENDAR` envelope delimitation: `event_to_ical` wraps components in a root `VCALENDAR` envelope stamped with `VERSION:2.0` and `PRODID:-//Tobias Mueller//evolution-jmap//EN`.
+  2. Component ordering: RFC 5545 Section 3.6 requires that `VTIMEZONE` definitions precede any calendar components (`VEVENT`) that reference them. `event_to_ical` inserts `drawn_time_zones` children into the calendar component tree strictly before the primary `vevent` component and any detached override instances.
+  3. Custom solidus timezone definition deduplication: `drawn_time_zones` extracts all timezone identifiers referenced by the event and its overrides (`referred_zones`). Standard IANA names are excluded because compliant readers resolve them against system tzdata. Only custom solidus identifiers (prefixed with `/` and defined in `event.time_zones`) generate `VTIMEZONE` components. References across master and override components are deduplicated, emitting each custom timezone definition exactly once.
+  4. Line length formatting and CRLF termination: `to_ics` formats each entry according to RFC 5545 Section 3.1. Content lines exceeding 75 octets are folded using CRLF followed by a single whitespace character. Every line is terminated by `\r\n` (CRLF) without bare LF or CR characters.
+  5. In contrast, differential oracles or uncoordinated serializers place `VEVENT` ahead of `VTIMEZONE` components (breaking streaming parsers), emit duplicate `VTIMEZONE` blocks for series with instance overrides, or emit non-standard LF line endings that cause CalDAV server rejections.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.1 defines content line limits and CRLF folding. Section 3.6 defines component ordering prerequisites. Section 3.6.5 defines `VTIMEZONE` scoping.
+  2. Emitting `VTIMEZONE` before `VEVENT`, deduplicating custom timezone components, and enforcing CRLF folding guarantees seamless streaming ingestion across external CalDAV and iCalendar consumers.
+- **Adjudication**:
+  Conforming specification boundary and calendar stream serialization determinism. Emits `VTIMEZONE` ahead of `VEVENT`, deduplicates custom solidus timezone definitions, stamps `VERSION:2.0`, and enforces RFC 5545 CRLF line formatting.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 

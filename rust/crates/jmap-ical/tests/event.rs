@@ -32645,3 +32645,232 @@ fn differential_oracle_multi_rrule_narrowing_and_property_dropping() {
         "participants dropped on import for iTIP safety"
     );
 }
+
+#[test]
+fn differential_oracle_drawn_participants_organizer_and_attendee_serialization() {
+    // Divergence 216 against Stalwart differential oracle:
+    // drawn_participants, calendar_address, stated_name, holds_role, and expects_reply:
+    // Outbound Attendee and Organizer Serialization: Single ORGANIZER Selection for Multi-Owner Events,
+    // Owner-as-Attendee Filtering when Holding Additional Roles, IMIP Calendar Address Normalization,
+    // Role Precedence Hierarchy (PARTICIPANT_ROLES), and Conditional RSVP=TRUE Attachment.
+
+    // 1. Single ORGANIZER selection for multi-owner event (RFC 5545 Section 3.6.1)
+    let mut event = fixture_event();
+    let mut participants = std::collections::BTreeMap::new();
+    participants.insert(
+        "p1".to_string(),
+        json!({
+            "name": "First Owner",
+            "sendTo": { "imip": "mailto:owner1@example.com" },
+            "roles": { "owner": true }
+        }),
+    );
+    participants.insert(
+        "p2".to_string(),
+        json!({
+            "name": "Second Owner",
+            "sendTo": { "imip": "mailto:owner2@example.com" },
+            "roles": { "owner": true }
+        }),
+    );
+    event.participants = Some(participants);
+
+    let ics = event_to_ical(&event);
+    // Only one ORGANIZER is drawn (first owner)
+    assert_eq!(
+        ics.matches("ORGANIZER;CN=\"First Owner\":mailto:owner1@example.com")
+            .count(),
+        1
+    );
+    assert_eq!(ics.matches("ORGANIZER;CN=\"Second Owner\"").count(), 0);
+    // Neither owner had additional roles, so neither is drawn as ATTENDEE
+    assert_eq!(ics.matches("ATTENDEE;CN=\"First Owner\"").count(), 0);
+    assert_eq!(ics.matches("ATTENDEE;CN=\"Second Owner\"").count(), 0);
+
+    // 2. Owner holding additional role (attendee) is drawn as both ORGANIZER and ATTENDEE
+    let mut event_both = fixture_event();
+    let mut participants_both = std::collections::BTreeMap::new();
+    participants_both.insert(
+        "p1".to_string(),
+        json!({
+            "name": "Host Guest",
+            "sendTo": { "imip": "mailto:host@example.com" },
+            "roles": { "owner": true, "attendee": true },
+            "kind": "individual",
+            "participationStatus": "accepted",
+            "expectReply": true
+        }),
+    );
+    event_both.participants = Some(participants_both);
+
+    let ics_both = event_to_ical(&event_both);
+    assert!(ics_both.contains("ORGANIZER;CN=\"Host Guest\":mailto:host@example.com"));
+    let attendee_line = content_line(&ics_both, "ATTENDEE;");
+    assert!(attendee_line.contains("CN=\"Host Guest\""));
+    assert!(attendee_line.contains("CUTYPE=INDIVIDUAL"));
+    assert!(attendee_line.contains("ROLE=REQ-PARTICIPANT"));
+    assert!(attendee_line.contains("PARTSTAT=ACCEPTED"));
+    assert!(attendee_line.contains("RSVP=TRUE"));
+    assert!(attendee_line.contains(":mailto:host@example.com"));
+}
+
+#[test]
+fn differential_oracle_vevent_core_identity_and_dual_timestamps() {
+    // Divergence 217 against Stalwart differential oracle:
+    // vevent_of, entry_raw_value, X_JMAP_UID, and to_utc_date_time:
+    // Outbound VEVENT Core Identity and Timestamp Dual-Emission: Server-Assigned UID Precedence
+    // (UID vs X-JMAP-UID), Primary Component Identity Anchoring, RFC 5545 Dual Timestamp Emission
+    // (CREATED, LAST-MODIFIED, and DTSTAMP Generation), and UTC Zulu Timestamp Formatting.
+
+    // 1. Server-assigned id takes precedence as UID; client-assigned uid preserved in X-JMAP-UID
+    let mut event = fixture_event();
+    event.id = Some("server-assigned-id-217".into());
+    event.uid = Some("client-assigned-uid-217".to_string());
+    event.created = Some("2026-01-01T08:00:00Z".to_string());
+    event.updated = Some("2026-01-02T16:30:00Z".to_string());
+
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "UID:"), "UID:server-assigned-id-217");
+    assert_eq!(
+        line(&ics, "X-JMAP-UID:"),
+        "X-JMAP-UID:client-assigned-uid-217"
+    );
+
+    // 2. Timestamp dual-emission: CREATED from created, DTSTAMP and LAST-MODIFIED from updated
+    assert_eq!(line(&ics, "CREATED:"), "CREATED:20260101T080000Z");
+    assert_eq!(line(&ics, "DTSTAMP:"), "DTSTAMP:20260102T163000Z");
+    assert_eq!(
+        line(&ics, "LAST-MODIFIED:"),
+        "LAST-MODIFIED:20260102T163000Z"
+    );
+
+    // 3. When server id is absent, client uid stands in for UID
+    let mut event_no_id = fixture_event();
+    event_no_id.id = None;
+    event_no_id.uid = Some("fallback-uid-217".to_string());
+    let ics_no_id = event_to_ical(&event_no_id);
+    assert_eq!(line(&ics_no_id, "UID:"), "UID:fallback-uid-217");
+}
+
+#[test]
+fn differential_oracle_scalar_vocabulary_and_priority_clamping() {
+    // Divergence 218 against Stalwart differential oracle:
+    // ical_status, known_status, ical_transparency, known_transparency, ical_privacy, known_privacy, and known_priority:
+    // Bi-directional Scalar Property Vocabulary Gating (STATUS, TRANSP, CLASS, PRIORITY),
+    // Cross-Vocabulary Alignment (CONFIDENTIAL vs secret), Explicit Default Emission, and Integer Range Bounding.
+
+    // 1. Status mapping and validation
+    assert_eq!(
+        jmap_ical::event::ical_status("confirmed"),
+        Some("CONFIRMED")
+    );
+    assert_eq!(
+        jmap_ical::event::ical_status("cancelled"),
+        Some("CANCELLED")
+    );
+    assert_eq!(
+        jmap_ical::event::ical_status("tentative"),
+        Some("TENTATIVE")
+    );
+    assert_eq!(jmap_ical::event::ical_status("unknown"), None);
+    assert!(jmap_ical::event::known_status("confirmed"));
+    assert!(!jmap_ical::event::known_status("completed"));
+
+    // 2. Transparency mapping
+    assert_eq!(
+        jmap_ical::event::ical_transparency("free"),
+        Some("TRANSPARENT")
+    );
+    assert_eq!(jmap_ical::event::ical_transparency("busy"), Some("OPAQUE"));
+    assert_eq!(jmap_ical::event::ical_transparency("other"), None);
+    assert!(jmap_ical::event::known_transparency("free"));
+    assert!(!jmap_ical::event::known_transparency("other"));
+
+    // 3. Privacy / Class alignment
+    assert_eq!(jmap_ical::event::ical_privacy("public"), Some("PUBLIC"));
+    assert_eq!(jmap_ical::event::ical_privacy("private"), Some("PRIVATE"));
+    assert_eq!(
+        jmap_ical::event::ical_privacy("secret"),
+        Some("CONFIDENTIAL")
+    );
+    assert_eq!(jmap_ical::event::ical_privacy("unlisted"), None);
+
+    // 4. Priority integer range clamping (0..=9)
+    assert!(jmap_ical::event::known_priority(0));
+    assert!(jmap_ical::event::known_priority(9));
+    assert!(!jmap_ical::event::known_priority(-1));
+    assert!(!jmap_ical::event::known_priority(10));
+
+    // 5. Outbound serialization behavior
+    let mut event = fixture_event();
+    event.status = Some("tentative".to_string());
+    event.free_busy_status = Some("free".to_string());
+    event.privacy = Some("secret".to_string());
+    event.priority = Some(3);
+    let ics = event_to_ical(&event);
+    assert_eq!(line(&ics, "STATUS:"), "STATUS:TENTATIVE");
+    assert_eq!(line(&ics, "TRANSP:"), "TRANSP:TRANSPARENT");
+    assert_eq!(line(&ics, "CLASS:"), "CLASS:CONFIDENTIAL");
+    assert_eq!(line(&ics, "PRIORITY:"), "PRIORITY:3");
+
+    // Invalid priority outside 0..=9 is omitted from serialization
+    let mut event_bad_priority = fixture_event();
+    event_bad_priority.priority = Some(15);
+    let ics_bad_prio = event_to_ical(&event_bad_priority);
+    assert!(without(&ics_bad_prio, "PRIORITY:"));
+}
+
+#[test]
+fn differential_oracle_calendar_stream_component_ordering_and_custom_vtimezone() {
+    // Divergence 219 against Stalwart differential oracle:
+    // event_to_ical, drawn_time_zones, Component::to_ics, and VCALENDAR:
+    // Outbound Calendar Stream Serialization: Component Ordering (VTIMEZONE Observances Preceding VEVENT Components),
+    // Standalone Calendar Envelope Delimitation (BEGIN:VCALENDAR / END:VCALENDAR),
+    // Line Length Formatting / CRLF Unfolding Boundary, and Custom Solidus TimeZone Definition Deduplication.
+
+    // 1. Calendar stream envelope structure
+    let mut event = fixture_event();
+    event.time_zone = Some("/custom/zone219".to_string());
+    let custom_def = json!({
+        "@type": "TimeZone",
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-01-01T00:00:00",
+            "offsetFrom": "+01:00",
+            "offsetTo": "+01:00"
+        }]
+    });
+    let mut time_zones = std::collections::BTreeMap::new();
+    time_zones.insert("/custom/zone219".to_string(), custom_def);
+    event.time_zones = Some(time_zones);
+
+    let ics = event_to_ical(&event);
+
+    // Envelope headers
+    assert!(ics.starts_with("BEGIN:VCALENDAR\r\nVERSION:2.0\r\n"));
+    assert!(ics.ends_with("END:VCALENDAR\r\n"));
+
+    // 2. VTIMEZONE appears before VEVENT in calendar stream
+    let vtimezone_pos = ics
+        .find("BEGIN:VTIMEZONE\r\n")
+        .expect("VTIMEZONE present in output");
+    let vevent_pos = ics
+        .find("BEGIN:VEVENT\r\n")
+        .expect("VEVENT present in output");
+    assert!(
+        vtimezone_pos < vevent_pos,
+        "VTIMEZONE components must precede VEVENT components in iCalendar stream"
+    );
+
+    // 3. Custom solidus timezone carries definition
+    assert!(ics.contains("TZID:/custom/zone219\r\n"));
+    assert!(ics.contains("BEGIN:STANDARD\r\n"));
+    assert!(ics.contains("TZOFFSETFROM:+0100\r\n"));
+    assert!(ics.contains("TZOFFSETTO:+0100\r\n"));
+
+    // 4. All lines terminated by CRLF without bare LF
+    for line in ics.split("\r\n") {
+        assert!(!line.contains('\n'), "no bare linefeeds permitted");
+        assert!(!line.contains('\r'), "no bare carriage returns permitted");
+    }
+}
