@@ -26535,3 +26535,223 @@ END:VCALENDAR\r\n";
         "out-of-range PRIORITY:10 is not mapped"
     );
 }
+
+#[test]
+fn differential_oracle_prune_time_zones_override_auditing_and_dual_key_matching() {
+    // Divergence 144 against Stalwart differential oracle:
+    // Full event timezone auditing (master time_zone + overrides patch timeZone),
+    // dual-key matching (/prefix and prefix), empty map elimination (None),
+    // and dangling definition defense.
+    let custom_tz1 = "/custom/override-zone";
+    let custom_tz2 = "/example.com/prefix-zone";
+    let unused_tz = "/custom/unused-zone";
+
+    let dummy_zone_def = json!({
+        "@type": "TimeZone",
+        "tzId": custom_tz1,
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-01-01T00:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0100",
+        }]
+    });
+
+    let mut ev = CalendarEvent {
+        id: Some("prune-144".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        recurrence_overrides: Some(
+            [
+                (
+                    "2026-09-08T10:00:00".to_owned(),
+                    json!({
+                        "timeZone": custom_tz1,
+                    }),
+                ),
+                (
+                    "2026-09-15T10:00:00".to_owned(),
+                    json!({
+                        "timeZone": custom_tz2,
+                    }),
+                ),
+            ]
+            .into(),
+        ),
+        time_zones: Some(
+            [
+                (custom_tz1.to_owned(), dummy_zone_def.clone()),
+                (unused_tz.to_owned(), dummy_zone_def.clone()),
+                ("example.com/prefix-zone".to_owned(), dummy_zone_def.clone()),
+            ]
+            .into(),
+        ),
+        ..Default::default()
+    };
+
+    assert_eq!(ev.time_zones.as_ref().map(BTreeMap::len), Some(3));
+
+    // Prune: unused_tz should be pruned; custom_tz1 and example.com/prefix-zone retained
+    prune_time_zones(&mut ev);
+    let pruned = ev.time_zones.as_ref().expect("retained time_zones");
+    assert_eq!(pruned.len(), 2);
+    assert!(pruned.contains_key(custom_tz1));
+    assert!(pruned.contains_key("example.com/prefix-zone"));
+    assert!(!pruned.contains_key(unused_tz));
+
+    // When overrides no longer reference custom zones and series zone is standard IANA:
+    ev.recurrence_overrides = None;
+    prune_time_zones(&mut ev);
+    assert!(
+        ev.time_zones.is_none(),
+        "time_zones is None rather than empty map when all definitions pruned"
+    );
+}
+
+#[test]
+fn differential_oracle_fetched_locally_file_uri_suppression_and_scheme_case_insensitivity() {
+    // Divergence 145 against Stalwart differential oracle:
+    // Local file: URI suppression (RFC 8089), case-insensitive scheme parsing (RFC 3986 section 3.1),
+    // and workstation path leaking defense.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:local-link-145\r\n\
+DTSTART:20260901T100000Z\r\n\
+ATTACH;VALUE=URI:file:///home/user/private/secret.pdf\r\n\
+ATTACH;VALUE=URI:FILE:///C:/Users/Administrator/notes.docx\r\n\
+ATTACH;VALUE=URI:File:///tmp/scratch.txt\r\n\
+ATTACH;VALUE=URI:https://example.com/public-agenda.pdf\r\n\
+IMAGE;VALUE=URI;DISPLAY=BADGE:https://example.com/badge.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse ics");
+    let links = ev.links.expect("links map present");
+    assert_eq!(links.len(), 2, "only the 2 non-file URIs are parsed");
+
+    // All file: URIs must be suppressed
+    for link in links.values() {
+        let href = link.get("href").and_then(Value::as_str).expect("href");
+        assert!(
+            !href.to_ascii_lowercase().starts_with("file:"),
+            "file: URI leaked into link: {href}"
+        );
+    }
+
+    // Only file: attachments: result should be links: None
+    let ics_only_local = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:only-local-link-145\r\n\
+DTSTART:20260901T100000Z\r\n\
+ATTACH;VALUE=URI:file:///home/runner/attachment.dat\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_local = ical_to_event(ics_only_local).expect("parse ics only local");
+    assert!(
+        ev_local.links.is_none(),
+        "links is None when all links are local file URIs"
+    );
+}
+
+#[test]
+fn differential_oracle_read_keywords_and_maps_keyword_fixed_point_trim_and_deduplication() {
+    // Divergence 146 against Stalwart differential oracle:
+    // Set deduplication, multi-property and comma gathering, empty and whitespace-only tag stripping,
+    // and fixed-point trim invariance.
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:keywords-146\r\n\
+DTSTART:20260901T100000Z\r\n\
+CATEGORIES:Work, Project , Urgent\r\n\
+CATEGORIES:Project,   , ,Quarterly Planning\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse ics keywords");
+    let keywords = ev.keywords.expect("keywords map present");
+
+    // "Project" is deduplicated, whitespace trimmed, empty tokens dropped
+    assert_eq!(keywords.len(), 4);
+    assert_eq!(keywords.get("Work"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Project"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Urgent"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Quarterly Planning"), Some(&Value::Bool(true)));
+    assert!(!keywords.contains_key(""));
+    assert!(!keywords.contains_key(" "));
+
+    // maps_keyword validation
+    assert!(maps_keyword("Work", &json!(true)));
+    assert!(maps_keyword("Quarterly Planning", &json!(true)));
+    assert!(!maps_keyword("", &json!(true)), "empty tag refused");
+    assert!(
+        !maps_keyword("   ", &json!(true)),
+        "whitespace-only tag refused"
+    );
+    assert!(
+        !maps_keyword("Tag\rWithCR", &json!(true)),
+        "carriage return rejected to prevent line folding corruption"
+    );
+    assert!(
+        maps_keyword("Tag\nWithLF", &json!(true)),
+        "line feed is permitted because it has an escape and survives"
+    );
+    assert!(!maps_keyword("Work", &json!(false)), "false value refused");
+    assert!(
+        !maps_keyword("Work", &json!("true")),
+        "non-bool value refused"
+    );
+}
+
+#[test]
+fn differential_oracle_offset_at_observance_search_window_and_wkst_tolerance() {
+    // Divergence 147 against Stalwart differential oracle:
+    // Observance transition search window (SEARCH = 40), WKST refusal immunity on yearly transition rules,
+    // and transition local resolution against TZOFFSETFROM.
+    let custom_tz = "/corp.example.com/CustomZone";
+    let ics = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20301025T010000Z;BYDAY=-1SU;BYMONTH=10;WKST=MO\r\n\
+TZNAME:CST\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:19700329T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20300329T010000Z;BYDAY=-1SU;BYMONTH=3;WKST=MO\r\n\
+TZNAME:CDT\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:wkst-zone-147\r\n\
+DTSTART;TZID={custom_tz}:20260401T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260405T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(&ics).expect("parse event with custom timezone");
+    assert_eq!(ev.time_zone.as_deref(), Some(custom_tz));
+    let rule = ev.recurrence_rule.expect("recurrence rule present");
+    // In April 2026, DAYLIGHT transition (+0200) is in force.
+    // 2026-04-05T12:00:00Z shifted by +0200 offset -> 2026-04-05T14:00:00
+    assert_eq!(
+        rule.until.as_deref(),
+        Some("2026-04-05T14:00:00"),
+        "UNTIL converted from UTC to local time in force without WKST refusal"
+    );
+    assert!(maps_recurrence_rule(&rule));
+}

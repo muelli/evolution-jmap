@@ -3087,3 +3087,74 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and enumeration validation. Enforces strict bidirectional mapping for statuses, transparencies, privacy classifications, and bounded integer priorities.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.144 Divergence 144: `prune_time_zones` and `referred_zones`: Full Event Timezone Auditing (`timeZone` and Overrides `patch["timeZone"]`), Dual-Key Matching (`/prefix` vs `prefix`), Empty Map Elimination (`None`), and Dangling Definition Defense
+
+- **Observed Behavior**:
+  RFC 8984 §4.7.2 models custom timezone definitions in the event's `timeZones` map (`timeZones: {"/tzid": TimeZone}`). An event may refer to custom timezones on the master series clock or within individual recurrence override patches. In `jmap-ical`:
+  1. Full event timezone auditing (`prune_time_zones`, `referred_zones`): `referred_zones` iterates over both the master series `event.time_zone` and every detached instance's `patch.get("timeZone")` within `event.recurrence_overrides`.
+  2. Dual-key matching: Custom timezone definitions are retained if their key matches either the exact referred timezone string or the string stripped of its leading solidus (`referred == tzid || referred.trim_start_matches('/') == tzid`).
+  3. Unused definition removal: Any custom timezone definition in `timeZones` that is not referenced by the series or any override is pruned, preventing unused definitions from bloating serialized payloads.
+  4. Empty map normalization (`event.time_zones = None`): If all definitions are pruned or none remain, `event.time_zones` is reset to `None` rather than emitted as an empty map (`{}`), ensuring strict schema conformance with JMAP endpoints.
+  5. Dangling definition defense: A caller resetting an unsendable master timezone (for example, falling back to floating time on appointment creation) does not inadvertently wipe definitions referenced by detached overrides. Overrides retain their needed definitions, preventing the server from rejecting the update with `invalidProperties`.
+  6. In contrast, differential oracles or naive CalDAV serializers either leak orphaned `VTIMEZONE` definitions that bloat network payloads, emit illegal empty `timeZones: {}` maps, or purge the entire `timeZones` map whenever the master series timezone changes, breaking detached recurrence instances.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §1.4.9 requires custom solidus timezone identifiers to be accompanied by valid `TimeZone` definitions in `timeZones`. An override referencing an undefined custom timezone constitutes a dangling reference that causes conformant JMAP servers to reject the update.
+  2. In Evolution Data Server, recurring meetings frequently move single occurrences into different timezones. Protecting override timezone definitions during series updates preserves recurrence tree integrity.
+- **Adjudication**:
+  Conforming specification boundary and timezone reference integrity defense. Audits master series and override timezones, matches dual solidus keys, eliminates empty definition maps, and defends against dangling custom timezone references.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.145 Divergence 145: `fetched_locally` and `read_links`: Local `file:` URI Suppression (RFC 8089), Case-Insensitive Scheme Parsing (RFC 3986 §3.1), and Workstation Path Leaking Defense
+
+- **Observed Behavior**:
+  Users frequently attach local files from their desktop workstations to calendar appointments in clients such as Evolution Data Server, producing `ATTACH;VALUE=URI:file:///home/...` properties. In `jmap-ical`:
+  1. Local `file:` URI suppression (`fetched_locally`): `read_links` invokes `fetched_locally(&href)` on every candidate attachment and image URI.
+  2. Case-insensitive scheme resolution: `fetched_locally` inspects `href.split_once(':')` and compares the scheme case-insensitively against `"file"` (`scheme.eq_ignore_ascii_case("file")`), per RFC 3986 §3.1 scheme normalization rules.
+  3. Workstation path privacy defense: All `file:` URIs are discarded during inbound parsing and never admitted into the `links` map.
+  4. Clean map absence: If an event contains only local `file:` attachments, `read_links` returns `None` rather than an empty map, avoiding unnecessary patch diffs.
+  5. In contrast, differential oracles or naive iCalendar parsers ingest `file:` URIs verbatim into remote calendar records, publishing private local workstation usernames and filesystem directory structures to all meeting invitees and remote servers.
+- **Specification and Architectural Context**:
+  1. RFC 8089 defines the `file` URI scheme for host-specific file access. Local file paths are unresolvable by remote calendar clients and expose sensitive user directory information if stored in shared objects.
+  2. In JMAP, shared attachments must be transferred as blobs via RFC 9404 `Blob/upload` or hosted at accessible HTTP/HTTPS endpoints, not stored as local workstation file paths.
+- **Adjudication**:
+  Conforming specification boundary and user privacy defense. Discards local `file:` URIs case-insensitively during link parsing to prevent private workstation path leakage.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.146 Divergence 146: `read_keywords` and `maps_keyword`: Set Deduplication, Multi-Property / Comma Gathering, Empty / Whitespace-Only Tag Stripping, and Fixed-Point Trim Invariance
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.1.2 defines `CATEGORIES` as comma-separated keyword lists and allows multiple property instances per `VEVENT`. RFC 8984 §4.2.4 models keywords as a boolean Set (`keywords: {"tag": true}`). In `jmap-ical`:
+  1. Multi-property and comma gathering: `read_keywords` iterates through all `CATEGORIES` property entries via `component_entries`, splitting comma-delimited tokens using `entry_texts`.
+  2. Edge whitespace trimming and empty tag stripping: Each keyword token is trimmed of leading and trailing whitespace (`tag.trim()`). Empty tokens (`""`) and whitespace-only values are dropped.
+  3. Set deduplication: Repeated keywords across lines or within a single line collapse into a single map entry (`(tag, Value::Bool(true))`).
+  4. Fixed-point trim invariance: Bare edge whitespace in an iCalendar tag (`CATEGORIES:0 `) is trimmed by upstream parser `calcard` upon re-parsing. If `read_keywords` preserved raw edge whitespace, it would emit unescaped edge whitespace that would be stripped on the next cycle, violating round-trip stability.
+  5. Keyword validity gating (`maps_keyword`): Requires `set == &Value::Bool(true)`, non-empty trimmed tag (`!tag.trim().is_empty()`), and rejects carriage return characters (`!tag.contains('\r')`) to prevent content line injection vulnerabilities, while permitting escaped line feeds (`\n`).
+  6. In contrast, differential oracles or permissive parsers either retain empty tags (`{"": true}`), preserve unstable edge whitespace, or drop all but the first `CATEGORIES` property line.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §1.4.3 defines a Set as a JSON object where all values must be `true`. RFC 5545 §3.8.1.2 permits multiple `CATEGORIES` lines to express categories cumulatively.
+  2. Collapsing duplicate keywords into a canonical Set and enforcing fixed-point whitespace trimming guarantees round-trip idempotency across Evolution Data Server sync cycles.
+- **Adjudication**:
+  Conforming specification boundary and keyword set validation. Gathers multi-line categories, trims edge whitespace for fixed-point stability, deduplicates tags, and rejects carriage return injection.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.147 Divergence 147: `offset_at`, `onsets`, and `rule_onsets`: Observance Transition Search Window (`SEARCH = 40`), Single-Transition Matching, `WKST` Refusal Immunity, and Transition Local Resolution Against `TZOFFSETFROM`
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.5 specifies `VTIMEZONE` subcomponents (`STANDARD` and `DAYLIGHT`) to define daylight saving and standard time transitions. Calculating the UTC offset in force at a given instant requires finding the latest transition rule onset at or before that instant. In `jmap-ical`'s `zone.rs`:
+  1. Local resolution against `TZOFFSETFROM`: Dates transition rules in the zone being defined, resolving `DTSTART` and `RDATE` against `TZOFFSETFROM` (`seconds - from`).
+  2. Bounded search window (`SEARCH = 40` years): Transition rules (`rule_onsets`) search backwards up to 40 years from the target year, covering rare recurrence intervals (such as leap day February 29 transitions or multi-year `WeekdayAmong` patterns) without unbounded execution time.
+  3. Single-transition matching (`names.of(year, month)`): Returns `Falls::On(day)` for valid occurrences, skips `Falls::Never` (when a month lacks a fifth weekday occurrence), and strictly refuses `Falls::Set` (if multiple days match, treating ambiguous transition sets as unresolvable).
+  4. `WKST` refusal immunity: Tolerates and ignores `WKST` parameters on yearly transition rules emitted by Microsoft Exchange and Zimbra (`WKST` is semantically inert for yearly rules without `BYWEEKNO`), avoiding outright refusal of valid corporate timezone definitions.
+  5. Earliest fallback: If a target instant precedes all described transitions, the earliest observance's `TZOFFSETFROM` is returned as the pre-transition baseline.
+  6. In contrast, differential oracles or naive transition evaluators either require external timezone databases, loop excessively on long-cycle transition rules, misinterpret local start times against the new rather than prior offset, or reject corporate `VTIMEZONE` blocks containing superfluous `WKST` parameters.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.5 dates observances against `TZOFFSETFROM` and defines transition rules using recurrence rule syntax. Tolerating `WKST` on yearly transition rules ensures robust compatibility with Exchange and Lotus Notes exports.
+  2. A bounded search window guarantees deterministic execution bounds while accurately evaluating historical and future daylight saving shifts for recurrence `UNTIL` calculation.
+- **Adjudication**:
+  Conforming specification boundary and timezone observance transition resolution. Resolves transitions against `TZOFFSETFROM`, bounds recurrence search to 40 years, tolerates benign `WKST` parameters, and enforces single-transition determinism.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
