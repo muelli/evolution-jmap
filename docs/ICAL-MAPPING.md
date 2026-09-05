@@ -3158,3 +3158,77 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and timezone observance transition resolution. Resolves transitions against `TZOFFSETFROM`, bounds recurrence search to 40 years, tolerates benign `WKST` parameters, and enforces single-transition determinism.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.148 Divergence 148: `unstateable_until` and `to_ical_date_time`: Recurrence `UNTIL` Endpoint Formatting Diagnostic Isolation, Wall-Clock Conversion Gating, and Non-UNTIL Rule Error Decoupling
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 dictates that an `UNTIL` rule part must be dated in UTC when the event start time is in UTC or a named timezone, and as floating local time when the start time is floating. In `jmap-ical`:
+  1. Diagnostic isolation (`unstateable_until`): When evaluating a recurrence rule, `unstateable_until(rule)` isolates timestamps in `rule.until` that cannot be rendered as valid iCalendar `DATE-TIME` strings by `to_ical_date_time`.
+  2. Targeted failure extraction: Returns `Some(&str)` containing the unstateable timestamp string if and only if `rule.until` is present and fails date-time validation.
+  3. Non-UNTIL error decoupling: If a recurrence rule is invalid for any other reason (such as an unknown frequency, invalid interval, or unrepresentable `byMonth`), `unstateable_until` returns `None`. This prevents unrelated structural rule defects from being misattributed to timezone or timestamp conversion issues.
+  4. Sync layer awareness: Exposing `unstateable_until` allows the synchronization engine (`jmap-cal-sync`) to flag unmappable recurrence endpoints explicitly rather than discarding recurring rules without explanation.
+  5. In contrast, differential oracles or monolithic serializers fail with a generic parsing or serialization error, drop the recurrence rule silently, or conflate invalid frequencies with endpoint date parsing failures.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.3.3 defines `until` as a `LocalDateTime` string. In Evolution Data Server, recurring meetings synchronize across CalDAV, Exchange, and JMAP backends. Accurately isolating date conversion failures on the recurrence boundary prevents false synchronization diagnostics.
+  2. Decoupling date formatting validation from recurrence rule structural validation enables client error reporting to distinguish between invalid recurrence grammar and unconvertible timezone endpoints.
+- **Adjudication**:
+  Conforming specification boundary and diagnostic isolation. Isolates unstateable `UNTIL` timestamps, validates wall-clock date formatting, and decouples date formatting errors from structural rule validation.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.149 Divergence 149: `rrule_entry` and `Parser::entry`: Synthetic Component Envelope AST Parsing (`BEGIN:VEVENT ... END:VEVENT`), Syntax Verification, and `ICalendarEntry` AST Extraction
+
+- **Observed Behavior**:
+  Serializing a structured `RecurrenceRule` into an RFC 5545 `RRULE` property line requires formatting recurrence parameters and validating that the output conforms to parser grammar. In `jmap-ical`:
+  1. Synthetic component envelope parsing: `rrule_entry` encapsulates candidate `rrule_str` content within a synthetic component wrapper (`BEGIN:VEVENT\r\nRRULE:{rrule_str}\r\nEND:VEVENT\r\n`).
+  2. AST parser ingestion: Feeds the synthetic block into `calcard`'s `Parser::new(&raw).entry()`, validating the serialized property line against RFC 5545 property grammar.
+  3. AST entry extraction: Locates and extracts the parsed `ICalendarEntry` matching `ICalendarProperty::Rrule`, swapping it from the component entry vector.
+  4. Fail-safe grammar rejection: If the serialized rule fails syntactic parsing by the underlying parser, `rrule_entry` returns `None`. This prevents malformed property lines from entering the output stream.
+  5. Observance and event serialization safety: Both `event_to_ical` (for master series recurrence) and `observance` (for timezone transition rules) invoke `rrule_entry`, ensuring that only structurally validated recurrence entries are emitted.
+  6. In contrast, differential oracles or naive template serializers format `RRULE` lines by unchecked string interpolation, potentially emitting invalid tokens, trailing delimiters, or unescaped characters that crash downstream CalDAV or JMAP consumers.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.10 defines strict ABNF grammar for `recurrence` rules. Re-parsing generated property lines through the parser AST guarantees that all emitted `RRULE` properties satisfy iCalendar grammar requirements.
+  2. Round-tripping generated lines through the component parser prevents subtle formatting bugs from reaching network boundaries.
+- **Adjudication**:
+  Conforming specification boundary and serializer grammar validation. Validates serialized recurrence rules through synthetic component envelope AST parsing before emission.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.150 Divergence 150: `restated`: `YEARLY` Transition Rule Time-of-Day Replacement (`BYHOUR`, `BYMINUTE`, `BYSECOND`), Bounded Field Validation (`0..=23`, `0..=59`), Leap Second 60 Refusal, and Multi-Value Set Rejection
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.5 describes daylight saving and standard time transitions in `VTIMEZONE` subcomponents (`STANDARD` and `DAYLIGHT`). RFC 5545 §3.3.10 specifies that in `YEARLY` recurrence rules, `BYHOUR`, `BYMINUTE`, and `BYSECOND` expand. Enterprise calendar systems (including Lotus Notes and Zimbra) routinely emit transition rules where `DTSTART` specifies midnight while `BYHOUR` and `BYMINUTE` define the actual transition time (such as `DTSTART:19700101T000000` with `RRULE:FREQ=YEARLY;...;BYHOUR=2;BYMINUTE=0`). In `jmap-ical`'s `zone.rs`:
+  1. Time-of-day field replacement: `restated` calculates the active transition time-of-day in seconds after midnight by replacing individual `DTSTART` fields with values specified in the rule's `BYHOUR`, `BYMINUTE`, and `BYSECOND` parts.
+  2. Strict integer range bounding: Enforces valid ranges for every specified field: hours in `0..=23`, minutes in `0..=59`, and seconds in `0..=59`. Values exceeding these bounds cause `restated` to return `None`.
+  3. Default inheritance from `DTSTART`: When a time-of-day field is omitted from the rule, its value is inherited directly from `DTSTART`'s `of_day` offset (`of_day / 3600`, `of_day / 60 % 60`, `of_day % 60`).
+  4. Multi-value set refusal: If a field specifies multiple values (e.g. `BYHOUR=2,3`), parsing fails and `restated` returns `None`, strictly refusing ambiguous multi-transition sets in a single day.
+  5. Leap second 60 refusal: Even though general date-time parsers tolerate leap second 60, `restated` strictly caps seconds at 59 (`only(second, 59)`). Placing a leap second in a transition rule would push the onset into the following minute, which is refused.
+  6. In contrast, differential oracles or naive transition evaluators either ignore `BYHOUR` and `BYMINUTE` on transition rules (evaluating transitions hours off from reality), panic on out-of-range numeric inputs, or accept ambiguous multi-value transitions.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.5 dates observances using `DTSTART` and recurrence rules. Supporting `BYHOUR`, `BYMINUTE`, and `BYSECOND` field replacement on `YEARLY` transition rules is essential for compatibility with corporate Lotus Notes and Zimbra exports.
+  2. Enforcing single-transition determinism and rejecting leap seconds guarantees accurate, monotonic daylight saving shift calculations during `UNTIL` evaluation.
+- **Adjudication**:
+  Conforming specification boundary and corporate timezone transition fidelity. Replaces observance time-of-day fields from `BYHOUR`/`BYMINUTE`/`BYSECOND`, bounds integer ranges, inherits unstated fields from `DTSTART`, and rejects leap second 60 and multi-value sets.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.151 Divergence 151: `Day::named`, `Day::of`, and `Falls`: Libical Tzdata Idiom Ingestion (`BYDAY` + `BYMONTHDAY` Range), Ordinal Conflict Refusal, Leap Year / Calendar Gap Skipping (`Falls::Never`), and Multi-Day Transition Refusal (`Falls::Set`)
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.5 transition rules define the day a daylight saving transition occurs. While simple rules specify `BYDAY` with an ordinal (e.g. `-1SU` for last Sunday), standard tzdata rules compiled by `libical` express "first weekday on or after date X" as a weekday limiting a run of dates: `BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29`. In `jmap-ical`'s `zone.rs`:
+  1. Tzdata idiom ingestion (`Day::WeekdayAmong`): `Day::named` parses combinations of `BYDAY` (without ordinal) and `BYMONTHDAY` date lists, validating that each date is a non-zero integer.
+  2. Ordinal conflict refusal: If `BYDAY` carries an ordinal when `BYMONTHDAY` is present (e.g. `BYDAY=1SU;BYMONTHDAY=23,24,25,26,27,28,29`), `Day::named` returns `None` per RFC 5545 §3.3.10 which forbids combining ordinals with `BYMONTHDAY`.
+  3. Negative month day support: `Day::OfMonth` supports negative day offsets (e.g. `BYMONTHDAY=-1` for the last day of the month), computing the day as `length + 1 + day`.
+  4. Calendar evaluation determinism (`Day::of` -> `Falls`):
+     - `Falls::On(day)`: Exactly one date in the run matches the weekday in that year, identifying the single transition day.
+     - `Falls::Never`: No date matches in that year (such as a 5th Sunday in a month with only 4 Sundays, or February 29 in non-leap years). The search skips that year cleanly without failing the rule.
+     - `Falls::Set`: Multiple dates in the run match the weekday. The rule states an ambiguous set of days, so `rule_onsets` returns `None`, refusing the definition.
+  5. In contrast, differential oracles or naive transition parsers either reject `BYDAY` plus `BYMONTHDAY` combinations, assume 7-day runs always contain exactly one weekday without testing month length boundaries, or fail when evaluating negative month days.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.10 specifies that `BYMONTHDAY` expands in yearly rules and `BYDAY` limits matching days. Supporting the tzdata/libical idiom ensures that standard Unix and Linux timezone definitions resolve accurately without requiring external timezone packages.
+  2. Differentiating single transitions (`Falls::On`) from calendar gaps (`Falls::Never`) and ambiguous sets (`Falls::Set`) guarantees deterministic timezone offset calculation.
+- **Adjudication**:
+  Conforming specification boundary and tzdata transition rule compatibility. Ingests `BYDAY` + `BYMONTHDAY` date runs, rejects ordinal conflicts, skips calendar gaps gracefully, and enforces single-transition determinism.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
