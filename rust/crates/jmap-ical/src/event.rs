@@ -162,7 +162,7 @@ const INVENTED_ALERT_KEY: &str = "a";
 const DISPLAY_ALERT: (&str, &str) = ("display", "DISPLAY");
 
 /// The `PRODID` of every calendar this crate emits.
-const PRODID: &str = "-//evolution-jmap//JMAP calendar backend//EN";
+pub const PRODID: &str = "-//evolution-jmap//JMAP calendar backend//EN";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Component {
@@ -349,14 +349,14 @@ pub(crate) const WEEKDAYS: [&str; 7] = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"
 /// JSCalendar `status` values and their iCalendar `STATUS` spelling. Both sets
 /// are closed, so a value outside this table is dropped rather than passed
 /// through in the other format's clothes.
-const STATUSES: [(&str, &str); 3] = [
+pub const STATUSES: [(&str, &str); 3] = [
     ("confirmed", "CONFIRMED"),
     ("cancelled", "CANCELLED"),
     ("tentative", "TENTATIVE"),
 ];
 
 /// JSCalendar `freeBusyStatus` values (RFC 8984 §4.4.2) and their iCalendar
-/// `TRANSP` spelling (RFC 5545 §3.8.2.7) — whether the event blocks the time it
+/// `TRANSP` spelling (RFC 5545 §3.8.2.7): whether the event blocks the time it
 /// occupies, which is Evolution's "Show Time as". Both sets are closed, so a
 /// value outside this table is dropped rather than passed through in the other
 /// format's clothes.
@@ -365,27 +365,27 @@ const STATUSES: [(&str, &str); 3] = [
 /// property to `busy` and RFC 5545 defaults `TRANSP` to `OPAQUE`, which is the
 /// same state. So a component with no line on it says exactly what an event with
 /// no property does, and neither direction has to invent one.
-const FREE_BUSY_STATUSES: [(&str, &str); 2] = [("free", "TRANSPARENT"), ("busy", "OPAQUE")];
+pub const FREE_BUSY_STATUSES: [(&str, &str); 2] = [("free", "TRANSPARENT"), ("busy", "OPAQUE")];
 
 /// The importances both formats admit: RFC 8984 §4.4.1's `priority` and RFC 5545
-/// §3.8.1.9's `PRIORITY` are the same integer with the same meaning — 0
-/// undefined, 1 highest, 9 lowest — so this range crosses digit for digit and a
+/// §3.8.1.9's `PRIORITY` are the same integer with the same meaning: 0
+/// undefined, 1 highest, 9 lowest. This range crosses digit for digit and a
 /// value outside it is dropped, as a value outside a closed vocabulary is.
 ///
 /// The two also agree that 0 and no value at all are the same state. That does
 /// *not* make 0 something to leave off: an event whose `priority` the server
 /// states as 0 is written `PRIORITY:0` and read straight back, so the round trip
 /// is the identity and the save path has nothing to explain. What it does mean is
-/// that clearing the field — `"priority": null` — and setting it to 0 ask a server
+/// that clearing the field (`"priority": null`) and setting it to 0 ask a server
 /// for the same thing.
-const PRIORITIES: std::ops::RangeInclusive<i64> = 0..=9;
+pub const PRIORITIES: std::ops::RangeInclusive<i64> = 0..=9;
 
 /// JSCalendar `privacy` values (RFC 8984 §4.4.3) and their iCalendar `CLASS`
-/// spelling (RFC 5545 §3.8.1.3) — how much of the event may be shared with other
+/// spelling (RFC 5545 §3.8.1.3): how much of the event may be shared with other
 /// calendar users, which is Evolution's Options ▸ Classification.
 ///
 /// The same three-step scale in both formats, in the same order: everything may
-/// be shared, only the time may be, nothing may — so each value crosses to the
+/// be shared, only the time may be, nothing may. Each value crosses to the
 /// other format's spelling of itself. Neither vocabulary is *closed* (RFC 5545
 /// admits an x-name or an iana-token, RFC 8984 a registered or vendor value) and
 /// neither says how a value in one becomes a value in the other, so a value
@@ -393,13 +393,13 @@ const PRIORITIES: std::ops::RangeInclusive<i64> = 0..=9;
 /// clothes.
 ///
 /// The two also agree about what a *missing* value means: both default to public.
-/// That does not make public something to leave off — see [`PRIVACIES`]'s reader
+/// That does not make public something to leave off: see [`PRIVACIES`]'s reader
 /// [`read_privacy`] and the writer in [`vevent_of`], where an event the server
 /// states as public is written `CLASS:PUBLIC` and read straight back. Evolution's
 /// appointment editor sets `CLASS` on *every* save from its Classification menu,
 /// so a baseline rendered without the line would differ from what EDS hands back
 /// on every save of such an event rather than once.
-const PRIVACIES: [(&str, &str); 3] = [
+pub const PRIVACIES: [(&str, &str); 3] = [
     ("public", "PUBLIC"),
     ("private", "PRIVATE"),
     ("secret", "CONFIDENTIAL"),
@@ -2394,54 +2394,54 @@ fn recurrence_dates(event: &CalendarEvent, is_excluded: bool) -> Vec<String> {
 
 /// The iCalendar `STATUS` for a JSCalendar status, or `None` for one outside the
 /// closed vocabulary the two share.
-fn ical_status(status: &str) -> Option<&'static str> {
+pub fn ical_status(status: &str) -> Option<&'static str> {
     STATUSES
         .iter()
         .find(|(jscalendar, _)| jscalendar.eq_ignore_ascii_case(status))
         .map(|(_, ical)| *ical)
 }
 
-fn known_status(status: &str) -> bool {
+pub fn known_status(status: &str) -> bool {
     ical_status(status).is_some()
 }
 
 /// The iCalendar `TRANSP` for a JSCalendar `freeBusyStatus`, or `None` for one
 /// outside the closed vocabulary the two share.
-fn ical_transparency(free_busy_status: &str) -> Option<&'static str> {
+pub fn ical_transparency(free_busy_status: &str) -> Option<&'static str> {
     FREE_BUSY_STATUSES
         .iter()
         .find(|(jscalendar, _)| jscalendar.eq_ignore_ascii_case(free_busy_status))
         .map(|(_, ical)| *ical)
 }
 
-fn known_transparency(free_busy_status: &str) -> bool {
+pub fn known_transparency(free_busy_status: &str) -> bool {
     ical_transparency(free_busy_status).is_some()
 }
 
 /// The iCalendar `CLASS` for a JSCalendar `privacy`, or `None` for one outside
-/// the three-value scale the two share — see [`PRIVACIES`].
-fn ical_privacy(privacy: &str) -> Option<&'static str> {
+/// the three-value scale the two share: see [`PRIVACIES`].
+pub fn ical_privacy(privacy: &str) -> Option<&'static str> {
     PRIVACIES
         .iter()
         .find(|(jscalendar, _)| jscalendar.eq_ignore_ascii_case(privacy))
         .map(|(_, ical)| *ical)
 }
 
-fn known_privacy(privacy: &str) -> bool {
+pub fn known_privacy(privacy: &str) -> bool {
     ical_privacy(privacy).is_some()
 }
 
 /// The JSCalendar `privacy` a `CLASS` states, or `None` where the component
-/// states none this mapping can name — which is read as nothing said, like every
+/// states none this mapping can name, which is read as nothing said, like every
 /// other unreadable value, rather than passed on for the server to reject.
 ///
 /// Case is ignored, as it is for `STATUS` and `TRANSP`: RFC 5545 §3.1 makes an
 /// enumerated property value case-insensitive, so `CLASS:confidential` is the
 /// same classification as `CLASS:CONFIDENTIAL`. What it is *not* is a match for
-/// JSCalendar's own spelling of a different value — the two vocabularies overlap
+/// JSCalendar's own spelling of a different value. The two vocabularies overlap
 /// nowhere, so `CLASS:secret` is an x-name-shaped value this mapping has no
 /// business reading as RFC 8984's `secret`.
-fn read_privacy(vevent: &ICalendarComponent) -> Option<String> {
+pub fn read_privacy(vevent: &ICalendarComponent) -> Option<String> {
     let privacy = component_text(vevent, "CLASS")?;
     PRIVACIES
         .iter()
@@ -2449,20 +2449,20 @@ fn read_privacy(vevent: &ICalendarComponent) -> Option<String> {
         .map(|(jscalendar, _)| (*jscalendar).to_owned())
 }
 
-/// Whether an importance is one both formats admit — see [`PRIORITIES`].
-fn known_priority(priority: i64) -> bool {
+/// Whether an importance is one both formats admit: see [`PRIORITIES`].
+pub fn known_priority(priority: i64) -> bool {
     PRIORITIES.contains(&priority)
 }
 
 /// The JSCalendar `priority` a `PRIORITY` states, or `None` where the component
-/// states none this mapping can carry — an integer outside the shared range, or
+/// states none this mapping can carry: an integer outside the shared range, or
 /// something that is no integer at all, which is read as nothing said like every
 /// other unreadable value rather than passed on for the server to reject.
 ///
 /// `parse` is deliberately strict about what an integer is: it refuses leading
 /// space, a fraction and a second value after a comma, none of which is the RFC
 /// 5545 §3.3.8 INTEGER the property is defined to carry.
-fn read_priority(vevent: &ICalendarComponent) -> Option<i64> {
+pub fn read_priority(vevent: &ICalendarComponent) -> Option<i64> {
     component_text(vevent, "PRIORITY")?
         .parse()
         .ok()
@@ -2470,10 +2470,10 @@ fn read_priority(vevent: &ICalendarComponent) -> Option<i64> {
 }
 
 /// The JSCalendar `freeBusyStatus` a `TRANSP` states, or `None` where the
-/// component states none this mapping can name — which is read as nothing said,
+/// component states none this mapping can name, which is read as nothing said,
 /// like every other unreadable value, rather than passed on for the server to
 /// reject.
-fn read_transparency(vevent: &ICalendarComponent) -> Option<String> {
+pub fn read_transparency(vevent: &ICalendarComponent) -> Option<String> {
     let transparency = component_text(vevent, "TRANSP")?;
     FREE_BUSY_STATUSES
         .iter()

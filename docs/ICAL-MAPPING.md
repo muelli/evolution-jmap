@@ -3939,8 +3939,72 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.192 Divergence 192: `vevent_of`, `entry_raw_value`, and `PRODID`: Outbound `VEVENT` Core Identity, Server-Assigned UID Precedence (`UID` vs `X-JMAP-UID`), `RECURRENCE-ID` Anchor Binding, and Dual Timestamp Emission (`CREATED`, `DTSTAMP`, `LAST-MODIFIED`)
 
+- **Observed Behavior**:
+  Serializing core `VEVENT` identity and timestamps requires coordinating server store keys with iCalendar component identities. In `jmap-ical`:
+  1. Server-assigned UID precedence: EDS keys its cache on iCalendar `UID` and passes it back to backend sync operations. In `vevent_of`, the server-assigned JMAP id (`event.id`) takes precedence as `UID`. The client-assigned JSCalendar `uid` rides alongside in `X-JMAP-UID`. When `event.id` is not yet assigned (for example, prior to the initial `CalendarEvent/set` create call), `event.uid` stands in for `UID`.
+  2. Detached component recurrence anchor: For modified override occurrences, `vevent_of` emits `RECURRENCE-ID` using `dated(RECURRENCE_ID, ...)`, anchoring the detached component to its scheduled series instant on the series master clock and applying uniform all-day date formatting.
+  3. Dual timestamp emission: `CREATED` is formatted from `event.created`. `DTSTAMP` and `LAST-MODIFIED` are both formatted from `event.updated`. RFC 5545 §3.8.7.2 mandates `DTSTAMP` on every `VEVENT` and defines it as equivalent to `LAST-MODIFIED` when `METHOD` is absent.
+  4. Absent timestamp suppression: When `event.updated` is `None`, neither `DTSTAMP` nor `LAST-MODIFIED` is emitted. Inventing a "now" timestamp would mutate serialized outputs between synchronizations, creating false cache invalidations.
+  5. Empty text property suppression: `SUMMARY` and `DESCRIPTION` filter empty string values (`!value.is_empty()`), preventing the emission of bare `SUMMARY:` or `DESCRIPTION:` lines.
+  6. In contrast, differential oracles or uncoordinated serializers use client UIDs for component identifiers (severing server correlation), invent non-reproducible current timestamps for `DTSTAMP`, or emit bare empty header lines.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.4.4, §3.8.7.1, §3.8.7.2, and §3.8.7.3 govern `RECURRENCE-ID`, `CREATED`, `DTSTAMP`, and `LAST-MODIFIED`. RFC 8984 §4.1 defines JSCalendar core identifiers and timestamps.
+  2. Prioritizing server ids for `UID` while preserving client `uid` in `X-JMAP-UID` maintains cache coherence in Evolution Data Server without losing client tracking keys.
+- **Adjudication**:
+  Conforming specification boundary and core identity serialization fidelity. Prioritizes server ids for `UID`, preserves client `uid` via `X-JMAP-UID`, binds `RECURRENCE-ID` to series clocks, maps `updated` to both `DTSTAMP` and `LAST-MODIFIED`, suppresses unstated timestamps, and elides empty text fields.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.193 Divergence 193: `ical_status`, `known_status`, `ical_transparency`, `known_transparency`, `ical_privacy`, `known_privacy`, `read_privacy`, `known_priority`, `read_priority`, and `read_transparency`: Scalar Property Bi-directional Vocabulary Gating (`STATUS`, `TRANSP`, `CLASS`, `PRIORITY`), Cross-Vocabulary Alignment (`CONFIDENTIAL` vs `secret`), Explicit Default Emission, and Integer Range Bounding
 
+- **Observed Behavior**:
+  Bi-directional translation of scalar calendar metadata requires reconciling closed enumeration sets and numeric bounds across formats. In `jmap-ical`:
+  1. Status vocabulary mapping (`ical_status`, `known_status`, `STATUSES`): Maps JSCalendar statuses to RFC 5545 `STATUS` case-insensitively: `confirmed` (`CONFIRMED`), `cancelled` (`CANCELLED`), `tentative` (`TENTATIVE`). Values outside this closed table (such as `draft` or unknown strings) return `None`, preventing unrecognized tokens from reaching the component.
+  2. Transparency vocabulary mapping (`ical_transparency`, `known_transparency`, `read_transparency`, `FREE_BUSY_STATUSES`): Maps `freeBusyStatus` to RFC 5545 `TRANSP`: `free` (`TRANSPARENT`), `busy` (`OPAQUE`). Both specifications treat absent values as `busy` / `OPAQUE`, allowing components without `TRANSP` to represent the shared default cleanly without synthetic defaults.
+  3. Privacy classification and cross-vocabulary alignment (`ical_privacy`, `known_privacy`, `read_privacy`, `PRIVACIES`): Translates `privacy` to RFC 5545 `CLASS`: `public` (`PUBLIC`), `private` (`PRIVATE`), and `secret` (`CONFIDENTIAL`). Inbound parser `read_privacy` maps `CONFIDENTIAL` case-insensitively to `secret`. Unmapped custom tokens such as `CLASS:secret` are dropped as unrecognized x-names rather than assumed to match RFC 8984 `secret`. Outbound serialization emits `CLASS:PUBLIC` explicitly even though public is the default, ensuring stable round-trips against Evolution's classification selector.
+  4. Priority integer range bounding (`known_priority`, `read_priority`, `PRIORITIES`): RFC 8984 §4.4.1 and RFC 5545 §3.8.1.9 share the integer scale `0..=9` (0 undefined, 1 highest, 9 lowest). `known_priority` strictly enforces `0..=9`. Inbound parser `read_priority` rejects non-integers, fractions, comma-separated lists, and numbers outside `0..=9`. Outbound serialization writes `PRIORITY` as typed integer `ICalendarValue::Integer`.
+  5. In contrast, differential oracles or permissive parsers permit arbitrary strings in `STATUS` and `TRANSP`, accept invalid non-standard privacy classifications, or parse negative/unbounded priority numbers.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.1.3, §3.8.1.9, §3.8.1.11, §3.8.2.7 and RFC 8984 §4.4 define status, priority, privacy, and transparency models.
+  2. Restricting translations to shared vocabularies and explicit integer ranges protects against cache corruption and sync failures.
+- **Adjudication**:
+  Conforming specification boundary and scalar property mapping robustness. Enforces closed vocabularies for status and transparency, aligns `secret` with `CONFIDENTIAL`, bounds priority to `0..=9`, rejects malformed integer syntax, and emits explicit defaults for classification stability.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.194 Divergence 194: `modified_instances` and `modified_instance`: Outbound Recurrence Override Instance Expansion: Base Series Property Inheritance, Excluded Instance Elimination (`EXDATE`), Set Replacement Semantics (`keywords`, `alerts`), Rescheduled Start Alignment, and `modified` Gating
 
+- **Observed Behavior**:
+  Expanding recurrence overrides into detached `VEVENT` components requires inheriting un-restated series properties while applying instance modifications cleanly. In `jmap-ical`:
+  1. Chronological override iteration (`modified_instances`): Iterates over `event.recurrence_overrides` in BTreeMap chronological order. Override keys are converted to iCalendar date-time strings via `to_ical_date_time`.
+  2. Base series property inheritance: `modified_instance` constructs a baseline event copying all series properties: `id`, `uid`, `created`, `updated`, `title`, `description`, `locations`, `virtual_locations`, `links`, `keywords`, `alerts`, `participants`, `use_default_alerts`, `color`, `locale`, `localizations`, and `extra`. The instance start defaults to `id` (the scheduled occurrence instant per RFC 8984 §4.3.4).
+  3. Excluded instance elimination: If `excluded(patch)` is true, `modified_instance` returns `None`. Excluded instances do not generate detached `VEVENT` components; they are emitted exclusively as `EXDATE` lines on the master series.
+  4. Field modification and replacement semantics: Each field in the override patch is checked via `draws_override_field`. For text fields, null clears the value while valid strings replace it. For `keywords` and `alerts`, the patch replaces the entire inherited set or map rather than merging with series values. For `priority`, `as_i64` updates or clears the integer value.
+  5. Rescheduled start time handling: If `patch["start"]` specifies a different date-time than `id`, the instance `start` is updated, while `RECURRENCE-ID` retains `id`. This ensures the detached component correctly references its recurring schedule slot while specifying its new meeting time in `DTSTART`.
+  6. In contrast, differential oracles or naive formatters merge keywords/alerts instead of replacing them, generate detached components for cancelled instances, or drop inherited locations and participants from detached overrides.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.4.4 and §3.8.5.1 define `RECURRENCE-ID` and `EXDATE` semantics. RFC 8984 §4.3.4 defines `recurrenceOverrides` patch objects and inheritance rules.
+  2. Complete property inheritance coupled with set replacement ensures detached recurrence instances maintain roster and location integrity without leaking stale series tags or alarms.
+- **Adjudication**:
+  Conforming specification boundary and recurrence override expansion fidelity. Inherits full series state onto detached instances, replaces sets cleanly for keywords and alerts, suppresses detached components for excluded instances, preserves original recurrence IDs on rescheduled instances, and gates updates via `draws_override_field`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.195 Divergence 195: `event_to_ical` and `drawn_time_zones`: Top-Level `VCALENDAR` Envelope Assembly: Component Sequencing (`VTIMEZONE` before `VEVENT`), Unified All-Day Date Type Enforcement (`as_a_date`), and Custom Solidus Timezone Deduplication
+
+- **Observed Behavior**:
+  Assembling top-level iCalendar streams requires sequencing envelope structures and reconciling custom timezone definitions across series and detached instances. In `jmap-ical`:
+  1. Envelope structure and metadata: `event_to_ical` wraps components in `BEGIN:VCALENDAR` and `END:VCALENDAR`, emitting `VERSION:2.0` and `PRODID` (`PRODID`).
+  2. Component sequencing order: `VTIMEZONE` components are emitted ahead of `VEVENT` components in the document tree. Stream-oriented parsers encounter timezone definitions before reading `TZID` parameters on event properties.
+  3. Custom solidus timezone deduplication (`drawn_time_zones`): Scans the master series and all modified instance components for custom timezone identifiers (`!names_time_zone(tzid)` and `!is_utc(tzid)`). Tracks seen identifiers in a `BTreeSet`, emitting exactly one `VTIMEZONE` component per unique custom identifier. Duplicate `VTIMEZONE` blocks for shared custom zones are prevented.
+  4. Unified all-day date type enforcement (`as_a_date`): Evaluates all-day status once for the entire document via `shows_without_time(event, start)`. When true, date-only formatting (`VALUE=DATE`) is enforced uniformly across master `DTSTART`, `DURATION`, `RRULE` (`UNTIL`), `EXDATE`, `RDATE`, and all detached `VEVENT` instances (`RECURRENCE-ID`, `DTSTART`). If any instance override violates all-day invariants, the entire event is demoted to timed representation, preventing mixed date and date-time types within a single series.
+  5. In contrast, differential oracles or legacy emitters place `VTIMEZONE` after `VEVENT`, emit redundant duplicate `VTIMEZONE` blocks for each occurrence in a custom zone, or emit mixed `DATE` and `DATE-TIME` values across detached recurrence components.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.4, §3.6.5, and §3.6.1 define calendar stream structure, `VTIMEZONE`, and `VEVENT` components. RFC 8984 §4.1.4, §4.3.4, and §4.7.2 define all-day and timezone models.
+  2. Emitting timezone definitions before events and deduplicating custom timezone blocks prevents parser errors and reduces payload size across protocol boundaries.
+- **Adjudication**:
+  Conforming specification boundary and document assembly determinism. Sequences `VTIMEZONE` ahead of `VEVENT`, deduplicates custom solidus timezone definitions, enforces uniform all-day date formatting via `as_a_date`, and emits standard `VCALENDAR` envelopes.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
