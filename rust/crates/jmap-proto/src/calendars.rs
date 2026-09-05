@@ -2134,3 +2134,37 @@ impl ParticipantIdentity {
 pub mod participant_identity_set_error {
     pub const CANNOT_DESTROY_DEFAULT: &str = "cannotDestroyDefault";
 }
+
+/// `ParticipantIdentity/set` arguments: the standard `/set` shape plus the
+/// `onSuccessSetIsDefault` extension (draft-ietf-jmap-calendars-28 §3.2).
+/// `isDefault` is server-set and only ever changes through this argument: a
+/// plain id (or a `#`-prefixed creation id from the same call) asks the
+/// server to make that identity the default. Unlike Sieve's
+/// `onSuccessActivateScript`, an id that does not resolve is silently
+/// ignored rather than an error (§3.2), so this stays `Option<Id>` rather
+/// than the `Value` Sieve needs to tell "absent" from "null": the draft
+/// gives `null` no meaning of its own here, so both collapse to "leave the
+/// default alone".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParticipantIdentitySetRequest {
+    #[serde(flatten)]
+    pub set: SetRequest<ParticipantIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_success_set_is_default: Option<String>,
+}
+
+impl ParticipantIdentitySetRequest {
+    pub fn new(set: SetRequest<ParticipantIdentity>) -> Self {
+        Self {
+            set,
+            on_success_set_is_default: None,
+        }
+    }
+
+    /// `id` may be a plain id or a `#`-prefixed creation id from the same call.
+    pub fn setting_default(mut self, id: impl Into<String>) -> Self {
+        self.on_success_set_is_default = Some(id.into());
+        self
+    }
+}

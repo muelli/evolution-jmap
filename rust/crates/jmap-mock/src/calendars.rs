@@ -10,7 +10,8 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
     CalendarEventParseRequest, CalendarEventQueryFilter, CalendarEventSetRequest, CalendarRights,
-    ParticipantIdentity, calendar_event_notification_type, calendar_event_set_error,
+    ParticipantIdentity, ParticipantIdentitySetRequest, calendar_event_notification_type,
+    calendar_event_set_error, participant_identity_set_error,
 };
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{
@@ -20,6 +21,7 @@ use jmap_proto::state::UtcDate;
 use serde_json::Value;
 
 use crate::dispatch::{account_mut, parse_arguments, project_properties, to_result};
+use crate::patch::apply_patch;
 use crate::scheduling::EventChange;
 use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
@@ -794,7 +796,6 @@ pub fn calendar_event_notification_set(
 }
 
 impl AccountState {
-    /// Seed a calendar; returns its id. Does not bump state.
     /// Seed a `ParticipantIdentity` (draft-ietf-jmap-calendars-28 §3), which
     /// is what makes a calendar address count as *this account* when the
     /// server decides who to send scheduling messages to. Returns its id;
@@ -815,6 +816,7 @@ impl AccountState {
         id
     }
 
+    /// Seed a calendar; returns its id. Does not bump state.
     pub fn seed_calendar(&mut self, name: &str, is_default: bool) -> Id {
         let id = self.calendars.alloc_id();
         let calendar = Calendar {
@@ -827,4 +829,235 @@ impl AccountState {
         self.calendars.seed_with_id(id.clone(), calendar);
         id
     }
+}
+
+/// `ParticipantIdentity/get` (draft-ietf-jmap-calendars-28 §3.1): a standard
+/// `/get`, `ids: null` returns every identity the account has.
+pub fn participant_identity_get(
+    state: &mut ServerState,
+    arguments: Value,
+) -> Result<Value, MethodError> {
+    let request: GetRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let mut list = Vec::new();
+    let mut not_found = Vec::new();
+    match &request.ids {
+        None => list.extend(
+            account
+                .participant_identities
+                .iter()
+                .map(|(_, identity)| identity.clone()),
+        ),
+        Some(ids) => {
+            for id in ids {
+                match account.participant_identities.get(id) {
+                    Some(identity) => list.push(identity.clone()),
+                    None => not_found.push(id.clone()),
+                }
+            }
+        }
+    }
+
+    to_result(&GetResponse {
+        account_id: request.account_id,
+        state: account.participant_identities.state(),
+        list,
+        not_found,
+    })
+}
+
+/// `ParticipantIdentity/set` (draft-ietf-jmap-calendars-28 §3.2). `id` and
+/// `isDefault` are both server-set: `isDefault` only ever changes through
+/// `onSuccessSetIsDefault`, never a direct create or update, and destroying
+/// the current default is `cannotDestroyDefault` until another identity is
+/// made default first. The very first identity an account ever creates
+/// becomes the default automatically, so an account with any identities at
+/// all always has exactly one default, the invariant the draft asks for.
+pub fn participant_identity_set(
+    state: &mut ServerState,
+    arguments: Value,
+) -> Result<Value, MethodError> {
+    let request: ParticipantIdentitySetRequest = parse_arguments(arguments)?;
+    let ParticipantIdentitySetRequest {
+        set,
+        on_success_set_is_default,
+    } = request;
+    let account_id = set.account_id.clone();
+    let account = account_mut(state, &account_id)?;
+
+    let old_state = account.participant_identities.state();
+    if let Some(expected) = &set.if_in_state
+        && expected != &old_state
+    {
+        return Err(MethodError::new(error::method::STATE_MISMATCH));
+    }
+
+    let has_default = account
+        .participant_identities
+        .iter()
+        .any(|(_, identity)| identity.is_default == Some(true));
+    let mut assigned_default = has_default;
+
+    let mut created: BTreeMap<String, ParticipantIdentity> = BTreeMap::new();
+    let mut not_created: BTreeMap<String, SetError> = BTreeMap::new();
+    let mut to_create: Vec<(Id, ParticipantIdentity)> = Vec::new();
+    let mut created_here: BTreeMap<String, Id> = BTreeMap::new();
+    for (creation_id, mut identity) in set.create.unwrap_or_default() {
+        if identity.id.is_some() {
+            not_created.insert(
+                creation_id,
+                SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description("id is set by the server and must not be given in a create"),
+            );
+            continue;
+        }
+        if identity.is_default.is_some() {
+            not_created.insert(
+                creation_id,
+                SetError::new(error::set::INVALID_PROPERTIES).with_description(
+                    "isDefault is set by the server; set via onSuccessSetIsDefault",
+                ),
+            );
+            continue;
+        }
+        let id = account.participant_identities.alloc_id();
+        identity.id = Some(id.clone());
+        identity.is_default = Some(!assigned_default);
+        assigned_default = true;
+        created_here.insert(creation_id.clone(), id.clone());
+        created.insert(creation_id, identity.clone());
+        to_create.push((id, identity));
+    }
+
+    let mut updated: BTreeMap<Id, Option<ParticipantIdentity>> = BTreeMap::new();
+    let mut not_updated: BTreeMap<Id, SetError> = BTreeMap::new();
+    let mut to_update: Vec<(Id, ParticipantIdentity)> = Vec::new();
+    for (id, patch) in set.update.unwrap_or_default() {
+        let Some(existing) = account.participant_identities.get(&id) else {
+            not_updated.insert(id, SetError::new(error::set::NOT_FOUND));
+            continue;
+        };
+        let Some(patch_map) = patch.as_object() else {
+            not_updated.insert(id, SetError::new(error::set::INVALID_PATCH));
+            continue;
+        };
+        let mut value = serde_json::to_value(existing).map_err(|e| {
+            MethodError::new(error::method::SERVER_FAIL).with_description(e.to_string())
+        })?;
+        let patched = match apply_patch(&mut value, patch_map)
+            .map_err(|message| SetError::new(error::set::INVALID_PATCH).with_description(message))
+            .and_then(|()| {
+                serde_json::from_value::<ParticipantIdentity>(value).map_err(|e| {
+                    SetError::new(error::set::INVALID_PATCH).with_description(e.to_string())
+                })
+            }) {
+            Ok(patched) => patched,
+            Err(set_error) => {
+                not_updated.insert(id, set_error);
+                continue;
+            }
+        };
+        if patched.id.as_ref() != Some(&id) {
+            not_updated.insert(
+                id,
+                SetError::new(error::set::INVALID_PROPERTIES).with_description("id is immutable"),
+            );
+            continue;
+        }
+        if patched.is_default != existing.is_default {
+            not_updated.insert(
+                id,
+                SetError::new(error::set::INVALID_PROPERTIES).with_description(
+                    "isDefault is set by the server; set via onSuccessSetIsDefault",
+                ),
+            );
+            continue;
+        }
+        to_update.push((id, patched));
+    }
+
+    let default_id = account
+        .participant_identities
+        .iter()
+        .find(|(_, identity)| identity.is_default == Some(true))
+        .map(|(id, _)| id.clone());
+
+    let mut destroyed: Vec<Id> = Vec::new();
+    let mut not_destroyed: BTreeMap<Id, SetError> = BTreeMap::new();
+    for id in set.destroy.unwrap_or_default() {
+        if !account.participant_identities.contains(&id) {
+            not_destroyed.insert(id, SetError::new(error::set::NOT_FOUND));
+        } else if default_id.as_ref() == Some(&id) {
+            not_destroyed.insert(
+                id,
+                SetError::new(participant_identity_set_error::CANNOT_DESTROY_DEFAULT),
+            );
+        } else {
+            destroyed.push(id);
+        }
+    }
+
+    account.participant_identities.transaction(|transaction| {
+        for (id, identity) in to_create {
+            transaction.create(id, identity);
+        }
+        for (id, identity) in to_update {
+            transaction.update(&id, identity);
+            updated.insert(id, None);
+        }
+        for id in &destroyed {
+            transaction.destroy(id);
+        }
+    });
+
+    // draft-ietf-jmap-calendars-28 §3.2: an id that does not resolve to a
+    // live identity (including one from an unknown creation id) is silently
+    // ignored, not an error.
+    if let Some(reference) = on_success_set_is_default {
+        let id = match reference.strip_prefix('#') {
+            Some(creation_id) => created_here.get(creation_id).cloned(),
+            None => Some(Id::new(reference)),
+        };
+        if let Some(id) = id
+            && account.participant_identities.contains(&id)
+        {
+            set_default(account, &id);
+        }
+    }
+
+    to_result(&SetResponse {
+        account_id,
+        old_state: Some(old_state),
+        new_state: account.participant_identities.state(),
+        created: (!created.is_empty()).then_some(created),
+        updated: (!updated.is_empty()).then_some(updated),
+        destroyed: (!destroyed.is_empty()).then_some(destroyed),
+        not_created: (!not_created.is_empty()).then_some(not_created),
+        not_updated: (!not_updated.is_empty()).then_some(not_updated),
+        not_destroyed: (!not_destroyed.is_empty()).then_some(not_destroyed),
+    })
+}
+
+/// Make `target` the one default identity, demoting whatever else was
+/// default (draft-ietf-jmap-calendars-28 §3.2 `onSuccessSetIsDefault`).
+fn set_default(account: &mut AccountState, target: &Id) {
+    let ids: Vec<Id> = account
+        .participant_identities
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect();
+    account.participant_identities.transaction(|transaction| {
+        for id in &ids {
+            let Some(identity) = transaction.get(id) else {
+                continue;
+            };
+            let should_be_default = id == target;
+            if identity.is_default != Some(should_be_default) {
+                let mut updated = identity.clone();
+                updated.is_default = Some(should_be_default);
+                transaction.update(id, updated);
+            }
+        }
+    });
 }
