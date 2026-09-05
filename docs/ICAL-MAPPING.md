@@ -4145,3 +4145,70 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.204 Divergence 204: `maps_recurrence_rule`, `unstateable_until`, and `rule_to_rrule`: Outbound Recurrence Rule Validation Gating, Libical Part Ordering, Default Value Suppression (`INTERVAL=1`), and Unstateable `UNTIL` Endpoint Diagnostics
+
+- **Observed Behavior**:
+  Outbound recurrence rule serialization requires validating that JSCalendar `RecurrenceRule` properties can be losslessly represented in RFC 5545 `RRULE` syntax without losing unbounded repeat bounds or schedule fidelity. In `jmap-ical`:
+  1. Recurrence rule validation gating (`maps_recurrence_rule`): Verifies that `rule.extra.is_empty()`, `rule.rscale.is_none()`, `rule.skip.is_none()`, and `writable(rule)` (non-empty frequency and valid date-time `until` if present). Furthermore, evaluates each rule subpart: `by_day_part`, `by_month_day_part`, `by_year_day_part`, `by_week_no_part`, `by_month_part`, `by_second_part`, `by_minute_part`, `by_hour_part`, `by_set_position_part`, and `weekday_token`. If any subpart fails validation (such as an invalid day, out-of-range position, or unrepresentable weekday), `maps_recurrence_rule` returns `false`, preventing the save engine from writing back a corrupted or partial recurrence.
+  2. Unstateable `UNTIL` diagnostics (`unstateable_until`): When a rule has an `until` endpoint that cannot be formatted as an iCalendar date-time string via `to_ical_date_time` (for instance, an unresolved UTC instant that failed timezone conversion), `unstateable_until` extracts the raw string so the sync error reporter can inform the user of the exact problematic boundary, rather than failing with an opaque mapping error. Rules failing for other reasons return `None`.
+  3. Libical canonical part ordering (`rule_to_rrule`): Emits rule parts in libical order: `FREQ`, followed by `COUNT`, `UNTIL`, and `INTERVAL`. Suppresses default `INTERVAL=1` because RFC 5545 Section 3.3.10 defines 1 as the default and libical strips `INTERVAL=1` on load. Follows with `named_by_parts` (finest time unit outwards: `BYSECOND`, `BYMINUTE`, `BYHOUR`, followed by `BYDAY`, `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYMONTH`), `BYSETPOS`, and `WKST`.
+  4. In contrast, differential oracles or permissive serializers emit `INTERVAL=1` explicitly (triggering round-trip cache differences in EDS), reorder parts non-deterministically, emit partial recurrence rules when individual day or month parts fail, or fail to diagnose unstateable `until` endpoints.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 defines recurrence rule grammar, defaults, and ordering considerations.
+  2. Suppressing default `INTERVAL=1` and enforcing strict all-or-nothing subpart validation preserves sync idempotence and prevents silent recurrence series distortion.
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule serialization determinism. Enforces comprehensive subpart gating, suppresses `INTERVAL=1`, orders parts matching libical AST conventions, and isolates unstateable `UNTIL` diagnostics.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.205 Divergence 205: `maps_recurrence_override`, `sends_recurrence_override`, `override_maps_by`, `maps_override_field`, and `draws_override_field`: Recurrence Override Safety Gating, Isolated vs Coordinated Custom TimeZone Resolution, Excluded Occurrence Purity, and Field Mutation Validation
+
+- **Observed Behavior**:
+  Recurrence override patches in JSCalendar `recurrenceOverrides` modify specific instances of a series. When converting to iCalendar detached `VEVENT` components or preparing `CalendarEvent/set` patches, the mapping must distinguish between isolated override patches and coordinated updates. In `jmap-ical`:
+  1. Base validation and occurrence identifier syntax (`override_maps_by`): Ensures the patch is a JSON object and that the instance `id` is a valid date-time via `to_ical_date_time`.
+  2. Excluded occurrence purity: If `excluded(patch)` is true, enforces `fields.len() == 1`. An excluded instance (`EXDATE`) cannot simultaneously restate title, duration, or locations; any extraneous properties invalidate the override.
+  3. Isolated vs coordinated custom timezone resolution: In `maps_recurrence_override` (using `maps_override_field`), `timeZone` in an override patch is accepted only if `null` or a standard IANA timezone name (`names_time_zone`). Custom solidus identifiers (e.g. `/custom/zone`) are refused because an isolated patch to `recurrenceOverrides` cannot carry the accompanying `timeZones` definition. In contrast, `sends_recurrence_override` (using `draws_override_field`) accepts custom timezone identifiers if they are defined on the master series (`defines_time_zone(series, tzid)`), permitting coordinated multi-property sync.
+  4. Granular field validation: Text fields (`title`, `description`) must be `null` or non-empty strings (empty strings `""` are rejected because they would be dropped by serializers and read back as `null` removals). Status, transparency, privacy, and priority are constrained to closed vocabularies or `null`. Keywords and alerts must be `null` or non-empty structures where every element satisfies `maps_keyword` or `drawn_alert`.
+  5. In contrast, differential oracles or uncoordinated parsers accept conflicting properties on excluded instances, permit dangling custom timezones in isolated override patches, or allow empty string titles to collapse into null deletions.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.4 and Section 3.8.5.1 govern recurrence identifiers and exclusions. RFC 8984 Section 4.3.4 defines `recurrenceOverrides` patch objects.
+  2. Isolating dangling custom timezones and rejecting ambiguous empty string modifications prevents data corruption across JMAP server synchronization passes.
+- **Adjudication**:
+  Conforming specification boundary and recurrence override mutation fidelity. Enforces single-property purity for excluded overrides, distinguishes isolated vs coordinated custom timezone handling, validates closed scalar vocabularies, and rejects empty text mutations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.206 Divergence 206: `by_day_part`, `by_day_token`, `counts_within_a_period`, `by_month_day_part`, and `month_day_token`: Outbound `BYDAY` and `BYMONTHDAY` Recurrence Rule Part Generation: Ordinal Frequency Gating (`MONTHLY`/`YEARLY`), Weekday All-or-Nothing Tokenization, and Weekly `BYMONTHDAY` Prohibition
+
+- **Observed Behavior**:
+  Generating RFC 5545 `BYDAY` and `BYMONTHDAY` recurrence rule parts from JSCalendar `NDay` and integer arrays requires enforcing RFC 5545 Section 3.3.10 frequency compatibility constraints and ordinal bounds. In `jmap-ical`:
+  1. `BYDAY` ordinal frequency gating (`by_day_token`, `counts_within_a_period`): RFC 5545 Section 3.3.10 specifies that `BYDAY` ordinals (e.g. `+2MO`, `-1FR`) MUST NOT be used when `FREQ` is not `MONTHLY` or `YEARLY`. `by_day_token` checks `counts_within_a_period(frequency)`. If an ordinal `nth_of_period` is present with `DAILY`, `WEEKLY`, `HOURLY`, `MINUTELY`, or `SECONDLY`, it returns `None`. Ordinal 0 (`Some(0)`) is rejected because ordinals are 1-based (`ordwk`). Non-empty `extra` fields in `NDay` are also rejected.
+  2. All-or-nothing weekday tokenization (`by_day_part`): Emits `BYDAY=<tokens>`. If any weekday in `rule.by_day` is invalid or contains an illegal ordinal for the given frequency, `tokens?` evaluates to `None`, dropping the entire `BYDAY` part. This signals `maps_recurrence_rule` that the recurrence cannot be faithfully represented, rather than emitting a partial set of weekdays that would alter the meeting schedule.
+  3. Frequency gating on `BYMONTHDAY` (`by_month_day_part`): RFC 5545 Section 3.3.10 explicitly states that `BYMONTHDAY` MUST NOT be specified when `FREQ` is `WEEKLY`. `by_month_day_part` returns `None` if `frequency` is `"weekly"`.
+  4. Day of month integer bounding (`month_day_token`): Accepts only `-31..=-1 | 1..=31`. Day 0 is rejected because Gregorian months have no day 0. Days exceeding 31 or below -31 return `None`. Empty `by_month_day` arrays return `None` (`BYMONTHDAY=` is invalid syntax).
+  5. In contrast, differential oracles or lenient serializers permit `BYDAY` ordinals on weekly recurrences (generating unparseable iCalendar), allow day 0 in `BYMONTHDAY`, or emit `BYMONTHDAY` on weekly rules, which libical rejects.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 defines precise mathematical rules for recurrence expansion.
+  2. Enforcing frequency-specific ordinal gating and all-or-nothing tokenization prevents corrupted recurrence generation and libical parser rejections.
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule part generation fidelity. Enforces `MONTHLY`/`YEARLY` gating on `BYDAY` ordinals, prohibits `BYMONTHDAY` on weekly recurrences, bounds month days to `-31..=-1 | 1..=31`, and rejects day 0.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.207 Divergence 207: `by_year_day_part`, `year_day_token`, `by_week_no_part`, `week_no_token`, `by_month_part`, and `month_token`: Outbound `BYYEARDAY`, `BYWEEKNO`, and `BYMONTH` Recurrence Rule Part Generation: Annual Frequency Invariant Enforcement, Week Number Yearly Restriction, and Canonical Month String Normalization
+
+- **Observed Behavior**:
+  Serializing annual and periodic recurrence components (`BYYEARDAY`, `BYWEEKNO`, `BYMONTH`) into RFC 5545 `RRULE` format requires strict frequency gating, bounded numeric ranges, and string normalization. In `jmap-ical`:
+  1. `BYYEARDAY` frequency gating and integer bounding (`by_year_day_part`, `year_day_token`, `holds_a_year`): RFC 5545 Section 3.3.10 specifies that `BYYEARDAY` MUST NOT be specified when `FREQ` is `DAILY`, `WEEKLY`, or `MONTHLY`. `holds_a_year` verifies that the frequency is outside those three (permitting `YEARLY`, `HOURLY`, `MINUTELY`, `SECONDLY`). `year_day_token` validates that each day falls within `-366..=-1 | 1..=366`, rejecting day 0. Empty arrays return `None`.
+  2. `BYWEEKNO` yearly frequency restriction and week bounding (`by_week_no_part`, `week_no_token`): RFC 5545 Section 3.3.10 restricts `BYWEEKNO` strictly to `FREQ=YEARLY`. Specifying `BYWEEKNO` with any other frequency (including sub-daily frequencies) is prohibited. `by_week_no_part` enforces `frequency.eq_ignore_ascii_case("yearly")`. `week_no_token` validates that week numbers fall within `-53..=-1 | 1..=53`, rejecting week 0.
+  3. `BYMONTH` string normalization and leap month rejection (`by_month_part`, `month_token`): In JSCalendar, `byMonth` contains strings (allowing RFC 7529 RSCALE non-Gregorian leap months like `5L`). In `jmap-ical`: `month_token` parses the string as an integer `1..=12` and enforces exact canonical representation without leading zeros (`month == number.to_string()`). Leading zeros (e.g. `"03"`) are rejected because libical and calcard re-render them as `"3"`, causing spurious round-trip edits. Leap month tokens (such as `"5L"`) return `None` because the Gregorian calendar has no leap month, preventing invalid months from being emitted on standard series.
+  4. In contrast, differential oracles or permissive emitters allow `BYWEEKNO` on non-yearly recurrences, emit `BYYEARDAY` on monthly recurrences, output leading zeros (`BYMONTH=01`), or accept non-Gregorian leap months without RSCALE.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 defines recurrence rule part constraints and dependencies.
+  2. Canonical numeric validation and strict frequency gating ensure RFC 5545 compliance and seamless libical round-tripping.
+- **Adjudication**:
+  Conforming specification boundary and annual recurrence rule part generation fidelity. Restricts `BYWEEKNO` to yearly frequency, validates `BYYEARDAY` against `holds_a_year`, bounds week numbers and year days while rejecting zero, normalizes month numbers to 1..=12 without leading zeros, and rejects non-Gregorian leap months.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
