@@ -34317,3 +34317,459 @@ fn differential_oracle_recurrence_override_safety_and_timezone_coordination() {
     assert!(ics_override.contains("SUMMARY:Special Review Session\r\n"));
     assert!(ics_override.contains("PRIORITY:1\r\n"));
 }
+
+#[test]
+fn differential_oracle_outbound_virtual_locations_and_conference_features() {
+    // Divergence 236 against Stalwart differential oracle:
+    // drawn_conferences, drawn_conference, joining_features, CONFERENCE_FEATURES, and names_a_uri:
+    // Outbound Virtual Location and Online Conference Serialization: RFC 7986 Section 5.11 Mandatory VALUE=URI Emission,
+    // Case-Insensitive Feature Parameter Mapping (FEATURE), Display Name Labeling (LABEL),
+    // RFC 3986 URI Scheme Validation, and Stable Map Entry Key Binding (X-JMAP-KEY).
+
+    let valid_conf = json!({
+        "uri": "https://meet.example.com/room101",
+        "name": "Team Standup",
+        "features": {
+            "audio": true,
+            "video": true,
+            "screen": true,
+            "chat": false
+        }
+    });
+
+    // 1. drawn_conference generates CONFERENCE entry with mandatory VALUE=URI, LABEL, and X-JMAP-KEY:
+    let entry = jmap_ical::event::drawn_conference("v1", &valid_conf).expect("valid conference");
+    assert_eq!(
+        jmap_ical::event::entry_text(&entry),
+        "https://meet.example.com/room101"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&entry, "VALUE").as_deref(),
+        Some("URI")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&entry, "LABEL").as_deref(),
+        Some("Team Standup")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&entry, "X-JMAP-KEY").as_deref(),
+        Some("v1")
+    );
+
+    // 2. FEATURE parameters in CONFERENCE_FEATURES order:
+    let features = jmap_ical::event::entry_param_values(&entry, "FEATURE");
+    assert_eq!(features, vec!["AUDIO", "SCREEN", "VIDEO"]);
+
+    // joining_features helper returns active uppercase features:
+    let direct_features = jmap_ical::event::joining_features(&valid_conf);
+    assert_eq!(direct_features, vec!["AUDIO", "SCREEN", "VIDEO"]);
+
+    // 3. Invalid URI values return None:
+    let invalid_conf_no_uri = json!({ "name": "No URI Room" });
+    assert!(jmap_ical::event::drawn_conference("v2", &invalid_conf_no_uri).is_none());
+
+    let invalid_conf_bad_uri = json!({ "uri": "not-a-uri-string" });
+    assert!(jmap_ical::event::drawn_conference("v3", &invalid_conf_bad_uri).is_none());
+
+    let invalid_conf_space_uri = json!({ "uri": "https://meet.example.com/has space" });
+    assert!(jmap_ical::event::drawn_conference("v4", &invalid_conf_space_uri).is_none());
+
+    // 4. drawn_conferences maps full event collection deterministically:
+    let mut event = fixture_event();
+    event.virtual_locations = Some(BTreeMap::from([
+        ("v1".to_string(), valid_conf),
+        (
+            "v2".to_string(),
+            json!({
+                "uri": "tel:+1234567890",
+                "features": { "phone": true }
+            }),
+        ),
+    ]));
+    let entries = jmap_ical::event::drawn_conferences(&event);
+    assert_eq!(entries.len(), 2);
+
+    let ics = event_to_ical(&event);
+    assert!(ics.contains("CONFERENCE;"));
+    assert!(ics.contains("VALUE=URI"));
+    assert!(ics.contains("https://meet.example.com/room101"));
+}
+
+#[test]
+fn differential_oracle_outbound_links_and_attachments_partitioning() {
+    // Divergence 237 against Stalwart differential oracle:
+    // drawn_links, drawn_link, media_type, restricted_name, stated_size, LINK_DISPLAYS, and ICON_REL:
+    // Outbound External Link and Image Attachment Serialization: Property Partitioning (IMAGE for rel: "icon" vs ATTACH for General Links),
+    // RFC 7986 VALUE=URI and DISPLAY Gating, RFC 6838 Restricted-Name MIME Type Sanitation (media_type),
+    // RFC 8607 Byte Size Parameter Formatting (SIZE), and Map Entry Key Tracking (X-JMAP-KEY).
+
+    // 1. General attachment link produces ATTACH with FMTTYPE, SIZE, X-JMAP-KEY, and no VALUE=URI:
+    let attach_link = json!({
+        "href": "https://example.com/reports/summary.pdf",
+        "contentType": "application/pdf",
+        "size": 204800,
+        "rel": "enclosure"
+    });
+    let attach_entry =
+        jmap_ical::event::drawn_link("doc1", &attach_link).expect("valid attach link");
+    assert_eq!(
+        jmap_ical::event::entry_text(&attach_entry),
+        "https://example.com/reports/summary.pdf"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&attach_entry, "FMTTYPE").as_deref(),
+        Some("application/pdf")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&attach_entry, "SIZE").as_deref(),
+        Some("204800")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&attach_entry, "X-JMAP-KEY").as_deref(),
+        Some("doc1")
+    );
+    assert_eq!(jmap_ical::event::entry_param(&attach_entry, "VALUE"), None);
+    assert_eq!(
+        jmap_ical::event::entry_param(&attach_entry, "DISPLAY"),
+        None
+    );
+
+    // 2. Icon relation produces IMAGE with mandatory VALUE=URI, DISPLAY, FMTTYPE, and no SIZE:
+    let icon_link = json!({
+        "href": "https://example.com/graphics/badge.png",
+        "contentType": "image/png",
+        "rel": jmap_ical::event::ICON_REL,
+        "display": "badge"
+    });
+    let icon_entry = jmap_ical::event::drawn_link("img1", &icon_link).expect("valid icon link");
+    assert_eq!(
+        jmap_ical::event::entry_text(&icon_entry),
+        "https://example.com/graphics/badge.png"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&icon_entry, "VALUE").as_deref(),
+        Some("URI")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&icon_entry, "DISPLAY").as_deref(),
+        Some("BADGE")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&icon_entry, "FMTTYPE").as_deref(),
+        Some("image/png")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&icon_entry, "X-JMAP-KEY").as_deref(),
+        Some("img1")
+    );
+    assert_eq!(jmap_ical::event::entry_param(&icon_entry, "SIZE"), None);
+
+    // 3. RFC 6838 restricted-name MIME type sanitation:
+    assert!(jmap_ical::event::restricted_name("application"));
+    assert!(jmap_ical::event::restricted_name("vnd.ms-excel"));
+    assert!(jmap_ical::event::restricted_name("x-custom+xml"));
+    assert!(!jmap_ical::event::restricted_name("text/plain"));
+    assert!(!jmap_ical::event::restricted_name("plain;charset=utf-8"));
+
+    let clean_mime = json!({ "contentType": "text/calendar" });
+    assert_eq!(
+        jmap_ical::event::media_type(&clean_mime),
+        Some("text/calendar")
+    );
+
+    let complex_mime = json!({ "contentType": "text/plain; charset=utf-8" });
+    assert_eq!(jmap_ical::event::media_type(&complex_mime), None);
+
+    // 4. RFC 8607 integer size formatting:
+    assert_eq!(
+        jmap_ical::event::stated_size(&json!({ "size": 1024 })),
+        Some("1024".into())
+    );
+    assert_eq!(
+        jmap_ical::event::stated_size(&json!({ "size": "1024" })),
+        None
+    );
+    assert_eq!(jmap_ical::event::stated_size(&json!({ "size": -5 })), None);
+    assert_eq!(
+        jmap_ical::event::stated_size(&json!({ "size": 12.34 })),
+        None
+    );
+
+    // 5. Invalid URI link is omitted:
+    let bad_link = json!({ "href": "not-a-valid-uri" });
+    assert!(jmap_ical::event::drawn_link("bad", &bad_link).is_none());
+
+    // 6. drawn_links maps event collection:
+    let mut event = fixture_event();
+    event.links = Some(BTreeMap::from([
+        ("doc1".to_string(), attach_link),
+        ("img1".to_string(), icon_link),
+    ]));
+    let drawn = jmap_ical::event::drawn_links(&event);
+    assert_eq!(drawn.len(), 2);
+
+    let ics = event_to_ical(&event);
+    assert!(ics.contains("ATTACH;"));
+    assert!(ics.contains("IMAGE;"));
+}
+
+#[test]
+fn differential_oracle_recurrence_dates_and_exclusion_formatting() {
+    // Divergence 238 against Stalwart differential oracle:
+    // dated, recurrence_dates, to_ical_date_time, and is_utc:
+    // Outbound Recurrence Exception and In-Set Addition Date Formatting (RDATE and EXDATE):
+    // Document-Wide Date vs Date-Time Alignment with DTSTART, Timezone Form Coordination (UTC Zulu, TZID, Floating),
+    // Detached Instance Component Absorption, and Unmodeled Override Fallback Inclusion.
+
+    let dates = vec!["20260701T140000".to_string()];
+
+    // 1. All-day date mode (as_a_date: true) writes VALUE=DATE and truncates to YYYYMMDD:
+    let date_entry = jmap_ical::event::dated("EXDATE", &dates, true, None);
+    assert_eq!(jmap_ical::event::entry_text(&date_entry), "20260701");
+    assert_eq!(
+        jmap_ical::event::entry_param(&date_entry, "VALUE").as_deref(),
+        Some("DATE")
+    );
+    assert_eq!(jmap_ical::event::entry_param(&date_entry, "TZID"), None);
+
+    // 2. UTC mode writes Z suffix without TZID or VALUE parameter:
+    let utc_entry = jmap_ical::event::dated("EXDATE", &dates, false, Some("UTC"));
+    assert_eq!(jmap_ical::event::entry_text(&utc_entry), "20260701T140000Z");
+    assert_eq!(jmap_ical::event::entry_param(&utc_entry, "TZID"), None);
+    assert_eq!(jmap_ical::event::entry_param(&utc_entry, "VALUE"), None);
+
+    // 3. IANA timezone mode writes TZID parameter with local digits:
+    let zoned_entry = jmap_ical::event::dated("RDATE", &dates, false, Some("America/New_York"));
+    assert_eq!(
+        jmap_ical::event::entry_text(&zoned_entry),
+        "20260701T140000"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&zoned_entry, "TZID").as_deref(),
+        Some("America/New_York")
+    );
+
+    // 4. Floating mode writes local digits without TZID or Z suffix:
+    let float_entry = jmap_ical::event::dated("RDATE", &dates, false, None);
+    assert_eq!(
+        jmap_ical::event::entry_text(&float_entry),
+        "20260701T140000"
+    );
+    assert_eq!(jmap_ical::event::entry_param(&float_entry, "TZID"), None);
+
+    // 5. recurrence_dates behavior on event overrides:
+    let mut event = fixture_event();
+    event.recurrence_overrides = Some(BTreeMap::from([
+        // Excluded override
+        (
+            "2026-07-02T14:00:00".to_string(),
+            json!({ "excluded": true }),
+        ),
+        // Valid modified instance (should be absorbed by detached VEVENT, excluded from RDATE)
+        (
+            "2026-07-03T14:00:00".to_string(),
+            json!({ "title": "Shifted Meeting" }),
+        ),
+        // Unmodeled override with invalid field (cannot be drawn as detached VEVENT, falls back to RDATE)
+        (
+            "2026-07-04T14:00:00".to_string(),
+            json!({ "invalidProperty": 123 }),
+        ),
+    ]));
+
+    // Excluded occurrences:
+    let exdates = jmap_ical::event::recurrence_dates(&event, true);
+    assert_eq!(exdates, vec!["20260702T140000"]);
+
+    // Included occurrences: the valid modified instance is absorbed, the unmodeled one falls back to RDATE:
+    let rdates = jmap_ical::event::recurrence_dates(&event, false);
+    assert_eq!(rdates, vec!["20260704T140000"]);
+
+    // Serialization check:
+    let ics = event_to_ical(&event);
+    assert!(ics.contains("EXDATE;"));
+    assert!(ics.contains("20260702T140000"));
+    assert!(ics.contains("RDATE;"));
+    assert!(ics.contains("20260704T140000"));
+}
+
+#[test]
+fn differential_oracle_rrule_by_parts_ordering_and_validation() {
+    // Divergence 239 against Stalwart differential oracle:
+    // rule_to_rrule, named_by_parts, time_of_day_part, by_day_part, by_day_token,
+    // counts_within_a_period, by_month_day_part, month_day_token, by_year_day_part,
+    // year_day_token, by_week_no_part, week_no_token, by_month_part, month_token,
+    // by_set_position_part, set_position_token, first_day_of_week_part, and weekday_token:
+    // Outbound Recurrence Rule BYxxx Parts Serialization and Ordering: Canonical Parameter Ordering,
+    // Default Value Suppression (INTERVAL=1, WKST=MO), Frequency-Dependent Part Gating,
+    // Value Range Bounding, and All-or-Nothing Part Emission.
+
+    // 1. counts_within_a_period: monthly/yearly provide periods for weekday ordinals:
+    assert!(jmap_ical::event::counts_within_a_period("monthly"));
+    assert!(jmap_ical::event::counts_within_a_period("yearly"));
+    assert!(!jmap_ical::event::counts_within_a_period("weekly"));
+    assert!(!jmap_ical::event::counts_within_a_period("daily"));
+
+    // 2. by_day_token weekday ordinal gating:
+    let monday_plain = NDay::new("mo");
+    assert_eq!(
+        jmap_ical::event::by_day_token(&monday_plain, "weekly").as_deref(),
+        Some("MO")
+    );
+
+    let monday_ordinal = NDay {
+        nth_of_period: Some(2),
+        ..NDay::new("mo")
+    };
+    assert_eq!(
+        jmap_ical::event::by_day_token(&monday_ordinal, "monthly").as_deref(),
+        Some("2MO")
+    );
+    assert_eq!(
+        jmap_ical::event::by_day_token(&monday_ordinal, "weekly"),
+        None
+    );
+
+    let monday_zero = NDay {
+        nth_of_period: Some(0),
+        ..NDay::new("mo")
+    };
+    assert_eq!(
+        jmap_ical::event::by_day_token(&monday_zero, "monthly"),
+        None
+    );
+
+    // 3. month_day_token and by_month_day_part:
+    assert_eq!(jmap_ical::event::month_day_token(15).as_deref(), Some("15"));
+    assert_eq!(jmap_ical::event::month_day_token(-1).as_deref(), Some("-1"));
+    assert_eq!(jmap_ical::event::month_day_token(0), None);
+    assert_eq!(jmap_ical::event::month_day_token(32), None);
+
+    let mut rule_mday = RecurrenceRule::new("monthly");
+    rule_mday.by_month_day = Some(vec![1, 15, -1]);
+    assert_eq!(
+        jmap_ical::event::by_month_day_part(&rule_mday).as_deref(),
+        Some("BYMONTHDAY=1,15,-1")
+    );
+
+    // BYMONTHDAY forbidden on weekly recurrence:
+    let mut rule_mday_weekly = RecurrenceRule::new("weekly");
+    rule_mday_weekly.by_month_day = Some(vec![15]);
+    assert_eq!(jmap_ical::event::by_month_day_part(&rule_mday_weekly), None);
+
+    // 4. year_day_token and by_year_day_part:
+    assert_eq!(
+        jmap_ical::event::year_day_token(100).as_deref(),
+        Some("100")
+    );
+    assert_eq!(jmap_ical::event::year_day_token(-1).as_deref(), Some("-1"));
+    assert_eq!(jmap_ical::event::year_day_token(0), None);
+    assert_eq!(jmap_ical::event::year_day_token(367), None);
+
+    let mut rule_yday = RecurrenceRule::new("yearly");
+    rule_yday.by_year_day = Some(vec![100]);
+    assert_eq!(
+        jmap_ical::event::by_year_day_part(&rule_yday).as_deref(),
+        Some("BYYEARDAY=100")
+    );
+
+    // BYYEARDAY forbidden on daily/weekly/monthly:
+    let mut rule_yday_daily = RecurrenceRule::new("daily");
+    rule_yday_daily.by_year_day = Some(vec![100]);
+    assert_eq!(jmap_ical::event::by_year_day_part(&rule_yday_daily), None);
+
+    // 5. week_no_token and by_week_no_part:
+    assert_eq!(jmap_ical::event::week_no_token(26).as_deref(), Some("26"));
+    assert_eq!(jmap_ical::event::week_no_token(-1).as_deref(), Some("-1"));
+    assert_eq!(jmap_ical::event::week_no_token(0), None);
+    assert_eq!(jmap_ical::event::week_no_token(54), None);
+
+    let mut rule_wno = RecurrenceRule::new("yearly");
+    rule_wno.by_week_no = Some(vec![26]);
+    assert_eq!(
+        jmap_ical::event::by_week_no_part(&rule_wno).as_deref(),
+        Some("BYWEEKNO=26")
+    );
+
+    // BYWEEKNO allowed ONLY on yearly:
+    let mut rule_wno_monthly = RecurrenceRule::new("monthly");
+    rule_wno_monthly.by_week_no = Some(vec![26]);
+    assert_eq!(jmap_ical::event::by_week_no_part(&rule_wno_monthly), None);
+
+    // 6. month_token and by_month_part:
+    assert_eq!(jmap_ical::event::month_token("3"), Some("3"));
+    assert_eq!(jmap_ical::event::month_token("03"), None);
+    assert_eq!(jmap_ical::event::month_token("5L"), None);
+    assert_eq!(jmap_ical::event::month_token("13"), None);
+
+    let mut rule_month = RecurrenceRule::new("yearly");
+    rule_month.by_month = Some(vec!["3".into(), "9".into()]);
+    assert_eq!(
+        jmap_ical::event::by_month_part(&rule_month).as_deref(),
+        Some("BYMONTH=3,9")
+    );
+
+    // 7. set_position_token and by_set_position_part:
+    assert_eq!(
+        jmap_ical::event::set_position_token(1).as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        jmap_ical::event::set_position_token(-1).as_deref(),
+        Some("-1")
+    );
+    assert_eq!(jmap_ical::event::set_position_token(0), None);
+
+    let mut rule_setpos = RecurrenceRule::new("monthly");
+    rule_setpos.by_set_position = Some(vec![1, -1]);
+    // Without other BYxxx parts selecting from a set, BYSETPOS is refused:
+    assert_eq!(
+        jmap_ical::event::by_set_position_part(&rule_setpos, false),
+        None
+    );
+    // With other BYxxx parts present, BYSETPOS is emitted:
+    assert_eq!(
+        jmap_ical::event::by_set_position_part(&rule_setpos, true).as_deref(),
+        Some("BYSETPOS=1,-1")
+    );
+
+    // 8. weekday_token and first_day_of_week_part (WKST):
+    assert_eq!(jmap_ical::event::weekday_token("mo"), Some("MO"));
+    assert_eq!(jmap_ical::event::weekday_token("su"), Some("SU"));
+    assert_eq!(jmap_ical::event::weekday_token("MO"), None);
+
+    let mut rule_wkst_mo = RecurrenceRule::new("weekly");
+    rule_wkst_mo.first_day_of_week = Some("mo".into());
+    // Default Monday is suppressed:
+    assert_eq!(
+        jmap_ical::event::first_day_of_week_part(&rule_wkst_mo),
+        None
+    );
+
+    let mut rule_wkst_su = RecurrenceRule::new("weekly");
+    rule_wkst_su.first_day_of_week = Some("su".into());
+    assert_eq!(
+        jmap_ical::event::first_day_of_week_part(&rule_wkst_su).as_deref(),
+        Some("WKST=SU")
+    );
+
+    // 9. rule_to_rrule full serialization, ordering, and default suppression:
+    let mut rule_full = RecurrenceRule::new("monthly");
+    rule_full.interval = Some(1); // Default interval suppressed
+    rule_full.count = Some(10);
+    rule_full.by_hour = Some(vec![9]);
+    rule_full.by_day = Some(vec![monday_plain]);
+    rule_full.first_day_of_week = Some("mo".into()); // Default WKST suppressed
+
+    let rrule_str = jmap_ical::event::rule_to_rrule(
+        &rule_full,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(Some("UTC"))),
+        false,
+    )
+    .expect("valid rule string");
+
+    // Ordered as FREQ -> COUNT -> BYHOUR -> BYDAY:
+    assert_eq!(rrule_str, "FREQ=MONTHLY;COUNT=10;BYHOUR=9;BYDAY=MO");
+    assert!(!rrule_str.contains("INTERVAL=1"));
+    assert!(!rrule_str.contains("WKST=MO"));
+}
