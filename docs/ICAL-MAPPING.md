@@ -3584,4 +3584,75 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.172 Divergence 172: `read_virtual_locations`, `read_locations`, and `INVENTED_CONFERENCE_KEY`: Virtual Location Mapping (RFC 7986 Section 5.11 `CONFERENCE` to RFC 8984 Section 4.2.6 `virtualLocations`), URI Validation (`names_a_uri`), Feature Decoding, Label Parameter Extraction, Colliding Key Collision Avoidance (`v1`, `v2`, ...), and Single Primary `LOCATION` Ingestion (`INVENTED_KEY = "l1"`)
+
+- **Observed Behavior**:
+  RFC 7986 §5.11 defines `CONFERENCE` admitting multiple occurrences, while RFC 5545 §3.8.1.7 defines `LOCATION`. In `jmap-ical`:
+  1. Mandatory URI validation: `read_virtual_locations` parses each `CONFERENCE` property. If the property value does not name a valid URI (`!names_a_uri(&value)`), the line is dropped rather than read into `virtualLocations`. RFC 8984 §4.2.6 mandates `uri` as the single required member of a `VirtualLocation`, so non-URI entries cannot be represented.
+  2. Feature decoding: `read_virtual_locations` inspects `FEATURE` parameters, decoding them against `CONFERENCE_FEATURES` (`AUDIO`, `VIDEO`, `CHAT`, `SCREEN`, `PHONE`) case-insensitively, setting boolean `true` flags in `place["features"]`.
+  3. Label parameter extraction: `LABEL` parameters on `CONFERENCE` lines are extracted into `place["name"]`, ignoring empty strings.
+  4. Deterministic collision-free key synthesis: `X-JMAP-KEY` parameters carrying valid `Id` values (`names_map_entry`) are preserved verbatim. If absent or invalid, keys are invented sequentially (`v1`, `v2`, ...) skipping any keys already present in the document to prevent colliding entries from overwriting each other.
+  5. Single primary location ingestion: `read_locations` extracts strictly the first `LOCATION` property. Non-empty values are wrapped in a single-element map with key `X-JMAP-KEY` or default `INVENTED_KEY = "l1"`. Empty `LOCATION` properties yield `None`.
+  6. In contrast, differential oracles or permissive parsers emit invalid `virtualLocations` without URIs, drop feature flags, fail to avoid key collisions on multiple invented conference keys, or create empty `locations` maps.
+- **Specification and Architectural Context**:
+  1. RFC 7986 §5.11 and RFC 8984 §4.2.6 govern virtual conference locations and feature vocabularies.
+  2. Synthesizing collision-safe keys and enforcing mandatory URI presence guarantees that client updates target distinct server resources without corruption.
+- **Adjudication**:
+  Conforming specification boundary and virtual location mapping fidelity. Enforces mandatory URI validation, extracts conference features and labels, synthesizes collision-safe map keys, and maps single primary physical locations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.173 Divergence 173: `drawn_links`, `drawn_link`, `media_type`, `restricted_name`, and `stated_size`: Outbound External Resource Serialization (RFC 8984 Section 4.2.7 `links` to RFC 5545 Section 3.8.1.1 `ATTACH` and RFC 7986 Section 5.10 `IMAGE`), Mandatory `VALUE=URI` for `IMAGE`, Default URI Omission for `ATTACH`, Media Type RFC 6838 Restricted Name Validation, and Stable `X-JMAP-KEY` Preservation
+
+- **Observed Behavior**:
+  RFC 8984 §4.2.7 unifies attachments and icons in `links: {"id": Link}`. In `jmap-ical`:
+  1. Mandatory `VALUE=URI` on `IMAGE`: When `link["rel"] == "icon"`, `drawn_link` serializes the link as RFC 7986 §5.10 `IMAGE`, appending `VALUE=URI` because RFC 7986 §5.10 requires explicit `VALUE=URI` on the URI alternative. It also serializes `DISPLAY` (e.g. `BADGE`, `GRAPHIC`, `THUMBNAIL`).
+  2. Default URI type parameter omission on `ATTACH`: When serializing non-icon links as RFC 5545 §3.8.1.1 `ATTACH`, `VALUE=URI` is deliberately omitted because URI is the default value type for `ATTACH` under RFC 5545 §3.8.1.1. Omitting redundant parameters matches libical canonical form and avoids parser clutter.
+  3. Media type RFC 6838 restricted name validation: `media_type` verifies `contentType` conforms to `type/subtype`, where each component satisfies RFC 6838 §4.2 restricted-name syntax (`restricted_name`: alphanumeric start, followed by alphanumerics and `RESTRICTED_NAME_CHARS`). Content types with parameters (e.g. `text/plain; charset=utf-8`) return `None`, preventing colons and semicolons from corrupting `FMTTYPE` parameter syntax.
+  4. Unsigned integer size formatting: `stated_size` validates that `size` is an unsigned integer (`as_u64()`), emitting clean `1*DIGIT` strings (RFC 8607 §4.1). Negative numbers, fractions, or string types are dropped.
+  5. Stable `X-JMAP-KEY` preservation: Every emitted `ATTACH` and `IMAGE` line carries `X-JMAP-KEY` to preserve the original map key across round-trips.
+  6. In contrast, differential oracles or naive formatters omit `VALUE=URI` on `IMAGE` (violating RFC 7986 grammar), emit redundant `VALUE=URI` on `ATTACH`, leak parameter semicolons into `FMTTYPE`, or fail on large sizes.
+- **Specification and Architectural Context**:
+  1. RFC 7986 §5.10 requires `VALUE=URI` for `IMAGE`. RFC 5545 §3.8.1.1 defines `URI` as the default for `ATTACH`.
+  2. Enforcing RFC 6838 restricted-name rules on `FMTTYPE` protects iCalendar parsers against malformed parameter tokens.
+- **Adjudication**:
+  Conforming specification boundary and external link serialization fidelity. Emits required `VALUE=URI` on `IMAGE`, omits redundant defaults on `ATTACH`, validates media types against RFC 6838 restricted names, and formats sizes accurately.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.174 Divergence 174: `by_set_position_part`, `set_position_token`, `first_day_of_week_part`, and `weekday_token`: Recurrence Set Position and Week Start Formatting: RFC 5545 Section 3.3.10 `BYSETPOS` Gating on Set Selectors (`selects_from_a_set`), Bounded Positional Index Verification (`-366..=-1 | 1..=366`, Rejecting 0), Default Monday Suppression (`WKST=MO` Omission for Libical/EDS Cache Stability), and Strict Lowercase Weekday Parsing (`mo..su`)
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 and RFC 8984 §4.3.1 govern recurrence rule constraints. In `jmap-ical`:
+  1. `BYSETPOS` set-selector gating: `by_set_position_part` inspects `selects_from_a_set`. RFC 5545 §3.3.10 mandates that `BYSETPOS` must only be used in conjunction with another `BYxxx` rule part (e.g. `BYDAY`, `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYMONTH`). If no other `BYxxx` part is present, `by_set_position_part` returns `None`, refusing to emit bare `BYSETPOS` without a target set.
+  2. Bounded set position verification: `set_position_token` verifies positions against `-366..=-1 | 1..=366`. Zero is strictly rejected as selecting no occurrence. Out-of-bounds positions return `None`, preventing malformed `BYSETPOS` parts.
+  3. Default Monday suppression (`WKST=MO`): `first_day_of_week_part` checks if `day == "MO"`. Because Monday is the RFC 5545 default and libical strips `WKST=MO` on parse, emitting `WKST=MO` causes EDS cache differences that trigger spurious update cycles. It is therefore omitted from outbound `RRULE` strings. Non-Monday week starts (`TU`, `WE`, `TH`, `FR`, `SA`, `SU`) are emitted as `WKST=<DAY>`.
+  4. Strict lowercase weekday token validation: `weekday_token` requires day strings to be strictly ASCII lowercase (`mo`, `tu`, `we`, `th`, `fr`, `sa`, `su`), returning `None` for uppercase or invalid tokens.
+  5. In contrast, differential oracles or permissive serializers emit bare `BYSETPOS` without accompanying `BYxxx` rules (violating RFC 5545 §3.3.10), permit `BYSETPOS=0`, or emit redundant `WKST=MO` that triggers cache churn in Evolution Data Server.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.10 defines `BYSETPOS` grammar and dependencies.
+  2. Omitting default `WKST=MO` prevents synchronization loops with libical and EDS.
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule serialization determinism. Gates `BYSETPOS` on set selectors, enforces bounded set positions, suppresses default Monday week starts, and validates lowercase weekday tokens.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.175 Divergence 175: `modified_instances`, `modified_instance`, `recurrence_dates`, and `dated`: Recurrence Override Detached Component Generation: Base Series Property Inheritance (UID, Timestamps, Locations, Links, Participants, Default Alerts), Recurrence-ID Relative Start Anchor, Excluded Instance Suppression (`EXDATE` Chronological Emission), Granular Patch Application, and Unified Date/DateTime Serialization (`dated`)
+
+- **Observed Behavior**:
+  RFC 8984 §4.3.4 defines recurrence overrides using `PatchObject` semantics, where detached instances override series properties. In `jmap-ical`:
+  1. Base series property inheritance: `modified_instance` constructs detached `CalendarEvent` instances inheriting UID, created, updated, title, description, time_zone, duration, status, free_busy_status, priority, privacy, locations, virtual_locations, links, participants, and use_default_alerts from the base series.
+  2. Recurrence-ID relative start anchor: The instance `start` defaults to `id` (the recurrence ID timestamp), adhering to RFC 8984 §4.3.4. It is only changed if the patch explicitly provides a new `start` property.
+  3. Excluded instance suppression: If `patch["excluded"] == true`, `modified_instance` returns `None`. The excluded occurrence is emitted as an `EXDATE` entry in the series component via `recurrence_dates(event, true)`, sorted chronologically.
+  4. Granular patch application: Modifies allowed fields (`title`, `description`, `duration`, `status`, `freeBusyStatus`, `privacy`, `start`, `timeZone`, `priority`, `keywords`, `alerts`). Null values clear fields (e.g. `priority = None`, `keywords = None`, `alerts = None`), while scalar and map values replace inherited values completely.
+  5. Unified date/datetime serialization (`dated`): Emits `DTSTART`, `RECURRENCE-ID`, `EXDATE`, and `RDATE` in conforming format: with `VALUE=DATE` and truncated 8-character string for all-day events (`as_a_date = true`), with trailing `Z` for UTC instants, with `TZID=<zone>` for named timezones, or as bare local date-times for floating events.
+  6. In contrast, differential oracles or monolithic serializers fail to inherit series metadata on detached instances, emit duplicate `VEVENT` components for excluded dates instead of `EXDATE`, or serialize recurrence dates with mismatched timezone formats.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.3.4 and RFC 5545 §3.8.4.4 govern detached recurrence instances and `RECURRENCE-ID`.
+  2. Harmonizing date representations across `DTSTART`, `RECURRENCE-ID`, and `EXDATE` via `dated` ensures recurrence calculations align across CalDAV and JMAP clients.
+- **Adjudication**:
+  Conforming specification boundary and recurrence override component generation fidelity. Inherits series metadata, anchors start to recurrence IDs, routes excluded instances to `EXDATE`, applies granular patch updates with nullification, and unifies date-time formatting.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
