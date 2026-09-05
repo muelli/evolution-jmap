@@ -202,6 +202,7 @@ pub fn calendar_set(state: &mut ServerState, arguments: Value) -> Result<Value, 
 pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: GetRequest = parse_arguments(arguments)?;
     let account = account_mut(state, &request.account_id)?;
+    let own_addresses = crate::scheduling::own_addresses(account);
 
     let mut list = Vec::new();
     let mut not_found = Vec::new();
@@ -220,6 +221,12 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
                 }
             }
         }
+    }
+    // §5.6: stamped fresh on every fetch rather than carried on the stored
+    // event, since a `ParticipantIdentity/set` can move which address is
+    // "this account" between two fetches of the same event.
+    for event in &mut list {
+        event.is_origin = Some(crate::scheduling::is_origin(event, &own_addresses));
     }
 
     to_result(&GetResponse {

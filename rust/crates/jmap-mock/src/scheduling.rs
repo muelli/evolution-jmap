@@ -106,7 +106,7 @@ fn messages_for(change: &EventChange, own: &BTreeSet<String>) -> Vec<RecordedSch
 /// §10.9.5: the account is the origin when nobody outside it organises the
 /// event, either because no organizer is named at all or because the named
 /// organizer is one of the account's own participant identities.
-fn is_origin(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
+pub(crate) fn is_origin(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     match event.organizer_calendar_address.as_deref() {
         None => true,
         Some(organizer) => own.contains(&normalize_uri(organizer)),
