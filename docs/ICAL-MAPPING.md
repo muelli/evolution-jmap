@@ -3799,6 +3799,75 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.184 Divergence 184: `time_zone_definition`, `definition_of`, `defines_time_zone`, and `maps_time_zone`: Custom Timezone Resolution: Dual Solidus Prefix Key Matching (`/prefix` vs `prefix`), Complete Round-Trip Redrawability Enforcement (`vtimezone_of`), and Floating Event Fallback for Undefined Custom Timezones
+
+- **Observed Behavior**:
+  RFC 8984 §4.7.2 defines `timeZones` as a map `Id[TimeZone]`. RFC 8984 §1.4.9 specifies that custom timezone identifiers begin with a solidus `/` (e.g. `/Europe/CustomZone`), but the `Id` grammar in §1.4.4 does not include the solidus. In `jmap-ical`:
+  1. Flexible key lookup (`definition_of`): Resolves `tzid` flexibly by first looking up `tzid` directly and falling back to `definitions.get(tzid.trim_start_matches('/'))`. This bridges implementations that include the solidus prefix in map keys with those that omit it.
+  2. Event-level definition extraction (`time_zone_definition`): Exposes this dual-prefix resolution across the entire `CalendarEvent` for synchronizers that need to inspect server-held timezone structures.
+  3. Redrawability verification (`defines_time_zone`): Requires `tzid` to begin with a solidus, resolves the definition via `definition_of`, and verifies that `vtimezone_of` can serialize the definition whole. A definition with empty observances or unparseable offsets cannot be drawn whole and returns `false`.
+  4. Sendability evaluation (`maps_time_zone`): Checks whether an event's timezone can be safely sent to a server. Floating events (`None` or empty), standard IANA names (`names_time_zone`), and valid custom zones (`defines_time_zone`) are sendable (`true`). Non-standard names (such as Windows `W. Europe Standard Time`) or dangling custom zones return `false`, allowing callers to fall back to floating time instead of aborting synchronization.
+  5. In contrast, differential oracles or rigid parsers fail to resolve keys when solidus conventions differ, emit incomplete `VTIMEZONE` blocks, or fail hard on unmapped Windows timezone strings.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §1.4.9 and §4.7.2 establish custom timezone reference semantics.
+  2. Bounding custom timezones to whole redrawable definitions prevents calendar corruption and daylight saving calculation errors.
+- **Adjudication**:
+  Conforming specification boundary and custom timezone resolution robustness. Implements dual solidus prefix lookup, enforces whole redrawability via `vtimezone_of`, and provides clean floating fallback for unresolvable custom zones.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.185 Divergence 185: `named_by_parts`, `by_second_part`, `by_minute_part`, `by_hour_part`, and `time_of_day_part`: Libical Recurrence Rule Part Canonical Ordering (Finest Time Unit Outwards: `BYSECOND`, `BYMINUTE`, `BYHOUR`), Leap Second 60 Tolerance, Non-Empty Part Validation, and `BYSETPOS` Exclusion
+
+- **Observed Behavior**:
+  Serializing recurrence rules (`RRULE`) requires formatting `BYxxx` clauses according to strict grammar and ordering expectations. In `jmap-ical`:
+  1. Libical canonical ordering (`named_by_parts`): Emits time-of-day clauses first, ordered from finest unit outwards: `BYSECOND`, `BYMINUTE`, and `BYHOUR`, followed by day and month selectors (`BYDAY`, `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYMONTH`).
+  2. Exclusion of `BYSETPOS`: `BYSETPOS` is excluded from `named_by_parts` because it operates as a filter over generated occurrences rather than generating occurrences itself.
+  3. Leap second 60 tolerance: `by_second_part` validates seconds in `0..=60`, explicitly admitting leap second 60 per RFC 5545 §3.3.12 and libical parser tests. Seconds 61 and above return `None`.
+  4. Time part bounds: `by_minute_part` validates minutes in `0..=59`. `by_hour_part` validates hours in `0..=23`.
+  5. Empty part suppression: `time_of_day_part` returns `None` for empty value slices. This prevents emitting empty clauses like `BYHOUR=`, which libical interprets as `BYHOUR=0` (shifting occurrences to midnight).
+  6. In contrast, differential oracles or naive rule formatters emit `BYxxx` parts in arbitrary order, reject leap second 60, or emit empty `BYxxx=` clauses that corrupt recurrence expansion in libical.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.10 and §3.3.12 govern recurrence rule parts and leap second representation.
+  2. Matching libical's finest-unit-outwards clause ordering avoids cache mismatches in Evolution Data Server.
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule part serialization determinism. Emits time clauses in libical canonical order (`BYSECOND`, `BYMINUTE`, `BYHOUR`), tolerates leap second 60, excludes `BYSETPOS` from generation sets, and suppresses empty `BYxxx` parameters.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.186 Divergence 186: `writable`, `is_type`, and `holds_a_year`: Recurrence Rule Writability Gating (`frequency.is_empty()`), RFC 8984 Implied Optional `@type` Validation, and Yearly Frequency Span Verification (`holds_a_year`)
+
+- **Observed Behavior**:
+  Validating recurrence structures and JSON types ensures that serialized rules remain conforming and robust. In `jmap-ical`:
+  1. Recurrence writability gating (`writable`): Validates that `rule.frequency` is not empty (`!rule.frequency.is_empty()`) and that `rule.until` (if present) is convertible via `to_ical_date_time`. Rules lacking a frequency or containing unparseable end times return `false`, preventing unbounded or corrupt recurrence emission.
+  2. Implied optional `@type` validation (`is_type`): RFC 8984 §1.4.1 specifies that `@type` is optional when implied by property context. `is_type(value, name)` accepts `None` as matching the expected type, verifies string matches when present, and rejects non-matching or non-string values.
+  3. Yearly frequency span verification (`holds_a_year`): Enforces RFC 5545 §3.3.10 constraints on `BYYEARDAY`. Rejects `daily`, `weekly`, and `monthly` frequencies case-insensitively, allowing only frequencies that span an entire year (`yearly`) or sub-day intervals (`hourly`, `minutely`, `secondly`) before emitting `BYYEARDAY`.
+  4. In contrast, differential oracles or permissive parsers emit bare `RRULE` without `FREQ`, reject valid objects that omit optional `@type`, or emit `BYYEARDAY` on weekly recurrences, triggering libical component rejection.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.10 mandates `FREQ` and restricts `BYYEARDAY` to yearly contexts. RFC 8984 §1.4.1 defines `@type` handling.
+  2. Filtering incompatible rule parts protects against invalid calendar component generation.
+- **Adjudication**:
+  Conforming specification boundary and recurrence validation fidelity. Enforces mandatory frequency presence and until date-time validity in `writable`, supports optional `@type` in `is_type`, and enforces frequency scope gating in `holds_a_year`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.187 Divergence 187: `drawn_tags`, `maps_keyword`, and `value_text_str`: RFC 5545 `CATEGORIES` Tag Formatting: Set Deduplication, Whitespace-Only Tag Stripping, Carriage Return (`\r`) Injection Protection, and calcard AST Typed Scalar Extraction (`value_text_str`)
+
+- **Observed Behavior**:
+  Mapping category tags and extracting typed AST scalar values requires defensive string sanitization. In `jmap-ical`:
+  1. Tag validation predicate (`maps_keyword`): Requires `set == &Value::Bool(true)`. Rejects empty strings and whitespace-only tags (`!tag.trim().is_empty()`). Rejects carriage returns (`!tag.contains('\r')`), while allowing line feeds.
+  2. Stable tag extraction (`drawn_tags`): Iterates over `event.keywords` in BTreeMap order (lexicographically sorted), filtering invalid tags and producing deterministic comma-separated `CATEGORIES` lists.
+  3. AST scalar extraction (`value_text_str`): Converts calcard `ICalendarValue` variants (Text, PartialDateTime, Duration, RecurrenceRule, Period, Uri, Integer, Float, Boolean) into strings.
+  4. Binary payload suppression: `ICalendarValue::Binary` and `Uri::Data` return `None`, preventing memory bloat and preserving the remote URI reference model.
+  5. In contrast, differential oracles or naive formatters emit bare whitespace tags that vanish on read-back, leak carriage returns into headers, or convert binary payloads into text fields.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.1.2 defines `CATEGORIES` text values. RFC 8984 §4.2.9 defines `keywords` sets.
+  2. Sanitizing tags at extraction and suppressing binary AST values guarantees safe round-trips without silent data corruption.
+- **Adjudication**:
+  Conforming specification boundary and category tag formatting robustness. Enforces boolean `true` set membership, strips empty and whitespace-only tags, prevents carriage return injection, and safely extracts scalar AST values while suppressing binary payloads.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
