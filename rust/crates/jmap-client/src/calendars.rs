@@ -7,6 +7,7 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
     CalendarEventParseRequest, CalendarEventParseResponse, CalendarEventQueryFilter,
+    CalendarEventSetRequest,
 };
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -92,7 +93,7 @@ impl Client {
     ) -> Result<CalendarEvent, Error> {
         let request =
             SetRequest::<CalendarEvent>::new(account_id.clone()).create("new", event.clone());
-        let response = self.event_set(&request)?;
+        let response = self.event_set_unscheduled(request)?;
         if let Some(created) = response
             .created
             .as_ref()
@@ -120,7 +121,7 @@ impl Client {
     pub fn event_update(&self, account_id: &Id, id: &Id, patch: Value) -> Result<(), Error> {
         let request =
             SetRequest::<CalendarEvent>::new(account_id.clone()).update(id.clone(), patch);
-        let response = self.event_set(&request)?;
+        let response = self.event_set_unscheduled(request)?;
         if response
             .updated
             .as_ref()
@@ -136,7 +137,7 @@ impl Client {
     /// Destroy a calendar event.
     pub fn event_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
         let request = SetRequest::<CalendarEvent>::new(account_id.clone()).destroy(id.clone());
-        let response = self.event_set(&request)?;
+        let response = self.event_set_unscheduled(request)?;
         if response
             .destroyed
             .as_ref()
@@ -170,12 +171,24 @@ impl Client {
         Ok(serde_json::from_value(arguments)?)
     }
 
-    fn event_set(
+    /// `CalendarEvent/set` (draft-ietf-jmap-calendars §5.9), including the
+    /// draft's `sendSchedulingMessages`: ask for it and the server sends the
+    /// iTIP invitations, cancellations and replies §5.9.2 calls for once the
+    /// change is applied. The plain create/update/destroy helpers above never
+    /// ask, which is the draft's own default.
+    pub fn event_set(
         &self,
-        request: &SetRequest<CalendarEvent>,
+        request: &CalendarEventSetRequest,
     ) -> Result<SetResponse<CalendarEvent>, Error> {
         let arguments = self.single_call(USING, "CalendarEvent/set", request)?;
         Ok(serde_json::from_value(arguments)?)
+    }
+
+    fn event_set_unscheduled(
+        &self,
+        request: SetRequest<CalendarEvent>,
+    ) -> Result<SetResponse<CalendarEvent>, Error> {
+        self.event_set(&CalendarEventSetRequest::new(request))
     }
 
     /// Fetch all `CalendarEventNotification`s visible to this credential
