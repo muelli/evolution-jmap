@@ -10,7 +10,7 @@
 //! already records accepted `EmailSubmission`s. These tests read that outbox.
 
 use jmap_client::{Client, Credentials};
-use jmap_mock::MockServer;
+use jmap_mock::{MockServer, RecordedSchedulingMessage};
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarEventSetRequest};
 use jmap_proto::methods::{SetRequest, SetResponse};
@@ -26,7 +26,7 @@ type Sent = (String, String, Option<String>);
 fn participant(address: &str, status: &str) -> Value {
     json!({
         "@type": "Participant",
-        "calendarAddress": address,
+        "sendTo": {"imip": address},
         "participationStatus": status,
         "roles": {"attendee": true},
     })
@@ -199,6 +199,14 @@ impl Fixture {
         let mut messages = self.sent().split_off(mark);
         messages.sort();
         messages
+    }
+
+    /// The full records since `mark`, `ical` payload included, for tests
+    /// that pin the message body rather than just who it went to.
+    fn sent_full_since(&self, mark: usize) -> Vec<RecordedSchedulingMessage> {
+        let state = self.server.state();
+        let state = state.lock().unwrap();
+        state.account(&self.account_id).unwrap().scheduling_outbox[mark..].to_vec()
     }
 }
 
@@ -701,4 +709,132 @@ fn a_status_pinned_by_an_override_does_not_answer_twice() {
         "the series is answered once; the occurrence pinning the same status \
          did not change, so it says nothing again"
     );
+}
+
+/// The `ical` payload itself (draft-ietf-jmap-calendars-28 §5.9.2, RFC 5546
+/// §3.2), not just the decision to send.
+mod payload {
+    use super::*;
+
+    fn owner_participant(address: &str) -> Value {
+        json!({
+            "@type": "Participant",
+            "sendTo": {"imip": address},
+            "participationStatus": "accepted",
+            "roles": {"owner": true},
+        })
+    }
+
+    #[test]
+    fn creating_a_simple_event_produces_a_full_request_body() {
+        let fixture = Fixture::new();
+        let mut event = meeting(&fixture.calendar_id);
+        event.participants = Some(
+            [
+                ("alice".to_owned(), owner_participant(ALICE)),
+                ("bob".to_owned(), participant(BOB, "needs-action")),
+            ]
+            .into(),
+        );
+
+        fixture.create(&event, true);
+
+        let sent = fixture.sent_full_since(0);
+        assert_eq!(sent.len(), 1, "one REQUEST, to Bob alone: {sent:?}");
+        assert_eq!(sent[0].method, "REQUEST");
+        assert_eq!(sent[0].recipient, BOB);
+        assert_eq!(sent[0].recurrence_id, None);
+        assert_eq!(
+            sent[0].ical,
+            "BEGIN:VCALENDAR\r\n\
+             VERSION:2.0\r\n\
+             PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+             METHOD:REQUEST\r\n\
+             BEGIN:VEVENT\r\n\
+             UID:CE1\r\n\
+             X-JMAP-UID:urn:example:event:CE1\r\n\
+             SUMMARY:Design review\r\n\
+             DTSTART:20260601T100000\r\n\
+             ORGANIZER:mailto:alice@example.com\r\n\
+             ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION:mailto:bob@example.net\r\n\
+             END:VEVENT\r\n\
+             END:VCALENDAR\r\n"
+        );
+    }
+
+    #[test]
+    fn destroying_an_event_produces_a_cancel_body() {
+        let fixture = Fixture::new();
+        let mut event = meeting(&fixture.calendar_id);
+        event.participants = Some(
+            [
+                ("alice".to_owned(), owner_participant(ALICE)),
+                ("bob".to_owned(), participant(BOB, "accepted")),
+            ]
+            .into(),
+        );
+        let id = fixture.create(&event, false);
+
+        fixture.destroy(&id, true);
+
+        let sent = fixture.sent_full_since(0);
+        assert_eq!(sent.len(), 1, "one CANCEL, to Bob alone: {sent:?}");
+        assert_eq!(sent[0].method, "CANCEL");
+        assert_eq!(sent[0].recipient, BOB);
+        assert_eq!(sent[0].recurrence_id, None);
+        assert_eq!(
+            sent[0].ical,
+            "BEGIN:VCALENDAR\r\n\
+             VERSION:2.0\r\n\
+             PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n\
+             METHOD:CANCEL\r\n\
+             BEGIN:VEVENT\r\n\
+             UID:CE1\r\n\
+             X-JMAP-UID:urn:example:event:CE1\r\n\
+             SUMMARY:Design review\r\n\
+             DTSTART:20260601T100000\r\n\
+             ORGANIZER:mailto:alice@example.com\r\n\
+             ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:bob@example.net\r\n\
+             END:VEVENT\r\n\
+             END:VCALENDAR\r\n"
+        );
+    }
+
+    #[test]
+    fn an_instance_only_participant_s_request_body_is_scoped_to_that_occurrence() {
+        let fixture = Fixture::new();
+        let mut event = series(&fixture.calendar_id);
+        event.recurrence_overrides = Some(
+            [(
+                SECOND.to_owned(),
+                json!({"participants/carol": participant(CAROL, "needs-action")}),
+            )]
+            .into(),
+        );
+
+        fixture.create(&event, true);
+
+        let sent = fixture.sent_full_since(0);
+        let to_carol = sent
+            .iter()
+            .find(|message| message.recipient == CAROL)
+            .expect("Carol was sent something");
+        assert_eq!(to_carol.recurrence_id.as_deref(), Some(SECOND));
+        // RFC 5545 §3.1 folds a physical line over 75 octets, which an
+        // address this long may cross; undo that before checking substrings.
+        let ical = to_carol.ical.replace("\r\n ", "");
+        assert!(
+            ical.contains("RECURRENCE-ID"),
+            "a per-instance message names which occurrence it is about: {ical}"
+        );
+        assert!(
+            ical.contains("mailto:carol@example.org"),
+            "and carries Carol's own invitation: {ical}"
+        );
+        assert!(
+            ical.contains("mailto:bob@example.net"),
+            "the occurrence's participant set is the series' plus Carol, not \
+             Carol alone: {ical}"
+        );
+    }
 }

@@ -1614,6 +1614,30 @@ fn writable(rule: &RecurrenceRule) -> bool {
 /// The series comes first, then one component per instance edited on its own —
 /// see `modified_instances`.
 pub fn event_to_ical(event: &CalendarEvent) -> String {
+    event_calendar(event, None).to_ics()
+}
+
+/// The iCalendar payload for one iTIP scheduling message
+/// (draft-ietf-jmap-calendars-28 §5.9.2, RFC 5546 §3.2): the same rendering
+/// `event_to_ical` gives a stored object, wrapped in a `VCALENDAR` whose
+/// `METHOD` property makes it a REQUEST, CANCEL or REPLY instead. Deciding
+/// who gets a message and what it is about is entirely the caller's job (see
+/// `jmap-mock`'s `scheduling` module); this only ever draws `event` the way
+/// `event_to_ical` always has.
+///
+/// `recurrence_id` narrows the message to one occurrence: `event` is then
+/// expected to already be that occurrence's own state (participants
+/// included), with a `recurrenceOverrides` that no longer names it, and the
+/// message carries that one `VEVENT` alone, with a `RECURRENCE-ID` rather
+/// than the series' own `RRULE`.
+pub fn scheduling_ical(event: &CalendarEvent, method: &str, recurrence_id: Option<&str>) -> String {
+    match recurrence_id {
+        None => event_calendar(event, Some(method)).to_ics(),
+        Some(recurrence_id) => instance_calendar(event, method, recurrence_id).to_ics(),
+    }
+}
+
+fn event_calendar(event: &CalendarEvent, method: Option<&str>) -> Component {
     let start = event.start.as_deref().and_then(to_ical_date_time);
     // Whether this event goes out as a date rather than a date-time, which is
     // the whole of `showWithoutTime` on this side. Decided once for the whole
@@ -1651,6 +1675,9 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
     let mut calendar = Component::new("VCALENDAR")
         .with(make_entry("VERSION", "2.0"))
         .with(make_entry("PRODID", PRODID));
+    if let Some(method) = method {
+        calendar = calendar.with(make_entry("METHOD", method));
+    }
     // Ahead of the events that refer to them, which is where a reader resolving a
     // `TZID` as it walks wants them.
     for vtimezone in drawn_time_zones(event, &instances, as_a_date) {
@@ -1660,7 +1687,30 @@ pub fn event_to_ical(event: &CalendarEvent) -> String {
     for (id, instance) in &instances {
         calendar = calendar.with_child(vevent_of(instance, as_a_date, zone, Some(id)));
     }
-    calendar.to_ics()
+    calendar
+}
+
+/// [`event_calendar`]'s single-occurrence counterpart: one `VEVENT`, carrying
+/// a `RECURRENCE-ID` rather than the series' own `RRULE`/`EXDATE`/`RDATE`,
+/// since `event` here already stands for the one occurrence the message is
+/// about rather than the whole series.
+fn instance_calendar(event: &CalendarEvent, method: &str, recurrence_id: &str) -> Component {
+    let start = event.start.as_deref().and_then(to_ical_date_time);
+    let as_a_date = start
+        .as_deref()
+        .is_some_and(|start| shows_without_time(event, start));
+    let zone = event.time_zone.as_deref();
+
+    let vevent = vevent_of(event, as_a_date, zone, Some(recurrence_id));
+
+    let mut calendar = Component::new("VCALENDAR")
+        .with(make_entry("VERSION", "2.0"))
+        .with(make_entry("PRODID", PRODID))
+        .with(make_entry("METHOD", method));
+    for vtimezone in drawn_time_zones(event, &[], as_a_date) {
+        calendar = calendar.with_child(vtimezone);
+    }
+    calendar.with_child(vevent)
 }
 
 /// The zones the document has to define itself, as `VTIMEZONE`s, in the order a

@@ -41,5 +41,6 @@ pub use server::{
     DEFAULT_SIZE_REQUEST, DEFAULT_SIZE_UPLOAD, MockServer, MockServerBuilder,
 };
 pub use state::{
-    AccountState, Blob, Change, ChangeKind, EventSourceHub, RecordedSubmission, ServerState, Store,
+    AccountState, Blob, Change, ChangeKind, EventSourceHub, RecordedSchedulingMessage,
+    RecordedSubmission, ServerState, Store,
 };
