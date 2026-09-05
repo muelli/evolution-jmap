@@ -291,6 +291,7 @@ fn handle_method(
         "ContactCard/get" => crate::contacts::contact_card_get(state, arguments),
         "ContactCard/set" => crate::contacts::contact_card_set(state, arguments),
         "ContactCard/query" => crate::contacts::contact_card_query(state, arguments),
+        "ContactCard/parse" => crate::contacts::contact_card_parse(state, arguments),
         "Mailbox/changes"
         | "Email/changes"
         | "Thread/changes"
