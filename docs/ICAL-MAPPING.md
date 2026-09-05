@@ -4909,5 +4909,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.248 Divergence 248: `names_time_zone`, `windows_time_zone_to_iana`, and `WINDOWS_TIME_ZONES`: CLDR Windows Timezone Name Translation and IANA Syntactic Shape Validation
+
+- **Observed Behavior**:
+  Ingesting calendar objects from Microsoft Exchange and Outlook or processing diverse timezone identifiers requires validating IANA syntactic structure and normalizing legacy Windows timezone display names into canonical IANA identifiers. In `jmap-ical`:
+  1. IANA syntactic shape validation (`names_time_zone`): Enforces that every solidus-separated segment in a candidate identifier contains only ASCII alphanumeric characters or `_`, `-`, `+`, and contains no empty segments. This accepts standard identifiers such as `Europe/Berlin`, `America/New_York`, `Etc/GMT+5`, and `UTC`, while rejecting bare Windows names (which contain spaces or periods) and solidus-prefixed paths (which begin with an empty segment).
+  2. CLDR Windows timezone mapping (`windows_time_zone_to_iana`, `WINDOWS_TIME_ZONES`): Ingests over 90 Windows registry display names and maps them directly to canonical CLDR IANA counterparts. Handles leading and trailing whitespace as well as surrounding quotation marks (e.g. `"Romance Standard Time"` maps to `Europe/Paris`, `"Eastern Standard Time"` maps to `America/New_York`, and `"W. Europe Standard Time"` maps to `Europe/Berlin`).
+  3. Case-insensitive table lookup: Windows timezone lookups match case-insensitively, handling casing variations produced by legacy calendar clients.
+  4. Unmapped name fallback: When a Windows display name is unrecognized or proprietary, `windows_time_zone_to_iana` returns `None`, allowing downstream pipelines to preserve the raw string for save-path inspection rather than making erroneous guesses.
+  5. In contrast, differential oracles or simplistic parsers drop Windows timezones as invalid, treat spaces as syntax errors, or fail to strip enclosing quotation marks.
+- **Specification and Architectural Context**:
+  1. RFC 8984 Section 1.4.9 (`TimeZoneId`) defines time zone identifiers in JSCalendar.
+  2. Unicode Common Locale Data Repository (CLDR) `windowsZones` specifies normative mappings from Windows time zone keys to IANA database identifiers.
+- **Adjudication**:
+  Conforming specification boundary and interoperability mapping. Validates IANA syntactic constraints, strips enclosing quotes, and normalizes standard Windows registry timezones to canonical IANA equivalents.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.249 Divergence 249: `unique_tzid_to_iana`, `IANA_AREAS`, and `resolve_canonical_time_zone`: Globally Unique Solidus TZID Tail Extraction and Canonical Resolution Pipeline
+
+- **Observed Behavior**:
+  Resolving RFC 5545 globally unique `TZID` parameters (prefixed with `/`) to standard IANA timezones requires peeling vendor namespaces and identifying canonical continental area paths. In `jmap-ical`:
+  1. Globally unique solidus prefix detection (`unique_tzid_to_iana`): Ingests solidus-prefixed identifiers (`/...`) per RFC 5545 Section 3.8.3.1 (such as `/freeassociation.sourceforge.net/Europe/Berlin`, `/citadel.org/20260101_1/America/New_York`, or `/vendor.example.com/UTC`).
+  2. Continental area matching (`IANA_AREAS`): Scans path segments for recognized IANA area prefixes (`Africa`, `America`, `Antarctica`, `Arctic`, `Asia`, `Atlantic`, `Australia`, `Brazil`, `Canada`, `Chile`, `Etc`, `Europe`, `Indian`, `Mexico`, `Pacific`, `US`, as well as `UTC` and `GMT`).
+  3. Candidate tail validation: When a recognized area is matched, the remainder of the path is tested against `names_time_zone`. If the tail is syntactically valid, it is extracted as the canonical IANA zone name, discarding the vendor prefix.
+  4. Unified canonical resolution pipeline (`resolve_canonical_time_zone`): Coordinates Windows lookup via `windows_time_zone_to_iana`, direct IANA shape verification via `names_time_zone`, and globally unique solidus tail peeling via `unique_tzid_to_iana`. Unresolvable custom names return `None`, leaving the raw identifier intact in `zone_of`.
+  5. In contrast, differential oracles or naive parsers retain vendor prefixes in `TimeZoneId` strings (e.g. `/freeassociation.sourceforge.net/Europe/Berlin`), causing server validation rejections, or strip solidus prefixes blindly without verifying whether the suffix corresponds to a valid IANA location.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.3.1 (`Time Zone Identifier`) defines globally unique solidus-prefixed TZIDs.
+  2. RFC 8984 Section 1.4.9 (`TimeZoneId`) mandates canonical IANA time zone identifiers or custom object-scoped solidus definitions.
+- **Adjudication**:
+  Conforming specification boundary and timezone resolution fidelity. Peels vendor namespaces by matching recognized IANA areas and validates candidate tails syntactically.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.250 Divergence 250: `read_time_zones`, `prune_time_zones`, `referred_zones`, `read_definition`, and `read_observance`: Custom Non-IANA Timezone Ingestion, Observance Component Parsing, Round-Trip Verifiability Gate, and Series/Override Multi-Occurrence Reference Pruning
+
+- **Observed Behavior**:
+  Ingesting and maintaining custom non-IANA timezone definitions in JSCalendar `timeZones` maps requires parsing `VTIMEZONE` components into structured `TimeZoneRule` arrays, verifying round-trip serialization, and pruning definitions no longer referenced by the series or any occurrence override. In `jmap-ical`:
+  1. Custom identifier filtering (`read_time_zones`): Scans `referred_zones(event)`, filtering specifically for solidus-prefixed custom identifiers (`/custom/...`) that cannot be resolved to canonical IANA names. Standard IANA zones are excluded from `timeZones` to avoid document bloat.
+  2. `VTIMEZONE` component ingestion (`read_definition`, `read_observance`): Parses `STANDARD` and `DAYLIGHT` subcomponents into `TimeZoneRule` objects (`@type: "TimeZoneRule"`). It mandates at least one observance subcomponent per RFC 5545 Section 3.6.5. `read_observance` parses local `DTSTART`, validates `TZOFFSETFROM` and `TZOFFSETTO` via `utc_offset`, converts observance recurrence rules using `Ends::At(&offset_from)`, and collects localized `TZNAME` properties into a boolean `names` map.
+  3. Round-trip verifiability gate (`vtimezone_of`): `read_time_zones` validates candidate definitions with `vtimezone_of(tzid, &definition).is_none()`. If an observance cannot be serialized back cleanly, it is excluded to prevent corrupting recurrence calculations.
+  4. Multi-occurrence reference pruning (`prune_time_zones`, `referred_zones`): Traverses both `event.time_zone` and every override in `event.recurrence_overrides` (`patch["timeZone"]`). `prune_time_zones` retains definitions that match any referenced zone (matching with or without leading `/`). If no custom zones remain, `event.time_zones` is reset to `None` rather than an empty object `{}`, preventing invalid empty map payloads in JMAP `CalendarEvent/set`.
+  5. In contrast, differential oracles or simplistic parsers store IANA zones redundantly in `timeZones`, prune custom definitions when only an occurrence override references them, or retain unreferenced definitions indefinitely.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.5 (`Time Zone Component`) defines `VTIMEZONE`, `STANDARD`, and `DAYLIGHT` subcomponents.
+  2. RFC 8984 Section 4.7.2 (`timeZones`) defines JSCalendar custom timezone definitions and `TimeZoneRule` representations.
+- **Adjudication**:
+  Conforming specification boundary and timezone lifecycle fidelity. Ingests custom `VTIMEZONE` components into structured `TimeZoneRule` objects, enforces redrawability validation, and coordinates multi-occurrence reference pruning across series and overrides.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.251 Divergence 251: `read_overrides`, `instance_patch`, `modified_instances`, `modified_instance`, and `RANGE=THISANDFUTURE`: Recurrence Override Ingestion, THISANDFUTURE Multi-Instance Safety Gating, PatchObject Property Diffing with Null Deletion, and Start-to-ID Alignment
+
+- **Observed Behavior**:
+  Ingesting and emitting recurrence overrides between RFC 5545 recurrence components and RFC 8984 `recurrenceOverrides` requires managing multi-instance scope safety, computing PatchObject diffs with null deletions, and coordinating occurrence start timestamps with recurrence identifiers. In `jmap-ical`:
+  1. `RANGE=THISANDFUTURE` safety gating (`read_overrides`): In RFC 5545 Section 3.2.13, a detached `VEVENT` carrying `RANGE=THISANDFUTURE` represents a split affecting all future occurrences. RFC 8984 `recurrenceOverrides` supports only single-occurrence patches (`PatchObject`). Applying a future split to a single occurrence key would corrupt that instance while silently losing modifications to all subsequent occurrences. `read_overrides` safely skips detached components carrying `RANGE`, preserving calendar integrity until full series splitting is performed.
+  2. PatchObject property diffing with null deletions (`instance_patch`): Compares detached instances against the series across `OVERRIDE_PROPERTIES` (`title`, `description`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `privacy`, `priority`, `keywords`, `alerts`). When a property was defined on the series but is absent on the detached instance, `instance_patch` emits `Value::Null`, instructing JMAP `CalendarEvent/set` to remove that property on the occurrence.
+  3. Occurrence start-to-ID alignment (`instance_patch`): Per RFC 8984 Section 4.3.4, an override's map key is the occurrence's starting time unless modified. In `instance_patch`, `instance.start` is compared against `id` (the `RECURRENCE-ID` timestamp), not against `series.start`. If the instance was not moved from its original occurrence time (`instance.start == id`), `start` is omitted from the patch. If the instance was moved, the new start time is recorded.
+  4. Outbound instance reconstruction and exclusion (`modified_instance`, `modified_instances`): When serializing back to RFC 5545, `modified_instances` skips excluded overrides (`excluded: true`), which are emitted exclusively as `EXDATE` lines. For modified instances, `modified_instance` inherits unmodeled series properties (`locations`, `virtualLocations`, `links`, `participants`), applies validated patch fields via `draws_override_field`, and produces an independent detached `VEVENT` component carrying `RECURRENCE-ID`.
+  5. In contrast, differential oracles or naive converters apply `RANGE=THISANDFUTURE` to a single override key (silently dropping changes to future occurrences), omit `null` deletions when properties are cleared on overrides, or compare override starts against the master series start rather than the recurrence identifier.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.4 (`RECURRENCE-ID`) and Section 3.2.13 (`Recurrence Identifier Range`) define recurrence instance targeting and scope.
+  2. RFC 8984 Section 4.3.4 (`recurrenceOverrides`) defines JSCalendar PatchObject semantics, property deletions via `null`, and occurrence start rules.
+- **Adjudication**:
+  Conforming specification boundary and recurrence override modeling fidelity. Skips unsupported `RANGE=THISANDFUTURE` components to prevent multi-occurrence data loss, generates conforming PatchObject diffs with null deletions, and aligns occurrence start timestamps to recurrence identifiers.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
 
