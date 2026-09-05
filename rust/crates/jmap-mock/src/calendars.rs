@@ -23,7 +23,7 @@ use serde_json::Value;
 use crate::dispatch::{account_mut, parse_arguments, project_properties, to_result};
 use crate::patch::apply_patch;
 use crate::scheduling::EventChange;
-use crate::setops::simple_set;
+use crate::setops::{simple_set, simple_set_with_validation};
 use crate::state::{AccountState, ServerState};
 
 /// Deterministic stand-in for "now" — the mock has no clock on purpose
@@ -237,6 +237,42 @@ pub fn calendar_event_get(state: &mut ServerState, arguments: Value) -> Result<V
     })
 }
 
+/// jscalendarbis §3.1.2 + draft-ietf-jmap-calendars-28 §1.4: a standalone
+/// Event MUST set `version`, and in JMAP context the object is a
+/// jscalendarbis Event, so the only valid value is "2.0". Enforced exactly
+/// the way Fastmail does — same type, same property list, no description;
+/// it rejects absent AND "1.0" alike (both wire-observed 2026-08-24) —
+/// because reproducing the strictest real deployment is what keeps the mock
+/// honest. Checked on both create and update: a patch can put either value
+/// back on an event that had a valid one already.
+fn version_is_2_0(event: &CalendarEvent) -> Result<(), SetError> {
+    if event.version.as_deref() != Some("2.0") {
+        return Err(SetError::new(error::set::INVALID_PROPERTIES).with_properties(["version"]));
+    }
+    Ok(())
+}
+
+/// draft §5.9.2: a change that asks for scheduling messages is only
+/// accepted if everyone it would have to announce itself to can be reached
+/// at all. `event` is whichever object the change leaves other people
+/// looking at: the created object, the patched result of an update, or the
+/// about-to-be-removed object of a destroy.
+fn schedulable(
+    event: &CalendarEvent,
+    own_addresses: &BTreeSet<String>,
+    send_scheduling_messages: bool,
+) -> Result<(), SetError> {
+    if send_scheduling_messages
+        && event.is_draft != Some(true)
+        && !crate::scheduling::recipients_are_reachable(event, own_addresses)
+    {
+        return Err(SetError::new(
+            calendar_event_set_error::NO_SUPPORTED_SCHEDULE_METHODS,
+        ));
+    }
+    Ok(())
+}
+
 pub fn calendar_event_set(
     state: &mut ServerState,
     arguments: Value,
@@ -273,57 +309,46 @@ pub fn calendar_event_set(
         ..
     } = account;
 
-    let response = simple_set(calendar_events, request, |id, event| {
-        let Some(calendar_ids) = event
-            .calendar_ids
-            .as_ref()
-            .filter(|calendar_ids| !calendar_ids.is_empty())
-        else {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description("calendarIds must name at least one calendar"));
-        };
-        if let Some(unknown) = calendar_ids
-            .keys()
-            .find(|calendar_id| !calendars.contains(calendar_id))
-        {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES)
-                .with_description(format!("calendar {unknown} does not exist")));
-        }
-        if event.start.is_none() {
-            return Err(
-                SetError::new(error::set::INVALID_PROPERTIES).with_description("start is required")
-            );
-        }
-        // jscalendarbis §3.1.2 + draft-ietf-jmap-calendars-28 §1.4: a
-        // standalone Event MUST set `version`, and in JMAP context the object
-        // is a jscalendarbis Event, so the only valid value is "2.0".
-        // Enforced exactly the way Fastmail does — same type, same property
-        // list, no description; it rejects absent AND "1.0" alike (both
-        // wire-observed 2026-08-24) — because reproducing the strictest real
-        // deployment is what keeps the mock honest.
-        if event.version.as_deref() != Some("2.0") {
-            return Err(SetError::new(error::set::INVALID_PROPERTIES).with_properties(["version"]));
-        }
-        // draft §5.9.2: a change that asks for scheduling messages is only
-        // accepted if everyone it would have to announce itself to can be
-        // reached at all.
-        if send_scheduling_messages
-            && event.is_draft != Some(true)
-            && !crate::scheduling::create_recipients_are_reachable(event, &own_addresses)
-        {
-            return Err(SetError::new(
-                calendar_event_set_error::NO_SUPPORTED_SCHEDULE_METHODS,
-            ));
-        }
-        event.id = Some(id.clone());
-        if event.event_type.is_none() {
-            event.event_type = Some("Event".to_owned());
-        }
-        if event.uid.is_none() {
-            event.uid = Some(format!("urn:example:event:{}", id.as_str()));
-        }
-        Ok(())
-    })?;
+    let response = simple_set_with_validation(
+        calendar_events,
+        request,
+        |id, event| {
+            let Some(calendar_ids) = event
+                .calendar_ids
+                .as_ref()
+                .filter(|calendar_ids| !calendar_ids.is_empty())
+            else {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description("calendarIds must name at least one calendar"));
+            };
+            if let Some(unknown) = calendar_ids
+                .keys()
+                .find(|calendar_id| !calendars.contains(calendar_id))
+            {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description(format!("calendar {unknown} does not exist")));
+            }
+            if event.start.is_none() {
+                return Err(SetError::new(error::set::INVALID_PROPERTIES)
+                    .with_description("start is required"));
+            }
+            version_is_2_0(event)?;
+            schedulable(event, &own_addresses, send_scheduling_messages)?;
+            event.id = Some(id.clone());
+            if event.event_type.is_none() {
+                event.event_type = Some("Event".to_owned());
+            }
+            if event.uid.is_none() {
+                event.uid = Some(format!("urn:example:event:{}", id.as_str()));
+            }
+            Ok(())
+        },
+        |_id, _before, patched| {
+            version_is_2_0(patched)?;
+            schedulable(patched, &own_addresses, send_scheduling_messages)
+        },
+        |_id, existing| schedulable(existing, &own_addresses, send_scheduling_messages),
+    )?;
 
     // `CalendarEventNotification` (draft-ietf-jmap-calendars §8): tell
     // everyone else the affected calendar(s) are shared with. `actor` is
