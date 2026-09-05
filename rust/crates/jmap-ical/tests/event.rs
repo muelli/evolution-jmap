@@ -32345,3 +32345,303 @@ fn differential_oracle_parse_ical_structure_depth_and_boundary_checks() {
         "exceeding MAX_DEPTH triggers ICalError::TooDeep"
     );
 }
+
+#[test]
+fn differential_oracle_by_hour_minute_second_sub_day_parts_and_ordering() {
+    // Divergence 212 against Stalwart differential oracle:
+    // time_of_day_part, by_hour_part, by_minute_part, by_second_part, and named_by_parts:
+    // Outbound Sub-Day Recurrence Rule Part Generation (BYHOUR, BYMINUTE, BYSECOND):
+    // Hour/Minute Range Enforcement (0..=23, 0..=59), Leap Second Accommodation (60 in BYSECOND),
+    // Empty Array Rejection, and Libical Finest-Outward Order Assembly.
+
+    // 1. Valid sub-day parts formatted correctly
+    let rule_valid = RecurrenceRule {
+        frequency: "daily".to_owned(),
+        by_hour: Some(vec![9, 17]),
+        by_minute: Some(vec![0, 30]),
+        by_second: Some(vec![0, 60]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_hour_part(&rule_valid),
+        Some("BYHOUR=9,17".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::by_minute_part(&rule_valid),
+        Some("BYMINUTE=0,30".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::by_second_part(&rule_valid),
+        Some("BYSECOND=0,60".to_string())
+    );
+
+    // 2. named_by_parts orders finest time units outwards: BYSECOND, BYMINUTE, BYHOUR
+    let parts = jmap_ical::event::named_by_parts(&rule_valid);
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0], "BYSECOND=0,60");
+    assert_eq!(parts[1], "BYMINUTE=0,30");
+    assert_eq!(parts[2], "BYHOUR=9,17");
+
+    // 3. Out-of-bounds rejection: hour > 23, minute > 59, second > 60
+    let rule_bad_hour = RecurrenceRule {
+        frequency: "daily".to_owned(),
+        by_hour: Some(vec![24]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(jmap_ical::event::by_hour_part(&rule_bad_hour), None);
+
+    let rule_bad_minute = RecurrenceRule {
+        frequency: "daily".to_owned(),
+        by_minute: Some(vec![60]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(jmap_ical::event::by_minute_part(&rule_bad_minute), None);
+
+    let rule_bad_second = RecurrenceRule {
+        frequency: "daily".to_owned(),
+        by_second: Some(vec![61]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(jmap_ical::event::by_second_part(&rule_bad_second), None);
+
+    // 4. Empty arrays rejected to prevent libical reading BYHOUR= as BYHOUR=0
+    let rule_empty = RecurrenceRule {
+        frequency: "daily".to_owned(),
+        by_hour: Some(vec![]),
+        by_minute: Some(vec![]),
+        by_second: Some(vec![]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(jmap_ical::event::by_hour_part(&rule_empty), None);
+    assert_eq!(jmap_ical::event::by_minute_part(&rule_empty), None);
+    assert_eq!(jmap_ical::event::by_second_part(&rule_empty), None);
+
+    // 5. Outbound serialization with sub-day parts in RRULE
+    let mut event = fixture_event();
+    event.recurrence_rule = Some(rule_valid);
+    let ics = event_to_ical(&event);
+    let rrule_line = content_line(&ics, "RRULE:");
+    assert!(rrule_line.contains("BYSECOND=0,60"));
+    assert!(rrule_line.contains("BYMINUTE=0,30"));
+    assert!(rrule_line.contains("BYHOUR=9,17"));
+}
+
+#[test]
+fn differential_oracle_stated_zones_x_lic_location_and_zone_of_pipeline() {
+    // Divergence 213 against Stalwart differential oracle:
+    // stated_zones, Zone, zone_of, X_LIC_LOCATION, and resolve_canonical_time_zone:
+    // Inbound VTIMEZONE Component Ingestion, Proprietary X-LIC-LOCATION IANA Extraction,
+    // Multi-Observance Hierarchy Assembly, and Four-Tier zone_of Resolution Pipeline.
+
+    // 1. VTIMEZONE with non-standard TZID and X-LIC-LOCATION pointing to IANA name
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Custom Paris Zone\r\n",
+        "X-LIC-LOCATION:Europe/Paris\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19710101T030000\r\n",
+        "TZOFFSETFROM:+0200\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-zone-213\r\n",
+        "DTSTAMP:20260905T120000Z\r\n",
+        "DTSTART;TZID=\"Custom Paris Zone\":20260905T100000\r\n",
+        "SUMMARY:Zone Test\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+
+    let event = ical_to_event(ics).expect("valid calendar with timezone parses");
+    // zone_of resolves Custom Paris Zone via X-LIC-LOCATION to Europe/Paris
+    assert_eq!(event.time_zone.as_deref(), Some("Europe/Paris"));
+
+    // 2. Globally-unique TZID resolved to IANA tail
+    let ics_unique = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-unique-213\r\n",
+        "DTSTAMP:20260905T120000Z\r\n",
+        "DTSTART;TZID=/freeassociation.sourceforge.net/Europe/Berlin:20260905T100000\r\n",
+        "SUMMARY:Unique TZID Test\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event_unique = ical_to_event(ics_unique).expect("valid calendar parses");
+    assert_eq!(event_unique.time_zone.as_deref(), Some("Europe/Berlin"));
+
+    // 3. Unresolvable custom zone without IANA equivalent preserved as raw TZID
+    let ics_raw = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:/custom/unmatched\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19710101T030000\r\n",
+        "TZOFFSETFROM:+0200\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-raw-213\r\n",
+        "DTSTAMP:20260905T120000Z\r\n",
+        "DTSTART;TZID=/custom/unmatched:20260905T100000\r\n",
+        "SUMMARY:Raw Custom Zone\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event_raw = ical_to_event(ics_raw).expect("valid custom zone parses");
+    assert_eq!(event_raw.time_zone.as_deref(), Some("/custom/unmatched"));
+}
+
+#[test]
+fn differential_oracle_master_series_selection_and_version_stamping() {
+    // Divergence 214 against Stalwart differential oracle:
+    // ical_to_event, read_vevent, RECURRENCE_ID, and ICalError::NoEvent:
+    // Inbound Master Series Selection, Non-Positional Detached Component Disambiguation,
+    // Top-Level RFC 8984/JSCalendar-bis version: "2.0" Stamping, and NoEvent Error Signaling.
+
+    // 1. Detached instance placed first in file order: master series without RECURRENCE-ID selected
+    let ics_reordered = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        // Detached instance appears first
+        "BEGIN:VEVENT\r\n",
+        "UID:series-uid-214\r\n",
+        "RECURRENCE-ID:20260906T100000Z\r\n",
+        "DTSTAMP:20260905T120000Z\r\n",
+        "DTSTART:20260906T100000Z\r\n",
+        "SUMMARY:Occurrence Override\r\n",
+        "END:VEVENT\r\n",
+        // Master series appears second
+        "BEGIN:VEVENT\r\n",
+        "UID:series-uid-214\r\n",
+        "DTSTAMP:20260905T120000Z\r\n",
+        "DTSTART:20260905T100000Z\r\n",
+        "SUMMARY:Master Series Title\r\n",
+        "RRULE:FREQ=DAILY;COUNT=5\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+
+    let event = ical_to_event(ics_reordered).expect("parsed multi-component calendar");
+    // Master series title selected, not occurrence title
+    assert_eq!(event.title.as_deref(), Some("Master Series Title"));
+    assert_eq!(
+        event.id.as_ref().map(|id| id.as_str()),
+        Some("series-uid-214")
+    );
+
+    // 2. Top-level event carries version: "2.0"
+    assert_eq!(event.version.as_deref(), Some("2.0"));
+
+    // 3. Recurrence override instance is created and does NOT carry version
+    let overrides = event.recurrence_overrides.expect("has overrides");
+    let patch = overrides
+        .get("2026-09-06T10:00:00")
+        .expect("override patch exists");
+    assert_eq!(
+        patch.get("title").and_then(Value::as_str),
+        Some("Occurrence Override")
+    );
+    assert!(
+        patch.get("version").is_none(),
+        "override patches must not carry version"
+    );
+
+    // 4. Missing VEVENT produces ICalError::NoEvent
+    let ics_no_vevent = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VTODO\r\n",
+        "UID:todo-only-214\r\n",
+        "SUMMARY:Not an event\r\n",
+        "END:VTODO\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    assert_eq!(ical_to_event(ics_no_vevent), Err(ICalError::NoEvent));
+}
+
+#[test]
+fn differential_oracle_multi_rrule_narrowing_and_property_dropping() {
+    // Divergence 215 against Stalwart differential oracle:
+    // read_vevent, component_entries, rrule_to_rule, and JSCalendar-bis Section 3.3.3:
+    // Inbound Single Recurrence Rule Narrowing, Multi-RRULE Secondary Line Dropping,
+    // Server-Owned Timestamp Dropping (created/updated), and iTIP Guest List Protection (participants: None).
+
+    // 1. Inbound multi-RRULE: first readable rule kept, secondary rules dropped per JSCalendar-bis Section 3.3.3
+    let ics_multi_rrule = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:multi-rrule-215\r\n",
+        "DTSTAMP:20260905T120000Z\r\n",
+        "DTSTART:20260905T100000Z\r\n",
+        "SUMMARY:Multi RRULE\r\n",
+        "RRULE:FREQ=DAILY;COUNT=10\r\n",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+
+    let event = ical_to_event(ics_multi_rrule).expect("parses multi-rrule calendar");
+    let rule = event.recurrence_rule.expect("has recurrence rule");
+    assert_eq!(rule.frequency, "daily");
+    assert_eq!(rule.count, Some(10));
+
+    // 2. Server-owned timestamps (CREATED, LAST-MODIFIED, DTSTAMP) dropped on import
+    let ics_timestamps = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:stamps-215\r\n",
+        "DTSTAMP:20260905T120000Z\r\n",
+        "CREATED:20260101T000000Z\r\n",
+        "LAST-MODIFIED:20260102T000000Z\r\n",
+        "DTSTART:20260905T100000Z\r\n",
+        "SUMMARY:Timestamps\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event_stamps = ical_to_event(ics_timestamps).expect("parses calendar");
+    assert!(
+        event_stamps.created.is_none(),
+        "created timestamp dropped on import"
+    );
+    assert!(
+        event_stamps.updated.is_none(),
+        "updated timestamp dropped on import"
+    );
+
+    // 3. iTIP scheduling participants (ORGANIZER, ATTENDEE) dropped on import
+    let ics_participants = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:parts-215\r\n",
+        "DTSTAMP:20260905T120000Z\r\n",
+        "DTSTART:20260905T100000Z\r\n",
+        "ORGANIZER;CN=Organizer:mailto:org@example.com\r\n",
+        "ATTENDEE;CN=Attendee;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:att@example.com\r\n",
+        "SUMMARY:Scheduling Meeting\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let event_parts = ical_to_event(ics_participants).expect("parses calendar");
+    assert!(
+        event_parts.participants.is_none(),
+        "participants dropped on import for iTIP safety"
+    );
+}
