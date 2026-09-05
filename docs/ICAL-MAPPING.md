@@ -2450,6 +2450,75 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.108 Divergence 108: `rrule_to_rule` Recurrence Rule Parsing: Non-DATE-TIME `UNTIL` Syntax Malformation Truncation (`break`) vs Preserving Trailing Parts or Lenient Recovery
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 specifies recurrence rule parameters and `UNTIL` endpoint syntax. In `jmap-ical`:
+  1. Syntactically malformed `UNTIL` truncation: In `rrule_to_rule`, when encountering `UNTIL`, the parser checks `date_time_digits(value)`. If the value lacks the structural shape of a date or date-time (such as `UNTIL=notadate` or unparseable text), the parser executes `break`, terminating part extraction immediately. Trailing rule parts (such as subsequent `BYDAY`, `BYMONTH`, or `COUNT`) are discarded, and `rule.until` remains `None`.
+  2. Structurally valid date-time with non-existent calendar date: In contrast, if `UNTIL` possesses valid date-time digits but represents an impossible Gregorian date (such as month 13 in `UNTIL=20261301T000000Z`), `date_time_digits` succeeds. `rrule_to_rule` processes the value via `read_until`, retaining the unresolvable timestamp verbatim. Subsequent rule parts are parsed normally, and `maps_recurrence_rule` subsequently flags the rule as unmappable to prevent corrupting recurrence state on save.
+  3. In contrast, lenient parsers or differential oracles may skip malformed `UNTIL` parameters and continue parsing trailing parts (producing an unintended infinite recurrence series), or reject the entire calendar object on import.
+- **Specification and Architectural Context**:
+  1. An `UNTIL` parameter establishes the bounding endpoint of a recurring appointment. If an unparseable `UNTIL` is simply ignored while continuing to parse frequency and day expansions, an intended finite series transforms into an infinite series repeating across every future year, cluttering the user's schedule.
+  2. Bailing out on malformed `UNTIL` matches `libical`'s parser truncation behavior, preventing unbounded repetition while signaling that the rule could not be safely interpreted.
+- **Adjudication**:
+  Conforming specification boundary and recurrence schedule protection. Halts `RRULE` part extraction on syntactically malformed `UNTIL` to prevent un-terminated recurrence explosion, while preserving date-shaped invalid timestamps verbatim for `maps_recurrence_rule` validation.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.109 Divergence 109: UTC Date-Time Property Formatting (`to_utc_date_time`): Strict Format Validation (8-Digit Date, 6-Digit Time, No Sub-Second Fractions) and Idempotent `DTSTAMP` / `LAST-MODIFIED` / `CREATED` Generation without Inventing "Now"
+
+- **Observed Behavior**:
+  RFC 8984 §1.4.5 defines `UTCDateTime` as an ISO 8601 UTC timestamp. RFC 5545 §3.8.7.1 (`CREATED`), §3.8.7.2 (`DTSTAMP`), and §3.8.7.3 (`LAST-MODIFIED`) require UTC timestamps ending in `'Z'`. In `jmap-ical`:
+  1. Strict UTC formatting: `to_utc_date_time` strips trailing `'Z'` or `'z'`, verifies exactly 8 date digits and 6 time digits via `strip(..., '-', 8)` and `strip(..., ':', 6)`, and confirms Gregorian date existence via `exists`.
+  2. Rejection of local time and sub-second fractions: Timestamps lacking the `'Z'` suffix (floating or local times) or containing fractional sub-seconds (such as `.123Z`) return `None`.
+  3. Timestamp property emission: `vevent_of` emits `CREATED` from `event.created`, and emits both `DTSTAMP` and `LAST-MODIFIED` from `event.updated`.
+  4. Missing timestamp omission: When `event.updated` is absent (`None`), `DTSTAMP` and `LAST-MODIFIED` are omitted. No current timestamp ("now") is synthesized from the system clock.
+  5. In contrast, Stalwart v1.0.0 or standard CalDAV servers may automatically stamp `DTSTAMP: <now>` with the current system time or preserve sub-second precision in metadata timestamps.
+- **Specification and Architectural Context**:
+  1. In `jmap-cal-sync`, serializing an event to iCalendar and comparing it against the local EDS cache must be strictly deterministic and idempotent. If `event_to_ical` generated a live clock timestamp for missing `DTSTAMP`, the output would fluctuate on every serialization pass, causing false dirty diffs and endless synchronization loops.
+  2. Emitting `DTSTAMP` only when backed by the server's authoritative `updated` timestamp ensures fixed-point stability. Enforcing exact 8-digit date and 6-digit time without fractional seconds complies with RFC 5545 §3.3.5.
+- **Adjudication**:
+  Conforming specification boundary and synchronization idempotence guarantee. Validates UTC formatting without sub-second fractions and suppresses timestamp emission when unpopulated to prevent non-deterministic sync churn.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.110 Divergence 110: All-Day Event (`shows_without_time`) Multi-Property Invariant Gating: Timezone Absence, Midnight Start, Whole-Day Duration, Recurrence Rule Sub-Day Time Prohibition, and Override Alignment
+
+- **Observed Behavior**:
+  RFC 8984 §4.2.1 defines `showWithoutTime: Boolean` indicating an all-day or floating date event. RFC 5545 §3.8.2.4 models all-day events using `DTSTART;VALUE=DATE:...`. In `jmap-ical`:
+  1. Six conjunctive invariants: `shows_without_time` mandates that all of the following conditions must hold before emitting `VALUE=DATE`:
+     - `show_without_time == Some(true)`;
+     - `time_zone.is_none()`: RFC 5545 §3.2.19 explicitly forbids `TZID` on date-only values. An event with `show_without_time: true` that names a timezone (even `"Etc/UTC"`) cannot be an iCalendar `VALUE=DATE` event;
+     - `at_midnight(start)`: `start` must end with `T000000`;
+     - `duration` must be whole days (`whole_days`: starting with `P`, containing no `T` time designator);
+     - `recurrence_rule` must have `until` at midnight and must not name any time of day (`!names_a_time_of_day`: no `BYHOUR`, `BYMINUTE`, `BYSECOND` per RFC 5545 §3.3.10);
+     - All `recurrence_overrides` instances must satisfy `instance_shows_without_time` (midnight ID, midnight start, whole-day duration, no timezone).
+  2. Defensive fallback: If any of the six invariants is violated, `shows_without_time` returns `false`, causing `vevent_of` to fall back to emitting timed date-times (`VALUE=DATE-TIME` or floating/zoned timestamps).
+  3. In contrast, permissive serializers or differential oracles might truncate non-midnight starts to date format or strip timezones blindly, leading to schedule shifts across timezone boundaries.
+- **Specification and Architectural Context**:
+  1. Emitting `VALUE=DATE` alongside a `TZID` or with `BYHOUR` rule parts violates RFC 5545 grammar and causes `libical` in EDS to reject the component.
+  2. Truncating a non-midnight start (such as 09:00:00) or a sub-day duration (such as `PT8H`) into an all-day date alters the event's scheduled length and position. Falling back to timed date-times preserves full temporal fidelity when calendar invariants cannot be satisfied.
+- **Adjudication**:
+  Conforming specification boundary and calendar schedule fidelity. Strictly enforces six conjunctive invariants before emitting `VALUE=DATE` and falls back to timed date-times when any invariant is violated to protect `libical` and prevent schedule distortion.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.111 Divergence 111: Recurrence Rule Token Parsing (`to_month_day`, `to_nday`): Explicit `+` Prefix Normalization, Sentinel Zero (`0`) Error Mapping, Ordinal Zero Refusal, and Complete Rule Preservation vs Token Discarding
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 specifies recurrence rule parts (`BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYSETPOS`, and `BYDAY`). In `jmap-ical`:
+  1. Explicit `+` prefix normalization: RFC 5545 allows explicit positive signs (`+1MO`, `+15`). `to_nday` strips `+` or `-` prefixes before parsing ordinals, mapping `+2MO` to `nth_of_period: Some(2)`. `to_month_day` parses via `token.parse()`, consuming leading `+` without failing. On export, canonical numbers without `+` prefixes are serialized.
+  2. Sentinel zero error mapping: In `to_month_day`, invalid or unparseable tokens default to `0` (`token.parse().unwrap_or(0)`). Because zero is an illegal value in RFC 5545, `month_day_token`, `year_day_token`, `week_no_token`, and `set_position_token` all reject `0`, causing `maps_recurrence_rule` to flag the rule as corrupted and preventing partial recurrence rule emission.
+  3. Ordinal zero refusal: `to_nday` rejects `nth == 0`. When a `BYDAY` token has ordinal 0 (such as `0MO`) or cannot be parsed, the raw token is preserved as `day`, which is not in `WEEKDAYS` and is rejected by `by_day_token`.
+  4. In contrast, permissive parsers or differential oracles might silently discard invalid tokens, producing a truncated subset of recurrence days.
+- **Specification and Architectural Context**:
+  1. In recurrence rules, dropping an unparseable token (for example, dropping `bad` from `BYMONTHDAY=1,bad,15`) leaves a rule that repeats only on days 1 and 15, which is a different recurrence schedule than what was authored.
+  2. Retaining sentinel values that fail emission predicates guarantees that `maps_recurrence_rule` alerts `jmap-cal-sync` to avoid overwriting server recurrence state.
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule integrity. Normalizes explicit `+` signs, maps unparseable tokens to sentinel zeros or invalid day strings, and gates emission to prevent silent recurrence subset corruption.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
 
 
