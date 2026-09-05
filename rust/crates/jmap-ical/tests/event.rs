@@ -34934,3 +34934,193 @@ fn differential_oracle_inbound_time_of_day_subday_parsing_and_u32_max_sentinel()
         None
     );
 }
+
+#[test]
+fn differential_oracle_outbound_itip_scheduling_ical_and_instance_scope() {
+    use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
+
+    let event = CalendarEvent {
+        id: Some("sched-1".into()),
+        uid: Some("sched-uid-1".into()),
+        title: Some("Design Review".into()),
+        start: Some("2026-09-10T10:00:00".into()),
+        time_zone: Some("America/New_York".into()),
+        duration: Some("PT1H".into()),
+        recurrence_rule: Some(RecurrenceRule {
+            frequency: "weekly".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // 1. Full series scheduling payload with METHOD:REQUEST
+    let series_ics = jmap_ical::event::scheduling_ical(&event, "REQUEST", None);
+    assert!(series_ics.contains("BEGIN:VCALENDAR\r\n"));
+    assert!(series_ics.contains("METHOD:REQUEST\r\n"));
+    assert!(series_ics.contains("VERSION:2.0\r\n"));
+    assert!(series_ics.contains("PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n"));
+    assert!(series_ics.contains("RRULE:FREQ=WEEKLY\r\n"));
+    assert!(!series_ics.contains("RECURRENCE-ID"));
+
+    // 2. Single occurrence scoped scheduling payload
+    let mut instance_event = event.clone();
+    instance_event.recurrence_rule = None;
+    instance_event.start = Some("2026-09-17T11:00:00".into());
+
+    let instance_ics =
+        jmap_ical::event::scheduling_ical(&instance_event, "CANCEL", Some("2026-09-17T10:00:00"));
+    assert!(instance_ics.contains("BEGIN:VCALENDAR\r\n"));
+    assert!(instance_ics.contains("METHOD:CANCEL\r\n"));
+    assert!(instance_ics.contains("RECURRENCE-ID;TZID=America/New_York:20260917T100000\r\n"));
+    assert!(instance_ics.contains("DTSTART;TZID=America/New_York:20260917T110000\r\n"));
+    assert!(!instance_ics.contains("RRULE"));
+
+    // 3. REPLY method
+    let reply_ics = jmap_ical::event::scheduling_ical(&event, "REPLY", None);
+    assert!(reply_ics.contains("METHOD:REPLY\r\n"));
+}
+
+#[test]
+fn differential_oracle_standalone_vs_embedded_jscalendar_version_tagging() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Corp.//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:top-level-event\r\n\
+DTSTART:20260910T090000Z\r\n\
+SUMMARY:Master Meeting\r\n\
+RRULE:FREQ=DAILY\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:top-level-event\r\n\
+RECURRENCE-ID:20260911T090000Z\r\n\
+DTSTART:20260911T100000Z\r\n\
+SUMMARY:Moved Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = jmap_ical::event::ical_to_event(ics).expect("parse ics");
+
+    // 1. Standalone top-level event MUST carry version: "2.0"
+    assert_eq!(event.version.as_deref(), Some("2.0"));
+    assert_eq!(event.title.as_deref(), Some("Master Meeting"));
+
+    // 2. Embedded recurrence-override instance MUST NOT carry version
+    let overrides = event.recurrence_overrides.as_ref().expect("overrides");
+    let patch = overrides
+        .get("2026-09-11T09:00:00")
+        .expect("override patch");
+    assert!(patch.get("version").is_none());
+    assert_eq!(
+        patch.get("title").and_then(|v| v.as_str()),
+        Some("Moved Meeting")
+    );
+
+    // 3. Detached-only component stream: fallback chooses first as master with version 2.0
+    let detached_only = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:detached-alone\r\n\
+RECURRENCE-ID:20260912T140000Z\r\n\
+DTSTART:20260912T140000Z\r\n\
+SUMMARY:Detached Only\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let fallback_event = jmap_ical::event::ical_to_event(detached_only).expect("parse detached");
+    assert_eq!(fallback_event.version.as_deref(), Some("2.0"));
+    assert_eq!(fallback_event.title.as_deref(), Some("Detached Only"));
+}
+
+#[test]
+fn differential_oracle_participant_calendar_address_and_imip_uri_validation() {
+    use serde_json::json;
+
+    // 1. Valid mailto imip participant
+    let valid_participant = json!({
+        "name": "Alice Smith",
+        "roles": { "attendee": true },
+        "sendTo": {
+            "imip": "mailto:alice@example.com"
+        }
+    });
+    assert_eq!(
+        jmap_ical::event::calendar_address(&valid_participant),
+        Some("mailto:alice@example.com")
+    );
+
+    // 2. Non-imip channels return None
+    let web_participant = json!({
+        "name": "Web Bot",
+        "sendTo": {
+            "web": "https://example.com/rsvp"
+        }
+    });
+    assert_eq!(jmap_ical::event::calendar_address(&web_participant), None);
+
+    // 3. Invalid URI without scheme or with whitespace fails names_a_uri
+    assert!(!jmap_ical::event::names_a_uri("bare-email@example.com"));
+    assert!(!jmap_ical::event::names_a_uri(
+        "mailto:has whitespace@example.com"
+    ));
+    assert!(!jmap_ical::event::names_a_uri(""));
+
+    let invalid_uri_participant = json!({
+        "sendTo": {
+            "imip": "bare-email@example.com"
+        }
+    });
+    assert_eq!(
+        jmap_ical::event::calendar_address(&invalid_uri_participant),
+        None
+    );
+
+    // 4. drawn_participants omits participants without valid calendar addresses
+    let event = jmap_proto::calendars::CalendarEvent {
+        participants: Some(
+            [
+                ("p1".into(), valid_participant),
+                ("p2".into(), web_participant),
+                ("p3".into(), invalid_uri_participant),
+            ]
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let entries = jmap_ical::event::drawn_participants(&event);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name.as_str(), "ATTENDEE");
+}
+
+#[test]
+fn differential_oracle_read_vevent_definition_and_zoned_ends_in_resolution() {
+    // 1. Zoned with named timezone but no observances appends Z or preserves local
+    let zoned_named = jmap_ical::event::Zoned::named(Some("America/New_York"));
+    assert_eq!(zoned_named.name, Some("America/New_York"));
+    assert!(zoned_named.observances.is_none());
+
+    // When zone is non-UTC and has no observances, read_until appends Z
+    let until_zoned =
+        jmap_ical::event::read_until("20260910T120000Z", jmap_ical::event::Ends::In(zoned_named));
+    assert_eq!(until_zoned, "2026-09-10T12:00:00Z");
+
+    // 2. Floating zone (None) preserves local wall-clock digits without shifting or appending Z
+    let zoned_floating = jmap_ical::event::Zoned::named(None);
+    let until_floating = jmap_ical::event::read_until(
+        "20260910T120000Z",
+        jmap_ical::event::Ends::In(zoned_floating),
+    );
+    assert_eq!(until_floating, "2026-09-10T12:00:00");
+
+    // 3. UTC zone preserves local wall clock digits
+    let zoned_utc = jmap_ical::event::Zoned::named(Some("UTC"));
+    let until_utc =
+        jmap_ical::event::read_until("20260910T120000Z", jmap_ical::event::Ends::In(zoned_utc));
+    assert_eq!(until_utc, "2026-09-10T12:00:00");
+
+    // 4. Fixed offset conversion via Ends::At
+    let until_at =
+        jmap_ical::event::read_until("20260910T120000Z", jmap_ical::event::Ends::At("-0400"));
+    assert_eq!(until_at, "2026-09-10T08:00:00");
+}
