@@ -4555,3 +4555,76 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.228 Divergence 228: `offset_at`, `onsets`, `rule_onsets`, `restated`, and `SEARCH`: VTIMEZONE Multi-Observance Horizon Windowing (SEARCH = 40), Chronological Onset Discovery, Sub-Day Time Restatement, and Leap Second (60) Rejection
+
+- **Observed Behavior**:
+  Resolving UTC offsets across multi-observance `VTIMEZONE` components (with `STANDARD` and `DAYLIGHT` subcomponents) requires robust onset calculation, transition window bounding, sub-day recurrence part merging, and safe default fallback. In `jmap-ical`:
+  1. Horizon windowing (`SEARCH = 40`): `rule_onsets` searches backwards up to 40 years from the target year (`earliest = start_year.max(last - SEARCH + 1)`). This fixed window accommodates transition rules with long recurrences (such as `WeekdayAmong` rules targeting February 29th, which can take up to 40 years to recur) without triggering unbounded historical iteration.
+  2. Sub-day time restatement (`restated`): When transition rules restate `BYHOUR`, `BYMINUTE`, or `BYSECOND` alongside `DTSTART` (common in Lotus Notes exports), RFC 5545 Section 3.3.10 dictates that the rule's fields replace `DTSTART`'s time of day. `restated` applies single-valued hour (`0..=23`), minute (`0..=59`), and second (`0..=59`).
+  3. Leap second (60) refusal in timezone transitions: While RFC 5545 Section 3.3.10 allows second 60 for UTC leap seconds, `restated` explicitly refuses `BYSECOND=60` (`only(second, 59)` returns `None`). Placing a leap second into a local wall-clock transition onset would push the transition into the subsequent minute, destabilizing local offset transitions.
+  4. Chronological onset discovery and fallback: `offset_at` evaluates transition onsets across all observances. For target timestamps occurring before any transition onset, it falls back to the `TZOFFSETFROM` of the earliest transition discovered. For target timestamps on or after transitions, it selects the offset from the latest transition onset at or before the target.
+  5. RDATE period refusal: In `onsets`, any `RDATE` containing `/` (indicating a period with duration) returns `None`, adhering to the principle that timezone transitions mark instantaneous offset changes rather than periods of time.
+  6. In contrast, differential oracles or external timezone libraries may panic on 40-year gaps, accept ambiguous multi-hour rules, misinterpret leap seconds in transition onsets, or fail to fall back to `TZOFFSETFROM` for historical dates preceding the first explicit transition.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.5 (`VTIMEZONE`), Section 3.8.2.4 (`TZOFFSETFROM`), Section 3.8.2.5 (`TZOFFSETTO`), Section 3.8.5.2 (`RDATE`), and Section 3.3.10 (`RRULE`) define timezone transition grammar and calculation rules.
+  2. In-document timezone resolution avoids external tzdata dependencies, guaranteeing deterministic offset mapping across platforms.
+- **Adjudication**:
+  Conforming specification boundary and timezone transition calculation determinism. Enforces 40-year horizon windowing, merges sub-day time restatement, rejects leap second 60 in transitions, refuses period RDATEs, and guarantees earliest-transition fallback.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.229 Divergence 229: `read_locations`, `read_virtual_locations`, `CONFERENCE_FEATURES`, and `names_map_entry`: Inbound Physical and Virtual Location Parsing: Empty Location Dropping vs None-Return Gating, Case-Insensitive Feature Translation, Invented Key Collision Avoidance, and Malformed URI Refusal
+
+- **Observed Behavior**:
+  Parsing physical and virtual locations from iCalendar components into JSCalendar structures requires careful handling of empty properties, parameter mapping, URI validation, and synthetic key generation. In `jmap-ical`:
+  1. Empty location dropping and None return: In `read_locations`, if `LOCATION` is absent or its text value is empty (`name.is_empty()`), the parser returns `None` rather than `Some(BTreeMap::new())`. This ensures that the save path (which diffs against existing state) does not interpret an empty map as an explicit deletion of locations when the incoming component made no claim.
+  2. Location key binding and ID validation: If an `X-JMAP-KEY` parameter is present on `LOCATION`, it is validated using `names_map_entry` (1..=255 octets of alphanumeric, `_`, or `-`). If valid, it is preserved; otherwise, a default synthetic key (`"1"`) is assigned.
+  3. Virtual location URI gating: In `read_virtual_locations`, every `CONFERENCE` property is parsed. Entries whose value is not a valid URI (`!names_a_uri(&value)`) are dropped, complying with RFC 8984 Section 4.2.6 which mandates `uri` on `VirtualLocation`.
+  4. Case-insensitive feature mapping (`CONFERENCE_FEATURES`): RFC 7986 Section 5.11 `FEATURE` parameter values (`AUDIO`, `CHAT`, `FEED`, `MODERATOR`, `PHONE`, `SCREEN`, `VIDEO`) are parsed case-insensitively and mapped into boolean flags in JSCalendar's `features` map (e.g. `FEATURE=AUDIO` maps to `{"features": {"audio": true}}`).
+  5. Invented key collision avoidance: For conference lines without an `X-JMAP-KEY` (or with an invalid key), synthetic keys (`"v1"`, `"v2"`, etc.) are generated in a loop that explicitly avoids colliding with any existing keys in the document.
+  6. In contrast, differential oracles may accept non-URI strings as virtual locations, emit empty location maps that trigger spurious deletions on update, fail to map case-insensitive conference features, or generate colliding synthetic map keys.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.7 (`LOCATION`), RFC 7986 Section 5.11 (`CONFERENCE`), and RFC 8984 Section 4.2.5 (`locations`) and Section 4.2.6 (`virtualLocations`) govern physical and online meeting places.
+  2. Safe diffing against backend storage requires distinguishing between absent location properties and intentional clearing.
+- **Adjudication**:
+  Conforming specification boundary and location ingestion fidelity. Drops empty locations to preserve backend state, validates URIs for virtual locations, maps conference features case-insensitively, and guarantees collision-free synthetic key assignment.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.230 Divergence 230: `read_links`, `fetched_locally`, `IMAGE`, `ATTACH`, `FMTTYPE`, and `SIZE`: Inbound Link and Attachment Ingestion: File Scheme Rejection (file:// Local Path Privacy Leak Prevention), Non-URI / Inline Binary Payload Dropping (VALUE=BINARY), Case-Insensitive Property Identification, MIME Type Extraction, RFC 8607 Size Parsing, and Display Relation Invariant Enforcement (ICON_REL = "icon")
+
+- **Observed Behavior**:
+  Ingesting external links and attachments from `ATTACH` and `IMAGE` properties into JSCalendar `links` requires URI validation, privacy defense, MIME type extraction, and size parameter parsing. In `jmap-ical`:
+  1. Local file scheme rejection (`fetched_locally`): Evolution stores attachments added from the local filesystem with `file:` URIs. If serialized or synced over JMAP, local file paths (such as `file:///home/user/document.pdf`) would leak private machine paths and cannot be fetched by other clients. `fetched_locally` detects `file:` schemes case-insensitively and drops them from the `links` map.
+  2. Non-URI and inline binary payload dropping: In `read_links`, properties whose value does not satisfy `names_a_uri(&href)` (such as inline binary attachments with `VALUE=BINARY`) are dropped, complying with RFC 8984 Section 1.4.11 which mandates a valid URI `href` on `Link`.
+  3. Property identification and icon relation binding: Case-insensitively identifies `ATTACH` and `IMAGE`. For `IMAGE` properties (RFC 7986 Section 5.10), `read_links` automatically sets `rel: "icon"` (`ICON_REL`) and maps `DISPLAY` parameters into JSCalendar `display`.
+  4. RFC 8607 byte size parsing (`SIZE`): On `ATTACH` properties, `SIZE` parameters are parsed into integer `size` in bytes. On `IMAGE` properties, `SIZE` is ignored because RFC 7986 Section 5.10 defines no `SIZE` parameter for images.
+  5. MIME type extraction (`FMTTYPE`): The `FMTTYPE` parameter is extracted into `contentType`.
+  6. In contrast, differential oracles or naive parsers leak sensitive local `file://` URLs into shared calendar events, attempt to parse binary payloads as text URIs, omit mandatory `rel: "icon"` for image components, or accept invalid non-integer sizes.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.1 (`ATTACH`), RFC 7986 Section 5.10 (`IMAGE`), RFC 8607 Section 4.1 (`SIZE` parameter), and RFC 8984 Section 4.2.7 (`links`) define attachment and link representations.
+  2. Rejecting `file:` URIs protects local file privacy and prevents broken sync operations across client devices.
+- **Adjudication**:
+  Conforming specification boundary and attachment security/fidelity. Strips local `file://` schemes, rejects inline binary attachments, binds `rel: "icon"` to `IMAGE`, parses `FMTTYPE` and `SIZE`, and prevents map key collisions.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.231 Divergence 231: `read_keywords`, `read_start`, `read_overrides`, `CATEGORIES`, and `DTSTART`: Inbound Category Keywords, Date vs Date-Time Start Disambiguation (shows_without_time), and Multi-Tier Recurrence Override Resolution (EXDATE Precedence over RDATE, Detached VEVENT Instance Winner)
+
+- **Observed Behavior**:
+  Ingesting categories, start times, and instance overrides into JSCalendar structures requires tag normalization, date vs date-time disambiguation, and multi-tier override conflict resolution. In `jmap-ical`:
+  1. Category keyword parsing, deduplication, and edge trimming: In `read_keywords`, all `CATEGORIES` properties in the `VEVENT` are collected, split by comma, and each tag is trimmed of leading and trailing whitespace. Empty tags and whitespace-only tags are dropped. The resulting tags are deduplicated into a `BTreeMap<String, Value>` (JSCalendar Set representation).
+  2. Date vs Date-time start disambiguation: In `read_start`, `DTSTART` is inspected. If the value lacks a `T` or `t` delimiter (a pure date like `20260115` or `VALUE=DATE`), it is recognized as an all-day event: `showWithoutTime` is set to `Some(true)`, the time defaults to midnight (`T00:00:00`), and any attached `TZID` parameter is ignored (as RFC 5545 Section 3.2.19 specifies TZID does not apply to DATE). For timed events, `showWithoutTime` is `None` (omitted, defaulting to `false` per RFC 8984) and `TZID` is resolved.
+  3. Multi-tier recurrence override resolution (`read_overrides`): Overrides are processed in a strict 3-tier precedence hierarchy:
+     - Tier 1: `RDATE` entries produce unpatched recurrence instances.
+     - Tier 2: `EXDATE` entries are processed after `RDATE`. If an instant is present in both `RDATE` and `EXDATE`, `EXDATE` wins and marks the instance `{"excluded": true}`, avoiding contradictory duplicate occurrences.
+     - Tier 3: Detached `VEVENT` components carrying `RECURRENCE-ID` are processed last. A detached component describing an instant previously marked by `RDATE` or `EXDATE` replaces the placeholder with the specific instance patch.
+  4. In contrast, differential oracles or simplistic parsers preserve leading/trailing whitespace in category tags (breaking round-trip fixed-point stability), set `showWithoutTime: false` explicitly (polluting diffs on unmodified events), apply timezone offsets to all-day events, or fail to resolve `EXDATE` over `RDATE` collisions deterministically.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.2 (`CATEGORIES`), Section 3.8.2.4 (`DTSTART`), Section 3.8.5.1 (`EXDATE`), Section 3.8.5.2 (`RDATE`), and Section 3.8.4.4 (`RECURRENCE-ID`) define event metadata, start timing, and recurrence set modifications.
+  2. RFC 8984 Section 4.4.2 (`keywords`), Section 4.1.3 (`start`), Section 4.1.6 (`showWithoutTime`), and Section 4.3.4 (`recurrenceOverrides`) define JSCalendar event properties.
+- **Adjudication**:
+  Conforming specification boundary and inbound calendar metadata fidelity. Trims category whitespace, disambiguates all-day date events without synthetic TZID, and enforces 3-tier recurrence override precedence.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
