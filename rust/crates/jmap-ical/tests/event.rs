@@ -30813,3 +30813,322 @@ fn differential_oracle_participant_roster_and_organizer_serialization() {
         Some("TRUE".to_string())
     );
 }
+
+#[test]
+fn differential_oracle_vevent_core_identity_timestamps_and_empty_text_suppression() {
+    // Divergence 192 against Stalwart differential oracle:
+    // vevent_of and entry_raw_value: Outbound VEVENT Core Identity, Server-Assigned UID Precedence (UID vs X-JMAP-UID),
+    // RECURRENCE-ID Anchor Binding, and Dual Timestamp Emission (CREATED, DTSTAMP, LAST-MODIFIED).
+
+    // 1. Server-assigned id takes precedence for UID; client uid is preserved in X-JMAP-UID
+    let event = CalendarEvent {
+        id: Some("srv-event-999".into()),
+        uid: Some("client-uid-111".to_string()),
+        title: Some("Core Identity Event".to_string()),
+        created: Some("2026-09-01T08:00:00Z".to_string()),
+        updated: Some("2026-09-02T12:00:00Z".to_string()),
+        ..CalendarEvent::default()
+    };
+    let ics = jmap_ical::event::event_to_ical(&event);
+    assert!(ics.contains("UID:srv-event-999\r\n"));
+    assert!(ics.contains("X-JMAP-UID:client-uid-111\r\n"));
+
+    // 2. When id is None, uid stands in for UID
+    let event_no_id = CalendarEvent {
+        id: None,
+        uid: Some("client-uid-222".to_string()),
+        title: Some("Fallback UID Event".to_string()),
+        ..CalendarEvent::default()
+    };
+    let ics_no_id = jmap_ical::event::event_to_ical(&event_no_id);
+    assert!(ics_no_id.contains("UID:client-uid-222\r\n"));
+    assert!(ics_no_id.contains("X-JMAP-UID:client-uid-222\r\n"));
+
+    // 3. Timestamps: CREATED from created, DTSTAMP and LAST-MODIFIED both from updated
+    assert!(ics.contains("CREATED:20260901T080000Z\r\n"));
+    assert!(ics.contains("DTSTAMP:20260902T120000Z\r\n"));
+    assert!(ics.contains("LAST-MODIFIED:20260902T120000Z\r\n"));
+
+    // 4. When updated is absent, neither DTSTAMP nor LAST-MODIFIED is emitted (avoids inventing "now")
+    let event_no_updated = CalendarEvent {
+        id: Some("event-no-updated".into()),
+        title: Some("No Updated Event".to_string()),
+        updated: None,
+        ..CalendarEvent::default()
+    };
+    let ics_no_updated = jmap_ical::event::event_to_ical(&event_no_updated);
+    assert!(!ics_no_updated.contains("DTSTAMP:"));
+    assert!(!ics_no_updated.contains("LAST-MODIFIED:"));
+
+    // 5. Empty title and description are suppressed from emitting bare property lines
+    let event_empty_text = CalendarEvent {
+        id: Some("event-empty-text".into()),
+        title: Some("".to_string()),
+        description: Some("".to_string()),
+        ..CalendarEvent::default()
+    };
+    let ics_empty = jmap_ical::event::event_to_ical(&event_empty_text);
+    assert!(!ics_empty.contains("SUMMARY:"));
+    assert!(!ics_empty.contains("DESCRIPTION:"));
+}
+
+#[test]
+fn differential_oracle_scalar_property_bi_directional_vocabulary_gating() {
+    // Divergence 193 against Stalwart differential oracle:
+    // ical_status, known_status, ical_transparency, known_transparency, ical_privacy, known_privacy, read_privacy,
+    // known_priority, read_priority, and read_transparency: Scalar Property Bi-directional Vocabulary Gating.
+
+    // 1. STATUS vocabulary mapping and case-insensitivity
+    assert_eq!(
+        jmap_ical::event::ical_status("confirmed"),
+        Some("CONFIRMED")
+    );
+    assert_eq!(
+        jmap_ical::event::ical_status("Confirmed"),
+        Some("CONFIRMED")
+    );
+    assert_eq!(
+        jmap_ical::event::ical_status("cancelled"),
+        Some("CANCELLED")
+    );
+    assert_eq!(
+        jmap_ical::event::ical_status("tentative"),
+        Some("TENTATIVE")
+    );
+    assert_eq!(jmap_ical::event::ical_status("draft"), None);
+    assert!(jmap_ical::event::known_status("confirmed"));
+    assert!(!jmap_ical::event::known_status("unknown-status"));
+
+    // 2. TRANSP / freeBusyStatus vocabulary mapping
+    assert_eq!(
+        jmap_ical::event::ical_transparency("free"),
+        Some("TRANSPARENT")
+    );
+    assert_eq!(jmap_ical::event::ical_transparency("busy"), Some("OPAQUE"));
+    assert_eq!(jmap_ical::event::ical_transparency("tentative"), None);
+    assert!(jmap_ical::event::known_transparency("free"));
+    assert!(!jmap_ical::event::known_transparency("other"));
+
+    // 3. CLASS / privacy vocabulary mapping and cross-vocabulary alignment
+    assert_eq!(jmap_ical::event::ical_privacy("public"), Some("PUBLIC"));
+    assert_eq!(jmap_ical::event::ical_privacy("private"), Some("PRIVATE"));
+    assert_eq!(
+        jmap_ical::event::ical_privacy("secret"),
+        Some("CONFIDENTIAL")
+    );
+    assert_eq!(jmap_ical::event::ical_privacy("restricted"), None);
+    assert!(jmap_ical::event::known_privacy("secret"));
+    assert!(!jmap_ical::event::known_privacy("confidential"));
+
+    // Inbound parse of CLASS:CONFIDENTIAL maps to secret, and CLASS:PUBLIC maps to public
+    let ics_confidential = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:c1\r\nDTSTART:20260905T100000Z\r\nCLASS:CONFIDENTIAL\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_confidential = jmap_ical::event::ical_to_event(ics_confidential).unwrap();
+    assert_eq!(ev_confidential.privacy.as_deref(), Some("secret"));
+
+    // CLASS:secret is an unmapped x-name, dropped rather than misinterpreted as RFC 8984 secret
+    let ics_secret = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:c2\r\nDTSTART:20260905T100000Z\r\nCLASS:secret\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_secret = jmap_ical::event::ical_to_event(ics_secret).unwrap();
+    assert_eq!(ev_secret.privacy, None);
+
+    // 4. PRIORITY integer range bounding (0..=9) and rejection of invalid formats
+    assert!(jmap_ical::event::known_priority(0));
+    assert!(jmap_ical::event::known_priority(5));
+    assert!(jmap_ical::event::known_priority(9));
+    assert!(!jmap_ical::event::known_priority(-1));
+    assert!(!jmap_ical::event::known_priority(10));
+
+    let ics_prio_valid = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:p1\r\nDTSTART:20260905T100000Z\r\nPRIORITY:7\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_prio = jmap_ical::event::ical_to_event(ics_prio_valid).unwrap();
+    assert_eq!(ev_prio.priority, Some(7));
+
+    let ics_prio_invalid = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:p2\r\nDTSTART:20260905T100000Z\r\nPRIORITY:15\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_prio_bad = jmap_ical::event::ical_to_event(ics_prio_invalid).unwrap();
+    assert_eq!(ev_prio_bad.priority, None);
+
+    // 5. Outbound serialization always emits CLASS:PUBLIC explicitly
+    let ev_pub = CalendarEvent {
+        id: Some("pub-1".into()),
+        privacy: Some("public".to_string()),
+        ..CalendarEvent::default()
+    };
+    let ics_pub = jmap_ical::event::event_to_ical(&ev_pub);
+    assert!(ics_pub.contains("CLASS:PUBLIC\r\n"));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_instance_expansion_and_replacement() {
+    // Divergence 194 against Stalwart differential oracle:
+    // modified_instances and modified_instance: Outbound Recurrence Override Instance Expansion:
+    // Base Series Property Inheritance, Excluded Instance Elimination (EXDATE), Set Replacement Semantics (keywords, alerts),
+    // Rescheduled Start Alignment, and modified Gating.
+
+    // 1. Base series inheritance: modified instance inherits title, description, and locations
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        "20260906T100000".to_string(),
+        json!({
+            "title": "Modified Meeting Title",
+            "priority": 3
+        }),
+    );
+    let mut locations = BTreeMap::new();
+    locations.insert("loc1".to_string(), json!({ "name": "Conference Room A" }));
+    let mut master_keywords = BTreeMap::new();
+    master_keywords.insert("Team".to_string(), Value::Bool(true));
+    master_keywords.insert("Sprint".to_string(), Value::Bool(true));
+
+    let event = CalendarEvent {
+        id: Some("series-rec-1".into()),
+        title: Some("Series Weekly Meeting".to_string()),
+        description: Some("Series Description".to_string()),
+        start: Some("20260905T100000".to_string()),
+        locations: Some(locations),
+        keywords: Some(master_keywords),
+        priority: Some(1),
+        recurrence_overrides: Some(overrides),
+        ..CalendarEvent::default()
+    };
+
+    let ics = jmap_ical::event::event_to_ical(&event);
+    let vevent_count = ics.matches("BEGIN:VEVENT").count();
+    assert_eq!(
+        vevent_count, 2,
+        "series plus one modified instance produces 2 VEVENTs"
+    );
+    assert!(ics.contains("RECURRENCE-ID:20260906T100000\r\n"));
+    assert!(ics.contains("SUMMARY:Modified Meeting Title\r\n"));
+    assert!(ics.contains("PRIORITY:3\r\n"));
+    // Inherited description and location present on the detached instance
+    assert!(ics.contains("DESCRIPTION:Series Description\r\n"));
+    assert!(ics.contains("LOCATION;X-JMAP-KEY=loc1:Conference Room A\r\n"));
+
+    // 2. Excluded instance produces EXDATE and no detached VEVENT
+    let mut excl_overrides = BTreeMap::new();
+    excl_overrides.insert("20260907T100000".to_string(), json!({ "excluded": true }));
+    let excl_event = CalendarEvent {
+        id: Some("series-excl-1".into()),
+        start: Some("20260905T100000".to_string()),
+        recurrence_overrides: Some(excl_overrides),
+        ..CalendarEvent::default()
+    };
+    let excl_ics = jmap_ical::event::event_to_ical(&excl_event);
+    assert_eq!(
+        excl_ics.matches("BEGIN:VEVENT").count(),
+        1,
+        "excluded instance emits no detached VEVENT"
+    );
+    assert!(excl_ics.contains("EXDATE:20260907T100000\r\n"));
+
+    // 3. Keywords replacement: instance keywords completely replace master series keywords
+    let mut kw_overrides = BTreeMap::new();
+    let mut instance_kw = serde_json::Map::new();
+    instance_kw.insert("Urgent".to_string(), Value::Bool(true));
+    kw_overrides.insert(
+        "20260908T100000".to_string(),
+        json!({ "keywords": instance_kw }),
+    );
+    let mut master_kw = BTreeMap::new();
+    master_kw.insert("Routine".to_string(), Value::Bool(true));
+    let kw_event = CalendarEvent {
+        id: Some("series-kw-1".into()),
+        start: Some("20260905T100000".to_string()),
+        keywords: Some(master_kw),
+        recurrence_overrides: Some(kw_overrides),
+        ..CalendarEvent::default()
+    };
+    let kw_ics = jmap_ical::event::event_to_ical(&kw_event);
+    assert!(kw_ics.contains("CATEGORIES:Routine\r\n"));
+    assert!(kw_ics.contains("CATEGORIES:Urgent\r\n"));
+
+    // 4. Rescheduled start time: patch start differs from scheduled id
+    let mut resched_overrides = BTreeMap::new();
+    resched_overrides.insert(
+        "20260909T100000".to_string(),
+        json!({ "start": "20260909T113000" }),
+    );
+    let resched_event = CalendarEvent {
+        id: Some("series-resched-1".into()),
+        start: Some("20260905T100000".to_string()),
+        recurrence_overrides: Some(resched_overrides),
+        ..CalendarEvent::default()
+    };
+    let resched_ics = jmap_ical::event::event_to_ical(&resched_event);
+    assert!(resched_ics.contains("RECURRENCE-ID:20260909T100000\r\n"));
+    assert!(resched_ics.contains("DTSTART:20260909T113000\r\n"));
+}
+
+#[test]
+fn differential_oracle_vcalendar_envelope_sequencing_and_custom_tz_deduplication() {
+    // Divergence 195 against Stalwart differential oracle:
+    // event_to_ical and drawn_time_zones: Top-Level VCALENDAR Envelope Assembly:
+    // Component Sequencing (VTIMEZONE before VEVENT), Unified All-Day Date Type Enforcement (as_a_date),
+    // and Custom Solidus Timezone Deduplication.
+
+    // 1. Envelope tags and version
+    let event = CalendarEvent {
+        id: Some("env-event-1".into()),
+        title: Some("Envelope Test".to_string()),
+        ..CalendarEvent::default()
+    };
+    let ics = jmap_ical::event::event_to_ical(&event);
+    assert!(ics.starts_with("BEGIN:VCALENDAR\r\n"));
+    assert!(ics.contains("VERSION:2.0\r\n"));
+    assert!(ics.contains(&format!("PRODID:{}\r\n", jmap_ical::event::PRODID)));
+    assert!(ics.ends_with("END:VCALENDAR\r\n"));
+
+    // 2. Custom solidus timezone deduplication: series and override both using /Custom/Zone emit ONE VTIMEZONE
+    let mut tz_map = BTreeMap::new();
+    tz_map.insert(
+        "/Custom/Zone".to_string(),
+        json!({
+            "standard": [{
+                "start": "1970-01-01T00:00:00",
+                "offsetFrom": "+01:00",
+                "offsetTo": "+01:00",
+                "recurrenceRules": [{ "frequency": "yearly" }]
+            }]
+        }),
+    );
+    let mut tz_overrides = BTreeMap::new();
+    tz_overrides.insert(
+        "20260910T100000".to_string(),
+        json!({
+            "title": "Override in Same Custom Zone",
+            "timeZone": "/Custom/Zone"
+        }),
+    );
+    let tz_event = CalendarEvent {
+        id: Some("tz-dedup-event".into()),
+        start: Some("20260905T100000".to_string()),
+        time_zone: Some("/Custom/Zone".to_string()),
+        time_zones: Some(tz_map),
+        recurrence_overrides: Some(tz_overrides),
+        ..CalendarEvent::default()
+    };
+    let tz_ics = jmap_ical::event::event_to_ical(&tz_event);
+    let vtz_count = tz_ics.matches("BEGIN:VTIMEZONE").count();
+    assert_eq!(
+        vtz_count, 1,
+        "custom timezone used across series and override is drawn exactly once"
+    );
+
+    // 3. Component sequencing: VTIMEZONE precedes VEVENT
+    let vtz_pos = tz_ics.find("BEGIN:VTIMEZONE").expect("VTIMEZONE present");
+    let vevent_pos = tz_ics.find("BEGIN:VEVENT").expect("VEVENT present");
+    assert!(
+        vtz_pos < vevent_pos,
+        "VTIMEZONE components must precede VEVENT components in stream"
+    );
+
+    // 4. Unified all-day date type enforcement (as_a_date): show_without_time with whole days emits VALUE=DATE
+    let all_day_event = CalendarEvent {
+        id: Some("allday-unified-1".into()),
+        start: Some("20260905T000000".to_string()),
+        duration: Some("P1D".to_string()),
+        show_without_time: Some(true),
+        ..CalendarEvent::default()
+    };
+    let allday_ics = jmap_ical::event::event_to_ical(&all_day_event);
+    assert!(allday_ics.contains("DTSTART;VALUE=DATE:20260905\r\n"));
+    assert!(!allday_ics.contains("DTSTART:20260905T000000"));
+}
