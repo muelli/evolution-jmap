@@ -4008,3 +4008,72 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and document assembly determinism. Sequences `VTIMEZONE` ahead of `VEVENT`, deduplicates custom solidus timezone definitions, enforces uniform all-day date formatting via `as_a_date`, and emits standard `VCALENDAR` envelopes.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.196 Divergence 196: `read_start`, `shows_without_time`, and `DTSTART`: Inbound Date vs Date-Time Start Resolution, Timezone Assignment, and Outbound All-Day Invariant Gating (`showWithoutTime`)
+
+- **Observed Behavior**:
+  Reconciling iCalendar `DTSTART` date types with JSCalendar start representations requires isolating all-day values from timed instants. In `jmap-ical`:
+  1. Inbound date vs date-time resolution (`read_start`): `read_start` inspects `DTSTART`. If the property value lacks a `T` or `t` separator, calcard renders it as a date. The start is converted to midnight (`00:00:00`), timezone is set to `None`, and `showWithoutTime` is set to `Some(true)`. Per RFC 5545 Section 3.2.19, any `TZID` parameter attached to a DATE value is ignored.
+  2. Timed start and asymmetric default handling: If the value represents a date-time, UTC instants (`Z` suffix) are assigned timezone `Etc/UTC`, while zoned instants resolve their `TZID` parameter via `zone_of`. For timed events, `showWithoutTime` is returned as `None` rather than `Some(false)`. Because RFC 8984 defaults `showWithoutTime` to `false`, returning `None` prevents diff-based save engines from detecting synthetic property mutations.
+  3. Outbound all-day invariant verification (`shows_without_time`): Outbound serialization evaluates whether an event can be safely emitted with `VALUE=DATE`. It enforces multiple strict invariants: `show_without_time == Some(true)`, `time_zone.is_none()`, `at_midnight(start)`, duration is empty or whole days (`whole_days`), recurrence rule `until` is at midnight, recurrence rules contain no time-of-day parts (`!names_a_time_of_day(rule)`), and all recurrence overrides satisfy `instance_shows_without_time`.
+  4. Demotion to timed representation: If any all-day invariant fails (such as an explicit timezone, non-midnight start, or timed override), `shows_without_time` returns `false`. The event is emitted as a timed component (`VALUE=DATE-TIME`), preserving the exact wall-clock start without silent truncation.
+  5. In contrast, differential oracles or permissive parsers permit `TZID` parameters on `VALUE=DATE` lines, emit explicit `showWithoutTime: false` tokens on every timed event (polluting patch sets), or truncate non-midnight event starts to dates during export.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.19, Section 3.3.4, Section 3.3.5, and Section 3.6.1 define `DTSTART`, `VALUE=DATE`, and timezone restrictions. RFC 8984 Section 4.1.4 and Section 4.1.5 define JSCalendar start times and `showWithoutTime`.
+  2. Strict invariant gating and asymmetric default return preserve start fidelity while preventing false cache invalidations in Evolution Data Server.
+- **Adjudication**:
+  Conforming specification boundary and all-day start mapping robustness. Normalizes dates to midnight with `showWithoutTime: true`, assigns `Etc/UTC` or resolved zones to timed starts while omitting `showWithoutTime: false`, and strictly demotes non-compliant events to timed date-times.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.197 Divergence 197: `read_overrides`, `instance_patch`, and `OVERRIDE_PROPERTIES`: Inbound Recurrence Override Ingestion, `RDATE` Period Duration Extraction (`period_length`), `EXDATE` Exclusion Ingestion, Detached Component Precedence, and Granular Patch Synthesis (`instance_patch`)
+
+- **Observed Behavior**:
+  Ingesting recurrence overrides requires coordinating discrete dates, excluded occurrences, and detached `VEVENT` components into JSCalendar `recurrenceOverrides` patch objects. In `jmap-ical`:
+  1. `RDATE` duration override ingestion: Evaluates `RDATE` entries in order. For period values (`start/end` or `start/duration`), computes the period duration via `period_length`. Only durations that differ from the series baseline duration are inserted as `{ "duration": ... }`; matching durations produce empty patch objects.
+  2. `EXDATE` precedence over `RDATE`: Processes `EXDATE` entries, inserting `{"excluded": true}`. When an instant is named in both `RDATE` and `EXDATE`, `EXDATE` takes precedence per RFC 5545 Section 3.8.5.1, ensuring excluded occurrences are never inadvertently scheduled.
+  3. Detached `VEVENT` component precedence and `RANGE` filtering: Detached components are processed last, overriding prior `RDATE` and `EXDATE` entries for the same recurrence ID. Components bearing `RANGE=THISANDFUTURE` (RFC 5545 Section 3.2.13) are skipped because JSCalendar single-instance patch objects cannot represent open-ended range modifications.
+  4. Granular patch synthesis (`instance_patch`): Compares properties in `OVERRIDE_PROPERTIES` against the master series: `title`, `description`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `privacy`, `priority`, `keywords`, and `alerts`. When a property exists on the series but is absent on the detached component, `instance_patch` emits `Value::Null` to remove the inherited property. Keywords and alerts are serialized as whole set/map replacements. Rescheduled start times are recorded only when differing from the scheduled recurrence ID.
+  5. In contrast, differential oracles or uncoordinated parsers merge keywords and alerts instead of replacing them, drop properties without emitting `null` deletions, attempt to flatten unsupported `RANGE=THISANDFUTURE` into single overrides, or resolve `RDATE`/`EXDATE` conflicts non-deterministically.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.13, Section 3.8.4.4, Section 3.8.5.1, and Section 3.8.5.2 govern recurrence identifiers, exclusions, and periods. RFC 8984 Section 4.3.4 defines `recurrenceOverrides` patch semantics.
+  2. Emitting `null` for removed properties and replacing complex sets ensures patch objects cleanly reflect client intentions without leaking stale series values.
+- **Adjudication**:
+  Conforming specification boundary and recurrence override ingestion fidelity. Extracts period durations from `RDATE`, gives `EXDATE` precedence over `RDATE`, skips unrepresentable `THISANDFUTURE` components, and synthesizes granular patches with null deletions and set replacements.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.198 Divergence 198: `read_duration`, `stated_duration`, `period_length`, `instant`, and `days_from_civil`: Inbound Event Duration Resolution, Wall-Clock `DTEND` Measurement, Relaxed ISO 8601 Duration Validation, and Proleptic Gregorian Civil Day Conversion
+
+- **Observed Behavior**:
+  Measuring event lengths across iCalendar and JSCalendar requires reconciling explicit duration properties with wall-clock end boundaries. In `jmap-ical`:
+  1. Mutual exclusivity and fallback resolution (`read_duration`): RFC 5545 Section 3.6.1 specifies that `DURATION` and `DTEND` are mutually exclusive. `read_duration` inspects `DURATION` first. If present and valid per `stated_duration`, it is returned directly. If `DURATION` is absent, it measures the wall-clock span `end - start` via `instant`. If both are absent or invalid, it returns `None`, which RFC 8984 Section 4.2.2 defaults to `P0D`.
+  2. Relaxed ISO 8601 duration syntax validation (`stated_duration`): Strips optional leading `+` signs permitted by RFC 5545 Section 3.3.6 but omitted in RFC 8984 Section 1.4.6. Validates unit order `W D T H M S`, accepting combined expressions such as `P1W2D` or `PT1H15S` produced by real calendar emitters. Negative durations (such as `-PT1H`) and strings without measured units return `None`.
+  3. Proleptic Gregorian civil day arithmetic (`days_from_civil`): Computes calendar days from 1970-01-01 using Howard Hinnant's algorithm. By counting March as the first month of the year, leap days are placed at the end of the year cycle without branching. Exact for all dates expressible in iCalendar.
+  4. Canonical nominal duration formatting (`to_duration`): Converts seconds into ISO 8601 duration strings. Whole days are emitted as `P<N>D` to preserve nominal day semantics across daylight saving transitions, followed by `T<H>H<M>M<S>S` for sub-day remainders. Non-positive durations (`<= 0`) yield `None`.
+  5. In contrast, differential oracles or strict parsers reject combined week/day durations (`P1W2D`), fail when `DTEND` is used in place of `DURATION`, or calculate physical UTC elapsed seconds across DST shifts, distorting wall-clock nominal durations.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.6, Section 3.6.1, and Section 3.8.2.5 define `DURATION` and `DTEND` semantics. RFC 8984 Section 1.4.6 and Section 4.2.2 define JSCalendar duration representation.
+  2. Wall-clock interval measurement using proleptic civil arithmetic guarantees accurate nominal event lengths without external timezone database dependencies.
+- **Adjudication**:
+  Conforming specification boundary and duration measurement determinism. Prioritizes explicit `DURATION`, measures wall-clock differences for `DTEND` via civil day arithmetic, normalizes nominal days, relaxes duration component ordering, and rejects negative durations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.199 Divergence 199: `read_links`, `fetched_locally`, `read_keywords`, and `names_map_entry`: Inbound External Resource and Tag Ingestion: MIME Attachment and Image Disambiguation (`ATTACH` vs `IMAGE`), Local File URI Stripping (`file:` Scheme Rejection), Stable Key Preservation (`X-JMAP-KEY`), and Category Set Whitespace Normalization
+
+- **Observed Behavior**:
+  Ingesting external attachments and categorization metadata requires filtering unshareable local paths and normalizing whitespace. In `jmap-ical`:
+  1. MIME attachment and image disambiguation (`read_links`): Reads both `ATTACH` (RFC 5545 Section 3.8.1.1) and `IMAGE` (RFC 7986 Section 5.10). For `IMAGE`, sets `rel: "icon"` and translates the `DISPLAY` parameter to JSCalendar `display` via `LINK_DISPLAYS` (`BADGE`, `GRAPHIC`, `FULLSIZE`, `THUMBNAIL`). For `ATTACH`, parses `SIZE` (RFC 8607 Section 4.1) as an integer `u64`. Translates `FMTTYPE` to `contentType`. Inline binary attachments are suppressed.
+  2. Local file URI rejection (`fetched_locally`): Filters out URIs using the `file:` scheme (RFC 8089) case-insensitively. Dropping local file paths from Evolution's local cache or temporary directories prevents leaking private client paths or creating broken external references across server sync boundaries.
+  3. Stable map key preservation and collision prevention: Inspects `X-JMAP-KEY`. If the parameter conforms to RFC 8984 Section 1.4.4 `Id` syntax (`names_map_entry`), the existing key is retained. Otherwise, sequential non-colliding keys (`k1`, `k2`, ...) are allocated.
+  4. Category set whitespace normalization (`read_keywords`): Reads all `CATEGORIES` properties across the component (RFC 5545 Section 3.8.1.2). Splits comma-separated values, trims leading and trailing whitespace from each tag, and suppresses empty or whitespace-only tokens (`CATEGORIES:` or `CATEGORIES:a,,b`). Deduplicates tags into a BTreeMap (`tag: true`). Returns `None` if no valid tags exist, avoiding false empty map diffs.
+  5. In contrast, differential oracles or naive parsers retain local `file:` URIs (causing remote fetch failures), fail to distinguish `IMAGE` from `ATTACH`, emit empty or whitespace-only category tags, or emit empty maps that erase server-held categories on update.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.1 and Section 3.8.1.2 define `ATTACH` and `CATEGORIES`. RFC 7986 Section 5.10 defines `IMAGE`. RFC 8607 Section 4.1 defines `SIZE`. RFC 8984 Section 4.2.7 and Section 4.4.4 define `links` and `keywords`.
+  2. Rejecting unshareable local URIs and normalizing category whitespace protects data integrity and guarantees idempotent synchronization cycles.
+- **Adjudication**:
+  Conforming specification boundary and external resource and tag ingestion fidelity. Distinguishes `IMAGE` from `ATTACH`, strips local `file:` URIs, preserves stable `X-JMAP-KEY` map keys, normalizes and deduplicates category tags, and elides empty category sets.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+

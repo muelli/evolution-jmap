@@ -31132,3 +31132,200 @@ fn differential_oracle_vcalendar_envelope_sequencing_and_custom_tz_deduplication
     assert!(allday_ics.contains("DTSTART;VALUE=DATE:20260905\r\n"));
     assert!(!allday_ics.contains("DTSTART:20260905T000000"));
 }
+
+#[test]
+fn differential_oracle_dtstart_date_vs_datetime_and_all_day_gating() {
+    // Divergence 196 against Stalwart differential oracle:
+    // read_start, shows_without_time, and DTSTART: Inbound Date vs Date-Time Start Resolution,
+    // Timezone Assignment, and Outbound All-Day Invariant Gating (showWithoutTime).
+
+    // 1. Inbound DATE value resolution: midnight start, no timezone, showWithoutTime is Some(true)
+    let ics_date = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:date-1\r\nDTSTART;VALUE=DATE:20260905\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_date = ical_to_event(ics_date).expect("parse date event");
+    assert_eq!(ev_date.start.as_deref(), Some("2026-09-05T00:00:00"));
+    assert_eq!(ev_date.show_without_time, Some(true));
+    assert_eq!(ev_date.time_zone, None);
+
+    // 2. Inbound bare date without VALUE=DATE parameter: also detected as date
+    let ics_bare_date = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:date-2\r\nDTSTART:20260905\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_bare = ical_to_event(ics_bare_date).expect("parse bare date event");
+    assert_eq!(ev_bare.start.as_deref(), Some("2026-09-05T00:00:00"));
+    assert_eq!(ev_bare.show_without_time, Some(true));
+    assert_eq!(ev_bare.time_zone, None);
+
+    // 3. Inbound timed UTC date-time: Etc/UTC zone, showWithoutTime is None (not Some(false))
+    let ics_utc = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:utc-1\r\nDTSTART:20260905T143000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_utc = ical_to_event(ics_utc).expect("parse utc event");
+    assert_eq!(ev_utc.start.as_deref(), Some("2026-09-05T14:30:00"));
+    assert_eq!(ev_utc.time_zone.as_deref(), Some("Etc/UTC"));
+    assert_eq!(
+        ev_utc.show_without_time, None,
+        "asymmetric default: timed event yields None to avoid synthetic save diffs"
+    );
+
+    // 4. Inbound timed date-time with TZID parameter
+    let ics_tzid = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:tz-1\r\nDTSTART;TZID=America/New_York:20260905T090000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_tz = ical_to_event(ics_tzid).expect("parse tz event");
+    assert_eq!(ev_tz.start.as_deref(), Some("2026-09-05T09:00:00"));
+    assert_eq!(ev_tz.time_zone.as_deref(), Some("America/New_York"));
+    assert_eq!(ev_tz.show_without_time, None);
+
+    // 5. Outbound all-day gating: show_without_time true with non-midnight start demotes to DATE-TIME
+    let non_midnight_event = CalendarEvent {
+        id: Some("demote-1".into()),
+        start: Some("20260905T090000".to_string()),
+        show_without_time: Some(true),
+        duration: Some("P1D".to_string()),
+        ..CalendarEvent::default()
+    };
+    let demote_ics = event_to_ical(&non_midnight_event);
+    assert!(
+        demote_ics.contains("DTSTART:20260905T090000\r\n"),
+        "non-midnight start demotes to timed representation"
+    );
+    assert!(!demote_ics.contains("VALUE=DATE"));
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_rdate_exdate_and_instance_patch() {
+    // Divergence 197 against Stalwart differential oracle:
+    // read_overrides, instance_patch, and OVERRIDE_PROPERTIES: Inbound Recurrence Override Ingestion,
+    // RDATE Period Duration Extraction (period_length), EXDATE Exclusion Ingestion,
+    // Detached Component Precedence, and Granular Patch Synthesis (instance_patch).
+
+    // 1. Inbound RDATE with period duration: override with duration patch
+    let ics_rdate = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:rec-rdate-1\r\nDTSTART:20260905T100000Z\r\nDURATION:PT1H\r\nRRULE:FREQ=DAILY\r\nRDATE;VALUE=PERIOD:20260906T100000Z/PT2H\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_rdate = ical_to_event(ics_rdate).expect("parse rdate event");
+    let overrides = ev_rdate.recurrence_overrides.expect("overrides present");
+    let patch = overrides
+        .get("2026-09-06T10:00:00")
+        .expect("patch for rdate");
+    assert_eq!(patch.get("duration").and_then(Value::as_str), Some("PT2H"));
+
+    // 2. EXDATE precedence over RDATE for identical instant
+    let ics_conflict = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:rec-conflict-1\r\nDTSTART:20260905T100000Z\r\nRRULE:FREQ=DAILY\r\nRDATE:20260907T100000Z\r\nEXDATE:20260907T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_conflict = ical_to_event(ics_conflict).expect("parse conflict event");
+    let conf_overrides = ev_conflict.recurrence_overrides.expect("overrides");
+    let conf_patch = conf_overrides.get("2026-09-07T10:00:00").expect("patch");
+    assert_eq!(
+        conf_patch.get("excluded"),
+        Some(&Value::Bool(true)),
+        "EXDATE takes precedence over RDATE"
+    );
+
+    // 3. Detached VEVENT with RANGE=THISANDFUTURE is skipped
+    let ics_range = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:range-1\r\nDTSTART:20260905T100000Z\r\nRRULE:FREQ=DAILY\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:range-1\r\nRECURRENCE-ID;RANGE=THISANDFUTURE:20260908T100000Z\r\nSUMMARY:Future modified\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_range = ical_to_event(ics_range).expect("parse range event");
+    assert!(
+        ev_range.recurrence_overrides.is_none(),
+        "RANGE=THISANDFUTURE cannot be represented in a single JSCalendar patch and is skipped"
+    );
+
+    // 4. Detached VEVENT property deletion: null patch emission
+    let ics_null_patch = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:null-patch-1\r\nDTSTART:20260905T100000Z\r\nSUMMARY:Series Title\r\nDESCRIPTION:Series Description\r\nPRIORITY:2\r\nRRULE:FREQ=DAILY\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:null-patch-1\r\nRECURRENCE-ID:20260909T100000Z\r\nSUMMARY:Only Title\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_null = ical_to_event(ics_null_patch).expect("parse null patch event");
+    let null_overrides = ev_null.recurrence_overrides.expect("overrides present");
+    let null_patch = null_overrides
+        .get("2026-09-09T10:00:00")
+        .expect("patch exists");
+    assert_eq!(
+        null_patch.get("description"),
+        Some(&Value::Null),
+        "absent description in detached instance produces null patch"
+    );
+    assert_eq!(
+        null_patch.get("priority"),
+        Some(&Value::Null),
+        "absent priority in detached instance produces null patch"
+    );
+}
+
+#[test]
+fn differential_oracle_duration_wall_clock_measurement_and_syntax_validation() {
+    // Divergence 198 against Stalwart differential oracle:
+    // read_duration, stated_duration, period_length, instant, and days_from_civil:
+    // Inbound Event Duration Resolution, Wall-Clock DTEND Measurement,
+    // Relaxed ISO 8601 Duration Validation, and Proleptic Gregorian Civil Day Conversion.
+
+    // 1. Inbound wall-clock duration measurement from DTSTART and DTEND
+    let ics_dtend = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:dur-1\r\nDTSTART:20260905T090000\r\nDTEND:20260905T113000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_dtend = ical_to_event(ics_dtend).expect("parse dtend event");
+    assert_eq!(ev_dtend.duration.as_deref(), Some("PT2H30M"));
+
+    // 2. Multi-day span measured as nominal whole days
+    let ics_days = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:dur-2\r\nDTSTART:20260905T000000\r\nDTEND:20260908T000000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_days = ical_to_event(ics_days).expect("parse multi-day event");
+    assert_eq!(ev_days.duration.as_deref(), Some("P3D"));
+
+    // 3. Non-positive duration (DTEND <= DTSTART) yields None (falling back to RFC 8984 P0D default)
+    let ics_zero = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:dur-3\r\nDTSTART:20260905T100000\r\nDTEND:20260905T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_zero = ical_to_event(ics_zero).expect("parse zero-duration event");
+    assert_eq!(ev_zero.duration, None);
+
+    let ics_negative = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:dur-4\r\nDTSTART:20260905T100000\r\nDTEND:20260905T090000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_neg = ical_to_event(ics_negative).expect("parse negative-duration event");
+    assert_eq!(ev_neg.duration, None);
+
+    // 4. DURATION syntax: leading '+' stripped, relaxed unit ordering accepted
+    let ics_plus = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:dur-5\r\nDTSTART:20260905T100000Z\r\nDURATION:+PT45M\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_plus = ical_to_event(ics_plus).expect("parse plus-duration event");
+    assert_eq!(ev_plus.duration.as_deref(), Some("PT45M"));
+
+    // Negative DURATION property -PT1H is unrepresentable in RFC 8984 and rejected
+    let ics_bad_dur = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:dur-6\r\nDTSTART:20260905T100000Z\r\nDURATION:-PT1H\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_bad_dur = ical_to_event(ics_bad_dur).expect("parse bad dur");
+    assert_eq!(ev_bad_dur.duration, None);
+}
+
+#[test]
+fn differential_oracle_links_mime_attachments_and_category_whitespace_trimming() {
+    // Divergence 199 against Stalwart differential oracle:
+    // read_links, fetched_locally, read_keywords, and names_map_entry:
+    // Inbound External Resource and Tag Ingestion: MIME Attachment and Image Disambiguation (ATTACH vs IMAGE),
+    // Local File URI Stripping (file: Scheme Rejection), Stable Key Preservation (X-JMAP-KEY),
+    // and Category Set Whitespace Normalization.
+
+    // 1. Inbound ATTACH with URI, FMTTYPE, and SIZE
+    let ics_attach = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:link-1\r\nDTSTART:20260905T100000Z\r\nATTACH;FMTTYPE=application/pdf;SIZE=204800;X-JMAP-KEY=doc1:https://example.com/spec.pdf\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_attach = ical_to_event(ics_attach).expect("parse attach event");
+    let links = ev_attach.links.expect("links present");
+    let doc_link = links.get("doc1").expect("doc1 key preserved");
+    assert_eq!(
+        doc_link.get("href").and_then(Value::as_str),
+        Some("https://example.com/spec.pdf")
+    );
+    assert_eq!(
+        doc_link.get("contentType").and_then(Value::as_str),
+        Some("application/pdf")
+    );
+    assert_eq!(doc_link.get("size").and_then(Value::as_u64), Some(204800));
+
+    // 2. Inbound IMAGE with DISPLAY parameter: rel is icon, display is mapped
+    let ics_image = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:link-2\r\nDTSTART:20260905T100000Z\r\nIMAGE;DISPLAY=BADGE:https://example.com/icon.png\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_image = ical_to_event(ics_image).expect("parse image event");
+    let img_links = ev_image.links.expect("links present");
+    let img_entry = img_links.values().next().expect("image link entry");
+    assert_eq!(img_entry.get("rel").and_then(Value::as_str), Some("icon"));
+    assert_eq!(
+        img_entry.get("display").and_then(Value::as_str),
+        Some("badge")
+    );
+
+    // 3. Local file URI rejection: file: scheme is dropped
+    let ics_local = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:link-3\r\nDTSTART:20260905T100000Z\r\nATTACH:file:///home/user/document.pdf\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_local = ical_to_event(ics_local).expect("parse local file event");
+    assert!(
+        ev_local.links.is_none(),
+        "local file: URI is dropped to prevent local path leakage"
+    );
+
+    // 4. Inbound CATEGORIES whitespace trimming and multi-line deduplication
+    let ics_cat = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:cat-1\r\nDTSTART:20260905T100000Z\r\nCATEGORIES: Project , Sprint \r\nCATEGORIES:Project, Urgent , \r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev_cat = ical_to_event(ics_cat).expect("parse categories event");
+    let keywords = ev_cat.keywords.expect("keywords present");
+    assert_eq!(keywords.len(), 3);
+    assert_eq!(keywords.get("Project"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Sprint"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Urgent"), Some(&Value::Bool(true)));
+    assert!(!keywords.contains_key(""));
+}
