@@ -4077,3 +4077,71 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.200 Divergence 200: `read_time_zones`, `prune_time_zones`, `referred_zones`, `read_definition`, `read_observance`, and `zone_of`: Inbound `VTIMEZONE` Ingestion, Observance Transition Extraction (`STANDARD`/`DAYLIGHT`), Mandatory Offset and Start Validation, Round-Trip Redrawability Filtering (`vtimezone_of`), and Selective TimeZone Pruning
+
+- **Observed Behavior**:
+  Ingesting custom timezone definitions and maintaining map cohesion requires validating observance transitions and pruning unreferenced zones. In `jmap-ical`:
+  1. Custom timezone ingestion (`read_time_zones`): Scans `referred_zones(event)` for timezone identifiers. Excludes standard IANA names (`names_time_zone`) and identifiers not prefixed with a solidus (`/`). Locates matching `VTIMEZONE` components in the document tree.
+  2. Observance rule extraction (`read_definition`, `read_observance`): Parses both `STANDARD` and `DAYLIGHT` subcomponents. Translates `DTSTART` to local date-time via `to_local_date_time`. Evaluates and normalizes `TZOFFSETFROM` and `TZOFFSETTO` using `utc_offset`. Evaluates recurrence rules via `rrule_to_rule(..., Ends::At(&offset_from))`. RFC 5545 Section 3.6.5 requires at least one subcomponent; components without observances return `None`.
+  3. Round-trip redrawability filtering (`vtimezone_of`): Ensures that every parsed timezone definition can be losslessly converted back to iCalendar via `vtimezone_of(tzid, &definition)`. If redrawability verification fails, the definition is dropped for that identifier alone, preventing invalid definitions from reaching the server.
+  4. Selective timezone pruning (`prune_time_zones`): Evaluates all timezones referred to by the series `timeZone` and recurrence override patches (`referred_zones`). Drops unreferenced definitions under both prefixed (`/prefix`) and bare (`prefix`) keys. When all definitions are pruned, `event.time_zones` is set to `None` rather than an empty map `{}`.
+  5. In contrast, differential oracles or uncoordinated parsers retain orphaned timezone definitions, admit observances lacking mandatory `DTSTART` or offsets, emit empty maps `{}` that trigger spurious server updates, or fail to verify outbound redrawability.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.5 defines `VTIMEZONE`, `STANDARD`, `DAYLIGHT`, `TZOFFSETFROM`, and `TZOFFSETTO` semantics. RFC 8984 Section 4.7.2 defines JSCalendar `timeZones` objects and `TimeZoneRule` records.
+  2. Dropping orphaned definitions and enforcing full round-trip redrawability prevents server store corruption while maintaining timezone synchronization across clients.
+- **Adjudication**:
+  Conforming specification boundary and timezone definition ingestion fidelity. Ingests valid solidus-prefixed timezone definitions, normalizes observance offsets, requires at least one observance subcomponent, verifies round-trip redrawability, and prunes unreferenced timezone definitions.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.201 Divergence 201: `read_locations`, `read_virtual_locations`, `INVENTED_KEY`, `INVENTED_CONFERENCE_KEY`, and `CONFERENCE_FEATURES`: Inbound Physical and Virtual Location Ingestion, URI Verification, Dynamic Map Key Allocation, and Conference Feature Decoding
+
+- **Observed Behavior**:
+  Ingesting physical locations and virtual meeting entries requires reconciling single-property iCalendar fields with multi-endpoint JSCalendar maps. In `jmap-ical`:
+  1. Physical location ingestion (`read_locations`): Inspects the single RFC 5545 `LOCATION` property. Extracts the text name; if the string is empty, returns `None`. Preserves `X-JMAP-KEY` if conforming to RFC 8984 Section 1.4.4 `Id` grammar (`names_map_entry`); otherwise falls back to `INVENTED_KEY` (`"1"`). Emits a single-entry map with `@type: "Location"`.
+  2. Multi-conference virtual location ingestion (`read_virtual_locations`): Reads all RFC 7986 Section 5.11 `CONFERENCE` lines. Validates the conference URI using `names_a_uri`. Non-URI lines (or empty values) are discarded, satisfying RFC 8984 Section 4.2.6 mandatory `uri` constraints.
+  3. Stable and non-colliding map key resolution: Preserves conforming `X-JMAP-KEY` values. For lines lacking keys, synthesizes sequential keys (`v1`, `v2`, ...) via `INVENTED_CONFERENCE_KEY`, dynamically skipping any keys already present in the document.
+  4. Label and feature extraction: Reads `LABEL` into `place["name"]`. Translates `FEATURE` parameter values against `CONFERENCE_FEATURES` table into boolean flags (`audio`, `chat`, `feed`, `moderator`, `phone`, `screen`, `video`).
+  5. In contrast, differential oracles or unverified parsers parse invalid non-URI conference values, emit empty location maps when `LOCATION:` is blank, produce colliding map keys, or fail to decode standardized conference features.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.7 defines `LOCATION`. RFC 7986 Section 5.11 and Section 6.3 define `CONFERENCE` properties and feature tokens. RFC 8984 Section 4.2.5 and Section 4.2.6 define JSCalendar `locations` and `virtualLocations`.
+  2. Discarding unparseable URIs and allocating collision-free keys guarantees client conference access while maintaining synchronization determinism.
+- **Adjudication**:
+  Conforming specification boundary and location ingestion fidelity. Enforces URI validity on virtual locations, decodes RFC 7986 conference features, preserves valid map keys with sequential fallback, and suppresses empty physical location maps.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.202 Divergence 202: `read_alerts`, `read_alert`, `stated_offset`, `INVENTED_ALERT_KEY`, and `DISPLAY_ALERT`: Inbound `VALARM` Reminder Ingestion: Display Action Gating, Offset Trigger Extraction with Default Canonical `relativeTo`, RFC 9074 `UID` Mapping, and Non-Colliding Fallback Key Generation
+
+- **Observed Behavior**:
+  Ingesting calendar reminders requires filtering unsupported alarm actions while mapping trigger offsets into JSCalendar alert structures. In `jmap-ical`:
+  1. Action filtering (`read_alert`, `DISPLAY_ALERT`): Enforces `ACTION:DISPLAY` case-insensitively. Unsupported iCalendar alarm actions (`ACTION:AUDIO`, `ACTION:EMAIL`, `ACTION:PROCEDURE`) return `None`, as RFC 8984 Section 4.5 only models display reminders.
+  2. OffsetTrigger parsing (`stated_offset`): Validates and normalizes relative duration offsets. Absolute triggers (`TRIGGER;VALUE=DATE-TIME`) are unrepresentable as relative offsets and return `None`.
+  3. Canonical `RELATED` parameter handling: Inspects the `RELATED` parameter. If `START` or omitted, `relativeTo` is omitted in JSCalendar because start is the canonical default. If `END`, sets `relativeTo: "end"`. Any unrecognized `RELATED` value (such as `MIDDLE` or unsupported tokens) causes the alarm to be rejected.
+  4. Stable alarm identifier preservation and collision-free synthesis: Preserves RFC 9074 Section 6 `UID` parameter when conforming to `names_map_entry`. For alarms lacking valid UIDs, synthesizes sequential keys (`a1`, `a2`, ...) via `INVENTED_ALERT_KEY`, avoiding collision with existing keys.
+  5. In contrast, differential oracles or permissive parsers invent drifting relative triggers from absolute alarms, retain non-display actions, emit redundant default `relativeTo: "start"` tokens, or drop alarms lacking UIDs.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 and Section 3.8.6 govern `VALARM`, `ACTION`, `TRIGGER`, and `RELATED`. RFC 9074 Section 6 defines `VALARM` `UID` parameters. RFC 8984 Section 4.5 defines JSCalendar `Alert` and `OffsetTrigger` models.
+  2. Restricting alarms to display actions and eliding default `relativeTo` properties prevents synthetic diff noise during incremental synchronizations.
+- **Adjudication**:
+  Conforming specification boundary and reminder alarm ingestion fidelity. Gates on `ACTION:DISPLAY`, parses offset triggers, elides default `relativeTo: start` while recording `end`, preserves RFC 9074 UIDs, and allocates non-colliding fallback keys.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.203 Divergence 203: `rrule_to_rule`, `read_until`, `to_nday`, `to_month_day`, and `to_time_of_day`: Inbound `RRULE` Recurrence Parsing: Rule Part Semicolon/Equals Tokenization, `UNTIL` Bound Disambiguation, Strict Malformed `UNTIL` Truncation, `BYDAY` Signed Ordinal Decomposition, and Invalid Part Sentinel Preservation
+
+- **Observed Behavior**:
+  Parsing iCalendar recurrence rules into JSCalendar `RecurrenceRule` objects requires decomposing structured grammar parts while preserving boundary integrity. In `jmap-ical`:
+  1. Part tokenization and frequency validation (`rrule_to_rule`): Decomposes semicolon-delimited key-value parts. Extracts `FREQ`, lowering case (`daily`, `weekly`, `monthly`, `yearly`). If `FREQ` is empty or missing, returns `None`.
+  2. `UNTIL` bound disambiguation and malformed truncation: Translates `UNTIL` values via `read_until`. Converts UTC instants (`Z` suffix) to local representations relative to the series offset or timezone (`Ends`). If `UNTIL` contains no date-time digit structure, parsing breaks immediately, discarding all subsequent rule parts to prevent partially corrupted recurrence series.
+  3. `BYDAY` signed ordinal decomposition (`to_nday`): Decomposes day tokens into `NDay` structures, extracting signed ordinals (such as `2TU` or `-1FR`) and lowercasing weekday abbreviations. Unrecognized tokens retain their literal text in `day` for downstream validation.
+  4. Numeric list parsing and sentinel preservation: Converts `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, and `BYSETPOS` via `to_month_day`. Unparseable tokens evaluate to sentinel `0` (a day or week no calendar contains), flagging the rule for rejection during round-trip validation. Converts `BYSECOND`, `BYMINUTE`, and `BYHOUR` via `to_time_of_day`, using sentinel `u32::MAX` to differentiate unparseable tokens from valid zero (midnight or zero seconds/minutes).
+  5. In contrast, differential oracles or lenient parsers silently drop broken `UNTIL` bounds (unbounding recurring series), convert unparseable times of day to 0 (corrupting midnight schedules), or drop invalid tokens silently.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 and Section 3.8.5.3 govern recurrence rule grammar and part interactions. RFC 8984 Section 4.3.3 defines JSCalendar `RecurrenceRule` properties.
+  2. Sentinel substitution and strict malformed part truncation protect against unintended schedule corruption or infinite occurrence generation.
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule parsing fidelity. Tokenizes recurrence parts, decomposes signed ordinals in `BYDAY`, handles `UNTIL` bounds with timezone resolution and malformed truncation, and preserves validation sentinels for unparseable subcomponents.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
