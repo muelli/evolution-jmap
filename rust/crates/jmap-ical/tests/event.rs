@@ -23234,3 +23234,330 @@ END:VCALENDAR\r\n";
         "converts local UNTIL back to UTC instant with Z suffix: {out_ics}"
     );
 }
+
+#[test]
+fn differential_oracle_date_property_emission_and_multi_value_formatting() {
+    // Divergence 104 against Stalwart differential oracle:
+    // RFC 5545 section 3.2.19, 3.2.20, 3.3.4, 3.3.5, 3.8.2.4, 3.8.5.1 govern date and date-time property formatting.
+    // In jmap-ical:
+    // 1. All-day: VALUE=DATE parameter emitted with 8-digit date string; time portion truncated.
+    // 2. Timed date-times: redundant VALUE=DATE-TIME parameter omitted.
+    // 3. UTC date-times: trailing Z emitted without TZID parameter (RFC 5545 forbids TZID on UTC).
+    // 4. Non-UTC date-times: TZID parameter emitted without trailing Z.
+    // 5. Floating date-times: emitted without TZID and without trailing Z.
+    // 6. Multi-valued property formatting: multiple EXDATE/RDATE values emitted as a single comma-separated line.
+
+    // 1. All-day event with multiple excluded dates
+    let all_day_ev = CalendarEvent {
+        show_without_time: Some(true),
+        start: Some("2026-09-05T00:00:00".to_owned()),
+        duration: Some("P1D".to_owned()),
+        recurrence_overrides: Some(BTreeMap::from([
+            ("2026-09-06T00:00:00".to_owned(), json!({"excluded": true})),
+            ("2026-09-07T00:00:00".to_owned(), json!({"excluded": true})),
+        ])),
+        ..CalendarEvent::default()
+    };
+
+    let all_day_ics = event_to_ical(&all_day_ev);
+    assert!(
+        all_day_ics.contains("DTSTART;VALUE=DATE:20260905\r\n"),
+        "all-day start formatted with VALUE=DATE and 8 digits: {all_day_ics}"
+    );
+    assert!(
+        all_day_ics.contains("EXDATE;VALUE=DATE:20260906,20260907\r\n"),
+        "multiple excluded dates formatted as single comma-separated VALUE=DATE line: {all_day_ics}"
+    );
+
+    // 2. Timed UTC event
+    let utc_ev = CalendarEvent {
+        time_zone: Some("Etc/UTC".to_owned()),
+        start: Some("2026-09-05T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let utc_ics = event_to_ical(&utc_ev);
+    assert!(
+        utc_ics.contains("DTSTART:20260905T100000Z\r\n"),
+        "UTC start emitted with Z and no TZID or VALUE=DATE-TIME: {utc_ics}"
+    );
+
+    // 3. Timed non-UTC event with multiple excluded dates
+    let zoned_ev = CalendarEvent {
+        time_zone: Some("Europe/Berlin".to_owned()),
+        start: Some("2026-09-05T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_overrides: Some(BTreeMap::from([
+            ("2026-09-06T10:00:00".to_owned(), json!({"excluded": true})),
+            ("2026-09-07T10:00:00".to_owned(), json!({"excluded": true})),
+        ])),
+        ..CalendarEvent::default()
+    };
+    let zoned_ics = event_to_ical(&zoned_ev);
+    assert!(
+        zoned_ics.contains("DTSTART;TZID=Europe/Berlin:20260905T100000\r\n"),
+        "zoned start emitted with TZID and no Z or VALUE=DATE-TIME: {zoned_ics}"
+    );
+    assert!(
+        zoned_ics.contains("EXDATE;TZID=Europe/Berlin:20260906T100000,20260907T100000\r\n"),
+        "zoned excluded dates formatted as single comma-separated line with TZID: {zoned_ics}"
+    );
+
+    // 4. Floating timed event
+    let floating_ev = CalendarEvent {
+        start: Some("2026-09-05T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let floating_ics = event_to_ical(&floating_ev);
+    assert!(
+        floating_ics.contains("DTSTART:20260905T100000\r\n"),
+        "floating start emitted without TZID and without Z: {floating_ics}"
+    );
+}
+
+#[test]
+fn differential_oracle_proleptic_gregorian_calendar_validation_and_leap_second() {
+    // Divergence 105 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.4, 3.3.5, 3.3.12 specify Gregorian date-time validity.
+    // In jmap-ical:
+    // 1. Leap year calculation: Feb 29 accepted in leap years (divisible by 4, not 100 unless 400).
+    // 2. Non-leap year: Feb 29 in 1900 or 2026 rejected (DTSTART dropped).
+    // 3. Invalid month or day: month 13 or April 31 rejected (DTSTART dropped).
+    // 4. Leap second 60: accepted per RFC 5545 section 3.3.12; second 61 rejected.
+    // 5. Sub-second fractional digits: truncated rather than rejected.
+
+    // 1. Leap years
+    let leap_2024 = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:leap-2024\r\nDTSTART:20240229T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(leap_2024).expect("parse leap 2024");
+    assert_eq!(ev.start.as_deref(), Some("2024-02-29T12:00:00"));
+
+    let leap_2000 = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:leap-2000\r\nDTSTART:20000229T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(leap_2000).expect("parse leap 2000");
+    assert_eq!(ev.start.as_deref(), Some("2000-02-29T12:00:00"));
+
+    // 2. Non-leap centurial year 1900 and regular non-leap year 2026
+    let non_leap_1900 = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:non-leap-1900\r\nDTSTART:19000229T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(non_leap_1900).expect("parse non-leap 1900");
+    assert_eq!(ev.start, None, "Feb 29 in 1900 rejected as non-existent");
+
+    let non_leap_2026 = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:non-leap-2026\r\nDTSTART:20260229T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(non_leap_2026).expect("parse non-leap 2026");
+    assert_eq!(ev.start, None, "Feb 29 in 2026 rejected as non-existent");
+
+    // 3. Invalid month and invalid day
+    let bad_month = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:bad-month\r\nDTSTART:20261301T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(bad_month).expect("parse bad month");
+    assert_eq!(ev.start, None, "month 13 rejected");
+
+    let bad_day = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:bad-day\r\nDTSTART:20260431T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(bad_day).expect("parse bad day");
+    assert_eq!(ev.start, None, "April 31 rejected");
+
+    // 4. Leap second 60 accepted, second 61 rejected
+    let leap_second = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:leap-sec\r\nDTSTART:20161231T235960Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(leap_second).expect("parse leap second");
+    assert_eq!(ev.start.as_deref(), Some("2016-12-31T23:59:60"));
+
+    let bad_second = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:bad-sec\r\nDTSTART:20161231T235961Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(bad_second).expect("parse bad second");
+    assert_eq!(ev.start, None, "second 61 rejected");
+
+    // 5. Sub-second fractional truncation
+    let sub_second = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:sub-sec\r\nDTSTART:20260905T123000.456Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(sub_second).expect("parse sub-second");
+    assert_eq!(ev.start.as_deref(), Some("2026-09-05T12:30:00"));
+}
+
+#[test]
+fn differential_oracle_wall_clock_duration_measurement_and_nominal_days() {
+    // Divergence 106 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.2.2 and RFC 8984 section 4.1.4 duration measurement.
+    // In jmap-ical:
+    // 1. Explicit DURATION parsed with stated_duration, preserving units and dropping leading +.
+    // 2. Calculated duration from DTSTART and DTEND measures wall-clock difference via days_from_civil.
+    // 3. Whole-day differences formatted as P<D>D rather than PT<H>H, preserving nominal day length across DST.
+    // 4. Zero or negative calculated duration returns None (falling back to server default PT0S).
+
+    // 1. Explicit DURATION
+    let explicit_dur = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:dur-exp\r\nDTSTART:20260905T100000\r\nDURATION:+PT2H30M\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(explicit_dur).expect("parse explicit duration");
+    assert_eq!(ev.duration.as_deref(), Some("PT2H30M"));
+
+    let week_dur = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:dur-week\r\nDTSTART:20260905T100000\r\nDURATION:P1W2D\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(week_dur).expect("parse week duration");
+    assert_eq!(ev.duration.as_deref(), Some("P1W2D"));
+
+    // 2. Calculated duration from DTSTART and DTEND
+    let calc_timed = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:calc-timed\r\nDTSTART:20260905T100000\r\nDTEND:20260905T143000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(calc_timed).expect("parse calc timed");
+    assert_eq!(ev.duration.as_deref(), Some("PT4H30M"));
+
+    // 3. Multi-day duration formatted as nominal days (P3D, not PT72H)
+    let calc_days = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:calc-days\r\nDTSTART;VALUE=DATE:20260905\r\nDTEND;VALUE=DATE:20260908\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(calc_days).expect("parse calc days");
+    assert_eq!(ev.duration.as_deref(), Some("P3D"));
+
+    // 4. Zero and negative duration return None
+    let zero_dur = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:zero-dur\r\nDTSTART:20260905T100000\r\nDTEND:20260905T100000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(zero_dur).expect("parse zero dur");
+    assert_eq!(ev.duration, None, "zero duration drops to default");
+
+    let neg_dur = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nBEGIN:VEVENT\r\nUID:neg-dur\r\nDTSTART:20260905T100000\r\nDTEND:20260905T090000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let ev = ical_to_event(neg_dur).expect("parse neg dur");
+    assert_eq!(ev.duration, None, "negative duration drops to default");
+}
+
+#[test]
+fn differential_oracle_bounded_date_shifting_and_four_digit_year_bounds() {
+    // Divergence 107 against Stalwart differential oracle:
+    // RFC 5545 section 3.3.4 requires 4-digit years.
+    // In jmap-ical:
+    // 1. moved shifts LocalDateTime by signed integer seconds, carrying single-day offsets.
+    // 2. Backward carry across month boundary in leap year 2024 rolls back to Feb 29; in non-leap 2026 to Feb 28.
+    // 3. Backward carry across year boundary rolls back from Jan 1 to Dec 31 of prior year.
+    // 4. Out-of-bounds years (negative or > 9999) return None and trigger maps_recurrence_rule refusal.
+
+    // 1. Leap year 2024 month boundary backward carry: March 1 minus 2 hours = Feb 29 22:00
+    let leap_carry_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.org/leap_tz\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19971026T020000\r\n\
+TZOFFSETFROM:-0200\r\n\
+TZOFFSETTO:-0200\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20240301T003000Z;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:evt-leap-carry\r\n\
+DTSTART;TZID=/example.org/leap_tz:20260905T100000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(leap_carry_ics).expect("parse leap carry");
+    let zone = ev
+        .time_zones
+        .as_ref()
+        .unwrap()
+        .get("/example.org/leap_tz")
+        .unwrap();
+    let std_rules = zone.get("standard").unwrap().as_array().unwrap();
+    let rrules = std_rules[0]
+        .get("recurrenceRules")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        rrules[0].get("until").unwrap().as_str(),
+        Some("2024-02-29T22:30:00"),
+        "March 1 minus 2 hours rolls back to Feb 29 in leap year 2024"
+    );
+
+    // 2. Non-leap year 2026 month boundary backward carry: March 1 minus 2 hours = Feb 28 22:00
+    let non_leap_carry_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.org/non_leap_tz\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19971026T020000\r\n\
+TZOFFSETFROM:-0200\r\n\
+TZOFFSETTO:-0200\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20260301T003000Z;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:evt-non-leap-carry\r\n\
+DTSTART;TZID=/example.org/non_leap_tz:20260905T100000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(non_leap_carry_ics).expect("parse non leap carry");
+    let zone = ev
+        .time_zones
+        .as_ref()
+        .unwrap()
+        .get("/example.org/non_leap_tz")
+        .unwrap();
+    let std_rules = zone.get("standard").unwrap().as_array().unwrap();
+    let rrules = std_rules[0]
+        .get("recurrenceRules")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        rrules[0].get("until").unwrap().as_str(),
+        Some("2026-02-28T22:30:00"),
+        "March 1 minus 2 hours rolls back to Feb 28 in non-leap year 2026"
+    );
+
+    // 3. Year boundary carry: Jan 1 minus 2 hours rolls back to Dec 31 of prior year
+    let year_carry_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.org/year_tz\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19971026T020000\r\n\
+TZOFFSETFROM:-0200\r\n\
+TZOFFSETTO:-0200\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20260101T003000Z;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:evt-year-carry\r\n\
+DTSTART;TZID=/example.org/year_tz:20260905T100000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(year_carry_ics).expect("parse year carry");
+    let zone = ev
+        .time_zones
+        .as_ref()
+        .unwrap()
+        .get("/example.org/year_tz")
+        .unwrap();
+    let std_rules = zone.get("standard").unwrap().as_array().unwrap();
+    let rrules = std_rules[0]
+        .get("recurrenceRules")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        rrules[0].get("until").unwrap().as_str(),
+        Some("2025-12-31T22:30:00"),
+        "Jan 1 minus 2 hours rolls back to Dec 31 2025"
+    );
+
+    // 4. Underflow below year 0000: refused and trailing Z preserved
+    let underflow_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.org/underflow_tz\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19971026T020000\r\n\
+TZOFFSETFROM:-0200\r\n\
+TZOFFSETTO:-0200\r\n\
+RRULE:FREQ=YEARLY;UNTIL=00000101T003000Z;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:evt-underflow\r\n\
+DTSTART;TZID=/example.org/underflow_tz:20260905T100000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(underflow_ics).expect("parse underflow");
+    assert_eq!(
+        ev.time_zones, None,
+        "definition with underflow UNTIL is refused by vtimezone_of and dropped from time_zones"
+    );
+    assert!(
+        !maps_time_zone(&ev),
+        "event referring to dropped custom zone cannot be safely sent"
+    );
+}
