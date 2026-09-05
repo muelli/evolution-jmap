@@ -36,13 +36,17 @@ use eds_sys::{
 };
 use evo_sys::{
     E_COMPOSER_HEADER_FROM, EMsgComposer, GTK_BUTTONS_CLOSE, GTK_DIALOG_DESTROY_WITH_PARENT,
-    GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GtkAction, GtkWindow, e_composer_header_get_registry,
+    GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_RESPONSE_CANCEL, GTK_RESPONSE_OK, GtkAction,
+    GtkActionGroup, GtkWindow, e_composer_header_get_registry,
     e_composer_header_table_dup_identity_uid, e_composer_header_table_get_header,
+    e_date_edit_get_time, e_date_edit_new, e_date_edit_set_show_time, e_date_edit_set_time,
     e_html_editor_get_action_group, e_html_editor_get_ui_manager, e_msg_composer_get_editor,
     e_msg_composer_get_header_table, e_msg_composer_get_message, e_msg_composer_get_message_finish,
-    e_msg_composer_get_type, gtk_action_group_add_action, gtk_action_new, gtk_action_set_sensitive,
-    gtk_dialog_run, gtk_message_dialog_new, gtk_ui_manager_add_ui_from_string,
-    gtk_ui_manager_ensure_update, gtk_widget_destroy,
+    e_msg_composer_get_type, gtk_action_get_name, gtk_action_group_add_action,
+    gtk_action_group_get_action, gtk_action_new, gtk_action_set_sensitive, gtk_container_add,
+    gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run,
+    gtk_message_dialog_new, gtk_ui_manager_add_ui_from_string, gtk_ui_manager_ensure_update,
+    gtk_widget_destroy, gtk_widget_show_all, gtk_window_set_title, gtk_window_set_transient_for,
 };
 use gio_sys::GAsyncResult;
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, g_free, gpointer};
@@ -81,6 +85,7 @@ const NO_RECIPIENTS: &CStr = N_(c"The message names no recipients");
 const NO_FROM: &CStr = N_(c"The message has no From address");
 const TOO_FAR: &CStr = N_(c"The chosen time is further ahead than the server accepts");
 const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time");
+const NOT_FUTURE: &CStr = N_(c"That time has already passed — choose one in the future");
 
 /// Per-composer state, boxed as qdata on the composer.
 struct SendState {
@@ -92,6 +97,9 @@ struct SendState {
     /// The submenu's own action, whose sensitivity and tooltip are the gate's
     /// visible half.
     menu_action: *mut GtkAction,
+    /// The group the preset actions live in, so their labels can be brought
+    /// up to date — "Today, 18:00" is only true until 18:00.
+    action_group: *mut GtkActionGroup,
 }
 
 static GENERATIONS: AtomicU64 = AtomicU64::new(1);
@@ -152,28 +160,32 @@ unsafe impl ObjectSubclass for JmapSendLaterExtension {
 /// The three presets: action name, menu label, and activate handler. The
 /// handlers differ only in the preset they pass on; three small trampolines
 /// keep the connection data a plain composer pointer.
-const PRESETS: &[(&CStr, &CStr, unsafe extern "C" fn(*mut GtkAction, gpointer))] = &[
-    (c"jmap-send-later-hour", N_(c"In One _Hour"), activate_hour),
-    (
-        c"jmap-send-later-tomorrow",
-        N_(c"_Tomorrow Morning"),
-        activate_tomorrow,
-    ),
-    (
-        c"jmap-send-later-monday",
-        N_(c"Next _Monday Morning"),
-        activate_monday,
-    ),
-];
+/// The action name of one preset's menu item.
+fn action_name(preset: Preset) -> CString {
+    CString::new(format!("jmap-send-later-{}", schedule::slug(preset))).unwrap_or_default()
+}
 
-const UI: &CStr = c"<menubar name='main-menu'>\
+/// The submenu's own XML, with one item per offered moment plus the custom
+/// entry — built rather than a constant, because which moments are offered
+/// is [`schedule::offered`]'s to say.
+fn ui_definition() -> CString {
+    let mut items = String::new();
+    for preset in schedule::offered() {
+        items.push_str(&format!(
+            "<menuitem action='jmap-send-later-{}'/>",
+            schedule::slug(preset)
+        ));
+    }
+    items.push_str("<separator/><menuitem action='jmap-send-later-custom'/>");
+    CString::new(format!(
+        "<menubar name='main-menu'>\
 <placeholder name='pre-edit-menu'><menu action='file-menu'>\
 <placeholder name='custom-actions-placeholder'>\
-<menu action='jmap-send-later-menu'>\
-<menuitem action='jmap-send-later-hour'/>\
-<menuitem action='jmap-send-later-tomorrow'/>\
-<menuitem action='jmap-send-later-monday'/>\
-</menu></placeholder></menu></placeholder></menubar>";
+<menu action='jmap-send-later-menu'>{items}</menu>\
+</placeholder></menu></placeholder></menubar>"
+    ))
+    .unwrap_or_default()
+}
 
 /// Chains up, merges the menu (insensitive), and arms the gate.
 unsafe extern "C" fn constructed(object: *mut GObject) {
@@ -205,10 +217,25 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
         gtk_action_set_sensitive(menu_action, GFALSE);
         gtk_action_group_add_action(action_group, menu_action);
 
-        for (name, label, handler) in PRESETS {
+        // One action per offered moment, plus the custom entry. All of them
+        // share `on_activate`, which recovers the moment from the action's
+        // own name; the labels are filled in by `refresh_labels` below and
+        // again on every re-gate, since what "Today, 18:00" means moves.
+        let mut names: Vec<CString> = schedule::offered()
+            .iter()
+            .copied()
+            .map(action_name)
+            .collect();
+        names.push(CString::new("jmap-send-later-custom").unwrap_or_default());
+        for name in &names {
+            let is_custom = name.to_bytes().ends_with(b"-custom");
             let action = gtk_action_new(
                 name.as_ptr(),
-                translate_static(label),
+                if is_custom {
+                    translate_static(N_(c"_Custom Time…"))
+                } else {
+                    ptr::null()
+                },
                 ptr::null(),
                 ptr::null(),
             );
@@ -221,7 +248,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
                 Some(std::mem::transmute::<
                     unsafe extern "C" fn(*mut GtkAction, gpointer),
                     unsafe extern "C" fn(),
-                >(*handler)),
+                >(on_activate)),
                 composer.cast(),
                 None,
                 0,
@@ -230,9 +257,11 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             // The group holds its reference now.
             g_object_unref(action.cast());
         }
+        refresh_labels(action_group);
 
+        let ui = ui_definition();
         let mut error: *mut GError = ptr::null_mut();
-        gtk_ui_manager_add_ui_from_string(ui_manager, UI.as_ptr(), -1, &mut error);
+        gtk_ui_manager_add_ui_from_string(ui_manager, ui.as_ptr(), -1, &mut error);
         if !error.is_null() {
             tracing::error!(
                 message = ?read_string((*error).message),
@@ -246,6 +275,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             link: None,
             generation: 0,
             menu_action,
+            action_group,
         }));
         g_object_set_data_full(
             composer.cast(),
@@ -348,10 +378,11 @@ unsafe fn gate(composer: *mut GObject) {
         let mut state = state.borrow_mut();
         state.link = None;
         state.generation = generation;
-        // SAFETY: the action lives with the composer.
+        // SAFETY: the action and group live with the composer.
         unsafe {
             gtk_action_set_sensitive(state.menu_action, GFALSE);
             set_tooltip(state.menu_action, translate(CHECKING));
+            refresh_labels(state.action_group);
         }
     }
 
@@ -524,24 +555,164 @@ unsafe fn apply_gate(
     }
 }
 
-unsafe extern "C" fn activate_hour(_action: *mut GtkAction, composer: gpointer) {
-    guard("JmapSendLaterExtension::hour", (), || unsafe {
+/// Re-label every preset item against the clock now.
+///
+/// Called at build and on every re-gate. It cannot catch a composer left
+/// open across one of its own suggestions — GtkAction has no "about to be
+/// shown" hook — which is why [`schedule::resolve`] is asked again at click
+/// time: a stale *label* is cosmetic, a stale *target* would schedule into
+/// the past.
+///
+/// # Safety
+///
+/// `action_group` must be a live `GtkActionGroup` holding this submenu's
+/// actions, on the main loop.
+unsafe fn refresh_labels(action_group: *mut GtkActionGroup) {
+    if action_group.is_null() {
+        return;
+    }
+    for preset in schedule::offered() {
+        let Some(occurrence) = schedule::resolve(preset) else {
+            continue;
+        };
+        let name = action_name(preset);
+        // SAFETY: a live group per the contract; the action is the group's
+        // own (or NULL, which is skipped), and the label is copied by the
+        // property machinery.
+        unsafe {
+            let action = gtk_action_group_get_action(action_group, name.as_ptr());
+            if action.is_null() {
+                continue;
+            }
+            let label = CString::new(occurrence.label).unwrap_or_default();
+            g_object_set(
+                action.cast(),
+                c"label".as_ptr(),
+                label.as_ptr(),
+                ptr::null::<std::ffi::c_char>(),
+            );
+        }
+    }
+}
+
+/// The *Custom Time…* entry: ask for a moment, then schedule to it.
+///
+/// An `EDateEdit` with its time half shown is the whole dialog — the same
+/// widget the vacation page uses for dates, which already knows how to parse
+/// what a person types and offers a calendar besides.
+///
+/// # Safety
+///
+/// `composer` must be a live decorated composer, on the main loop.
+unsafe fn activate_custom(composer: *mut GObject) {
+    // The limit is the server's, so a dialog is pointless without a link.
+    let Some(max_hold) = (unsafe { state(composer) })
+        .and_then(|state| state.borrow().link.as_ref()?.features.max_hold)
+    else {
+        return;
+    };
+
+    // SAFETY: a live composer window per the contract; every widget is
+    // freshly built and owned by the dialog, which is destroyed below.
+    let picked = unsafe {
+        let dialog = gtk_dialog_new();
+        gtk_window_set_title(dialog.cast(), translate_static(N_(c"Send Later")));
+        gtk_window_set_transient_for(dialog.cast(), composer.cast::<GtkWindow>());
+        gtk_dialog_add_button(
+            dialog.cast(),
+            translate_static(N_(c"_Cancel")),
+            GTK_RESPONSE_CANCEL,
+        );
+        gtk_dialog_add_button(
+            dialog.cast(),
+            translate_static(N_(c"_Send Later")),
+            GTK_RESPONSE_OK,
+        );
+
+        let field = e_date_edit_new();
+        // Both halves: a send time without a time of day is not a time.
+        e_date_edit_set_show_time(field.cast(), GTRUE);
+        // Seeded an hour out, so the dialog opens on a sane, valid moment
+        // rather than on "now", which is already in the past by the time
+        // anyone reads it.
+        let now = glib_sys::g_date_time_new_now_local();
+        if !now.is_null() {
+            e_date_edit_set_time(field.cast(), glib_sys::g_date_time_to_unix(now) + 3600);
+            glib_sys::g_date_time_unref(now);
+        }
+        gtk_container_add(gtk_dialog_get_content_area(dialog.cast()).cast(), field);
+        gtk_widget_show_all(dialog);
+
+        let response = gtk_dialog_run(dialog.cast());
+        let chosen = (response == GTK_RESPONSE_OK).then(|| e_date_edit_get_time(field.cast()));
+        gtk_widget_destroy(dialog);
+        chosen
+    };
+    let Some(chosen) = picked else {
+        return;
+    };
+
+    // SAFETY: no arguments; the object is released immediately.
+    let now = unsafe {
+        let now = glib_sys::g_date_time_new_now_local();
+        if now.is_null() {
+            None
+        } else {
+            let seconds = glib_sys::g_date_time_to_unix(now);
+            glib_sys::g_date_time_unref(now);
+            Some(seconds)
+        }
+    };
+    let Some(now) = now else {
+        // SAFETY: a live composer window per this function's contract.
+        unsafe { refuse_send(composer, translate(NO_CLOCK)) };
+        return;
+    };
+
+    // `e_date_edit_get_time` answers -1 for "no date set", which lands in
+    // the past like any other stale choice, so one check covers both.
+    let hold = chosen - now;
+    if hold <= 0 {
+        // SAFETY: a live composer window.
+        unsafe { refuse_send(composer, translate(NOT_FUTURE)) };
+        return;
+    }
+    let hold = hold as u64;
+    if hold > max_hold {
+        // SAFETY: as above.
+        unsafe { refuse_send(composer, translate(TOO_FAR)) };
+        return;
+    }
+    // SAFETY: as above.
+    unsafe { schedule_hold(composer, hold) };
+}
+
+/// The one `activate` handler for the whole submenu: which moment was
+/// clicked is recovered from the action's own name, so adding a preset is a
+/// line in [`schedule::offered`] rather than another trampoline.
+///
+/// # Safety
+///
+/// GLib's signal machinery; `composer` is the connection's data pointer.
+unsafe extern "C" fn on_activate(action: *mut GtkAction, composer: gpointer) {
+    guard("JmapSendLaterExtension::activate", (), || {
+        // SAFETY: a live action GLib is emitting on; the name is its own.
+        let name = unsafe { read_string(gtk_action_get_name(action)) };
+        let Some(slug) = name
+            .as_deref()
+            .and_then(|name| name.strip_prefix("jmap-send-later-"))
+        else {
+            return;
+        };
+        tracing::trace!(slug, "send-later: menu item activated");
         // SAFETY: the composer is alive — its own menu emitted.
-        activate(composer.cast(), Preset::InOneHour);
-    });
-}
-
-unsafe extern "C" fn activate_tomorrow(_action: *mut GtkAction, composer: gpointer) {
-    guard("JmapSendLaterExtension::tomorrow", (), || unsafe {
-        // SAFETY: as `activate_hour`.
-        activate(composer.cast(), Preset::TomorrowMorning);
-    });
-}
-
-unsafe extern "C" fn activate_monday(_action: *mut GtkAction, composer: gpointer) {
-    guard("JmapSendLaterExtension::monday", (), || unsafe {
-        // SAFETY: as `activate_hour`.
-        activate(composer.cast(), Preset::MondayMorning);
+        unsafe {
+            if slug == "custom" {
+                activate_custom(composer.cast());
+            } else if let Some(preset) = schedule::from_slug(slug) {
+                activate(composer.cast(), preset);
+            }
+        }
     });
 }
 
@@ -551,13 +722,32 @@ struct PendingSchedule {
     hold: u64,
 }
 
-/// A click: check the hold against the server's limit, then ask the composer
-/// for its message the way Send itself does.
+/// A preset click. The moment is resolved *here* rather than read off the
+/// menu label, so a composer left open past its own suggestion schedules to
+/// the next occurrence instead of into the past.
 ///
 /// # Safety
 ///
 /// `composer` must be a live decorated composer, on the main loop.
 unsafe fn activate(composer: *mut GObject, preset: Preset) {
+    let Some(occurrence) = schedule::resolve(preset) else {
+        // SAFETY: a live composer per this function's contract.
+        unsafe { refuse_send(composer, translate(NO_CLOCK)) };
+        return;
+    };
+    // SAFETY: as above.
+    unsafe { schedule_hold(composer, occurrence.hold) };
+}
+
+/// Hold for `hold` seconds: check it against the server's limit, then ask the
+/// composer for its message the way Send itself does. Shared by the presets
+/// and by the custom-time dialog, which has already done its own bounds
+/// check but is re-checked here so one place owns the rule.
+///
+/// # Safety
+///
+/// `composer` must be a live decorated composer, on the main loop.
+unsafe fn schedule_hold(composer: *mut GObject, hold: u64) {
     let Some((link, max_hold)) = (unsafe { state(composer) }).and_then(|state| {
         let state = state.borrow();
         let link = state.link.clone()?;
@@ -566,14 +756,8 @@ unsafe fn activate(composer: *mut GObject, preset: Preset) {
     }) else {
         return; // the menu was insensitive; a race clicked it anyway
     };
-
-    let Some(hold) = schedule::hold_seconds(preset) else {
-        // SAFETY: a live composer per this function's contract.
-        unsafe { refuse_send(composer, translate(NO_CLOCK)) };
-        return;
-    };
     if hold > max_hold {
-        // SAFETY: as above.
+        // SAFETY: a live composer per this function's contract.
         unsafe { refuse_send(composer, translate(TOO_FAR)) };
         return;
     }

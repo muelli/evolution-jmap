@@ -421,14 +421,14 @@ unsafe extern "C" fn activate_hour(_action: *mut GtkAction, owner: gpointer) {
 unsafe extern "C" fn activate_tomorrow(_action: *mut GtkAction, owner: gpointer) {
     guard("snooze::tomorrow", (), || unsafe {
         // SAFETY: as `activate_hour`.
-        activate(owner.cast(), Preset::TomorrowMorning);
+        activate(owner.cast(), Preset::TimeOfDay(8));
     });
 }
 
 unsafe extern "C" fn activate_monday(_action: *mut GtkAction, owner: gpointer) {
     guard("snooze::monday", (), || unsafe {
         // SAFETY: as `activate_hour`.
-        activate(owner.cast(), Preset::MondayMorning);
+        activate(owner.cast(), Preset::NextWorkday);
     });
 }
 
@@ -460,7 +460,10 @@ unsafe fn activate(owner: *mut GObject, preset: Preset) {
         return;
     }
 
-    let Some(until) = schedule::hold_seconds(preset).and_then(schedule::utc_in) else {
+    let Some(until) = schedule::resolve(preset)
+        .map(|occurrence| occurrence.hold)
+        .and_then(schedule::utc_in)
+    else {
         warn_dialog(translate(NO_CLOCK));
         return;
     };
