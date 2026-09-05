@@ -20,9 +20,9 @@
 //! Contacts and Calendars among them, on a server that also hosts CardDAV and
 //! CalDAV data for the same user — and a folder-properties dialog asking about
 //! a mailbox has no use for a quota that says nothing about Mail. RFC 9425
-//! §2.3 gives the rule for which is which: a `dataTypes` naming `"Mail"`
+//! §2.3 gives the rule for which is which: a `types` naming `"Mail"`
 //! applies, and so — this is the part easy to miss — does one that is absent
-//! or empty, because an empty `dataTypes` means "every data type this account
+//! or empty, because an empty `types` means "every data type this account
 //! has", not "none". [`applies_to_mail`] is that rule, kept as a plain
 //! function over [`Quota`] so it can be tested without a `CamelFolder` to call
 //! the vfunc on.
@@ -105,12 +105,12 @@ unsafe extern "C" fn get_quota_info_sync(
 }
 
 /// Whether a `Quota` describes Mail usage, per RFC 9425 §2.3: an absent or
-/// empty `dataTypes` applies to every data type the account has, not to none
+/// empty `types` applies to every data type the account has, not to none
 /// of them, so it is a match here as much as one that names `"Mail"` is.
 fn applies_to_mail(quota: &Quota) -> bool {
-    quota.data_types.is_empty()
+    quota.types.is_empty()
         || quota
-            .data_types
+            .types
             .iter()
             .any(|data_type| data_type == quota_data_type::MAIL)
 }
@@ -126,9 +126,10 @@ fn chain(quotas: &[Quota]) -> Option<*mut CamelFolderQuotaInfo> {
     for quota in quotas {
         let name = cstring_lossy(&quota.name);
         // SAFETY: `name` is NUL-terminated and alive for the call, which
-        // copies it into the node it allocates; `used` and `limit` are plain
-        // integers.
-        let node = unsafe { camel_folder_quota_info_new(name.as_ptr(), quota.used, quota.limit) };
+        // copies it into the node it allocates; `used` and `hard_limit` are
+        // plain integers.
+        let node =
+            unsafe { camel_folder_quota_info_new(name.as_ptr(), quota.used, quota.hard_limit) };
         if head.is_null() {
             head = node;
         } else {

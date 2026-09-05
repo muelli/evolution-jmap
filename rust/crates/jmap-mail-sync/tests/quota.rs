@@ -40,7 +40,7 @@ fn every_seeded_quota_comes_back() {
     assert_eq!(quotas.len(), 1);
     assert_eq!(quotas[0].resource_type, quota_resource_type::OCTETS);
     assert_eq!(quotas[0].scope, quota_scope::ACCOUNT);
-    assert_eq!(quotas[0].data_types, vec![quota_data_type::MAIL.to_owned()]);
+    assert_eq!(quotas[0].types, vec![quota_data_type::MAIL.to_owned()]);
 }
 
 #[test]

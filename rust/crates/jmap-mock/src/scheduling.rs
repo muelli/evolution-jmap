@@ -20,10 +20,17 @@
 //!   draft itself advises against for interoperability;
 //! * the iMIP licence in §5.9.2 to drop changes the server deems inessential,
 //!   which would make the mock's output depend on a judgement call;
-//! * per-instance participant sets, so a REPLY is always about the whole
-//!   event even when only one instance's `participationStatus` moved;
 //! * `hideAttendees` (§5.1.3), which shapes an attendee list this mock does
-//!   not build.
+//!   not build;
+//! * §5.9.2.1's rule that a message to somebody dropped from one occurrence
+//!   must still *show* that occurrence as excluded, which shapes the same
+//!   unbuilt payload.
+//!
+//! Per-instance participant sets are modelled (§5.9.2.1's MUST that
+//! "participants are only sent information about recurrence instances they
+//! are added to"). This needs no recurrence expansion: a participant can only
+//! be named for one occurrence through `recurrenceOverrides`, so the
+//! recurrence ids in question are exactly that map's keys.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -31,9 +38,13 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{
     CalendarEvent, PER_USER_PROPERTIES, participant_participation_status, scheduling_method,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 
+use crate::patch::apply_patch;
 use crate::state::{AccountState, RecordedSchedulingMessage};
+
+/// Who a message is about: the whole event, or one occurrence of it.
+type Scope = Option<String>;
 
 /// One event's transition, as `CalendarEvent/set` applied it: a create has no
 /// `before`, a destroy has no `after`.
@@ -53,26 +64,32 @@ pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
         .collect()
 }
 
-/// Whether everyone this event's creation would have to be announced to can
-/// actually be reached, which §5.9.2 makes a precondition of the change
-/// rather than of the message: a recipient with no `calendarAddress` at all
-/// is one the server has no scheduling method for.
+/// Whether everyone this event would have to be announced to, in the shape
+/// it is being left in by this `/set` call, can actually be reached, which
+/// §5.9.2 makes a precondition of the change rather than of the message: a
+/// recipient with no `calendarAddress` at all is one the server has no
+/// scheduling method for.
 ///
-/// Only creates are checked. `simple_set` validates creates and nothing else,
-/// so refusing an update or a destroy for the same reason needs a validation
-/// hook it does not have; that is left for the increment that adds one.
-pub(crate) fn create_recipients_are_reachable(
-    event: &CalendarEvent,
-    own: &BTreeSet<String>,
-) -> bool {
+/// Applies the same test to a create's object, an update's patched result
+/// and a destroy's about-to-be-removed object: whichever one it is, that is
+/// the event whose participant list the server is about to announce a
+/// REQUEST or CANCEL to. An occurrence's own participants count too, since
+/// they are recipients of a message just as the series' are.
+pub(crate) fn recipients_are_reachable(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     if !is_origin(event, own) {
         // The one recipient is the organizer, and an event without an
         // organizer address would have been this account's own.
         return event.organizer_calendar_address.is_some();
     }
-    participants(event)
-        .values()
-        .all(|participant| calendar_address(participant).is_some())
+    let reachable = |participant: &Value| calendar_address(participant).is_some();
+    participants(event).values().all(|p| reachable(p))
+        && overridden_ids(None, Some(event))
+            .iter()
+            .all(|recurrence_id| {
+                participants_at(event, recurrence_id)
+                    .values()
+                    .all(reachable)
+            })
 }
 
 /// Record whatever §5.9.2 asks for, for one applied `/set`.
@@ -121,7 +138,7 @@ fn origin_messages(
 ) -> Vec<RecordedSchedulingMessage> {
     let sender = subject.organizer_calendar_address.clone();
     let mut messages = Vec::new();
-    let mut send = |method: &str, recipient: &str, recurrence_id: Option<String>| {
+    let mut send = |method: &str, recipient: &str, recurrence_id: Scope| {
         messages.push(RecordedSchedulingMessage {
             method: method.to_owned(),
             event_id: change.id.clone(),
@@ -133,21 +150,26 @@ fn origin_messages(
     };
 
     match (&change.before, &change.after) {
-        // Created: invite everyone who is not this account.
+        // Created: invite everyone who is not this account, each about the
+        // series or about their one occurrence of it.
         (None, Some(after)) => {
-            for recipient in outward_addresses(after, own) {
-                send(scheduling_method::REQUEST, &recipient, None);
+            for (recipient, recurrence_id) in invitation_scopes(after, own) {
+                send(scheduling_method::REQUEST, &recipient, recurrence_id);
             }
         }
-        // Destroyed: withdraw from everyone who is not this account.
+        // Destroyed: withdraw the same way.
         (Some(before), None) => {
-            for recipient in outward_addresses(before, own) {
-                send(scheduling_method::CANCEL, &recipient, None);
+            for (recipient, recurrence_id) in invitation_scopes(before, own) {
+                send(scheduling_method::CANCEL, &recipient, recurrence_id);
             }
         }
         (Some(before), Some(after)) => {
             // §5.9.2.2, first case: a participant who is gone hears CANCEL,
             // and hears it alone.
+            let mut withdrawn: BTreeSet<String> = BTreeSet::new();
+            // Whether this change withdrew any single occurrence, which is
+            // what §5.9.2.1's exception below turns on.
+            let mut cancelled_occurrence = false;
             let current = participants(after);
             for (id, participant) in participants(before) {
                 if current.contains_key(&id) {
@@ -157,14 +179,41 @@ fn origin_messages(
                     && !own.contains(&normalize_uri(address))
                 {
                     send(scheduling_method::CANCEL, address, None);
+                    withdrawn.insert(normalize_uri(address));
+                }
+            }
+
+            // The same case, one occurrence at a time: somebody an override
+            // drops from a single instance is withdrawn from that instance,
+            // and stays on the series. Anybody already withdrawn from the
+            // whole event has heard about it and is not told again.
+            for recurrence_id in overridden_ids(Some(before), Some(after)) {
+                let was = instance_addresses(before, &recurrence_id, own);
+                let is = instance_addresses(after, &recurrence_id, own);
+                for address in was.difference(&is) {
+                    if withdrawn.contains(&normalize_uri(address)) {
+                        continue;
+                    }
+                    send(
+                        scheduling_method::CANCEL,
+                        address,
+                        Some(recurrence_id.clone()),
+                    );
+                    cancelled_occurrence = true;
                 }
             }
 
             // §5.9.2.2, third and fourth cases: an instance that stops
-            // happening is withdrawn from everybody, by recurrence id.
+            // happening is withdrawn from everybody who was in *it*, which is
+            // the series' participants plus whoever that occurrence alone
+            // named.
             let excluded = newly_excluded(before, after);
+            cancelled_occurrence |= !excluded.is_empty();
             for recurrence_id in &excluded {
-                for recipient in outward_addresses(after, own) {
+                let mut recipients: BTreeSet<String> =
+                    outward_addresses(after, own).into_iter().collect();
+                recipients.extend(instance_addresses(after, recurrence_id, own));
+                for recipient in recipients {
                     send(
                         scheduling_method::CANCEL,
                         &recipient,
@@ -174,15 +223,26 @@ fn origin_messages(
             }
 
             // §5.9.2.1: any other change to a property that is not per-user
-            // re-invites whoever is still on the list. The exception the
-            // section names is a change that is *only* those exclusions:
-            // those were just cancelled, and a REQUEST would contradict it.
+            // re-invites whoever is still on the list, each at their own
+            // scope. The exception the section names is a change that touches
+            // *only* `recurrenceOverrides` and generates CANCELs by doing so:
+            // a REQUEST would contradict what was just withdrawn.
             let changed = changed_shared_properties(before, after);
-            let only_exclusions =
-                !excluded.is_empty() && changed.iter().all(|name| name == "recurrenceOverrides");
-            if !changed.is_empty() && !only_exclusions {
-                for recipient in outward_addresses(after, own) {
-                    send(scheduling_method::REQUEST, &recipient, None);
+            let invited = invitation_scopes(after, own);
+            let cancelling_overrides =
+                cancelled_occurrence && changed.iter().all(|name| name == "recurrenceOverrides");
+            if !changed.is_empty() && !cancelling_overrides {
+                for (recipient, recurrence_id) in invited {
+                    send(scheduling_method::REQUEST, &recipient, recurrence_id);
+                }
+            } else {
+                // That exception cannot swallow an invitation, though:
+                // somebody the same patch newly names for an occurrence has
+                // been told nothing at all otherwise.
+                for (recipient, recurrence_id) in
+                    invited.difference(&invitation_scopes(before, own))
+                {
+                    send(scheduling_method::REQUEST, recipient, recurrence_id.clone());
                 }
             }
         }
@@ -237,6 +297,44 @@ fn reply_messages(
             recurrence_id: None,
         });
     }
+
+    // §5.9.2.3's closing SHOULD: an answer the client pinned inside an
+    // override answers for that recurrence id, and for no other. Only a
+    // status the override itself sets counts, so a series-level answer that
+    // an occurrence merely inherits is not sent a second time here.
+    for recurrence_id in overridden_ids(change.before.as_ref(), change.after.as_ref()) {
+        for (id, participant) in participants_at(subject, &recurrence_id) {
+            let Some(address) = calendar_address(&participant) else {
+                continue;
+            };
+            if !own.contains(&normalize_uri(address)) {
+                continue;
+            }
+            let answer = match (&change.before, &change.after) {
+                (None, Some(_)) | (Some(_), None) => pinned_status(subject, &recurrence_id, &id),
+                (Some(before), Some(after)) => {
+                    let previous = pinned_status(before, &recurrence_id, &id);
+                    let current = pinned_status(after, &recurrence_id, &id);
+                    if current == previous { None } else { current }
+                }
+                (None, None) => None,
+            };
+            if answer
+                .as_deref()
+                .is_none_or(|status| status == participant_participation_status::NEEDS_ACTION)
+            {
+                continue;
+            }
+            messages.push(RecordedSchedulingMessage {
+                method: scheduling_method::REPLY.to_owned(),
+                event_id: change.id.clone(),
+                uid: subject.uid.clone(),
+                sender: Some(address.to_owned()),
+                recipient: organizer.clone(),
+                recurrence_id: Some(recurrence_id.clone()),
+            });
+        }
+    }
     messages
 }
 
@@ -259,6 +357,146 @@ fn participants(event: &CalendarEvent) -> BTreeMap<String, &Value> {
         .flatten()
         .map(|(id, participant)| (id.clone(), participant))
         .collect()
+}
+
+/// Every recurrence id the event singles out, in either state of a change.
+/// These are the only occurrences whose participant set can differ from the
+/// series', so they are the only ones worth asking about.
+fn overridden_ids(
+    before: Option<&CalendarEvent>,
+    after: Option<&CalendarEvent>,
+) -> BTreeSet<String> {
+    [before, after]
+        .into_iter()
+        .flatten()
+        .filter_map(|event| event.recurrence_overrides.as_ref())
+        .flat_map(|overrides| overrides.keys().cloned())
+        .collect()
+}
+
+/// The participants of one occurrence: the series' own, with the override's
+/// participant-scoped patches applied.
+///
+/// An override is a JSCalendar PatchObject (jscalendarbis §1.4.10), so its
+/// keys are pointer paths into the event and not nested objects: a
+/// per-occurrence answer arrives as the single key
+/// `participants/<id>/participationStatus`, and a per-occurrence removal as
+/// `participants/<id>` mapping to null. Figure 6 of
+/// draft-ietf-jmap-calendars-28 spells out that this is the only shape a
+/// client can send, since the outer `update` patch cannot reach inside an
+/// override that does not exist yet.
+///
+/// The patches are replayed through [`apply_patch`] rather than read by a
+/// second, hand-written pointer parser, so RFC 6901's `~0`/`~1` escaping is
+/// handled in exactly one place.
+fn instance_participants(base: &Map<String, Value>, override_: &Value) -> Map<String, Value> {
+    let mut participants = Value::Object(base.clone());
+    for (path, new_value) in override_.as_object().into_iter().flatten() {
+        let (head, tail) = match path.split_once('/') {
+            Some((head, tail)) => (head, Some(tail)),
+            None => (path.as_str(), None),
+        };
+        if unescape(head) != "participants" {
+            continue;
+        }
+        let Some(tail) = tail else {
+            // The whole property is replaced, or removed outright.
+            participants = match new_value {
+                Value::Object(_) => new_value.clone(),
+                _ => Value::Object(Map::new()),
+            };
+            continue;
+        };
+        let patch = Map::from_iter([(tail.to_owned(), new_value.clone())]);
+        // A patch this mock cannot apply (one reaching through a non-object,
+        // which §1.4.10 forbids anyway) leaves the occurrence as the series.
+        let _ = apply_patch(&mut participants, &patch);
+    }
+    match participants {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    }
+}
+
+/// The participants of the occurrence `recurrence_id` names. An occurrence
+/// with no override of its own is the series, participants and all.
+fn participants_at(event: &CalendarEvent, recurrence_id: &str) -> Map<String, Value> {
+    let base: Map<String, Value> = participants(event)
+        .into_iter()
+        .map(|(id, participant)| (id, participant.clone()))
+        .collect();
+    match event
+        .recurrence_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.get(recurrence_id))
+    {
+        Some(override_) => instance_participants(&base, override_),
+        None => base,
+    }
+}
+
+/// The `participationStatus` the override for `recurrence_id` *itself* sets
+/// for a participant, which is what §5.9.2.3's "changed for just a single
+/// instance (i.e., set in recurrenceOverrides)" asks about.
+///
+/// Computed by replaying the override's participant patches onto an empty
+/// participant set rather than onto the series', so a status the participant
+/// merely inherits from the series does not read as pinned here. That is what
+/// keeps a plain series-level answer from being sent twice.
+fn pinned_status(
+    event: &CalendarEvent,
+    recurrence_id: &str,
+    participant_id: &str,
+) -> Option<String> {
+    let override_ = event
+        .recurrence_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.get(recurrence_id))?;
+    instance_participants(&Map::new(), override_)
+        .get(participant_id)
+        .and_then(participation_status)
+        .map(str::to_owned)
+}
+
+/// Everybody this event has to announce something to, each at the scope they
+/// hear it: the whole event for a participant of the series, one occurrence
+/// for somebody only that occurrence names (§5.9.2.1).
+fn invitation_scopes(event: &CalendarEvent, own: &BTreeSet<String>) -> BTreeSet<(String, Scope)> {
+    let series = outward_addresses(event, own);
+    let normalized: BTreeSet<String> = series
+        .iter()
+        .map(|address| normalize_uri(address))
+        .collect();
+    let mut scopes: BTreeSet<(String, Scope)> =
+        series.into_iter().map(|address| (address, None)).collect();
+    for recurrence_id in overridden_ids(None, Some(event)) {
+        for address in instance_addresses(event, &recurrence_id, own) {
+            if !normalized.contains(&normalize_uri(&address)) {
+                scopes.insert((address, Some(recurrence_id.clone())));
+            }
+        }
+    }
+    scopes
+}
+
+/// The addresses, other than this account's own, in one occurrence.
+fn instance_addresses(
+    event: &CalendarEvent,
+    recurrence_id: &str,
+    own: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    participants_at(event, recurrence_id)
+        .values()
+        .filter_map(|participant| calendar_address(participant))
+        .filter(|address| !own.contains(&normalize_uri(address)))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// RFC 6901 §3's escaping, undone. Kept beside the split that produces the
+/// segment, since [`apply_patch`] does the same for the rest of the path.
+fn unescape(segment: &str) -> String {
+    segment.replace("~1", "/").replace("~0", "~")
 }
 
 fn calendar_address(participant: &Value) -> Option<&str> {
@@ -371,7 +609,100 @@ fn is_unreserved(byte: u8) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_uri;
+    use super::{CalendarEvent, Map, instance_participants, normalize_uri, pinned_status};
+    use serde_json::json;
+
+    fn series_of_one() -> Map<String, serde_json::Value> {
+        json!({"carol": {"calendarAddress": "mailto:carol@example.org"}})
+            .as_object()
+            .unwrap()
+            .clone()
+    }
+
+    #[test]
+    fn an_override_patches_the_series_participants_in_place() {
+        let patched = instance_participants(
+            &series_of_one(),
+            &json!({"participants/carol/participationStatus": "declined"}),
+        );
+        assert_eq!(
+            patched["carol"],
+            json!({
+                "calendarAddress": "mailto:carol@example.org",
+                "participationStatus": "declined",
+            }),
+            "the occurrence keeps what the series said and adds the answer"
+        );
+    }
+
+    #[test]
+    fn a_participant_id_holding_a_solidus_arrives_escaped() {
+        let base = json!({"a/b": {"calendarAddress": "mailto:ab@example.org"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let patched = instance_participants(
+            &base,
+            // RFC 6901 §3: the id's own solidus is `~1`, so this is one
+            // segment naming the participant, not two naming a path.
+            &json!({"participants/a~1b/participationStatus": "accepted"}),
+        );
+        assert_eq!(
+            patched["a/b"]["participationStatus"],
+            json!("accepted"),
+            "the escape is undone before the id is looked up"
+        );
+    }
+
+    #[test]
+    fn an_escaped_solidus_in_the_first_segment_is_not_a_participant_patch() {
+        // draft-ietf-jmap-calendars-28 Figure 5: this key names a property
+        // called "participants/carol" on the event, which does not exist. It
+        // is the mistake the draft warns clients off, not a removal.
+        let patched =
+            instance_participants(&series_of_one(), &json!({"participants~1carol": null}));
+        assert_eq!(patched, series_of_one(), "the occurrence is left alone");
+    }
+
+    #[test]
+    fn only_the_override_own_answer_counts_as_pinned() {
+        let event = CalendarEvent {
+            participants: Some(
+                [(
+                    "carol".to_owned(),
+                    json!({
+                        "calendarAddress": "mailto:carol@example.org",
+                        "participationStatus": "accepted",
+                    }),
+                )]
+                .into(),
+            ),
+            recurrence_overrides: Some(
+                [
+                    (
+                        "2026-06-08T10:00:00".to_owned(),
+                        json!({"title": "Elsewhere"}),
+                    ),
+                    (
+                        "2026-06-15T10:00:00".to_owned(),
+                        json!({"participants/carol/participationStatus": "declined"}),
+                    ),
+                ]
+                .into(),
+            ),
+            ..CalendarEvent::default()
+        };
+
+        assert_eq!(
+            pinned_status(&event, "2026-06-08T10:00:00", "carol"),
+            None,
+            "a status the occurrence merely inherits is not its own answer"
+        );
+        assert_eq!(
+            pinned_status(&event, "2026-06-15T10:00:00", "carol").as_deref(),
+            Some("declined"),
+        );
+    }
 
     #[test]
     fn the_scheme_is_the_only_case_folded_part() {

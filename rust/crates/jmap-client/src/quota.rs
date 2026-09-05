@@ -5,8 +5,8 @@
 //! is no `Quota/set` — the RFC defines quotas as server-computed.
 
 use jmap_proto::Id;
-use jmap_proto::methods::{GetRequest, GetResponse};
-use jmap_proto::quota::Quota;
+use jmap_proto::methods::{GetRequest, GetResponse, QueryRequest, QueryResponse};
+use jmap_proto::quota::{Quota, QuotaQueryFilter};
 use jmap_proto::session::{CAPABILITY_CORE, CAPABILITY_QUOTA};
 
 use crate::client::Client;
@@ -24,17 +24,34 @@ impl Client {
     /// quotas", and every caller here already treats an empty list as
     /// nothing to report.
     pub fn quotas(&self, account_id: &Id) -> Result<Vec<Quota>, Error> {
-        let has_quota = self
-            .session()
-            .accounts
-            .get(account_id)
-            .is_some_and(|account| account.has_capability(CAPABILITY_QUOTA));
-        if !has_quota {
+        if !self.has_quota_capability(account_id) {
             return Ok(Vec::new());
         }
         let arguments =
             self.single_call(USING, "Quota/get", &GetRequest::all(account_id.clone()))?;
         let response: GetResponse<Quota> = serde_json::from_value(arguments)?;
         Ok(response.list)
+    }
+
+    /// Resolve quota ids matching `filter` (`Quota/query`, RFC 9425 §4.4).
+    ///
+    /// Same capability gate as [`Client::quotas`], for the same reason: a
+    /// server that never advertises quota at all must not be sent this
+    /// request either.
+    pub fn quota_query(&self, account_id: &Id, filter: QuotaQueryFilter) -> Result<Vec<Id>, Error> {
+        if !self.has_quota_capability(account_id) {
+            return Ok(Vec::new());
+        }
+        let request = QueryRequest::new(account_id.clone()).filter(filter);
+        let arguments = self.single_call(USING, "Quota/query", &request)?;
+        let response: QueryResponse = serde_json::from_value(arguments)?;
+        Ok(response.ids)
+    }
+
+    fn has_quota_capability(&self, account_id: &Id) -> bool {
+        self.session()
+            .accounts
+            .get(account_id)
+            .is_some_and(|account| account.has_capability(CAPABILITY_QUOTA))
     }
 }
