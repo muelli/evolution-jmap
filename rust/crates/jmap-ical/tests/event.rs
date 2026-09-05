@@ -24524,3 +24524,300 @@ END:VCALENDAR\r\n";
     );
     assert!(maps_time_zone(&ev_iana));
 }
+
+#[test]
+fn differential_oracle_fold_overlong_lines_utf8_and_escape_preservation() {
+    // Divergence 120 against Stalwart differential oracle:
+    // Outbound content line folding (MAX_LINE_OCTETS = 75), UTF-8 code point boundary safety,
+    // and backslash escape sequence preservation.
+    // In jmap-ical:
+    // 1. Lines exceeding 75 octets are folded using CRLF followed by a single space (\r\n ).
+    // 2. Multi-byte UTF-8 sequences are never split across line boundaries (is_char_boundary).
+    // 3. Trailing backslashes before a cut step back so escape pairs (\,, \;, \n, \\) stay intact.
+    // 4. Stalwart calcard skips folding when trailing empty text slots occur or on recurrence rules (issue #25).
+
+    let long_text = "This is an extraordinarily lengthy meeting description that spans well beyond \
+                     seventy-five octets in length and incorporates multi-byte UTF-8 glyphs: \
+                     Café München ☕, alongside escaped characters like comma\\, semicolon\\; \
+                     and backslashes\\\\ to verify line folding integrity.";
+
+    let event = CalendarEvent {
+        uid: Some("fold-test-120".to_owned()),
+        title: Some("Overlong Line Test".to_owned()),
+        description: Some(long_text.to_owned()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+
+    let ics = event_to_ical(&event);
+
+    // Verify all physical lines adhere to the 75-octet limit
+    for line in ics.split("\r\n") {
+        assert!(
+            line.len() <= 75,
+            "physical line exceeds 75 octets: (len {}) {line}",
+            line.len()
+        );
+    }
+
+    // Verify that continuation lines start with a single space
+    let mut saw_continuation = false;
+    for (i, line) in ics.split("\r\n").enumerate() {
+        if i > 0 && line.starts_with(' ') {
+            saw_continuation = true;
+            // The character following the fold space must not be a broken continuation
+            assert!(
+                !line.starts_with("  "),
+                "continuation line must have exactly one fold space"
+            );
+        }
+    }
+    assert!(
+        saw_continuation,
+        "expected at least one folded continuation line"
+    );
+
+    // Inbound re-parsing must restore the exact original text without corruption
+    let roundtrip = ical_to_event(&ics).expect("parse folded ics");
+    assert_eq!(
+        roundtrip.description.as_deref(),
+        Some(long_text),
+        "unfolding must restore original text with multi-byte and escape sequence fidelity"
+    );
+}
+
+#[test]
+fn differential_oracle_fmttype_parameter_restricted_name_validation() {
+    // Divergence 121 against Stalwart differential oracle:
+    // RFC 5545 section 3.2.8 FMTTYPE parameter validation and RFC 6838 restricted name enforcement.
+    // In jmap-ical:
+    // 1. Valid RFC 6838 restricted names (type/subtype) emit FMTTYPE parameter on ATTACH/IMAGE.
+    // 2. Media types containing parameters (e.g. charset=utf-8) or invalid characters return None,
+    //    omitting the parameter while preserving the resource link.
+    // 3. Inbound parsing extracts FMTTYPE into Link.contentType.
+
+    // 1. Valid media type: application/pdf emitted as FMTTYPE=application/pdf
+    let link_valid = json!({
+        "@type": "Link",
+        "href": "https://example.com/agenda.pdf",
+        "contentType": "application/pdf"
+    });
+    let event_valid = CalendarEvent {
+        uid: Some("link-valid-fmttype".to_owned()),
+        links: Some(BTreeMap::from([("l1".to_owned(), link_valid)])),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_valid = event_to_ical(&event_valid);
+    assert!(
+        ics_valid.contains(
+            "ATTACH;FMTTYPE=application/pdf;X-JMAP-KEY=l1:https://example.com/agenda.pdf\r\n"
+        ),
+        "valid media type must emit FMTTYPE parameter: {ics_valid}"
+    );
+
+    // 2. Media type with parameter (e.g. charset=utf-8): FMTTYPE omitted, link preserved
+    let link_param = json!({
+        "@type": "Link",
+        "href": "https://example.com/calendar.ics",
+        "contentType": "text/calendar; charset=utf-8"
+    });
+    let event_param = CalendarEvent {
+        uid: Some("link-param-fmttype".to_owned()),
+        links: Some(BTreeMap::from([("l2".to_owned(), link_param)])),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_param = event_to_ical(&event_param);
+    assert!(
+        ics_param.contains("ATTACH;X-JMAP-KEY=l2:https://example.com/calendar.ics\r\n"),
+        "parameterized media type must omit FMTTYPE but retain ATTACH: {ics_param}"
+    );
+    assert!(
+        !ics_param.contains("FMTTYPE="),
+        "FMTTYPE must not be emitted when media type contains parameters"
+    );
+
+    // 3. Inbound parsing extracts FMTTYPE into contentType
+    let inbound_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:fmttype-inbound\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+ATTACH;FMTTYPE=image/png;SIZE=2048:https://example.com/photo.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_inbound = ical_to_event(inbound_ics).expect("parse inbound fmttype");
+    let links = ev_inbound.links.expect("links populated");
+    let link_entry = links.values().next().expect("link entry exists");
+    assert_eq!(
+        link_entry.get("contentType").and_then(Value::as_str),
+        Some("image/png")
+    );
+    assert_eq!(link_entry.get("size").and_then(Value::as_u64), Some(2048));
+}
+
+#[test]
+fn differential_oracle_participant_roles_precedence_hierarchy_and_owner_omission() {
+    // Divergence 122 against Stalwart differential oracle:
+    // PARTICIPANT_ROLES precedence ordering (chair > informational > optional > attendee)
+    // and owner role omission.
+    // In jmap-ical:
+    // 1. Multi-role participant sets are resolved via strict four-tier precedence.
+    // 2. An attendee with both attendee: true and optional: true maps to ROLE=OPT-PARTICIPANT.
+    // 3. An attendee with chair: true maps to ROLE=CHAIR regardless of attendee: true.
+    // 4. An attendee with informational: true maps to ROLE=NON-PARTICIPANT.
+    // 5. A participant with owner: true is emitted as ORGANIZER, not ATTENDEE.
+
+    let p_chair = json!({
+        "@type": "Participant",
+        "name": "Alice Chair",
+        "sendTo": {"imip": "mailto:alice@example.com"},
+        "roles": {"chair": true, "attendee": true}
+    });
+    let p_info = json!({
+        "@type": "Participant",
+        "name": "Bob Info",
+        "sendTo": {"imip": "mailto:bob@example.com"},
+        "roles": {"informational": true, "attendee": true}
+    });
+    let p_opt = json!({
+        "@type": "Participant",
+        "name": "Charlie Optional",
+        "sendTo": {"imip": "mailto:charlie@example.com"},
+        "roles": {"optional": true, "attendee": true}
+    });
+    let p_req = json!({
+        "@type": "Participant",
+        "name": "David Required",
+        "sendTo": {"imip": "mailto:david@example.com"},
+        "roles": {"attendee": true}
+    });
+    let p_owner = json!({
+        "@type": "Participant",
+        "name": "Eve Organizer",
+        "sendTo": {"imip": "mailto:eve@example.com"},
+        "roles": {"owner": true}
+    });
+
+    let event = CalendarEvent {
+        uid: Some("participant-roles-122".to_owned()),
+        participants: Some(BTreeMap::from([
+            ("p1".to_owned(), p_chair),
+            ("p2".to_owned(), p_info),
+            ("p3".to_owned(), p_opt),
+            ("p4".to_owned(), p_req),
+            ("p5".to_owned(), p_owner),
+        ])),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+
+    let ics = event_to_ical(&event);
+
+    // 1. Owner emitted as ORGANIZER
+    assert!(
+        ics.contains("ORGANIZER;CN=\"Eve Organizer\":mailto:eve@example.com\r\n"),
+        "owner must be emitted as ORGANIZER: {ics}"
+    );
+
+    // 2. Chair takes highest precedence
+    assert!(
+        ics.contains("ROLE=CHAIR") && ics.contains("mailto:alice@example.com"),
+        "chair must take highest precedence: {ics}"
+    );
+
+    // 3. Informational takes precedence over attendee
+    assert!(
+        ics.contains("ROLE=NON-PARTICIPANT") && ics.contains("mailto:bob@example.com"),
+        "informational must take precedence over attendee: {ics}"
+    );
+
+    // 4. Optional takes precedence over attendee
+    assert!(
+        ics.contains("ROLE=OPT-PARTICIPANT") && ics.contains("Charlie Optional"),
+        "optional must take precedence over attendee: {ics}"
+    );
+
+    // 5. Default attendee maps to REQ-PARTICIPANT
+    assert!(
+        ics.contains("ROLE=REQ-PARTICIPANT") && ics.contains("David Required"),
+        "attendee must map to REQ-PARTICIPANT: {ics}"
+    );
+}
+
+#[test]
+fn differential_oracle_stated_offset_signed_duration_and_alarm_triggers() {
+    // Divergence 123 against Stalwart differential oracle:
+    // stated_offset signed duration validation and alarm trigger mapping.
+    // In jmap-ical:
+    // 1. Negative duration triggers (-PT15M) parse into OffsetTrigger with offset: "-PT15M".
+    // 2. Positive duration triggers (PT30M) parse into offset: "PT30M".
+    // 3. Explicit positive signs (+PT1H) are stripped into canonical offset: "PT1H".
+    // 4. Malformed triggers (-PT, invalid syntax) return None, dropping unparseable alarms.
+
+    let alarms_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:alarm-triggers-123\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Pre-meeting reminder\r\n\
+TRIGGER:-PT15M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Post-start reminder\r\n\
+TRIGGER:PT30M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Explicit plus reminder\r\n\
+TRIGGER:+PT1H\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Broken reminder\r\n\
+TRIGGER:-PT\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(alarms_ics).expect("parse alarms ics");
+    let alerts = ev.alerts.expect("alerts populated");
+    assert_eq!(alerts.len(), 3, "broken alarm with -PT must be dropped");
+
+    // Collect offsets
+    let offsets: Vec<&str> = alerts
+        .values()
+        .filter_map(|alert| {
+            alert
+                .get("trigger")
+                .and_then(|trig| trig.get("offset"))
+                .and_then(Value::as_str)
+        })
+        .collect();
+
+    assert!(
+        offsets.contains(&"-PT15M"),
+        "negative pre-meeting offset preserved: {offsets:?}"
+    );
+    assert!(
+        offsets.contains(&"PT30M"),
+        "positive post-meeting offset preserved: {offsets:?}"
+    );
+    assert!(
+        offsets.contains(&"PT1H"),
+        "plus prefix stripped into canonical offset: {offsets:?}"
+    );
+}
