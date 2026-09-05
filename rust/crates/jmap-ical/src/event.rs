@@ -782,7 +782,7 @@ pub fn uses_default_alerts(event: &CalendarEvent) -> bool {
 /// either — there is nothing to put there, and the reminder still fires — so the
 /// text puts no condition on whether the alert is covered, and [`maps_alerts`]
 /// asks without it.
-fn drawn_alert(key: &str, alert: &Value, summary: Option<&str>) -> Option<Component> {
+pub fn drawn_alert(key: &str, alert: &Value, summary: Option<&str>) -> Option<Component> {
     let alert = alert.as_object()?;
     if !names_map_entry(key) {
         return None;
@@ -1211,7 +1211,7 @@ fn stated_offset(value: &str) -> Option<String> {
 /// reason [`read_locations`] gives: the save path reads an edit off a difference
 /// from what was shown, and an empty map would claim the event reminds nobody
 /// where the component made no claim at all.
-fn read_alerts(
+pub fn read_alerts(
     vevent: &ICalendarComponent,
     components: &[ICalendarComponent],
 ) -> Option<BTreeMap<String, Value>> {
@@ -1258,7 +1258,7 @@ fn read_alerts(
 /// off: both directions have to agree about which, or a save would read its own
 /// rendering as an edit. What decides is [`drawn_alert`], which reads back exactly
 /// this shape.
-fn read_alert(valarm: &ICalendarComponent) -> Option<Value> {
+pub fn read_alert(valarm: &ICalendarComponent) -> Option<Value> {
     let (jscalendar, ical) = DISPLAY_ALERT;
     if !component_text(valarm, "ACTION")?.eq_ignore_ascii_case(ical) {
         return None;
@@ -1439,7 +1439,7 @@ pub fn sends_recurrence_override(series: &CalendarEvent, id: &str, patch: &Value
 /// The shape both questions above have, with the per-field judgement left to the
 /// caller: an id an `EXDATE` can spell, an exclusion that says nothing else, and
 /// otherwise every restated field admitted by `field`.
-fn override_maps_by(
+pub fn override_maps_by(
     series: &CalendarEvent,
     id: &str,
     patch: &Value,
@@ -1467,7 +1467,7 @@ fn override_maps_by(
 /// round-trips wherever an absent property does. An *empty* string is neither:
 /// the writer drops it like an absent value, so it would come back as a
 /// removal, which is a different patch.
-fn maps_override_field(series: &CalendarEvent, name: &str, value: &Value) -> bool {
+pub fn maps_override_field(series: &CalendarEvent, name: &str, value: &Value) -> bool {
     match name {
         "excluded" => value.is_boolean(),
         _ if !OVERRIDE_PROPERTIES.contains(&name) => false,
@@ -1567,7 +1567,7 @@ fn maps_override_field(series: &CalendarEvent, name: &str, value: &Value) -> boo
 /// clock — a different appointment, stated without saying so — and refusing it
 /// in a save that *can* patch `timeZones` throws the user's move away, which is
 /// what [`sends_recurrence_override`] asks this instead.
-fn draws_override_field(series: &CalendarEvent, name: &str, value: &Value) -> bool {
+pub fn draws_override_field(series: &CalendarEvent, name: &str, value: &Value) -> bool {
     match name {
         "timeZone" => {
             value.is_null()
@@ -3890,7 +3890,7 @@ fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) ->
 /// alternative is dropping the length of an event that plainly states it, and
 /// a zone database is a dependency this crate does not carry (see
 /// [`rule_to_rrule`] for the same trade made about `UNTIL`).
-fn read_duration(vevent: &ICalendarComponent) -> Option<String> {
+pub fn read_duration(vevent: &ICalendarComponent) -> Option<String> {
     if let Some(duration) = component_entry(vevent, "DURATION")
         .map(entry_raw_value)
         .and_then(|value| stated_duration(&value))
@@ -3945,7 +3945,7 @@ fn read_duration(vevent: &ICalendarComponent) -> Option<String> {
 /// What it sees is calcard's rendering of the value, not the octets the
 /// component carried: a `P1DT` arrives already trimmed to `P1D`. Only what
 /// survives *that* is judged here.
-fn stated_duration(value: &str) -> Option<String> {
+pub fn stated_duration(value: &str) -> Option<String> {
     let value = value.strip_prefix('+').unwrap_or(value);
     let mut rest = value.strip_prefix(['P', 'p'])?;
     let mut measured = false;
@@ -3992,7 +3992,7 @@ fn stated_duration(value: &str) -> Option<String> {
 /// `PT0H0M0S` all spell it. It comes back as written, which RFC 8984 §4.2.2
 /// reads as the same zero length the `None` answer leaves behind; the two
 /// spellings differ on paper and not in the calendar.
-fn period_length(start: &str, end: &str) -> Option<String> {
+pub fn period_length(start: &str, end: &str) -> Option<String> {
     if end.starts_with(['P', 'p']) {
         return stated_duration(end);
     }
@@ -4001,7 +4001,7 @@ fn period_length(start: &str, end: &str) -> Option<String> {
 
 /// A `DTSTART`/`DTEND` value as seconds from 1970-01-01T00:00:00 on its own
 /// wall clock — a number to subtract, not an instant on any timeline.
-fn instant(value: &str) -> Option<i64> {
+pub fn instant(value: &str) -> Option<i64> {
     let local = to_local_date_time(value)?;
     let fields: Vec<i64> = local
         .split(['-', 'T', ':'])
@@ -4038,7 +4038,7 @@ pub fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 /// — is a component saying nothing usable about its length, which is better
 /// answered with silence than with a value the server would reject or, worse,
 /// accept.
-fn to_duration(seconds: i64) -> Option<String> {
+pub fn to_duration(seconds: i64) -> Option<String> {
     if seconds <= 0 {
         return None;
     }
@@ -4073,7 +4073,7 @@ fn to_duration(seconds: i64) -> Option<String> {
 /// having cleared the flag.
 ///
 /// `start` is the already-rendered `DTSTART` value, `YYYYMMDDTHHMMSS`.
-fn shows_without_time(event: &CalendarEvent, start: &str) -> bool {
+pub fn shows_without_time(event: &CalendarEvent, start: &str) -> bool {
     event.show_without_time == Some(true)
         && event.time_zone.is_none()
         && at_midnight(start)
@@ -4128,7 +4128,7 @@ pub fn names_a_time_of_day(rule: &RecurrenceRule) -> bool {
 /// series does: a start at midnight, a length in whole days and no zone of its
 /// own, since RFC 5545 §3.6.1 lets nothing else stand beside a DATE-valued
 /// `DTSTART` and §3.2.19 gives such a value no `TZID` to carry a zone on.
-fn instance_shows_without_time(event: &CalendarEvent, id: &str, patch: &Value) -> bool {
+pub fn instance_shows_without_time(event: &CalendarEvent, id: &str, patch: &Value) -> bool {
     let Some(rendered) = to_ical_date_time(id) else {
         return true;
     };

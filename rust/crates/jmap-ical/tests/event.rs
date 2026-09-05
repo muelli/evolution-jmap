@@ -33887,3 +33887,433 @@ END:VCALENDAR\r\n";
         "detached VEVENT is not marked as excluded"
     );
 }
+
+#[test]
+fn differential_oracle_all_day_date_invariants_and_time_exclusion() {
+    // Divergence 232 against Stalwart differential oracle:
+    // shows_without_time, instance_shows_without_time, at_midnight, whole_days, and names_a_time_of_day:
+    // Outbound All-Day VALUE=DATE Serialization Invariants: Document-Wide Date-Type Consensus,
+    // Midnight Start Requirement (at_midnight), Duration in Whole Days (whole_days),
+    // Sub-Day Recurrence Time Exclusion (names_a_time_of_day), and Override Date-Time Alignment.
+
+    // 1. at_midnight and whole_days validators
+    assert!(jmap_ical::event::at_midnight("20260101T000000"));
+    assert!(jmap_ical::event::at_midnight("20261231T000000"));
+    assert!(!jmap_ical::event::at_midnight("20260101T000001"));
+    assert!(!jmap_ical::event::at_midnight("20260101T093000"));
+
+    assert!(jmap_ical::event::whole_days("P1D"));
+    assert!(jmap_ical::event::whole_days("P7D"));
+    assert!(jmap_ical::event::whole_days("P2W"));
+    assert!(jmap_ical::event::whole_days("P1W3D"));
+    assert!(!jmap_ical::event::whole_days("PT1H"));
+    assert!(!jmap_ical::event::whole_days("P1DT1H"));
+    assert!(!jmap_ical::event::whole_days("PT30M"));
+    assert!(!jmap_ical::event::whole_days("-P1D"));
+    assert!(!jmap_ical::event::whole_days(""));
+
+    // 2. names_a_time_of_day: sub-day parts in RecurrenceRule
+    let mut rule_daily = RecurrenceRule::new("daily");
+    assert!(!jmap_ical::event::names_a_time_of_day(&rule_daily));
+
+    rule_daily.by_hour = Some(vec![9, 17]);
+    assert!(jmap_ical::event::names_a_time_of_day(&rule_daily));
+
+    rule_daily.by_hour = None;
+    rule_daily.by_minute = Some(vec![30]);
+    assert!(jmap_ical::event::names_a_time_of_day(&rule_daily));
+
+    rule_daily.by_minute = None;
+    rule_daily.by_second = Some(vec![0]);
+    assert!(jmap_ical::event::names_a_time_of_day(&rule_daily));
+
+    // 3. shows_without_time: valid all-day event vs invalid (timed, zone-bound, or sub-day rule)
+    let valid_allday = CalendarEvent {
+        id: Some("allday-1".into()),
+        start: Some("2026-06-01T00:00:00".to_owned()),
+        show_without_time: Some(true),
+        time_zone: None,
+        duration: Some("P1D".to_owned()),
+        ..CalendarEvent::default()
+    };
+    assert!(jmap_ical::event::shows_without_time(
+        &valid_allday,
+        "20260601T000000"
+    ));
+
+    // Non-midnight start cannot show as all-day:
+    assert!(!jmap_ical::event::shows_without_time(
+        &valid_allday,
+        "20260601T090000"
+    ));
+
+    // Time zone attached prevents bare VALUE=DATE:
+    let mut zoned_allday = valid_allday.clone();
+    zoned_allday.time_zone = Some("America/New_York".to_owned());
+    assert!(!jmap_ical::event::shows_without_time(
+        &zoned_allday,
+        "20260601T000000"
+    ));
+
+    // Sub-day duration prevents VALUE=DATE:
+    let mut timed_duration_allday = valid_allday.clone();
+    timed_duration_allday.duration = Some("PT4H".to_owned());
+    assert!(!jmap_ical::event::shows_without_time(
+        &timed_duration_allday,
+        "20260601T000000"
+    ));
+
+    // Recurrence rule with by_hour prevents VALUE=DATE:
+    let mut rrule_allday = valid_allday.clone();
+    rrule_allday.recurrence_rule = Some(RecurrenceRule {
+        by_hour: Some(vec![10]),
+        ..RecurrenceRule::new("daily")
+    });
+    assert!(!jmap_ical::event::shows_without_time(
+        &rrule_allday,
+        "20260601T000000"
+    ));
+
+    // 4. Serialization of valid all-day event emits VALUE=DATE without TZID:
+    let ics = event_to_ical(&valid_allday);
+    assert!(ics.contains("DTSTART;VALUE=DATE:20260601\r\n"));
+    assert!(!ics.contains("TZID"));
+}
+
+#[test]
+fn differential_oracle_duration_resolution_and_civil_day_conversion() {
+    // Divergence 233 against Stalwart differential oracle:
+    // read_duration, stated_duration, period_length, instant, days_from_civil, and to_duration:
+    // Inbound Duration and Period Length Resolution: Explicit DURATION Precedence over DTEND,
+    // Wall-Clock Instant Measurement via Howard Hinnant's Civil Algorithm (days_from_civil),
+    // Signed Prefix Handling (+ Stripping vs - Rejection), Loose ISO 8601 Component Ingestion,
+    // and Zero/Negative Length Fallback.
+
+    // 1. days_from_civil and instant wall-clock timestamp calculation:
+    // 1970-01-01 is day 0
+    assert_eq!(jmap_ical::event::days_from_civil(1970, 1, 1), 0);
+    // 2000-01-01 (leap century)
+    assert_eq!(jmap_ical::event::days_from_civil(2000, 1, 1), 10957);
+    // 2026-01-01
+    assert_eq!(jmap_ical::event::days_from_civil(2026, 1, 1), 20454);
+
+    assert_eq!(jmap_ical::event::instant("19700101T000000"), Some(0));
+    assert_eq!(jmap_ical::event::instant("19700101T010000"), Some(3600));
+    assert_eq!(
+        jmap_ical::event::instant("20260101T120000Z"),
+        Some(20454 * 86_400 + 12 * 3600)
+    );
+
+    // 2. to_duration formatting:
+    assert_eq!(
+        jmap_ical::event::to_duration(86_400),
+        Some("P1D".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::to_duration(172_800),
+        Some("P2D".to_owned())
+    );
+    assert_eq!(jmap_ical::event::to_duration(3600), Some("PT1H".to_owned()));
+    assert_eq!(
+        jmap_ical::event::to_duration(5400),
+        Some("PT1H30M".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::to_duration(90_061),
+        Some("P1DT1H1M1S".to_owned())
+    );
+    assert_eq!(jmap_ical::event::to_duration(0), None);
+    assert_eq!(jmap_ical::event::to_duration(-3600), None);
+
+    // 3. stated_duration loose validation and prefix stripping:
+    assert_eq!(
+        jmap_ical::event::stated_duration("PT1H"),
+        Some("PT1H".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::stated_duration("+PT1H"),
+        Some("PT1H".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::stated_duration("P1W2D"),
+        Some("P1W2D".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::stated_duration("PT1H15S"),
+        Some("PT1H15S".to_owned())
+    );
+    assert_eq!(jmap_ical::event::stated_duration("-PT1H"), None);
+    assert_eq!(jmap_ical::event::stated_duration("not-a-duration"), None);
+
+    // 4. period_length evaluation:
+    assert_eq!(
+        jmap_ical::event::period_length("20260101T100000Z", "PT2H"),
+        Some("PT2H".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::period_length("20260101T100000Z", "20260101T120000Z"),
+        Some("PT2H".to_owned())
+    );
+    // Inverted or zero length period:
+    assert_eq!(
+        jmap_ical::event::period_length("20260101T120000Z", "20260101T100000Z"),
+        None
+    );
+
+    // 5. Inbound component: DURATION takes precedence over DTEND:
+    let ics_both = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:dur-precedence\r\n\
+DTSTART:20260101T100000Z\r\n\
+DTEND:20260101T120000Z\r\n\
+DURATION:PT30M\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_both = ical_to_event(ics_both).expect("parse");
+    assert_eq!(ev_both.duration.as_deref(), Some("PT30M"));
+
+    // Inbound component: DTEND used when DURATION absent:
+    let ics_dtend = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:dur-dtend\r\n\
+DTSTART:20260101T100000Z\r\n\
+DTEND:20260101T113000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_dtend = ical_to_event(ics_dtend).expect("parse");
+    assert_eq!(ev_dtend.duration.as_deref(), Some("PT1H30M"));
+}
+
+#[test]
+fn differential_oracle_alerts_gating_action_vocabulary_and_uid_ingestion() {
+    // Divergence 234 against Stalwart differential oracle:
+    // maps_alerts, uses_default_alerts, drawn_alert, drawn_trigger, is_type, and read_alerts:
+    // Reminder and Alarm Gating and Transformation: User Default Alert Masking (useDefaultAlerts),
+    // Closed Action Vocabulary (action: \"display\" / ACTION:DISPLAY), Offset Trigger Normalization
+    // (OffsetTrigger with START / END RELATED), RFC 9074 Stable Alert UID Ingestion,
+    // and Non-Colliding Invented Key Generation (a1, a2).
+
+    // 1. uses_default_alerts detection:
+    let mut ev_alert = CalendarEvent {
+        id: Some("ev-alert".into()),
+        title: Some("Staff Meeting".into()),
+        start: Some("2026-03-01T10:00:00".to_owned()),
+        alerts: Some(BTreeMap::from([(
+            "alert-1".to_string(),
+            json!({
+                "@type": "Alert",
+                "action": "display",
+                "trigger": {
+                    "@type": "OffsetTrigger",
+                    "offset": "-PT15M",
+                    "relativeTo": "start"
+                }
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+    assert!(!jmap_ical::event::uses_default_alerts(&ev_alert));
+    assert!(jmap_ical::event::maps_alerts(&ev_alert));
+
+    // Setting use_default_alerts disables custom alerts mapping:
+    ev_alert.use_default_alerts = Some(true);
+    assert!(jmap_ical::event::uses_default_alerts(&ev_alert));
+    assert!(!jmap_ical::event::maps_alerts(&ev_alert));
+    ev_alert.use_default_alerts = None;
+
+    // 2. drawn_trigger and drawn_alert behavior:
+    let trigger_val = json!({
+        "@type": "OffsetTrigger",
+        "offset": "-PT10M",
+        "relativeTo": "end"
+    });
+    let (offset_str, related_params) =
+        jmap_ical::event::drawn_trigger(&trigger_val).expect("valid trigger");
+    assert_eq!(offset_str, "-PT10M");
+    assert_eq!(related_params, vec!["END"]);
+
+    let trigger_start = json!({
+        "@type": "OffsetTrigger",
+        "offset": "-PT5M"
+    });
+    let (offset_s2, related_p2) =
+        jmap_ical::event::drawn_trigger(&trigger_start).expect("start trigger");
+    assert_eq!(offset_s2, "-PT5M");
+    assert!(
+        related_p2.is_empty(),
+        "default start trigger omits RELATED param"
+    );
+
+    // Invalid action refused:
+    let invalid_alert = json!({
+        "@type": "Alert",
+        "action": "email",
+        "trigger": trigger_start
+    });
+    assert!(jmap_ical::event::drawn_alert("k1", &invalid_alert, Some("Test")).is_none());
+
+    // 3. Serialization and inbound parsing round-trip with RFC 9074 UID:
+    let ics = event_to_ical(&ev_alert);
+    assert!(ics.contains("BEGIN:VALARM\r\n"));
+    assert!(ics.contains("ACTION:DISPLAY\r\n"));
+    assert!(ics.contains("TRIGGER:-PT15M\r\n"));
+    assert!(ics.contains("UID:alert-1\r\n"));
+    assert!(ics.contains("DESCRIPTION:Staff Meeting\r\n"));
+
+    let parsed = ical_to_event(&ics).expect("parse ics with valarm");
+    let alerts_map = parsed.alerts.expect("alerts present");
+    assert!(alerts_map.contains_key("alert-1"));
+    assert_eq!(alerts_map["alert-1"]["action"], "display");
+    assert_eq!(alerts_map["alert-1"]["trigger"]["offset"], "-PT15M");
+
+    // 4. Inbound VALARM without UID assigns invented keys (a1, a2) avoiding collision:
+    let ics_no_uid = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:nouid-event\r\n\
+DTSTART:20260301T100000Z\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+TRIGGER:-PT30M\r\n\
+DESCRIPTION:Reminder 1\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+TRIGGER:-PT10M\r\n\
+DESCRIPTION:Reminder 2\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let parsed_no_uid = ical_to_event(ics_no_uid).expect("parse no uid");
+    let alerts_no_uid = parsed_no_uid.alerts.expect("invented alerts");
+    assert_eq!(alerts_no_uid.len(), 2);
+    assert!(alerts_no_uid.contains_key("a1"));
+    assert!(alerts_no_uid.contains_key("a2"));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_safety_and_timezone_coordination() {
+    // Divergence 235 against Stalwart differential oracle:
+    // maps_recurrence_override, sends_recurrence_override, override_maps_by,
+    // maps_override_field, and draws_override_field:
+    // Recurrence Override Modification Safety Gating: Strict Property Whitelisting (OVERRIDE_PROPERTIES),
+    // Isolated Override vs Coordinated TimeZone Definition Emission (maps_override_field vs draws_override_field),
+    // Set Replacement Semantics (keywords and alerts), and Exclusion Purity (excluded: true).
+
+    let series = CalendarEvent {
+        id: Some("series-base".into()),
+        start: Some("2026-05-01T09:00:00".to_owned()),
+        title: Some("Weekly Review".into()),
+        time_zone: Some("UTC".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
+        time_zones: Some(BTreeMap::from([(
+            "/custom-zone".to_string(),
+            json!({
+                "@type": "TimeZone",
+                "standard": [{
+                    "start": "2026-01-01T00:00:00",
+                    "offsetFrom": "+01:00",
+                    "offsetTo": "+01:00"
+                }]
+            }),
+        )])),
+        ..CalendarEvent::default()
+    };
+
+    // 1. Exclusion purity: excluded: true with no other fields passes
+    let valid_excluded = json!({ "excluded": true });
+    assert!(jmap_ical::event::maps_recurrence_override(
+        &series,
+        "2026-05-08T09:00:00",
+        &valid_excluded
+    ));
+
+    // Impure exclusion: excluded: true combined with title is refused
+    let impure_excluded = json!({
+        "excluded": true,
+        "title": "Should Not Happen"
+    });
+    assert!(!jmap_ical::event::maps_recurrence_override(
+        &series,
+        "2026-05-08T09:00:00",
+        &impure_excluded
+    ));
+
+    // 2. Unwhitelisted property (e.g. participants, locations) is refused
+    let invalid_field = json!({
+        "participants": {
+            "p1": { "name": "Eve" }
+        }
+    });
+    assert!(!jmap_ical::event::maps_recurrence_override(
+        &series,
+        "2026-05-08T09:00:00",
+        &invalid_field
+    ));
+
+    // 3. Time zone coordination: custom solidus timezone in isolated patch vs coordinated patch
+    let custom_tz_patch = json!({
+        "timeZone": "/custom-zone"
+    });
+    // Isolated check refuses custom timezone without definition in patch:
+    assert!(!jmap_ical::event::maps_recurrence_override(
+        &series,
+        "2026-05-08T09:00:00",
+        &custom_tz_patch
+    ));
+    // Coordinated check admits custom timezone defined in series time_zones:
+    assert!(jmap_ical::event::sends_recurrence_override(
+        &series,
+        "2026-05-08T09:00:00",
+        &custom_tz_patch
+    ));
+
+    // Standard IANA timezone passes in both:
+    let iana_tz_patch = json!({
+        "timeZone": "Europe/Berlin"
+    });
+    assert!(jmap_ical::event::maps_recurrence_override(
+        &series,
+        "2026-05-08T09:00:00",
+        &iana_tz_patch
+    ));
+    assert!(jmap_ical::event::sends_recurrence_override(
+        &series,
+        "2026-05-08T09:00:00",
+        &iana_tz_patch
+    ));
+
+    // 4. Set replacement semantics: empty objects are refused for keywords and alerts
+    // because they are ambiguous with removal nulls:
+    let empty_keywords = json!({ "keywords": {} });
+    assert!(!jmap_ical::event::maps_recurrence_override(
+        &series,
+        "2026-05-08T09:00:00",
+        &empty_keywords
+    ));
+    let null_keywords = json!({ "keywords": null });
+    assert!(jmap_ical::event::maps_recurrence_override(
+        &series,
+        "2026-05-08T09:00:00",
+        &null_keywords
+    ));
+
+    // Valid modified instance round-trip into detached VEVENT:
+    let mut series_with_override = series.clone();
+    series_with_override.recurrence_overrides = Some(BTreeMap::from([(
+        "2026-05-08T09:00:00".to_string(),
+        json!({
+            "title": "Special Review Session",
+            "priority": 1
+        }),
+    )]));
+    let ics_override = event_to_ical(&series_with_override);
+    assert!(ics_override.contains("RECURRENCE-ID:20260508T090000Z\r\n"));
+    assert!(ics_override.contains("SUMMARY:Special Review Session\r\n"));
+    assert!(ics_override.contains("PRIORITY:1\r\n"));
+}
