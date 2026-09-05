@@ -427,6 +427,20 @@ pub struct AccountState {
     /// Every accepted `EmailSubmission` — what a real server would hand to
     /// its SMTP queue. Tests assert against this.
     pub outbox: Vec<RecordedSubmission>,
+    /// Every iTIP scheduling message (RFC 5546) the server would have sent
+    /// for a `CalendarEvent/set` that asked for one
+    /// (draft-ietf-jmap-calendars-28 §5.9.2) — what a real server hands to
+    /// its iMIP transport. This mock has no SMTP path, so it records the
+    /// messages here and lets tests assert against them, exactly as
+    /// [`Self::outbox`] already does for accepted `EmailSubmission`s. The
+    /// iTIP payload itself is not built: what §5.9.2 specifies, and what a
+    /// client can get wrong, is which method goes to whom.
+    pub scheduling_outbox: Vec<RecordedSchedulingMessage>,
+    /// `ParticipantIdentity` objects (draft-ietf-jmap-calendars-28 §3): the
+    /// calendar addresses that *are* this account when an event names
+    /// participants. Empty on a fresh account, like `sieve_scripts`; a test
+    /// seeds whichever identities the case needs.
+    pub participant_identities: Store<jmap_proto::calendars::ParticipantIdentity>,
     pub address_books: Store<jmap_proto::contacts::AddressBook>,
     pub contact_cards: Store<jmap_proto::contacts::ContactCard>,
     pub calendars: Store<jmap_proto::calendars::Calendar>,
@@ -487,6 +501,8 @@ impl AccountState {
             quotas,
             sieve_scripts: Store::new("SV"),
             outbox: Vec::new(),
+            scheduling_outbox: Vec::new(),
+            participant_identities: Store::new("PI"),
             address_books: Store::new("AB"),
             contact_cards: Store::new("C"),
             calendars: Store::new("CAL"),
@@ -531,6 +547,25 @@ pub struct RecordedSubmission {
     pub email_id: Id,
     pub identity_id: Id,
     pub envelope: jmap_proto::mail::Envelope,
+}
+
+/// One scheduling message left in [`AccountState::scheduling_outbox`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedSchedulingMessage {
+    /// The iTIP method: one of [`jmap_proto::calendars::scheduling_method`]'s.
+    pub method: String,
+    pub event_id: Id,
+    pub uid: Option<String>,
+    /// The `calendarAddress` the message comes from: the organizer's for a
+    /// REQUEST or a CANCEL, the replying participant's own for a REPLY.
+    pub sender: Option<String>,
+    /// The one `calendarAddress` this message is addressed to. A change that
+    /// concerns several participants records one message each, since that is
+    /// what the recipient set actually is.
+    pub recipient: String,
+    /// The instance the message is about, when it is about one instance
+    /// rather than the whole event (draft-ietf-jmap-calendars-28 §5.9.2.2).
+    pub recurrence_id: Option<String>,
 }
 
 /// What happened to an object, for the changes log.

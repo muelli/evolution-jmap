@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use crate::error::SetError;
 use crate::id::Id;
+use crate::methods::SetRequest;
 #[cfg(feature = "principals")]
 use crate::principals::Principal;
 use crate::state::UtcDate;
@@ -349,6 +350,21 @@ pub struct CalendarEvent {
     /// it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub participants: Option<BTreeMap<String, Value>>,
+    /// The URI iTIP scheduling messages for this event come from
+    /// (draft-ietf-jmap-calendars-28 §5.9.2): the organizer's
+    /// `calendarAddress`. `None` says nobody outside this account organises
+    /// the event, which is one of the two ways §10.9.5 makes an account the
+    /// event's *origin*; the other is that the URI is one of the account's
+    /// own [`ParticipantIdentity::calendar_address`]es. Only the origin
+    /// invites and cancels; everyone else only ever replies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organizer_calendar_address: Option<String>,
+    /// Whether the event is still a draft (draft-ietf-jmap-calendars-28
+    /// §5.1). A server sends no scheduling message and raises no alert for a
+    /// draft. It may only be set on create, and once false it cannot be made
+    /// true again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_draft: Option<bool>,
     /// jscalendarbis §3.3.3 (draft-ietf-calext-jscalendarbis): a single
     /// `RecurrenceRule`, not RFC 8984's plural `recurrenceRules` array — the
     /// property was renamed and restructured from array-valued to
@@ -1210,6 +1226,67 @@ impl CalendarPreferencesCapability {
     }
 }
 
+/// `CalendarEvent/set` arguments (draft-ietf-jmap-calendars-28 §5.9): a
+/// standard `/set` plus the one extra argument the draft adds to it.
+///
+/// Flattened over [`SetRequest`] rather than repeating its fields, so that a
+/// caller who wants no scheduling can keep building the plain request and
+/// wrap it at the last moment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEventSetRequest {
+    #[serde(flatten)]
+    pub set: SetRequest<CalendarEvent>,
+    /// If true, the server sends the iTIP messages §5.9.2 calls for after
+    /// the change is applied: invitations to the participants when this
+    /// account is the event's origin, an answer back to the organizer when
+    /// it is not. Absent means false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send_scheduling_messages: Option<bool>,
+}
+
+impl CalendarEventSetRequest {
+    pub fn new(set: SetRequest<CalendarEvent>) -> Self {
+        Self {
+            set,
+            send_scheduling_messages: None,
+        }
+    }
+
+    pub fn send_scheduling_messages(mut self, send: bool) -> Self {
+        self.send_scheduling_messages = Some(send);
+        self
+    }
+}
+
+/// iTIP methods (RFC 5546 §3.2) a server sends for
+/// draft-ietf-jmap-calendars-28 §5.9.2's scheduling messages.
+pub mod scheduling_method {
+    /// An invitation, from the event's origin to its participants.
+    pub const REQUEST: &str = "REQUEST";
+    /// A withdrawal, from the event's origin to a participant who was
+    /// dropped, or to everyone when the event or one of its instances goes
+    /// away.
+    pub const CANCEL: &str = "CANCEL";
+    /// An answer, from a participant back to the organizer.
+    pub const REPLY: &str = "REPLY";
+}
+
+/// The top-level `CalendarEvent` properties draft-ietf-jmap-calendars-28 §5.4
+/// stores per user, and which therefore say nothing to anybody else: changing
+/// only these sends no scheduling message.
+///
+/// `updated` rides along because §5.4 stores it per user too whenever only
+/// per-user properties were written.
+pub const PER_USER_PROPERTIES: &[&str] = &[
+    "alerts",
+    "color",
+    "freeBusyStatus",
+    "keywords",
+    "updated",
+    "useDefaultAlerts",
+];
+
 /// `CalendarEvent/parse` arguments (draft-ietf-jmap-calendars-28 §5.7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1471,7 +1548,7 @@ impl GetFreeBusyResponse {
     }
 }
 
-/// The `SetError` types draft-ietf-jmap-calendars-28 §5.4 adds for `CalendarEvent/set`.
+/// The `SetError` types draft-ietf-jmap-calendars-28 §5.9 adds for `CalendarEvent/set`.
 pub mod calendar_event_set_error {
     pub const BLOB_NOT_FOUND: &str = "blobNotFound";
     pub const TOO_MANY_PARTICIPANTS: &str = "tooManyParticipants";
@@ -1988,6 +2065,13 @@ pub struct ParticipantIdentity {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schedule_id: Option<String>,
+    /// The URI that represents this participant for iTIP scheduling
+    /// (draft-ietf-jmap-calendars-28 §3). An event participant corresponds to
+    /// this identity when the participant's own `calendarAddress` matches
+    /// this one after RFC 3986 §6.2.2 syntax-based normalisation, which is
+    /// how a server decides whether it is looking at the user themselves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar_address: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub send_to: Option<BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2011,6 +2095,11 @@ impl ParticipantIdentity {
 
     pub fn with_schedule_id(mut self, schedule_id: impl Into<String>) -> Self {
         self.schedule_id = Some(schedule_id.into());
+        self
+    }
+
+    pub fn with_calendar_address(mut self, calendar_address: impl Into<String>) -> Self {
+        self.calendar_address = Some(calendar_address.into());
         self
     }
 
