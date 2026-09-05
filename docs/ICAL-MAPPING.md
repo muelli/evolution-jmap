@@ -3017,6 +3017,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.140 Divergence 140: `drawn_place` and `place_name`: RFC 8984 §4.2.5 `locations` Mapping to Single Primary RFC 5545 §3.8.1.7 `LOCATION`, Stable Map Iteration Order, Non-Empty Name Filter, and Multi-Location Save Suppression (`maps_locations`)
 
+- **Observed Behavior**:
+  RFC 8984 §4.2.5 models physical event locations as an object map (`locations: {"id": Location}`), whereas RFC 5545 §3.8.1.7 restricts `LOCATION` to at most a single occurrence per `VEVENT` component. In `jmap-ical`:
+  1. Deterministic primary location selection (`drawn_place`): Iterates through `locations` in canonical map order, selecting the first entry whose `name` property is a non-empty string via `place_name`.
+  2. Non-empty string filtering (`place_name`): Requires `location.get("name")` to be text and asserts `!name.is_empty()`. Locations with missing, non-string, or empty `""` names are ignored, avoiding the emission of empty `LOCATION:` content lines.
+  3. Multi-location save suppression (`maps_locations`): While `drawn_place` draws the first valid location so that users see where the meeting occurs, `maps_locations` detects if more than one location entry is present. If multiple locations exist, `maps_locations` returns `false`, preventing `jmap-cal-sync` from overwriting the server's multi-location map with a single collapsed location on save.
+  4. Inbound location recovery (`read_locations`): Ingests `LOCATION` properties, extracting the appointment location text. Preserves `X-JMAP-KEY` as the map key if valid per RFC 8984 `Id` syntax, or defaults to invented key `"1"`. Drops empty `LOCATION` lines.
+  5. In contrast, differential oracles or naive CalDAV serializers either omit locations entirely when multiple entries exist, concatenate multiple places into an unstructured string with comma or semicolon delimiter corruption, or emit invalid duplicate `LOCATION` lines that violate RFC 5545 §3.6.1 grammar.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.1 explicitly restricts `LOCATION` to at most one occurrence in a `VEVENT`. In Evolution Data Server, the meeting editor displays a single location string field.
+  2. Rendering the primary location provides immediate UI context for users, while `maps_locations` prevents destructive loss of secondary locations (such as overflow conference rooms or physical addresses) during round-trip synchronization.
+- **Adjudication**:
+  Conforming specification boundary and multi-location data loss defense. Selects the first named location deterministically, filters empty names, and gates write-back to protect multi-location server maps.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.141 Divergence 141: `drawn_conferences`, `drawn_conference`, and `joining_features`: RFC 8984 §4.2.6 `virtualLocations` Mapping to RFC 7986 §5.11 `CONFERENCE`, Mandatory `VALUE=URI`, Feature Extraction (`AUDIO`, `VIDEO`, `CHAT`, `SCREEN`, `PHONE`), and Stable `X-JMAP-KEY` Round-Trip Association
 
+- **Observed Behavior**:
+  RFC 8984 §4.2.6 models virtual meeting rooms in `virtualLocations: {"id": VirtualLocation}`, and RFC 7986 §5.11 defines the `CONFERENCE` property. In `jmap-ical`:
+  1. Mandatory `VALUE=URI` parameter: `drawn_conference` explicitly attaches `VALUE=URI` to every emitted `CONFERENCE` line per RFC 7986 §5.11 `confparam` syntax requirements.
+  2. URI scheme validation (`names_a_uri`): Validates that the conference URI conforms to RFC 3986 with an alphabetic scheme and non-empty scheme-specific body. Non-URI endpoints are dropped from serialization.
+  3. Feature extraction and canonical sorting (`joining_features`): Inspects the boolean `features` Set and extracts recognized capabilities (`audio`, `chat`, `feed`, `moderator`, `phone`, `screen`, `video`) in fixed canonical order (`CONFERENCE_FEATURES`), joining them into a comma-separated `FEATURE` parameter (e.g. `FEATURE=AUDIO,CHAT,SCREEN,VIDEO`).
+  4. Identity parameter preservation: Attaches `X-JMAP-KEY` holding the map key, ensuring that inbound `read_virtual_locations` restores the exact server map key.
+  5. Inbound parsing (`read_virtual_locations`): Ingests `CONFERENCE` lines, extracting `LABEL` into `name`, parsing `FEATURE` parameter tokens case-insensitively into boolean feature Sets, and recovering `X-JMAP-KEY`.
+  6. In contrast, differential oracles or legacy CalDAV servers often omit the mandatory `VALUE=URI` parameter (causing parser failures in strict clients), fail to serialize conference features, or omit identity tracking parameters.
+- **Specification and Architectural Context**:
+  1. RFC 7986 §5.11 specifies that the `VALUE=URI` parameter is mandatory on `CONFERENCE` properties. Omission of this parameter violates iCalendar grammar and breaks compatibility with strict parsers.
+  2. Extracting capabilities into structured `features` Sets enables EDS and conferencing plugins to identify video endpoints, screen-sharing URLs, and dial-in telephone bridges.
+- **Adjudication**:
+  Conforming specification boundary and virtual location interoperability guarantee. Emits mandatory `VALUE=URI`, serializes sorted feature tokens, and preserves round-trip key identity.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.142 Divergence 142: `drawn_alert`, `drawn_trigger`, `uses_default_alerts`, and `drawn_alarms`: RFC 8984 §4.5 `alerts` to RFC 5545 §3.6.6 `VALARM` Mapping, `ACTION:DISPLAY` Requirement, Event Title Summary Injection (`DESCRIPTION`), `useDefaultAlerts` Suppression, and Unsupported Trigger Rejection
+
+- **Observed Behavior**:
+  RFC 8984 §4.5 models reminders in `alerts: {"id": Alert}`, while RFC 5545 §3.6.6 and RFC 9074 §6 specify `VALARM` subcomponents. In `jmap-ical`:
+  1. Display alarm validation: `drawn_alert` verifies that `@type == "Alert"`, `action == "display"`, and validates the key via `names_map_entry`.
+  2. Mandatory summary injection on `DESCRIPTION`: RFC 5545 §3.6.6 mandates `DESCRIPTION` on `ACTION:DISPLAY` alarms. Because RFC 8984 Alert objects carry no separate message text, `drawn_alert` injects the event's own `title` into `DESCRIPTION`. If the event has no title, the `DESCRIPTION` property is omitted.
+  3. Offset trigger resolution (`drawn_trigger`): Normalizes signed duration strings via `stated_offset`. For `relativeTo: "end"`, it attaches `RELATED=END`. For `relativeTo: "start"`, it omits `RELATED` to preserve default representation.
+  4. Absolute trigger refusal: Rejects `AbsoluteTrigger` (`when`) objects, returning `None`. Approximating an absolute instant as a relative offset would cause reminders to drift when appointments are rescheduled.
+  5. Default alert suppression (`uses_default_alerts`): When `useDefaultAlerts: true` is set on the event, `drawn_alarms` suppresses all `VALARM` emission, preventing user-specific default alarms from being serialized into shared calendar streams.
+  6. Inbound parsing (`read_alerts`): Reads `VALARM` components, extracting `UID` into map keys, filtering non-display actions, and parsing relative trigger offsets.
+  7. In contrast, differential oracles or permissive serializers often omit mandatory `DESCRIPTION` properties on display alarms (failing libical validation), approximate absolute triggers with floating offsets, or leak default alarm configurations into external exports.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.6 dictates that a `VALARM` with `ACTION:DISPLAY` must contain both `ACTION` and `DESCRIPTION`. Populating `DESCRIPTION` with the event title ensures that reminder dialogs in desktop environments display actionable notification text.
+  2. Suppressing alarms when `useDefaultAlerts` is active conforms to RFC 8984 §4.5.1 semantics, ensuring that personal notification preferences do not overwrite recipient alarm settings during CalDAV synchronization.
+- **Adjudication**:
+  Conforming specification boundary and reminder fidelity defense. Requires `ACTION:DISPLAY`, injects event title into `DESCRIPTION`, formats relative offsets, and suppresses alarms when default alerts are enabled.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.143 Divergence 143: Closed Vocabulary Bidirectional Enumeration Mapping for `STATUS`, `TRANSP`, `CLASS`, and `PRIORITY`: Case-Insensitive Matching, RFC 5545 / RFC 8984 Invariant Alignment, and Out-of-Range / Invalid Token Rejection
+
+- **Observed Behavior**:
+  RFC 8984 defines `status`, `freeBusyStatus`, `privacy`, and `priority`. RFC 5545 defines `STATUS`, `TRANSP`, `CLASS`, and `PRIORITY`. In `jmap-ical`:
+  1. Status vocabulary mapping (`ical_status`): Maps `confirmed` to `CONFIRMED`, `tentative` to `TENTATIVE`, and `cancelled` to `CANCELLED` case-insensitively. Inbound `STATUS` strings are converted to lowercase JSCalendar values. Unmodeled or task-specific statuses (such as `COMPLETED`) are rejected and omitted.
+  2. Transparency lexical translation (`ical_transparency`, `read_transparency`): Translates `freeBusyStatus: "busy"` to `TRANSP:OPAQUE` and `"free"` to `TRANSP:TRANSPARENT`. Inbound parsing maps `OPAQUE` to `"busy"` and `TRANSPARENT` to `"free"`. Unmodeled statuses (such as `tentative`) are omitted.
+  3. Privacy classification translation (`ical_privacy`, `read_privacy`): Translates `privacy: "public"` to `CLASS:PUBLIC`, `"private"` to `CLASS:PRIVATE`, and `"secret"` to `CLASS:CONFIDENTIAL`. Inbound parsing maps `CONFIDENTIAL` to `"secret"`. Non-standard tokens (such as `CLASS:secret`) are rejected on import.
+  4. Priority range bounding (`known_priority`, `read_priority`): Enforces integer values in `0..=9`. Serializes valid integers directly to `PRIORITY:<int>`. Inbound parsing rejects non-integers, floats, comma-separated lists, and out-of-range values.
+  5. In contrast, differential oracles or naive parsers often pass raw un-mapped tokens (such as `TRANSP:BUSY` instead of `OPAQUE`, or `CLASS:SECRET` instead of `CONFIDENTIAL`), corrupting event visibility and availability across federated calendar systems.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.1.11 (`STATUS`), §3.8.2.7 (`TRANSP`), §3.8.1.3 (`CLASS`), and §3.8.1.9 (`PRIORITY`) define strict enumerated vocabularies and bounded integer ranges.
+  2. Bridging the lexical divergences between RFC 8984 and RFC 5545 (such as `busy` ↔ `OPAQUE` and `secret` ↔ `CONFIDENTIAL`) ensures seamless interoperability with CalDAV servers and Evolution Data Server.
+- **Adjudication**:
+  Conforming specification boundary and enumeration validation. Enforces strict bidirectional mapping for statuses, transparencies, privacy classifications, and bounded integer priorities.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.

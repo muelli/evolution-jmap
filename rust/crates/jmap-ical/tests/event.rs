@@ -26067,3 +26067,471 @@ fn differential_oracle_spelled_participation_statuses_closed_vocabulary_and_set_
         "task status COMPLETED is never emitted for attendee"
     );
 }
+
+#[test]
+fn differential_oracle_drawn_place_single_location_filter_and_multi_location_suppression() {
+    // Divergence 140 against Stalwart differential oracle:
+    // RFC 8984 section 4.2.5 locations mapping to single primary RFC 5545 LOCATION,
+    // empty name filtering, maps_locations multi-location save suppression,
+    // and inbound LOCATION extraction with X-JMAP-KEY preservation.
+
+    // 1. Single valid location: serializes to LOCATION with X-JMAP-KEY
+    let single_loc_event = CalendarEvent {
+        id: Some("loc-single-140".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        locations: Some(BTreeMap::from([(
+            "loc1".to_owned(),
+            json!({
+                "@type": "Location",
+                "name": "Conference Room Alpha"
+            }),
+        )])),
+        ..Default::default()
+    };
+    assert!(maps_locations(single_loc_event.locations.as_ref().unwrap()));
+
+    let ics = event_to_ical(&single_loc_event);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(
+        unfolded.contains("LOCATION;X-JMAP-KEY=loc1:Conference Room Alpha"),
+        "single named location serialized with X-JMAP-KEY: {unfolded}"
+    );
+
+    // 2. Multi-location: drawn_place draws first named location in map order,
+    // but maps_locations returns false to prevent save overwriting server map.
+    let multi_loc_event = CalendarEvent {
+        id: Some("loc-multi-140".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        locations: Some(BTreeMap::from([
+            (
+                "loc1".to_owned(),
+                json!({
+                    "@type": "Location",
+                    "name": "Room A"
+                }),
+            ),
+            (
+                "loc2".to_owned(),
+                json!({
+                    "@type": "Location",
+                    "name": "Room B Overflow"
+                }),
+            ),
+        ])),
+        ..Default::default()
+    };
+    assert!(
+        !maps_locations(multi_loc_event.locations.as_ref().unwrap()),
+        "maps_locations returns false when multiple locations exist"
+    );
+
+    let multi_ics = event_to_ical(&multi_loc_event);
+    let multi_unfolded = multi_ics.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(
+        multi_unfolded.contains("LOCATION;X-JMAP-KEY=loc1:Room A"),
+        "drawn_place outputs first named location: {multi_unfolded}"
+    );
+    assert!(
+        !multi_unfolded.contains("Room B Overflow"),
+        "secondary location is omitted from single LOCATION property: {multi_unfolded}"
+    );
+
+    // 3. Location with empty string name is skipped by place_name filter
+    let empty_loc_event = CalendarEvent {
+        id: Some("loc-empty-140".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        locations: Some(BTreeMap::from([(
+            "loc_empty".to_owned(),
+            json!({
+                "@type": "Location",
+                "name": ""
+            }),
+        )])),
+        ..Default::default()
+    };
+    let empty_ics = event_to_ical(&empty_loc_event);
+    assert!(
+        !empty_ics.contains("LOCATION"),
+        "empty location name emits no LOCATION property"
+    );
+
+    // 4. Inbound parsing: read_locations recovers LOCATION into map entry
+    let roundtrip = ical_to_event(&ics).expect("parse roundtrip");
+    let locs = roundtrip.locations.expect("locations map present");
+    assert_eq!(locs.len(), 1);
+    let l1 = locs.get("loc1").expect("loc1 entry present");
+    assert_eq!(
+        l1.get("name").and_then(Value::as_str),
+        Some("Conference Room Alpha")
+    );
+}
+
+#[test]
+fn differential_oracle_drawn_conferences_mandatory_value_uri_and_feature_extraction() {
+    // Divergence 141 against Stalwart differential oracle:
+    // RFC 8984 section 4.2.6 virtualLocations mapping to RFC 7986 section 5.11 CONFERENCE,
+    // mandatory VALUE=URI parameter, multi-feature parameter extraction in canonical order,
+    // and X-JMAP-KEY round-trip identity preservation.
+
+    let ev = CalendarEvent {
+        id: Some("conf-141".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        virtual_locations: Some(BTreeMap::from([
+            (
+                "v1".to_owned(),
+                json!({
+                    "@type": "VirtualLocation",
+                    "uri": "https://meet.example.com/sync-room",
+                    "name": "Design Review Video",
+                    "features": {
+                        "video": true,
+                        "audio": true,
+                        "chat": true,
+                        "screen": true,
+                        "phone": false
+                    }
+                }),
+            ),
+            (
+                "v2".to_owned(),
+                json!({
+                    "@type": "VirtualLocation",
+                    "uri": "tel:+18005550199",
+                    "name": "Dial-in Bridge",
+                    "features": {
+                        "phone": true
+                    }
+                }),
+            ),
+            (
+                "v3".to_owned(),
+                json!({
+                    "@type": "VirtualLocation",
+                    "uri": "invalid-not-a-uri-scheme",
+                    "name": "Bad Endpoint"
+                }),
+            ),
+        ])),
+        ..Default::default()
+    };
+
+    let ics = event_to_ical(&ev);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+
+    // Check v1 has VALUE=URI, comma-separated FEATURE parameter, LABEL, and X-JMAP-KEY
+    assert!(
+        unfolded.contains("CONFERENCE;VALUE=URI;FEATURE=AUDIO,CHAT,SCREEN,VIDEO;LABEL=\"Design Review Video\";X-JMAP-KEY=v1:https://meet.example.com/sync-room"),
+        "conference v1 has mandatory VALUE=URI, sorted features, label, and X-JMAP-KEY: {unfolded}"
+    );
+
+    // Check v2 has VALUE=URI, FEATURE=PHONE, LABEL, and X-JMAP-KEY
+    assert!(
+        unfolded.contains(
+            "CONFERENCE;VALUE=URI;FEATURE=PHONE;LABEL=\"Dial-in Bridge\";X-JMAP-KEY=v2:tel:+18005550199"
+        ),
+        "conference v2 has phone feature: {unfolded}"
+    );
+
+    // Check v3 is dropped because URI syntax validation failed
+    assert!(
+        !unfolded.contains("invalid-not-a-uri-scheme"),
+        "invalid URI endpoint is omitted from CONFERENCE output"
+    );
+
+    // Inbound parsing: read_virtual_locations reads both conferences back
+    let roundtrip = ical_to_event(&ics).expect("parse conference ics");
+    let vplaces = roundtrip
+        .virtual_locations
+        .expect("virtual locations present");
+    assert_eq!(vplaces.len(), 2);
+
+    let parsed_v1 = vplaces.get("v1").expect("v1 present");
+    assert_eq!(
+        parsed_v1.get("uri").and_then(Value::as_str),
+        Some("https://meet.example.com/sync-room")
+    );
+    assert_eq!(
+        parsed_v1.get("name").and_then(Value::as_str),
+        Some("Design Review Video")
+    );
+    let f1 = parsed_v1
+        .get("features")
+        .and_then(Value::as_object)
+        .expect("v1 features");
+    assert_eq!(f1.get("audio"), Some(&Value::Bool(true)));
+    assert_eq!(f1.get("video"), Some(&Value::Bool(true)));
+    assert_eq!(f1.get("chat"), Some(&Value::Bool(true)));
+    assert_eq!(f1.get("screen"), Some(&Value::Bool(true)));
+    assert!(f1.get("phone").is_none());
+
+    let parsed_v2 = vplaces.get("v2").expect("v2 present");
+    assert_eq!(
+        parsed_v2.get("uri").and_then(Value::as_str),
+        Some("tel:+18005550199")
+    );
+    assert_eq!(
+        parsed_v2.get("name").and_then(Value::as_str),
+        Some("Dial-in Bridge")
+    );
+    let f2 = parsed_v2
+        .get("features")
+        .and_then(Value::as_object)
+        .expect("v2 features");
+    assert_eq!(f2.get("phone"), Some(&Value::Bool(true)));
+}
+
+#[test]
+fn differential_oracle_drawn_alert_display_summary_injection_and_default_alerts_suppression() {
+    // Divergence 142 against Stalwart differential oracle:
+    // RFC 8984 section 4.5 alerts to RFC 5545 section 3.6.6 VALARM mapping,
+    // ACTION:DISPLAY requirement, event title summary injection into DESCRIPTION,
+    // useDefaultAlerts suppression, and unsupported trigger rejection.
+
+    let ev = CalendarEvent {
+        id: Some("alert-142".into()),
+        title: Some("Quarterly Review".to_owned()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        alerts: Some(BTreeMap::from([
+            (
+                "alert1".to_owned(),
+                json!({
+                    "@type": "Alert",
+                    "action": "display",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT15M",
+                        "relativeTo": "start"
+                    }
+                }),
+            ),
+            (
+                "alert2".to_owned(),
+                json!({
+                    "@type": "Alert",
+                    "action": "display",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "PT0S",
+                        "relativeTo": "end"
+                    }
+                }),
+            ),
+            (
+                "alert_email".to_owned(),
+                json!({
+                    "@type": "Alert",
+                    "action": "email",
+                    "trigger": {
+                        "@type": "OffsetTrigger",
+                        "offset": "-PT10M"
+                    }
+                }),
+            ),
+            (
+                "alert_absolute".to_owned(),
+                json!({
+                    "@type": "Alert",
+                    "action": "display",
+                    "trigger": {
+                        "@type": "AbsoluteTrigger",
+                        "when": "2026-09-01T09:45:00Z"
+                    }
+                }),
+            ),
+        ])),
+        ..Default::default()
+    };
+
+    let ics = event_to_ical(&ev);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+
+    // alert1 has ACTION:DISPLAY, UID:alert1, TRIGGER:-PT15M, and DESCRIPTION:Quarterly Review
+    assert!(unfolded.contains("BEGIN:VALARM"));
+    assert!(unfolded.contains("UID:alert1"));
+    assert!(unfolded.contains("ACTION:DISPLAY"));
+    assert!(unfolded.contains("TRIGGER:-PT15M"));
+    assert!(unfolded.contains("DESCRIPTION:Quarterly Review"));
+
+    // alert2 has RELATED=END parameter on TRIGGER
+    assert!(unfolded.contains("UID:alert2"));
+    assert!(unfolded.contains("TRIGGER;RELATED=END:PT0S"));
+
+    // Non-display and absolute triggers are suppressed
+    assert!(
+        !unfolded.contains("UID:alert_email"),
+        "email alert is omitted"
+    );
+    assert!(
+        !unfolded.contains("UID:alert_absolute"),
+        "absolute trigger alert is omitted"
+    );
+
+    // Inbound parsing: read_alerts parses both valid VALARM components back
+    let roundtrip = ical_to_event(&ics).expect("parse alert ics");
+    let alerts = roundtrip.alerts.expect("alerts present");
+    assert_eq!(alerts.len(), 2);
+
+    let a1 = alerts.get("alert1").expect("alert1 present");
+    assert_eq!(a1.get("action").and_then(Value::as_str), Some("display"));
+    let t1 = a1
+        .get("trigger")
+        .and_then(Value::as_object)
+        .expect("t1 object");
+    assert_eq!(t1.get("offset").and_then(Value::as_str), Some("-PT15M"));
+    assert!(
+        t1.get("relativeTo").is_none(),
+        "relativeTo start is omitted as default"
+    );
+
+    let a2 = alerts.get("alert2").expect("alert2 present");
+    let t2 = a2
+        .get("trigger")
+        .and_then(Value::as_object)
+        .expect("t2 object");
+    assert_eq!(t2.get("offset").and_then(Value::as_str), Some("PT0S"));
+    assert_eq!(t2.get("relativeTo").and_then(Value::as_str), Some("end"));
+
+    // useDefaultAlerts = true suppresses all VALARM components
+    let mut default_alerts_ev = ev.clone();
+    default_alerts_ev.use_default_alerts = Some(true);
+    assert!(!maps_alerts(&default_alerts_ev));
+    let default_ics = event_to_ical(&default_alerts_ev);
+    assert!(
+        !default_ics.contains("BEGIN:VALARM"),
+        "useDefaultAlerts suppresses all VALARM components"
+    );
+}
+
+#[test]
+fn differential_oracle_status_transparency_privacy_and_priority_closed_vocabulary() {
+    // Divergence 143 against Stalwart differential oracle:
+    // Closed vocabulary bidirectional mapping for STATUS, TRANSP, CLASS, and PRIORITY:
+    // case-insensitive matching, lexical vocabulary translation (busy -> OPAQUE, secret -> CONFIDENTIAL),
+    // and invalid/out-of-range token rejection.
+
+    // 1. Outbound emission of canonical tokens
+    let ev = CalendarEvent {
+        id: Some("vocab-143".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        status: Some("confirmed".to_owned()),
+        free_busy_status: Some("busy".to_owned()),
+        privacy: Some("secret".to_owned()),
+        priority: Some(3),
+        ..Default::default()
+    };
+
+    let ics = event_to_ical(&ev);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded.contains("STATUS:CONFIRMED"));
+    assert!(
+        unfolded.contains("TRANSP:OPAQUE"),
+        "busy translates to OPAQUE"
+    );
+    assert!(
+        unfolded.contains("CLASS:CONFIDENTIAL"),
+        "secret translates to CONFIDENTIAL"
+    );
+    assert!(unfolded.contains("PRIORITY:3"));
+
+    // 2. Outbound with free and private
+    let ev2 = CalendarEvent {
+        id: Some("vocab-free-143".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        status: Some("cancelled".to_owned()),
+        free_busy_status: Some("free".to_owned()),
+        privacy: Some("private".to_owned()),
+        priority: Some(9),
+        ..Default::default()
+    };
+    let ics2 = event_to_ical(&ev2);
+    let unfolded2 = ics2.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded2.contains("STATUS:CANCELLED"));
+    assert!(
+        unfolded2.contains("TRANSP:TRANSPARENT"),
+        "free translates to TRANSPARENT"
+    );
+    assert!(unfolded2.contains("CLASS:PRIVATE"));
+    assert!(unfolded2.contains("PRIORITY:9"));
+
+    // 3. Outbound unmodeled tokens are omitted
+    let ev_invalid = CalendarEvent {
+        id: Some("vocab-invalid-143".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        status: Some("unknown_status".to_owned()),
+        free_busy_status: Some("tentative".to_owned()),
+        privacy: Some("confidential".to_owned()),
+        priority: Some(15),
+        ..Default::default()
+    };
+    let ics_invalid = event_to_ical(&ev_invalid);
+    assert!(!ics_invalid.contains("STATUS"));
+    assert!(!ics_invalid.contains("TRANSP"));
+    assert!(!ics_invalid.contains("CLASS"));
+    assert!(!ics_invalid.contains("PRIORITY"));
+
+    // 4. Inbound case-insensitive parsing and vocabulary translation
+    let inbound_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:inbound-vocab-143\r\n\
+DTSTART:20260901T100000Z\r\n\
+STATUS:tentative\r\n\
+TRANSP:opaque\r\n\
+CLASS:confidential\r\n\
+PRIORITY:7\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let parsed = ical_to_event(inbound_ics).expect("parse inbound ics");
+    assert_eq!(parsed.status.as_deref(), Some("tentative"));
+    assert_eq!(
+        parsed.free_busy_status.as_deref(),
+        Some("busy"),
+        "OPAQUE maps to busy"
+    );
+    assert_eq!(
+        parsed.privacy.as_deref(),
+        Some("secret"),
+        "CONFIDENTIAL maps to secret"
+    );
+    assert_eq!(parsed.priority, Some(7));
+
+    // 5. Inbound rejection of non-standard class or invalid priority
+    let inbound_bad = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:inbound-bad-143\r\n\
+DTSTART:20260901T100000Z\r\n\
+CLASS:secret\r\n\
+PRIORITY:10\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let parsed_bad = ical_to_event(inbound_bad).expect("parse inbound bad ics");
+    assert!(
+        parsed_bad.privacy.is_none(),
+        "non-standard CLASS:secret is not mapped"
+    );
+    assert!(
+        parsed_bad.priority.is_none(),
+        "out-of-range PRIORITY:10 is not mapped"
+    );
+}
