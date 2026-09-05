@@ -2519,6 +2519,74 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.112 Divergence 112: `stated_duration`: ISO 8601 Duration Parsing State Machine (`['W', 'D', 'T', 'H', 'M', 'S']`), Leading `+` Sign Stripping, Empty Time Divider (`PT`) Rejection, and Negative Duration Refusal
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.6 defines duration syntax: `dur-value = (["+"] / "-") "P" (dur-date / dur-time / dur-week)`. RFC 8984 §1.4.6 defines `Duration` as an unsigned ISO 8601 duration string. In `jmap-ical`:
+  1. Leading `+` sign stripping: `stated_duration` strips any leading `+` prefix before validating the duration string. RFC 8984 `Duration` has no sign, so stripping `+` standardizes the string into canonical ISO 8601 format.
+  2. Unit ordering and measurement: Iterates strictly across `['W', 'D', 'T', 'H', 'M', 'S']`. The `T` designator acts as a time divider; encountering `T` resets `measured` to false, ensuring that at least one time unit (`H`, `M`, or `S`) follows `T`. An empty time designator like `PT` or trailing `T` (e.g. `P1DT`) fails validation and returns `None`.
+  3. Negative duration rejection: Signed negative durations (such as `-PT1H`) fail the `['P', 'p']` prefix check and return `None`. Because RFC 8984 §1.4.6 does not permit negative event lengths, rejecting negative durations protects `CalendarEvent/set` from server rejection.
+  4. In contrast, Stalwart or permissive parsers may accept signed negative durations or parse `PT` as zero seconds (`PT0S`). `jmap-ical` strictly rejects unmeasured `T` and negative durations.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §1.4.6 defines event durations as positive lengths. Emitting a negative duration or an empty `PT` marker produces an invalid JSCalendar object that causes server-side protocol rejection during calendar synchronization.
+  2. Admitting combined date and time units (such as `P1W2DT3H4M5S`) provides practical tolerance for real-world calendar generators while enforcing strict structural validity before passing durations to EDS or JMAP.
+- **Adjudication**:
+  Conforming specification boundary and duration syntax normalization. Strips redundant `+` signs, validates ordered unit progressions, enforces non-empty time units following `T`, and rejects negative durations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.113 Divergence 113: `read_overrides` Multi-Source Precedence Hierarchy (`RDATE` < `EXDATE` < Detached `VEVENT` with `RECURRENCE-ID`) and `RANGE=THISANDFUTURE` Range Exclusion
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.5.1, §3.8.5.2, and §3.8.4.4 define recurrence set modifications. In `jmap-ical`:
+  1. Multi-source precedence hierarchy: `read_overrides` processes recurrence modifications in strict precedence order:
+     - `RDATE`: First, all `RDATE` occurrences are added to `overrides`. If specified as a period (`start/end`), `period_length` computes the duration.
+     - `EXDATE`: Second, `EXDATE` instances are processed. If an instant was named in both `RDATE` and `EXDATE`, `EXDATE` overwrites `RDATE` with `{"excluded": true}`. This adheres to RFC 5545 §3.8.5.1, where exclusion takes precedence over inclusion.
+     - Detached `VEVENT` components: Third, detached components carrying `RECURRENCE-ID` are evaluated via `instance_patch`. If an occurrence was listed in `EXDATE` or `RDATE`, the detached `VEVENT` takes final precedence, restoring or modifying the specific instance.
+  2. `RANGE=THISANDFUTURE` exclusion: If a detached `VEVENT` carries `RANGE=THISANDFUTURE` (RFC 5545 §3.2.13), `read_overrides` skips it completely (`continue`).
+  3. In contrast, CalDAV servers or differential oracles might split recurrence series into separate independent event records or synthesize expanded master components when encountering `RANGE=THISANDFUTURE`.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.3.4 models individual recurrence overrides as single-instance patch objects keyed by local date-time. Applying a range modification to a single override key would falsely modify only one day while discarding modifications to the remainder of the series.
+  2. Enforcing `EXDATE` over `RDATE` prevents accidentally recreating cancelled occurrences when legacy calendar systems emit overlapping inclusion and exclusion lists. Allowing detached `VEVENT` components to override `EXDATE` ensures that an explicit rescheduled occurrence authored by the user takes priority over historical cancellation markers.
+- **Adjudication**:
+  Conforming specification boundary and recurrence override conflict resolution. Enforces four-stage precedence ordering (`RDATE` < `EXDATE` < detached `VEVENT`) and drops `RANGE=THISANDFUTURE` components to prevent recurrence series corruption.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.114 Divergence 114: `instance_patch` Recurrence Override Patch Object Construction: Minimal Diffing, Sub-Property Nullification (`Value::Null`), `RDATE` Redundant Series Duration Suppression, and Instance Start Offset vs `id` Matching
+
+- **Observed Behavior**:
+  RFC 8984 §4.3.4 defines `PatchObject` as a map of property paths to replacement values or `null` (to delete or reset to series default). In `jmap-ical`:
+  1. Minimal diff generation: Only modified properties are included in the patch object. Properties identical to the master series (`was == now`) are omitted.
+  2. Sub-property nullification: If a property was present on the series but omitted on the detached instance (e.g. `title`, `description`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `privacy`, `priority`, `keywords`, `alerts`), `instance_patch` inserts `Value::Null`. In JSCalendar, `null` instructs the server to remove the property or clear its value on the override instance.
+  3. Redundant `RDATE` duration suppression: In `read_overrides`, if an `RDATE` period calculates a duration identical to `event.duration`, the patch is emitted as `{}` (empty object) rather than `{ "duration": "..." }`.
+  4. Start time offset vs recurrence ID: `instance_patch` compares `instance.start` against `id` (the scheduled recurrence instant from `RECURRENCE-ID`), rather than against `series.start`. If the instance starts at its scheduled recurrence time (`instance.start == id`), `"start"` is omitted from the patch. If the appointment was rescheduled to a different time (`instance.start != id`), `"start"` is included in the patch.
+  5. In contrast, differential oracles or full-object serializers often emit all properties on detached instances verbatim, producing bloated patch objects that duplicate unchanged series fields.
+- **Specification and Architectural Context**:
+  1. RFC 8984 patch semantics rely on sparse delta updates. Transmitting unmodified fields bloats synchronization payloads and causes spurious property change notifications across connected clients.
+  2. Setting `null` for deleted override properties ensures that when a user clears a description or priority on a single occurrence, the deletion is propagated to the JMAP server rather than reviving the master series value.
+- **Adjudication**:
+  Conforming specification boundary and minimal patch object fidelity. Emits minimal diffs, serializes `null` for cleared override properties, suppresses redundant `RDATE` durations, and compares start times against occurrence IDs.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.115 Divergence 115: `read_start` Triple Property Resolution (`start`, `timeZone`, `showWithoutTime`), Date-Only Parameter-Independent Value Detection, Date-Only `TZID` Stripping, and Timed Event `showWithoutTime: None` Default Preservation
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.2.4 governs `DTSTART`. RFC 8984 §4.1.2 defines `start`, §4.1.3 defines `timeZone`, and §4.2.1 defines `showWithoutTime`. In `jmap-ical`:
+  1. Structural date-only detection: `read_start` checks `!value.contains(['T', 't'])`. Because `calcard` strips parameters and formats DATE values without `T`, the value digits themselves determine whether an event is date-only, regardless of whether `VALUE=DATE` was explicitly provided or omitted by the sender.
+  2. Date-only `TZID` stripping and midnight start: For date-only starts, `read_start` returns `(Some(start), None, Some(true))`. RFC 5545 §3.2.19 explicitly forbids `TZID` on date values. Even if a malformed client attaches `TZID` to a DATE property, `jmap-ical` forces `timeZone: None`. The start date is parsed with `to_local_date_time`, which assigns midnight `T00:00:00`.
+  3. Timed event default preservation: For timed events (containing `T`/`t`), `read_start` returns `(Some(start), zone, None)`. It emits `showWithoutTime: None` rather than `Some(false)`. In RFC 8984, the schema default for `showWithoutTime` is `false`. Setting `None` avoids generating an explicit `false` diff during cache reconciliation when the server document omitted the field.
+  4. UTC instant detection: If a timed `DTSTART` ends with `'Z'`, `zone` is resolved to `Some("Etc/UTC".to_owned())`.
+  5. In contrast, permissive parsers or differential oracles might pass `TZID` through on date properties or populate `showWithoutTime: false` explicitly, triggering false diffs in synchronization engines.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.2.19 strictly forbids associating a timezone identifier with date-only properties. Stripping `TZID` on date values prevents illegal parameters from reaching EDS and avoids timezone offset skew for full-day events.
+  2. Preserving `None` for default boolean values maintains fixed-point idempotence in `jmap-cal-sync`. Generating explicit `false` values causes false dirty diffs when reconciling against server states where the property was omitted.
+- **Adjudication**:
+  Conforming specification boundary and parameter-independent property resolution. Strips `TZID` on date-only properties, enforces midnight start alignment, and preserves `None` defaults on timed events.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
 
 

@@ -23902,3 +23902,337 @@ END:VCALENDAR\r\n";
         "rule containing 0mo is refused by maps_recurrence_rule"
     );
 }
+
+#[test]
+fn differential_oracle_duration_parsing_plus_stripping_and_empty_time_divider() {
+    // Divergence 112 against Stalwart differential oracle:
+    // ISO 8601 duration parsing state machine, leading + sign stripping, and empty time divider rejection.
+    // In jmap-ical:
+    // 1. Leading + sign (+PT2H) is stripped to canonical PT2H.
+    // 2. Complex duration with mixed units (P1W2DT3H4M5S) is accepted and preserved.
+    // 3. Empty time divider (PT, P1DT) without trailing time units fails validation (None).
+    // 4. Negative duration (-PT1H) fails validation (None) because RFC 8984 Duration has no sign.
+
+    // 1. Leading + sign stripped
+    let plus_dur_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:dur-plus\r\n\
+DTSTART:20260905T100000Z\r\n\
+DURATION:+PT2H\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_plus = ical_to_event(plus_dur_ics).expect("parse plus duration");
+    assert_eq!(
+        ev_plus.duration.as_deref(),
+        Some("PT2H"),
+        "leading + sign must be stripped to canonical ISO duration"
+    );
+
+    // 2. Complex multi-unit duration
+    let complex_dur_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:dur-complex\r\n\
+DTSTART:20260905T100000Z\r\n\
+DURATION:P1W2DT3H4M5S\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_complex = ical_to_event(complex_dur_ics).expect("parse complex duration");
+    assert_eq!(
+        ev_complex.duration.as_deref(),
+        Some("P1W2DT3H4M5S"),
+        "valid mixed-unit duration must be preserved"
+    );
+
+    // 3. Empty time divider PT fails validation
+    let empty_time_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:dur-empty-time\r\n\
+DTSTART:20260905T100000Z\r\n\
+DURATION:PT\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_empty = ical_to_event(empty_time_ics).expect("parse empty time divider");
+    assert_eq!(
+        ev_empty.duration, None,
+        "empty time divider PT must return None for duration"
+    );
+
+    // 4. Negative duration -PT1H fails validation
+    let neg_dur_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:dur-neg\r\n\
+DTSTART:20260905T100000Z\r\n\
+DURATION:-PT1H\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_neg = ical_to_event(neg_dur_ics).expect("parse negative duration");
+    assert_eq!(
+        ev_neg.duration, None,
+        "negative duration must be rejected for RFC 8984 event duration"
+    );
+}
+
+#[test]
+fn differential_oracle_read_overrides_precedence_and_range_thisandfuture() {
+    // Divergence 113 against Stalwart differential oracle:
+    // Multi-source recurrence override precedence hierarchy and RANGE=THISANDFUTURE exclusion.
+    // In jmap-ical:
+    // 1. RDATE vs EXDATE on same instant: EXDATE takes precedence ({"excluded": true}).
+    // 2. EXDATE vs detached VEVENT on same instant: detached VEVENT takes precedence.
+    // 3. RANGE=THISANDFUTURE on detached VEVENT is dropped (not added to recurrenceOverrides).
+
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:override-prec\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+RRULE:FREQ=DAILY\r\n\
+RDATE:20260902T100000Z,20260903T100000Z\r\n\
+EXDATE:20260903T100000Z,20260904T100000Z\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:override-prec\r\n\
+RECURRENCE-ID:20260904T100000Z\r\n\
+DTSTART:20260904T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Detached override\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:override-prec\r\n\
+RECURRENCE-ID;RANGE=THISANDFUTURE:20260905T100000Z\r\n\
+DTSTART:20260905T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Future range\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse override precedence ics");
+    let overrides = ev.recurrence_overrides.expect("overrides present");
+
+    // 1. RDATE sole occurrence (2026-09-02) has empty patch since duration matches series
+    assert_eq!(
+        overrides.get("2026-09-02T10:00:00"),
+        Some(&json!({})),
+        "RDATE without duration change produces empty patch"
+    );
+
+    // 2. Conflict: 2026-09-03 is in both RDATE and EXDATE. EXDATE wins!
+    assert_eq!(
+        overrides.get("2026-09-03T10:00:00"),
+        Some(&json!({ "excluded": true })),
+        "EXDATE must overwrite RDATE on conflicting instant"
+    );
+
+    // 3. Conflict: 2026-09-04 is in both EXDATE and detached VEVENT. Detached VEVENT wins!
+    let patch_04 = overrides
+        .get("2026-09-04T10:00:00")
+        .expect("detached override present");
+    assert_eq!(
+        patch_04.get("title"),
+        Some(&json!("Detached override")),
+        "detached VEVENT must take final precedence over EXDATE"
+    );
+    assert_eq!(
+        patch_04.get("excluded"),
+        None,
+        "detached VEVENT clears exclusion"
+    );
+
+    // 4. RANGE=THISANDFUTURE is skipped and must not appear in recurrence_overrides
+    assert!(
+        !overrides.contains_key("2026-09-05T10:00:00"),
+        "RANGE=THISANDFUTURE component must be skipped"
+    );
+}
+
+#[test]
+fn differential_oracle_instance_patch_minimal_diff_and_rdate_duration_suppression() {
+    // Divergence 114 against Stalwart differential oracle:
+    // Minimal override patch construction, property nullification, RDATE duration suppression, and start offset.
+    // In jmap-ical:
+    // 1. RDATE period matching series duration produces empty patch {}.
+    // 2. RDATE period differing from series duration produces {"duration": "..."}.
+    // 3. Missing property on detached instance produces null to remove property from series.
+    // 4. Instance starting at recurrence id omits start from patch; rescheduled instance includes start.
+
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:patch-diff\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Series Title\r\n\
+DESCRIPTION:Series Description\r\n\
+RRULE:FREQ=DAILY\r\n\
+RDATE;VALUE=PERIOD:20260902T100000Z/20260902T110000Z,20260903T100000Z/20260903T130000Z\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:patch-diff\r\n\
+RECURRENCE-ID:20260904T100000Z\r\n\
+DTSTART:20260904T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Series Title\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:patch-diff\r\n\
+RECURRENCE-ID:20260905T100000Z\r\n\
+DTSTART:20260905T113000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Rescheduled Title\r\n\
+DESCRIPTION:Series Description\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse patch diff ics");
+    let overrides = ev.recurrence_overrides.expect("overrides present");
+
+    // 1. RDATE with 1-hour duration identical to series duration (PT1H) produces empty patch
+    assert_eq!(
+        overrides.get("2026-09-02T10:00:00"),
+        Some(&json!({})),
+        "RDATE with duration equal to series must emit empty patch"
+    );
+
+    // 2. RDATE with 3-hour duration differing from series duration produces duration patch
+    assert_eq!(
+        overrides.get("2026-09-03T10:00:00"),
+        Some(&json!({ "duration": "PT3H" })),
+        "RDATE with differing duration must emit duration patch"
+    );
+
+    // 3. Detached instance with missing description nullifies description; unchanged title and start are omitted
+    let patch_04 = overrides
+        .get("2026-09-04T10:00:00")
+        .expect("patch 04 present");
+    assert_eq!(
+        patch_04.get("description"),
+        Some(&serde_json::Value::Null),
+        "omitted property on detached instance must patch null"
+    );
+    assert_eq!(
+        patch_04.get("title"),
+        None,
+        "unchanged title must be omitted from patch"
+    );
+    assert_eq!(
+        patch_04.get("start"),
+        None,
+        "instance starting at recurrence ID must omit start from patch"
+    );
+
+    // 4. Detached instance with rescheduled start includes start in patch
+    let patch_05 = overrides
+        .get("2026-09-05T10:00:00")
+        .expect("patch 05 present");
+    assert_eq!(
+        patch_05.get("start"),
+        Some(&json!("2026-09-05T11:30:00")),
+        "rescheduled instance must include new start in patch"
+    );
+    assert_eq!(
+        patch_05.get("title"),
+        Some(&json!("Rescheduled Title")),
+        "modified title must be included in patch"
+    );
+    assert_eq!(
+        patch_05.get("description"),
+        None,
+        "unchanged description must be omitted from patch"
+    );
+}
+
+#[test]
+fn differential_oracle_read_start_triple_property_resolution_and_tzid_stripping() {
+    // Divergence 115 against Stalwart differential oracle:
+    // read_start triple property resolution (start, timeZone, showWithoutTime) and TZID stripping on dates.
+    // In jmap-ical:
+    // 1. Date-only start (no T) sets showWithoutTime: Some(true) and start at midnight T00:00:00.
+    // 2. Date-only start with TZID parameter forces timeZone: None (RFC 5545 section 3.2.19 prohibition).
+    // 3. Timed start sets showWithoutTime: None, preserving schema default.
+    // 4. Timed UTC start (Z) sets timeZone: Some("Etc/UTC").
+
+    // 1. Date-only start without TZID
+    let date_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:start-date\r\n\
+DTSTART:20260905\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_date = ical_to_event(date_ics).expect("parse date-only start");
+    assert_eq!(ev_date.start.as_deref(), Some("2026-09-05T00:00:00"));
+    assert_eq!(ev_date.show_without_time, Some(true));
+    assert_eq!(ev_date.time_zone, None);
+
+    // 2. Date-only start with TZID parameter: TZID is stripped, timeZone forced to None
+    let date_tz_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:start-date-tz\r\n\
+DTSTART;TZID=America/New_York:20260905\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_date_tz = ical_to_event(date_tz_ics).expect("parse date-only start with TZID");
+    assert_eq!(ev_date_tz.start.as_deref(), Some("2026-09-05T00:00:00"));
+    assert_eq!(ev_date_tz.show_without_time, Some(true));
+    assert_eq!(
+        ev_date_tz.time_zone, None,
+        "TZID on date-only DTSTART must be stripped to None"
+    );
+
+    // 3. Timed floating start: showWithoutTime is None (not Some(false))
+    let timed_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:start-timed\r\n\
+DTSTART:20260905T143000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_timed = ical_to_event(timed_ics).expect("parse timed floating start");
+    assert_eq!(ev_timed.start.as_deref(), Some("2026-09-05T14:30:00"));
+    assert_eq!(
+        ev_timed.show_without_time, None,
+        "timed start must leave showWithoutTime as None"
+    );
+    assert_eq!(ev_timed.time_zone, None);
+
+    // 4. Timed UTC start: timeZone is Etc/UTC, showWithoutTime is None
+    let utc_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:start-utc\r\n\
+DTSTART:20260905T143000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_utc = ical_to_event(utc_ics).expect("parse timed utc start");
+    assert_eq!(ev_utc.start.as_deref(), Some("2026-09-05T14:30:00"));
+    assert_eq!(
+        ev_utc.time_zone.as_deref(),
+        Some("Etc/UTC"),
+        "UTC Z suffix sets timeZone to Etc/UTC"
+    );
+    assert_eq!(ev_utc.show_without_time, None);
+}
