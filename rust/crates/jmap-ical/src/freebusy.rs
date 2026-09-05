@@ -97,7 +97,7 @@ pub fn busy_periods_to_vfreebusy(
 /// RFC 5545's `DATE-TIME` carries, and a server that sends one anyway should
 /// cost the digits, not the attendee's whole answer — which, under this
 /// module's refusal rule, is what dropping the period would cost.
-fn instant(value: &UtcDate) -> Option<String> {
+pub fn instant(value: &UtcDate) -> Option<String> {
     let value = value.as_str();
     let Some((seconds, fraction)) = value.split_once('.') else {
         return to_utc_date_time(value);
@@ -113,7 +113,7 @@ fn instant(value: &UtcDate) -> Option<String> {
 
 /// The address as a `mailto:` URI, which is how all three EDS backends name
 /// the subject of a `VFREEBUSY` and therefore what reads it back.
-fn mailto(attendee: &str) -> String {
+pub fn mailto(attendee: &str) -> String {
     let address = attendee
         .split_at_checked("mailto:".len())
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("mailto:"))

@@ -33154,3 +33154,371 @@ fn differential_oracle_date_time_conversion_existence_and_leap_second_tolerance(
     );
     assert_eq!(jmap_ical::event::strip("2026-01-15", '-', 6), None);
 }
+
+#[test]
+fn differential_oracle_transition_rule_day_resolution_and_weekday_arithmetic() {
+    // Divergence 224 against Stalwart differential oracle:
+    // Day::named, Day::of, Falls, weekday_named, weekday, and length_of:
+    // Timezone Transition Rule Day-of-Month Resolution (Nth, WeekdayAmong, OfMonth, OfStart),
+    // Sunday-Relative and Day-Count Arithmetic, tzdata WeekdayAmong Idiom Matching,
+    // and Ambiguous Set Refusal (Falls::Set) vs Transition Gap Skipping (Falls::Never).
+
+    // 1. tzdata WeekdayAmong idiom matching: "first Sunday on or after 23rd" (Oct 2026: Oct 25)
+    let custom_tz_tzdata = "/tzdata.example.org/Europe/Paris";
+    let ics_tzdata = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz_tzdata}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29;BYMONTH=10\r\n\
+TZNAME:CET\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:19700329T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=25,26,27,28,29,30,31;BYMONTH=3\r\n\
+TZNAME:CEST\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:tzdata-idiom-event\r\n\
+DTSTART;TZID={custom_tz_tzdata}:20261101T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20261110T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+    let ev_tzdata = ical_to_event(&ics_tzdata).expect("parse tzdata idiom event");
+    let rule_tzdata = ev_tzdata.recurrence_rule.expect("rule present");
+    // Standard time in effect (+0100): UTC 12:00:00Z -> local 13:00:00.
+    assert_eq!(
+        rule_tzdata.until.as_deref(),
+        Some("2026-11-10T13:00:00"),
+        "tzdata WeekdayAmong idiom matches exact transition onset and offset"
+    );
+
+    // 2. OfMonth single transition date (e.g. BYMONTHDAY=15)
+    let custom_tz_of_month = "/custom.example.org/FixedDay";
+    let ics_of_month = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz_of_month}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19700101T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYMONTHDAY=15;BYMONTH=1\r\n\
+TZNAME:FIXED\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:fixed-day-event\r\n\
+DTSTART;TZID={custom_tz_of_month}:20260201T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260205T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+    let ev_of_month = ical_to_event(&ics_of_month).expect("parse of_month event");
+    let rule_of_month = ev_of_month.recurrence_rule.expect("rule present");
+    // Transition on Jan 15 (+0200): UTC 12:00:00Z -> local 14:00:00.
+    assert_eq!(
+        rule_of_month.until.as_deref(),
+        Some("2026-02-05T14:00:00"),
+        "single BYMONTHDAY transition matches"
+    );
+
+    // 3. Ambiguous Set Refusal (Falls::Set): multiple dates matching weekday in same month
+    let custom_tz_set = "/custom.example.org/AmbiguousSet";
+    let ics_set = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz_set}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19700101T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYMONTHDAY=1,8;BYDAY=SU;BYMONTH=2\r\n\
+TZNAME:AMBIGUOUS\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:ambiguous-set-event\r\n\
+DTSTART;TZID={custom_tz_set}:20260301T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260305T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+    // February 2026 starts on Sunday (Feb 1 and Feb 8 are both Sunday).
+    // Falls::Set causes rule_onsets to return None, preserving the unshifted UTC Zulu timestamp.
+    let ev_set = ical_to_event(&ics_set).expect("parse ambiguous set event");
+    let rule_set = ev_set.recurrence_rule.expect("rule present");
+    assert_eq!(
+        rule_set.until.as_deref(),
+        Some("2026-03-05T12:00:00Z"),
+        "ambiguous set (Falls::Set) refuses multi-transition rule and preserves unshifted UTC instant"
+    );
+}
+
+#[test]
+fn differential_oracle_freebusy_status_mapping_and_address_normalization() {
+    // Divergence 225 against Stalwart differential oracle:
+    // free_busy_type, mailto, instant, and busy_periods_to_vfreebusy:
+    // Free/Busy Availability Availability Status Mapping (free_busy_type),
+    // Attendee Address Normalization (mailto: URI Prefix Idempotence),
+    // RFC 3339 Fractional Second Truncation, and Whole-Component Refusal Integrity.
+
+    // 1. free_busy_type status mapping
+    assert_eq!(
+        jmap_ical::freebusy::free_busy_type("tentative"),
+        "BUSY-TENTATIVE"
+    );
+    assert_eq!(
+        jmap_ical::freebusy::free_busy_type("unavailable"),
+        "BUSY-UNAVAILABLE"
+    );
+    assert_eq!(jmap_ical::freebusy::free_busy_type("confirmed"), "BUSY");
+    assert_eq!(jmap_ical::freebusy::free_busy_type("other-unknown"), "BUSY");
+
+    // 2. mailto address normalization
+    assert_eq!(
+        jmap_ical::freebusy::mailto("user@example.com"),
+        "mailto:user@example.com"
+    );
+    assert_eq!(
+        jmap_ical::freebusy::mailto("mailto:user@example.com"),
+        "mailto:user@example.com"
+    );
+    assert_eq!(
+        jmap_ical::freebusy::mailto("MAILTO:user@example.com"),
+        "mailto:user@example.com"
+    );
+
+    // 3. instant fractional second truncation
+    let date_clean = UtcDate::new("2026-09-01T12:00:00Z");
+    assert_eq!(
+        jmap_ical::freebusy::instant(&date_clean),
+        Some("20260901T120000Z".to_string())
+    );
+
+    let date_frac = UtcDate::new("2026-09-01T12:00:00.500Z");
+    assert_eq!(
+        jmap_ical::freebusy::instant(&date_frac),
+        Some("20260901T120000Z".to_string())
+    );
+
+    let date_malformed = UtcDate::new("2026-09-01T12:00:00.xyzZ");
+    assert_eq!(jmap_ical::freebusy::instant(&date_malformed), None);
+
+    // 4. busy_periods_to_vfreebusy whole-component refusal integrity
+    let start = UtcDate::new("2026-09-01T08:00:00Z");
+    let end = UtcDate::new("2026-09-01T18:00:00Z");
+    let valid_period = BusyPeriod {
+        utc_start: UtcDate::new("2026-09-01T09:00:00.123Z"),
+        utc_end: UtcDate::new("2026-09-01T10:00:00.456Z"),
+        busy_status: "confirmed".to_string(),
+        event: None,
+    };
+    let invalid_period = BusyPeriod {
+        utc_start: UtcDate::new("invalid-timestamp"),
+        utc_end: UtcDate::new("2026-09-01T11:00:00Z"),
+        busy_status: "confirmed".to_string(),
+        event: None,
+    };
+
+    let result_valid = jmap_ical::freebusy::busy_periods_to_vfreebusy(
+        "alice@example.com",
+        &start,
+        &end,
+        std::slice::from_ref(&valid_period),
+    );
+    assert!(result_valid.is_some());
+    let ics = result_valid.unwrap();
+    assert!(ics.contains("BEGIN:VFREEBUSY\r\n"));
+    assert!(ics.contains("ATTENDEE:mailto:alice@example.com\r\n"));
+    assert!(ics.contains("FREEBUSY;FBTYPE=BUSY:20260901T090000Z/20260901T100000Z\r\n"));
+    assert!(ics.contains("END:VFREEBUSY\r\n"));
+
+    let result_invalid = jmap_ical::freebusy::busy_periods_to_vfreebusy(
+        "alice@example.com",
+        &start,
+        &end,
+        &[valid_period, invalid_period],
+    );
+    assert_eq!(
+        result_invalid, None,
+        "unreadable period refuses entire VFREEBUSY component"
+    );
+}
+
+#[test]
+fn differential_oracle_ical_error_diagnostics_and_formatting() {
+    // Divergence 226 against Stalwart differential oracle:
+    // ICalError, Display, and Error:
+    // Error Variant Taxonomy, Human-Readable Formatting, Mismatched Component Delimiter Diagnostics,
+    // Trailing Stream Garbage Detection, and Strict Nesting Limit Enforcement (MAX_DEPTH = 32).
+
+    // 1. Error Display formatting for all variants
+    let err_not_cal = ICalError::NotACalendar;
+    assert_eq!(
+        err_not_cal.to_string(),
+        "not an iCalendar object: missing BEGIN:VCALENDAR"
+    );
+
+    let err_unterminated = ICalError::Unterminated("VEVENT".to_string());
+    assert_eq!(
+        err_unterminated.to_string(),
+        "truncated iCalendar: missing END:VEVENT"
+    );
+
+    let err_mismatched = ICalError::Mismatched {
+        expected: "VEVENT".to_string(),
+        found: "VCALENDAR".to_string(),
+    };
+    assert_eq!(
+        err_mismatched.to_string(),
+        "END:VCALENDAR closes nothing; END:VEVENT was due"
+    );
+
+    let err_trailing = ICalError::Trailing("EXTRA".to_string());
+    assert_eq!(
+        err_trailing.to_string(),
+        "content after END:VCALENDAR: EXTRA"
+    );
+
+    let err_too_deep = ICalError::TooDeep("VALARM".to_string());
+    assert_eq!(
+        err_too_deep.to_string(),
+        "iCalendar components nested more than 32 deep at BEGIN:VALARM"
+    );
+
+    let err_no_event = ICalError::NoEvent;
+    assert_eq!(
+        err_no_event.to_string(),
+        "iCalendar object contains no VEVENT"
+    );
+
+    // 2. Standard Error trait implementation
+    use std::error::Error;
+    assert!(err_not_cal.source().is_none());
+
+    // 3. Parser error triggering
+    assert_eq!(
+        jmap_ical::event::parse_ical("NOT CALENDAR"),
+        Err(ICalError::NotACalendar)
+    );
+    assert_eq!(
+        jmap_ical::event::parse_ical("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VCALENDAR\r\n"),
+        Err(ICalError::Mismatched {
+            expected: "VEVENT".to_string(),
+            found: "VCALENDAR".to_string(),
+        })
+    );
+    assert_eq!(
+        jmap_ical::event::parse_ical("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\nTRAILING"),
+        Err(ICalError::Trailing("TRAILING".to_string()))
+    );
+}
+
+#[test]
+fn differential_oracle_ast_rrule_synthetic_envelope_and_value_coercion() {
+    // Divergence 227 against Stalwart differential oracle:
+    // rrule_entry, value_text, param_text, date_time_text, and value_text_str:
+    // Calcard AST Entry Parsing via Synthetic Envelopes, Structured Value Stringification
+    // across 20 Variants, Parameter AST Coercion across 19 Variants, and Negative Zero Offset Normalization.
+
+    use calcard::common::PartialDateTime;
+    use calcard::icalendar::{
+        ICalendarParameterValue, ICalendarProperty, ICalendarStatus, ICalendarValue, Uri,
+    };
+
+    // 1. rrule_entry synthetic envelope verification
+    let valid_entry = jmap_ical::event::rrule_entry("FREQ=DAILY;INTERVAL=2;COUNT=5");
+    assert!(valid_entry.is_some());
+    let entry = valid_entry.unwrap();
+    assert_eq!(entry.name, ICalendarProperty::Rrule);
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(&entry),
+        "FREQ=DAILY;COUNT=5;INTERVAL=2"
+    );
+    assert!(matches!(
+        entry.values.first(),
+        Some(ICalendarValue::RecurrenceRule(_))
+    ));
+
+    // 2. value_text and value_text_str
+    let val_text = ICalendarValue::Text("test-summary".to_string());
+    assert_eq!(
+        jmap_ical::event::value_text(&val_text),
+        Some(("test-summary".to_string(), true))
+    );
+    assert_eq!(
+        jmap_ical::event::value_text_str(&val_text),
+        Some("test-summary".to_string())
+    );
+
+    let val_int = ICalendarValue::Integer(42);
+    assert_eq!(
+        jmap_ical::event::value_text(&val_int),
+        Some(("42".to_string(), false))
+    );
+
+    let val_bool_true = ICalendarValue::Boolean(true);
+    assert_eq!(
+        jmap_ical::event::value_text(&val_bool_true),
+        Some(("TRUE".to_string(), false))
+    );
+
+    let val_status = ICalendarValue::Status(ICalendarStatus::Confirmed);
+    assert_eq!(
+        jmap_ical::event::value_text(&val_status),
+        Some(("CONFIRMED".to_string(), false))
+    );
+
+    let val_bin = ICalendarValue::Binary(vec![1, 2, 3]);
+    assert_eq!(jmap_ical::event::value_text(&val_bin), None);
+
+    let val_data_uri = ICalendarValue::Uri(Uri::Data(calcard::common::Data {
+        content_type: Some("text/plain".to_string()),
+        data: b"hello".to_vec(),
+    }));
+    assert_eq!(jmap_ical::event::value_text(&val_data_uri), None);
+
+    let val_loc_uri = ICalendarValue::Uri(Uri::Location("https://example.com".to_string()));
+    assert_eq!(
+        jmap_ical::event::value_text(&val_loc_uri),
+        Some(("https://example.com".to_string(), false))
+    );
+
+    // 3. date_time_text with negative zero normalization
+    let stamp_neg_zero = PartialDateTime {
+        tz_hour: Some(0),
+        tz_minute: Some(0),
+        tz_minus: true,
+        ..Default::default()
+    };
+    // When date_time_text formats -0000, it normalizes to +0000
+    let formatted_neg = jmap_ical::event::date_time_text(&stamp_neg_zero);
+    assert_eq!(formatted_neg, "+0000");
+
+    // 4. param_text coercion
+    let p_text = ICalendarParameterValue::Text("param-val".to_string());
+    assert_eq!(jmap_ical::event::param_text(&p_text), "param-val");
+
+    let p_bool = ICalendarParameterValue::Bool(true);
+    assert_eq!(jmap_ical::event::param_text(&p_bool), "TRUE");
+
+    let p_int = ICalendarParameterValue::Integer(7);
+    assert_eq!(jmap_ical::event::param_text(&p_int), "7");
+
+    let p_null = ICalendarParameterValue::Null;
+    assert_eq!(jmap_ical::event::param_text(&p_null), "");
+}

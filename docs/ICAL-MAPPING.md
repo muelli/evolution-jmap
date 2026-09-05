@@ -4486,6 +4486,72 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.224 Divergence 224: `Day::named`, `Day::of`, `Falls`, `weekday_named`, `weekday`, and `length_of`: Timezone Transition Rule Day-of-Month Resolution (Nth, WeekdayAmong, OfMonth, OfStart), Sunday-Relative and Day-Count Arithmetic, tzdata WeekdayAmong Idiom Matching, and Ambiguous Set Refusal (Falls::Set) vs Transition Gap Skipping (Falls::Never)
 
+- **Observed Behavior**:
+  Resolving VTIMEZONE transition rules (e.g. DAYLIGHT and STANDARD subcomponents) defined with RRULE requires resolving exact calendar day onsets from rule specifications. In `jmap-ical`:
+  1. Day rule classification: `Day` models onset specifications into `Nth` (e.g. 1st or -1st Sunday), `WeekdayAmong` (tzdata idiom for "Sunday on or after day D", matching consecutive 7-day ranges like `BYMONTHDAY=23,24,25,26,27,28,29`), `OfMonth` (fixed day of month like `BYMONTHDAY=15`), and `OfStart` (defaulting to the start date day).
+  2. Sunday-relative arithmetic and weekday calculation: `weekday_named` maps weekday names to 0-indexed offsets from Sunday (Sunday = 0, Monday = 1, ..., Saturday = 6). `weekday(year, month, day)` calculates exact day-of-week using proleptic Gregorian calendar arithmetic.
+  3. `Falls` resolution: `Falls::Exact(day)` resolves when an exact calendar day in the target month matches the rule. `Falls::Never` handles months where the target day does not exist (e.g. February 30). Crucially, `Falls::Set` identifies ambiguous sets where multiple days within the specified list match the weekday criteria.
+  4. Ambiguous set refusal: When `Falls::Set` occurs, `rule_onsets` refuses to guess an arbitrary transition date and returns `None`. In turn, `read_until` detects that the custom timezone transition is unresolvable, preserving the original unshifted UTC Zulu timestamp (e.g. `2026-03-05T12:00:00Z`). This ensures that downstream recurrence processing cleanly identifies unmappable recurrence rules rather than producing silently corrupt local timestamps.
+  5. In contrast, differential oracles or naive recurrence evaluators pick the first matching day in an ambiguous set, miscalculate negative ordinal weekdays near month boundaries, or silently loop indefinitely.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.5 (`VTIMEZONE`), Section 3.3.10 (`RECUR`), and Section 3.8.5.3 (`Recurrence Rule`) define timezone recurrence rules and transition onsets.
+  2. Standard tzdata/Olson timezone definitions frequently employ the `BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29` idiom to express "Sunday on or after the 23rd" without requiring complex custom extensions.
+- **Adjudication**:
+  Conforming specification boundary and timezone onset calculation determinism. Correctly resolves tzdata `WeekdayAmong` idioms, calculates exact Sunday-relative weekday arithmetic, and refuses ambiguous multi-onset sets with `Falls::Set`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.225 Divergence 225: `free_busy_type`, `mailto`, `instant`, and `busy_periods_to_vfreebusy`: Free/Busy Availability Status Mapping, Attendee Address Normalization (mailto URI Prefix Idempotence), RFC 3339 Fractional Second Truncation, and Whole-Component Refusal Integrity
+
+- **Observed Behavior**:
+  Serializing JSCalendar availability / busy periods to RFC 5545 `VFREEBUSY` components requires mapping busy statuses, normalizing attendee addresses, formatting UTC timestamps, and maintaining fail-safe transaction integrity. In `jmap-ical`:
+  1. Busy status mapping: `free_busy_type` maps `"tentative"` to `"BUSY-TENTATIVE"`, `"unavailable"` to `"BUSY-UNAVAILABLE"`, `"confirmed"` to `"BUSY"`, and safely defaults any unrecognized or non-standard status string to `"BUSY"`, preventing unconfirmed periods from erroneously showing as free time.
+  2. Attendee address normalization: `mailto` guarantees idempotent `mailto:` URI scheme prefixing. If an address string already begins with `mailto:` (case-insensitive), it is retained as-is; otherwise, `mailto:` is prepended, avoiding invalid double-prefixed addresses such as `mailto:mailto:user@example.com`.
+  3. Fractional second truncation: RFC 5545 Section 3.3.4 explicitly requires compact UTC date-times (`YYYYMMDDTHHMMSSZ`) with integer seconds and forbids fractional seconds. `instant` parses RFC 3339 timestamps from `UtcDate` and strips fractional subsecond components (e.g. `.500Z` or `.123456Z`), outputting clean RFC 5545 compact Zulu timestamps, while rejecting malformed inputs with non-digit fractional tails.
+  4. Whole-component refusal integrity: `busy_periods_to_vfreebusy` validates every start, end, and period timestamp before constructing the `VFREEBUSY` block. If any timestamp within the list is unreadable or malformed, the function returns `None` immediately, refusing the entire component rather than emitting a partial or corrupted schedule that could cause calendar scheduling conflicts.
+  5. In contrast, differential oracles drop unknown statuses (causing busy time to appear free), double-prefix mailto addresses, leak fractional seconds into wire output, or emit partial `VFREEBUSY` objects when an individual period timestamp fails.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.4 (`VFREEBUSY`), Section 3.8.2.6 (`FREEBUSY`), and Section 3.3.4 (`DATE-TIME`) govern free/busy component structure and timestamp syntax. RFC 8984 Section 4.5.1 defines JSCalendar availability.
+  2. Scheduling availability integrity requires that malformed period data never results in silently dropped busy slots.
+- **Adjudication**:
+  Conforming specification boundary and scheduling availability integrity. Enforces strict integer second formatting, idempotent mailto prefixing, conservative busy status fallback, and all-or-nothing component generation.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.226 Divergence 226: `ICalError`, `Display`, and `Error`: Error Variant Taxonomy, Human-Readable Diagnostics, Mismatched Component Delimiter Diagnostics, Trailing Stream Garbage Detection, and Strict Nesting Limit Enforcement (MAX_DEPTH = 32)
+
+- **Observed Behavior**:
+  Robust iCalendar parsing requires comprehensive error taxonomy and descriptive diagnostics for malformed, truncated, or malicious input streams. In `jmap-ical`:
+  1. Error variant taxonomy: `ICalError` categorizes parser failures into distinct, structured variants: `NotACalendar` (missing `BEGIN:VCALENDAR`), `Unterminated(component)` (missing closing `END`), `Mismatched { expected, found }` (closing delimiter does not match current open component), `Trailing(content)` (extraneous data following `END:VCALENDAR`), `TooDeep(component)` (nesting exceeding 32 levels), and `NoEvent` (calendar stream containing no `VEVENT`).
+  2. Human-readable diagnostic formatting: `Display` produces actionable, specific error strings. For instance, `ICalError::Mismatched` reports `"END:{found} closes nothing; END:{expected} was due"`, pinpointing mismatched nesting tags during debugging.
+  3. Standard trait compliance: `ICalError` implements `std::error::Error` with empty source chains, allowing seamless integration with `?` operators and standard Rust error handling ecosystems.
+  4. Defense-in-depth nesting limits: `ICalError::TooDeep` enforces `MAX_DEPTH = 32`, guarding against parser stack overflows or denial-of-service attacks constructed with deeply nested synthetic components.
+  5. Trailing garbage detection: Streams containing data past the final `END:VCALENDAR` delimiter are rejected with `ICalError::Trailing`, preventing smuggled or unparsed payloads from bypassing validation.
+  6. In contrast, differential oracles or minimal parsers return generic untyped errors (such as `Err(())` or `Err("parse error")`), ignore trailing payload garbage, or crash via recursion on deeply nested payloads.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.4 defines iCalendar object structure and mandatory component delimiters.
+  2. Clear error attribution and recursion limits are critical for secure server backends processing untrusted external calendar invitations.
+- **Adjudication**:
+  Conforming specification boundary and parser robustness. Provides granular error taxonomy, informative diagnostics, strict delimiter matching, trailing data rejection, and recursion depth bounding.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.227 Divergence 227: `rrule_entry`, `value_text`, `param_text`, `date_time_text`, and `value_text_str`: Calcard AST Entry Parsing via Synthetic Envelopes, Structured Value Stringification across 20 Variants, Parameter AST Coercion across 19 Variants, and Negative Zero Offset Normalization
+
+- **Observed Behavior**:
+  Transforming low-level `calcard` AST nodes into typed JMAP/JSCalendar representations requires comprehensive value coercion, parameter extraction, synthetic envelope parsing, and date-time normalization. In `jmap-ical`:
+  1. Synthetic envelope parsing: `rrule_entry` wraps raw recurrence rule strings inside a minimal synthetic envelope (`BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nRRULE:{rrule}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n`), feeding it through the full AST parser to produce a validated `ICalendarEntry` without re-implementing dedicated parser grammars.
+  2. Exhaustive value stringification: `value_text` and `value_text_str` systematically handle all 20 `ICalendarValue` variants. Scalar types (`Text`, `Integer`, `Float`, `Boolean`, `Status`, `RecurrenceId`) are coerced to string representations along with an unescaped flag. Crucially, binary data payloads (`Binary` and `Uri::Data`) return `None`, preventing massive memory allocations or invalid binary leaks into textual event properties.
+  3. Parameter coercion: `param_text` coerces all 19 `ICalendarParameterValue` variants into normalized text, safely converting booleans, integers, floats, and null parameters (`""`) while cleanly handling structured types.
+  4. Negative zero offset normalization: In `date_time_text`, partial timestamps with `-0000` (represented by `tz_minus: true` with zero hour and minute) are explicitly normalized to `+0000`, complying with RFC 5545 Section 3.3.14 which disallows negative zero offsets.
+  5. In contrast, differential oracles panic on unexpected AST variants, leak raw binary payloads into text fields, fail to parse standalone recurrence rules, or serialize `-0000` offsets into outbound data.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3 defines property value data types, Section 3.2 defines parameter data types, and Section 3.3.14 defines UTC offsets. RFC 8984 defines JSCalendar data models.
+  2. Bridging third-party AST structures (`calcard`) to JMAP requires total mapping coverage across all potential enum variants to guarantee parser safety.
+- **Adjudication**:
+  Conforming specification boundary and AST coercion determinism. Enforces comprehensive variant coverage, suppresses binary payloads from textual properties, normalizes negative zero offsets, and provides robust synthetic envelope parsing.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
