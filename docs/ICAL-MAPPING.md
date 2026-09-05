@@ -3655,4 +3655,80 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.176 Divergence 176: `rrule_to_rule`, `to_nday`, `to_month_day`, and `to_time_of_day`: Inbound Recurrence Rule Parsing, Token Sentinels (`0` vs `u32::MAX`), and Malformed `UNTIL` Truncation Canary
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 defines the recurrence rule grammar, while RFC 8984 §4.3.1 models recurrence rules as structured objects. In `jmap-ical`:
+  1. Recurrence rule component parsing: `rrule_to_rule` parses semicolon-separated `RRULE` property tokens (`FREQ`, `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY`, `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYMONTH`, `BYSECOND`, `BYMINUTE`, `BYHOUR`, `BYSETPOS`, `WKST`).
+  2. Malformed `UNTIL` truncation canary: When `UNTIL` lacks date-time shape entirely (`date_time_digits(value)` returns `None`, such as `UNTIL=whenever`), `rrule_to_rule` immediately terminates the loop (`break`). This drops trailing rule parts, reproducing calcard parser truncation semantics and ensuring unparseable trailing tokens do not corrupt the recurrence frequency. In contrast, values that possess date-time digits (even if naming non-existent dates, like month 13) are preserved for evaluation by `read_until` and subsequent gating by `maps_recurrence_rule`.
+  3. Weekday token parsing (`to_nday`): Parses weekday tokens with optional signed integer prefixes (`+3TU`, `-1FR`, `WE`). Explicit plus signs are stripped to extract positive ordinals, and ordinal `0` is strictly rejected as invalid in RFC 5545 ABNF grammar (`(+ / -) 1*2DIGIT`). Unrecognized suffixes or malformed tokens preserve their raw text in `NDay.day`, ensuring `by_day_token` and `maps_recurrence_rule` refuse them on export.
+  4. Day, week, and set position sentinels (`to_month_day`): In `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, and `BYSETPOS`, unparseable non-integer tokens default to sentinel `0`. Because `0` is an invalid calendar day of the month (1..=31), day of the year (1..=366), week of the year (1..=53), and set position index, downstream token validators reject `0`, causing `maps_recurrence_rule` to return `false`.
+  5. Time-of-day sentinels (`to_time_of_day`): In `BYSECOND`, `BYMINUTE`, and `BYHOUR`, `0` represents midnight or the zeroth second/minute, a valid value that cannot serve as an error sentinel. Unparseable tokens instead default to sentinel `u32::MAX`. Downstream serializer `time_of_day_part` checks `value <= largest` (23 for hours, 59 for minutes, 60 for seconds), rejecting `u32::MAX` and causing `maps_recurrence_rule` to flag the corrupted rule.
+  6. In contrast, differential oracles or permissive parsers silently drop malformed tokens (narrowing recurrence rules without notification), accept ordinal `0` on weekdays, or use `0` as an error sentinel in time-of-day fields (falsely converting unparseable hours into midnight occurrences).
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.10 defines recurrence rule syntax and valid numerical ranges.
+  2. Utilizing typed sentinels (`0` for non-zero calendar parts, `u32::MAX` for zero-admitting time parts) ensures parser failures propagate deterministically without creating silent occurrence shifts.
+- **Adjudication**:
+  Conforming specification boundary and defensive recurrence rule parsing. Preserves failure states via typed sentinels, strips signed prefixes, enforces non-zero weekday ordinals, and prevents malformed `UNTIL` strings from corrupting recurrence rules.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.177 Divergence 177: `read_until`, `Ends`, `Zoned`, and `offset_at`: Inbound Recurrence `UNTIL` Endpoint Zone Evaluation: Dynamic Embedded Observance Calculation, Fixed Offset Observance Resolution (`Ends::At`), Undefined Custom Zone Protection, and Floating Event Handling
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 mandates that `UNTIL` must be a UTC instant (`Z`) whenever `DTSTART` has a `TZID`. In contrast, RFC 8984 §4.3.3 mandates that `until` in JSCalendar must be a `LocalDateTime` in the event's own timezone. In `jmap-ical`:
+  1. Dynamic embedded observance evaluation (`Ends::In`): `read_until` converts the UTC instant into local time without external timezone database dependencies by inspecting the document's own `VTIMEZONE` subcomponents (`zone.offset_at(&local)`). It calculates the active UTC offset in effect at the transition instant and moves the timestamp into local time via `moved(&local, offset)`.
+  2. Fixed offset observance resolution (`Ends::At`): For `VTIMEZONE` observance subcomponents, transitions date themselves in the zone they define, resolving against the fixed offset `TZOFFSETFROM`. `read_until` converts the UTC instant directly using arithmetic offset subtraction (`at_offset`).
+  3. Undefined custom zone protection: If the event's timezone is named (and not UTC) but has no definition in the document (or its definition cannot be resolved), `read_until` appends `Z` to keep the instant unshifted as a UTC timestamp. Because RFC 8984 `until` requires a local date-time, `writable(rule)` returns `false`, `unstateable_until` reports the unshifted timestamp, and `maps_recurrence_rule` signals that the rule cannot be safely saved back, protecting the server's existing rule from corruption.
+  4. Floating event handling: If the event has no timezone, any trailing `Z` on `UNTIL` is stripped, and the wall-clock digits are preserved as local date-time.
+  5. In contrast, differential oracles or naive date converters shift undefined timezones by guessing system local time, drop `UNTIL` entirely when timezones cannot be resolved, or fail to evaluate dynamic daylight saving transitions in custom timezone components.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.10 and RFC 8984 §4.3.3 govern `UNTIL` date-time formatting and timezone alignment.
+  2. Evaluating offsets directly from embedded `VTIMEZONE` observances ensures self-contained, offline operation without host tzdata dependencies.
+- **Adjudication**:
+  Conforming specification boundary and self-contained recurrence boundary conversion. Evaluates embedded VTIMEZONE transitions dynamically, supports fixed-offset observances, and protects undefined custom zones from inaccurate time shifting.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.178 Divergence 178: `weekday_named`, `weekday`, `length_of`, and `Falls`: Observance Weekday Arithmetic, Proleptic Gregorian Day-of-Week Indexing (Thursday-Aligned Unix Epoch `+3`), Transition Gap Skipping (`Falls::Never`), and Ambiguous Set Refusal (`Falls::Set`)
+
+- **Observed Behavior**:
+  Evaluating `VTIMEZONE` observance transitions requires computing the exact calendar dates of transitions (e.g. last Sunday in October) across historical and future years in pure integer arithmetic. In `jmap-ical`:
+  1. Case-insensitive weekday lookup (`weekday_named`): Maps two-letter weekday tokens (`MO` through `SU`) to indices `0..=6`, returning `None` for invalid names or tokens with attached ordinals.
+  2. Proleptic Gregorian weekday calculation (`weekday`): Computes zero-indexed weekday (0=Monday) in O(1) integer arithmetic using `(days_from_civil(year, month, day) + 3).rem_euclid(7)`. The `+3` constant aligns with Thursday, 1970-01-01 (the Unix epoch, where `days_from_civil == 0` and `(0 + 3) % 7 == 3`).
+  3. Bounded calendar month length (`length_of`): Safely evaluates month lengths in signed 64-bit integer space via `days_in_month`, returning `None` for negative, zero, or out-of-bounds month indices.
+  4. Transition date resolution (`Falls`):
+     - `Falls::On(day)`: Returns the single matching day of the month for the transition rule.
+     - `Falls::Never`: Identifies years where the recurrence criteria cannot occur (e.g. 5th occurrence of a weekday in a 4-weekday month, or February 29th in non-leap years). The search back loop (`SEARCH = 40`) skips the gap year without failing the surrounding timezone definition.
+     - `Falls::Set`: Detects and rejects ambiguous multi-day matches within a single year (e.g. multiple days satisfying a broad range), refusing to guess between multiple transitions.
+  5. In contrast, differential oracles or external calendar libraries often panic on nonexistent dates (such as February 29th in non-leap years), fail on century leap year rules (year 1900 vs 2000), or select an arbitrary date when transition rules match multiple days.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.5 and §3.3.10 govern `VTIMEZONE` recurrence rules and weekday calculations.
+  2. Proleptic Gregorian arithmetic with Hinnant era shifting guarantees accurate day-of-week indexing without platform-dependent time libraries.
+- **Adjudication**:
+  Conforming specification boundary and deterministic transition calendar arithmetic. Implements integer-based weekday calculation, handles calendar gaps via `Falls::Never`, and refuses ambiguous transition sets via `Falls::Set`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.179 Divergence 179: `ICalError`: Diagnostic Error Enumeration, Exact Component Pairing Delimiter Reporting, Multi-Calendar Trailing Content Detection, and Bounded Nesting Depth Defense
+
+- **Observed Behavior**:
+  Parsing iCalendar streams encounters syntax errors, truncated network buffers, nested attacks, or non-appointment calendar feeds. In `jmap-ical`:
+  1. Non-calendar detection (`ICalError::NotACalendar`): Raised when input does not begin with `BEGIN:VCALENDAR` (such as empty text, whitespace, or vCard streams). Display yields `"not an iCalendar object: missing BEGIN:VCALENDAR"`.
+  2. Unterminated component detection (`ICalError::Unterminated`): Raised when a component is opened via `BEGIN:<name>` but reaches EOF without a matching `END:<name>`. Display yields `"truncated iCalendar: missing END:{name}"`.
+  3. Mismatched envelope pairing (`ICalError::Mismatched`): Raised when `END:<found>` closes a component other than the innermost active component `<expected>`. Display yields `"END:{found} closes nothing; END:{expected} was due"`.
+  4. Extraneous trailing data detection (`ICalError::Trailing`): Raised when extraneous non-whitespace content follows `END:VCALENDAR`. Display yields `"content after END:VCALENDAR: {line}"`. This prevents multi-calendar batch streams from having whole events silently dropped.
+  5. Bounded nesting depth defense (`ICalError::TooDeep`): Raised when component nesting depth exceeds `MAX_DEPTH = 32`. Display yields `"iCalendar components nested more than 32 deep at BEGIN:{name}"`. This guards against stack overflow aborts on deeply nested recursive AST drops.
+  6. Empty appointment calendar detection (`ICalError::NoEvent`): Raised when a valid `VCALENDAR` contains zero `VEVENT` components (such as calendars holding only `VTODO` or `VJOURNAL`). Display yields `"iCalendar object contains no VEVENT"`.
+  7. Standard error integration: Implements `std::error::Error` for seamless integration into Rust standard error handling ecosystems.
+  8. In contrast, differential oracles or permissive parsers silently drop trailing components, crash on deeply nested adversarial inputs, or recover from mismatched delimiters with ambiguous component boundaries.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.4 defines component structure and delimiter pairing.
+  2. Exact envelope diagnostics pinpoint corruption sites in multi-calendar feeds and prevent malformed streams from corrupting the calendar backend.
+- **Adjudication**:
+  Conforming specification boundary and defensive parser diagnostic fidelity. Provides exact component pairing mismatch reporting, prevents silent batch event loss, and bounds nesting depth against denial-of-service recursion attacks.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 

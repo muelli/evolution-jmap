@@ -29365,3 +29365,397 @@ fn differential_oracle_modified_instances_override_expansion_and_dated_types() {
     assert!(all_day_ics.contains("EXDATE;VALUE=DATE:20281001"));
     assert!(all_day_ics.contains("SUMMARY:Extended Holiday"));
 }
+
+#[test]
+fn differential_oracle_rrule_to_rule_inbound_parsing_and_sentinel_handling() {
+    // Divergence 176 against Stalwart differential oracle:
+    // rrule_to_rule, to_nday, to_month_day, and to_time_of_day:
+    // Inbound Recurrence Rule Parsing, Token Sentinels (0 vs u32::MAX),
+    // and Malformed UNTIL Truncation Canary.
+
+    // 1. Malformed UNTIL truncation canary:
+    // When UNTIL has no date-time shape at all (e.g. UNTIL=whenever),
+    // rrule_to_rule immediately breaks, dropping trailing rule parts.
+    let ics_canary = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:test\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:canary-176\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=whenever;INTERVAL=5;COUNT=10\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_canary = ical_to_event(ics_canary).expect("parse event with canary until");
+    let rule_canary = ev_canary.recurrence_rule.expect("rule present");
+    assert_eq!(rule_canary.frequency, "daily");
+    assert_eq!(rule_canary.until, None, "unshaped UNTIL drops until");
+    assert_eq!(
+        rule_canary.interval, None,
+        "unshaped UNTIL canary breaks parsing so trailing INTERVAL is dropped"
+    );
+    assert_eq!(
+        rule_canary.count, None,
+        "unshaped UNTIL canary breaks parsing so trailing COUNT is dropped"
+    );
+
+    // 2. Signed ordinals on BYDAY (+2MO, -1FR) and explicit plus stripping
+    let ics_byday = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:test\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:byday-176\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "RRULE:FREQ=MONTHLY;BYDAY=+2TU,-1FR,WE\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_byday = ical_to_event(ics_byday).expect("parse byday");
+    let rule_byday = ev_byday.recurrence_rule.expect("rule present");
+    let days = rule_byday.by_day.as_ref().expect("days present");
+    assert_eq!(days[0].day, "tu");
+    assert_eq!(days[0].nth_of_period, Some(2));
+    assert_eq!(days[1].day, "fr");
+    assert_eq!(days[1].nth_of_period, Some(-1));
+    assert_eq!(days[2].day, "we");
+    assert_eq!(days[2].nth_of_period, None);
+    assert!(maps_recurrence_rule(&rule_byday));
+
+    // 3. Sentinel 0 on unparseable tokens in BYMONTHDAY, BYWEEKNO, and BYSETPOS
+    let ics_bad_tokens = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:test\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:bad-tokens-176\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTHDAY=foo,15;BYWEEKNO=bar,20;BYSETPOS=baz,1\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_bad = ical_to_event(ics_bad_tokens).expect("parse bad tokens");
+    let rule_bad = ev_bad.recurrence_rule.expect("rule present");
+    assert_eq!(rule_bad.by_month_day.as_deref(), Some(&[0, 15][..]));
+    assert_eq!(rule_bad.by_week_no.as_deref(), Some(&[0, 20][..]));
+    assert_eq!(rule_bad.by_set_position.as_deref(), Some(&[0, 1][..]));
+    assert!(
+        !maps_recurrence_rule(&rule_bad),
+        "sentinel 0 causes maps_recurrence_rule to refuse rule"
+    );
+
+    // 4. Sentinel u32::MAX on unparseable tokens in BYSECOND, BYMINUTE, BYHOUR
+    let ics_bad_time = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:test\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:bad-time-176\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "RRULE:FREQ=DAILY;BYHOUR=bad_hour,12;BYMINUTE=bad_min,30;BYSECOND=bad_sec,45\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_time = ical_to_event(ics_bad_time).expect("parse bad time");
+    let rule_time = ev_time.recurrence_rule.expect("rule present");
+    assert_eq!(rule_time.by_hour.as_deref(), Some(&[u32::MAX, 12][..]));
+    assert_eq!(rule_time.by_minute.as_deref(), Some(&[u32::MAX, 30][..]));
+    assert_eq!(rule_time.by_second.as_deref(), Some(&[u32::MAX, 45][..]));
+    assert!(
+        !maps_recurrence_rule(&rule_time),
+        "sentinel u32::MAX causes maps_recurrence_rule to refuse rule"
+    );
+}
+
+#[test]
+fn differential_oracle_read_until_endpoint_zone_evaluation_and_fallback() {
+    // Divergence 177 against Stalwart differential oracle:
+    // read_until, Ends, Zoned, and offset_at:
+    // Inbound Recurrence UNTIL Endpoint Zone Evaluation:
+    // Dynamic Embedded Observance Calculation, Fixed Offset Observance Resolution (Ends::At),
+    // Undefined Custom Zone Protection, and Floating Event Handling.
+
+    // 1. Dynamic embedded VTIMEZONE observance evaluation (Ends::In)
+    let custom_tz = "/custom.example.org/BonnZone";
+    let ics_zoned = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+TZNAME:CET\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:19700329T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+TZNAME:CEST\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:zoned-until-summer-177\r\n\
+DTSTART;TZID={custom_tz}:20260601T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260610T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+    let ev_zoned = ical_to_event(&ics_zoned).expect("parse summer event with custom timezone");
+    let rule_zoned = ev_zoned.recurrence_rule.expect("rule present");
+    // In June, DAYLIGHT is in effect (+0200 = +7200s), so UTC 12:00:00Z converts to local 14:00:00
+    assert_eq!(
+        rule_zoned.until.as_deref(),
+        Some("2026-06-10T14:00:00"),
+        "summer UNTIL converts using CEST +0200 offset"
+    );
+
+    // 2. Winter UNTIL evaluation in the same zone (STANDARD +0100)
+    let ics_winter = ics_zoned
+        .replace("20260601T100000", "20261201T100000")
+        .replace("20260610T120000Z", "20261210T120000Z");
+    let ev_winter = ical_to_event(&ics_winter).expect("parse winter event");
+    let rule_winter = ev_winter.recurrence_rule.expect("winter rule present");
+    // In December, STANDARD is in effect (+0100 = +3600s), so UTC 12:00:00Z converts to local 13:00:00
+    assert_eq!(
+        rule_winter.until.as_deref(),
+        Some("2026-12-10T13:00:00"),
+        "winter UNTIL converts using CET +0100 offset"
+    );
+
+    // 3. Undefined custom timezone protection: preserves Z, flags unstateable_until
+    let ics_undef = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:test\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:undef-zone-177\r\n",
+        "DTSTART;TZID=/unknown/zone:20260601T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20260610T120000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_undef = ical_to_event(ics_undef).expect("parse undefined zone event");
+    let rule_undef = ev_undef.recurrence_rule.expect("rule present");
+    assert_eq!(
+        rule_undef.until.as_deref(),
+        Some("2026-06-10T12:00:00Z"),
+        "undefined custom zone retains trailing Z to prevent guessing"
+    );
+    assert!(
+        !maps_recurrence_rule(&rule_undef),
+        "rule with unshifted trailing Z is not writable"
+    );
+    assert_eq!(
+        unstateable_until(&rule_undef),
+        Some("2026-06-10T12:00:00Z"),
+        "unstateable_until reports the exact unshifted timestamp"
+    );
+
+    // 4. Floating event handling: no timezone -> local digits preserved
+    let ics_floating = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:test\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:floating-177\r\n",
+        "DTSTART:20260601T100000\r\n",
+        "RRULE:FREQ=DAILY;UNTIL=20260610T120000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_float = ical_to_event(ics_floating).expect("parse floating event");
+    let rule_float = ev_float.recurrence_rule.expect("rule present");
+    assert_eq!(
+        rule_float.until.as_deref(),
+        Some("2026-06-10T12:00:00"),
+        "floating event strips Z and retains digits"
+    );
+}
+
+#[test]
+fn differential_oracle_zone_weekday_arithmetic_and_falls_resolution() {
+    // Divergence 178 against Stalwart differential oracle:
+    // weekday_named, weekday, length_of, and Falls:
+    // Observance Weekday Arithmetic, Proleptic Gregorian Day-of-Week Indexing
+    // (Thursday-Aligned Unix Epoch +3), Transition Gap Skipping (Falls::Never),
+    // and Ambiguous Set Refusal (Falls::Set).
+
+    // 1. Proleptic Gregorian day of the week alignment with Unix Epoch (1970-01-01 was Thursday = 3)
+    // Thursday (3): (days_from_civil(1970, 1, 1) + 3).rem_euclid(7) == 3
+    let d_epoch = jmap_ical::event::days_from_civil(1970, 1, 1);
+    assert_eq!(d_epoch, 0);
+    assert_eq!((d_epoch + 3).rem_euclid(7), 3, "1970-01-01 is Thursday");
+
+    // Friday 1970-01-02 -> (1 + 3) % 7 == 4
+    let d_friday = jmap_ical::event::days_from_civil(1970, 1, 2);
+    assert_eq!((d_friday + 3).rem_euclid(7), 4, "1970-01-02 is Friday");
+
+    // Sunday 1970-01-04 -> (3 + 3) % 7 == 6
+    let d_sunday = jmap_ical::event::days_from_civil(1970, 1, 4);
+    assert_eq!((d_sunday + 3).rem_euclid(7), 6, "1970-01-04 is Sunday");
+
+    // Monday 1970-01-05 -> (4 + 3) % 7 == 0
+    let d_monday = jmap_ical::event::days_from_civil(1970, 1, 5);
+    assert_eq!((d_monday + 3).rem_euclid(7), 0, "1970-01-05 is Monday");
+
+    // 2. Transition resolution with Falls::On (Last Sunday of October 2026 is October 25)
+    // October 31, 2026 is Saturday (5), so last Sunday is 31 - 6 = 25.
+    let d_oct31_2026 = jmap_ical::event::days_from_civil(2026, 10, 31);
+    assert_eq!(
+        (d_oct31_2026 + 3).rem_euclid(7),
+        5,
+        "2026-10-31 is Saturday"
+    );
+    let d_oct25_2026 = jmap_ical::event::days_from_civil(2026, 10, 25);
+    assert_eq!((d_oct25_2026 + 3).rem_euclid(7), 6, "2026-10-25 is Sunday");
+
+    // 3. Calendar gap skipping (Falls::Never):
+    // Transition rule for 5th Sunday of February: no February ever has 5 Sundays.
+    // The search back handles Falls::Never without failing the surrounding definition.
+    let custom_tz = "/custom.example.org/GapZone";
+    let ics_gap = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19700101T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=5SU;BYMONTH=2\r\n\
+TZNAME:GAP\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:gap-zone-178\r\n\
+DTSTART;TZID={custom_tz}:20260301T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260305T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+    let ev_gap = ical_to_event(&ics_gap).expect("parse gap zone event");
+    let rule_gap = ev_gap.recurrence_rule.expect("rule present");
+    // Since 5th Sunday of February never falls, onset is not generated for that rule,
+    // and earliest transition offset (+0100) is used: UTC 12:00:00Z -> local 13:00:00.
+    assert_eq!(
+        rule_gap.until.as_deref(),
+        Some("2026-03-05T13:00:00"),
+        "gap year (Falls::Never) resolves to earliest transition offset"
+    );
+}
+
+#[test]
+fn differential_oracle_ical_error_display_formatting_and_diagnostics() {
+    // Divergence 179 against Stalwart differential oracle:
+    // ICalError: Diagnostic Error Enumeration, Exact Component Pairing Delimiter Reporting,
+    // Multi-Calendar Trailing Content Detection, and Bounded Nesting Depth Defense.
+
+    // 1. ICalError::NotACalendar
+    let err_not_cal = ICalError::NotACalendar;
+    assert_eq!(
+        err_not_cal.to_string(),
+        "not an iCalendar object: missing BEGIN:VCALENDAR"
+    );
+    assert_eq!(
+        jmap_ical::event::check_structure("NOT A VALID CALENDAR"),
+        Ok(()),
+        "check_structure only validates BEGIN/END delimiters"
+    );
+    assert_eq!(
+        jmap_ical::event::parse_ical("NOT A VALID CALENDAR"),
+        Err(ICalError::NotACalendar)
+    );
+
+    // 2. ICalError::Unterminated
+    let err_unterminated = ICalError::Unterminated("VEVENT".to_string());
+    assert_eq!(
+        err_unterminated.to_string(),
+        "truncated iCalendar: missing END:VEVENT"
+    );
+    let unterm_ics = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nSUMMARY:Unterminated\r\n";
+    assert_eq!(
+        jmap_ical::event::check_structure(unterm_ics),
+        Err(ICalError::Unterminated("VEVENT".to_string()))
+    );
+
+    // 3. ICalError::Mismatched
+    let err_mismatched = ICalError::Mismatched {
+        expected: "VEVENT".to_string(),
+        found: "VALARM".to_string(),
+    };
+    assert_eq!(
+        err_mismatched.to_string(),
+        "END:VALARM closes nothing; END:VEVENT was due"
+    );
+    let mismatch_ics = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VALARM\r\nEND:VCALENDAR\r\n";
+    assert_eq!(
+        jmap_ical::event::check_structure(mismatch_ics),
+        Err(err_mismatched)
+    );
+
+    // 4. ICalError::Trailing
+    let err_trailing = ICalError::Trailing("EXTRA_CALENDAR_DATA".to_string());
+    assert_eq!(
+        err_trailing.to_string(),
+        "content after END:VCALENDAR: EXTRA_CALENDAR_DATA"
+    );
+    let trailing_ics =
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\nEND:VCALENDAR\r\nEXTRA_CALENDAR_DATA\r\n";
+    assert_eq!(
+        jmap_ical::event::parse_ical(trailing_ics),
+        Err(err_trailing)
+    );
+
+    // 5. ICalError::TooDeep (MAX_DEPTH = 32)
+    let err_deep = ICalError::TooDeep("VEVENT".to_string());
+    assert_eq!(
+        err_deep.to_string(),
+        format!(
+            "iCalendar components nested more than {} deep at BEGIN:VEVENT",
+            MAX_DEPTH
+        )
+    );
+    // Build calendar with 33 nested VEVENT components
+    let mut deep_ics = String::from("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:test\r\n");
+    for _ in 0..33 {
+        deep_ics.push_str("BEGIN:VEVENT\r\n");
+    }
+    for _ in 0..33 {
+        deep_ics.push_str("END:VEVENT\r\n");
+    }
+    deep_ics.push_str("END:VCALENDAR\r\n");
+    assert_eq!(
+        jmap_ical::event::parse_ical(&deep_ics),
+        Err(ICalError::TooDeep("VEVENT".to_string())),
+        "exceeding MAX_DEPTH triggers ICalError::TooDeep"
+    );
+
+    // 6. ICalError::NoEvent
+    let err_no_event = ICalError::NoEvent;
+    assert_eq!(
+        err_no_event.to_string(),
+        "iCalendar object contains no VEVENT"
+    );
+    let no_event_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:test\r\n",
+        "BEGIN:VTODO\r\n",
+        "UID:todo-179\r\n",
+        "SUMMARY:Task only\r\n",
+        "END:VTODO\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    assert_eq!(ical_to_event(no_event_ics), Err(ICalError::NoEvent));
+
+    // 7. std::error::Error trait implementation check
+    let dyn_err: &dyn std::error::Error = &err_no_event;
+    assert!(dyn_err.source().is_none());
+}
