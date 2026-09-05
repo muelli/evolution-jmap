@@ -4775,4 +4775,75 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.240 Divergence 240: `rrule_to_rule`, `read_until`, and `date_time_digits`: Inbound Recurrence Rule Parsing: Parameter Extraction, Digit-Only UNTIL Gating, Timezone Offset Resolution, and Unterminated Rule Prevention
+
+- **Observed Behavior**:
+  Translating RFC 5545 `RRULE` strings into JSCalendar `RecurrenceRule` requires semicolon parameter extraction, frequency validation, `UNTIL` timestamp and timezone resolution, and defensive handling of malformed endpoints. In `jmap-ical`:
+  1. Parameter extraction: Decomposes semicolon-separated key-value pairs (`FREQ`, `INTERVAL`, `COUNT`, `UNTIL`, `BYDAY`, `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYMONTH`, `BYSECOND`, `BYMINUTE`, `BYHOUR`, `BYSETPOS`, `WKST`).
+  2. Case-insensitive key and frequency normalization: Property keys are matched case-insensitively, and `FREQ` values are normalized to lowercase (`daily`, `weekly`, `monthly`, `yearly`). If `FREQ` is absent or empty, the entire rule returns `None`.
+  3. Digit-only `UNTIL` gating and loop termination (`date_time_digits`): If an `UNTIL` parameter has no date-time digits at all (such as `UNTIL=whenever`), `rrule_to_rule` executes `break`, truncating trailing parts and leaving `rule.until` as `None`. This preserves calcard truncation semantics and prevents unparseable trailing tokens from corrupting the recurrence frequency.
+  4. Structurally valid date-times with invalid calendar dates: In contrast, if `UNTIL` possesses valid date-time digits but represents an impossible Gregorian date (such as month 13 in `UNTIL=20261301T000000Z`), `date_time_digits` succeeds. `rrule_to_rule` processes the value via `read_until`, retaining the unresolvable timestamp verbatim. Subsequent rule parts are parsed normally, and `maps_recurrence_rule` subsequently flags the rule as unmappable to prevent corrupting recurrence state on save.
+  5. Timezone offset conversion (`read_until` with `Ends::In` and `Ends::At`): If `UNTIL` ends with `Z` or `z`, it is converted to the event's local wall clock using `moved` (for `Ends::In` with zone offset) or `at_offset` (for `Ends::At` in `VTIMEZONE` observances). If floating, the local representation is preserved. If the zone offset cannot be determined, it appends `Z` or preserves local digits rather than inventing an arbitrary offset.
+  6. Rule type tagging: Populates `rule_type: Some("RecurrenceRule".to_owned())`.
+  7. In contrast, differential oracles or permissive parsers panic on missing `FREQ`, fail to convert UTC `UNTIL` to local wall-clock time, or corrupt trailing rule tokens when encountering malformed `UNTIL` properties.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`) defines `RRULE` grammar, parameter sets, and `UNTIL` UTC requirements.
+  2. RFC 8984 Section 4.3.3 (`RecurrenceRule`) defines JSCalendar recurrence rules and local `until` wall-clock timestamps.
+- **Adjudication**:
+  Conforming specification boundary and inbound recurrence rule parsing fidelity. Normalizes frequency case-insensitively, truncates unparseable `UNTIL` endpoints, coordinates wall-clock offset conversion, and tags `RecurrenceRule` objects.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.241 Divergence 241: `to_nday` and `by_day_token`: Inbound Recurrence Weekday Ordinal Parsing: Leading Sign Stripping, Decimal Ordinal Decomposition, Zero-Ordinal Invalidation, Case Normalization, and Preservation of Malformed Tokens
+
+- **Observed Behavior**:
+  Ingesting `BYDAY` tokens (such as `MO`, `2WE`, `-1FR`, `+3TU`) into JSCalendar `NDay` structures requires signed integer decomposition, zero-ordinal rejection, case normalization, and error-preserving fallback. In `jmap-ical`:
+  1. Sign stripping and digit counting: Strips leading `+` or `-` to isolate digits, handling both standard and signed RFC 5545 spellings.
+  2. Decimal ordinal decomposition (`nth_of_period`): Separates the integer ordinal prefix from the trailing 2-character weekday abbreviation, populating `nth_of_period: Some(nth)` and `day: weekday.to_ascii_lowercase()`.
+  3. Zero-ordinal rejection (`nth != 0`): RFC 5545 and RFC 8984 forbid ordinal 0. If a token specifies 0 (such as `0MO` or `+0TU`), `to_nday` refuses to parse it as an ordinal, instead storing the entire string in `day`. This ensures downstream validation (`by_day_token` and `maps_recurrence_rule`) flags and refuses the invalid rule rather than silently interpreting it as every occurrence.
+  4. Unparseable token fallback: If an ordinal exceeds integer bounds or contains non-digit characters, the full token is preserved in `day` rather than dropping the ordinal, preventing recurrence expansion to every weekday.
+  5. Plain weekday parsing: Plain 2-letter tokens (such as `TH`, `fr`) parse to `NDay { day: "th".into(), nth_of_period: None }`.
+  6. In contrast, differential oracles or naive parsers accept `0MO` as valid, strip ordinals on error and convert them to unconstrained weekdays, or crash on signed `+` prefixes.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`) defines `BYDAY` weekday and signed ordinal syntax (`[+|-]ordwk weekday`).
+  2. RFC 8984 Section 4.3.3 (`NDay`) defines JSCalendar weekday representation and non-zero `nthOfPeriod` integer semantics.
+- **Adjudication**:
+  Conforming specification boundary and recurrence weekday parsing fidelity. Strips signs, decomposes valid non-zero ordinals, normalizes weekday codes to lowercase, and preserves invalid tokens whole for gating by `maps_recurrence_rule`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.242 Divergence 242: `to_month_day` and `month_day_token`: Inbound Month-Day, Year-Day, Week-No, and Set-Position Parsing: Decimal String Parsing, Plus-Sign Tolerance, and Zero-Value Fallback Sentinel Preventing Silent Set Shrinkage
+
+- **Observed Behavior**:
+  Ingesting integer list parts (`BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYSETPOS`) into `i32` vectors in JSCalendar requires numeric parsing, signed prefix tolerance, and defensive sentinel mapping. In `jmap-ical`:
+  1. Numeric parsing and sign handling: Parses RFC 5545 signed tokens (such as `15`, `-1`, `+10`) via `str::parse::<i32>()`.
+  2. Zero-value fallback sentinel (`0`): If a token is unparseable or malformed (such as non-numeric characters), `to_month_day` returns `0` rather than dropping the item from the vector. Because day, year-day, week-no, and set-position numbers in RFC 5545 are 1-based (never 0), `0` serves as a universal invalid sentinel.
+  3. Set shrinkage prevention: Retaining `0` in the list guarantees that `maps_recurrence_rule` (via `month_day_token`, `year_day_token`, `week_no_token`, and `set_position_token`) detects that an unparseable token was present and refuses to write the corrupted rule back. Dropping the token would leave a smaller subset of days looking valid, causing subsequent updates to silently delete intended recurrence occurrences.
+  4. In contrast, differential oracles or lenient parsers silently drop invalid tokens, shrinking the recurrence set, or panic on signed integers like `+5`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`) defines signed 1-based ranges for `ordmoday`, `yeardaynum`, `ordwk`, and `setposday`.
+  2. RFC 8984 Section 4.3.3 (`RecurrenceRule`) defines `byMonthDay`, `byYearDay`, `byWeekNo`, and `bySetPosition` integer arrays.
+- **Adjudication**:
+  Conforming specification boundary and integer recurrence part parsing fidelity. Ingests signed decimal integers, tolerates explicit plus signs, and assigns invalid sentinel `0` to protect against silent recurrence set shrinkage.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.243 Divergence 243: `to_time_of_day` and `time_of_day_part`: Inbound Sub-Day Time-of-Day Component Parsing: Unsigned Integer Conversion, Midnight/Zero Disambiguation via Sentinel Allocation, and Complete Set Preservation
+
+- **Observed Behavior**:
+  Ingesting sub-day time components (`BYSECOND`, `BYMINUTE`, `BYHOUR`) into `u32` vectors in JSCalendar requires unsigned integer parsing, zero/midnight disambiguation, and invalid value signaling. In `jmap-ical`:
+  1. Unsigned integer conversion: Parses string tokens into `u32` for hours (`0..=23`), minutes (`0..=59`), and seconds (`0..=60`).
+  2. Midnight/zeroth component disambiguation: Unlike calendar days where `0` is invalid, `0` is a valid time of day (midnight hour 0, minute 0, second 0). Therefore, `0` cannot serve as an unreadable sentinel.
+  3. Sentinel allocation (`u32::MAX`): If parsing fails, `to_time_of_day` returns `u32::MAX` (`4294967295`), an impossible time value that is guaranteed to exceed valid bounds.
+  4. Full set preservation for downstream gating: Retaining `u32::MAX` in the vector ensures `time_of_day_part` rejects the value and `maps_recurrence_rule` flags the entire rule as unmappable. Dropping the unparseable item would alter the frequency times without user awareness.
+  5. In contrast, differential oracles or permissive parsers map unreadable time tokens to 0 (moving events to midnight), silently drop invalid parts, or fail to distinguish missing from zero-valued time components.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`) defines `BYHOUR`, `BYMINUTE`, and `BYSECOND` unsigned integer grammar.
+  2. RFC 8984 Section 4.3.3 (`RecurrenceRule`) defines `byHour`, `byMinute`, and `bySecond` unsigned integer arrays in JSCalendar.
+- **Adjudication**:
+  Conforming specification boundary and sub-day time component ingestion fidelity. Ingests valid hour, minute, and second numbers including midnight zero, and uses sentinel `u32::MAX` to prevent silent corruption while preserving complete sets for outbound validation.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 

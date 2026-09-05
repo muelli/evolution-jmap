@@ -4905,7 +4905,7 @@ pub fn weekday_token(day: &str) -> Option<&'static str> {
 /// looking like a recurrence the user had deliberately left unbounded. What is
 /// kept is no LocalDateTime either, so [`writable`] refuses it and
 /// [`maps_recurrence_rule`] is how each caller learns the end did not survive.
-fn read_until(value: &str, ends: Ends) -> String {
+pub fn read_until(value: &str, ends: Ends) -> String {
     let Some(local) = to_local_date_time(value) else {
         return value.to_owned();
     };
@@ -4980,7 +4980,7 @@ pub enum Ends<'a> {
 /// rejected by the server, whose `rscale` is a lowercase calendar-system name.
 ///
 /// `ends` is what only `UNTIL` needs — see [`read_until`].
-fn rrule_to_rule(value: &str, ends: Ends) -> Option<RecurrenceRule> {
+pub fn rrule_to_rule(value: &str, ends: Ends) -> Option<RecurrenceRule> {
     let mut rule = RecurrenceRule::default();
     for part in value.split(';') {
         let Some((key, value)) = part.split_once('=') else {
@@ -5063,7 +5063,7 @@ fn rrule_to_rule(value: &str, ends: Ends) -> Option<RecurrenceRule> {
 /// way back out and flagged by [`maps_recurrence_rule`]. Reading it as the
 /// weekday alone would drop an ordinal the rule was written with and repeat the
 /// event on every one of that weekday instead.
-fn to_nday(token: &str) -> NDay {
+pub fn to_nday(token: &str) -> NDay {
     let unsigned = token.strip_prefix(['+', '-']).unwrap_or(token);
     let digits = unsigned.len()
         - unsigned
@@ -5094,7 +5094,7 @@ fn to_nday(token: &str) -> NDay {
 /// apart is. Dropping it instead would leave a *smaller* set of days looking
 /// like the whole rule, and a save would then delete whichever day the server
 /// really held there.
-fn to_month_day(token: &str) -> i32 {
+pub fn to_month_day(token: &str) -> i32 {
     token.parse().unwrap_or(0)
 }
 
@@ -5107,6 +5107,6 @@ fn to_month_day(token: &str) -> i32 {
 /// legitimately name, so it cannot also mean "no value". What matters is only that
 /// it be one [`time_of_day_part`] refuses, so that the set is carried whole and
 /// flagged by [`maps_recurrence_rule`] rather than handed back a member short.
-fn to_time_of_day(token: &str) -> u32 {
+pub fn to_time_of_day(token: &str) -> u32 {
     token.parse().unwrap_or(u32::MAX)
 }
