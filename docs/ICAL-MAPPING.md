@@ -4282,4 +4282,71 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.212 Divergence 212: `time_of_day_part`, `by_hour_part`, `by_minute_part`, `by_second_part`, and `named_by_parts`: Outbound Sub-Day Recurrence Rule Part Generation (`BYHOUR`, `BYMINUTE`, `BYSECOND`): Hour/Minute Range Enforcement (`0..=23`, `0..=59`), Leap Second Accommodation (`60` in `BYSECOND`), Empty Array Rejection, and Libical Finest-Outward Order Assembly
+
+- **Observed Behavior**:
+  Serializing sub-day recurrence rule components into RFC 5545 `RRULE` syntax requires enforcing numeric bounds, rejecting empty part values, and ordering subparts matching libical AST expectations. In `jmap-ical`:
+  1. Sub-day range bounds: RFC 5545 Section 3.3.10 constrains `BYHOUR` to `0..=23`, `BYMINUTE` to `0..=59`, and `BYSECOND` to `0..=60`. `time_of_day_part` bounds each array against `largest`. Out-of-bounds numbers cause `time_of_day_part` to return `None`. Because a partial array would state a different recurrence rule, returning `None` flags `maps_recurrence_rule` that the rule cannot be safely represented.
+  2. Leap second accommodation in `BYSECOND`: Unlike minutes (which hold up to 59), RFC 5545 Section 3.3.10 and libical admit second `60` for occasional UTC leap seconds. `by_second_part` passes `largest: 60`, preserving leap second recurrence precision without triggering validation failures.
+  3. Empty array rejection: An empty array in `by_hour`, `by_minute`, or `by_second` causes `time_of_day_part` to return `None`. Emitting `BYHOUR=` would lead libical to interpret the line as `BYHOUR=0`, shifting every occurrence of the series to midnight.
+  4. Finest-outward order assembly (`named_by_parts`): Emits rule parts starting from the finest time unit outwards: `BYSECOND`, `BYMINUTE`, `BYHOUR`, followed by `BYDAY`, `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, and `BYMONTH`. This ordering matches the libical recurrence parser conventions.
+  5. In contrast, differential oracles or naive serializers emit empty parts (such as `BYHOUR=`), reject leap second `60`, output out-of-order recurrence tokens, or emit sub-day parts beside all-day events without converting them to timed events.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 governs recurrence rule grammar, sub-day numeric bounds, and leap second definitions.
+  2. Enforcing subpart bounding, rejecting empty parts, and preserving libical part ordering prevents recurrence corruption and unexpected schedule shifts.
+- **Adjudication**:
+  Conforming specification boundary and sub-day recurrence rule part generation fidelity. Enforces `0..=23` and `0..=59` ranges, accommodates leap second `60`, rejects empty arrays, and sequences parts from finest time unit outwards.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.213 Divergence 213: `stated_zones`, `Zone`, `zone_of`, `X_LIC_LOCATION`, and `resolve_canonical_time_zone`: Inbound `VTIMEZONE` Component Ingestion, Proprietary `X-LIC-LOCATION` IANA Extraction, Multi-Observance Hierarchy Assembly, and Four-Tier `zone_of` Resolution Pipeline
+
+- **Observed Behavior**:
+  Ingesting document-defined timezones requires reconciling vendor-specific timezone identifiers, proprietary metadata, and local observance definitions with canonical IANA timezone names. In `jmap-ical`:
+  1. `VTIMEZONE` component ingestion (`stated_zones`): Scans calendar child components for `VTIMEZONE`. Extracts the `TZID` property and collects child observance subcomponents (`STANDARD` and `DAYLIGHT`) via `component_ids`.
+  2. Proprietary `X-LIC-LOCATION` extraction: In libical generated documents, a vendor-specific `TZID` (such as `Custom Paris Zone` or `/freeassociation.sourceforge.net/...`) is accompanied by an `X-LIC-LOCATION` property naming the underlying IANA timezone. `stated_zones` checks `!names_time_zone(&tzid) && names_time_zone(location)`. If true, records the IANA name in `Zone::name`.
+  3. Canonical resolution fallback: If `X-LIC-LOCATION` is absent, falls back to `resolve_canonical_time_zone(&tzid)`, querying the CLDR Windows time zone mapping and globally unique solidus tail matching.
+  4. Four-tier resolution pipeline (`zone_of`): Resolves property `TZID` parameters through four tiers: first, queries document `zones` for an extracted IANA name (`zone.name`); second, checks if the raw `TZID` is already a valid syntactic IANA name via `names_time_zone`; third, attempts extraction of an IANA tail from globally unique solidus URIs via `unique_tzid_to_iana`; fourth, falls back to preserving the raw `TZID` string.
+  5. In contrast, differential oracles or unhardened parsers ignore `X-LIC-LOCATION` (retaining opaque vendor strings), fall back to UTC instead of document-stated timezones, or crash on non-standard `TZID` formats.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.19 and Section 3.6.5 define `VTIMEZONE` and `TZID` parameter scoping.
+  2. Leaning on `X-LIC-LOCATION` and canonical resolution mappings bridges legacy libical and Windows formats with modern RFC 8984 IANA timezone identifiers.
+- **Adjudication**:
+  Conforming specification boundary and timezone identification robustness. Ingests `VTIMEZONE` hierarchies, extracts canonical names from `X-LIC-LOCATION`, and resolves property timestamps across a deterministic four-tier pipeline.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.214 Divergence 214: `ical_to_event`, `read_vevent`, `RECURRENCE_ID`, and `ICalError::NoEvent`: Inbound Master Series Selection, Non-Positional Detached Component Disambiguation, Top-Level RFC 8984/JSCalendar-bis `version: "2.0"` Stamping, and `NoEvent` Error Signaling
+
+- **Observed Behavior**:
+  Ingesting multi-component calendar streams containing recurring series and detached instance overrides requires disambiguating the master series from individual occurrences regardless of component order. In `jmap-ical`:
+  1. Non-positional master series selection: `ical_to_event` inspects all `VEVENT` components in the document. It locates the series component by searching for a component where `component_entry(vevent, RECURRENCE_ID).is_none()`. Even if an edited occurrence with a `RECURRENCE-ID` appears first in the file stream, `ical_to_event` reliably identifies the master series rather than mistaking the detached occurrence for the root series.
+  2. All-detached fallback: If every `VEVENT` in the document carries a `RECURRENCE-ID`, `ical_to_event` falls back to the first component (`vevents.first()`), as JSCalendar models instance overrides only relative to a parent series.
+  3. `ICalError::NoEvent` error signaling: If the document contains zero `VEVENT` components (such as a document containing only `VTODO`, `VJOURNAL`, or non-event components), parsing terminates with `Err(ICalError::NoEvent)`.
+  4. Top-level JSCalendar version stamping: In accordance with draft-ietf-jmap-calendars-28 Section 1.4 and JSCalendar-bis Section 3.1.2, a standalone root Event must specify `version: "2.0"`. `ical_to_event` stamps `event.version = Some("2.0".to_owned())` on the root event object, while ensuring embedded recurrence override patch objects created by `read_overrides` do not carry a `version` property.
+  5. In contrast, differential oracles or naive parsers rely on positional ordering (misinterpreting leading detached components as the master series), emit `version: "1.0"` (rejected by Fastmail and Stalwart), or fail silently when no event is present.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.4 defines `RECURRENCE-ID` for recurrence instances. JSCalendar-bis Section 3.1.2 defines version requirements for standalone objects.
+  2. Disambiguating the master series by property presence rather than stream order guarantees idempotence across disparate calendar server exporters.
+- **Adjudication**:
+  Conforming specification boundary and calendar component ingestion determinism. Selects master series by absence of `RECURRENCE-ID`, stamps `version: "2.0"` on top-level events, and signals `ICalError::NoEvent` when appropriate.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.215 Divergence 215: `read_vevent`, `component_entries`, `rrule_to_rule`, and `JSCalendar-bis Section 3.3.3`: Inbound Single Recurrence Rule Narrowing, Multi-RRULE Secondary Line Dropping, Server-Owned Timestamp Dropping (`created`/`updated`), and iTIP Guest List Protection (`participants: None`)
+
+- **Observed Behavior**:
+  Ingesting iCalendar properties into JSCalendar requires harmonizing structural data models and protecting server-owned state during bidirectional synchronization. In `jmap-ical`:
+  1. Single recurrence rule narrowing: JSCalendar-bis Section 3.3.3 models recurrence as a single `RecurrenceRule` object rather than an array of rules. Although RFC 5545 Section 3.8.5.3 syntactically permits multiple `RRULE` lines, real calendar editors write at most one rule. In `read_vevent`, `component_entries(vevent, "RRULE").filter_map(...).next()` selects only the first readable recurrence rule, cleanly dropping secondary lines without failing the entire event.
+  2. Server-owned timestamp dropping (`created` and `updated`): `CREATED`, `LAST-MODIFIED`, and `DTSTAMP` are omitted on import (`created: None`, `updated: None`). These timestamps reflect server storage metadata. Importing them into client editable event models would result in the client attempting to update immutable server timestamps during `CalendarEvent/set` operations.
+  3. iTIP guest list protection (`participants: None`): Inbound `ORGANIZER` and `ATTENDEE` lines are not ingested into `event.participants`. Participant status and guest list management are governed by iTIP (RFC 5546). Ingesting and syncing these properties through general event patch paths would cause uncoordinated changes to attendee reply states without dispatching required iTIP scheduling messages.
+  4. In contrast, differential oracles or standard parsers ingest multiple recurrence rules as conflicting structures, attempt to mutate server-owned timestamps on save, or ingest participant lists without iTIP scheduling safeguards.
+- **Specification and Architectural Context**:
+  1. JSCalendar-bis Section 3.3.3 models single recurrence rules. RFC 5546 defines iTIP scheduling protocols. RFC 5545 Section 3.8.7 governs timestamp properties.
+  2. Dropping server-owned timestamps and scheduling-sensitive participants preserves backend synchronization integrity and avoids spurious update rejections.
+- **Adjudication**:
+  Conforming specification boundary and property ingestion safety. Narrows multi-RRULE lines to the primary rule per JSCalendar-bis, drops server-owned timestamps on import, and leaves `participants: None` to isolate iTIP scheduling workflows.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
