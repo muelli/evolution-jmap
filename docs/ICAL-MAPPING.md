@@ -4977,5 +4977,71 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.252 Divergence 252: `MAPPED_PROPERTIES`, `OVERRIDE_PROPERTIES`, and Property Scope Partitioning: 17 Mapped Properties vs 11 Override Properties, Subpath Patch Isolation, Document-Wide Consensus Guard, Scheduling State Prohibition, and Unmodeled Field Shielding
 
+- **Observed Behavior**:
+  Partitioning mapped properties across series and occurrence overrides requires establishing explicit safety boundaries for `CalendarEvent/set` patch operations. In `jmap-ical`:
+  1. Full mapped property set (`MAPPED_PROPERTIES`): Defines the 17 properties that survive conversion between JSCalendar and iCalendar: `title`, `description`, `start`, `timeZone`, `duration`, `showWithoutTime`, `status`, `freeBusyStatus`, `priority`, `privacy`, `locations`, `virtualLocations`, `links`, `keywords`, `alerts`, `recurrenceRule`, and `recurrenceOverrides`. Five are mapped conditionally (`maps_locations`, `maps_virtual_locations`, `maps_alerts`, `maps_recurrence_rule`, and `maps_recurrence_override`). Three (`locations`, `virtualLocations`, and `links`) are patched into via JSON Pointer paths (`locations/<key>/name`, `virtualLocations/<key>/uri`, `links/<key>/href`) rather than replaced whole, preserving unmodeled sub-properties.
+  2. Override restatable property set (`OVERRIDE_PROPERTIES`): Defines the 11 properties an occurrence override PatchObject may restate: `title`, `description`, `start`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `priority`, `privacy`, `keywords`, and `alerts`.
+  3. Structural exclusions from overrides: `locations`, `virtualLocations`, and `links` are barred from `OVERRIDE_PROPERTIES` because RFC 5545 allows only a single `LOCATION` line and attaching attachments or conferences per instance cannot be reconciled with key-path patching on occurrences. `showWithoutTime` is barred from overrides because all-day status is decided once for the entire event document (`shows_without_time`), maintaining date-type consensus across `DTSTART`, `EXDATE`, and `RDATE`. `recurrenceRule` and `recurrenceOverrides` are barred because individual occurrences cannot nest recurrence rules.
+  4. Unmodeled field shielding: Server-only and unmapped properties (`participants`, `calendarIds`, `color`, `locale`, `localizations`, `useDefaultAlerts`, `extra`) are excluded from both sets. Because inbound parsing leaves them unpopulated (`None`) and `CalendarEvent/set` updates only target mapped properties, unmodeled server fields are shielded from accidental clobbering or erasure during synchronization. `participants` is excluded from property patching because attendee mutations require RFC 5546 iTIP scheduling workflows rather than direct property updates.
+  5. In contrast, differential oracles or naive synchronization engines emit full-object replacements (clobbering unmodeled server fields like color or localizations) or allow overrides to patch unsupported fields, corrupting occurrence states.
+- **Specification and Architectural Context**:
+  1. RFC 8984 Section 4.1 (`Core Properties`), Section 4.2 (`Locations and Resources`), Section 4.3 (`Recurrence Properties`), and Section 4.4 (`Sharing and Scheduling`) define JSCalendar properties.
+  2. RFC 8620 Section 5.3 (`/set Methods`) and RFC 8984 Section 4.3.4 (`recurrenceOverrides`) define JSON Pointer patch semantics.
+- **Adjudication**:
+  Conforming specification boundary and property synchronization safety. Enforces 17-property full mapping and 11-property override allowlists, isolates subpath-patched properties, enforces document-wide all-day consensus, and shields unmodeled server metadata.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.253 Divergence 253: `recurrence_dates`, `modified_instances`, `modified_instance`, and `excluded`: Recurrence Instance Property Partitioning: Detached VEVENT Component Absorption from RDATE, Fallback Unmodeled Occurrence Preservation, Exclusion Purity, and No-Op Diff Suppression
+
+- **Observed Behavior**:
+  Serializing recurrence overrides into RFC 5545 `EXDATE`, `RDATE`, and detached `VEVENT` components requires coordinating occurrence identity, component absorption, and fallback preservation. In `jmap-ical`:
+  1. Detached component absorption (`recurrence_dates` and `modified_instance`): When an override in `recurrence_overrides` produces a modified occurrence (`modified_instance` returns `Some`), `recurrence_dates(event, false)` explicitly omits that occurrence timestamp from the emitted `RDATE` line. The occurrence is represented exclusively by its own detached `VEVENT` component carrying `RECURRENCE-ID`. Emitting both a detached component and an `RDATE` for the same instance would be redundant and invalid per RFC 5545 Section 3.8.5.2.
+  2. Fallback unmodeled occurrence preservation: When an override is present but contains only properties outside `OVERRIDE_PROPERTIES` (causing `modified_instance` to return `None`), `recurrence_dates(event, false)` includes the occurrence timestamp in `RDATE`. This fallback ensures the occurrence is still generated on the calendar at the series' default values, rather than disappearing completely.
+  3. Exclusion purity (`excluded: true` and `EXDATE`): `recurrence_dates(event, true)` selects overrides where `excluded(patch)` is true, emitting them as `EXDATE` lines. `modified_instance` returns `None` for excluded instances, ensuring no detached `VEVENT` component is generated for an occurrence that does not take place.
+  4. No-op diff suppression: If an override patch introduces no valid differences from the series (for example, `{"excluded": false}` without other fields), `modified` remains false and `modified_instance` returns `None`. No redundant detached component is emitted.
+  5. In contrast, differential oracles or simplistic serializers emit redundant `RDATE` lines alongside detached `VEVENT` components, drop occurrences whose patch fields are unsupported, or emit identical copies of the series for unedited occurrences.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.5.1 (`EXDATE`), Section 3.8.5.2 (`RDATE`), and Section 3.8.4.4 (`RECURRENCE-ID`) govern recurrence exceptions, additions, and detached instance targeting.
+  2. RFC 8984 Section 4.3.4 (`recurrenceOverrides`) specifies PatchObject override semantics.
+- **Adjudication**:
+  Conforming specification boundary and recurrence override serialization fidelity. Absorbs detached components from `RDATE`, preserves unmodeled overrides via fallback `RDATE` lines, guarantees exclusion purity via `EXDATE`, and suppresses no-op detached components.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.254 Divergence 254: `date_time_digits`, `to_local_date_time`, `to_ical_date_time`, and `exists`: Proleptic Gregorian Calendar Date Validation: Strict Field Bounding, Century Leap Year Exceptions, RFC 5545 Leap Second Tolerance, Sub-Second Truncation, and Date-Only Midnight Normalization
+
+- **Observed Behavior**:
+  Validating and converting date-time strings between compact RFC 5545 format and ISO 8601 JSCalendar strings requires strict Gregorian calendar verification, leap second handling, and parameter normalization. In `jmap-ical`:
+  1. Strict calendar existence verification (`exists`): Validates month (`1..=12`), day (`1..=days_in_month(year, month)`), hour (`0..=23`), and minute (`0..=59`). Validates Gregorian leap year rules, including century exceptions: years divisible by 4 are leap years unless divisible by 100, unless also divisible by 400 (e.g. 2000 is a leap year, 1900 and 2100 are not). Invalid dates (such as `2026-02-29`, `2026-04-31`, `2026-13-01`, hour 24, minute 60) return `false`, causing conversion functions to return `None` and preventing malformed dates from corrupting storage or failing parser pipelines.
+  2. Leap second 60 tolerance: RFC 5545 Section 3.3.12 and RFC 3339 Section 5.6 both explicitly allow leap seconds (`second <= 60`). `exists` accepts `second == 60`, ensuring valid leap second timestamps are preserved without loss. Values above 60 are rejected.
+  3. Exact digit bounding and sub-second fraction truncation (`date_time_digits`): Requires exactly 8 date digits (`YYYYMMDD`) and at least 6 time digits (`HHMMSS`). If sub-second fractions are present (e.g. `123045.123`), `date_time_digits` slices the initial 6 digits (`&time[..6]`), tolerating trailing fractions without failing conversion. It strictly verifies ASCII digit bytes (`b.is_ascii_digit()`), rejecting Unicode digits and non-numeric characters.
+  4. Date-only to midnight normalization (`to_local_date_time`): When a date string lacks a time component (e.g. `20260915` or `VALUE=DATE`), `date_time_digits` supplies synthetic time `000000`, formatting the result as midnight `2026-09-15T00:00:00`.
+  5. Bidirectional conversion integrity: `to_local_date_time` formats hyphenated strings (`YYYY-MM-DDTHH:MM:SS`), while `to_ical_date_time` reverses this to compact RFC 5545 notation (`YYYYMMDDTHHMMSS`).
+  6. In contrast, differential oracles or permissive parsers panic on invalid dates, roll month 13 into the following year, reject leap second 60, or fail to truncate sub-second fractions.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.4 (`DATE-TIME`), Section 3.3.5 (`DATE`), and Section 3.3.12 (`Time`) define iCalendar timestamp syntax and leap seconds.
+  2. RFC 8984 Section 1.4.5 (`LocalDateTime`) and Section 1.4.8 (`UTCDateTime`) define JSCalendar timestamp representations.
+- **Adjudication**:
+  Conforming specification boundary and calendar timestamp validation determinism. Enforces Gregorian leap year rules, supports RFC 5545 leap second 60, truncates sub-second fractions, and normalizes date-only values to midnight.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.255 Divergence 255: `at_offset`, `from_offset`, `offset_seconds`, `moved`, and `days_in_month_of`: Wall-Clock Fixed-Offset Date-Time Arithmetic: 24-Hour Bounded Day Rollover, Gregorian Month Carrying, Four-Digit Year Boundary Clamping, and Negative Zero Offset Rejection
+
+- **Observed Behavior**:
+  Translating timestamps across fixed UTC offsets requires exact integer arithmetic, month and year boundary rollover, and four-digit year range bounding. In `jmap-ical`:
+  1. Offset parsing and negative zero rejection (`offset_seconds`): Translates RFC 5545 UTC offset strings (`+HHMM[SS]` or `-HHMM[SS]`, with or without colons) into signed integer seconds east of UTC via `utc_offset`. RFC 5545 Section 3.3.14 forbids negative zero `-0000` because the sign indicates direction from UTC and zero cannot be negative; `offset_seconds` rejects `-0000`, returning `None`.
+  2. Offset translation (`at_offset` and `from_offset`): `at_offset` converts UTC date-times to local representations by advancing by `offset_seconds`. `from_offset` subtracts offset seconds to recover UTC.
+  3. Bounded 24-hour day rollover and Gregorian month carrying (`moved`): Because `utc_offset` constrains offsets to strictly under 24 hours, day rollover carries at most one day forward or backward (`moved < 0` or `moved >= DAY`). When day underflows (`moved < 0`), `moved` rolls back to the previous month via `days_in_month_of(year, month - 1)`, correctly handling February 29 in leap years (such as 2024), February 28 in non-leap years (such as 2026), and January 1 to December 31 of `year - 1`. When day overflows (`moved >= DAY`), it advances to day 1 of the next month, or January 1 of `year + 1` from December.
+  4. Four-digit year boundary clamping: RFC 5545 Section 3.3.4 restricts years to four digits (`0000..=9999`). If arithmetic steps outside this range (for instance, underflowing year 0000), `moved` returns `None` rather than emitting invalid negative or five-digit years.
+  5. In contrast, differential oracles or naive date libraries wrap years around 32-bit integer limits, fail on February leap-year underflow, accept forbidden `-0000` offsets, or emit out-of-range year strings.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.14 (`UTC-OFFSET`) and Section 3.3.4 (`DATE-TIME`) govern offset syntax and four-digit year constraints.
+  2. RFC 8984 Section 1.4.5 (`LocalDateTime`) and Section 1.4.8 (`UTCDateTime`) define local and UTC representations.
+- **Adjudication**:
+  Conforming specification boundary and date-time arithmetic determinism. Enforces 24-hour bounded day rollover, handles Gregorian leap-year month carrying, clamps years to four digits (`0000..=9999`), and rejects negative zero offsets.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
