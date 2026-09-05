@@ -31329,3 +31329,397 @@ fn differential_oracle_links_mime_attachments_and_category_whitespace_trimming()
     assert_eq!(keywords.get("Urgent"), Some(&Value::Bool(true)));
     assert!(!keywords.contains_key(""));
 }
+
+#[test]
+fn differential_oracle_vtimezone_ingestion_redrawability_and_pruning() {
+    // Divergence 200 against Stalwart differential oracle:
+    // read_time_zones, prune_time_zones, referred_zones, read_definition, read_observance, and zone_of:
+    // Inbound VTIMEZONE Ingestion, Observance Transition Extraction, RFC 5545 Mandatory Property Validation,
+    // and Selective TimeZone Pruning.
+
+    // 1. Inbound VTIMEZONE with custom identifier starting with '/' is ingested into time_zones
+    let ics_custom_tz = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.com/CustomZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19700101T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0100\r\n\
+TZNAME:CUST\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:tz-1\r\n\
+DTSTART;TZID=/example.com/CustomZone:20260905T120000\r\n\
+SUMMARY:Custom Zone Event\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_tz = ical_to_event(ics_custom_tz).expect("parse custom tz event");
+    assert_eq!(ev_tz.time_zone.as_deref(), Some("/example.com/CustomZone"));
+    let time_zones = ev_tz.time_zones.as_ref().expect("time_zones present");
+    let custom_def = time_zones
+        .get("/example.com/CustomZone")
+        .expect("custom zone definition present");
+    assert_eq!(
+        custom_def.get("@type").and_then(Value::as_str),
+        Some("TimeZone")
+    );
+    assert_eq!(
+        custom_def.get("tzId").and_then(Value::as_str),
+        Some("/example.com/CustomZone")
+    );
+    let standard_rules = custom_def
+        .get("standard")
+        .and_then(Value::as_array)
+        .expect("standard rules array");
+    assert_eq!(standard_rules.len(), 1);
+    assert_eq!(
+        standard_rules[0].get("offsetFrom").and_then(Value::as_str),
+        Some("+0100")
+    );
+    assert_eq!(
+        standard_rules[0].get("offsetTo").and_then(Value::as_str),
+        Some("+0100")
+    );
+
+    // 2. VTIMEZONE missing observances is rejected (RFC 5545 Section 3.6.5 requires at least one subcomponent)
+    let ics_empty_tz = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/example.com/EmptyZone\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:tz-2\r\n\
+DTSTART;TZID=/example.com/EmptyZone:20260905T120000\r\n\
+SUMMARY:Empty Zone Event\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_empty_tz = ical_to_event(ics_empty_tz).expect("parse empty tz event");
+    assert!(
+        ev_empty_tz.time_zones.is_none(),
+        "VTIMEZONE without observances cannot describe a zone and is omitted"
+    );
+
+    // 3. Selective timezone pruning: unreferenced definitions are dropped
+    let mut ev_prune = ev_tz.clone();
+    let mut zones_map = ev_prune.time_zones.unwrap();
+    zones_map.insert(
+        "/example.com/UnusedZone".to_string(),
+        json!({"@type": "TimeZone", "tzId": "/example.com/UnusedZone"}),
+    );
+    ev_prune.time_zones = Some(zones_map);
+    prune_time_zones(&mut ev_prune);
+    let pruned_zones = ev_prune.time_zones.expect("pruned zones present");
+    assert!(pruned_zones.contains_key("/example.com/CustomZone"));
+    assert!(!pruned_zones.contains_key("/example.com/UnusedZone"));
+}
+
+#[test]
+fn differential_oracle_locations_physical_and_virtual_conference_features() {
+    // Divergence 201 against Stalwart differential oracle:
+    // read_locations, read_virtual_locations, INVENTED_KEY, INVENTED_CONFERENCE_KEY, and CONFERENCE_FEATURES:
+    // Inbound Physical and Virtual Location Ingestion, URI Verification, Dynamic Map Key Allocation,
+    // and Conference Feature Decoding.
+
+    // 1. Single physical LOCATION with X-JMAP-KEY parameter
+    let ics_loc = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:loc-1\r\n\
+DTSTART:20260905T100000Z\r\n\
+LOCATION;X-JMAP-KEY=loc-hq:Main Office Room 301\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_loc = ical_to_event(ics_loc).expect("parse location event");
+    let locs = ev_loc.locations.expect("locations present");
+    assert_eq!(locs.len(), 1);
+    let hq = locs.get("loc-hq").expect("loc-hq key preserved");
+    assert_eq!(hq.get("@type").and_then(Value::as_str), Some("Location"));
+    assert_eq!(
+        hq.get("name").and_then(Value::as_str),
+        Some("Main Office Room 301")
+    );
+
+    // 2. Empty LOCATION property is dropped
+    let ics_empty_loc = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:loc-2\r\n\
+DTSTART:20260905T100000Z\r\n\
+LOCATION:\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_empty = ical_to_event(ics_empty_loc).expect("parse empty location event");
+    assert!(
+        ev_empty.locations.is_none(),
+        "empty LOCATION property yields None"
+    );
+
+    // 3. Multiple RFC 7986 CONFERENCE properties with FEATURE parameters and invented keys
+    let ics_conf = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:loc-3\r\n\
+DTSTART:20260905T100000Z\r\n\
+CONFERENCE;LABEL=Video Bridge;FEATURE=VIDEO,AUDIO;X-JMAP-KEY=video-room:https://meet.example.com/sync\r\n\
+CONFERENCE;LABEL=Audio Dial-in;FEATURE=PHONE:tel:+15551234567\r\n\
+CONFERENCE:not-a-valid-uri\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_conf = ical_to_event(ics_conf).expect("parse conference event");
+    let vlocs = ev_conf
+        .virtual_locations
+        .expect("virtual_locations present");
+    assert_eq!(vlocs.len(), 2, "non-URI conference is rejected");
+
+    let video = vlocs.get("video-room").expect("video-room key preserved");
+    assert_eq!(
+        video.get("@type").and_then(Value::as_str),
+        Some("VirtualLocation")
+    );
+    assert_eq!(
+        video.get("uri").and_then(Value::as_str),
+        Some("https://meet.example.com/sync")
+    );
+    assert_eq!(
+        video.get("name").and_then(Value::as_str),
+        Some("Video Bridge")
+    );
+    let video_features = video
+        .get("features")
+        .and_then(Value::as_object)
+        .expect("features object");
+    assert_eq!(video_features.get("video"), Some(&Value::Bool(true)));
+    assert_eq!(video_features.get("audio"), Some(&Value::Bool(true)));
+
+    let dialin = vlocs
+        .get("v1")
+        .expect("fallback non-colliding key v1 generated");
+    assert_eq!(
+        dialin.get("@type").and_then(Value::as_str),
+        Some("VirtualLocation")
+    );
+    assert_eq!(
+        dialin.get("uri").and_then(Value::as_str),
+        Some("tel:+15551234567")
+    );
+    assert_eq!(
+        dialin.get("name").and_then(Value::as_str),
+        Some("Audio Dial-in")
+    );
+    let phone_features = dialin
+        .get("features")
+        .and_then(Value::as_object)
+        .expect("features object");
+    assert_eq!(phone_features.get("phone"), Some(&Value::Bool(true)));
+}
+
+#[test]
+fn differential_oracle_valarm_display_gating_offset_and_uid_allocation() {
+    // Divergence 202 against Stalwart differential oracle:
+    // read_alerts, read_alert, stated_offset, INVENTED_ALERT_KEY, and DISPLAY_ALERT:
+    // Inbound VALARM Alert Ingestion: Display Action Gating, Offset Trigger Extraction with Default Canonical relativeTo,
+    // RFC 9074 UID Mapping, and Non-Colliding Fallback Key Generation.
+
+    // 1. ACTION:DISPLAY with START and END related triggers, and UID preservation
+    let ics_valarm = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:alarm-1\r\n\
+DTSTART:20260905T100000Z\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-start\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Reminder Start\r\n\
+TRIGGER;RELATED=START:-PT15M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Reminder End\r\n\
+TRIGGER;RELATED=END:+PT10M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:AUDIO\r\n\
+TRIGGER:-PT5M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_valarm = ical_to_event(ics_valarm).expect("parse valarm event");
+    let alerts = ev_valarm.alerts.expect("alerts present");
+    assert_eq!(alerts.len(), 2, "ACTION:AUDIO is filtered out");
+
+    // Preserved UID and start offset trigger
+    let start_alert = alerts
+        .get("alarm-start")
+        .expect("alarm-start key preserved");
+    assert_eq!(
+        start_alert.get("@type").and_then(Value::as_str),
+        Some("Alert")
+    );
+    assert_eq!(
+        start_alert.get("action").and_then(Value::as_str),
+        Some("display")
+    );
+    let start_trig = start_alert
+        .get("trigger")
+        .and_then(Value::as_object)
+        .expect("trigger object");
+    assert_eq!(
+        start_trig.get("@type").and_then(Value::as_str),
+        Some("OffsetTrigger")
+    );
+    assert_eq!(
+        start_trig.get("offset").and_then(Value::as_str),
+        Some("-PT15M")
+    );
+    assert!(
+        start_trig.get("relativeTo").is_none(),
+        "relativeTo:start is canonical default and omitted"
+    );
+
+    // Fallback key a1 and end offset trigger
+    let end_alert = alerts.get("a1").expect("a1 fallback key generated");
+    let end_trig = end_alert
+        .get("trigger")
+        .and_then(Value::as_object)
+        .expect("trigger object");
+    assert_eq!(
+        end_trig.get("@type").and_then(Value::as_str),
+        Some("OffsetTrigger")
+    );
+    assert_eq!(
+        end_trig.get("offset").and_then(Value::as_str),
+        Some("PT10M")
+    );
+    assert_eq!(
+        end_trig.get("relativeTo").and_then(Value::as_str),
+        Some("end")
+    );
+
+    // 2. Unsupported or malformed RELATED parameter is rejected
+    let ics_bad_related = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:alarm-2\r\n\
+DTSTART:20260905T100000Z\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+TRIGGER;RELATED=MIDDLE:-PT15M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_bad = ical_to_event(ics_bad_related).expect("parse bad related event");
+    assert!(
+        ev_bad.alerts.is_none(),
+        "unrecognized RELATED parameter causes alarm rejection"
+    );
+}
+
+#[test]
+fn differential_oracle_rrule_inbound_parsing_until_and_part_decomposition() {
+    // Divergence 203 against Stalwart differential oracle:
+    // rrule_to_rule, read_until, to_nday, to_month_day, and to_time_of_day:
+    // Inbound RRULE Recurrence Parsing: Rule Part Semicolon/Equals Tokenization,
+    // UNTIL Bound Disambiguation, Strict Malformed UNTIL Truncation, BYDAY Signed Ordinal Decomposition,
+    // and Invalid Part Sentinel Preservation.
+
+    // 1. Comprehensive multi-part RRULE parsing
+    let ics_rrule = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:rrule-1\r\n\
+DTSTART:20260905T100000\r\n\
+RRULE:FREQ=MONTHLY;INTERVAL=2;COUNT=10;BYDAY=2TU,-1FR;BYMONTHDAY=15,-1;BYMONTH=6,12;WKST=SU\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_rrule = ical_to_event(ics_rrule).expect("parse rrule event");
+    let rule = ev_rrule.recurrence_rule.expect("recurrence_rule present");
+    assert_eq!(rule.rule_type.as_deref(), Some("RecurrenceRule"));
+    assert_eq!(rule.frequency, "monthly");
+    assert_eq!(rule.interval, Some(2));
+    assert_eq!(rule.count, Some(10));
+    assert_eq!(rule.first_day_of_week.as_deref(), Some("su"));
+
+    // BYDAY ordinal decomposition
+    let by_day = rule.by_day.as_ref().expect("by_day present");
+    assert_eq!(by_day.len(), 2);
+    assert_eq!(by_day[0].day, "tu");
+    assert_eq!(by_day[0].nth_of_period, Some(2));
+    assert_eq!(by_day[1].day, "fr");
+    assert_eq!(by_day[1].nth_of_period, Some(-1));
+
+    // BYMONTHDAY signed numbers
+    let by_mday = rule.by_month_day.as_ref().expect("by_month_day present");
+    assert_eq!(by_mday, &[15, -1]);
+
+    // BYMONTH string tokens
+    let by_month = rule.by_month.as_ref().expect("by_month present");
+    assert_eq!(by_month, &["6", "12"]);
+
+    // 2. UNTIL bound date-time parsing
+    let ics_until = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:rrule-2\r\n\
+DTSTART:20260905T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20261231T235959\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_until = ical_to_event(ics_until).expect("parse until event");
+    let until_rule = ev_until.recurrence_rule.expect("until rule present");
+    assert_eq!(until_rule.until.as_deref(), Some("2026-12-31T23:59:59"));
+
+    // 3. Malformed UNTIL truncation (parts following broken UNTIL are dropped)
+    let ics_malformed_until = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:rrule-3\r\n\
+DTSTART:20260905T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=NOT-A-DATE;BYMONTH=8\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_malformed = ical_to_event(ics_malformed_until).expect("parse malformed until event");
+    let malformed_rule = ev_malformed.recurrence_rule.expect("rule present");
+    assert!(
+        malformed_rule.until.is_none(),
+        "malformed UNTIL is discarded"
+    );
+    assert!(
+        malformed_rule.by_month.is_none(),
+        "parts after malformed UNTIL are truncated"
+    );
+
+    // 4. Sentinel preservation for unparseable subcomponents
+    let ics_sentinel = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:rrule-4\r\n\
+DTSTART:20260905T100000\r\n\
+RRULE:FREQ=YEARLY;BYMONTHDAY=BAD;BYHOUR=INVALID\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_sentinel = ical_to_event(ics_sentinel).expect("parse sentinel event");
+    let sentinel_rule = ev_sentinel.recurrence_rule.expect("sentinel rule present");
+    assert_eq!(
+        sentinel_rule.by_month_day.as_deref(),
+        Some(&[0][..]),
+        "unparseable BYMONTHDAY token produces sentinel 0"
+    );
+    assert_eq!(
+        sentinel_rule.by_hour.as_deref(),
+        Some(&[u32::MAX][..]),
+        "unparseable BYHOUR token produces sentinel u32::MAX"
+    );
+}
