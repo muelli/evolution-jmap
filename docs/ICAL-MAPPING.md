@@ -3867,6 +3867,79 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.188 Divergence 188: `fold_overlong_lines`, `MAX_LINE_OCTETS`, and `unfold`: Content Line Folding: RFC 5545 Section 3.1 75-Octet Limit Enforcement, UTF-8 Character Boundary Alignment, Escape Sequence Split Prevention (Odd Backslash Run Detection), and Continuation Line Budgeting
+
+- **Observed Behavior**:
+  Content lines emitted by iCalendar serializers must conform to RFC 5545 §3.1 line length constraints. In `jmap-ical`:
+  1. 75-octet limit enforcement (`MAX_LINE_OCTETS = 75`): `fold_overlong_lines` checks whether any physical line in the rendered string exceeds 75 octets. If all lines satisfy `line.len() <= MAX_LINE_OCTETS`, the input string is returned directly without copying or reallocation (zero-cost pass-through).
+  2. UTF-8 character boundary alignment: When a line exceeds 75 octets, `fold_overlong_lines` finds the largest valid UTF-8 character boundary (`is_char_boundary`) within the octet budget (`cut <= budget`), preventing multi-byte code points from being fractured across line breaks.
+  3. Escape sequence split prevention: If an odd sequence of backslashes immediately precedes the proposed cut point (`bytes().rev().take_while(|b| *b == b'\\').count() % 2 == 1`), the final backslash acts as an escape for the character immediately following the cut. `fold_overlong_lines` steps back one octet (`cut -= 1`), keeping the escape character and escaped payload on the same physical line to prevent downstream parsers from corrupting escaped delimiters.
+  4. Continuation line budgeting: Continuation lines begin with CRLF followed by a single space (`\r\n `). Because the leading space consumes 1 octet, subsequent segment budgets are set to `MAX_LINE_OCTETS - 1 = 74` octets.
+  5. In contrast, differential oracles or naive line wrappers cut blindly at fixed byte intervals (splitting multi-byte UTF-8 sequences and creating invalid text), separate backslash escape characters across fold boundaries (corrupting escaped text like `\n` or `\,`), or omit folding entirely on structured or recurrence properties.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.1 mandates that lines of text SHOULD NOT be longer than 75 octets, excluding the line break, and defines folding by inserting a CRLF immediately followed by a space.
+  2. Preserving UTF-8 character boundaries and backslash escape pairs guarantees that line-oriented readers and calcard parsers can unfold and parse streams losslessly.
+- **Adjudication**:
+  Conforming specification boundary and defensive line folding fidelity. Enforces the 75-octet limit, preserves UTF-8 boundaries, prevents escape sequence fragmentation via odd-backslash detection, budgets 74 octets for continuation lines, and provides zero-cost pass-through for compliant documents.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.189 Divergence 189: `maps_locations`, `maps_virtual_locations`, `drawn_place`, and `place_name`: Physical and Virtual Location Outbound Gating: RFC 5545 Section 3.8.1.7 Single Primary `LOCATION` Enforcement, RFC 7986 Section 5.11 Multi-Conference Support, Vocabulary-Restricted Conference Features (`CONFERENCE_FEATURES`), and Empty Name String Suppression
+
+- **Observed Behavior**:
+  Gating physical and virtual locations determines whether client updates survive iCalendar round-trips without data loss. In `jmap-ical`:
+  1. Single physical location cardinality (`maps_locations`): RFC 5545 §3.8.1.7 admits only a single `LOCATION` property per `VEVENT`. If `locations` contains more than one entry (`entries.next().is_some()`), `maps_locations` returns `false`, preventing partial writes that would drop additional locations. Events with zero or one valid location pass gating.
+  2. Non-empty map key and type safety: `maps_locations` requires the single entry key to be non-empty (`!key.is_empty()`), the location value to be a JSON object, and `name` to be either `None` or a string (`Value::String`). Non-string names (such as integers or arrays) or empty keys return `false`.
+  3. Multi-conference virtual location support (`maps_virtual_locations`): RFC 7986 §5.11 allows `CONFERENCE` to appear multiple times. Therefore, `maps_virtual_locations` supports multi-entry maps, validating each entry independently.
+  4. Conference feature vocabulary validation: Every feature in `location["features"]` must have value `Value::Bool(true)` and match one of the seven standardized RFC 7986 §6.3 features in `CONFERENCE_FEATURES` (`audio`, `chat`, `feed`, `moderator`, `phone`, `screen`, `video`). Unknown features or non-boolean values return `false`.
+  5. Primary location selection and empty name suppression (`drawn_place`, `place_name`): `drawn_place` selects the first named location in map order for outbound `LOCATION` serialization. `place_name` filters out empty string names (`!name.is_empty()`), preventing the emission of bare `LOCATION:` lines.
+  6. In contrast, differential oracles or permissive parsers silently truncate multi-location maps to the first entry during serialization without signalling data loss, admit invalid conference feature types, or emit empty `LOCATION:` headers.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.1.7 defines single `LOCATION` property semantics for `VEVENT`. RFC 7986 §5.11 and §6.3 govern `CONFERENCE` properties and feature parameters.
+  2. Strict gating in `maps_locations` protects clients from partial updates where unrepresentable secondary locations would be silently discarded.
+- **Adjudication**:
+  Conforming specification boundary and location gating fidelity. Restricts physical locations to a single entry, permits multiple virtual conference locations, validates RFC 7986 feature vocabularies, and suppresses empty location names.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.190 Divergence 190: `maps_alerts`, `uses_default_alerts`, `drawn_alert`, `drawn_trigger`, and `drawn_alarms`: Alert and Alarm Outbound Serialization: RFC 8984 Section 4.5.1 Default Alert Masking (`useDefaultAlerts`), RFC 9074 Section 6 Stable `UID` Preservation, RFC 8984 Section 4.5.3 `OffsetTrigger` Mapping with Canonical `RELATED` (`START` vs `END`), Absolute Trigger Rejection, and Summary-Derived `DESCRIPTION` Generation
+
+- **Observed Behavior**:
+  Mapping JSCalendar alerts to iCalendar `VALARM` components requires preserving alarm identity and timing while isolating unrepresentable reminder forms. In `jmap-ical`:
+  1. Default alert masking (`uses_default_alerts`, `maps_alerts`): If `event.use_default_alerts` is `Some(true)` or `extra["useDefaultAlerts"]` is `true`, `uses_default_alerts` returns `true`. In this case, `maps_alerts` returns `false` and `drawn_alarms` emits no `VALARM` components. This preserves user-level default reminder preferences without overwriting them with explicit alarms during round-trips.
+  2. OffsetTrigger serialization and canonical `RELATED` (`drawn_trigger`): Supports RFC 8984 §4.5.3 `OffsetTrigger`. Validates `offset` duration syntax via `stated_offset`. If `relativeTo` is `"end"`, emits `RELATED=END`. If `relativeTo` is `"start"` or absent, `RELATED` is omitted because `START` is the RFC 5545 default. Unknown `relativeTo` values or extra properties are refused.
+  3. Absolute trigger rejection: RFC 8984 §4.5.4 `AbsoluteTrigger` (`when`) is refused (`drawn_trigger` returns `None`). An absolute instant cannot be mapped to a relative duration without shifting if the event time changes.
+  4. Stable alarm `UID` preservation: RFC 9074 §6 assigns each `VALARM` a `UID` matching the JSCalendar alert map key (`names_map_entry`), allowing server stores to correlate alarms across round-trips.
+  5. Action and description mapping: Only `action: "display"` (RFC 5545 `ACTION:DISPLAY`) is supported. Emits `DESCRIPTION` derived from the event title (`summary`) per RFC 5545 §3.6.6; if the event has no title, `DESCRIPTION` is omitted.
+  6. In contrast, differential oracles or legacy parsers convert absolute triggers into drifting relative triggers, omit alarm UIDs (causing alarm duplication on updates), or fail to mask server default alerts.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.5 defines JSCalendar alert objects, `useDefaultAlerts`, and trigger types. RFC 5545 §3.6.6 and RFC 9074 §6 define `VALARM` structure and `UID` semantics.
+  2. Isolating default alerts and refusing absolute triggers ensures alarm triggers remain synchronized with event start times.
+- **Adjudication**:
+  Conforming specification boundary and alert serialization fidelity. Masks default alerts, preserves stable alarm UIDs, maps `OffsetTrigger` with canonical `RELATED` handling, rejects absolute triggers, and synthesizes `DESCRIPTION` from event titles.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.191 Divergence 191: `drawn_participants`, `calendar_address`, `stated_name`, `holds_role`, `expects_reply`, and `spelled`: Outbound Attendee and Organizer Serialization: RFC 5545 Section 3.6.1 Single `ORGANIZER` Selection for Multi-Owner Events, Owner Attendee Omission vs Inclusion, IMIP Calendar Address URI Validation (`names_a_uri`), Set-Order Priority Role Mapping (`PARTICIPANT_ROLES`), and RFC 5545 Section 3.2.17 `RSVP=TRUE` Conditional Parameter Attachment
+
+- **Observed Behavior**:
+  Serializing the event participant roster to iCalendar `ORGANIZER` and `ATTENDEE` lines requires reconciling JSCalendar set-based multi-role models with RFC 5545 single-organizer constraints. In `jmap-ical`:
+  1. Single organizer selection for multi-owner events: RFC 8984 §4.4.6 permits multiple participants to hold the `owner` role (`roles: {"owner": true}`). RFC 5545 §3.6.1 permits only one `ORGANIZER` property per `VEVENT`. `drawn_participants` selects the first owner in map iteration order to emit `ORGANIZER` (`organizer_drawn = true`), skipping subsequent owners for `ORGANIZER` emission.
+  2. Owner attendee line omission vs inclusion: If an owner participant holds no additional attendee roles (only `owner`), it emits the `ORGANIZER` line alone, omitting an `ATTENDEE` line. If an owner participant also holds attendee roles (`attendee`, `optional`, `chair`, `informational`), it emits both `ORGANIZER` and `ATTENDEE`.
+  3. IMIP calendar address URI validation (`calendar_address`, `names_a_uri`): Calendar addresses are extracted from `participant["sendTo"]["imip"]`. `names_a_uri` strictly validates that the address is a URI: contains an ASCII alphabetic scheme, colon, non-empty rest, and contains no whitespace. Addresses failing URI validation are dropped, protecting downstream parsers from syntax errors.
+  4. Role precedence mapping (`PARTICIPANT_ROLES`, `spelled`): Because RFC 8984 `roles` is a set but RFC 5545 `ROLE` is a single scalar parameter, `spelled` evaluates roles against `PARTICIPANT_ROLES` in strict priority order: `chair` (`CHAIR`), `informational` (`NON-PARTICIPANT`), `optional` (`OPT-PARTICIPANT`), and `attendee` (`REQ-PARTICIPANT`).
+  5. Participant kind and status mapping (`PARTICIPANT_KINDS`, `PARTICIPATION_STATUSES`): Maps `kind` to `CUTYPE` (`individual`, `group`, `resource`, `location` to `ROOM`). Maps `participationStatus` to `PARTSTAT` (`needs-action`, `accepted`, `declined`, `tentative`, `delegated`).
+  6. RSVP parameter conditional attachment (`expects_reply`): Emits `RSVP=TRUE` if and only if `expectReply == true`. Omitted when false or absent.
+  7. In contrast, differential oracles or uncoordinated serializers emit multiple `ORGANIZER` lines (violating RFC 5545 §3.6.1), emit bare email addresses without URI schemes, or select attendee roles non-deterministically from role sets.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.1, §3.8.4.1, §3.8.4.3, and §3.2 govern `ORGANIZER`, `ATTENDEE`, `ROLE`, `CUTYPE`, `PARTSTAT`, and `RSVP`. RFC 8984 §4.4 defines JSCalendar participant properties.
+  2. Deterministic owner selection and priority-ordered role resolution maintain calendar roster integrity across protocol conversions.
+- **Adjudication**:
+  Conforming specification boundary and participant serialization fidelity. Emits a single `ORGANIZER` for the first owner, differentiates pure owners from attending owners, validates IMIP URIs, maps roles by strict precedence, and attaches `RSVP=TRUE` conditionally.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
 

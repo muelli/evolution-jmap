@@ -212,7 +212,7 @@ impl Component {
 
 /// The RFC 5545 §3.1 folding width `to_ics`'s output holds to, in
 /// octets, excluding the line break.
-const MAX_LINE_OCTETS: usize = 75;
+pub const MAX_LINE_OCTETS: usize = 75;
 
 /// Folds any physical line longer than [`MAX_LINE_OCTETS`], cutting at UTF-8
 /// character boundaries.
@@ -229,7 +229,7 @@ const MAX_LINE_OCTETS: usize = 75;
 /// additionally keeps every physical line valid UTF-8 and every escape pair
 /// whole for line-oriented readers (reported upstream as
 /// <https://github.com/stalwartlabs/calcard/issues/25>).
-fn fold_overlong_lines(ics: String) -> String {
+pub fn fold_overlong_lines(ics: String) -> String {
     if ics.split("\r\n").all(|line| line.len() <= MAX_LINE_OCTETS) {
         return ics;
     }
@@ -416,13 +416,13 @@ const IMIP: &str = "imip";
 /// no `organizer` property: the owner of the event is a participant like any
 /// other, holding this role, where RFC 5545 §3.8.4.3 states it on a line of its
 /// own.
-const OWNER_ROLE: &str = "owner";
+pub const OWNER_ROLE: &str = "owner";
 
 /// What a participant has replied: RFC 8984 §4.4.6's `participationStatus` and
 /// RFC 5545 §3.2.12's `PARTSTAT`, which for a `VEVENT` admit the same five
 /// answers under the same names. A value outside them is dropped rather than
 /// passed through in the other format's clothes.
-const PARTICIPATION_STATUSES: [(&str, &str); 5] = [
+pub const PARTICIPATION_STATUSES: [(&str, &str); 5] = [
     ("needs-action", "NEEDS-ACTION"),
     ("accepted", "ACCEPTED"),
     ("declined", "DECLINED"),
@@ -438,7 +438,7 @@ const PARTICIPATION_STATUSES: [(&str, &str); 5] = [
 ///
 /// `owner` is not here: it is the [`ORGANIZER`](OWNER_ROLE) line rather than a
 /// role on the guest list.
-const PARTICIPANT_ROLES: [(&str, &str); 4] = [
+pub const PARTICIPANT_ROLES: [(&str, &str); 4] = [
     ("chair", "CHAIR"),
     ("informational", "NON-PARTICIPANT"),
     ("optional", "OPT-PARTICIPANT"),
@@ -454,7 +454,7 @@ const PARTICIPANT_ROLES: [(&str, &str); 4] = [
 /// In this order on the line, whatever order the Set holds them in, so that a
 /// re-rendering is stable — the save path diffs against a re-rendering of what
 /// the server holds.
-const CONFERENCE_FEATURES: [(&str, &str); 7] = [
+pub const CONFERENCE_FEATURES: [(&str, &str); 7] = [
     ("audio", "AUDIO"),
     ("chat", "CHAT"),
     ("feed", "FEED"),
@@ -496,7 +496,7 @@ const RESTRICTED_NAME_CHARS: [char; 9] = ['!', '#', '$', '&', '-', '^', '_', '.'
 /// in one word — a JSCalendar `location` is iCalendar's `ROOM`. iCalendar's
 /// `UNKNOWN` is not written: an event that says nothing about a participant's
 /// kind gets no parameter, which is the same state.
-const PARTICIPANT_KINDS: [(&str, &str); 4] = [
+pub const PARTICIPANT_KINDS: [(&str, &str); 4] = [
     ("individual", "INDIVIDUAL"),
     ("group", "GROUP"),
     ("resource", "RESOURCE"),
@@ -652,7 +652,7 @@ pub fn maps_virtual_locations(locations: &BTreeMap<String, Value>) -> bool {
 /// the server holds. Where there is more than one, [`maps_locations`] has
 /// already said the property must not be written back; drawing the first is
 /// still better than showing an event as happening nowhere.
-fn drawn_place(event: &CalendarEvent) -> Option<(&String, &str)> {
+pub fn drawn_place(event: &CalendarEvent) -> Option<(&String, &str)> {
     event
         .locations
         .iter()
@@ -663,7 +663,7 @@ fn drawn_place(event: &CalendarEvent) -> Option<(&String, &str)> {
 /// The `name` of one Location, or `None` when it has none this mapping can put
 /// on a content line — no name, one that is not text, or an empty one, which
 /// would write a `LOCATION` saying nothing.
-fn place_name(location: &Value) -> Option<&str> {
+pub fn place_name(location: &Value) -> Option<&str> {
     location
         .get("name")?
         .as_str()
@@ -766,7 +766,7 @@ pub fn maps_alerts(event: &CalendarEvent) -> bool {
 /// the ones it carries — RFC 8984 §4.5.1, read out of [`CalendarEvent::extra`]
 /// because the property is not modeled: nothing here writes it, and the only
 /// question asked of it is whether it is `true`.
-fn uses_default_alerts(event: &CalendarEvent) -> bool {
+pub fn uses_default_alerts(event: &CalendarEvent) -> bool {
     event.use_default_alerts == Some(true)
         || event.extra.get("useDefaultAlerts") == Some(&Value::Bool(true))
 }
@@ -829,7 +829,7 @@ fn drawn_alert(key: &str, alert: &Value, summary: Option<&str>) -> Option<Compon
 /// and this mapping does not write in either direction yet; it is refused rather
 /// than approximated, since an offset guessed from an instant would move the
 /// reminder as soon as the event moved.
-fn drawn_trigger(trigger: &Value) -> Option<(String, Vec<&'static str>)> {
+pub fn drawn_trigger(trigger: &Value) -> Option<(String, Vec<&'static str>)> {
     let trigger = trigger.as_object()?;
     if !trigger
         .keys()
@@ -891,7 +891,7 @@ fn drawn_alarms(event: &CalendarEvent) -> Vec<Component> {
 /// besides — the usual shape of a meeting somebody called and comes to — gets
 /// both, because iCalendar states the organizer beside the guest list rather
 /// than instead of it.
-fn drawn_participants(event: &CalendarEvent) -> Vec<ICalendarEntry> {
+pub fn drawn_participants(event: &CalendarEvent) -> Vec<ICalendarEntry> {
     let mut lines = Vec::new();
     let mut organizer_drawn = false;
     for participant in event.participants.iter().flatten().map(|(_, value)| value) {
@@ -1104,7 +1104,7 @@ fn stated_size(link: &Value) -> Option<String> {
 /// libical refuses costs every other field of the event with it. That is only
 /// safe because the guest list is written and never read back — see
 /// [`read_vevent`], where `participants` stays `None`.
-fn calendar_address(participant: &Value) -> Option<&str> {
+pub fn calendar_address(participant: &Value) -> Option<&str> {
     participant
         .get("sendTo")?
         .get(IMIP)?
@@ -1119,7 +1119,7 @@ fn calendar_address(participant: &Value) -> Option<&str> {
 /// what keeps a CR or an LF out of a value that skips [`syntax::escape`]. That
 /// is belt and braces: `syntax::fold_into` drops both on the way out, for
 /// exactly this reason.
-fn names_a_uri(value: &str) -> bool {
+pub fn names_a_uri(value: &str) -> bool {
     let Some((scheme, rest)) = value.split_once(':') else {
         return false;
     };
@@ -1138,13 +1138,13 @@ fn names_a_uri(value: &str) -> bool {
 /// VirtualLocation's to the empty string, and a parameter carrying it would say
 /// the place is named nothing, where leaving it off says only that the value
 /// speaks for itself.
-fn stated_name(value: &Value) -> Option<&str> {
+pub fn stated_name(value: &Value) -> Option<&str> {
     value.get("name")?.as_str().filter(|name| !name.is_empty())
 }
 
 /// Whether a participant states this RFC 8984 §4.4.6 role. The values of a set
 /// are `true` (RFC 8984 §1.4.3); anything else says nothing was set.
-fn holds_role(participant: &Value, role: &str) -> bool {
+pub fn holds_role(participant: &Value, role: &str) -> bool {
     participant
         .get("roles")
         .and_then(|roles| roles.get(role))
@@ -1154,7 +1154,7 @@ fn holds_role(participant: &Value, role: &str) -> bool {
 /// Whether a reply is expected of a participant — RFC 8984 §4.4.6's
 /// `expectReply`, which is RFC 5545 §3.2.17's `RSVP`. Both default to false, so
 /// only a stated `true` is written.
-fn expects_reply(participant: &Value) -> bool {
+pub fn expects_reply(participant: &Value) -> bool {
     participant.get("expectReply") == Some(&Value::Bool(true))
 }
 
@@ -1164,7 +1164,7 @@ fn expects_reply(participant: &Value) -> bool {
 /// Two shapes of value reach here: a string, which is looked up as itself, and a
 /// Set, whose *first* member the table names wins — which is what makes
 /// [`PARTICIPANT_ROLES`] an order and not just a list.
-fn spelled(table: &[(&str, &'static str)], value: Option<&Value>) -> Option<&'static str> {
+pub fn spelled(table: &[(&str, &'static str)], value: Option<&Value>) -> Option<&'static str> {
     let stated = |name: &str| match value? {
         Value::String(value) => value.eq_ignore_ascii_case(name).then_some(()),
         set => (set.get(name) == Some(&Value::Bool(true))).then_some(()),
