@@ -3303,3 +3303,72 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and recurrence override fidelity. Calculates period durations for `VALUE=PERIOD` RDATEs, enforces EXDATE precedence over RDATE, prioritizes detached VEVENT overrides, and skips unsupported THISANDFUTURE ranges.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.156 Divergence 156: `drawn_participants`, `holds_role`, and `calendar_address`: Single Primary `ORGANIZER` Emission (RFC 5545 §3.6.1), Dual Role Attendance Gating (`owns && role.is_some()`), IMIP URI Scheme Validation (`names_a_uri`), and Parameter Synthesis (`CN`, `CUTYPE`, `ROLE`, `PARTSTAT`, `RSVP`)
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.1 and §3.8.4.3 govern `ORGANIZER` and `ATTENDEE` property serialization. RFC 8984 §4.4 models participants in `participants: {"id": Participant}`. In `jmap-ical`:
+  1. Single primary `ORGANIZER` emission: RFC 5545 §3.6.1 restricts `ORGANIZER` to at most one occurrence in a `VEVENT`. In `drawn_participants`, the first participant holding the owner role (`holds_role(participant, OWNER_ROLE)`) sets `organizer_drawn = true` and emits the `ORGANIZER` property line. Subsequent participants claiming ownership are blocked from emitting duplicate `ORGANIZER` lines.
+  2. Dual-role attendance gating: If an organizer also holds an attendee role (`owns && role.is_some()`, such as `chair` or `attendee`), `drawn_participants` emits both `ORGANIZER` and `ATTENDEE` lines, preserving the organizer's attendance and participation status on the guest list. If the participant holds only the owner role without an attendee role (`owns && role.is_none()`), the participant is emitted solely as `ORGANIZER` and omitted from `ATTENDEE`.
+  3. IMIP URI scheme validation: `calendar_address` extracts `sendTo["imip"]` and validates it with `names_a_uri`. Addresses lacking a valid URI scheme (e.g. missing scheme, containing whitespace, or lacking scheme-specific body) are dropped from serialization, preventing malformed addresses from reaching libical.
+  4. Parameter mapping synthesis: Emits `CN` via `stated_name`, `CUTYPE` via `PARTICIPANT_KINDS`, `ROLE` via `PARTICIPANT_ROLES`, `PARTSTAT` via `PARTICIPATION_STATUSES`, and `RSVP` (`expects_reply(participant).then_some("TRUE")`).
+  5. In contrast, differential oracles or naive serializers emit duplicate `ORGANIZER` lines when multiple owner participants exist (violating RFC 5545 grammar and failing strict parsers), omit organizers from attendee lists even when chairing meetings, or pass unvetted address strings into iCalendar headers.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.1 explicitly restricts `ORGANIZER` to at most one per event. Emitting multiple `ORGANIZER` properties is invalid iCalendar syntax.
+  2. Representing organizers with dual roles (both organizer and attendee) matches Evolution Data Server and CalDAV expectations, ensuring meeting chairs are visible on attendance rosters.
+- **Adjudication**:
+  Conforming specification boundary and participant serialization fidelity. Enforces single `ORGANIZER` emission, supports dual-role attendance representation, validates IMIP URI schemes, and synthesizes standard attendee parameters.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.157 Divergence 157: `instance_patch`, `read_overrides`, and `OVERRIDE_PROPERTIES`: Detached Instance RFC 8984 §4.3.4 PatchObject Minimal Delta Generation: Nullification of Cleared Series Properties (`priority`, `keywords`, `alerts`, `timeZone`), Minimal Recurrence-ID Relative Start Comparison, and Unsupported Field Shielding
+
+- **Observed Behavior**:
+  RFC 8984 §4.3.4 defines recurrence overrides using `PatchObject` semantics, where omitted properties inherit from the master series while explicit `null` values delete properties. In `jmap-ical`:
+  1. Property nullification: In `instance_patch`, if the master series specifies a property (`title`, `description`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `privacy`, `priority`, `keywords`, `alerts`) and a detached instance component omits that property, `instance_patch` emits `null` (e.g. `"priority": null`, `"keywords": null`, `"alerts": null`, `"timeZone": null`). In RFC 8984 §4.3.4 PatchObject semantics, emitting `null` clears the inherited series value on the instance. Omitting the property would cause the instance to inherit the master series value, failing to reflect the user's deletion.
+  2. Relative start comparison: `instance.start` is compared against `id` (the `RECURRENCE-ID` date string), not against `series.start`. Because an override map key is its instance start time, an un-rescheduled instance requires no `start` property in its patch. Only if the instance was rescheduled to a different timestamp does `instance_patch` record `"start": "<new-start>"`.
+  3. Controlled field comparison: Only properties within `OVERRIDE_PROPERTIES` are compared; properties outside this allowlist are ignored during patch calculation.
+  4. In contrast, differential oracles or naive diffing engines either omit missing properties (causing detached instances to resurrect series values that were cleared in Evolution), compare start times against the series start (bloating every override patch with redundant start timestamps), or emit monolithic replacement objects that break fine-grained patch synchronization.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.3.4 establishes PatchObject semantics for recurrence overrides. Distinguishing between inherited values and explicitly cleared values via `null` is essential for bidirectional synchronization fidelity.
+  2. Comparing instance start times against recurrence IDs preserves minimal patch deltas and prevents churn across sync iterations.
+- **Adjudication**:
+  Conforming specification boundary and recurrence override delta calculation. Nullifies cleared series properties in override patches, minimizes start time properties relative to recurrence IDs, and bounds comparisons to supported override properties.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.158 Divergence 158: `seconds`, `seconds_at`, `parts`, and `length_of`: Timezone Transition Date Existence Verification: Bounded Calendar Month Length Validation (`length_of`), Nonexistent Date Rejection (e.g. February 30th), and Wall-Clock Transition Arithmetic Determinism
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.5 describes daylight saving and standard time transitions in `VTIMEZONE` subcomponents. In `jmap-ical`'s `zone.rs`:
+  1. Bounded calendar date validation: `seconds(year, month, day, of_day)` validates that `day` is strictly within `1..=length_of(year, month)?`. If an observance rule or transition timestamp specifies a nonexistent calendar day (such as February 30th, April 31st, or month 13), `seconds` immediately returns `None`.
+  2. Non-wrapping arithmetic: Rather than wrapping February 30th into March 2nd (as standard timestamp libraries with lax normalization often do), `seconds` refuses the nonexistent date. This prevents corrupt observance rules from generating phantom transitions that shift timezone boundaries.
+  3. Leap year accuracy: `length_of` delegates to `days_in_month`, correctly accounting for proleptic Gregorian leap years (divisible by 4, not 100 unless divisible by 400). For example, February 29th is accepted in leap year 2024 and rejected in non-leap year 2025.
+  4. Component extraction: `parts(local)` parses year, month, day, and time of day in seconds from midnight, validating that all components parse cleanly before arithmetic.
+  5. In contrast, differential oracles or permissive date parsers silently wrap out-of-bounds dates into subsequent months or crash on invalid inputs, altering daylight saving transition onsets by days or weeks.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.4 and §3.3.5 define date-time values in the proleptic Gregorian calendar. Nonexistent calendar dates in timezone definitions are corrupt and must be rejected rather than wrapped.
+  2. Epochless wall-clock second calculation ensures deterministic timezone transition evaluation without host system timezone database discrepancies.
+- **Adjudication**:
+  Conforming specification boundary and timezone transition arithmetic determinism. Validates calendar month lengths via `length_of`, strictly rejects nonexistent dates, and deterministically computes transition onsets.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.159 Divergence 159: `Component::write_into`, `Component::to_ics`, and `EntryExt::with_named_params`: Component AST Serialization: Canonical CRLF Envelope Delimitation (`BEGIN`/`END`), Empty Parameter Suppression, Standard vs Non-Standard Parameter/Property Token Preservation (`ICalendarParameterName::Other`, `ICalendarProperty::Other`), and Recursive Subcomponent Hierarchy
+
+- **Observed Behavior**:
+  RFC 5545 §3.1, §3.6, and §3.8 govern iCalendar component structure, parameter formatting, and line delimitation. In `jmap-ical`:
+  1. Canonical CRLF formatting: Every component boundary line (`BEGIN:<type>\r\n` and `END:<type>\r\n`) and property line emitted conforms strictly to RFC 5545 §3.1 CRLF delimiter requirements.
+  2. Empty parameter suppression: In `EntryExt::with_named_params`, if the provided `values` iterator yields zero items, the parameter is not appended to `entry.params`. This prevents invalid empty parameter syntax (such as `;ROLE=;` or `;CN=;`) from appearing on emitted properties.
+  3. Token preservation: When constructing entries (`make_entry`) and parameters (`with_named_param`), unrecognized standard tokens fall back cleanly to `ICalendarProperty::Other` and `ICalendarParameterName::Other` with uppercase preservation (e.g. `X-JMAP-UID`, `X-JMAP-KEY`).
+  4. Recursive subcomponent hierarchy: Subcomponents (`children`) are written in strictly nested sequence after parent property entries and before the parent closing `END:` tag, adhering to RFC 5545 component nesting grammar.
+  5. Line folding integration: `Component::to_ics` passes the entire generated string through `fold_overlong_lines`, guaranteeing that no line in the emitted payload exceeds 75 octets.
+  6. In contrast, differential oracles or template formatters often emit bare LF line endings, leak trailing empty parameters like `;CN=;`, emit child components out of grammar order, or omit 75-octet line folding.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.1 mandates CRLF line termination and specifies line folding rules.
+  2. Suppressing empty parameter blocks prevents parser syntax errors in strict CalDAV clients.
+- **Adjudication**:
+  Conforming specification boundary and component AST serialization fidelity. Emits canonical CRLF line endings, suppresses empty parameters, preserves standard and custom property tokens, and guarantees RFC 5545 line folding.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
