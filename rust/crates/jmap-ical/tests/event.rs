@@ -32051,3 +32051,297 @@ fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() 
     };
     assert!(!maps_recurrence_rule(&oob_month));
 }
+
+#[test]
+fn differential_oracle_by_set_position_and_wkst_part_generation() {
+    // Divergence 208 against Stalwart differential oracle:
+    // by_set_position_part, set_position_token, first_day_of_week_part, and weekday_token:
+    // Outbound BYSETPOS and WKST Recurrence Rule Part Generation:
+    // Set Selection Gating (selects_from_a_set), Set Position Bounding (-366..=-1 | 1..=366),
+    // Zero Rejection, Monday Default Suppression (WKST=MO), and Lowercase Weekday Spelling Normalization.
+
+    // 1. Valid by_set_position with by_day (selects_from_a_set = true)
+    let valid_setpos = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_day: Some(vec![NDay::new("fr")]),
+        by_set_position: Some(vec![1, -1]),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&valid_setpos));
+
+    // 2. by_set_position with 0 is rejected (RFC 5545 Section 3.3.10)
+    let zero_setpos = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_day: Some(vec![NDay::new("fr")]),
+        by_set_position: Some(vec![0]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&zero_setpos));
+
+    // 3. by_set_position out of bounds (> 366 or < -366) is rejected
+    let oob_setpos = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_day: Some(vec![NDay::new("fr")]),
+        by_set_position: Some(vec![367]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&oob_setpos));
+
+    // 4. by_set_position empty array is rejected
+    let empty_setpos = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_day: Some(vec![NDay::new("fr")]),
+        by_set_position: Some(vec![]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&empty_setpos));
+
+    // 5. firstDayOfWeek: lowercase weekdays are valid
+    let valid_wkst = RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        first_day_of_week: Some("su".to_owned()),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&valid_wkst));
+
+    // 6. firstDayOfWeek with uppercase or full day name is rejected
+    let upper_wkst = RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        first_day_of_week: Some("SU".to_owned()),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&upper_wkst));
+
+    let long_wkst = RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        first_day_of_week: Some("sunday".to_owned()),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&long_wkst));
+
+    // 7. rule serialization suppresses WKST=MO (libical drops it) and emits WKST=SU
+    let mut event_su = fixture_event();
+    event_su.recurrence_rule = Some(RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        first_day_of_week: Some("su".to_owned()),
+        ..RecurrenceRule::default()
+    });
+    let ics_su = event_to_ical(&event_su);
+    let rrule_su = content_line(&ics_su, "RRULE:");
+    assert!(rrule_su.contains("WKST=SU"));
+
+    let mut event_mo = fixture_event();
+    event_mo.recurrence_rule = Some(RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        first_day_of_week: Some("mo".to_owned()),
+        ..RecurrenceRule::default()
+    });
+    let ics_mo = event_to_ical(&event_mo);
+    let rrule_mo = content_line(&ics_mo, "RRULE:");
+    assert!(
+        !rrule_mo.contains("WKST="),
+        "WKST=MO is suppressed as default"
+    );
+}
+
+#[test]
+fn differential_oracle_virtual_locations_conference_serialization() {
+    // Divergence 209 against Stalwart differential oracle:
+    // drawn_conferences, drawn_conference, and joining_features:
+    // Outbound RFC 7986 CONFERENCE Virtual Meeting Serialization:
+    // Mandatory VALUE=URI Parameter Attachment, Multi-Endpoint Map Iteration,
+    // Stable Round-Trip Key Preservation (X-JMAP-KEY), Feature Parameter Decoding,
+    // and Label Parameter Binding (LABEL).
+
+    let mut event = fixture_event();
+    let mut vlocs = BTreeMap::new();
+    vlocs.insert(
+        "v1".to_owned(),
+        json!({
+            "@type": "VirtualLocation",
+            "uri": "https://meet.example.com/room1",
+            "name": "Design Sync Room",
+            "features": {
+                "video": true,
+                "audio": true,
+                "chat": true,
+                "screen": false
+            }
+        }),
+    );
+    vlocs.insert(
+        "v2".to_owned(),
+        json!({
+            "@type": "VirtualLocation",
+            "uri": "tel:+15551234567",
+            "features": {
+                "phone": true
+            }
+        }),
+    );
+    event.virtual_locations = Some(vlocs);
+
+    let ics = event_to_ical(&event);
+    assert_eq!(vevents(&ics), 1);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+
+    // Verify v1 conference line
+    assert!(unfolded.contains("CONFERENCE;VALUE=URI"));
+    assert!(unfolded.contains("X-JMAP-KEY=v1"));
+    assert!(unfolded.contains("LABEL=\"Design Sync Room\""));
+    assert!(unfolded.contains("FEATURE=AUDIO,CHAT,VIDEO"));
+    assert!(!unfolded.contains("SCREEN"), "false feature omitted");
+    assert!(unfolded.contains("https://meet.example.com/room1"));
+
+    // Verify v2 conference line
+    assert!(unfolded.contains("X-JMAP-KEY=v2"));
+    assert!(unfolded.contains("FEATURE=PHONE"));
+    assert!(unfolded.contains("tel:+15551234567"));
+
+    // Non-URI virtual location is dropped
+    let mut invalid_event = fixture_event();
+    let mut invalid_vlocs = BTreeMap::new();
+    invalid_vlocs.insert(
+        "bad".to_owned(),
+        json!({
+            "@type": "VirtualLocation",
+            "uri": "not a valid uri",
+            "name": "Broken"
+        }),
+    );
+    invalid_event.virtual_locations = Some(invalid_vlocs);
+    let invalid_ics = event_to_ical(&invalid_event);
+    assert!(without(&invalid_ics, "CONFERENCE"));
+}
+
+#[test]
+fn differential_oracle_links_attach_and_image_serialization() {
+    // Divergence 210 against Stalwart differential oracle:
+    // drawn_links, drawn_link, media_type, restricted_name, and stated_size:
+    // Outbound External Resource Serialization:
+    // Disambiguation of Document Attachments (ATTACH) vs Icon Graphics (IMAGE),
+    // Mandatory VALUE=URI on Images, Display Mode Parameterization (DISPLAY),
+    // Media Type Parameterization (FMTTYPE), RFC 8607 Byte Size Parameterization (SIZE),
+    // and Stable Map Key Binding (X-JMAP-KEY).
+
+    let mut event = fixture_event();
+    let mut links = BTreeMap::new();
+    // 1. Document attachment
+    links.insert(
+        "k1".to_owned(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/doc.pdf",
+            "contentType": "application/pdf",
+            "size": 1048576u64
+        }),
+    );
+    // 2. Icon graphic
+    links.insert(
+        "k2".to_owned(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/icon.png",
+            "rel": "icon",
+            "display": "badge",
+            "contentType": "image/png"
+        }),
+    );
+    event.links = Some(links);
+
+    let ics = event_to_ical(&event);
+
+    // ATTACH entry
+    let attach_line = content_line(&ics, "ATTACH");
+    assert!(!attach_line.contains("VALUE=URI"));
+    assert!(!attach_line.contains("DISPLAY="));
+    assert!(attach_line.contains("FMTTYPE=application/pdf"));
+    assert!(attach_line.contains("SIZE=1048576"));
+    assert!(attach_line.contains("X-JMAP-KEY=k1"));
+    assert!(attach_line.contains("https://example.com/doc.pdf"));
+
+    // IMAGE entry
+    let image_line = content_line(&ics, "IMAGE");
+    assert!(image_line.contains("VALUE=URI"));
+    assert!(image_line.contains("DISPLAY=BADGE"));
+    assert!(image_line.contains("FMTTYPE=image/png"));
+    assert!(image_line.contains("X-JMAP-KEY=k2"));
+    assert!(image_line.contains("https://example.com/icon.png"));
+
+    // Non-URI href is dropped
+    let mut bad_event = fixture_event();
+    let mut bad_links = BTreeMap::new();
+    bad_links.insert(
+        "k_bad".to_owned(),
+        json!({
+            "@type": "Link",
+            "href": "not-a-valid-uri"
+        }),
+    );
+    bad_event.links = Some(bad_links);
+    let bad_ics = event_to_ical(&bad_event);
+    assert!(without(&bad_ics, "ATTACH"));
+    assert!(without(&bad_ics, "IMAGE"));
+}
+
+#[test]
+fn differential_oracle_parse_ical_structure_depth_and_boundary_checks() {
+    // Divergence 211 against Stalwart differential oracle:
+    // parse_ical, check_structure, check_depth, and MAX_DEPTH:
+    // Inbound iCalendar Envelope Parsing, Structure Validation, and Recursion Depth Defense:
+    // Byte Order Mark Stripping (\u{feff}), Matching BEGIN/END Balancing,
+    // Mismatched/Unterminated Component Detection, Trailing Garbage Rejection,
+    // Root VCALENDAR Type Enforcement, and Strict Nesting Limit Gating (MAX_DEPTH = 32).
+
+    // 1. Valid envelope with UTF-8 BOM succeeds
+    let valid_bom = "\u{feff}BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test\r\nBEGIN:VEVENT\r\nUID:u1\r\nDTSTAMP:20260905T120000Z\r\nDTSTART:20260905T120000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    assert!(jmap_ical::event::parse_ical(valid_bom).is_ok());
+
+    // 2. Mismatched component tags rejected with ICalError::Mismatched
+    let mismatched = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:u1\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
+    match jmap_ical::event::parse_ical(mismatched) {
+        Err(ICalError::Mismatched { expected, found }) => {
+            assert_eq!(expected, "VEVENT");
+            assert_eq!(found, "VTODO");
+        }
+        other => panic!("expected Mismatched, got {other:?}"),
+    }
+
+    // 3. Unterminated component rejected with ICalError::Unterminated
+    let unterminated = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:u1\r\n";
+    match jmap_ical::event::parse_ical(unterminated) {
+        Err(ICalError::Unterminated(name)) => {
+            assert_eq!(name, "VEVENT");
+        }
+        other => panic!("expected Unterminated, got {other:?}"),
+    }
+
+    // 4. Non-calendar root component rejected with ICalError::NotACalendar
+    let non_calendar = "BEGIN:VEVENT\r\nUID:u1\r\nEND:VEVENT\r\n";
+    assert!(matches!(
+        jmap_ical::event::parse_ical(non_calendar),
+        Err(ICalError::NotACalendar)
+    ));
+
+    // 5. Trailing content after VCALENDAR rejected with ICalError::Trailing
+    let trailing = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\nEXTRA JUNK\r\n";
+    assert!(matches!(
+        jmap_ical::event::parse_ical(trailing),
+        Err(ICalError::Trailing(_))
+    ));
+
+    // 6. Nesting exceeding MAX_DEPTH (32) rejected with ICalError::TooDeep
+    let mut deep_ics = String::from("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test\r\n");
+    for _ in 0..33 {
+        deep_ics.push_str("BEGIN:VEVENT\r\n");
+    }
+    for _ in 0..33 {
+        deep_ics.push_str("END:VEVENT\r\n");
+    }
+    deep_ics.push_str("END:VCALENDAR\r\n");
+    assert_eq!(
+        jmap_ical::event::parse_ical(&deep_ics),
+        Err(ICalError::TooDeep("VEVENT".to_string())),
+        "exceeding MAX_DEPTH triggers ICalError::TooDeep"
+    );
+}
