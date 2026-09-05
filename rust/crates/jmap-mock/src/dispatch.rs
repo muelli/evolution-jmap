@@ -370,6 +370,7 @@ fn handle_method(
         "VacationResponse/get" => crate::mail::vacation_response_get(state, arguments),
         "VacationResponse/set" => crate::mail::vacation_response_set(state, arguments),
         "Quota/get" => crate::quota::quota_get(state, arguments),
+        "Quota/query" => crate::quota::quota_query(state, arguments),
         "Blob/get" => crate::blob::blob_get(state, arguments),
         "Blob/upload" => crate::blob::blob_upload(state, arguments),
         "Blob/lookup" => crate::blob::blob_lookup(state, arguments),
