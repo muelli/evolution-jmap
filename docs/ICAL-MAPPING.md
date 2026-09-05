@@ -3444,4 +3444,75 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.164 Divergence 164: `read_vevent`, `ical_to_event`, and `ICalError::NoEvent`: Inbound Series Identification via `RECURRENCE-ID` Absence, Fallback on All-Detached Streams, and Standalone vs Embedded `version: "2.0"` Gating (RFC 8984 §3.1.2)
+
+- **Observed Behavior**:
+  In RFC 5545 streams containing recurring series and detached occurrences (`VEVENT`), components arrive in arbitrary order. In `jmap-ical`:
+  1. Series component identification: `ical_to_event` identifies the master series as the first `VEVENT` lacking a `RECURRENCE-ID` property line (`component_entry(vevent, RECURRENCE_ID).is_none()`). It does not rely on component order or position.
+  2. All-detached fallback: If a document contains exclusively detached instances (every `VEVENT` carries a `RECURRENCE-ID`), it falls back to treating the first component as the series (`vevents.first()`), avoiding complete parsing failure when disconnected occurrences are exported.
+  3. No-event error handling: If no `VEVENT` exists in the `VCALENDAR`, returns `Err(ICalError::NoEvent)`.
+  4. Standalone vs embedded version gating: draft-ietf-jmap-calendars-28 §1.4 and jscalendar-bis §3.1.2 require standalone `Event` objects to state `version: "2.0"`. `read_vevent` leaves `version: None` during component creation, and `ical_to_event` stamps `version: Some("2.0".to_owned())` strictly on the root event. Embedded recurrence override instances in `recurrence_overrides` do not carry `version`, preserving strict schema compliance.
+  5. Store-owned clock dropping: `created` and `updated` are left as `None` in `read_vevent`, ensuring server-owned timestamps are never guessed on import.
+  6. In contrast, differential oracles or naive parsers often assume the first `VEVENT` is always the series (misinterpreting a detached instance as the master appointment if it appears first), stamp `version` onto embedded override patches (causing schema validation failures in Fastmail or JMAP servers), or fail with cryptic syntax errors on all-detached streams.
+- **Specification and Architectural Context**:
+  1. draft-ietf-jmap-calendars-28 §1.4 defines CalendarEvent as a jscalendar-bis Event. Standalone Event objects must state `"version": "2.0"`, whereas embedded override objects must omit it.
+  2. In Evolution Data Server, detached occurrences can precede the master series in serialized components depending on local cache layout. Identifying the series by the absence of `RECURRENCE-ID` guarantees consistent series detection regardless of line ordering.
+- **Adjudication**:
+  Conforming specification boundary and inbound component resolution fidelity. Identifies series by `RECURRENCE-ID` absence, gracefully handles all-detached streams, gates `version: "2.0"` strictly to standalone root events, and drops store-owned timestamps.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.165 Divergence 165: `days_from_civil`, `instant`, and `to_duration`: Wall-Clock Second Conversion Arithmetic, March-Based Proleptic Gregorian Leap Day Accounting (Hinnant Algorithm), and Nominal Day (`P<N>D`) vs Sub-Day Duration Synthesis
+
+- **Observed Behavior**:
+  Converting between iCalendar date-time timestamps (`DTSTART`, `DTEND`) and JSCalendar ISO 8601 durations (`duration: "P1D"`, `"PT1H30M"`) requires exact calendar arithmetic without timezone database overhead or epoch ambiguities. In `jmap-ical`:
+  1. March-based leap day normalization (`days_from_civil`): Howard Hinnant's civil day calculation algorithm treats the calendar year as beginning on March 1st (`year - (month <= 2)`), shifting the leap day (February 29) to the very end of the year. This completely eliminates special-case leap year branch logic across 400-year Gregorian cycles (`era * 146_097 + day_of_era - 719_468`).
+  2. Wall-clock seconds extraction (`instant`): Converts `YYYY-MM-DDTHH:MM:SS` into seconds from 1970-01-01 on its own wall clock (`days * 86_400 + hour * 3600 + minute * 60 + second`).
+  3. Nominal day duration preference (`to_duration`): When seconds divide evenly into whole 86,400-second days with non-zero days (`days > 0`), it emits nominal days `P<N>D` rather than 24 hours (`PT24H`). In RFC 8984 §4.2.2, a nominal day survives daylight saving transitions without shifting appointment wall-clock times.
+  4. Sub-day remainder formatting: If remaining seconds exist, formats time components with designator `T`, omitting zero units (e.g. `PT1H30M`, `P1DT2H`).
+  5. Non-positive duration refusal: If seconds `<= 0` (e.g. `DTEND` at or before `DTSTART`, or negative delta), `to_duration` returns `None`. In RFC 8984, zero duration is the default anyway, and negative durations are illegal under RFC 8984 §1.4.6.
+  6. In contrast, differential oracles or naive date difference functions often calculate durations using epoch timestamps that warp across daylight saving boundaries (turning 1-day events into `PT23H` or `PT25H`), fail on leap centuries (e.g. 2000 vs 1900), or emit illegal negative durations like `-PT1H`.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.2.2 defines Duration using ISO 8601 strings and treats day units as nominal days.
+  2. Pure wall-clock arithmetic guarantees deterministic execution across all platforms and environments without host system tzdata dependencies.
+- **Adjudication**:
+  Conforming specification boundary and calendar duration arithmetic determinism. Employs Hinnant's March-based Gregorian algorithm, prioritizes nominal whole days, and strictly suppresses non-positive durations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.166 Divergence 166: `date_time_digits`, `to_local_date_time`, `to_utc_date_time`, and `exists`: Proleptic Gregorian Calendar Date Validation, Leap Second 60 Tolerance (RFC 5545 §3.3.12 / RFC 3339 §5.6), Sub-Second Fraction Truncation, and Impossible Date Rejection
+
+- **Observed Behavior**:
+  iCalendar date-time strings (`20260901T120000Z`, `20260901T120000`, `20260901`) must be converted to JSCalendar `LocalDateTime` (`2026-09-01T12:00:00`) or `UTCDateTime`. Syntactically well-formed digit strings may represent nonexistent dates (e.g. month 13, day 32, Feb 29 in non-leap years, hour 25). In `jmap-ical`:
+  1. Calendar existence verification (`exists`): Validates month in `1..=12`, day in `1..=days_in_month(year, month)`, hour in `0..=23`, minute in `0..=59`. If any field is out of bounds, `exists` returns `false`, and `to_local_date_time` / `to_ical_date_time` returns `None`. Treating an impossible date as absent prevents invalid data from crashing libical or being rejected by JMAP servers.
+  2. Leap second 60 tolerance: `exists` permits `second <= 60`, conforming strictly to RFC 5545 §3.3.12 and RFC 3339 §5.6. Servers storing leap second records round-trip without date refusal.
+  3. Sub-second fraction truncation: `date_time_digits` recognizes optional fractional seconds (e.g. `20260901T120000.123Z`), slicing the first 6 digits of time (`&time[..6]`) and ignoring sub-seconds. RFC 5545 and RFC 8984 date-times do not support sub-seconds; truncating them allows events from overly precise exporters to be ingested cleanly rather than dropped.
+  4. Date-only to midnight normalization: In `to_local_date_time`, date strings without a time (`20260901`) default to midnight `00:00:00`, generating `2026-09-01T00:00:00`.
+  5. UTC conversion validation (`to_utc_date_time`): Strips mandatory trailing `Z` suffix, validates via `to_ical_date_time`, and appends `Z`. Returns `None` if the input lacks `Z`, ensuring local times are never misidentified as UTC.
+  6. In contrast, differential oracles or permissive parsers often accept impossible dates like `2026-13-40T25:99:99` into JSON structures, which later cause catastrophic failures during database indexing or calendar rendering, or reject valid leap seconds (`:60`).
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.4 and §3.3.5 specify Gregorian date-time formats, and RFC 5545 §3.3.12 explicitly permits leap second 60.
+  2. Rejecting impossible dates at the codec boundary protects Evolution Data Server and libical from memory faults and unrecoverable parser errors.
+- **Adjudication**:
+  Conforming specification boundary and calendar timestamp validation robustness. Enforces Gregorian date bounds via `days_in_month`, tolerates leap second 60, truncates sub-second fractions, and normalizes date-only values to midnight.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.167 Divergence 167: `at_offset`, `from_offset`, `offset_seconds`, and `moved`: Arithmetic Wall-Clock Offset Translation, Bounded 24-Hour Day Carry, Leap Second Minute Roll-Over, and 4-Digit Year Clamping (`0000..=9999`)
+
+- **Observed Behavior**:
+  In recurrence rule `UNTIL` evaluation and `VTIMEZONE` observance transitions, UTC endpoints must be translated to and from local wall-clock time across fixed UTC offsets (`±hhmm[ss]`). In `jmap-ical`:
+  1. Arithmetic wall-clock offset translation (`at_offset`, `from_offset`): Translates timestamps by adding or subtracting `offset_seconds(offset)`. Does not rely on host system timezone libraries or C `time_t` epochs.
+  2. Bounded 24-hour day carry (`moved`): Because `utc_offset` guarantees offsets are strictly within 24 hours (`DAY = 86_400`), day roll-over carries at most one day forward or backward (`moved < 0` or `moved >= DAY`). Calculates month and year transitions using `days_in_month_of`, handling year boundaries (Dec 31 to Jan 1, or Jan 1 to Dec 31) without multi-day loops.
+  3. Leap second roll-over: If `time` contains leap second 60, adding seconds arithmetic carries the leap second seamlessly into the following minute.
+  4. Four-digit year bounding: `moved` strictly asserts `(0..=9999).contains(&year)`. If shifting a timestamp by an offset causes an underflow below year 0000 or overflow above year 9999, `moved` returns `None`. RFC 5545 §3.3.4 explicitly restricts years to 4 digits (`year = 4DIGIT`). Refusing out-of-bounds dates prevents buffer overflows or malformed year strings.
+  5. In contrast, differential oracles or naive timestamp libraries often use signed 32-bit `time_t` (failing after year 2038 or before 1901), wrap year 0000 into negative numbers like `-0001` (violating RFC 5545 ABNF grammar), or fail to carry leap seconds.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.4 explicitly specifies 4-digit years for all date-time values.
+  2. Monotonic arithmetic offset calculation without epoch libraries guarantees deterministic timezone onset transitions across historical and future calendar dates.
+- **Adjudication**:
+  Conforming specification boundary and wall-clock offset translation fidelity. Performs exact day carry, bounds offsets to 24 hours, normalizes leap seconds, and strictly clamps years to 4 digits (`0000..=9999`).
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 

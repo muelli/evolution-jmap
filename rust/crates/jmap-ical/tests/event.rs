@@ -28269,3 +28269,417 @@ fn differential_oracle_freebusy_envelope_and_window_demarcation() {
         "refuses component whole on unreadable period instant"
     );
 }
+
+#[test]
+fn differential_oracle_read_vevent_series_identification_and_version_gating() {
+    // Divergence 164 against Stalwart differential oracle:
+    // read_vevent, ical_to_event, and ICalError::NoEvent:
+    // Inbound Series Identification via RECURRENCE-ID Absence, Fallback on All-Detached Streams,
+    // and Standalone vs Embedded version: "2.0" Gating (RFC 8984 section 3.1.2).
+
+    // 1. Inbound stream where detached VEVENT appears FIRST and master series appears SECOND
+    let ics_unordered = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:unordered-series-164\r\n",
+        "RECURRENCE-ID:20260908T100000Z\r\n",
+        "DTSTART:20260908T110000Z\r\n",
+        "SUMMARY:Detached First Occurrence\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:unordered-series-164\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Master Recurring Series\r\n",
+        "RRULE:FREQ=WEEKLY\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+
+    let event = ical_to_event(ics_unordered).expect("parse unordered stream");
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Master Recurring Series"),
+        "component without RECURRENCE-ID correctly identified as master series"
+    );
+    assert_eq!(
+        event.version.as_deref(),
+        Some("2.0"),
+        "standalone root event states version 2.0 per jscalendarbis"
+    );
+    assert_eq!(
+        event.created, None,
+        "store-owned created timestamp dropped on import"
+    );
+    assert_eq!(
+        event.updated, None,
+        "store-owned updated timestamp dropped on import"
+    );
+
+    let overrides = event
+        .recurrence_overrides
+        .expect("recurrence overrides present");
+    let ov = overrides
+        .get("2026-09-08T10:00:00")
+        .expect("detached override entry present");
+    assert_eq!(
+        ov.get("title"),
+        Some(&Value::String("Detached First Occurrence".to_owned()))
+    );
+    assert_eq!(
+        ov.get("version"),
+        None,
+        "embedded recurrence override patch must NOT carry version"
+    );
+
+    // 2. All-detached stream: every component has RECURRENCE-ID
+    let ics_all_detached = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:all-detached-164\r\n",
+        "RECURRENCE-ID:20260901T100000Z\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "SUMMARY:Detached Only 1\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:all-detached-164\r\n",
+        "RECURRENCE-ID:20260908T100000Z\r\n",
+        "DTSTART:20260908T120000Z\r\n",
+        "SUMMARY:Detached Only 2\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let detached_event = ical_to_event(ics_all_detached).expect("parse all detached stream");
+    assert_eq!(
+        detached_event.title.as_deref(),
+        Some("Detached Only 1"),
+        "all-detached stream falls back to first component as series"
+    );
+    assert_eq!(detached_event.version.as_deref(), Some("2.0"));
+
+    // 3. Document with no VEVENT returns ICalError::NoEvent
+    let ics_no_event = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VTODO\r\n",
+        "UID:todo-only-164\r\n",
+        "SUMMARY:Task\r\n",
+        "END:VTODO\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let err = ical_to_event(ics_no_event).expect_err("no VEVENT must error");
+    assert!(matches!(err, ICalError::NoEvent));
+}
+
+#[test]
+fn differential_oracle_civil_days_instant_and_duration_arithmetic() {
+    // Divergence 165 against Stalwart differential oracle:
+    // days_from_civil, instant, and to_duration:
+    // Wall-Clock Second Conversion Arithmetic, March-Based Proleptic Gregorian Leap Day Accounting,
+    // and Nominal Day (P<N>D) vs Sub-Day Duration Synthesis.
+
+    // 1. Proleptic Gregorian days_from_civil verification
+    // Epoch: 1970-01-01 -> 0
+    assert_eq!(jmap_ical::event::days_from_civil(1970, 1, 1), 0);
+    // Leap year 2024 (divisible by 4, not 100):
+    // 2024-02-28 to 2024-02-29 is 1 day; to 2024-03-01 is 2 days
+    let d_2024_02_28 = jmap_ical::event::days_from_civil(2024, 2, 28);
+    let d_2024_02_29 = jmap_ical::event::days_from_civil(2024, 2, 29);
+    let d_2024_03_01 = jmap_ical::event::days_from_civil(2024, 3, 1);
+    assert_eq!(d_2024_02_29 - d_2024_02_28, 1);
+    assert_eq!(d_2024_03_01 - d_2024_02_29, 1);
+
+    // Non-leap year 2025:
+    // 2025-02-28 to 2025-03-01 is 1 day
+    let d_2025_02_28 = jmap_ical::event::days_from_civil(2025, 2, 28);
+    let d_2025_03_01 = jmap_ical::event::days_from_civil(2025, 3, 1);
+    assert_eq!(d_2025_03_01 - d_2025_02_28, 1);
+
+    // Century leap rule: 2000 is leap (divisible by 400), 1900 is not (divisible by 100 but not 400)
+    let d_2000_02_28 = jmap_ical::event::days_from_civil(2000, 2, 28);
+    let d_2000_03_01 = jmap_ical::event::days_from_civil(2000, 3, 1);
+    assert_eq!(d_2000_03_01 - d_2000_02_28, 2, "year 2000 has Feb 29");
+
+    let d_1900_02_28 = jmap_ical::event::days_from_civil(1900, 2, 28);
+    let d_1900_03_01 = jmap_ical::event::days_from_civil(1900, 3, 1);
+    assert_eq!(d_1900_03_01 - d_1900_02_28, 1, "year 1900 has no Feb 29");
+
+    // 2. Inbound duration synthesis: nominal day preference
+    // 24 hours between DTSTART and DTEND synthesizes to nominal P1D
+    let ics_1day = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-1day-165\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "DTEND:20260902T100000Z\r\n",
+        "SUMMARY:One Nominal Day\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_1day = ical_to_event(ics_1day).expect("parse 1 day");
+    assert_eq!(ev_1day.duration.as_deref(), Some("P1D"));
+
+    // 48 hours synthesizes to P2D
+    let ics_2days = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-2day-165\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "DTEND:20260903T100000Z\r\n",
+        "SUMMARY:Two Nominal Days\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_2days = ical_to_event(ics_2days).expect("parse 2 days");
+    assert_eq!(ev_2days.duration.as_deref(), Some("P2D"));
+
+    // Sub-day: 90 minutes synthesizes to PT1H30M
+    let ics_90m = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-90m-165\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "DTEND:20260901T113000Z\r\n",
+        "SUMMARY:90 Minutes\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_90m = ical_to_event(ics_90m).expect("parse 90m");
+    assert_eq!(ev_90m.duration.as_deref(), Some("PT1H30M"));
+
+    // 25 hours synthesizes to P1DT1H
+    let ics_25h = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-25h-165\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "DTEND:20260902T110000Z\r\n",
+        "SUMMARY:25 Hours\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_25h = ical_to_event(ics_25h).expect("parse 25h");
+    assert_eq!(ev_25h.duration.as_deref(), Some("P1DT1H"));
+
+    // Non-positive duration (DTEND at or before DTSTART) results in duration: None
+    let ics_zero_dur = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-zero-165\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "DTEND:20260901T100000Z\r\n",
+        "SUMMARY:Zero Duration\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_zero = ical_to_event(ics_zero_dur).expect("parse zero dur");
+    assert_eq!(ev_zero.duration, None, "zero duration yields None");
+
+    let ics_neg_dur = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-neg-165\r\n",
+        "DTSTART:20260901T120000Z\r\n",
+        "DTEND:20260901T100000Z\r\n",
+        "SUMMARY:Negative Duration\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_neg = ical_to_event(ics_neg_dur).expect("parse neg dur");
+    assert_eq!(ev_neg.duration, None, "negative duration yields None");
+}
+
+#[test]
+fn differential_oracle_date_time_digits_existence_and_leap_second() {
+    // Divergence 166 against Stalwart differential oracle:
+    // date_time_digits, to_local_date_time, to_utc_date_time, and exists:
+    // Proleptic Gregorian Calendar Date Validation, Leap Second 60 Tolerance,
+    // Sub-Second Fraction Truncation, and Impossible Date Rejection.
+
+    // 1. Calendar date existence checks via exists
+    assert!(jmap_ical::event::exists("20260905", "120000"));
+    assert!(
+        jmap_ical::event::exists("20240229", "000000"),
+        "leap day 2024 exists"
+    );
+    assert!(
+        !jmap_ical::event::exists("20250229", "000000"),
+        "non-leap Feb 29 rejected"
+    );
+    assert!(
+        !jmap_ical::event::exists("20260431", "120000"),
+        "April 31 rejected"
+    );
+    assert!(
+        !jmap_ical::event::exists("20261301", "120000"),
+        "month 13 rejected"
+    );
+    assert!(
+        !jmap_ical::event::exists("20260905", "240000"),
+        "hour 24 rejected"
+    );
+    assert!(
+        !jmap_ical::event::exists("20260905", "126000"),
+        "minute 60 rejected"
+    );
+
+    // Leap second 60 is permitted per RFC 5545 section 3.3.12 and RFC 3339 section 5.6
+    assert!(
+        jmap_ical::event::exists("20260630", "235960"),
+        "leap second 60 is tolerated"
+    );
+
+    // 2. Sub-second fraction truncation in to_local_date_time
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20260901T100000.123Z"),
+        Some("2026-09-01T10:00:00".to_owned()),
+        "sub-second fraction truncated to standard second resolution"
+    );
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20260901T100000.999999"),
+        Some("2026-09-01T10:00:00".to_owned()),
+        "high precision sub-second fraction truncated"
+    );
+
+    // 3. Date-only normalized to midnight
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20260901"),
+        Some("2026-09-01T00:00:00".to_owned()),
+        "date without time normalized to midnight"
+    );
+
+    // 4. to_utc_date_time requires explicit Z suffix
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-09-01T10:00:00Z"),
+        Some("20260901T100000Z".to_owned()),
+        "UTC instant with Z converts to compact ical UTC representation"
+    );
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-09-01T10:00:00"),
+        None,
+        "local time without Z rejected by to_utc_date_time"
+    );
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-13-01T10:00:00Z"),
+        None,
+        "impossible month 13 rejected by to_utc_date_time"
+    );
+
+    // 5. Inbound ical_to_event with leap second preserves appointment start
+    let ics_leap = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:leap-sec-166\r\n",
+        "DTSTART:20260630T235960Z\r\n",
+        "SUMMARY:Leap Second Appointment\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_leap = ical_to_event(ics_leap).expect("parse leap second event");
+    assert_eq!(
+        ev_leap.start.as_deref(),
+        Some("2026-06-30T23:59:60"),
+        "leap second 60 parsed faithfully"
+    );
+}
+
+#[test]
+fn differential_oracle_offset_translation_moved_day_carry_and_year_bounds() {
+    // Divergence 167 against Stalwart differential oracle:
+    // at_offset, from_offset, offset_seconds, and moved:
+    // Arithmetic Wall-Clock Offset Translation, Bounded 24-Hour Day Carry,
+    // Leap Second Minute Roll-Over, and 4-Digit Year Clamping (0000..=9999).
+
+    // 1. offset_seconds validation
+    assert_eq!(jmap_ical::event::offset_seconds("+0200"), Some(7200));
+    assert_eq!(jmap_ical::event::offset_seconds("-0500"), Some(-18000));
+    assert_eq!(jmap_ical::event::offset_seconds("+0000"), Some(0));
+    assert_eq!(
+        jmap_ical::event::offset_seconds("-0000"),
+        None,
+        "negative zero offset rejected per RFC 5545 section 3.3.14"
+    );
+    assert_eq!(
+        jmap_ical::event::offset_seconds("+02:00"),
+        Some(7200),
+        "coloned offset stripped and parsed"
+    );
+    assert_eq!(
+        jmap_ical::event::offset_seconds("-05:00"),
+        Some(-18000),
+        "coloned negative offset stripped and parsed"
+    );
+    assert_eq!(
+        jmap_ical::event::offset_seconds("+01:23:45"),
+        Some(3600 + 1380 + 45),
+        "offset with seconds parsed accurately"
+    );
+
+    // 2. Day carry across month and year boundaries in observance conversion
+    // Daylight transition rule with UNTIL at 23:30Z shifted by +02:00 offset carries into next day
+    let custom_tz = "/corp.example.com/CarryZone";
+    let ics_carry = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+TZNAME:STD\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:19700329T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+TZNAME:DST\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:carry-tz-167\r\n\
+DTSTART;TZID={custom_tz}:20260401T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260401T233000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+
+    let ev_carry = ical_to_event(&ics_carry).expect("parse carry zone event");
+    let rule_carry = ev_carry.recurrence_rule.expect("rule present");
+    // 2026-04-01T23:30:00Z + 01:00 offset rolls over midnight into 2026-04-02T00:30:00
+    assert_eq!(
+        rule_carry.until.as_deref(),
+        Some("2026-04-02T00:30:00"),
+        "forward day carry arithmetic across midnight evaluated accurately"
+    );
+
+    // Year boundary carry: December 31st 23:00:00Z + 01:00 rolls over into January 1st next year
+    let ics_year_carry = ics_carry.replace("UNTIL=20260401T233000Z", "UNTIL=20261231T230000Z");
+    let ev_year = ical_to_event(&ics_year_carry).expect("parse year boundary carry");
+    let rule_year = ev_year.recurrence_rule.expect("rule present");
+    assert_eq!(
+        rule_year.until.as_deref(),
+        Some("2027-01-01T00:00:00"),
+        "forward year boundary carry evaluated accurately"
+    );
+}
