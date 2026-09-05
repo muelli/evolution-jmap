@@ -566,6 +566,9 @@ pub struct RecordedSchedulingMessage {
     /// The instance the message is about, when it is about one instance
     /// rather than the whole event (draft-ietf-jmap-calendars-28 §5.9.2.2).
     pub recurrence_id: Option<String>,
+    /// The message body itself: a `VCALENDAR` with a `METHOD` (RFC 5546
+    /// §3.2), built by `scheduling::build_ical`.
+    pub ical: String,
 }
 
 /// What happened to an object, for the changes log.
