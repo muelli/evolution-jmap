@@ -35124,3 +35124,232 @@ fn differential_oracle_read_vevent_definition_and_zoned_ends_in_resolution() {
         jmap_ical::event::read_until("20260910T120000Z", jmap_ical::event::Ends::At("-0400"));
     assert_eq!(until_at, "2026-09-10T08:00:00");
 }
+
+#[test]
+fn differential_oracle_windows_timezone_mapping_and_iana_shape_validation() {
+    // 1. IANA shape validation via names_time_zone
+    assert!(jmap_ical::event::names_time_zone("Europe/Berlin"));
+    assert!(jmap_ical::event::names_time_zone("America/New_York"));
+    assert!(jmap_ical::event::names_time_zone("Etc/GMT+5"));
+    assert!(jmap_ical::event::names_time_zone("UTC"));
+
+    // Solidus-prefixed custom IDs or Windows names fail direct IANA shape validation
+    assert!(!jmap_ical::event::names_time_zone("/custom/zone"));
+    assert!(!jmap_ical::event::names_time_zone("Romance Standard Time"));
+    assert!(!jmap_ical::event::names_time_zone(
+        "W. Europe Standard Time"
+    ));
+    assert!(!jmap_ical::event::names_time_zone("Europe/"));
+
+    // 2. Windows timezone display name translation via windows_time_zone_to_iana
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("Romance Standard Time"),
+        Some("Europe/Paris")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("Eastern Standard Time"),
+        Some("America/New_York")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("W. Europe Standard Time"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("\"Eastern Standard Time (Mexico)\""),
+        Some("America/Cancun")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("  Tokyo Standard Time  "),
+        Some("Asia/Tokyo")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("Unknown Nonexistent Time"),
+        None
+    );
+}
+
+#[test]
+fn differential_oracle_unique_tzid_peeling_and_canonical_resolution_pipeline() {
+    // 1. Globally unique solidus TZID tail extraction via unique_tzid_to_iana
+    assert_eq!(
+        jmap_ical::event::unique_tzid_to_iana("/freeassociation.sourceforge.net/Europe/Berlin"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::event::unique_tzid_to_iana("/citadel.org/20260101_1/America/New_York"),
+        Some("America/New_York")
+    );
+    assert_eq!(
+        jmap_ical::event::unique_tzid_to_iana("/vendor.example.com/UTC"),
+        Some("UTC")
+    );
+    assert_eq!(
+        jmap_ical::event::unique_tzid_to_iana("/citadel.org/Pacific/Auckland"),
+        Some("Pacific/Auckland")
+    );
+    // Non-solidus or unrecognized area paths return None
+    assert_eq!(jmap_ical::event::unique_tzid_to_iana("Europe/Berlin"), None);
+    assert_eq!(
+        jmap_ical::event::unique_tzid_to_iana("/vendor/NonexistentArea/City"),
+        None
+    );
+
+    // 2. Unified canonical resolution pipeline via resolve_canonical_time_zone
+    assert_eq!(
+        jmap_ical::event::resolve_canonical_time_zone("Romance Standard Time"),
+        Some("Europe/Paris")
+    );
+    assert_eq!(
+        jmap_ical::event::resolve_canonical_time_zone("America/Chicago"),
+        Some("America/Chicago")
+    );
+    assert_eq!(
+        jmap_ical::event::resolve_canonical_time_zone(
+            "/freeassociation.sourceforge.net/Europe/Paris"
+        ),
+        Some("Europe/Paris")
+    );
+    assert_eq!(
+        jmap_ical::event::resolve_canonical_time_zone("/custom/unrecognized/zone"),
+        None
+    );
+}
+
+#[test]
+fn differential_oracle_custom_timezone_definition_and_override_pruning() {
+    use serde_json::json;
+
+    // 1. Ingest document with custom solidus timezone definition
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Corp.//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/custom/corp-zone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19700101T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0100\r\n\
+TZNAME:CORP\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:custom-tz-event-1\r\n\
+DTSTART;TZID=/custom/corp-zone:20260910T090000\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Custom Zone Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = jmap_ical::event::ical_to_event(ics).expect("parse custom tz ics");
+    assert_eq!(event.time_zone.as_deref(), Some("/custom/corp-zone"));
+
+    let time_zones = event.time_zones.as_ref().expect("custom time_zones map");
+    assert!(time_zones.contains_key("/custom/corp-zone"));
+    let def = &time_zones["/custom/corp-zone"];
+    assert_eq!(def["@type"], "TimeZone");
+    assert_eq!(def["tzId"], "/custom/corp-zone");
+
+    // 2. prune_time_zones retains override references when series moves to standard zone
+    let mut modified_event = event.clone();
+    modified_event.time_zone = Some("UTC".into());
+    // Add an override referencing the custom zone
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "2026-09-17T09:00:00".to_owned(),
+        json!({
+            "timeZone": "/custom/corp-zone"
+        }),
+    );
+    modified_event.recurrence_overrides = Some(overrides);
+
+    // prune_time_zones should keep /custom/corp-zone because the override refers to it
+    jmap_ical::event::prune_time_zones(&mut modified_event);
+    assert!(
+        modified_event
+            .time_zones
+            .as_ref()
+            .expect("retained time_zones")
+            .contains_key("/custom/corp-zone")
+    );
+
+    // 3. When override also moves to UTC, prune_time_zones clears the map to None
+    let mut cleared_event = modified_event.clone();
+    cleared_event.recurrence_overrides = Some(
+        [(
+            "2026-09-17T09:00:00".to_owned(),
+            json!({ "title": "Moved Title" }),
+        )]
+        .into(),
+    );
+    jmap_ical::event::prune_time_zones(&mut cleared_event);
+    assert!(cleared_event.time_zones.is_none());
+}
+
+#[test]
+fn differential_oracle_recurrence_override_range_thisandfuture_and_instance_patch() {
+    use serde_json::json;
+
+    // 1. Detached component with RANGE=THISANDFUTURE is safely skipped from recurrence_overrides
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Corp.//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:series-split-1\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Series Meeting\r\n\
+RRULE:FREQ=DAILY\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:series-split-1\r\n\
+RECURRENCE-ID;RANGE=THISANDFUTURE:20260915T090000Z\r\n\
+DTSTART:20260915T110000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Split Future Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = jmap_ical::event::ical_to_event(ics).expect("parse ics");
+    // recurrence_overrides must be None because the only override carried RANGE=THISANDFUTURE
+    assert!(event.recurrence_overrides.is_none());
+
+    // 2. Standard detached instance diffing via read_overrides and instance_patch
+    let standard_override_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Corp.//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:series-mod-1\r\n\
+DTSTART:20260910T090000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Series Meeting\r\n\
+DESCRIPTION:Original Description\r\n\
+PRIORITY:1\r\n\
+RRULE:FREQ=DAILY\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:series-mod-1\r\n\
+RECURRENCE-ID:20260912T090000Z\r\n\
+DTSTART:20260912T090000Z\r\n\
+DURATION:PT2H\r\n\
+SUMMARY:Extended Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let mod_event = jmap_ical::event::ical_to_event(standard_override_ics).expect("parse mod ics");
+    let overrides = mod_event.recurrence_overrides.as_ref().expect("overrides");
+    let patch = overrides
+        .get("2026-09-12T09:00:00")
+        .expect("patch at 09:00");
+
+    // DTSTART matched RECURRENCE-ID, so start is omitted from patch
+    assert!(patch.get("start").is_none());
+    assert_eq!(
+        patch.get("title").and_then(|v| v.as_str()),
+        Some("Extended Meeting")
+    );
+    assert_eq!(patch.get("duration").and_then(|v| v.as_str()), Some("PT2H"));
+    // Description was omitted on detached instance, so it is deleted with null
+    assert_eq!(patch.get("description"), Some(&json!(null)));
+    // Priority was omitted on detached instance, so it is deleted with null
+    assert_eq!(patch.get("priority"), Some(&json!(null)));
+}
