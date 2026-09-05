@@ -25782,3 +25782,288 @@ END:VCALENDAR\r\n";
         "CRLF-containing URI refused"
     );
 }
+
+#[test]
+fn differential_oracle_drawn_link_and_read_links_image_vs_attach_parameter_disjointness() {
+    // Divergence 136 against Stalwart differential oracle:
+    // RFC 7986 section 5.10 IMAGE vs RFC 5545 section 3.8.1.1 ATTACH dual mapping (rel: "icon"),
+    // mandatory VALUE=URI on IMAGE vs default omission on ATTACH,
+    // parameter disjointness (DISPLAY on IMAGE, SIZE on ATTACH), and unsigned integer size validation.
+
+    let ev = CalendarEvent {
+        id: Some("link-disjointness-136".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        links: Some(BTreeMap::from([
+            (
+                "k1".to_owned(),
+                json!({
+                    "@type": "Link",
+                    "href": "https://example.com/icon.png",
+                    "rel": "icon",
+                    "display": "badge",
+                    "contentType": "image/png",
+                    "size": 1024
+                }),
+            ),
+            (
+                "k2".to_owned(),
+                json!({
+                    "@type": "Link",
+                    "href": "https://example.com/spec.pdf",
+                    "contentType": "application/pdf",
+                    "size": 2048
+                }),
+            ),
+            (
+                "k3".to_owned(),
+                json!({
+                    "@type": "Link",
+                    "href": "https://example.com/invalid-size.bin",
+                    "contentType": "application/octet-stream",
+                    "size": -50
+                }),
+            ),
+        ])),
+        ..Default::default()
+    };
+
+    let ics = event_to_ical(&ev);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+
+    // IMAGE line: rel == "icon" emits IMAGE, requires VALUE=URI, emits DISPLAY, suppresses SIZE
+    assert!(
+        unfolded.contains("IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=k1:https://example.com/icon.png"),
+        "IMAGE line contains VALUE=URI, DISPLAY, and no SIZE: {unfolded}"
+    );
+
+    // ATTACH line: rel != "icon" emits ATTACH, omits VALUE=URI, emits SIZE, has no DISPLAY
+    assert!(
+        unfolded.contains(
+            "ATTACH;FMTTYPE=application/pdf;SIZE=2048;X-JMAP-KEY=k2:https://example.com/spec.pdf"
+        ),
+        "ATTACH line omits VALUE=URI and carries SIZE: {unfolded}"
+    );
+
+    // Negative size on k3 dropped by stated_size
+    assert!(
+        unfolded.contains("ATTACH;FMTTYPE=application/octet-stream;X-JMAP-KEY=k3:https://example.com/invalid-size.bin"),
+        "ATTACH line with negative size omits SIZE parameter: {unfolded}"
+    );
+
+    // Inbound parsing: read_links correctly parses IMAGE and ATTACH lines
+    let roundtrip = ical_to_event(&ics).expect("parse serialized links");
+    let links = roundtrip.links.expect("links present");
+
+    let img = links.get("k1").expect("k1 link present");
+    assert_eq!(img.get("rel").and_then(Value::as_str), Some("icon"));
+    assert_eq!(img.get("display").and_then(Value::as_str), Some("badge"));
+    assert_eq!(
+        img.get("contentType").and_then(Value::as_str),
+        Some("image/png")
+    );
+    assert!(
+        img.get("size").is_none(),
+        "SIZE on IMAGE is not parsed into Link"
+    );
+
+    let att = links.get("k2").expect("k2 link present");
+    assert!(att.get("rel").is_none(), "ATTACH has no rel: icon");
+    assert_eq!(att.get("size").and_then(Value::as_u64), Some(2048));
+    assert_eq!(
+        att.get("contentType").and_then(Value::as_str),
+        Some("application/pdf")
+    );
+}
+
+#[test]
+fn differential_oracle_component_entries_and_entry_texts_multi_value_case_insensitive() {
+    // Divergence 137 against Stalwart differential oracle:
+    // Multi-valued property joining (comma-separated entry_text vs entry_texts slice),
+    // case-insensitive property name matching in component_entries, and comma join delimitation.
+
+    let mixed_case_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+uid:mixed-case-137\r\n\
+dtstart:20260901T100000Z\r\n\
+duration:PT1H\r\n\
+summary:Case Insensitive Properties\r\n\
+description:Testing property name matching\r\n\
+categories:Rust, JMAP, Calendar\r\n\
+CATEGORIES:Networking, Async\r\n\
+categories:  , Duplicate, Rust\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(mixed_case_ics).expect("parse mixed-case ics");
+
+    assert_eq!(ev.id.as_ref().map(|id| id.as_str()), Some("mixed-case-137"));
+    assert_eq!(ev.start.as_deref(), Some("2026-09-01T10:00:00"));
+    assert_eq!(ev.duration.as_deref(), Some("PT1H"));
+    assert_eq!(ev.title.as_deref(), Some("Case Insensitive Properties"));
+    assert_eq!(
+        ev.description.as_deref(),
+        Some("Testing property name matching")
+    );
+
+    // Multiple CATEGORIES lines and comma-separated tokens are gathered and deduplicated
+    let keywords = ev.keywords.expect("keywords present");
+    assert_eq!(keywords.len(), 6);
+    assert_eq!(keywords.get("Rust"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("JMAP"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Calendar"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Networking"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Async"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Duplicate"), Some(&Value::Bool(true)));
+    assert!(
+        !keywords.contains_key(""),
+        "empty whitespace token discarded"
+    );
+}
+
+#[test]
+fn differential_oracle_entry_param_values_multi_occurrence_and_ast_text_flattening() {
+    // Divergence 138 against Stalwart differential oracle:
+    // entry_param_values multi-occurrence extraction (e.g. repeated FEATURE),
+    // case-insensitive parameter name lookup, and parameter AST text unwrapping.
+
+    let multi_feature_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:multi-param-138\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+CONFERENCE;VALUE=URI;feature=audio;FEATURE=VIDEO;FEATURE=chat;label=Main Hall:https://example.com/conf-138\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(multi_feature_ics).expect("parse multi-parameter ics");
+    let virtual_locs = ev.virtual_locations.expect("virtual_locations present");
+    let loc = virtual_locs.values().next().expect("conference entry");
+
+    assert_eq!(
+        loc.get("uri").and_then(Value::as_str),
+        Some("https://example.com/conf-138")
+    );
+    assert_eq!(loc.get("name").and_then(Value::as_str), Some("Main Hall"));
+
+    // entry_param_values captures all three repeated FEATURE parameters across case variations
+    let features = loc
+        .get("features")
+        .and_then(Value::as_object)
+        .expect("features object");
+    assert_eq!(features.get("audio"), Some(&Value::Bool(true)));
+    assert_eq!(features.get("video"), Some(&Value::Bool(true)));
+    assert_eq!(features.get("chat"), Some(&Value::Bool(true)));
+}
+
+#[test]
+fn differential_oracle_spelled_participation_statuses_closed_vocabulary_and_set_resolution() {
+    // Divergence 139 against Stalwart differential oracle:
+    // PARTICIPATION_STATUSES closed 5-state vocabulary mapping,
+    // spelled Set vs String resolution, case insensitivity, and non-event status rejection.
+
+    let ev = CalendarEvent {
+        id: Some("partstat-139".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("UTC".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        participants: Some(BTreeMap::from([
+            (
+                "p1".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "name": "Alice Accepted",
+                    "sendTo": { "imip": "mailto:alice@example.com" },
+                    "roles": { "attendee": true },
+                    "participationStatus": "accepted"
+                }),
+            ),
+            (
+                "p2".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "name": "Bob Needs Action",
+                    "sendTo": { "imip": "mailto:bob@example.com" },
+                    "roles": { "attendee": true },
+                    "participationStatus": "needs-action"
+                }),
+            ),
+            (
+                "p3".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "name": "Charlie Declined",
+                    "sendTo": { "imip": "mailto:charlie@example.com" },
+                    "roles": { "attendee": true },
+                    "participationStatus": "DECLINED"
+                }),
+            ),
+            (
+                "p4".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "name": "Dave Tentative",
+                    "sendTo": { "imip": "mailto:dave@example.com" },
+                    "roles": { "attendee": true },
+                    "participationStatus": "Tentative"
+                }),
+            ),
+            (
+                "p5".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "name": "Eve Delegated",
+                    "sendTo": { "imip": "mailto:eve@example.com" },
+                    "roles": { "attendee": true },
+                    "participationStatus": "delegated"
+                }),
+            ),
+            (
+                "p6".to_owned(),
+                json!({
+                    "@type": "Participant",
+                    "name": "Frank Completed Task",
+                    "sendTo": { "imip": "mailto:frank@example.com" },
+                    "roles": { "attendee": true },
+                    "participationStatus": "completed"
+                }),
+            ),
+        ])),
+        ..Default::default()
+    };
+
+    let ics = event_to_ical(&ev);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+
+    assert!(unfolded.contains(
+        "CN=\"Alice Accepted\";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:alice@example.com"
+    ));
+    assert!(unfolded.contains(
+        "CN=\"Bob Needs Action\";ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION:mailto:bob@example.com"
+    ));
+    assert!(unfolded.contains(
+        "CN=\"Charlie Declined\";ROLE=REQ-PARTICIPANT;PARTSTAT=DECLINED:mailto:charlie@example.com"
+    ));
+    assert!(unfolded.contains(
+        "CN=\"Dave Tentative\";ROLE=REQ-PARTICIPANT;PARTSTAT=TENTATIVE:mailto:dave@example.com"
+    ));
+    assert!(unfolded.contains(
+        "CN=\"Eve Delegated\";ROLE=REQ-PARTICIPANT;PARTSTAT=DELEGATED:mailto:eve@example.com"
+    ));
+
+    // Frank has invalid status "completed", so PARTSTAT is omitted entirely
+    assert!(
+        unfolded
+            .contains("CN=\"Frank Completed Task\";ROLE=REQ-PARTICIPANT:mailto:frank@example.com"),
+        "invalid status completed results in omitted PARTSTAT parameter: {unfolded}"
+    );
+    assert!(
+        !unfolded.contains("PARTSTAT=COMPLETED"),
+        "task status COMPLETED is never emitted for attendee"
+    );
+}
