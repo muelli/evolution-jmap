@@ -3232,3 +3232,74 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.152 Divergence 152: `shows_without_time` and `instance_shows_without_time`: All-Day Event DATE vs DATE-TIME Serialization Gating, Midnight Alignment, Whole-Day Duration Verification, and Override Consistency
+
+- **Observed Behavior**:
+  RFC 8984 §4.1.5 models all-day events using `showWithoutTime: true`, specifying that all-day events start at midnight and last whole days. In RFC 5545 §3.6.1 and §3.8.2.4, all-day events are expressed using `VALUE=DATE` without a time component (`DTSTART;VALUE=DATE:YYYYMMDD`). In `jmap-ical`:
+  1. Gating preconditions: `shows_without_time` requires four base conditions before allowing `VALUE=DATE` emission:
+     - `show_without_time == Some(true)`.
+     - `time_zone.is_none()`: RFC 5545 §3.2.19 strictly forbids `TZID` parameters on DATE values. A zoned event cannot be serialized as a bare DATE.
+     - `at_midnight(start)`: The start date-time must be aligned to midnight (`T000000`).
+     - `whole_days(duration)`: If duration is present, it must be measured in whole days or weeks (e.g. `P1D`, `P7D`, `P1W`) without any `T` time designator.
+  2. Recurrence rule consistency: If a recurrence rule is present, its `until` timestamp must be at midnight, and the rule must not specify time-of-day parts (`names_a_time_of_day`: `BYHOUR`, `BYMINUTE`, `BYSECOND`). RFC 5545 §3.3.10 explicitly forbids time-of-day rule parts beside DATE values.
+  3. Override instance validation (`instance_shows_without_time`): Every override key in `recurrence_overrides` must fall at midnight, and every modified detached instance must have floating time (`time_zone.is_none()`), start at midnight, and have a whole-day duration.
+  4. Defensive fallback to timed DATE-TIME: If any precondition fails, the event is serialized as a timed `DATE-TIME` event (`DTSTART:YYYYMMDDTHHMMSS` or `DTSTART;TZID=...`). This preserves exact start times and durations rather than truncating times to midnight or stripping recurrence rules.
+  5. In contrast, differential oracles or naive serializers often unconditionally emit `VALUE=DATE` whenever `showWithoutTime` is true, truncating non-midnight times, stripping recurrence rule time parts, or emitting illegal `TZID` parameters on DATE values that crash strict CalDAV clients.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.2.19 dictates that `TZID` must not be used on properties with a `DATE` value type. RFC 5545 §3.6.1 requires all-day events to have `DATE` start and end values.
+  2. Falling back to `DATE-TIME` when an event cannot satisfy all-day constraints prevents data loss in Evolution Data Server, ensuring round-trip idempotency and protecting non-midnight appointments.
+- **Adjudication**:
+  Conforming specification boundary and all-day event integrity defense. Verifies midnight alignment, whole-day durations, timezone absence, recurrence rule compatibility, and override consistency, falling back cleanly to DATE-TIME to prevent data truncation.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.153 Divergence 153: `windows_time_zone_to_iana`, `unique_tzid_to_iana`, and `resolve_canonical_time_zone`: CLDR Windows Time Zone Mapping, Globally Unique Solidus TZID Tail Extraction, and Canonical IANA Zone Resolution
+
+- **Observed Behavior**:
+  Enterprise calendaring systems (including Microsoft Exchange, Outlook, and Windows CalDAV exporters) frequently label time zones using Windows registry display names (such as `"W. Europe Standard Time"`, `"FLE Standard Time"`, or `"Pacific Standard Time"`) or globally unique vendor-prefixed identifiers (such as `"/freeassociation.sourceforge.net/Europe/Berlin"` or `"/mozilla.org/20070129_1/America/New_York"`). In `jmap-ical`:
+  1. CLDR Windows mapping (`windows_time_zone_to_iana`): Normalizes input strings by trimming whitespace and surrounding double quotes (`trim().trim_matches('"')`), then performs ASCII case-insensitive lookups against `WINDOWS_TIME_ZONES` (derived from Unicode CLDR `windowsZones`). Translates 98 standard Windows timezone names to canonical IANA equivalents (e.g. `W. Europe Standard Time` to `Europe/Berlin`, `FLE Standard Time` to `Europe/Kyiv`, `Pacific Standard Time` to `America/Los_Angeles`).
+  2. Globally unique TZID tail extraction (`unique_tzid_to_iana`): Ingests solidus-prefixed TZIDs starting with `/` per RFC 5545 §3.8.3.1. Iterates through path segments, scanning for recognized IANA continental area prefixes (`IANA_AREAS`: `Africa`, `America`, `Antarctica`, `Arctic`, `Asia`, `Atlantic`, `Australia`, `Brazil`, `Canada`, `Chile`, `Etc`, `Europe`, `Indian`, `Mexico`, `Pacific`, `US`, `UTC`, `GMT`). If the remaining path tail forms a valid IANA identifier according to `names_time_zone`, it extracts that tail as the canonical IANA zone name.
+  3. Unified resolution pipeline (`resolve_canonical_time_zone`): Checks Windows names first, then tests if the raw string is already a valid IANA zone via `names_time_zone`, and finally attempts unique solidus path extraction. Returns `Some(&str)` for resolved canonical IANA names, or `None` if unresolvable.
+  4. Inbound parser integration: `stated_zones` and `read_start` utilize canonical resolution to populate `event.time_zone` with clean IANA identifiers, avoiding dangling custom zone references on import.
+  5. In contrast, differential oracles or naive parsers reject Windows timezone strings and vendor-prefixed solidus paths as unrecognized, falling back to floating local time or failing import entirely.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.3.1 permits globally unique TZID identifiers prefixed with a solidus. RFC 8984 §1.4.9 requires `timeZone` to be either an IANA Time Zone Database name or a solidus-prefixed custom identifier defined in `timeZones`.
+  2. Resolving Windows names and vendor-prefixed solidus paths to canonical IANA names enables seamless interoperability between Microsoft Exchange exports and Evolution Data Server.
+- **Adjudication**:
+  Conforming specification boundary and enterprise timezone resolution pipeline. Translates Windows registry timezone display names via CLDR tables, extracts canonical IANA path tails from globally unique solidus TZIDs, and unifies zone resolution across parser stages.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.154 Divergence 154: `read_alert` and `read_alerts`: Display VALARM Ingestion, Strict ACTION Filtering, Offset Trigger Parsing, and Positional Map Key Synthesis (`a1`, `a2`)
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.6 and RFC 9074 §6 specify `VALARM` subcomponents, while RFC 8984 §4.5 models reminders as an `alerts` map. In `jmap-ical`:
+  1. Strict action filtering: `read_alert` compares `ACTION` against `DISPLAY` case-insensitively (`action.eq_ignore_ascii_case("DISPLAY")`). Audio (`ACTION:AUDIO`), email (`ACTION:EMAIL`), and procedural alarms are discarded cleanly, conforming to RFC 8984's display-only reminder architecture.
+  2. Relative offset trigger parsing: Ingests `TRIGGER` values via `stated_offset`. Negative durations (e.g. `-PT15M` for reminders before start) map to `@type: "OffsetTrigger"` with a negative duration string. `RELATED=START` (or parameter omission) defaults to start-relative reminders (omitting `relativeTo`). `RELATED=END` sets `"relativeTo": "end"`. Non-standard or non-offset triggers return `None` and are discarded.
+  3. Stable map key preservation and synthesis: If a `VALARM` carries an RFC 9074 §6 `UID` conforming to RFC 8984 `Id` grammar via `names_map_entry`, that UID is preserved as the alert map key. For nameless alarms (such as those emitted with `X-EVOLUTION-ALARM-UID` or legacy CalDAV clients), `read_alerts` synthesizes deterministic positional keys (`a1`, `a2`, ...), actively skipping any keys already claimed by explicit UIDs to prevent key collisions.
+  4. Empty map suppression: If a `VEVENT` contains no readable display alarms (e.g. only audio alarms or malformed triggers), `read_alerts` returns `None` rather than an empty map (`{}`), preventing spurious patch generation during round-trip synchronization.
+  5. In contrast, differential oracles or permissive parsers often ingest non-display alarms with invalid `@type` actions, approximate absolute triggers as floating offsets, or generate non-deterministic random UUID map keys that invalidate sync caches on every pass.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §4.5 restricts alerts to display notifications. RFC 9074 §6 establishes `UID` as the stable identifier for `VALARM` components.
+  2. Positional key synthesis (`a1`, `a2`, ...) ensures that appointments edited across Evolution sessions maintain deterministic alert identities without churning JMAP object patches.
+- **Adjudication**:
+  Conforming specification boundary and alert ingestion robustness. Enforces DISPLAY action filtering, validates relative offset triggers, preserves explicit UIDs while synthesizing collision-free positional keys for nameless alarms, and suppresses empty alert maps.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.155 Divergence 155: `read_start`, `period_length`, and `read_overrides`: RDATE Period Duration Calculation (`VALUE=PERIOD`), EXDATE Contradiction Precedence, and Detached Instance Priority
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.5.2 permits `RDATE` entries with `VALUE=PERIOD`, specifying both start and end or duration (e.g. `19970101T180000Z/PT3H` or `19970101T180000Z/19970101T210000Z`). RFC 5545 §3.8.5.1 specifies `EXDATE` for excluded instances. In `jmap-ical`:
+  1. Period duration calculation (`period_length`): Splits period strings on `/`. If the second token is an explicit ISO duration (`P...`), it validates via `stated_duration`. If it is an ending date-time, it calculates the wall-clock second delta (`end - start`) and formats it via `to_duration`. If the resulting duration matches the master series duration, it emits an empty patch (`{}`); otherwise, it records an override patch (`{"duration": "<duration>"}`).
+  2. Contradiction ordering: In `read_overrides`, `EXDATE` entries are evaluated after `RDATE` entries. If the same timestamp appears in both `RDATE` and `EXDATE`, the exclusion wins per RFC 5545 §3.8.5.1 (`overrides.insert(date, json!({"excluded": true}))`), preventing phantom occurrences from being scheduled.
+  3. Detached instance precedence: Detached `VEVENT` components carrying `RECURRENCE-ID` are processed last, overriding any earlier `RDATE` or `EXDATE` entry for that instant with the specific instance patch.
+  4. Range exclusion (`RANGE=THISANDFUTURE`): Detached components carrying `RANGE=THISANDFUTURE` (RFC 5545 §3.2.13) are skipped cleanly rather than misapplied as a single-instance override, preventing partial range corruption.
+  5. In contrast, differential oracles or rigid parsers fail on `VALUE=PERIOD` RDATE properties, allow RDATE to resurrect an EXDATE-excluded occurrence, or corrupt recurrence sets when encountering `THISANDFUTURE`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.8.5.1 specifies that `EXDATE` takes precedence over recurrence rules and dates. RFC 5545 §3.8.5.2 defines period syntax for recurrence dates.
+  2. Calculating period durations into override patches allows Evolution Data Server to accurately represent instances with custom durations without desynchronizing the recurrence series.
+- **Adjudication**:
+  Conforming specification boundary and recurrence override fidelity. Calculates period durations for `VALUE=PERIOD` RDATEs, enforces EXDATE precedence over RDATE, prioritizes detached VEVENT overrides, and skips unsupported THISANDFUTURE ranges.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.

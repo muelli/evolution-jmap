@@ -13,8 +13,8 @@ use jmap_ical::{
     ICalError, MAX_DEPTH, OVERRIDE_PROPERTIES, busy_periods_to_vfreebusy, defines_time_zone,
     event_to_ical, free_busy_type, ical_to_event, maps_alerts, maps_keyword, maps_locations,
     maps_recurrence_override, maps_recurrence_rule, maps_time_zone, maps_virtual_locations,
-    names_time_zone, prune_time_zones, sends_recurrence_override, time_zone_definition,
-    unique_tzid_to_iana, unstateable_until, windows_time_zone_to_iana,
+    names_time_zone, prune_time_zones, resolve_canonical_time_zone, sends_recurrence_override,
+    time_zone_definition, unique_tzid_to_iana, unstateable_until, windows_time_zone_to_iana,
 };
 use jmap_proto::calendars::{CalendarEvent, NDay, RecurrenceRule};
 use jmap_proto::principals::BusyPeriod;
@@ -26978,5 +26978,445 @@ END:VCALENDAR\r\n"
         rule_neg.until.as_deref(),
         Some("2026-04-05T14:00:00"),
         "negative month day evaluates to last day of month"
+    );
+}
+
+#[test]
+fn differential_oracle_shows_without_time_all_day_gating_and_override_consistency() {
+    // Divergence 152 against Stalwart differential oracle:
+    // shows_without_time and instance_shows_without_time: All-Day Event DATE vs DATE-TIME Serialization Gating,
+    // Midnight Alignment, Whole-Day Duration Verification, and Override Consistency.
+
+    // 1. Valid all-day event: show_without_time=true, no timezone, start at midnight, duration P1D
+    let ev = CalendarEvent {
+        uid: Some("all-day-valid-152".to_owned()),
+        title: Some("All Day Meeting".to_owned()),
+        start: Some("2026-06-01T00:00:00".to_owned()),
+        show_without_time: Some(true),
+        duration: Some("P1D".to_owned()),
+        ..CalendarEvent::default()
+    };
+
+    let ics = event_to_ical(&ev);
+    assert!(
+        ics.contains("DTSTART;VALUE=DATE:20260601\r\n"),
+        "conforming all-day event emits VALUE=DATE"
+    );
+
+    // 2. Non-midnight start falls back to timed DATE-TIME
+    let mut ev_non_midnight = ev.clone();
+    ev_non_midnight.start = Some("2026-06-01T09:00:00".to_owned());
+    let ics_nm = event_to_ical(&ev_non_midnight);
+    assert!(
+        ics_nm.contains("DTSTART:20260601T090000\r\n"),
+        "non-midnight start falls back to timed representation"
+    );
+    assert!(
+        !ics_nm.contains("VALUE=DATE"),
+        "non-midnight event must not emit VALUE=DATE"
+    );
+
+    // 3. Timezone present falls back to timed DATE-TIME because RFC 5545 §3.2.19 forbids TZID on DATE
+    let mut ev_zoned = ev.clone();
+    ev_zoned.time_zone = Some("Europe/Berlin".to_owned());
+    let ics_zoned = event_to_ical(&ev_zoned);
+    assert!(
+        ics_zoned.contains("DTSTART;TZID=Europe/Berlin:20260601T000000\r\n"),
+        "zoned event falls back to timed representation"
+    );
+    assert!(
+        !ics_zoned.contains("VALUE=DATE"),
+        "zoned event must not emit VALUE=DATE"
+    );
+
+    // 4. Non-whole-day duration falls back to timed representation
+    let mut ev_timed_dur = ev.clone();
+    ev_timed_dur.duration = Some("PT4H".to_owned());
+    let ics_dur = event_to_ical(&ev_timed_dur);
+    assert!(
+        ics_dur.contains("DTSTART:20260601T000000\r\n"),
+        "non-whole-day duration falls back to timed representation"
+    );
+
+    // 5. Recurrence rule with time-of-day part (BYHOUR) falls back to timed representation
+    let mut ev_rrule_hour = ev.clone();
+    ev_rrule_hour.recurrence_rule = Some(RecurrenceRule {
+        frequency: "DAILY".to_owned(),
+        by_hour: Some(vec![10]),
+        ..RecurrenceRule::default()
+    });
+    let ics_rh = event_to_ical(&ev_rrule_hour);
+    assert!(
+        ics_rh.contains("DTSTART:20260601T000000\r\n"),
+        "rule with BYHOUR falls back to timed representation"
+    );
+
+    // 6. Recurrence override with non-midnight start falls back to timed representation
+    let mut ev_override = ev.clone();
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        "2026-06-02T00:00:00".to_owned(),
+        json!({
+            "start": "2026-06-02T14:00:00"
+        }),
+    );
+    ev_override.recurrence_overrides = Some(overrides);
+    let ics_ov = event_to_ical(&ev_override);
+    assert!(
+        ics_ov.contains("DTSTART:20260601T000000\r\n"),
+        "event with non-midnight override falls back to timed representation"
+    );
+}
+
+#[test]
+fn differential_oracle_windows_and_unique_tzid_to_canonical_iana_resolution() {
+    // Divergence 153 against Stalwart differential oracle:
+    // windows_time_zone_to_iana, unique_tzid_to_iana, and resolve_canonical_time_zone:
+    // CLDR Windows Time Zone Mapping, Globally Unique Solidus TZID Tail Extraction, and Canonical IANA Zone Resolution.
+
+    // 1. Windows time zone mapping via CLDR table
+    assert_eq!(
+        windows_time_zone_to_iana("W. Europe Standard Time"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        windows_time_zone_to_iana("FLE Standard Time"),
+        Some("Europe/Kyiv")
+    );
+    assert_eq!(
+        windows_time_zone_to_iana("Pacific Standard Time"),
+        Some("America/Los_Angeles")
+    );
+    assert_eq!(
+        windows_time_zone_to_iana("\"Russian Standard Time\""),
+        Some("Europe/Moscow"),
+        "quoted Windows zone name trimmed and resolved"
+    );
+    assert_eq!(
+        windows_time_zone_to_iana("Unknown Nonexistent Standard Time"),
+        None
+    );
+
+    // 2. Globally unique solidus-prefixed TZIDs tail extraction
+    assert_eq!(
+        unique_tzid_to_iana("/freeassociation.sourceforge.net/Europe/Berlin"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        unique_tzid_to_iana("/mozilla.org/20070129_1/America/New_York"),
+        Some("America/New_York")
+    );
+    assert_eq!(
+        unique_tzid_to_iana("/citadel.org/20080225_1/Asia/Tokyo"),
+        Some("Asia/Tokyo")
+    );
+    assert_eq!(
+        unique_tzid_to_iana("Europe/Berlin"),
+        None,
+        "non-solidus string rejected by unique_tzid_to_iana"
+    );
+    assert_eq!(
+        unique_tzid_to_iana("/custom/MyLocalZone"),
+        None,
+        "solidus TZID without recognized IANA area rejected"
+    );
+
+    // 3. Unified resolve_canonical_time_zone pipeline
+    assert_eq!(
+        resolve_canonical_time_zone("W. Europe Standard Time"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        resolve_canonical_time_zone("/freeassociation.sourceforge.net/Europe/Berlin"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        resolve_canonical_time_zone("Europe/Berlin"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(resolve_canonical_time_zone("/custom/Unresolvable"), None);
+
+    // 4. Inbound parsing with Windows and unique solidus TZIDs
+    // Windows timezone with VTIMEZONE component resolved via stated_zones
+    let ics_win_vtimezone = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:W. Europe Standard Time\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:win-tz-153\r\n\
+DTSTART;TZID=\"W. Europe Standard Time\":20260601T100000\r\n\
+SUMMARY:Windows Appointment\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_win_vt = ical_to_event(ics_win_vtimezone).expect("parse Windows timezone event");
+    assert_eq!(
+        ev_win_vt.time_zone.as_deref(),
+        Some("Europe/Berlin"),
+        "Windows timezone in VTIMEZONE resolved to canonical IANA identifier"
+    );
+
+    // Bare Windows timezone without VTIMEZONE preserved unchanged for sync layer
+    let ics_win_bare = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:win-bare-153\r\n\
+DTSTART;TZID=\"W. Europe Standard Time\":20260601T100000\r\n\
+SUMMARY:Bare Windows Appointment\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_win_bare = ical_to_event(ics_win_bare).expect("parse bare Windows timezone event");
+    assert_eq!(
+        ev_win_bare.time_zone.as_deref(),
+        Some("W. Europe Standard Time"),
+        "bare Windows timezone without VTIMEZONE returned unchanged"
+    );
+
+    let ics_unique = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:unique-tz-153\r\n\
+DTSTART;TZID=\"/freeassociation.sourceforge.net/Europe/Berlin\":20260601T100000\r\n\
+SUMMARY:Unique Solidus Appointment\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_unique = ical_to_event(ics_unique).expect("parse unique solidus timezone event");
+    assert_eq!(
+        ev_unique.time_zone.as_deref(),
+        Some("Europe/Berlin"),
+        "unique solidus TZID resolved to canonical IANA identifier"
+    );
+}
+
+#[test]
+fn differential_oracle_read_alerts_display_filtering_and_positional_key_synthesis() {
+    // Divergence 154 against Stalwart differential oracle:
+    // read_alert and read_alerts: Display VALARM Ingestion, Strict ACTION Filtering,
+    // Offset Trigger Parsing, and Positional Map Key Synthesis (a1, a2).
+
+    let ics = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:alerts-event-154\r\n\
+DTSTART:20260601T100000Z\r\n\
+SUMMARY:Meeting with Alarms\r\n\
+BEGIN:VALARM\r\n\
+UID:explicit-alarm-uid\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Reminder 1\r\n\
+TRIGGER:-PT15M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:End Reminder\r\n\
+TRIGGER;RELATED=END:PT10M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:AUDIO\r\n\
+TRIGGER:-PT5M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:EMAIL\r\n\
+DESCRIPTION:Email notification\r\n\
+SUMMARY:Meeting alert\r\n\
+TRIGGER:-PT30M\r\n\
+END:VALARM\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Nameless reminder 2\r\n\
+TRIGGER:-PT1H\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse event with alarms");
+    let alerts = ev.alerts.expect("alerts map present");
+
+    // Explicit UID preserved as map key
+    let alert1 = alerts
+        .get("explicit-alarm-uid")
+        .expect("explicit UID alert present");
+    assert_eq!(
+        alert1.get("@type"),
+        Some(&Value::String("Alert".to_owned()))
+    );
+    assert_eq!(
+        alert1.get("action"),
+        Some(&Value::String("display".to_owned()))
+    );
+    let trigger1 = alert1.get("trigger").expect("trigger present");
+    assert_eq!(
+        trigger1.get("@type"),
+        Some(&Value::String("OffsetTrigger".to_owned()))
+    );
+    assert_eq!(
+        trigger1.get("offset"),
+        Some(&Value::String("-PT15M".to_owned()))
+    );
+    assert_eq!(
+        trigger1.get("relativeTo"),
+        None,
+        "start relative omits relativeTo"
+    );
+
+    // First nameless alarm gets synthesized positional key "a1"
+    let alert2 = alerts.get("a1").expect("first nameless alert assigned a1");
+    let trigger2 = alert2.get("trigger").expect("trigger present");
+    assert_eq!(
+        trigger2.get("offset"),
+        Some(&Value::String("PT10M".to_owned()))
+    );
+    assert_eq!(
+        trigger2.get("relativeTo"),
+        Some(&Value::String("end".to_owned()))
+    );
+
+    // Second nameless alarm gets synthesized positional key "a2"
+    let alert3 = alerts.get("a2").expect("second nameless alert assigned a2");
+    let trigger3 = alert3.get("trigger").expect("trigger present");
+    assert_eq!(
+        trigger3.get("offset"),
+        Some(&Value::String("-PT1H".to_owned()))
+    );
+
+    // Exactly 3 display alerts present (AUDIO and EMAIL alarms dropped)
+    assert_eq!(alerts.len(), 3, "non-display alarms filtered out");
+
+    // Event with only audio alarm results in None (empty map suppressed)
+    let ics_audio_only = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:audio-only-154\r\n\
+DTSTART:20260601T100000Z\r\n\
+SUMMARY:Audio Only\r\n\
+BEGIN:VALARM\r\n\
+ACTION:AUDIO\r\n\
+TRIGGER:-PT5M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_audio = ical_to_event(ics_audio_only).expect("parse audio only event");
+    assert!(ev_audio.alerts.is_none(), "empty alerts map omitted");
+}
+
+#[test]
+fn differential_oracle_rdate_period_duration_and_exdate_contradiction_precedence() {
+    // Divergence 155 against Stalwart differential oracle:
+    // read_start, period_length, and read_overrides: RDATE Period Duration Calculation (VALUE=PERIOD),
+    // EXDATE Contradiction Precedence, and Detached Instance Priority.
+
+    let ics = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:rdate-period-155\r\n\
+DTSTART:20260601T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Series Meeting\r\n\
+RDATE;VALUE=PERIOD:20260602T100000Z/PT2H\r\n\
+RDATE;VALUE=PERIOD:20260603T100000Z/20260603T130000Z\r\n\
+RDATE;VALUE=PERIOD:20260604T100000Z/PT1H\r\n\
+RDATE:20260605T100000Z\r\n\
+EXDATE:20260605T100000Z\r\n\
+EXDATE:20260606T100000Z\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:rdate-period-155\r\n\
+RECURRENCE-ID:20260606T100000Z\r\n\
+DTSTART:20260606T100000Z\r\n\
+SUMMARY:Detached Override\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:rdate-period-155\r\n\
+RECURRENCE-ID;RANGE=THISANDFUTURE:20260607T100000Z\r\n\
+DTSTART:20260607T100000Z\r\n\
+SUMMARY:Range Override\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse event with rdate periods and overrides");
+    let overrides = ev
+        .recurrence_overrides
+        .expect("recurrence overrides present");
+
+    // 1. RDATE with explicit duration period (PT2H vs series PT1H)
+    let ov_period_dur = overrides
+        .get("2026-06-02T10:00:00")
+        .expect("period duration override present");
+    assert_eq!(
+        ov_period_dur.get("duration"),
+        Some(&Value::String("PT2H".to_owned())),
+        "explicit duration in period creates duration override"
+    );
+
+    // 2. RDATE with end date period (10:00 to 13:00 = PT3H)
+    let ov_period_end = overrides
+        .get("2026-06-03T10:00:00")
+        .expect("end date period override present");
+    assert_eq!(
+        ov_period_end.get("duration"),
+        Some(&Value::String("PT3H".to_owned())),
+        "wall-clock delta in period creates duration override"
+    );
+
+    // 3. RDATE with period matching series duration (PT1H) produces empty patch
+    let ov_period_same = overrides
+        .get("2026-06-04T10:00:00")
+        .expect("same duration period override present");
+    assert_eq!(
+        ov_period_same,
+        &Value::Object(Default::default()),
+        "period matching series duration produces empty override patch"
+    );
+
+    // 4. Contradiction: 2026-06-05 is in both RDATE and EXDATE. EXDATE wins!
+    let ov_contradiction = overrides
+        .get("2026-06-05T10:00:00")
+        .expect("contradiction date present");
+    assert_eq!(
+        ov_contradiction.get("excluded"),
+        Some(&Value::Bool(true)),
+        "EXDATE takes precedence over RDATE for identical instant"
+    );
+
+    // 5. Detached VEVENT precedence: 2026-06-06 is in EXDATE, but detached component takes precedence!
+    let ov_detached = overrides
+        .get("2026-06-06T10:00:00")
+        .expect("detached override present");
+    assert_eq!(
+        ov_detached.get("title"),
+        Some(&Value::String("Detached Override".to_owned())),
+        "detached VEVENT takes precedence over EXDATE"
+    );
+    assert_eq!(
+        ov_detached.get("excluded"),
+        None,
+        "detached VEVENT removes excluded flag"
+    );
+
+    // 6. RANGE=THISANDFUTURE is skipped cleanly
+    assert!(
+        !overrides.contains_key("2026-06-07T10:00:00"),
+        "RANGE=THISANDFUTURE component skipped cleanly"
     );
 }
