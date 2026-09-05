@@ -31723,3 +31723,331 @@ END:VCALENDAR\r\n";
         "unparseable BYHOUR token produces sentinel u32::MAX"
     );
 }
+
+#[test]
+fn differential_oracle_maps_recurrence_rule_gating_and_part_ordering() {
+    // Divergence 204 against Stalwart differential oracle:
+    // maps_recurrence_rule, unstateable_until, and rule_to_rrule:
+    // Outbound Recurrence Rule Validation Gating, Libical Part Ordering,
+    // Default Value Suppression (INTERVAL=1), and Unstateable UNTIL Endpoint Diagnostics.
+
+    // 1. Basic conforming rule passes validation
+    let mut rule = RecurrenceRule {
+        rule_type: Some("RecurrenceRule".to_owned()),
+        frequency: "weekly".to_owned(),
+        interval: Some(2),
+        rscale: None,
+        skip: None,
+        first_day_of_week: Some("mo".to_owned()),
+        by_day: Some(vec![NDay::new("tu")]),
+        by_month_day: None,
+        by_month: None,
+        by_year_day: None,
+        by_week_no: None,
+        by_hour: None,
+        by_minute: None,
+        by_second: None,
+        by_set_position: None,
+        count: Some(5),
+        until: None,
+        extra: Default::default(),
+    };
+    assert!(maps_recurrence_rule(&rule));
+
+    // 2. Extra fields, rscale, or skip cause maps_recurrence_rule to refuse
+    rule.extra.insert("customField".to_owned(), json!(true));
+    assert!(!maps_recurrence_rule(&rule));
+    rule.extra.clear();
+
+    rule.rscale = Some("hebrew".to_owned());
+    assert!(!maps_recurrence_rule(&rule));
+    rule.rscale = None;
+
+    rule.skip = Some("forward".to_owned());
+    assert!(!maps_recurrence_rule(&rule));
+    rule.skip = None;
+
+    // 3. unstateable_until isolates unparseable UNTIL date-times
+    rule.until = Some("2026-12-31T23:59:59".to_owned());
+    assert_eq!(unstateable_until(&rule), None);
+    assert!(maps_recurrence_rule(&rule));
+
+    rule.until = Some("invalid-until-format".to_owned());
+    assert_eq!(unstateable_until(&rule), Some("invalid-until-format"));
+    assert!(!maps_recurrence_rule(&rule));
+
+    // 4. Libical part ordering and INTERVAL=1 suppression in event_to_ical
+    let event_interval_1 = CalendarEvent {
+        id: Some("interval-1".into()),
+        start: Some("2026-09-05T10:00:00".to_owned()),
+        recurrence_rule: Some(RecurrenceRule {
+            frequency: "daily".to_owned(),
+            interval: Some(1),
+            ..RecurrenceRule::default()
+        }),
+        ..CalendarEvent::default()
+    };
+    let ics_1 = event_to_ical(&event_interval_1);
+    assert!(
+        ics_1.contains("RRULE:FREQ=DAILY"),
+        "FREQ=DAILY emitted: {ics_1}"
+    );
+    assert!(
+        !ics_1.contains("INTERVAL="),
+        "default INTERVAL=1 is suppressed: {ics_1}"
+    );
+
+    let event_interval_3 = CalendarEvent {
+        id: Some("interval-3".into()),
+        start: Some("2026-09-05T10:00:00".to_owned()),
+        recurrence_rule: Some(RecurrenceRule {
+            frequency: "daily".to_owned(),
+            interval: Some(3),
+            ..RecurrenceRule::default()
+        }),
+        ..CalendarEvent::default()
+    };
+    let ics_3 = event_to_ical(&event_interval_3);
+    assert!(
+        ics_3.contains("RRULE:FREQ=DAILY;INTERVAL=3"),
+        "non-default INTERVAL=3 is emitted: {ics_3}"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_override_safety_gating_and_field_validation() {
+    // Divergence 205 against Stalwart differential oracle:
+    // maps_recurrence_override, sends_recurrence_override, override_maps_by,
+    // maps_override_field, and draws_override_field:
+    // Recurrence Override Safety Gating, Isolated vs Coordinated Custom TimeZone Resolution,
+    // Excluded Occurrence Purity, and Field Mutation Validation.
+
+    let series = CalendarEvent {
+        id: Some("series-1".into()),
+        start: Some("2026-09-05T10:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        time_zones: Some(BTreeMap::from([(CUSTOM_TZID.to_owned(), custom_zone())])),
+        ..CalendarEvent::default()
+    };
+
+    let id = "2026-09-12T10:00:00";
+
+    // 1. Excluded occurrence purity: excluded: true alone is valid
+    let pure_excluded = json!({"excluded": true});
+    assert!(maps_recurrence_override(&series, id, &pure_excluded));
+
+    // Excluded with extraneous fields is rejected
+    let polluted_excluded = json!({
+        "excluded": true,
+        "title": "Canceled Meeting"
+    });
+    assert!(!maps_recurrence_override(&series, id, &polluted_excluded));
+
+    // 2. Standard IANA timeZone in override patch is accepted by both
+    let iana_patch = json!({"timeZone": "America/New_York"});
+    assert!(maps_recurrence_override(&series, id, &iana_patch));
+    assert!(sends_recurrence_override(&series, id, &iana_patch));
+
+    // 3. Custom solidus timeZone: refused by isolated maps_recurrence_override,
+    // accepted by sends_recurrence_override when series defines it
+    let custom_patch = json!({"timeZone": CUSTOM_TZID});
+    assert!(
+        !maps_recurrence_override(&series, id, &custom_patch),
+        "isolated override patch cannot carry custom timeZones definition"
+    );
+    assert!(
+        sends_recurrence_override(&series, id, &custom_patch),
+        "coordinated sync permits custom timezone defined on master series"
+    );
+
+    // 4. Undefined custom timezone is rejected even by sends_recurrence_override
+    let undefined_patch = json!({"timeZone": "/unknown/zone"});
+    assert!(!sends_recurrence_override(&series, id, &undefined_patch));
+
+    // 5. Empty text properties rejected, null text removals accepted
+    let empty_title_patch = json!({"title": ""});
+    assert!(!maps_recurrence_override(&series, id, &empty_title_patch));
+
+    let null_title_patch = json!({"title": null});
+    assert!(maps_recurrence_override(&series, id, &null_title_patch));
+}
+
+#[test]
+fn differential_oracle_by_day_and_by_month_day_frequency_gating() {
+    // Divergence 206 against Stalwart differential oracle:
+    // by_day_part, by_day_token, counts_within_a_period, by_month_day_part, and month_day_token:
+    // Outbound BYDAY and BYMONTHDAY Recurrence Rule Part Generation:
+    // Ordinal Frequency Gating (MONTHLY/YEARLY), Weekday All-or-Nothing Tokenization,
+    // and Weekly BYMONTHDAY Prohibition.
+
+    // 1. BYDAY with ordinal is valid under MONTHLY or YEARLY
+    let monthly_with_ordinal = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_day: Some(vec![NDay {
+            nth_of_period: Some(2),
+            ..NDay::new("mo")
+        }]),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&monthly_with_ordinal));
+
+    // 2. BYDAY with ordinal is prohibited under WEEKLY (RFC 5545 Section 3.3.10)
+    let weekly_with_ordinal = RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        by_day: Some(vec![NDay {
+            nth_of_period: Some(2),
+            ..NDay::new("mo")
+        }]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&weekly_with_ordinal),
+        "BYDAY ordinals forbidden under WEEKLY frequency"
+    );
+
+    // 3. Ordinal 0 is rejected (RFC 8984 Section 4.3.3 and RFC 5545 ordwk 1-based)
+    let zero_ordinal = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_day: Some(vec![NDay {
+            nth_of_period: Some(0),
+            ..NDay::new("mo")
+        }]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&zero_ordinal));
+
+    // 4. BYMONTHDAY is valid under MONTHLY or YEARLY, with positive and negative day bounds
+    let valid_mday = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_month_day: Some(vec![15, -1]),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&valid_mday));
+
+    // 5. BYMONTHDAY is prohibited under WEEKLY (RFC 5545 Section 3.3.10)
+    let weekly_with_mday = RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        by_month_day: Some(vec![15]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&weekly_with_mday),
+        "BYMONTHDAY forbidden under WEEKLY frequency"
+    );
+
+    // 6. Day 0 in BYMONTHDAY is rejected
+    let zero_mday = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_month_day: Some(vec![0]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&zero_mday));
+
+    // 7. Out-of-bounds day in BYMONTHDAY is rejected (> 31 or < -31)
+    let oob_mday = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_month_day: Some(vec![32]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&oob_mday));
+}
+
+#[test]
+fn differential_oracle_by_year_day_by_week_no_and_by_month_annual_constraints() {
+    // Divergence 207 against Stalwart differential oracle:
+    // by_year_day_part, year_day_token, by_week_no_part, week_no_token, by_month_part, and month_token:
+    // Outbound BYYEARDAY, BYWEEKNO, and BYMONTH Recurrence Rule Part Generation:
+    // Annual Frequency Invariant Enforcement, Week Number Yearly Restriction,
+    // and Canonical Month String Normalization.
+
+    // 1. BYYEARDAY is valid under YEARLY, HOURLY, MINUTELY, SECONDLY
+    let yearly_yday = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_year_day: Some(vec![100, -1]),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&yearly_yday));
+
+    // BYYEARDAY is prohibited under DAILY, WEEKLY, MONTHLY (holds_a_year)
+    let monthly_yday = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_year_day: Some(vec![100]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&monthly_yday),
+        "BYYEARDAY forbidden under MONTHLY frequency"
+    );
+
+    // BYYEARDAY with 0 is rejected
+    let zero_yday = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_year_day: Some(vec![0]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&zero_yday));
+
+    // 2. BYWEEKNO is strictly restricted to YEARLY frequency
+    let yearly_week = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_week_no: Some(vec![20, -1]),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&yearly_week));
+
+    let monthly_week = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_week_no: Some(vec![20]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&monthly_week),
+        "BYWEEKNO forbidden under MONTHLY frequency"
+    );
+
+    // BYWEEKNO with 0 is rejected
+    let zero_week = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_week_no: Some(vec![0]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&zero_week));
+
+    // 3. BYMONTH requires exact canonical numbers 1..=12 without leading zeros
+    let valid_month = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_month: Some(vec!["3".to_owned(), "12".to_owned()]),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&valid_month));
+
+    // Leading zero in BYMONTH is rejected (causes round-trip diff noise with libical)
+    let leading_zero_month = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_month: Some(vec!["03".to_owned()]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&leading_zero_month),
+        "leading zeros in BYMONTH rejected"
+    );
+
+    // Non-Gregorian leap month without RSCALE is rejected
+    let leap_month = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_month: Some(vec!["5L".to_owned()]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&leap_month),
+        "unmodeled leap month token rejected"
+    );
+
+    // Out-of-bounds month (> 12 or 0) is rejected
+    let oob_month = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_month: Some(vec!["13".to_owned()]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&oob_month));
+}
