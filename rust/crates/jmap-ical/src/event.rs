@@ -165,14 +165,14 @@ const DISPLAY_ALERT: (&str, &str) = ("display", "DISPLAY");
 pub const PRODID: &str = "-//evolution-jmap//JMAP calendar backend//EN";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Component {
-    component_type: ICalendarComponentType,
-    entries: Vec<ICalendarEntry>,
-    children: Vec<Component>,
+pub struct Component {
+    pub component_type: ICalendarComponentType,
+    pub entries: Vec<ICalendarEntry>,
+    pub children: Vec<Component>,
 }
 
 impl Component {
-    pub(crate) fn new(name: &str) -> Self {
+    pub fn new(name: &str) -> Self {
         let component_type = ICalendarComponentType::parse(name.as_bytes())
             .unwrap_or_else(|| ICalendarComponentType::Other(name.to_ascii_uppercase()));
         Self {
@@ -182,12 +182,12 @@ impl Component {
         }
     }
 
-    pub(crate) fn with(mut self, entry: ICalendarEntry) -> Self {
+    pub fn with(mut self, entry: ICalendarEntry) -> Self {
         self.entries.push(entry);
         self
     }
 
-    fn with_child(mut self, child: Component) -> Self {
+    pub fn with_child(mut self, child: Component) -> Self {
         self.children.push(child);
         self
     }
@@ -203,7 +203,7 @@ impl Component {
         write!(out, "END:{}\r\n", self.component_type.as_str()).unwrap();
     }
 
-    pub(crate) fn to_ics(&self) -> String {
+    pub fn to_ics(&self) -> String {
         let mut out = String::new();
         self.write_into(&mut out);
         fold_overlong_lines(out)
@@ -4203,7 +4203,7 @@ pub fn to_ical_date_time(local: &str) -> Option<String> {
 /// but naming no real instant" (`"20261315T000000Z"`, month 13): the two get
 /// different treatment in [`rrule_to_rule`] and [`to_local_date_time`] means
 /// the latter either way, so this is the shape check factored out of it.
-fn date_time_digits(value: &str) -> Option<(&str, &str)> {
+pub fn date_time_digits(value: &str) -> Option<(&str, &str)> {
     let value = value.strip_suffix(['Z', 'z']).unwrap_or(value);
     let (date, time) = match value.split_once('T') {
         Some((date, time)) => (date, time),
@@ -4291,12 +4291,12 @@ pub fn days_in_month(year: u32, month: u32) -> u32 {
 /// `("1973-04-29T07:00:00", "-0500")` → `1973-04-29T02:00:00`: the instant a
 /// UTC date-time names, restated where the offset from UTC is fixed at
 /// `offset`.
-fn at_offset(utc: &str, offset: &str) -> Option<String> {
+pub fn at_offset(utc: &str, offset: &str) -> Option<String> {
     moved(utc, offset_seconds(offset)?)
 }
 
 /// The inverse: the UTC date-time a local time in a fixed-offset zone names.
-fn from_offset(local: &str, offset: &str) -> Option<String> {
+pub fn from_offset(local: &str, offset: &str) -> Option<String> {
     moved(local, -offset_seconds(offset)?)
 }
 
@@ -4323,7 +4323,7 @@ pub fn offset_seconds(offset: &str) -> Option<i64> {
 /// on the instant; and a result outside the four-digit years RFC 5545 §3.3.4
 /// admits is no date-time either format can state, so it is refused rather than
 /// written with a year no reader would parse.
-fn moved(local: &str, seconds: i64) -> Option<String> {
+pub fn moved(local: &str, seconds: i64) -> Option<String> {
     let (date, time) = local.split_once('T')?;
     let field = |value: Option<&str>| value?.parse::<i64>().ok();
     let (mut year, mut month, mut day) = (
@@ -4367,7 +4367,7 @@ fn moved(local: &str, seconds: i64) -> Option<String> {
 
 /// [`days_in_month`] on the signed fields [`moved`] carries, refusing the year
 /// that has stepped outside what a date-time can state rather than wrapping it.
-fn days_in_month_of(year: i64, month: i64) -> Option<i64> {
+pub fn days_in_month_of(year: i64, month: i64) -> Option<i64> {
     let length = days_in_month(u32::try_from(year).ok()?, u32::try_from(month).ok()?);
     (length > 0).then_some(i64::from(length))
 }

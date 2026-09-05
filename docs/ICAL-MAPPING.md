@@ -4417,5 +4417,75 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.220 Divergence 220: `entry_text`, `entry_texts`, `entry_raw_value`, `entry_param`, `entry_param_values`, `component_entry`, `component_entries`, and `component_text`: Inbound Component AST Property and Parameter Extraction: Case-Insensitive Name Matching, Comma-Separated Multi-Value Flattening, Raw String vs Structured Value Fallback, and Missing Parameter Gating
+
+- **Observed Behavior**:
+  Extracting properties and parameters from parsed iCalendar AST components requires robust case folding, text flattening across structured and raw values, multi-valued parameter collection, and graceful handling of absent keys. In `jmap-ical`:
+  1. Case-insensitive component and property lookup: `component_entry`, `component_entries`, and `component_text` search component entries by name using case-insensitive ASCII comparison (`eq_ignore_ascii_case`). Lookups succeed regardless of whether the inbound stream uses uppercase (`SUMMARY`), lowercase (`summary`), or mixed case (`Summary`).
+  2. Single text vs multi-text extraction: `entry_text` returns the primary string content of an entry, while `entry_texts` extracts comma-delimited tokens from multi-valued properties (such as `CATEGORIES:Engineering,Planning,Core`) into a flattened `Vec<String>`. Structured values like `ICalendarEntryValue::Text` and `ICalendarEntryValue::Texts` are normalized uniformly.
+  3. Case-insensitive parameter extraction: `entry_param` retrieves the first value of a specified parameter name ignoring case, while `entry_param_values` collects all values for repeated or multi-valued parameters (e.g. `TAG=alpha;TAG=beta`). Missing parameters safely evaluate to `None` or an empty slice rather than panicking.
+  4. Raw value fallback: `entry_raw_value` provides unparsed text access when structured deserialization is bypassed or custom extensions (`X-*`) are processed.
+  5. In contrast, differential oracles or naive parsers require strict uppercase property and parameter keys, fail to split multi-value text properties, return only the last parameter instance when multiple appear, or panic on missing parameter queries.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.1 defines property names, parameter names, and enumerated parameter values as case-insensitive. Section 3.1.2 defines multi-valued property value separation using commas.
+  2. Inbound iCalendar streams from heterogeneous CalDAV clients frequently vary in casing and parameter repetition. Providing robust AST extraction primitives prevents parser crashes and ensures consistent translation into JSCalendar objects.
+- **Adjudication**:
+  Conforming specification boundary and inbound AST extraction fidelity. Normalizes case across property and parameter lookups, supports structured and raw value extraction, flattens comma-separated multi-values, and handles repeated parameters gracefully.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.221 Divergence 221: `Component`, `make_entry`, `EntryExt`, `with_named_param`, `with_named_params`, `write_into`, and `to_ics`: Outbound iCalendar AST Construction: Hierarchical Component Assembly, Parameter Name/Value Wrapping, Dynamic Fallback to RFC 5545 Other Variants, and Stream CRLF Termination
+
+- **Observed Behavior**:
+  Constructing outbound iCalendar trees requires ergonomic builder APIs that assemble component hierarchies, attach properties with structured parameters, support RFC 5545 fallback types, and serialize cleanly to wire format. In `jmap-ical`:
+  1. Hierarchical component assembly: `Component` provides a fluent builder interface (`Component::new`, `with`, `with_child`) for nesting components such as `VALARM` or `VTIMEZONE` inside a parent `VEVENT` or `VCALENDAR`.
+  2. Parameter decoration with `EntryExt`: The `EntryExt` trait equips `ICalendarEntry` with fluent helpers (`with_named_param`, `with_named_params`) to append named parameters with automatic quoting where necessary, without manual byte manipulation.
+  3. Dynamic fallback to `Other` variants: `Component::new` parses standard component names via `ICalendarComponentType::parse`, but gracefully falls back to `ICalendarComponentType::Other(name.to_ascii_uppercase())` when encountering custom or non-standard component types (e.g. `X-CUSTOM-CONTAINER`), preserving extensibility.
+  4. Stream serialization and CRLF termination: `to_ics` formats the AST using `write_into`, enclosing child blocks within corresponding `BEGIN:` and `END:` delimiters and folding lines exceeding RFC 5545 octet limits with `\r\n` (CRLF) endings.
+  5. In contrast, differential oracles or static formatters reject non-standard component names, fail to quote parameter values containing colons or semicolons, or emit unbalanced `BEGIN`/`END` blocks when subcomponents are nested.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6 defines calendar components and their structural hierarchy. Section 3.2 defines property parameters and quoting rules.
+  2. Evolution and JMAP backends require modular component building to synthesize alarms, recurrence rules, and timezone definitions into a coherent RFC 5545 stream.
+- **Adjudication**:
+  Conforming specification boundary and AST serialization determinism. Assembles nested component trees, decorates entries with fluent parameter builders, falls back to `Other` for non-standard components, and emits valid folded CRLF streams.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.222 Divergence 222: `at_offset`, `from_offset`, `moved`, `days_in_month_of`, `offset_seconds`, and `utc_offset`: Wall-Clock Date-Time Arithmetic and UTC Offset Translation: Proleptic Gregorian Calendar Arithmetic, Month Boundary Rollover, Four-Digit Year Clamping (0000..=9999), and Negative Zero (-0000) UTC Offset Rejection
+
+- **Observed Behavior**:
+  Translating timestamps between UTC and local time zones with fixed offsets requires exact date-time arithmetic that handles month and year rollovers, leap years, and offset syntax validation. In `jmap-ical`:
+  1. UTC offset normalization and negative zero rejection: `utc_offset` validates offset strings matching `±HH:MM` or `±HHMM` formats. RFC 5545 Section 3.3.14 explicitly forbids negative zero (`-0000` or `-00:00`), which represents an unknown local offset in RFC 5322 but is invalid in iCalendar. `utc_offset` rejects `-0000` and out-of-range offsets (`> 23:59`), returning `None`.
+  2. Offset translation: `at_offset` converts UTC date-times to local representations by advancing by `offset_seconds`, while `from_offset` applies the negative offset to recover UTC.
+  3. Arithmetic rollover and leap year handling: `moved` executes proleptic Gregorian calendar date-time shifts with second-level precision. It correctly accounts for 28, 29, 30, and 31 day month boundaries, including quadrennial leap years (such as February 29 in 2024 vs February 28 in 2026), and rolls year boundaries backwards and forwards.
+  4. Four-digit year clamping: RFC 5545 Section 3.3.4 restricts year representations to four digits (`0000..=9999`). If arithmetic steps outside this range, `moved` and `days_in_month_of` return `None` rather than producing invalid five-digit or negative year strings.
+  5. In contrast, differential oracles or external time libraries accept `-0000` as valid zero, wrap around month boundaries improperly during day shifts, or emit out-of-spec five-digit years.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.4 (`DATE-TIME`), Section 3.3.14 (`UTC-OFFSET`), and RFC 8984 Section 1.4.2 define date-time formats and offset representations.
+  2. Fixed offset translations are required when generating recurrence instances and applying timezone transitions without heavy external time zone database lookups.
+- **Adjudication**:
+  Conforming specification boundary and calendar arithmetic precision. Enforces strict UTC offset syntax, rejects `-0000`, calculates exact leap-year month rollovers, and bounds year values to four digits.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.223 Divergence 223: `to_local_date_time`, `to_ical_date_time`, `to_utc_date_time`, `date_time_digits`, `strip`, `exists`, and `days_in_month`: Bi-directional Timestamp String Conversion and Existence Validation: Exact Digit Bounding, Gregorian Leap Year Validation, Leap Second (60) Tolerance, and Malformed Date-Time String Rejection
+
+- **Observed Behavior**:
+  Converting between ISO 8601 / RFC 3339 strings used by JSCalendar and compact iCalendar date-time strings requires bidirectional format mapping and date-time validation. In `jmap-ical`:
+  1. Structure and digit extraction: `date_time_digits` splits timestamp strings into 8-digit date and 6-digit time components, stripping optional `Z` markers. If only a date is provided (e.g. `20260115`), time defaults to `000000`. Malformed inputs with unexpected lengths or characters are rejected.
+  2. Instant existence validation: `exists` validates that the parsed digits represent a real Gregorian calendar instant. Month numbers must be between 1 and 12, days must fall within `days_in_month(year, month)` (accounting for century leap rules), hours must be `0..=23`, and minutes must be `0..=59`.
+  3. Leap second tolerance: RFC 5545 Section 3.3.4 explicitly permits second value `60` to accommodate positive leap seconds. `exists` admits `second <= 60`, but rejects `second >= 61`.
+  4. Bidirectional conversion: `to_local_date_time` translates `YYYYMMDDTHHMMSS[Z]` to `YYYY-MM-DDTHH:MM:SS`. `to_ical_date_time` converts hyphenated local timestamps back to compact `YYYYMMDDTHHMMSS`. `to_utc_date_time` requires a terminal `Z` and emits canonical compact Zulu format `YYYYMMDDTHHMMSSZ`. Non-existent dates (such as `2026-02-29`) are strictly rejected during conversion.
+  5. Separator stripping: `strip` strips delimiter characters (`-`, `:`) with target length gating, preventing malformed digit clusters from passing through.
+  6. In contrast, differential oracles or permissive parsers fail to validate calendar existence (accepting invalid dates like February 29 on non-leap years), reject leap second 60, or allow non-UTC strings into `to_utc_date_time`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.4 and Section 3.3.5 govern `DATE-TIME` and `DATE`. RFC 8984 Section 1.4.1 and Section 1.4.2 define JSCalendar timestamp representations.
+  2. Pinned digit bounding and calendar existence validation prevent corrupted timestamps from entering Evolution's calendar database or being synced over JMAP.
+- **Adjudication**:
+  Conforming specification boundary and date-time format conversion determinism. Validates Gregorian calendar existence, supports leap second 60, enforces exact digit structure, and ensures bidirectional fidelity between RFC 5545 and RFC 8984.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
