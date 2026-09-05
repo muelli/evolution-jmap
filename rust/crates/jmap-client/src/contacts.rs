@@ -4,7 +4,10 @@
 //! Contact operations (RFC 9610).
 
 use jmap_proto::Id;
-use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
+use jmap_proto::contacts::{
+    AddressBook, ContactCard, ContactCardParseRequest, ContactCardParseResponse,
+    ContactCardQueryFilter,
+};
 use jmap_proto::error::SetError;
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -166,6 +169,16 @@ impl Client {
     ) -> Result<QueryResponse, Error> {
         let request = QueryRequest::new(account_id.clone()).filter(filter);
         let arguments = self.single_call(USING, "ContactCard/query", &request)?;
+        Ok(serde_json::from_value(arguments)?)
+    }
+
+    /// `ContactCard/parse` (RFC 9610 §3.4): reads an uploaded vCard blob
+    /// into a `ContactCard`, without filing it into any address book.
+    pub fn contact_card_parse(
+        &self,
+        request: &ContactCardParseRequest,
+    ) -> Result<ContactCardParseResponse, Error> {
+        let arguments = self.single_call(USING, "ContactCard/parse", request)?;
         Ok(serde_json::from_value(arguments)?)
     }
 
