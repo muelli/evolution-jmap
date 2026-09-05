@@ -5,11 +5,13 @@
 //! (draft-ietf-jmap-calendars-28 §5.9.2).
 //!
 //! The draft's rule is entirely about *who* hears about a change and under
-//! *which* iTIP method (RFC 5546), and that is what this module decides. It
-//! builds no iCalendar payload: the mock has no SMTP or iMIP transport, so it
-//! records the decision in [`AccountState::scheduling_outbox`] the way it
-//! already records accepted `EmailSubmission`s in the mail outbox, and tests
-//! read it from there.
+//! *which* iTIP method (RFC 5546), and that is what this module decides;
+//! [`build_ical`] then draws the decided event as the `VCALENDAR` payload
+//! (reusing `jmap_ical::scheduling_ical`, the same rendering a stored object
+//! gets, wrapped in a `METHOD`). The mock has no SMTP or iMIP transport, so
+//! the message, decision and payload both, is recorded in
+//! [`AccountState::scheduling_outbox`] the way it already records accepted
+//! `EmailSubmission`s in the mail outbox, and tests read it from there.
 //!
 //! Everything turns on whether this account is the event's *origin* (§10.9.5).
 //! The origin invites and withdraws; anybody else only ever answers.
@@ -20,11 +22,11 @@
 //!   draft itself advises against for interoperability;
 //! * the iMIP licence in §5.9.2 to drop changes the server deems inessential,
 //!   which would make the mock's output depend on a judgement call;
-//! * `hideAttendees` (§5.1.3), which shapes an attendee list this mock does
-//!   not build;
+//! * `hideAttendees` (§5.1.3), which would trim the attendee list a built
+//!   message carries;
 //! * §5.9.2.1's rule that a message to somebody dropped from one occurrence
-//!   must still *show* that occurrence as excluded, which shapes the same
-//!   unbuilt payload.
+//!   must still *show* that occurrence as excluded, which the payload does
+//!   not render specially yet.
 //!
 //! Per-instance participant sets are modelled (§5.9.2.1's MUST that
 //! "participants are only sent information about recurrence instances they
@@ -67,7 +69,7 @@ pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
 /// Whether everyone this event would have to be announced to, in the shape
 /// it is being left in by this `/set` call, can actually be reached, which
 /// §5.9.2 makes a precondition of the change rather than of the message: a
-/// recipient with no `calendarAddress` at all is one the server has no
+/// recipient with no `sendTo`/`imip` address at all is one the server has no
 /// scheduling method for.
 ///
 /// Applies the same test to a create's object, an update's patched result
@@ -139,6 +141,7 @@ fn origin_messages(
     let sender = subject.organizer_calendar_address.clone();
     let mut messages = Vec::new();
     let mut send = |method: &str, recipient: &str, recurrence_id: Scope| {
+        let ical = build_ical(subject, method, &recurrence_id);
         messages.push(RecordedSchedulingMessage {
             method: method.to_owned(),
             event_id: change.id.clone(),
@@ -146,6 +149,7 @@ fn origin_messages(
             sender: sender.clone(),
             recipient: recipient.to_owned(),
             recurrence_id,
+            ical,
         });
     };
 
@@ -288,6 +292,7 @@ fn reply_messages(
         if answer.is_none_or(|status| status == participant_participation_status::NEEDS_ACTION) {
             continue;
         }
+        let ical = build_ical(subject, scheduling_method::REPLY, &None);
         messages.push(RecordedSchedulingMessage {
             method: scheduling_method::REPLY.to_owned(),
             event_id: change.id.clone(),
@@ -295,6 +300,7 @@ fn reply_messages(
             sender: Some(address.to_owned()),
             recipient: organizer.clone(),
             recurrence_id: None,
+            ical,
         });
     }
 
@@ -325,13 +331,16 @@ fn reply_messages(
             {
                 continue;
             }
+            let scope = Some(recurrence_id.clone());
+            let ical = build_ical(subject, scheduling_method::REPLY, &scope);
             messages.push(RecordedSchedulingMessage {
                 method: scheduling_method::REPLY.to_owned(),
                 event_id: change.id.clone(),
                 uid: subject.uid.clone(),
                 sender: Some(address.to_owned()),
                 recipient: organizer.clone(),
-                recurrence_id: Some(recurrence_id.clone()),
+                recurrence_id: scope,
+                ical,
             });
         }
     }
@@ -435,6 +444,52 @@ fn participants_at(event: &CalendarEvent, recurrence_id: &str) -> Map<String, Va
     }
 }
 
+/// The iCalendar payload for one recorded message (draft-ietf-jmap-calendars-28
+/// §5.9.2, RFC 5546 §3.2): `event`'s already-decided content, wrapped as
+/// `method` names it, and narrowed to one occurrence when `recurrence_id`
+/// says the message is about one rather than the whole event. Building who
+/// gets a message is entirely the caller's job; this only ever builds what
+/// it says.
+fn build_ical(event: &CalendarEvent, method: &str, recurrence_id: &Scope) -> String {
+    match recurrence_id {
+        None => jmap_ical::scheduling_ical(event, method, None),
+        Some(recurrence_id) => {
+            let instance = instance_event(event, recurrence_id);
+            jmap_ical::scheduling_ical(&instance, method, Some(recurrence_id))
+        }
+    }
+}
+
+/// The occurrence `recurrence_id` names, as a `CalendarEvent` of its own: the
+/// series, patched by its override exactly as any PatchObject applies (RFC
+/// 8620 §5.3, the same [`apply_patch`] [`instance_participants`] already
+/// reuses, rather than jmap-ical's display-only [`jmap_ical::OVERRIDE_PROPERTIES`]
+/// allowlist), with `participants` then forced to [`participants_at`]'s
+/// answer so the message never states a guest list this module did not
+/// already decide on.
+fn instance_event(event: &CalendarEvent, recurrence_id: &str) -> CalendarEvent {
+    let mut value = serde_json::to_value(event).unwrap_or(Value::Null);
+    if let Value::Object(map) = &mut value {
+        map.remove("recurrenceOverrides");
+        if let Some(patch) = event
+            .recurrence_overrides
+            .as_ref()
+            .and_then(|overrides| overrides.get(recurrence_id))
+            .and_then(Value::as_object)
+        {
+            let _ = apply_patch(&mut value, patch);
+        }
+    }
+    if let Value::Object(map) = &mut value {
+        map.insert("start".to_owned(), Value::String(recurrence_id.to_owned()));
+        map.insert(
+            "participants".to_owned(),
+            Value::Object(participants_at(event, recurrence_id)),
+        );
+    }
+    serde_json::from_value(value).unwrap_or_default()
+}
+
 /// The `participationStatus` the override for `recurrence_id` *itself* sets
 /// for a participant, which is what §5.9.2.3's "changed for just a single
 /// instance (i.e., set in recurrenceOverrides)" asks about.
@@ -499,8 +554,14 @@ fn unescape(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
 }
 
+/// RFC 8984 §4.4.6: a `Participant` has no `calendarAddress` property of its
+/// own, only a `sendTo` map of addressing methods; `imip` is the one iTIP
+/// scheduling (RFC 5546) sends to. This is the same property
+/// `jmap_ical::event`'s own `drawn_participants` draws an `ATTENDEE`/
+/// `ORGANIZER` line from, so a message this module decides to send and the
+/// payload `build_ical` draws for it agree on who that is.
 fn calendar_address(participant: &Value) -> Option<&str> {
-    participant.get("calendarAddress").and_then(Value::as_str)
+    participant.get("sendTo")?.get("imip")?.as_str()
 }
 
 fn participation_status(participant: &Value) -> Option<&str> {
