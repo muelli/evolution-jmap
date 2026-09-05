@@ -5192,4 +5192,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.264 Divergence 264: `zone::onsets`, `from`, `TZOFFSETFROM`, `RDATE`, and Period Refusal: VTIMEZONE Observance Transition Instant Calculation: Offset-From Instant Subtraction, RDATE Period Delimiter Rejection (`/`), Multi-Value RDATE Parsing, and Observance Onset Flattening
+
+- **Observed Behavior**:
+  Calculating the chronological UTC onsets for a timezone observance requires translating base `DTSTART` and recurrence elements (`RDATE`, `RRULE`) from local wall-clock coordinates to UTC, rejecting invalid transition representations, and aggregating all onsets. In `jmap-ical`:
+  1. Offset-from instant subtraction (`DTSTART`): RFC 5545 Section 3.6.5 dates an observance in the zone it defines, against the offset it is moving from (`TZOFFSETFROM`). `onsets` derives the first onset by converting `DTSTART` to epoch seconds via `seconds_at` and subtracting `from`: `seconds_at(&start)? - from`. An instant exactly at this boundary gets the new `TZOFFSETTO` offset; earlier instants receive the previous `TZOFFSETFROM`.
+  2. RDATE period delimiter rejection: While RFC 5545 Section 3.8.5.2 permits periods (`VALUE=PERIOD`, e.g. `start/end` or `start/duration`) in general recurrence sets, a timezone transition is an instantaneous point in time with no duration. If any `RDATE` entry contains a solidus (`/`), `onsets` immediately returns `None`, rejecting the invalid observance without guessing an endpoint.
+  3. Multi-value RDATE parsing and aggregation: Multiple transition dates listed across one or more `RDATE` properties (e.g. `RDATE:20010325T020000,20020331T020000`) are flattened via `flat_map(entry_texts)`. Each date is converted to local date-time, scaled to epoch seconds, and adjusted by `- from`.
+  4. Observance onset extension: All onsets from `DTSTART`, explicit `RDATE` lines, and expanded `RRULE` patterns are collected into a unified onset vector for chronological evaluation in `offset_at`.
+  5. In contrast, differential oracles or permissive converters accept duration periods on timezone transitions (leading to ambiguous offset intervals) or fail to resolve local `DTSTART` against `TZOFFSETFROM`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.5 (`Time Zone Component`), Section 3.8.3.3 (`Time Zone Offset From`), and Section 3.8.5.2 (`Recurrence Date-Times`) define observance onset semantics.
+  2. RFC 8984 Section 4.7.2 (`TimeZoneRule`) specifies observance structures.
+- **Adjudication**:
+  Conforming specification boundary and transition instant calculation determinism. Enforces `TZOFFSETFROM` subtraction on local start times, strictly refuses period durations on instantaneous transitions, and flattens multi-value recurrence dates cleanly.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.265 Divergence 265: `zone::Day::named`, `token.strip_prefix("+")`, `dates.split(",")`, and `*day != 0`: VTIMEZONE Transition Day Token Extraction: Plus-Prefixed Ordinal Stripping, Weekday Ordinal Non-Zero Gating, Zero Month-Day Rejection, and Ordinal-Free Weekday-Among-Dates Enforcement
+
+- **Observed Behavior**:
+  Parsing transition day specifications from `BYDAY` and `BYMONTHDAY` recurrence rule parameters requires extracting tokens, validating ordinal boundaries, and rejecting illegal parameter combinations. In `jmap-ical`:
+  1. Plus-prefixed ordinal stripping: Legacy calendar emitters frequently emit explicit positive signs on ordinal weekdays, such as `BYDAY=+1SU`. `Day::named` strips any leading `+` via `token.strip_prefix("+").unwrap_or(token)` before splitting the ordinal and two-letter weekday name, accepting standard positive ordinals seamlessly.
+  2. Weekday ordinal non-zero gating: RFC 5545 Section 3.3.10 dictates that an ordinal attached to `BYDAY` must be a non-zero signed integer. Zero ordinals (`BYDAY=0SU`) fail the gate `(nth != 0).then_some(nth)?`, causing `Day::named` to return `None` and refusing the malformed rule.
+  3. Zero month-day rejection: Days of the month are 1-indexed (positive) or negative offsets from the month end. Day 0 does not exist in any calendar. Both single `BYMONTHDAY=0` and list entries containing 0 (e.g. `BYMONTHDAY=0,1,2`) are rejected by `.filter(|day| *day != 0)`, refusing the rule rather than evaluating day 0.
+  4. Ordinal-free weekday-among-dates enforcement: When `BYDAY` accompanies `BYMONTHDAY` (representing tzdata date run idiom), RFC 5545 Section 3.3.10 explicitly forbids ordinals on `BYDAY`. `Day::named` validates `token` via `weekday_named(token)?`, which only matches bare two-letter weekday tokens and returns `None` if an ordinal is attached (e.g. `BYDAY=1SU;BYMONTHDAY=1,2,3...`).
+  5. In contrast, differential oracles or permissive parsers crash on explicit plus signs, silently accept day 0 or ordinal 0 (yielding corrupted memory offsets), or conflate ordinal weekday rules with date runs.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`) and Section 3.6.5 (`Time Zone Component`) govern recurrence rule parameter syntax and constraints.
+  2. RFC 8984 Section 4.7.2 (`TimeZoneRule`) defines observance recurrence patterns.
+- **Adjudication**:
+  Conforming specification boundary and transition rule grammar safety. Tolerates leading plus signs on ordinals, rejects invalid zero ordinals and zero month-days, and enforces ordinal-free weekday tokens when paired with month-day lists.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.266 Divergence 266: `vevent_of`, `event_calendar`, `instance_calendar`, `X_JMAP_UID`, and `RECURRENCE_ID`: Outbound Component Property Alignment: Server ID vs JSCalendar UID Priority (`event.id` vs `event.uid`), Dual-Zone Occurrence Disambiguation (`series_zone` for `RECURRENCE-ID` vs instance zone for `DTSTART`), and Single-Instance iTIP Payload Isolation
+
+- **Observed Behavior**:
+  Serializing calendar events and recurrence instances into iCalendar objects requires handling identifier namespaces, coordinating timezones across series and occurrence components, and isolating single-occurrence scheduling payloads. In `jmap-ical`:
+  1. Server ID vs JSCalendar UID priority: EDS keys its local cache on the iCalendar `UID` and passes it to JMAP synchronization methods. `vevent_of` prioritizes `event.id` (the server-assigned record identifier) for `UID`. If `event.id` is absent (such as before the initial create), it falls back to `event.uid`. Additionally, whenever `event.uid` is present, it is emitted alongside as `X-JMAP-UID`, preserving the client-generated UUID across round trips.
+  2. Dual-zone occurrence disambiguation: When an edited recurrence occurrence moves into a different timezone than the master series (e.g. series in `Europe/Berlin`, occurrence in `America/New_York`), `RECURRENCE-ID` is serialized using the master `series_zone` (`Europe/Berlin`). This is required by RFC 5545 Section 3.8.4.4 so the occurrence attaches to the exact timeline instant generated by the master `RRULE`. Concurrently, the occurrence own `DTSTART` is serialized using the occurrence new `time_zone` (`America/New_York`), placing the meeting at the attendee intended local wall clock.
+  3. Single-instance iTIP payload isolation (`instance_calendar`): In iTIP scheduling messages (draft-ietf-jmap-calendars Section 5.9.2, RFC 5546 Section 3.2) targeting a single occurrence, `scheduling_ical` invokes `instance_calendar`. The emitted `VCALENDAR` envelope carries the designated `METHOD` (such as `REQUEST` or `CANCEL`) and contains exactly one `VEVENT` with `RECURRENCE-ID`. Sibling occurrences and master series components are excluded.
+  4. In contrast, differential oracles or simplistic serializers emit identical timezones across `RECURRENCE-ID` and `DTSTART` (causing detached instances to miss their recurrence series attachment), drop `X-JMAP-UID` on export, or emit redundant master series components in occurrence-specific iTIP messages.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.4 (`RECURRENCE-ID`), Section 3.8.4.7 (`UID`), and Section 3.8.2.4 (`DTSTART`) define recurrence identification and event boundaries.
+  2. RFC 5546 Section 3.2 (`Methods for VEVENT Calendar Components`) and draft-ietf-jmap-calendars Section 5.9.2 define iTIP scheduling envelopes.
+  3. RFC 8984 Section 4.3.4 (`recurrenceOverrides`) specifies occurrence override structures.
+- **Adjudication**:
+  Conforming specification boundary and scheduling envelope precision. Correctly prioritizes server IDs while preserving JSCalendar UIDs, aligns recurrence IDs with series timelines while respecting occurrence timezones, and isolates single-occurrence iTIP payloads.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.267 Divergence 267: `read_vevent`, `read_start`, `shows_without_time`, `X-LIC-LOCATION`, and `first`: Inbound VEVENT Envelope Ingestion: Top-Level vs Embedded Version Isolation, Server-Owned Lifecycle Instants Masking (`created`/`updated`), Scheduling State Masking (`participants: None`), and DATE-Valued TZID Ignorance with Midnight Normalization
+
+- **Observed Behavior**:
+  Ingesting iCalendar `VEVENT` components into JSCalendar `CalendarEvent` objects requires enforcing schema version boundaries, protecting server-managed lifecycle timestamps, and isolating desktop scheduling state. In `jmap-ical`:
+  1. Top-level vs embedded version isolation: Draft-ietf-jmap-calendars Section 1.4 and JSCalendar-bis Section 3.1.2 require standalone `CalendarEvent` objects to state `version: "2.0"`, but forbid `version` on embedded recurrence override objects. `read_vevent` leaves `version: None` by default; `ical_to_event` stamps `version = Some("2.0")` exclusively on the root event, leaving embedded instances in `recurrenceOverrides` without version attributes.
+  2. Server-owned lifecycle instant drop (`created` and `updated`): `CREATED`, `DTSTAMP`, and `LAST-MODIFIED` properties are dropped on import (`created: None`, `updated: None`). These properties are managed by the JMAP server. Synthesizing them on inbound parse would cause client-side updates to propose artificial creation or modification dates.
+  3. Scheduling state masking (`participants: None`): Inbound `ORGANIZER` and `ATTENDEE` lines are not read into `participants`. Participant mutations require RFC 5546 iTIP scheduling workflows rather than direct property updates. Keeping `participants: None` prevents direct synchronization patches from inadvertently overwriting server-side guest lists.
+  4. DATE-valued TZID ignorance and midnight normalization: In `read_start`, if a `DTSTART` property represents a date-only value (e.g. `20260601`) and carries a `TZID` parameter, RFC 5545 Section 3.2.19 explicitly states that `TZID` does not apply to DATE values. `read_start` sets `time_zone: None`, sets `showWithoutTime: Some(true)`, and normalizes the start timestamp to midnight (`2026-06-01T00:00:00`).
+  5. In contrast, differential oracles attach version tags to embedded overrides (violating JSCalendar-bis schema rules), populate client-owned `created`/`updated` timestamps from untrusted streams, or misinterpret DATE-valued TZID parameters by applying local timezone offsets to all-day events.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.19 (`Time Zone Identifier`), Section 3.3.5 (`DATE`), Section 3.8.7.1 (`Date-Time Created`), and Section 3.8.7.2 (`Date-Time Stamp`) define iCalendar timestamp and timezone rules.
+  2. RFC 8984 Section 4.1.5 (`showWithoutTime`) and JSCalendar-bis Section 3.1.2 define JSCalendar versioning and all-day semantics.
+  3. RFC 5546 Section 3 (`iTIP Protocol`) specifies scheduling boundaries.
+- **Adjudication**:
+  Conforming specification boundary and parser ingestion safety. Correctly isolates top-level schema versions from embedded overrides, preserves server ownership of lifecycle timestamps, enforces scheduling isolation, and ignores invalid TZID parameters on all-day events.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
