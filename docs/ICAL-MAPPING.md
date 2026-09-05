@@ -3372,3 +3372,76 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.160 Divergence 160: `by_day_token`, `counts_within_a_period`, and `to_nday`: Recurrence Weekday Ordinal Frequency Gating (`MONTHLY` and `YEARLY` Only), Ordinal Zero Refusal, Signed Prefix Parsing (`+3TU`), and Extension Rejection
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.10 and RFC 8984 §4.3.3 govern recurrence rule weekday (`BYDAY` / `byDay`) modeling. In `jmap-ical`:
+  1. Frequency gating on numeric ordinals: RFC 5545 §3.3.10 explicitly dictates that `BYDAY` MUST NOT be specified with a numeric value when `FREQ` is not `MONTHLY` or `YEARLY`. `by_day_token` invokes `counts_within_a_period(frequency)` (which requires `monthly` or `yearly`). If an `NDay` carries an `nth_of_period` ordinal when `FREQ` is `WEEKLY`, `DAILY`, or sub-day, `by_day_token` returns `None`. Crucially, it refuses to fall back to emitting the weekday without its ordinal: repeating every Monday instead of the second Monday would alter the meeting schedule and flood the user's calendar. Refusing the part allows `maps_recurrence_rule` to signal that the rule cannot be safely serialized.
+  2. Ordinal zero refusal: RFC 8984 §4.3.3 and RFC 5545 §3.3.10 forbid ordinal zero (`ordwk` starts at 1). `by_day_token` returns `None` when `nth_of_period == Some(0)`.
+  3. Inbound signed prefix parsing: In `to_nday`, leading `+` signs permitted by RFC 5545 (e.g. `+3TU`) are stripped before parsing into positive ordinals, accommodating explicit plus notation while standardizing to canonical unsigned integer representation in JSCalendar.
+  4. Extension property rejection: If `day.extra` contains unmapped vendor attributes, `by_day_token` returns `None` to prevent unvetted fields from leaking into output property lines.
+  5. In contrast, differential oracles or permissive serializers often emit ordinals beside weekly frequencies (violating RFC 5545 grammar and failing strict CalDAV parsers) or strip ordinals on error, turning monthly appointments into weekly meetings.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.10 restricts numeric `BYDAY` ordinals to monthly and yearly intervals where a period exists to count within.
+  2. In libical and Evolution Data Server, emitting an illegal ordinal on a weekly rule causes the entire `VEVENT` component to fail parsing, discarding all event properties.
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule ordinal gating fidelity. Enforces frequency gating on numeric ordinals, refuses ordinal zero, parses signed prefixes, and rejects unmapped extensions.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.161 Divergence 161: `unfold`: RFC 5545 §3.1 Inbound Line Unfolding, Space and Horizontal Tab (`\t`) Continuation Normalization, Bare LF Tolerance, and Empty Line Trimming
+
+- **Observed Behavior**:
+  RFC 5545 §3.1 defines content line folding and unfolding over long octet streams. In `jmap-ical`:
+  1. Space and horizontal tab continuation: RFC 5545 §3.1 specifies that a content line may be folded by inserting a CRLF immediately followed by a space or a horizontal tab. `unfold` detects both continuations via `raw.strip_prefix([' ', '\t'])`.
+  2. In-place continuation concatenation: When a continuation line is encountered, `unfold` appends the slice directly to the previous line buffer (`lines.last_mut().push_str(rest)`), seamlessly reconstructing folded properties across arbitrary numbers of continuation lines without intermediary string allocations.
+  3. Mixed line ending normalization: Inbound text is normalized via `text.replace("\r\n", "\n").split('\n')`, transparently accommodating RFC-compliant CRLF line breaks, Unix bare LF endings, and mixed payload streams.
+  4. Empty line and trailing carriage return trimming: Strips trailing carriage returns (`raw.trim_end_matches('\r')`) and drops empty lines (`!line.is_empty()`), preventing extraneous blank lines between components from injecting phantom empty tokens or disrupting envelope validation.
+  5. In contrast, differential oracles or rigid line parsers often fail on horizontal tab continuations, reject Unix bare LF line feeds, or crash when empty lines occur between iCalendar components.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.1 mandates support for both space and horizontal tab continuation characters during line unfolding.
+  2. Robust handling of Unix bare LF line endings is necessary for compatibility with desktop script exports and diverse CalDAV implementations.
+- **Adjudication**:
+  Conforming specification boundary and iCalendar stream unfolding robustness. Handles space and tab continuations, normalizes mixed CRLF and bare LF line breaks, and trims blank lines.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.162 Divergence 162: `zone_of`: Four-Tier Inbound Timezone Identifier Resolution Pipeline (`zones` Table, `names_time_zone`, `unique_tzid_to_iana`, Verbatim Fallback) and Floating vs Custom Undefined Distinction
+
+- **Observed Behavior**:
+  RFC 5545 §3.2.19, §3.6.5 and RFC 8984 §1.4.9 govern timezone identifier referencing and resolution. In `jmap-ical`:
+  1. Four-tier resolution hierarchy:
+     - Tier 1: Document `VTIMEZONE` table lookup (`zones.get(tzid).and_then(|zone| zone.name.clone())`). If the document provides a `VTIMEZONE` defining that `TZID` and maps it via `X-LIC-LOCATION` to a valid IANA zone, that canonical name is resolved.
+     - Tier 2: Direct standard IANA validation via `names_time_zone(tzid)`. If the raw `TZID` string is already a structurally valid IANA identifier, it is returned directly.
+     - Tier 3: Globally unique solidus vendor TZID tail extraction via `unique_tzid_to_iana(tzid)`. For vendor paths (such as `/freeassociation.sourceforge.net/Europe/Berlin`), extracts the recognized IANA continental area tail.
+     - Tier 4: Verbatim string fallback: If unresolvable, returns `tzid.to_owned()` verbatim.
+  2. Floating vs custom undefined distinction: Returning the verbatim unresolvable string preserves the fact that the event had a timezone, distinguishing it from genuinely floating events (`time_zone: None`). This allows `maps_time_zone` to return `false`, alerting `jmap-cal-sync` to refuse syncing the unknown timezone rather than silently stripping the timezone and shifting meeting times.
+  3. In contrast, differential oracles or naive parsers often discard unrecognized `TZID` parameters, converting zoned events into floating local time (causing meetings to shift across user timezones), or replace unknown zones with UTC.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §1.4.9 requires custom timezone identifiers to be paired with definitions in `timeZones`.
+  2. Preserving unresolvable timezone names verbatim protects user appointments from silent time shifts during synchronization.
+- **Adjudication**:
+  Conforming specification boundary and inbound timezone resolution pipeline. Resolves through four structured tiers and preserves unresolvable identifiers verbatim to defend against floating time corruption.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.163 Divergence 163: `busy_periods_to_vfreebusy`, `free_busy_type`, and `instant`: Free/Busy Availability Envelope Shape (`VFREEBUSY`), Query Window Demarcation, Omission of Clock and Entropy Fields (`UID`, `DTSTAMP`), and Whole-Component Refusal Integrity
+
+- **Observed Behavior**:
+  draft-ietf-jmap-calendars §2.2 `Principal/getAvailability` returns `BusyPeriod` objects, while Evolution Data Server asks for availability via `ECalBackendSync::get_free_busy_sync` expecting iCalendar `VFREEBUSY` text. In `jmap-ical`:
+  1. Single bare `VFREEBUSY` component: Formats a single bare `VFREEBUSY` component per user without an outer `VCALENDAR` envelope, conforming strictly to incumbent Evolution Data Server backend conventions (`ECalMetaBackend`, CalDAV, and EWS).
+  2. Query window demarcation: Restates the queried time window as `DTSTART` and `DTEND` on the component, allowing consumers to distinguish an attendee with no busy intervals from a response for an unrelated window.
+  3. Clock and entropy independence: Deliberately omits `UID` and `DTSTAMP`, keeping the mapping pure, deterministic, and free of host system clock or random state dependencies.
+  4. Attendee address normalization: Normalizes bare email addresses to `mailto:` URIs while tolerating existing `mailto:` prefixes without doubling.
+  5. Busy status vocabulary mapping: `free_busy_type` maps `tentative` to `BUSY-TENTATIVE`, `unavailable` to `BUSY-UNAVAILABLE`, `confirmed` to `BUSY`, and safely defaults any future draft status to `BUSY` to prevent unknown busy periods from being interpreted as free time.
+  6. Whole-component refusal integrity: Returns `Option<String>`. If any timestamp in the query window or busy period list cannot be parsed as a valid UTC date-time, `busy_periods_to_vfreebusy` returns `None`. In free/busy scheduling, dropping an unreadable period would falsely mark an attendee as free for time they are actually busy, leading to conflicting bookings. Refusing the entire component leaves the attendee row blank ("unknown" rather than a confident wrong answer).
+  7. In contrast, differential oracles or permissive formatters often drop unparseable periods silently (causing double bookings), invent clock-dependent `UID` / `DTSTAMP` lines that break cache determinism, or wrap bare components in unwanted `VCALENDAR` envelopes that fail EDS backend decoders.
+- **Specification and Architectural Context**:
+  1. draft-ietf-jmap-calendars §2.2 and RFC 5545 §3.6.4 govern availability querying and `VFREEBUSY` component representation.
+  2. In Evolution Data Server scheduling, refusing a component when busy intervals cannot be read protects attendees from meeting collisions.
+- **Adjudication**:
+  Conforming specification boundary and free/busy availability scheduling fidelity. Formats bare `VFREEBUSY` envelopes, demarcates query windows, eliminates clock dependencies, and enforces whole-component refusal on unreadable timestamps.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+

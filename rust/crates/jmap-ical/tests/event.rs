@@ -27823,3 +27823,449 @@ fn differential_oracle_component_ast_serialization_crlf_and_empty_param_suppress
         );
     }
 }
+
+#[test]
+fn differential_oracle_by_day_token_frequency_gating_and_signed_prefix() {
+    // Divergence 160 against Stalwart differential oracle:
+    // by_day_token, counts_within_a_period, and to_nday:
+    // Recurrence Weekday Ordinal Frequency Gating (only MONTHLY and YEARLY),
+    // Ordinal Zero Refusal, Signed Prefix Parsing (+3TU), and Extension Rejection.
+
+    // 1. Ordinal permitted on monthly rule
+    let monthly_rule = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_day: Some(vec![NDay {
+            day: "mo".to_owned(),
+            nth_of_period: Some(2),
+            ..NDay::default()
+        }]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        maps_recurrence_rule(&monthly_rule),
+        "ordinal on monthly frequency is permitted"
+    );
+    let ev_monthly = CalendarEvent {
+        uid: Some("byday-monthly-160".to_owned()),
+        title: Some("Monthly Second Monday".to_owned()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(monthly_rule),
+        ..CalendarEvent::default()
+    };
+    let ics_monthly = event_to_ical(&ev_monthly);
+    assert!(
+        ics_monthly.contains("RRULE:FREQ=MONTHLY;BYDAY=2MO"),
+        "emits BYDAY=2MO on monthly rule: {ics_monthly}"
+    );
+
+    // 2. Ordinal permitted on yearly rule
+    let yearly_rule = RecurrenceRule {
+        frequency: "yearly".to_owned(),
+        by_day: Some(vec![NDay {
+            day: "fr".to_owned(),
+            nth_of_period: Some(-1),
+            ..NDay::default()
+        }]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        maps_recurrence_rule(&yearly_rule),
+        "ordinal on yearly frequency is permitted"
+    );
+    let ev_yearly = CalendarEvent {
+        uid: Some("byday-yearly-160".to_owned()),
+        title: Some("Yearly Last Friday".to_owned()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(yearly_rule),
+        ..CalendarEvent::default()
+    };
+    let ics_yearly = event_to_ical(&ev_yearly);
+    assert!(
+        ics_yearly.contains("RRULE:FREQ=YEARLY;BYDAY=-1FR"),
+        "emits BYDAY=-1FR on yearly rule: {ics_yearly}"
+    );
+
+    // 3. Ordinal strictly refused on weekly rule per RFC 5545 section 3.3.10
+    let weekly_rule = RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        by_day: Some(vec![NDay {
+            day: "mo".to_owned(),
+            nth_of_period: Some(1),
+            ..NDay::default()
+        }]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&weekly_rule),
+        "ordinal on weekly frequency is refused per RFC 5545 section 3.3.10"
+    );
+    let ev_weekly = CalendarEvent {
+        uid: Some("byday-weekly-160".to_owned()),
+        title: Some("Invalid Weekly Ordinal".to_owned()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(weekly_rule),
+        ..CalendarEvent::default()
+    };
+    let ics_weekly = event_to_ical(&ev_weekly);
+    assert!(
+        !ics_weekly.contains("BYDAY=1MO"),
+        "refuses to emit invalid BYDAY=1MO on weekly rule: {ics_weekly}"
+    );
+
+    // 4. Ordinal zero is refused
+    let zero_rule = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_day: Some(vec![NDay {
+            day: "tu".to_owned(),
+            nth_of_period: Some(0),
+            ..NDay::default()
+        }]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!maps_recurrence_rule(&zero_rule), "ordinal zero is refused");
+
+    // 5. Inbound signed prefix parsing (+3TU) strips plus sign
+    let ics_signed = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:signed-byday-160\r\n",
+        "DTSTART:20260901T100000\r\n",
+        "RRULE:FREQ=MONTHLY;BYDAY=+3TU\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_signed = ical_to_event(ics_signed).expect("parse signed BYDAY");
+    let parsed_rule = ev_signed.recurrence_rule.as_ref().expect("rule present");
+    let nday = &parsed_rule.by_day.as_ref().expect("by_day present")[0];
+    assert_eq!(nday.day, "tu");
+    assert_eq!(nday.nth_of_period, Some(3));
+    let ics_reserialized = event_to_ical(&ev_signed);
+    assert!(
+        ics_reserialized.contains("BYDAY=3TU"),
+        "emits canonical unsigned 3TU: {ics_reserialized}"
+    );
+
+    // 6. Day extra properties cause refusal
+    let mut extra_map = std::collections::BTreeMap::new();
+    extra_map.insert("vendor".to_owned(), serde_json::Value::Bool(true));
+    let extra_rule = RecurrenceRule {
+        frequency: "monthly".to_owned(),
+        by_day: Some(vec![NDay {
+            day: "we".to_owned(),
+            nth_of_period: Some(1),
+            extra: extra_map,
+            ..NDay::default()
+        }]),
+        ..RecurrenceRule::default()
+    };
+    assert!(
+        !maps_recurrence_rule(&extra_rule),
+        "extra properties on NDay cause refusal"
+    );
+}
+
+#[test]
+fn differential_oracle_unfold_whitespace_continuation_and_newline_normalization() {
+    // Divergence 161 against Stalwart differential oracle:
+    // unfold: RFC 5545 section 3.1 Inbound Line Unfolding, Space and Horizontal Tab Continuation,
+    // Bare LF Normalization, and Empty Line Trimming.
+
+    // 1. Line folded with space continuation
+    let ics_space = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:unfold-space-161\r\n",
+        "DTSTART:20260901T090000Z\r\n",
+        "SUMMARY:Quarterly Financial \r\n",
+        " Planning Review\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_space = ical_to_event(ics_space).expect("parse space fold");
+    assert_eq!(
+        ev_space.title.as_deref(),
+        Some("Quarterly Financial Planning Review")
+    );
+
+    // 2. Line folded with horizontal tab continuation
+    let ics_tab = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:unfold-tab-161\r\n",
+        "DTSTART:20260901T090000Z\r\n",
+        "DESCRIPTION:Detailed Meeting\r\n",
+        "\tAgenda Item A\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_tab = ical_to_event(ics_tab).expect("parse tab fold");
+    assert_eq!(
+        ev_tab.description.as_deref(),
+        Some("Detailed MeetingAgenda Item A")
+    );
+
+    // 3. Multi-line folding continuation with mixed space and tab
+    let ics_multi = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:unfold-multi-161\r\n",
+        "DTSTART:20260901T090000Z\r\n",
+        "SUMMARY:Alpha \r\n",
+        " Beta \r\n",
+        "\tGamma\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_multi = ical_to_event(ics_multi).expect("parse multi-line fold");
+    assert_eq!(ev_multi.title.as_deref(), Some("Alpha Beta Gamma"));
+
+    // 4. Unix bare LF line endings without CR
+    let ics_bare_lf = "BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//test//EN\nBEGIN:VEVENT\nUID:unfold-lf-161\nDTSTART:20260901T100000Z\nSUMMARY:Unix Bare LF\nEND:VEVENT\nEND:VCALENDAR\n";
+    let ev_bare_lf = ical_to_event(ics_bare_lf).expect("parse bare LF");
+    assert_eq!(ev_bare_lf.title.as_deref(), Some("Unix Bare LF"));
+
+    // 5. Empty lines interspersed between components do not break parsing
+    let ics_empty_lines = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "\r\n",
+        "VERSION:2.0\r\n",
+        "\r\n",
+        "PRODID:-//test//EN\r\n",
+        "\r\n",
+        "BEGIN:VEVENT\r\n",
+        "\r\n",
+        "UID:unfold-empty-161\r\n",
+        "\r\n",
+        "DTSTART:20260901T120000Z\r\n",
+        "\r\n",
+        "SUMMARY:Tolerating Empty Lines\r\n",
+        "\r\n",
+        "END:VEVENT\r\n",
+        "\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_empty = ical_to_event(ics_empty_lines).expect("parse empty lines");
+    assert_eq!(ev_empty.title.as_deref(), Some("Tolerating Empty Lines"));
+}
+
+#[test]
+fn differential_oracle_zone_of_four_tier_resolution_and_fallback() {
+    // Divergence 162 against Stalwart differential oracle:
+    // zone_of: Four-Tier Inbound Timezone Identifier Resolution Pipeline
+    // (zones table, names_time_zone, unique_tzid_to_iana, verbatim fallback)
+    // and Floating vs Custom Undefined Distinction.
+
+    // Tier 1: Document VTIMEZONE table lookup with X-LIC-LOCATION
+    let ics_tier1 = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Custom Berlin Zone\r\n",
+        "X-LIC-LOCATION:Europe/Berlin\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19700101T000000\r\n",
+        "TZOFFSETFROM:+0200\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:zone-tier1-162\r\n",
+        "DTSTART;TZID=\"Custom Berlin Zone\":20260601T120000\r\n",
+        "DURATION:PT1H\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_tier1 = ical_to_event(ics_tier1).expect("parse tier 1 zone");
+    assert_eq!(
+        ev_tier1.time_zone.as_deref(),
+        Some("Europe/Berlin"),
+        "tier 1 resolves via X-LIC-LOCATION"
+    );
+
+    // Tier 2: Recognized standard IANA timezone directly in TZID
+    let ics_tier2 = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:zone-tier2-162\r\n",
+        "DTSTART;TZID=America/New_York:20260601T120000\r\n",
+        "DURATION:PT1H\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_tier2 = ical_to_event(ics_tier2).expect("parse tier 2 zone");
+    assert_eq!(
+        ev_tier2.time_zone.as_deref(),
+        Some("America/New_York"),
+        "tier 2 recognizes standard IANA timezone"
+    );
+
+    // Tier 3: Solidus vendor path tail extraction
+    let ics_tier3 = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:zone-tier3-162\r\n",
+        "DTSTART;TZID=/freeassociation.sourceforge.net/Europe/Berlin:20260601T120000\r\n",
+        "DURATION:PT1H\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_tier3 = ical_to_event(ics_tier3).expect("parse tier 3 zone");
+    assert_eq!(
+        ev_tier3.time_zone.as_deref(),
+        Some("Europe/Berlin"),
+        "tier 3 extracts IANA tail from solidus path"
+    );
+
+    // Tier 4: Unresolvable custom TZID preserved verbatim
+    let ics_tier4 = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:zone-tier4-162\r\n",
+        "DTSTART;TZID=\"Unknown Internal Clock\":20260601T120000\r\n",
+        "DURATION:PT1H\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+    let ev_tier4 = ical_to_event(ics_tier4).expect("parse tier 4 zone");
+    assert_eq!(
+        ev_tier4.time_zone.as_deref(),
+        Some("Unknown Internal Clock"),
+        "tier 4 preserves unresolvable TZID verbatim"
+    );
+    assert!(
+        !maps_time_zone(&ev_tier4),
+        "unresolvable timezone definition fails maps_time_zone"
+    );
+}
+
+#[test]
+fn differential_oracle_freebusy_envelope_and_window_demarcation() {
+    // Divergence 163 against Stalwart differential oracle:
+    // busy_periods_to_vfreebusy, free_busy_type, and instant:
+    // Free/Busy Availability Envelope Shape (VFREEBUSY), Query Window Demarcation,
+    // Omission of Clock and Entropy Fields (UID and DTSTAMP), and Whole-Component Refusal Integrity.
+
+    let window_start = UtcDate::new("2026-09-01T08:00:00Z");
+    let window_end = UtcDate::new("2026-09-01T18:00:00Z");
+
+    let periods = vec![
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-01T09:00:00Z"),
+            utc_end: UtcDate::new("2026-09-01T10:00:00Z"),
+            busy_status: "tentative".to_owned(),
+            event: None,
+        },
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-01T11:00:00Z"),
+            utc_end: UtcDate::new("2026-09-01T12:00:00Z"),
+            busy_status: "unavailable".to_owned(),
+            event: None,
+        },
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-01T14:00:00Z"),
+            utc_end: UtcDate::new("2026-09-01T15:00:00Z"),
+            busy_status: "confirmed".to_owned(),
+            event: None,
+        },
+        BusyPeriod {
+            utc_start: UtcDate::new("2026-09-01T16:00:00Z"),
+            utc_end: UtcDate::new("2026-09-01T17:00:00Z"),
+            busy_status: "unknown-future-type".to_owned(),
+            event: None,
+        },
+    ];
+
+    // 1. Bare VFREEBUSY component envelope
+    let ics = busy_periods_to_vfreebusy("user@example.com", &window_start, &window_end, &periods)
+        .expect("render vfreebusy");
+
+    assert!(ics.starts_with("BEGIN:VFREEBUSY\r\n"));
+    assert!(ics.ends_with("END:VFREEBUSY\r\n"));
+    assert!(
+        !ics.contains("BEGIN:VCALENDAR"),
+        "bare component has no VCALENDAR envelope"
+    );
+
+    // 2. Deterministic mapping: no UID or DTSTAMP
+    assert!(
+        !ics.contains("UID:"),
+        "omits UID to remain clock and entropy independent"
+    );
+    assert!(
+        !ics.contains("DTSTAMP:"),
+        "omits DTSTAMP to remain deterministic"
+    );
+
+    // 3. Query window demarcation
+    assert!(ics.contains("DTSTART:20260901T080000Z\r\n"));
+    assert!(ics.contains("DTEND:20260901T180000Z\r\n"));
+
+    // 4. Attendee mailto normalization
+    assert!(ics.contains("ATTENDEE:mailto:user@example.com\r\n"));
+    let ics_mailto = busy_periods_to_vfreebusy(
+        "mailto:user@example.com",
+        &window_start,
+        &window_end,
+        &periods,
+    )
+    .expect("render vfreebusy mailto");
+    assert!(ics_mailto.contains("ATTENDEE:mailto:user@example.com\r\n"));
+    assert!(
+        !ics_mailto.contains("mailto:mailto:"),
+        "no double mailto prefix"
+    );
+
+    // 5. Busy status vocabulary mapping
+    assert_eq!(free_busy_type("tentative"), "BUSY-TENTATIVE");
+    assert_eq!(free_busy_type("unavailable"), "BUSY-UNAVAILABLE");
+    assert_eq!(free_busy_type("confirmed"), "BUSY");
+    assert_eq!(free_busy_type("other"), "BUSY");
+
+    assert!(ics.contains("FREEBUSY;FBTYPE=BUSY-TENTATIVE:20260901T090000Z/20260901T100000Z\r\n"));
+    assert!(ics.contains("FREEBUSY;FBTYPE=BUSY-UNAVAILABLE:20260901T110000Z/20260901T120000Z\r\n"));
+    assert!(ics.contains("FREEBUSY;FBTYPE=BUSY:20260901T140000Z/20260901T150000Z\r\n"));
+    assert!(ics.contains("FREEBUSY;FBTYPE=BUSY:20260901T160000Z/20260901T170000Z\r\n"));
+
+    // 6. Whole-component refusal on unreadable instant
+    let bad_window_start = UtcDate::new("invalid-timestamp");
+    assert!(
+        busy_periods_to_vfreebusy("user@example.com", &bad_window_start, &window_end, &periods)
+            .is_none(),
+        "refuses component whole on unreadable window start"
+    );
+
+    let bad_period = BusyPeriod {
+        utc_start: UtcDate::new("not-a-utc-date"),
+        utc_end: UtcDate::new("2026-09-01T10:00:00Z"),
+        busy_status: "confirmed".to_owned(),
+        event: None,
+    };
+    assert!(
+        busy_periods_to_vfreebusy(
+            "user@example.com",
+            &window_start,
+            &window_end,
+            &[bad_period]
+        )
+        .is_none(),
+        "refuses component whole on unreadable period instant"
+    );
+}
