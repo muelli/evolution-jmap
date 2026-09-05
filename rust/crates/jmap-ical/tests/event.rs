@@ -30024,3 +30024,360 @@ fn differential_oracle_all_day_invariants_and_time_of_day_prohibition() {
         "rule naming only BYDAY carries no time of day"
     );
 }
+
+#[test]
+fn differential_oracle_custom_timezone_resolution_and_fallback() {
+    // Divergence 184 against Stalwart differential oracle:
+    // time_zone_definition, definition_of, defines_time_zone, and maps_time_zone:
+    // Custom Timezone Resolution: Dual Solidus Prefix Key Matching (/prefix vs prefix),
+    // Complete Round-Trip Redrawability Enforcement (vtimezone_of),
+    // and Floating Event Fallback for Undefined Custom Timezones.
+
+    // 1. definition_of: dual-prefix key matching (/prefix vs prefix)
+    let mut definitions = BTreeMap::new();
+    definitions.insert(
+        "custom-zone-no-slash".to_string(),
+        json!({
+            "standard": [
+                {
+                    "start": "1970-01-01T00:00:00",
+                    "offsetFrom": "+01:00",
+                    "offsetTo": "+01:00"
+                }
+            ]
+        }),
+    );
+    definitions.insert(
+        "/custom-zone-with-slash".to_string(),
+        json!({
+            "standard": [
+                {
+                    "start": "1970-01-01T00:00:00",
+                    "offsetFrom": "+02:00",
+                    "offsetTo": "+02:00"
+                }
+            ]
+        }),
+    );
+
+    // Lookup with leading slash finds entry stored without slash
+    assert!(jmap_ical::event::definition_of(&definitions, "/custom-zone-no-slash").is_some());
+    // Lookup without leading slash finds entry stored with slash
+    assert!(jmap_ical::event::definition_of(&definitions, "/custom-zone-with-slash").is_some());
+    // Lookup for nonexistent zone returns None
+    assert!(jmap_ical::event::definition_of(&definitions, "/nonexistent").is_none());
+
+    // 2. defines_time_zone: requires solidus prefix and redrawable VTIMEZONE definition
+    let valid_event = CalendarEvent {
+        time_zones: Some(definitions.clone()),
+        ..CalendarEvent::default()
+    };
+    assert!(jmap_ical::event::defines_time_zone(
+        &valid_event,
+        "/custom-zone-no-slash"
+    ));
+    assert!(jmap_ical::event::defines_time_zone(
+        &valid_event,
+        "/custom-zone-with-slash"
+    ));
+    // Missing leading solidus fails defines_time_zone
+    assert!(!jmap_ical::event::defines_time_zone(
+        &valid_event,
+        "custom-zone-no-slash"
+    ));
+
+    // Empty observances definition cannot be drawn whole
+    let mut bad_defs = BTreeMap::new();
+    bad_defs.insert("/empty-zone".to_string(), json!({}));
+    let bad_event = CalendarEvent {
+        time_zones: Some(bad_defs),
+        ..CalendarEvent::default()
+    };
+    assert!(!jmap_ical::event::defines_time_zone(
+        &bad_event,
+        "/empty-zone"
+    ));
+
+    // 3. maps_time_zone: floating (None/empty) is sendable, IANA is sendable,
+    // defined custom zone is sendable; undefined or non-standard zones return false.
+    let floating_event = CalendarEvent {
+        time_zone: None,
+        ..CalendarEvent::default()
+    };
+    assert!(jmap_ical::event::maps_time_zone(&floating_event));
+
+    let iana_event = CalendarEvent {
+        time_zone: Some("Europe/Berlin".to_string()),
+        ..CalendarEvent::default()
+    };
+    assert!(jmap_ical::event::maps_time_zone(&iana_event));
+
+    let custom_event = CalendarEvent {
+        time_zone: Some("/custom-zone-no-slash".to_string()),
+        time_zones: Some(definitions),
+        ..CalendarEvent::default()
+    };
+    assert!(jmap_ical::event::maps_time_zone(&custom_event));
+
+    let undefined_event = CalendarEvent {
+        time_zone: Some("/undefined-zone".to_string()),
+        ..CalendarEvent::default()
+    };
+    assert!(!jmap_ical::event::maps_time_zone(&undefined_event));
+
+    let windows_event = CalendarEvent {
+        time_zone: Some("W. Europe Standard Time".to_string()),
+        ..CalendarEvent::default()
+    };
+    assert!(!jmap_ical::event::maps_time_zone(&windows_event));
+}
+
+#[test]
+fn differential_oracle_recurrence_by_parts_ordering_and_leap_second() {
+    // Divergence 185 against Stalwart differential oracle:
+    // named_by_parts, by_second_part, by_minute_part, by_hour_part, and time_of_day_part:
+    // Libical Recurrence Rule Part Canonical Ordering (Finest Time Unit Outwards:
+    // BYSECOND, BYMINUTE, BYHOUR), Leap Second 60 Tolerance, Non-Empty Part Validation,
+    // and BYSETPOS Exclusion.
+
+    // 1. by_second_part: admits 0..=60 including leap second 60 per RFC 5545 Section 3.3.12
+    let rule_leap = RecurrenceRule {
+        frequency: "minutely".to_string(),
+        by_second: Some(vec![0, 30, 60]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_second_part(&rule_leap),
+        Some("BYSECOND=0,30,60".to_string())
+    );
+
+    let rule_second_overflow = RecurrenceRule {
+        frequency: "minutely".to_string(),
+        by_second: Some(vec![61]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_second_part(&rule_second_overflow),
+        None,
+        "second 61 is out of range"
+    );
+
+    let rule_second_empty = RecurrenceRule {
+        frequency: "minutely".to_string(),
+        by_second: Some(vec![]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_second_part(&rule_second_empty),
+        None,
+        "empty by_second is refused to prevent BYSECOND=0 misinterpretation"
+    );
+
+    // 2. by_minute_part: admits 0..=59
+    let rule_minute = RecurrenceRule {
+        frequency: "hourly".to_string(),
+        by_minute: Some(vec![15, 45]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_minute_part(&rule_minute),
+        Some("BYMINUTE=15,45".to_string())
+    );
+
+    let rule_minute_overflow = RecurrenceRule {
+        frequency: "hourly".to_string(),
+        by_minute: Some(vec![60]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_minute_part(&rule_minute_overflow),
+        None,
+        "minute 60 is out of range"
+    );
+
+    // 3. by_hour_part: admits 0..=23
+    let rule_hour = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_hour: Some(vec![9, 17]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_hour_part(&rule_hour),
+        Some("BYHOUR=9,17".to_string())
+    );
+
+    let rule_hour_overflow = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_hour: Some(vec![24]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_hour_part(&rule_hour_overflow),
+        None,
+        "hour 24 is out of range"
+    );
+
+    // 4. named_by_parts: libical canonical ordering puts time-of-day finest-first
+    // (BYSECOND, BYMINUTE, BYHOUR), followed by calendar date parts. Excludes BYSETPOS.
+    let full_rule = RecurrenceRule {
+        frequency: "yearly".to_string(),
+        by_second: Some(vec![0]),
+        by_minute: Some(vec![30]),
+        by_hour: Some(vec![10]),
+        by_day: Some(vec![NDay::new("mo")]),
+        by_month: Some(vec!["10".to_string()]),
+        by_set_position: Some(vec![1]),
+        ..RecurrenceRule::default()
+    };
+    let parts = jmap_ical::event::named_by_parts(&full_rule);
+    assert_eq!(
+        parts,
+        vec![
+            "BYSECOND=0".to_string(),
+            "BYMINUTE=30".to_string(),
+            "BYHOUR=10".to_string(),
+            "BYDAY=MO".to_string(),
+            "BYMONTH=10".to_string(),
+        ],
+        "time of day clauses come first from finest unit outwards, excluding BYSETPOS"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_writability_type_and_year_scope() {
+    // Divergence 186 against Stalwart differential oracle:
+    // writable, is_type, and holds_a_year:
+    // Recurrence Rule Writability Gating (frequency.is_empty()),
+    // RFC 8984 Implied Optional @type Validation, and Yearly Frequency Span Verification.
+
+    // 1. writable: frequency cannot be empty, until must be valid date-time
+    let empty_freq = RecurrenceRule {
+        frequency: "".to_string(),
+        ..RecurrenceRule::default()
+    };
+    assert!(!jmap_ical::event::writable(&empty_freq));
+
+    let valid_freq_no_until = RecurrenceRule {
+        frequency: "daily".to_string(),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::writable(&valid_freq_no_until));
+
+    let valid_until = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        until: Some("2026-12-31T23:59:59".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::writable(&valid_until));
+
+    let invalid_until = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        until: Some("invalid-date".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert!(!jmap_ical::event::writable(&invalid_until));
+
+    // 2. is_type: RFC 8984 Section 1.4.1 implied optional @type handling
+    assert!(
+        jmap_ical::event::is_type(None, "Alert"),
+        "None implies the expected type"
+    );
+    let correct_type = json!("Alert");
+    assert!(jmap_ical::event::is_type(Some(&correct_type), "Alert"));
+    let wrong_type = json!("AbsoluteTrigger");
+    assert!(!jmap_ical::event::is_type(Some(&wrong_type), "Alert"));
+    let non_string_type = json!(123);
+    assert!(!jmap_ical::event::is_type(Some(&non_string_type), "Alert"));
+
+    // 3. holds_a_year: rejects daily, weekly, monthly per RFC 5545 Section 3.3.10 BYYEARDAY table
+    assert!(!jmap_ical::event::holds_a_year("daily"));
+    assert!(!jmap_ical::event::holds_a_year("weekly"));
+    assert!(!jmap_ical::event::holds_a_year("monthly"));
+    assert!(!jmap_ical::event::holds_a_year("DAILY"));
+    assert!(!jmap_ical::event::holds_a_year("Weekly"));
+    assert!(jmap_ical::event::holds_a_year("yearly"));
+    assert!(jmap_ical::event::holds_a_year("hourly"));
+    assert!(jmap_ical::event::holds_a_year("minutely"));
+    assert!(jmap_ical::event::holds_a_year("secondly"));
+}
+
+#[test]
+fn differential_oracle_category_tags_formatting_and_ast_scalar_extraction() {
+    // Divergence 187 against Stalwart differential oracle:
+    // drawn_tags, maps_keyword, and value_text_str:
+    // RFC 5545 CATEGORIES Tag Formatting: Set Deduplication, Whitespace-Only Tag Stripping,
+    // Carriage Return (\r) Injection Protection, and calcard AST Typed Scalar Extraction.
+
+    // 1. maps_keyword validation
+    assert!(jmap_ical::event::maps_keyword("Project", &json!(true)));
+    assert!(!jmap_ical::event::maps_keyword("Project", &json!(false)));
+    assert!(
+        !jmap_ical::event::maps_keyword("", &json!(true)),
+        "empty tag rejected"
+    );
+    assert!(
+        !jmap_ical::event::maps_keyword("   ", &json!(true)),
+        "whitespace-only tag rejected"
+    );
+    assert!(
+        !jmap_ical::event::maps_keyword("Tag\rHeader: Injection", &json!(true)),
+        "carriage return rejected"
+    );
+    assert!(
+        jmap_ical::event::maps_keyword("Tag\nWithNewline", &json!(true)),
+        "line feed is allowed"
+    );
+
+    // 2. drawn_tags: extracts tags in sorted order, filtering invalid ones
+    let mut keywords = BTreeMap::new();
+    keywords.insert("Zebra".to_string(), json!(true));
+    keywords.insert("Alpha".to_string(), json!(true));
+    keywords.insert("   ".to_string(), json!(true));
+    keywords.insert("Beta".to_string(), json!(false));
+    let event = CalendarEvent {
+        keywords: Some(keywords),
+        ..CalendarEvent::default()
+    };
+    let tags = jmap_ical::event::drawn_tags(&event);
+    assert_eq!(
+        tags,
+        vec!["Alpha", "Zebra"],
+        "drawn_tags extracts valid tags in sorted order"
+    );
+
+    // 3. value_text_str: calcard AST value extraction and binary suppression
+    use calcard::icalendar::{ICalendarValue, Uri};
+    let text_val = ICalendarValue::Text("Summary text".to_string());
+    assert_eq!(
+        jmap_ical::event::value_text_str(&text_val),
+        Some("Summary text".to_string())
+    );
+
+    let int_val = ICalendarValue::Integer(42);
+    assert_eq!(
+        jmap_ical::event::value_text_str(&int_val),
+        Some("42".to_string())
+    );
+
+    let bool_val = ICalendarValue::Boolean(true);
+    assert_eq!(
+        jmap_ical::event::value_text_str(&bool_val),
+        Some("TRUE".to_string())
+    );
+
+    let uri_val = ICalendarValue::Uri(Uri::Location(
+        "https://example.com/calendar.ics".to_string(),
+    ));
+    assert_eq!(
+        jmap_ical::event::value_text_str(&uri_val),
+        Some("https://example.com/calendar.ics".to_string())
+    );
+
+    // Binary payload and data URIs are suppressed (return None)
+    let binary_val = ICalendarValue::Binary(vec![0xde, 0xad, 0xbe, 0xef]);
+    assert_eq!(
+        jmap_ical::event::value_text_str(&binary_val),
+        None,
+        "inline binary payload is suppressed"
+    );
+}

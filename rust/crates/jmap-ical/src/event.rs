@@ -708,7 +708,7 @@ pub fn maps_keyword(tag: &str, set: &Value) -> bool {
 /// The tags to write on the `CATEGORIES` line, in the order the set holds them —
 /// which is sorted, so a document is stable across renderings; the save path
 /// diffs against a re-rendering of what the server holds.
-fn drawn_tags(event: &CalendarEvent) -> Vec<&str> {
+pub fn drawn_tags(event: &CalendarEvent) -> Vec<&str> {
     event
         .keywords
         .iter()
@@ -858,7 +858,7 @@ fn drawn_trigger(trigger: &Value) -> Option<(String, Vec<&'static str>)> {
 
 /// Whether an `@type` member is absent — RFC 8984 §1.4.1 makes it optional where
 /// the type is implied by the property — or names the type it should.
-fn is_type(value: Option<&Value>, name: &str) -> bool {
+pub fn is_type(value: Option<&Value>, name: &str) -> bool {
     value.is_none_or(|value| value.as_str() == Some(name))
 }
 
@@ -1600,7 +1600,7 @@ fn excluded(patch: &Value) -> bool {
 /// written without it, because a recurrence that ends and one that never does
 /// are different events, and the unbounded one repeats into every week of the
 /// user's calendar for ever.
-fn writable(rule: &RecurrenceRule) -> bool {
+pub fn writable(rule: &RecurrenceRule) -> bool {
     !rule.frequency.is_empty()
         && rule
             .until
@@ -1743,7 +1743,10 @@ fn drawn_time_zones(
 /// the prefix lives is genuinely ambiguous and both readings are in the wild.
 /// Asking for either costs nothing, and a zone left undefined because the server
 /// chose the other one is a silent hour.
-fn definition_of<'a>(definitions: &'a BTreeMap<String, Value>, tzid: &str) -> Option<&'a Value> {
+pub fn definition_of<'a>(
+    definitions: &'a BTreeMap<String, Value>,
+    tzid: &str,
+) -> Option<&'a Value> {
     definitions
         .get(tzid)
         .or_else(|| definitions.get(tzid.trim_start_matches('/')))
@@ -2634,7 +2637,7 @@ pub fn component_text(component: &ICalendarComponent, name: &str) -> Option<Stri
     component_entry(component, name).map(entry_text)
 }
 
-pub(crate) fn value_text_str(value: &ICalendarValue) -> Option<String> {
+pub fn value_text_str(value: &ICalendarValue) -> Option<String> {
     value_text(value).map(|(s, _)| s)
 }
 
@@ -4445,7 +4448,7 @@ fn rule_to_rrule(rule: &RecurrenceRule, ends: Ends, as_a_date: bool) -> Option<S
 /// the days: that is where libical puts them (measured in
 /// `jmap-backend-cal/tests/marshal.rs`), and it is not where the parts added
 /// before them went.
-fn named_by_parts(rule: &RecurrenceRule) -> Vec<String> {
+pub fn named_by_parts(rule: &RecurrenceRule) -> Vec<String> {
     [
         by_second_part(rule),
         by_minute_part(rule),
@@ -4464,12 +4467,12 @@ fn named_by_parts(rule: &RecurrenceRule) -> Vec<String> {
 /// The `BYHOUR` part of a rule's `RRULE`, or `None` when the rule names no hours
 /// — and, as with [`by_day_part`], when it names ones this mapping will not
 /// write. RFC 5545 §3.3.10's `hour` is 0 to 23.
-fn by_hour_part(rule: &RecurrenceRule) -> Option<String> {
+pub fn by_hour_part(rule: &RecurrenceRule) -> Option<String> {
     time_of_day_part("BYHOUR", rule.by_hour.as_deref(), 23)
 }
 
 /// The `BYMINUTE` part, on the same terms. §3.3.10's `minutes` is 0 to 59.
-fn by_minute_part(rule: &RecurrenceRule) -> Option<String> {
+pub fn by_minute_part(rule: &RecurrenceRule) -> Option<String> {
     time_of_day_part("BYMINUTE", rule.by_minute.as_deref(), 59)
 }
 
@@ -4477,7 +4480,7 @@ fn by_minute_part(rule: &RecurrenceRule) -> Option<String> {
 /// one more than a minute holds: the sixtieth is the leap second UTC
 /// occasionally inserts, and libical accepts it (measured in
 /// `jmap-backend-cal/tests/marshal.rs`), so this does too.
-fn by_second_part(rule: &RecurrenceRule) -> Option<String> {
+pub fn by_second_part(rule: &RecurrenceRule) -> Option<String> {
     time_of_day_part("BYSECOND", rule.by_second.as_deref(), 60)
 }
 
@@ -4499,7 +4502,7 @@ fn by_second_part(rule: &RecurrenceRule) -> Option<String> {
 /// whose rule names a time as a timed one. libical keeps the contradiction rather
 /// than objecting to it (`jmap-backend-cal/tests/marshal.rs`), so nothing below
 /// this mapping would.
-fn time_of_day_part(name: &str, values: Option<&[u32]>, largest: u32) -> Option<String> {
+pub fn time_of_day_part(name: &str, values: Option<&[u32]>, largest: u32) -> Option<String> {
     let values = values?;
     // An empty part names no time — and libical reads `BYHOUR=` as `BYHOUR=0`,
     // moving every occurrence of the series, which is worse than a part left off.
@@ -4622,7 +4625,7 @@ fn by_year_day_part(rule: &RecurrenceRule) -> Option<String> {
 
 /// Whether a frequency leaves room for a day of the year — everything outside
 /// the `DAILY`/`WEEKLY`/`MONTHLY` column of RFC 5545 §3.3.10's table.
-fn holds_a_year(frequency: &str) -> bool {
+pub fn holds_a_year(frequency: &str) -> bool {
     !["daily", "weekly", "monthly"]
         .iter()
         .any(|period| period.eq_ignore_ascii_case(frequency))
