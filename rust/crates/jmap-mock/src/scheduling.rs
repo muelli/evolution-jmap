@@ -53,18 +53,17 @@ pub(crate) fn own_addresses(account: &AccountState) -> BTreeSet<String> {
         .collect()
 }
 
-/// Whether everyone this event's creation would have to be announced to can
-/// actually be reached, which §5.9.2 makes a precondition of the change
-/// rather than of the message: a recipient with no `calendarAddress` at all
-/// is one the server has no scheduling method for.
+/// Whether everyone this event would have to be announced to, in the shape
+/// it is being left in by this `/set` call, can actually be reached, which
+/// §5.9.2 makes a precondition of the change rather than of the message: a
+/// recipient with no `calendarAddress` at all is one the server has no
+/// scheduling method for.
 ///
-/// Only creates are checked. `simple_set` validates creates and nothing else,
-/// so refusing an update or a destroy for the same reason needs a validation
-/// hook it does not have; that is left for the increment that adds one.
-pub(crate) fn create_recipients_are_reachable(
-    event: &CalendarEvent,
-    own: &BTreeSet<String>,
-) -> bool {
+/// Applies the same test to a create's object, an update's patched result
+/// and a destroy's about-to-be-removed object: whichever one it is, that is
+/// the event whose participant list the server is about to announce a
+/// REQUEST or CANCEL to.
+pub(crate) fn recipients_are_reachable(event: &CalendarEvent, own: &BTreeSet<String>) -> bool {
     if !is_origin(event, own) {
         // The one recipient is the organizer, and an event without an
         // organizer address would have been this account's own.
