@@ -28,6 +28,7 @@ mod message;
 mod patch;
 mod principals;
 mod quota;
+mod scheduling;
 mod server;
 mod setops;
 mod sieve;

@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use jmap_proto::Id;
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
-    CalendarEventParseRequest, CalendarEventQueryFilter, CalendarRights,
-    calendar_event_notification_type,
+    CalendarEventParseRequest, CalendarEventQueryFilter, CalendarEventSetRequest, CalendarRights,
+    ParticipantIdentity, calendar_event_notification_type, calendar_event_set_error,
 };
 use jmap_proto::error::{self, MethodError, SetError};
 use jmap_proto::methods::{
@@ -20,6 +20,7 @@ use jmap_proto::state::UtcDate;
 use serde_json::Value;
 
 use crate::dispatch::{account_mut, parse_arguments, project_properties, to_result};
+use crate::scheduling::EventChange;
 use crate::setops::simple_set;
 use crate::state::{AccountState, ServerState};
 
@@ -232,28 +233,30 @@ pub fn calendar_event_set(
     arguments: Value,
     caller: Option<&Id>,
 ) -> Result<Value, MethodError> {
-    let request: SetRequest<CalendarEvent> = parse_arguments(arguments)?;
+    let request: CalendarEventSetRequest = parse_arguments(arguments)?;
+    let send_scheduling_messages = request.send_scheduling_messages.unwrap_or(false);
+    let request = request.set;
     let account = account_mut(state, &request.account_id)?;
 
-    // Captured before `simple_set` consumes `request.destroy`: a destroyed
-    // event's `calendarIds` is needed afterwards, once the event itself is
-    // gone, to know who to send a `CalendarEventNotification` (draft
-    // §8) to.
-    let destroyed_calendar_ids: BTreeMap<Id, Vec<Id>> = request
-        .destroy
+    // Captured before `simple_set` consumes the request, since both uses need
+    // an event the call is about to change or remove: a destroyed event's
+    // `calendarIds` says who to send a `CalendarEventNotification` (draft §8)
+    // to once the event itself is gone, and an update's scheduling messages
+    // (draft §5.9.2) are decided by what moved between these two states.
+    let before: BTreeMap<Id, CalendarEvent> = request
+        .update
         .iter()
         .flatten()
+        .map(|(id, _)| id)
+        .chain(request.destroy.iter().flatten())
         .filter_map(|id| {
-            account.calendar_events.get(id).map(|event| {
-                let calendar_ids = event
-                    .calendar_ids
-                    .as_ref()
-                    .map(|map| map.keys().cloned().collect())
-                    .unwrap_or_default();
-                (id.clone(), calendar_ids)
-            })
+            account
+                .calendar_events
+                .get(id)
+                .map(|event| (id.clone(), event.clone()))
         })
         .collect();
+    let own_addresses = crate::scheduling::own_addresses(account);
 
     let AccountState {
         calendars,
@@ -291,6 +294,17 @@ pub fn calendar_event_set(
         // deployment is what keeps the mock honest.
         if event.version.as_deref() != Some("2.0") {
             return Err(SetError::new(error::set::INVALID_PROPERTIES).with_properties(["version"]));
+        }
+        // draft §5.9.2: a change that asks for scheduling messages is only
+        // accepted if everyone it would have to announce itself to can be
+        // reached at all.
+        if send_scheduling_messages
+            && event.is_draft != Some(true)
+            && !crate::scheduling::create_recipients_are_reachable(event, &own_addresses)
+        {
+            return Err(SetError::new(
+                calendar_event_set_error::NO_SUPPORTED_SCHEDULE_METHODS,
+            ));
         }
         event.id = Some(id.clone());
         if event.event_type.is_none() {
@@ -350,7 +364,11 @@ pub fn calendar_event_set(
     }
     if let Some(destroyed) = &response.destroyed {
         for id in destroyed {
-            let calendar_ids = destroyed_calendar_ids.get(id).cloned().unwrap_or_default();
+            let calendar_ids: Vec<Id> = before
+                .get(id)
+                .and_then(|event| event.calendar_ids.as_ref())
+                .map(|map| map.keys().cloned().collect())
+                .unwrap_or_default();
             record_event_change_notifications(
                 account,
                 id,
@@ -360,6 +378,40 @@ pub fn calendar_event_set(
                 None,
             );
         }
+    }
+
+    // draft §5.9.2: the iTIP side of the same three lists, once the change
+    // itself has been applied.
+    if send_scheduling_messages {
+        let mut changes = Vec::new();
+        for event in response.created.iter().flatten().map(|(_, event)| event) {
+            if let Some(id) = event.id.clone() {
+                changes.push(EventChange {
+                    id,
+                    before: None,
+                    after: Some(event.clone()),
+                });
+            }
+        }
+        for id in response.updated.iter().flatten().map(|(id, _)| id) {
+            if let (Some(was), Some(now)) = (before.get(id), account.calendar_events.get(id)) {
+                changes.push(EventChange {
+                    id: id.clone(),
+                    before: Some(was.clone()),
+                    after: Some(now.clone()),
+                });
+            }
+        }
+        for id in response.destroyed.iter().flatten() {
+            if let Some(was) = before.get(id) {
+                changes.push(EventChange {
+                    id: id.clone(),
+                    before: Some(was.clone()),
+                    after: None,
+                });
+            }
+        }
+        crate::scheduling::record_scheduling_messages(account, &changes);
     }
 
     let mut result = to_result(&response)?;
@@ -743,6 +795,26 @@ pub fn calendar_event_notification_set(
 
 impl AccountState {
     /// Seed a calendar; returns its id. Does not bump state.
+    /// Seed a `ParticipantIdentity` (draft-ietf-jmap-calendars-28 §3), which
+    /// is what makes a calendar address count as *this account* when the
+    /// server decides who to send scheduling messages to. Returns its id;
+    /// does not bump state.
+    pub fn seed_participant_identity(
+        &mut self,
+        name: &str,
+        calendar_address: &str,
+        is_default: bool,
+    ) -> Id {
+        let id = self.participant_identities.alloc_id();
+        let identity = ParticipantIdentity::new(name)
+            .with_id(id.clone())
+            .with_calendar_address(calendar_address)
+            .is_default(is_default);
+        self.participant_identities
+            .seed_with_id(id.clone(), identity);
+        id
+    }
+
     pub fn seed_calendar(&mut self, name: &str, is_default: bool) -> Id {
         let id = self.calendars.alloc_id();
         let calendar = Calendar {
