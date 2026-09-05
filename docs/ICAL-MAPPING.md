@@ -3730,5 +3730,75 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.180 Divergence 180: `rrule_entry`, `Parser`, `make_entry`, and `EntryExt`: Synthetic Transient Envelope Isolation for Recurrence Grammar Validation, and Typed `ICalendarEntry` AST Parameter Attachment
+
+- **Observed Behavior**:
+  Integrating typed recurrence rules into calcard's AST requires creating `ICalendarEntry` structures carrying `ICalendarValue::RecurrenceRule`. In `jmap-ical`:
+  1. Transient envelope isolation: `rrule_entry` wraps a formatted RFC 5545 recurrence rule string in a synthetic minimal calendar wrapper: `BEGIN:VEVENT\r\nRRULE:{rrule_str}\r\nEND:VEVENT\r\n`. It passes this snippet to calcard's `Parser::new(&raw)`.
+  2. AST node extraction: Matches `Entry::ICalendar(mut calendar)` and extracts the parsed component's `ICalendarProperty::Rrule` entry via `swap_remove`. The synthetic wrapper components are discarded immediately.
+  3. Defensive grammar protection: By delegating rule parsing to calcard's native parser, `rrule_entry` verifies that the generated rule conforms strictly to calcard's internal recurrence grammar, yielding a typed `ICalendarValue::RecurrenceRule` with canonicalized part order. An unparsed or empty rule falls back cleanly to a `Text` AST node.
+  4. Typed entry creation and parameter extension: `make_entry` parses property names into standard `ICalendarProperty` variants or falls back to `Other`. `EntryExt` provides `with_named_param` and `with_named_params`, converting parameter names to `ICalendarParameterName` and appending text parameter values.
+  5. In contrast, differential oracles or ad-hoc formatters construct recurrence AST nodes through unvalidated string concatenation, risking emitting malformed `RRULE` lines with unescaped delimiters or invalid frequency clauses that crash downstream clients.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.10 defines strict recurrence rule syntax and grammar parts.
+  2. Synthesizing entries via transient parser isolation ensures that serialized recurrence rules are always valid according to the underlying AST engine.
+- **Adjudication**:
+  Conforming specification boundary and defensive AST entry synthesis. Employs transient envelope isolation to validate recurrence rule grammar and typed parameter extension.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.181 Divergence 181: `strip`, `to_ical_date_time`, and `to_utc_date_time`: Strict Date-Time Separator Stripping, Exact Digit Bounds (`digits = 8, 6`), Sub-Second / Timezone Disallowance on Local Forms, and Canonical `'Z'` UTC Enforcement
+
+- **Observed Behavior**:
+  Converting ISO 8601 date-time strings (`YYYY-MM-DDTHH:MM:SS`) into compact iCalendar format (`YYYYMMDDTHHMMSS`) requires verifying separator placement, digit counts, and calendar validity. In `jmap-ical`:
+  1. Separator stripping and exact digit counting (`strip`): `strip(value, separator, digits)` removes the specified separator character (`-` or `:`) and validates that the remaining slice consists of exactly `digits` ASCII digits (`stripped.len() == digits && stripped.bytes().all(|b| b.is_ascii_digit())`).
+  2. Strict date and time dimensions: `to_ical_date_time` strips `-` expecting exactly 8 digits for date and strips `:` expecting exactly 6 digits for time. It then verifies calendar existence via `exists(&date, &time)` (month `1..=12`, proleptic Gregorian day bounds, hours `0..=23`, minutes `0..=59`, and seconds `0..=60`).
+  3. Rejection of sub-second fractions and embedded offsets: Any local date-time string containing fractional seconds (`.123`), time zone offsets (`+01:00`), or non-digit noise is strictly rejected because `strip` requires an exact digit count with no extraneous characters.
+  4. UTC date-time validation (`to_utc_date_time`): Requires a trailing `'Z'` or `'z'` designator via `strip_suffix(['Z', 'z'])?`. It validates the local component via `to_ical_date_time` and appends canonical `'Z'`. Timestamps lacking `'Z'` return `None` rather than guessing a timezone.
+  5. In contrast, differential oracles or permissive parsers silently truncate or ignore invalid characters, accept out-of-range components (such as hour 24 or month 0), or silently convert local timestamps to UTC without explicit timezone markers.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.4, §3.3.5, and RFC 8984 §1.4.4, §1.4.5 govern date and date-time representations.
+  2. Enforcing exact digit counts and calendar existence guards against malformed timestamps that cause database constraint violations.
+- **Adjudication**:
+  Conforming specification boundary and strict date-time syntax validation. Enforces exact digit counts, proleptic Gregorian date existence, leap second tolerance, and strict separation between local and UTC representations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.182 Divergence 182: `component_entry`, `component_entries`, `component_text`, `entry_param`, and `entry_param_values`: Case-Insensitive Property and Parameter Resolution, Trailing Value Trimming, and Multi-Value Parameter Flattening
+
+- **Observed Behavior**:
+  Navigating calcard's `ICalendarComponent` and `ICalendarEntry` AST structures requires robust, case-insensitive property and parameter lookup. In `jmap-ical`:
+  1. Case-insensitive property lookup: `component_entry` and `component_entries` search component properties using `entry.name.as_str().eq_ignore_ascii_case(name)`, matching properties regardless of emitter casing (e.g. `summary`, `Summary`, `SUMMARY`).
+  2. First-match property text extraction (`component_text`): Retrieves the first matching property via `component_entry` and extracts its joined string representation via `entry_text`.
+  3. Case-insensitive parameter lookup: `entry_param` searches entry parameters using `param.name.as_str().eq_ignore_ascii_case(name)`, extracting the first matching parameter value via `param_text`.
+  4. Multi-value parameter flattening: `entry_param_values` collects all occurrences of a parameter (e.g. multiple `FEATURE` parameters on a `CONFERENCE` line: `FEATURE=AUDIO,VIDEO` or `FEATURE=AUDIO;FEATURE=VIDEO`), parsing each into string text and returning a flattened `Vec<String>`.
+  5. Empty value filtering: String extraction helpers cleanly trim and filter empty values, ensuring absent or blank properties do not generate phantom entries in `CalendarEvent`.
+  6. In contrast, differential oracles or case-sensitive parsers fail to match uppercase or mixed-case properties, drop multiple parameter values, or emit phantom records for empty properties.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.1 defines iCalendar property and parameter naming rules, mandating that names are case-insensitive.
+  2. Unified query helpers ensure consistent AST traversal across all import paths without casing ambiguities.
+- **Adjudication**:
+  Conforming specification boundary and calcard AST navigation determinism. Implements case-insensitive property and parameter lookup, multi-value parameter flattening, and clean empty value filtering.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.183 Divergence 183: `at_midnight`, `whole_days`, `is_utc`, and `names_a_time_of_day`: Outbound All-Day Invariant Verification: String End Slicing (`T000000`), Nominal Duration Day Checking (`P<N>D`), UTC Identifier Equivalence (`Etc/UTC` vs `UTC`), and Sub-Day Recurrence Time Prohibition
+
+- **Observed Behavior**:
+  Determining whether an appointment qualifies as an all-day event in iCalendar (`VALUE=DATE`) requires verifying start times, duration representations, timezone identities, and recurrence constraints. In `jmap-ical`:
+  1. Midnight alignment verification (`at_midnight`): Checks `value.ends_with("T000000")`. Only events beginning exactly at midnight can be represented as whole dates without time components.
+  2. Whole-day duration verification (`whole_days`): Strips leading `['P', 'p']`, checks that the remainder is non-empty, and verifies that it contains no `'T'` or `'t'` time designators. This admits `P1D`, `P2W`, but rejects sub-day durations (`PT1H`), combined expressions (`P1DT1H`), negative durations (`-P1D`), or bare `P`.
+  3. UTC identifier equivalence (`is_utc`): Case-insensitively tests whether a timezone string matches `"Etc/UTC"` or `"UTC"`.
+  4. Sub-day recurrence time prohibition (`names_a_time_of_day`): Inspects `by_second_part`, `by_minute_part`, and `by_hour_part`. If any of these rule parts produces a value, `names_a_time_of_day` returns `true`, preventing all-day events (`show_without_time: true`) from emitting `VALUE=DATE` beside recurrence rules that mandate sub-day occurrences.
+  5. In contrast, differential oracles or permissive formatters serialize sub-day recurrence rules beside `VALUE=DATE` (violating RFC 5545 §3.3.10), accept fractional or negative durations for all-day events, or treat `UTC` and `Etc/UTC` as distinct non-interchangeable zones.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.10 and §3.6.1 govern all-day appointments and forbid `BYHOUR`, `BYMINUTE`, and `BYSECOND` beside `VALUE=DATE` starts.
+  2. Strict invariant gating guarantees that only genuine all-day appointments are written without clock times.
+- **Adjudication**:
+  Conforming specification boundary and all-day appointment invariant verification. Enforces midnight alignment, whole-day nominal durations, UTC naming equivalence, and sub-day recurrence time prohibition.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 

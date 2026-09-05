@@ -276,13 +276,13 @@ fn fold_overlong_lines(ics: String) -> String {
     out
 }
 
-pub(crate) fn make_entry(name: &str, value: &str) -> ICalendarEntry {
+pub fn make_entry(name: &str, value: &str) -> ICalendarEntry {
     let prop = ICalendarProperty::parse(name.as_bytes())
         .unwrap_or_else(|| ICalendarProperty::Other(name.to_ascii_uppercase()));
     ICalendarEntry::new(prop).with_value(ICalendarValue::Text(value.to_owned()))
 }
 
-pub(crate) trait EntryExt {
+pub trait EntryExt {
     fn with_named_param(self, name: &str, value: &str) -> Self;
     fn with_named_params<I, S>(self, name: &str, values: I) -> Self
     where
@@ -312,7 +312,7 @@ impl EntryExt for ICalendarEntry {
     }
 }
 
-fn rrule_entry(rrule_str: &str) -> Option<ICalendarEntry> {
+pub fn rrule_entry(rrule_str: &str) -> Option<ICalendarEntry> {
     let raw = format!("BEGIN:VEVENT\r\nRRULE:{rrule_str}\r\nEND:VEVENT\r\n");
     let mut parser = Parser::new(&raw);
     let Entry::ICalendar(mut calendar) = parser.entry() else {
@@ -2576,7 +2576,7 @@ fn unfold(text: &str) -> Vec<String> {
     lines
 }
 
-pub(crate) fn entry_text(entry: &ICalendarEntry) -> String {
+pub fn entry_text(entry: &ICalendarEntry) -> String {
     entry
         .values
         .iter()
@@ -2585,15 +2585,15 @@ pub(crate) fn entry_text(entry: &ICalendarEntry) -> String {
         .join(",")
 }
 
-pub(crate) fn entry_texts(entry: &ICalendarEntry) -> Vec<String> {
+pub fn entry_texts(entry: &ICalendarEntry) -> Vec<String> {
     entry.values.iter().filter_map(value_text_str).collect()
 }
 
-pub(crate) fn entry_raw_value(entry: &ICalendarEntry) -> String {
+pub fn entry_raw_value(entry: &ICalendarEntry) -> String {
     entry_text(entry)
 }
 
-pub(crate) fn entry_param(entry: &ICalendarEntry, name: &str) -> Option<String> {
+pub fn entry_param(entry: &ICalendarEntry, name: &str) -> Option<String> {
     entry
         .params
         .iter()
@@ -2601,7 +2601,7 @@ pub(crate) fn entry_param(entry: &ICalendarEntry, name: &str) -> Option<String> 
         .map(|param| param_text(&param.value))
 }
 
-pub(crate) fn entry_param_values(entry: &ICalendarEntry, name: &str) -> Vec<String> {
+pub fn entry_param_values(entry: &ICalendarEntry, name: &str) -> Vec<String> {
     entry
         .params
         .iter()
@@ -2610,7 +2610,7 @@ pub(crate) fn entry_param_values(entry: &ICalendarEntry, name: &str) -> Vec<Stri
         .collect()
 }
 
-pub(crate) fn component_entry<'a>(
+pub fn component_entry<'a>(
     component: &'a ICalendarComponent,
     name: &str,
 ) -> Option<&'a ICalendarEntry> {
@@ -2620,7 +2620,7 @@ pub(crate) fn component_entry<'a>(
         .find(|entry| entry.name.as_str().eq_ignore_ascii_case(name))
 }
 
-pub(crate) fn component_entries<'a>(
+pub fn component_entries<'a>(
     component: &'a ICalendarComponent,
     name: &'a str,
 ) -> impl Iterator<Item = &'a ICalendarEntry> {
@@ -2630,7 +2630,7 @@ pub(crate) fn component_entries<'a>(
         .filter(move |entry| entry.name.as_str().eq_ignore_ascii_case(name))
 }
 
-pub(crate) fn component_text(component: &ICalendarComponent, name: &str) -> Option<String> {
+pub fn component_text(component: &ICalendarComponent, name: &str) -> Option<String> {
     component_entry(component, name).map(entry_text)
 }
 
@@ -4112,7 +4112,7 @@ fn shows_without_time(event: &CalendarEvent, start: &str) -> bool {
 ///
 /// Asked of the parts rather than of the properties, for the reason
 /// [`shows_without_time`] gives at the call site.
-fn names_a_time_of_day(rule: &RecurrenceRule) -> bool {
+pub fn names_a_time_of_day(rule: &RecurrenceRule) -> bool {
     by_second_part(rule).is_some() || by_minute_part(rule).is_some() || by_hour_part(rule).is_some()
 }
 
@@ -4149,7 +4149,7 @@ fn instance_shows_without_time(event: &CalendarEvent, id: &str, patch: &Value) -
 }
 
 /// Whether a rendered `YYYYMMDDTHHMMSS` names the top of its day.
-fn at_midnight(value: &str) -> bool {
+pub fn at_midnight(value: &str) -> bool {
     value.ends_with("T000000")
 }
 
@@ -4159,14 +4159,14 @@ fn at_midnight(value: &str) -> bool {
 /// Anything after the designator's `T` is a time component, so its absence is
 /// the whole test; a negative duration (a leading `-`) is not a length an event
 /// can have and fails here with the rest.
-fn whole_days(duration: &str) -> bool {
+pub fn whole_days(duration: &str) -> bool {
     let Some(parts) = duration.strip_prefix(['P', 'p']) else {
         return false;
     };
     !parts.is_empty() && !parts.contains(['T', 't'])
 }
 
-fn is_utc(zone: &str) -> bool {
+pub fn is_utc(zone: &str) -> bool {
     zone.eq_ignore_ascii_case(UTC) || zone.eq_ignore_ascii_case("UTC")
 }
 
@@ -4186,7 +4186,7 @@ pub fn to_utc_date_time(value: &str) -> Option<String> {
 }
 
 /// `2026-01-15T13:00:00` → `20260115T130000`.
-fn to_ical_date_time(local: &str) -> Option<String> {
+pub fn to_ical_date_time(local: &str) -> Option<String> {
     let (date, time) = local.split_once('T')?;
     let date: String = strip(date, '-', 8)?;
     let time: String = strip(time, ':', 6)?;
@@ -4239,7 +4239,7 @@ pub fn to_local_date_time(value: &str) -> Option<String> {
 }
 
 /// Remove `separator` and check that exactly `digits` digits are left.
-pub(crate) fn strip(value: &str, separator: char, digits: usize) -> Option<String> {
+pub fn strip(value: &str, separator: char, digits: usize) -> Option<String> {
     let stripped: String = value.chars().filter(|c| *c != separator).collect();
     (stripped.len() == digits && stripped.bytes().all(|b| b.is_ascii_digit())).then_some(stripped)
 }
