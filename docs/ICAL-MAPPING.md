@@ -2802,3 +2802,78 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.128 Divergence 128: `instance_shows_without_time`: Recurrence Override All-Day Validation (`at_midnight`, `whole_days`, `time_zone.is_none`) and Timed Elevation vs Override Mismatch
+
+- **Observed Behavior**:
+  RFC 8984 §4.1.4 and §4.3.4 model all-day recurring series and per-instance overrides. In RFC 5545 §3.8.4.4 and §3.8.2.4, an all-day detached instance requires a date-only `RECURRENCE-ID` and `DTSTART;VALUE=DATE`. In `jmap-ical`:
+  1. Multi-invariant all-day override check: In `shows_without_time`, every override in `event.recurrence_overrides` is validated via `instance_shows_without_time`.
+  2. Recurrence ID midnight alignment: `at_midnight(&rendered)` checks that the override recurrence identifier `id` lands at midnight `T000000`. An occurrence identifier naming an intra-day time (such as `09:00:00`) fails validation.
+  3. Instance property constraints: For any modified instance (`modified_instance`), it verifies that `instance.time_zone.is_none()`, `instance.start` (if specified) falls at midnight, and `instance.duration` (if specified) represents whole days via `whole_days` (starts with `P`/`p`, contains no `T`/`t` time delimiter).
+  4. Timed elevation fallback: If any override violates these constraints, `instance_shows_without_time` returns `false`. Consequently, `shows_without_time` on the series returns `false`, elevating the master series and all overrides to timed representation (`DATE-TIME` without `VALUE=DATE`).
+  5. In contrast, differential oracles or naive CalDAV serializers often emit `VALUE=DATE` on detached instances that have moved to specific times of day, or serialize conflicting date-only and timed components under the same series, producing inconsistent calendar renderings in client applications.
+- **Specification and Architectural Context**:
+  1. In RFC 5545 §3.2.19, `TZID` is explicitly forbidden beside `VALUE=DATE`. If an override moves an all-day occurrence to a specific timezone or intra-day time, serializing it as `VALUE=DATE` would discard the scheduled meeting hours.
+  2. Evolution Data Server renders all-day events across the top banner of the calendar grid. Displaying a timed meeting in the banner obscures other appointments and conceals meeting start times.
+  3. Elevating the entire series to timed date-time representation when an override introduces times ensures full temporal accuracy across CalDAV clients while preserving all occurrence modifications.
+- **Adjudication**:
+  Conforming specification boundary and all-day override integrity guarantee. Enforces midnight start, timezone absence, and whole-day duration on overrides, elevating to timed date-time representation when an override introduces intra-day timing.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.129 Divergence 129: `maps_override_field` vs `draws_override_field`: Timezone Definition Scoping (`defines_time_zone`), Standalone Patch Dangling Defense, Empty Property Refusal (`title: ""`, `keywords: {}`, `alerts: {}`), and Default Alerts Conflict Guard
+
+- **Observed Behavior**:
+  RFC 8984 §4.3.4 defines `recurrenceOverrides` patch objects. In JMAP, an update may patch `recurrenceOverrides` alone without modifying the event's `timeZones` map. In contrast, RFC 5545 serializes detached `VEVENT` components inside a `VCALENDAR` that holds all `VTIMEZONE` blocks. In `jmap-ical`:
+  1. Timezone definition scoping: `maps_override_field` accepts only standard IANA timezone identifiers (`names_time_zone(tzid)`) or null. It strictly rejects custom solidus timezones (`/prefix/...`). In contrast, `draws_override_field` (used when drawing full `VCALENDAR` streams or when sending bundled updates via `sends_recurrence_override`) permits custom timezones if defined in the series (`defines_time_zone(series, tzid)`).
+  2. Dangling identifier defense: Sending a custom timezone in an isolated `recurrenceOverrides` patch without accompanying `timeZones` updates would leave the custom identifier dangling on the JMAP server, causing rejection with `invalidProperties`.
+  3. Empty string refusal: `title: ""` and `description: ""` are refused because an empty string serializes as an absent content line, which on read-back returns `null` (property removal), mutating patch semantics.
+  4. Empty map refusal: Empty maps (`keywords: {}` and `alerts: {}`) are refused because they emit no `CATEGORIES` or `VALARM` lines, reading back as `null` rather than `{}`.
+  5. Default alerts conflict guard: If `uses_default_alerts(series)` is true, any override attempting to set `alerts` (even `null` or a valid map) is rejected (`!uses_default_alerts(series)`), preventing conflicting alarm configurations between series and instances.
+  6. In contrast, differential oracles or permissive parsers may accept empty maps or send custom timezone strings in isolated patches, triggering schema errors or dangling reference rejections on conformant JMAP servers.
+- **Specification and Architectural Context**:
+  1. JMAP servers validate patch operations atomically. Emitting dangling timezone references or empty objects that normalize to null causes patch desynchronization and server validation failures.
+  2. RFC 8984 §1.4.9 mandates that custom solidus identifiers must not be used without an accompanying definition in `timeZones`. Standalone override patches cannot carry timezone definitions, so restricting them to standard IANA zones protects synchronization safety.
+  3. Prohibiting alert overrides when default alerts are active respects RFC 8984 §4.5.1 semantics and prevents ambiguous reminder state.
+- **Adjudication**:
+  Conforming specification boundary and patch idempotence defense. Differentiates standalone vs bundled timezone scoping, rejects empty string and map mutations that distort patch semantics, and gates alarms against default alerts.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.130 Divergence 130: `value_text` and `date_time_text`: Comprehensive `calcard` AST Variant Mapping, Negative Zero (`-0000`) Offset Normalization, and Binary / Data URI Rejection
+
+- **Observed Behavior**:
+  RFC 5545 §3.3 defines value data types. Upstream `calcard::icalendar` models property values as the enum `ICalendarValue` (20 variants) and parameters as `ICalendarParameterValue` (19 variants). In `jmap-ical`:
+  1. Strongly-typed AST variant extraction: `value_text` systematically maps all 18 scalar and structured variants of `ICalendarValue` (Text, PartialDateTime, Duration, RecurrenceRule, Period, Uri::Location, Integer, Float, Boolean, CalendarScale, Method, Classification, Status, Transparency, Action, BusyType, ParticipantType, ResourceType, Proximity) into normalized strings and flags whether the value was plain text.
+  2. Binary and Data URI rejection: `ICalendarValue::Binary(_)` and `ICalendarValue::Uri(Uri::Data(_))` return `None`, safely dropping unhandled payload blobs and inline data URIs from property lines.
+  3. Negative zero offset normalization: In `date_time_text`, if a `PartialDateTime` with no date components formats as `"-0000"`, it is normalized to `"+0000"` (`match out == "-0000" { true => "+0000".to_owned(), false => out }`). RFC 5545 §3.3.14 forbids negative zero UTC offsets.
+  4. Parameter extraction: `param_text` handles all 19 parameter value variants, stringifying enums, booleans (`TRUE`/`FALSE`), integers, and converting `Uri::Data` or `Null` to empty strings.
+  5. In contrast, differential oracles or naive AST consumers that only inspect `ICalendarValue::Text` drop typed properties (such as `STATUS:CONFIRMED` or `TRANSP:OPAQUE`) as empty or fail to sanitize negative zero offsets.
+- **Specification and Architectural Context**:
+  1. `calcard`'s parser returns strongly-typed AST variants for known properties. If an AST extractor only handles `Text`, any typed property parsed as an enum variant is silently discarded, causing loss of appointment status, priority, and privacy.
+  2. RFC 5545 §3.3.14 defines UTC offsets as `("+" / "-") 2DIGIT 2DIGIT [2DIGIT]`, and specifies that an offset of negative zero is either illegal or semantically undefined. Normalizing `-0000` to `+0000` ensures compliance with libical parser requirements.
+  3. Dropping inline binary attachments prevents excessive memory consumption and protects local storage from oversized data payloads.
+- **Adjudication**:
+  Conforming specification boundary and AST serialization completeness. Maps all `calcard` AST variants, normalizes negative zero offsets to `+0000`, and rejects inline binary/data payloads.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.131 Divergence 131: `read_definition` and `read_observance`: Tripartite RFC 5545 §3.6.5 Required Property Validation (`DTSTART`, `TZOFFSETFROM`, `TZOFFSETTO`), At Least One Observance Gate, and Local `UNTIL` Offset Calculation (`Ends::At`)
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.5 specifies `VTIMEZONE` and its `STANDARD` and `DAYLIGHT` subcomponents. RFC 8984 §4.7.2 models custom timezones as `TimeZone` objects containing `TimeZoneRule`s in `standard` and `daylight` arrays. In `jmap-ical`:
+  1. Tripartite required property validation: `read_observance` strictly requires all three RFC 5545 §3.6.5 mandatory properties: `DTSTART`, `TZOFFSETFROM`, and `TZOFFSETTO`. If any of these three is missing or fails conversion (`to_local_date_time`, `utc_offset`), `read_observance` returns `None`.
+  2. At least one observance gate: RFC 5545 §3.6.5 requires at least one `STANDARD` or `DAYLIGHT` subcomponent in every `VTIMEZONE`. In `read_definition`, `observances` counts the total valid subcomponents; if `observances == 0`, `read_definition` returns `None`, dropping the empty `VTIMEZONE`.
+  3. Observance `DTSTART` local resolution: `DTSTART` in an observance carries no `TZID` parameter; `read_observance` reads it directly via `to_local_date_time` without querying external zone databases, because RFC 5545 §3.6.5 dictates that an observance dates itself against `TZOFFSETFROM`.
+  4. Local `UNTIL` calculation (`Ends::At(&offset_from)`): When parsing `RRULE` on an observance, any UTC `UNTIL` parameter is shifted to local time using arithmetic against `offset_from` rather than referencing external timezone definitions.
+  5. `TZNAME` parameter stripping: Multiple `TZNAME` properties are collected into the `names` map (`{name: true}`), dropping `LANGUAGE` parameters per RFC 8984 §4.7.2.
+  6. In contrast, differential oracles or permissive parsers may accept empty `VTIMEZONE` components, ingest observances lacking mandatory offsets, or attempt to resolve observance `UNTIL` against external database transitions rather than the observance's own `TZOFFSETFROM`.
+- **Specification and Architectural Context**:
+  1. An empty `VTIMEZONE` or an observance lacking offsets or start times conveys no timezone transition information and violates RFC 5545 §3.6.5 grammar. Discarding invalid definitions protects the client from injecting corrupt `TimeZone` objects into JMAP.
+  2. Resolving observance `UNTIL` dates against `TZOFFSETFROM` via arithmetic calculation ensures that observance recurrence rules terminate at the exact intended local moment without external timezone database dependencies.
+  3. Converting `TZNAME` properties into RFC 8984 boolean maps produces clean, language-neutral timezone representations for JMAP consumers.
+- **Adjudication**:
+  Conforming specification boundary and timezone definition fidelity. Enforces tripartite mandatory property presence, requires at least one observance, resolves `DTSTART` and `UNTIL` against `TZOFFSETFROM`, and extracts `TZNAME` into clean boolean maps.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
