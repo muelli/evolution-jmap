@@ -118,10 +118,29 @@ fn window<T>(store: &Store<T>, since: u64, cap: Option<u64>) -> (u64, bool) {
 /// (it receives the freshly allocated id). The created-response map echoes
 /// the full stored object — a superset of the server-set properties, which
 /// clients may rely on.
+///
+/// Update and destroy are not validated: use [`simple_set_with_validation`]
+/// for a data type that needs to refuse one of those too.
 pub(crate) fn simple_set<T>(
     store: &mut Store<T>,
     request: SetRequest<T>,
+    prepare: impl FnMut(&Id, &mut T) -> Result<(), SetError>,
+) -> Result<SetResponse<T>, MethodError>
+where
+    T: Clone + serde::Serialize + serde::de::DeserializeOwned,
+{
+    simple_set_with_validation(store, request, prepare, |_, _, _| Ok(()), |_, _| Ok(()))
+}
+
+/// Same as [`simple_set`], but also validates an update against the object
+/// both before and after the patch, and a destroy against the object about
+/// to be removed, refusing either before it is ever applied to the store.
+pub(crate) fn simple_set_with_validation<T>(
+    store: &mut Store<T>,
+    request: SetRequest<T>,
     mut prepare: impl FnMut(&Id, &mut T) -> Result<(), SetError>,
+    mut validate_update: impl FnMut(&Id, &T, &T) -> Result<(), SetError>,
+    mut validate_destroy: impl FnMut(&Id, &T) -> Result<(), SetError>,
 ) -> Result<SetResponse<T>, MethodError>
 where
     T: Clone + serde::Serialize + serde::de::DeserializeOwned,
@@ -164,13 +183,18 @@ where
         let mut value = serde_json::to_value(existing).map_err(|e| {
             MethodError::new(error::method::SERVER_FAIL).with_description(e.to_string())
         })?;
-        match apply_patch(&mut value, patch_map)
+        let outcome = apply_patch(&mut value, patch_map)
             .map_err(|message| SetError::new(error::set::INVALID_PATCH).with_description(message))
             .and_then(|()| {
                 serde_json::from_value::<T>(value).map_err(|e| {
                     SetError::new(error::set::INVALID_PATCH).with_description(e.to_string())
                 })
-            }) {
+            })
+            .and_then(|patched| {
+                validate_update(&id, existing, &patched)?;
+                Ok(patched)
+            });
+        match outcome {
             Ok(patched) => to_update.push((id, patched)),
             Err(set_error) => {
                 not_updated.insert(id, set_error);
@@ -189,10 +213,19 @@ where
             updated.insert(id, None);
         }
         for id in request.destroy.unwrap_or_default() {
-            if transaction.destroy(&id) {
-                destroyed.push(id);
-            } else {
-                not_destroyed.insert(id, SetError::new(error::set::NOT_FOUND));
+            match transaction.get(&id) {
+                None => {
+                    not_destroyed.insert(id, SetError::new(error::set::NOT_FOUND));
+                }
+                Some(existing) => match validate_destroy(&id, existing) {
+                    Ok(()) => {
+                        transaction.destroy(&id);
+                        destroyed.push(id);
+                    }
+                    Err(set_error) => {
+                        not_destroyed.insert(id, set_error);
+                    }
+                },
             }
         }
     });

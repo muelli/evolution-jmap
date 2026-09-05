@@ -326,6 +326,80 @@ fn answering_someone_elses_invitation_replies_to_the_organizer() {
 }
 
 #[test]
+fn updating_to_add_an_unreachable_participant_is_refused() {
+    let fixture = Fixture::new();
+    let id = fixture.create(&meeting(&fixture.calendar_id), true);
+    let mark = fixture.sent().len();
+
+    let response = fixture.set(
+        SetRequest::new(fixture.account_id.clone()).update(
+            id.clone(),
+            json!({"participants/dave": {"@type": "Participant", "name": "Dave"}}),
+        ),
+        true,
+    );
+
+    let error = response
+        .not_updated
+        .as_ref()
+        .and_then(|map| map.get(&id))
+        .expect("the update was refused");
+    assert_eq!(error.error_type, "noSupportedScheduleMethods");
+    assert!(
+        fixture.sent_since(mark).is_empty(),
+        "a refused update sends no messages"
+    );
+}
+
+#[test]
+fn destroying_an_event_with_an_unreachable_participant_is_refused() {
+    let fixture = Fixture::new();
+    let mut event = meeting(&fixture.calendar_id);
+    event.participants.as_mut().unwrap().insert(
+        "dave".to_owned(),
+        json!({"@type": "Participant", "name": "Dave"}),
+    );
+    // Unscheduled create: the reachability check only runs when a call
+    // actually asks for scheduling messages.
+    let id = fixture.create(&event, false);
+
+    let response = fixture.set(
+        SetRequest::new(fixture.account_id.clone()).destroy(id.clone()),
+        true,
+    );
+
+    let error = response
+        .not_destroyed
+        .as_ref()
+        .and_then(|map| map.get(&id))
+        .expect("the destroy was refused");
+    assert_eq!(error.error_type, "noSupportedScheduleMethods");
+    assert!(fixture.sent().is_empty(), "a refused destroy sends nothing");
+}
+
+#[test]
+fn an_update_that_drops_the_version_is_refused() {
+    let fixture = Fixture::new();
+    let id = fixture.create(&meeting(&fixture.calendar_id), false);
+
+    let response = fixture.set(
+        SetRequest::new(fixture.account_id.clone()).update(id.clone(), json!({"version": "1.0"})),
+        false,
+    );
+
+    let error = response
+        .not_updated
+        .as_ref()
+        .and_then(|map| map.get(&id))
+        .expect("the update was refused");
+    assert_eq!(error.error_type, "invalidProperties");
+    assert_eq!(
+        error.properties.as_deref(),
+        Some(["version".to_owned()].as_slice())
+    );
+}
+
+#[test]
 fn a_participant_with_no_calendar_address_is_refused() {
     let fixture = Fixture::new();
     let mut event = meeting(&fixture.calendar_id);
