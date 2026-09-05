@@ -2730,3 +2730,75 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.124 Divergence 124: `ical_to_event` Master Series Identification by `RECURRENCE-ID` Absence vs Non-Ordered EDS Component Stream Ingestion and Orphaned Override Fallback
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.4.4 models recurring series modifications as detached `VEVENT` components sharing the master series `UID` and carrying a `RECURRENCE-ID` property. The master series component itself does not carry `RECURRENCE-ID`. RFC 8984 §4.3.4 models recurrent appointments as a single root `Event` object with an optional `recurrenceOverrides` patch map. In `jmap-ical`:
+  1. Predicate-based master identification: In `ical_to_event`, the parser selects the series component via `vevents.iter().find(|vevent| component_entry(vevent, RECURRENCE_ID).is_none())`. Rather than assuming that the master series appears first in the file, it explicitly identifies the component lacking `RECURRENCE-ID`.
+  2. Out-of-order component tolerance: Evolution Data Server and CalDAV gateways often serialize modified detached instances ahead of the master series. Searching for the non-recurrent component ensures that a preceding detached instance is never mistakenly ingested as the master series definition.
+  3. Preceding override ingestion: Detached components that appear before the master series in the stream are correctly parsed by `read_overrides` and ingested into `event.recurrence_overrides`.
+  4. Orphaned detached override fallback: If a calendar export contains only detached components and lacks a master series (`vevents.iter().find(...)` returns `None`), `ical_to_event` falls back gracefully via `.or_else(|| vevents.first())` to ingest the first available component as the base event, rather than returning `Err(ICalError::NoEvent)`.
+  5. In contrast, differential oracles or naive CalDAV parsers that unconditionally take the first `VEVENT` as the master component will misinterpret a detached instance as the master series, losing the recurring schedule and corrupting the appointment start time.
+- **Specification and Architectural Context**:
+  1. RFC 5545 specifies no required order among `VEVENT` components sharing a common `UID` inside a `VCALENDAR` container. In Evolution Data Server, detached occurrences and master components are stored and marshaled in arbitrary order.
+  2. Treating a detached rescheduled occurrence as the master series causes severe synchronization data loss: the master recurrence rule is discarded, and the appointment is demoted to a single moved occurrence.
+  3. Falling back to the first available component when no master series is present provides practical fault tolerance for orphaned iCalendar exports, allowing desktop users to view the appointment rather than failing the import entirely.
+- **Adjudication**:
+  Conforming specification boundary and component ordering defense. Identifies the master series by `RECURRENCE-ID` absence regardless of physical component ordering, ingests preceding detached instances into overrides, and falls back gracefully on orphaned streams.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.125 Divergence 125: `modified_instance`: Master Property Inheritance for Detached Instances (RFC 8984 §4.3.4 vs RFC 5545 Detached `VEVENT`), `useDefaultAlerts` Flag Propagation, and Non-Diff Override Suppression (`modified.then_some`)
+
+- **Observed Behavior**:
+  RFC 8984 §4.3.4 models a recurrence override as a sparse delta (`PatchObject`), where unmentioned properties are inherited from the master series. RFC 5545 §3.8.4.4 models overrides as standalone detached `VEVENT` components that restate or modify individual properties beside a `RECURRENCE-ID`. In `jmap-ical`:
+  1. Comprehensive property inheritance: In `modified_instance`, a detached occurrence begins as a clone of the master series (`title`, `description`, `time_zone`, `duration`, `show_without_time`, `locations`, `virtual_locations`, `links`, `keywords`, `alerts`, `participants`, `use_default_alerts`, `created`, `updated`).
+  2. `useDefaultAlerts` series propagation: If the master series specifies `useDefaultAlerts: true`, the flag is copied to the detached instance. Consequently, `drawn_alarms` suppresses `VALARM` emission across both the master and detached components, preventing spurious alarms on detached instances.
+  3. Sparse patch application: Properties specified in the override patch are evaluated via `draws_override_field` and applied over inherited values. Null values explicitly remove or clear the corresponding field on the instance.
+  4. Non-diff override suppression: If an override patch introduces no drawable modifications (for example, `{"excluded": false}` or unmappable properties outside `OVERRIDE_PROPERTIES`), `modified` remains `false` and `modified.then_some(instance)` returns `None`. No redundant detached `VEVENT` component is emitted.
+  5. In contrast, differential oracles or CalDAV serializers often emit redundant detached `VEVENT` components that duplicate the master series without any actual property differences, bloating the stream and confusing client synchronization engines.
+- **Specification and Architectural Context**:
+  1. In iCalendar, emitting a detached `VEVENT` component identical to the master occurrence creates unnecessary overhead and risks desynchronization between master and override representations.
+  2. Propagating `useDefaultAlerts` ensures that an occurrence does not resurrect alarms that the user disabled for the series.
+  3. Applying minimal sparse patch deltas while suppressing redundant non-diff components maintains fixed-point stability and compact wire representation.
+- **Adjudication**:
+  Conforming specification boundary and override representation fidelity. Inherits master properties into detached instances, propagates `useDefaultAlerts` to suppress unwanted alarms, and suppresses non-diff detached components.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.126 Divergence 126: `recurrence_dates`: Non-Drawable Un-Excluded Override Preservation as `RDATE` vs Duplicate Detached `VEVENT` Emission or Silent Instance Dropping
+
+- **Observed Behavior**:
+  RFC 8984 §4.3.4 allows recurrence overrides to specify occurrences that are not excluded (`excluded != true`) but carry no drawable modifications to modeled properties. RFC 5545 §3.8.5.2 defines `RDATE` for explicitly adding recurrence dates to a series, and dictates that duplicate occurrences generated by both `RRULE` and `RDATE` are absorbed into a single occurrence. In `jmap-ical`:
+  1. Un-excluded non-drawable override capture: In `recurrence_dates`, entries where `excluded(patch) == false` and `modified_instance(event, id, patch).is_none()` are gathered.
+  2. `RDATE` emission: Rather than discarding the occurrence or emitting a redundant full `VEVENT` component with identical properties, `event_to_ical` emits the date as an `RDATE` property on the master series component.
+  3. Series timezone parameter alignment: The emitted `RDATE` line uses `dated("RDATE", ...)` and attaches the series `TZID` parameter (or UTC `Z` suffix), matching the datetime format of `DTSTART`.
+  4. Excluded occurrence separation: Entries where `excluded(patch) == true` are emitted as `EXDATE` on the master series.
+  5. In contrast, differential oracles or CalDAV serializers either omit un-drawable overrides entirely (risking dropping newly added dates from the calendar) or serialize bloated empty `VEVENT` components that trigger synchronization churn.
+- **Specification and Architectural Context**:
+  1. In business scheduling, an author may add an explicit extra date to a series without modifying meeting details. In JSCalendar, this is represented by an override entry with `{"excluded": false}` or an empty patch `{}`.
+  2. Emitting an `RDATE` on the master component ensures that the added occurrence appears in Evolution Data Server without generating an unnecessary detached component.
+  3. If the date was already part of the `RRULE` series, RFC 5545 §3.8.5.2 specifies that the recurrence set absorbs it, guaranteeing that no duplicate appointment appears in the user interface.
+- **Adjudication**:
+  Conforming specification boundary and recurrence occurrence preservation. Emits un-excluded non-drawable overrides as `RDATE` properties on the master series with matching timezone parameters, preventing occurrence loss without generating redundant components.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.127 Divergence 127: `names_map_entry`: RFC 8984 §1.4.4 `Id` Syntax Validation (`1..=255` Octets, `[a-zA-Z0-9_-]`), Server Key Sanitization, and Invented Key Fallback Protection
+
+- **Observed Behavior**:
+  RFC 8984 §1.4.4 defines the `Id` type: an ASCII string consisting of 1 to 255 octets matching `[A-Za-z0-9_-]+`. In `jmap-ical`, map keys for `locations`, `virtualLocations`, `links`, and `alerts` must conform to RFC 8984 `Id` requirements to be safely transmitted in `CalendarEvent/set` requests. In `jmap-ical`:
+  1. Structural syntax validation: `names_map_entry` verifies `(1..=255).contains(&value.len())` and asserts that every byte is an ASCII alphanumeric character or `_` or `-`.
+  2. Wire parameter extraction: In `read_locations`, `read_virtual_locations`, and `read_links`, `X-JMAP-KEY` parameter values are filtered through `names_map_entry`. In `read_alerts`, `UID` property values on `VALARM` components are filtered through `names_map_entry`.
+  3. Valid key preservation: Valid `Id` strings are preserved directly as the map key in the parsed `CalendarEvent`, maintaining round-trip identity across synchronization passes.
+  4. Malformed key fallback: If an external sender emits an `X-JMAP-KEY` or `UID` containing spaces, punctuation, colons, control characters, or exceeding 255 octets, `names_map_entry` returns `false`. The parser safely falls back to allocating an invented positional key (`l1`, `v1`, `k1`, `a1`).
+  5. In contrast, differential oracles or permissive parsers often accept arbitrary strings into map keys without validation. When such objects are sent to a JMAP server in a `set` create or update request, the server rejects the entire request with `invalidArguments` or `invalidProperties` errors.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §1.4.4 establishes strict character and length constraints on identifier strings to ensure safe usage in JSON Pointer path expressions and database keys.
+  2. Malformed parameters received from external iCalendar feeds or non-standard CalDAV clients must not be allowed to poison local JMAP event models.
+  3. Sanitizing identifiers and falling back to collision-free invented keys ensures that inbound appointments remain valid for subsequent JMAP operations while isolating the synchronization engine from client-side parameter errors.
+- **Adjudication**:
+  Conforming specification boundary and identifier sanitization defense. Validates RFC 8984 `Id` syntax on inbound keys, preserves valid identifiers, and falls back to invented positional keys on malformed parameters.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+

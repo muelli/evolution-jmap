@@ -24821,3 +24821,263 @@ END:VCALENDAR\r\n";
         "plus prefix stripped into canonical offset: {offsets:?}"
     );
 }
+
+#[test]
+fn differential_oracle_ical_to_event_master_series_detection_and_orphaned_override_fallback() {
+    // Divergence 124 against Stalwart differential oracle:
+    // ical_to_event master series identification by absence of RECURRENCE-ID.
+    // In jmap-ical:
+    // 1. When detached override components (with RECURRENCE-ID) precede the master series
+    //    in the VCALENDAR stream, ical_to_event finds the component lacking RECURRENCE-ID
+    //    and treats it as the authoritative master series.
+    // 2. The preceding detached component is ingested into recurrenceOverrides.
+    // 3. When an iCalendar stream contains ONLY detached instances (all carrying RECURRENCE-ID),
+    //    ical_to_event falls back to the first component rather than failing with NoEvent.
+
+    // 1. Detached override precedes master series
+    let out_of_order_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:series-124\r\n\
+RECURRENCE-ID:20260902T100000Z\r\n\
+DTSTART:20260902T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Rescheduled Day Two\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:series-124\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+RRULE:FREQ=DAILY;COUNT=5\r\n\
+SUMMARY:Master Recurring Series\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(out_of_order_ics).expect("parse out of order ics");
+    assert_eq!(
+        ev.title.as_deref(),
+        Some("Master Recurring Series"),
+        "master component without RECURRENCE-ID must be selected as series"
+    );
+    assert_eq!(
+        ev.start.as_deref(),
+        Some("2026-09-01T10:00:00"),
+        "master series start must be used"
+    );
+    let overrides = ev.recurrence_overrides.expect("overrides present");
+    assert!(
+        overrides.contains_key("2026-09-02T10:00:00"),
+        "detached instance preceding series must be ingested into recurrence_overrides: {overrides:?}"
+    );
+
+    // 2. Orphaned detached instances (all components have RECURRENCE-ID)
+    let orphaned_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:orphaned-124\r\n\
+RECURRENCE-ID:20260902T100000Z\r\n\
+DTSTART:20260902T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Orphaned Instance\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let orphaned_ev =
+        ical_to_event(orphaned_ics).expect("parse orphaned ics falls back gracefully");
+    assert_eq!(
+        orphaned_ev.title.as_deref(),
+        Some("Orphaned Instance"),
+        "first component must be used as fallback when no series exists"
+    );
+}
+
+#[test]
+fn differential_oracle_modified_instance_master_property_inheritance_and_use_default_alerts() {
+    // Divergence 125 against Stalwart differential oracle:
+    // modified_instance master property inheritance, useDefaultAlerts propagation,
+    // and non-diff override suppression.
+    // In jmap-ical:
+    // 1. A detached override instance inherits master properties (title, description,
+    //    duration, showWithoutTime, useDefaultAlerts, etc.).
+    // 2. When useDefaultAlerts is true on master, alarms are suppressed on both
+    //    master and detached VEVENT components.
+    // 3. When an override patch introduces no drawable difference (e.g. excluded: false),
+    //    modified_instance returns None and no redundant detached VEVENT is emitted.
+
+    let mut event = fixture_event();
+    event.use_default_alerts = Some(true);
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        "2026-09-02T10:00:00".to_owned(),
+        json!({
+            "title": "Overridden Occurrence Title"
+        }),
+    );
+    event.recurrence_overrides = Some(overrides);
+
+    let ics = event_to_ical(&event);
+    assert!(
+        !ics.contains("BEGIN:VALARM"),
+        "useDefaultAlerts must suppress VALARM on master and detached instance: {ics}"
+    );
+    assert!(
+        ics.contains("SUMMARY:Overridden Occurrence Title"),
+        "detached instance must have updated summary: {ics}"
+    );
+    assert_eq!(
+        vevents(&ics),
+        2,
+        "master and one modified instance must be drawn: {ics}"
+    );
+
+    // Override with no drawable difference
+    let mut no_diff_event = fixture_event();
+    let mut no_diff_overrides = BTreeMap::new();
+    no_diff_overrides.insert("2026-09-03T10:00:00".to_owned(), json!({"excluded": false}));
+    no_diff_event.recurrence_overrides = Some(no_diff_overrides);
+
+    let no_diff_ics = event_to_ical(&no_diff_event);
+    assert_eq!(
+        vevents(&no_diff_ics),
+        1,
+        "non-diff override must not emit redundant detached VEVENT: {no_diff_ics}"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_dates_unexcluded_non_drawable_override_preservation_as_rdate() {
+    // Divergence 126 against Stalwart differential oracle:
+    // recurrence_dates non-drawable unexcluded override preservation as RDATE.
+    // In jmap-ical:
+    // 1. An override instance that is not excluded (excluded != true) but has no
+    //    drawable difference is emitted as an RDATE on the master component,
+    //    ensuring the occurrence is not dropped from the calendar.
+    // 2. An override instance with excluded: true is emitted as EXDATE on the master series.
+
+    let mut event = fixture_event();
+    let mut overrides = BTreeMap::new();
+    overrides.insert("2026-09-05T10:00:00".to_owned(), json!({"excluded": false}));
+    overrides.insert("2026-09-06T10:00:00".to_owned(), json!({"excluded": true}));
+    event.recurrence_overrides = Some(overrides);
+
+    let ics = event_to_ical(&event);
+    assert!(
+        ics.contains("RDATE;TZID=Europe/Berlin:20260905T100000"),
+        "unexcluded non-drawable override must be preserved as RDATE with series TZID: {ics}"
+    );
+    assert!(
+        ics.contains("EXDATE;TZID=Europe/Berlin:20260906T100000"),
+        "excluded override must be emitted as EXDATE with series TZID: {ics}"
+    );
+    assert_eq!(
+        vevents(&ics),
+        1,
+        "no detached VEVENT should be emitted for RDATE/EXDATE occurrences: {ics}"
+    );
+}
+
+#[test]
+fn differential_oracle_names_map_entry_id_syntax_validation_and_invented_key_fallback() {
+    // Divergence 127 against Stalwart differential oracle:
+    // names_map_entry RFC 8984 section 1.4.4 Id syntax validation and key sanitization.
+    // In jmap-ical:
+    // 1. Valid RFC 8984 Id keys (1..=255 octets of alphanumeric, '-', '_') in X-JMAP-KEY
+    //    or UID are preserved directly into map keys.
+    // 2. Invalid keys (spaces, punctuation, colons, control characters) fail names_map_entry
+    //    and safely fall back to invented positional keys (l1, v1, k1, a1).
+
+    let custom_keys_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:keys-test-127\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+LOCATION;X-JMAP-KEY=valid_room-1:Conference Room A\r\n\
+CONFERENCE;VALUE=URI;X-JMAP-KEY=conf_call-42:https://meet.example.com/room\r\n\
+ATTACH;X-JMAP-KEY=doc-attachment_99:https://files.example.com/agenda.pdf\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Reminder\r\n\
+TRIGGER:-PT15M\r\n\
+UID:alarm_custom-uid_7\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(custom_keys_ics).expect("parse custom keys ics");
+    assert!(
+        ev.locations.as_ref().unwrap().contains_key("valid_room-1"),
+        "valid location key preserved: {:?}",
+        ev.locations
+    );
+    assert!(
+        ev.virtual_locations
+            .as_ref()
+            .unwrap()
+            .contains_key("conf_call-42"),
+        "valid virtual location key preserved: {:?}",
+        ev.virtual_locations
+    );
+    assert!(
+        ev.links.as_ref().unwrap().contains_key("doc-attachment_99"),
+        "valid link key preserved: {:?}",
+        ev.links
+    );
+    assert!(
+        ev.alerts
+            .as_ref()
+            .unwrap()
+            .contains_key("alarm_custom-uid_7"),
+        "valid alert UID preserved: {:?}",
+        ev.alerts
+    );
+
+    // Malformed keys with spaces, colons, or punctuation
+    let malformed_keys_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:bad-keys-test-127\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+LOCATION;X-JMAP-KEY=\"bad key with spaces\":Conference Room B\r\n\
+CONFERENCE;VALUE=URI;X-JMAP-KEY=\"bad:conf:key\":https://meet.example.com/other\r\n\
+ATTACH;X-JMAP-KEY=\"bad/link/key\":https://files.example.com/doc.pdf\r\n\
+BEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Reminder\r\n\
+TRIGGER:-PT15M\r\n\
+UID:bad alarm uid!\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let bad_ev = ical_to_event(malformed_keys_ics).expect("parse malformed keys ics");
+    assert!(
+        bad_ev.locations.as_ref().unwrap().contains_key("l1"),
+        "malformed location key falls back to l1: {:?}",
+        bad_ev.locations
+    );
+    assert!(
+        bad_ev
+            .virtual_locations
+            .as_ref()
+            .unwrap()
+            .contains_key("v1"),
+        "malformed virtual location key falls back to v1: {:?}",
+        bad_ev.virtual_locations
+    );
+    assert!(
+        bad_ev.links.as_ref().unwrap().contains_key("k1"),
+        "malformed link key falls back to k1: {:?}",
+        bad_ev.links
+    );
+    assert!(
+        bad_ev.alerts.as_ref().unwrap().contains_key("a1"),
+        "malformed alert UID falls back to a1: {:?}",
+        bad_ev.alerts
+    );
+}
