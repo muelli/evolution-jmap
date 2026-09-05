@@ -2379,6 +2379,77 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.104 Divergence 104: Date and Date-Time Property Emission (`dated`): `VALUE=DATE` Parameter and 8-Digit Truncation, UTC `'Z'` Suffix without `TZID`, Non-UTC `TZID` Emission, and Multi-Valued Property Formatting
+
+- **Observed Behavior**:
+  RFC 5545 §3.2.19, §3.2.20, §3.3.4, §3.3.5, §3.8.2.4, §3.8.4.4, §3.8.5.1, and §3.8.5.2 govern date and date-time properties (`DTSTART`, `RECURRENCE-ID`, `EXDATE`, `RDATE`). In `jmap-ical`, `dated`:
+  1. `VALUE=DATE` parameter and truncation: When `as_a_date` is true, it emits `VALUE=DATE` and truncates values to 8 digits (`value[..8]`), omitting any time digits. RFC 5545 specifies that `DTSTART`, `RECURRENCE-ID`, `EXDATE`, and `RDATE` default to `DATE-TIME`. Without the explicit `VALUE=DATE` parameter, consumers like `libical` fail to parse the component.
+  2. Redundant parameter omission: When `as_a_date` is false, `dated` omits `VALUE=DATE-TIME` because `DATE-TIME` is the grammar default. Suppressing redundant default type parameters complies with standard iCalendar formatting and avoids triggering parser quirks in strict clients.
+  3. UTC instant formatting: When `zone` is `"Etc/UTC"` or `"UTC"`, `is_utc(zone)` is true, so `dated` appends `'Z'` to each value and omits the `TZID` parameter. RFC 5545 §3.2.19 explicitly forbids `TZID` on UTC timestamps.
+  4. Non-UTC zoned formatting: When `zone` is a named timezone, `dated` sets `TZID=<zone>` and emits local digits with no trailing `'Z'`.
+  5. Floating local time formatting: When `zone` is None and `as_a_date` is false, `dated` emits local digits with no `TZID` and no `'Z'`.
+  6. Multi-valued property formatting: When multiple values are provided (such as multiple excluded dates in `recurrence_overrides`), `dated` formats them as a single comma-separated property line (e.g. `EXDATE;VALUE=DATE:20260906,20260907`) rather than emitting duplicate property lines.
+  7. In contrast, Stalwart v1.0.0 or CalDAV servers may emit redundant `VALUE=DATE-TIME` parameters, emit multiple single-valued `EXDATE` lines, or emit `TZID=UTC` which requires providing a redundant `VTIMEZONE` definition for UTC.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.2.19 strictly forbids applying `TZID` to UTC date-times or date-only values. Emitting `TZID=UTC` or `TZID=Etc/UTC` in iCalendar object streams is non-standard and obliges serializers to synthesize a superfluous `VTIMEZONE` component.
+  2. Formatting multiple exclusion dates on a single `EXDATE` line complies with RFC 5545 §3.8.5.1 and reduces payload size for heavily edited recurrence series.
+- **Adjudication**:
+  Conforming specification boundary and canonical parameter formatting. Emits required `VALUE=DATE` and 8-digit truncation for dates, suppresses redundant `VALUE=DATE-TIME`, strictly forbids `TZID` on UTC timestamps, and emits multi-value lists.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.105 Divergence 105: Proleptic Gregorian Calendar Date-Time Validation (`to_local_date_time`, `exists`): Leap Year Rules, Leap Second 60 Tolerance, Sub-Second Truncation, and Nonexistent Date Rejection
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.4 and §3.3.5 specify date-times in the Gregorian calendar. In `jmap-ical`:
+  1. Calendar date existence: `exists` validates that the month is in `1..=12` and the day is in `1..=days_in_month(year, month)`.
+  2. Leap year rules: `days_in_month` enforces proleptic Gregorian leap year rules (`year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)`), admitting 29 days in February for leap years (such as 2000 and 2024) and 28 days for non-leap years (such as 1900 and 2026).
+  3. Time component bounds: `exists` checks that hour is in `0..=23`, minute is in `0..=59`, and second is in `0..=60`. Leap second 60 is explicitly permitted per RFC 5545 §3.3.12 and RFC 3339 §5.6, while second 61 is rejected.
+  4. Sub-second fractional truncation: `date_time_digits` truncates trailing sub-second fractional digits (such as `.123` or `,456`) rather than failing the parse, because neither RFC 5545 DATE-TIME nor RFC 8984 LocalDateTime carries fractional seconds.
+  5. Defensive refusal: Nonexistent dates (such as `2026-02-29`, `2026-04-31`, `2026-13-01`, hour 25, minute 60, second 61) return `None`. In `read_start`, this causes `start` to be `None`. In `to_ical_date_time`, invalid dates return `None`, preventing emission of impossible `DTSTART` lines that would cause `libical` component parse failures.
+  6. In contrast, permissive parsers or differential oracles may roll invalid dates over into adjacent months or years (such as `2026-02-29` rolling over to `2026-03-01`, or `24:00:00` rolling over to `00:00:00` next day) or pass unvalidated strings through, risking protocol-level rejection on `CalendarEvent/set`.
+- **Specification and Architectural Context**:
+  1. Passing impossible calendar dates to `libical` destroys the whole component, taking down all appointment fields.
+  2. Sending invalid `LocalDateTime` strings to a JMAP server causes fatal validation errors on `CalendarEvent/set`. Rejecting nonexistent dates defensively protects both local storage and server synchronization.
+- **Adjudication**:
+  Conforming specification boundary and calendar date integrity guarantee. Validates proleptic Gregorian calendar date existence, leap years, and leap seconds, while rejecting out-of-range dates to prevent invalid server state and `libical` component rejections.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.106 Divergence 106: Wall-Clock Duration Measurement and Epochless Date Arithmetic (`days_from_civil`, `instant`, `to_duration`): Proleptic Gregorian Day Counting, Nominal Day Formatting (`P<D>D`), and Zero/Negative Drop
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.2.2 and RFC 8984 §4.1.4 govern event duration calculation and representation. In `jmap-ical`:
+  1. Howard Hinnant's algorithm in `days_from_civil`: Computes the exact number of days from 1970-01-01 to any proleptic Gregorian date using modular arithmetic where the year starts in March, operating in a completely self-contained manner without external timezone or epoch databases.
+  2. Local wall-clock conversion: `instant` converts `LocalDateTime` (`YYYY-MM-DDTHH:MM:SS`) into wall-clock seconds from 1970-01-01T00:00:00 (`days * 86_400 + hour * 3_600 + minute * 60 + second`). Subtracting two wall-clock instants `instant(end) - instant(start)` yields the elapsed wall-clock duration without daylight saving time jumps (for example, an appointment from 09:00 to 17:00 on a 23-hour or 25-hour DST transition day is measured as 8 wall-clock hours), matching RFC 8984 §1.4.6 nominal duration semantics.
+  3. ISO 8601 formatting: `to_duration(seconds)` splits positive seconds into whole days (`seconds / 86_400`) formatted as `P<D>D` and remainder formatted as `T<H>H<M>M<S>S`. Whole days are represented as `D`, not `24H`, preserving nominal day semantics across DST boundaries.
+  4. Negative and zero duration dropping: Durations `<= 0` yield `None`, falling back to the RFC 8984 default `PT0S` on import and avoiding invalid negative durations.
+  5. In contrast, timeline-based or POSIX timestamp subtraction (used by general CalDAV servers or Stalwart) would measure 23-hour or 25-hour durations across DST transitions, causing duration skew in calendar clients.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §1.4.6 defines duration in terms of nominal days and clock hours rather than elapsed physical seconds. Measuring duration in wall-clock time ensures appointments maintain their expected scheduled duration when viewed across timezone or daylight saving boundaries.
+  2. Formatting whole days as `P<D>D` complies with RFC 5545 §3.3.6 and RFC 8984 conventions for all-day and multi-day events.
+- **Adjudication**:
+  Deliberate mapping design and nominal calendar duration fidelity. Measures duration strictly in wall-clock time using Howard Hinnant's algorithm and formats nominal days (`P<D>D`), preserving scheduled event length across daylight saving transitions.
+- **Status**:
+  Deliberate mapping design. Documented and pinned in `tests/event.rs`.
+
+### 13.107 Divergence 107: Bounded Calendar Date Shifting and Gregorian Month Carrying (`moved`, `days_in_month_of`): Single-Day Offset Carry, Month/Year Boundary Wraparound, and 4-Digit Year Bounding (`0..=9999`)
+
+- **Observed Behavior**:
+  Recurrence endpoint calculations (`read_until`) and timezone offset shifts (`at_offset`, `from_offset`) require shifting local date-times by signed integer seconds east or west. In `jmap-ical`:
+  1. Day-boundary carry: `moved` shifts `LocalDateTime` by signed seconds. Because UTC offsets are constrained by `utc_offset` to strictly under 24 hours, the carry is at most one day forward or backward.
+  2. Backward carry across month and year boundaries: When day underflows to 0, `moved` rolls back to the previous month, querying `days_in_month_of(year, month - 1)`. For example, rolling back from March 1 to February 29 in leap years (such as 2024), or to February 28 in non-leap years (such as 2026), and rolling back from January 1 to December 31 of `year - 1`.
+  3. Forward carry across month and year boundaries: When day overflows the month length (`day > days_in_month_of(year, month)`), `moved` advances to day 1 of `month + 1`, or January 1 of `year + 1` when `month == 12`.
+  4. Four-digit year bounds: Constrains the resulting year to `(0..=9999).contains(&year)`, returning `None` if the shift steps outside 4-digit years. RFC 5545 §3.3.4 explicitly requires 4-digit years (`year = 4DIGIT`). When an observance recurrence endpoint underflows year 0000 or overflows year 9999, `moved` returns `None`, preserving the trailing `'Z'` marker on `until`. This causes `vtimezone_of` to reject the observance, dropping the un-drawable timezone definition from `time_zones` and causing `maps_time_zone` to refuse the event.
+  5. In contrast, external date-time libraries or unchecked integer additions might overflow or produce 5-digit years (`+10000`) or negative years (`-0001`) that cause iCalendar grammar violations.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.4 explicitly restricts years to 4 digits. Generating dates outside this range produces un-parseable iCalendar streams.
+  2. Refusing un-drawable timezone definitions protects `libical` from crashing on corrupt recurrence rules while preventing silent temporal distortion.
+- **Adjudication**:
+  Conforming specification boundary and bounded date arithmetic integrity. Safely carries day offsets across month and leap-year boundaries and strictly bounds results to 4-digit years (`0..=9999`) to prevent iCalendar grammar corruption.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
 
 
