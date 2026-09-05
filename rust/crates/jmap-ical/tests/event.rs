@@ -27420,3 +27420,406 @@ END:VCALENDAR\r\n";
         "RANGE=THISANDFUTURE component skipped cleanly"
     );
 }
+
+#[test]
+fn differential_oracle_drawn_participants_single_organizer_and_dual_role_attendance() {
+    // Divergence 156 against Stalwart differential oracle:
+    // drawn_participants, holds_role, and calendar_address: Single Primary ORGANIZER Emission (RFC 5545 section 3.6.1),
+    // Dual Role Attendance Gating (owns && role.is_some()), IMIP URI Scheme Validation, and Parameter Synthesis.
+
+    let mut event = CalendarEvent {
+        uid: Some("part-event-156".to_owned()),
+        title: Some("Board Meeting".to_owned()),
+        start: Some("2026-08-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+
+    let mut participants = std::collections::BTreeMap::new();
+
+    // 1. Primary Owner with Dual Role (owner + attendee): should emit ORGANIZER and ATTENDEE
+    participants.insert(
+        "p1".to_owned(),
+        serde_json::json!({
+            "@type": "Participant",
+            "name": "Alice Owner",
+            "sendTo": {"imip": "mailto:alice@example.com"},
+            "roles": {"owner": true, "attendee": true},
+            "kind": "individual",
+            "participationStatus": "accepted",
+            "expectReply": true
+        }),
+    );
+
+    // 2. Regular Chair: should emit ATTENDEE with ROLE=CHAIR
+    participants.insert(
+        "p2".to_owned(),
+        serde_json::json!({
+            "@type": "Participant",
+            "name": "Bob Chair",
+            "sendTo": {"imip": "mailto:bob@example.com"},
+            "roles": {"chair": true},
+            "kind": "individual",
+            "participationStatus": "tentative"
+        }),
+    );
+
+    // 3. Second Owner without attendee role: should NOT emit duplicate ORGANIZER and NOT emit ATTENDEE
+    participants.insert(
+        "p3".to_owned(),
+        serde_json::json!({
+            "@type": "Participant",
+            "name": "Carol Second Owner",
+            "sendTo": {"imip": "mailto:carol@example.com"},
+            "roles": {"owner": true},
+            "kind": "individual"
+        }),
+    );
+
+    // 4. Invalid SendTo URI: should be discarded completely
+    participants.insert(
+        "p4".to_owned(),
+        serde_json::json!({
+            "@type": "Participant",
+            "name": "Dave Invalid",
+            "sendTo": {"imip": "not-a-valid-uri"},
+            "roles": {"attendee": true}
+        }),
+    );
+
+    event.participants = Some(participants);
+
+    let ics = event_to_ical(&event);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+
+    // Exactly one ORGANIZER line emitted
+    let organizer_count = unfolded.matches("ORGANIZER").count();
+    assert_eq!(organizer_count, 1, "only single primary ORGANIZER emitted");
+    assert!(
+        unfolded.contains("ORGANIZER;CN=Alice Owner:mailto:alice@example.com")
+            || unfolded.contains("ORGANIZER;CN=\"Alice Owner\":mailto:alice@example.com"),
+        "primary owner emitted as ORGANIZER"
+    );
+
+    // Carol is neither a second ORGANIZER nor an ATTENDEE
+    assert!(
+        !unfolded.contains("carol@example.com"),
+        "second owner without attendee role omitted from ATTENDEE and ORGANIZER"
+    );
+
+    // Alice is also emitted as ATTENDEE due to dual role
+    assert!(
+        unfolded.contains("ATTENDEE;") && unfolded.contains("mailto:alice@example.com"),
+        "dual role owner also emitted as ATTENDEE"
+    );
+    assert!(
+        unfolded.contains("ROLE=REQ-PARTICIPANT"),
+        "attendee role mapped to REQ-PARTICIPANT"
+    );
+    assert!(
+        unfolded.contains("CUTYPE=INDIVIDUAL"),
+        "individual kind mapped to CUTYPE=INDIVIDUAL"
+    );
+    assert!(
+        unfolded.contains("PARTSTAT=ACCEPTED"),
+        "accepted participation status mapped"
+    );
+    assert!(
+        unfolded.contains("RSVP=TRUE"),
+        "expectReply true mapped to RSVP=TRUE"
+    );
+
+    // Bob chair is emitted as ATTENDEE with ROLE=CHAIR
+    assert!(
+        unfolded.contains("ROLE=CHAIR") && unfolded.contains("mailto:bob@example.com"),
+        "chair role mapped to ROLE=CHAIR"
+    );
+    assert!(
+        unfolded.contains("PARTSTAT=TENTATIVE"),
+        "tentative participation status mapped"
+    );
+
+    // Dave invalid URI is discarded
+    assert!(
+        !unfolded.contains("Dave Invalid") && !unfolded.contains("not-a-valid-uri"),
+        "non-URI sendTo address dropped from serialization"
+    );
+}
+
+#[test]
+fn differential_oracle_instance_patch_cleared_properties_nullification_and_relative_start() {
+    // Divergence 157 against Stalwart differential oracle:
+    // instance_patch, read_overrides, and OVERRIDE_PROPERTIES: Detached Instance RFC 8984 section 4.3.4
+    // PatchObject Minimal Delta Generation: Nullification of Cleared Series Properties,
+    // Minimal Recurrence-ID Relative Start Comparison, and Unsupported Field Shielding.
+
+    let ics = "\
+BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:patch-series-157\r\n\
+DTSTART:20260701T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Team Weekly Sync\r\n\
+DESCRIPTION:Weekly agenda\r\n\
+PRIORITY:3\r\n\
+CATEGORIES:Work,Planning\r\n\
+CLASS:CONFIDENTIAL\r\n\
+STATUS:CONFIRMED\r\n\
+RRULE:FREQ=WEEKLY\r\n\
+BEGIN:VALARM\r\n\
+UID:alarm-157\r\n\
+ACTION:DISPLAY\r\n\
+DESCRIPTION:Sync reminder\r\n\
+TRIGGER:-PT15M\r\n\
+END:VALARM\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:patch-series-157\r\n\
+RECURRENCE-ID:20260708T100000Z\r\n\
+DTSTART:20260708T110000Z\r\n\
+SUMMARY:Rescheduled Sync\r\n\
+PRIORITY:1\r\n\
+CATEGORIES:Work\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:patch-series-157\r\n\
+RECURRENCE-ID:20260715T100000Z\r\n\
+DTSTART:20260715T100000Z\r\n\
+SUMMARY:Team Weekly Sync\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse event with detached components");
+    let overrides = ev
+        .recurrence_overrides
+        .expect("recurrence overrides present");
+
+    // 1. Override 1: Rescheduled start and modified fields
+    let ov1 = overrides
+        .get("2026-07-08T10:00:00")
+        .expect("first override present");
+    // Start differs from id (11:00 vs 10:00), so start is emitted in patch
+    assert_eq!(
+        ov1.get("start"),
+        Some(&Value::String("2026-07-08T11:00:00".to_owned())),
+        "rescheduled start included in patch"
+    );
+    assert_eq!(
+        ov1.get("title"),
+        Some(&Value::String("Rescheduled Sync".to_owned())),
+        "changed title included in patch"
+    );
+    assert_eq!(
+        ov1.get("priority"),
+        Some(&serde_json::json!(1)),
+        "changed priority included in patch"
+    );
+
+    // 2. Override 2: Un-rescheduled start, cleared properties
+    let ov2 = overrides
+        .get("2026-07-15T10:00:00")
+        .expect("second override present");
+    // Start matches recurrence id (10:00 vs 10:00), so start is omitted from patch!
+    assert_eq!(
+        ov2.get("start"),
+        None,
+        "unmoved start omitted from patch relative to recurrence id"
+    );
+    // Title matches master series ("Team Weekly Sync"), so title is omitted from patch!
+    assert_eq!(
+        ov2.get("title"),
+        None,
+        "unchanged title omitted from patch relative to series"
+    );
+    // Series had priority, description, keywords, alerts, status, privacy.
+    // Override 2 omitted them, so they must be explicitly nullified!
+    assert_eq!(
+        ov2.get("priority"),
+        Some(&Value::Null),
+        "cleared priority explicitly nullified in patch"
+    );
+    assert_eq!(
+        ov2.get("description"),
+        Some(&Value::Null),
+        "cleared description explicitly nullified in patch"
+    );
+    assert_eq!(
+        ov2.get("keywords"),
+        Some(&Value::Null),
+        "cleared keywords explicitly nullified in patch"
+    );
+    assert_eq!(
+        ov2.get("alerts"),
+        Some(&Value::Null),
+        "cleared alerts explicitly nullified in patch"
+    );
+}
+
+#[test]
+fn differential_oracle_zone_seconds_date_existence_validation_and_arithmetic_determinism() {
+    // Divergence 158 against Stalwart differential oracle:
+    // seconds, seconds_at, parts, and length_of: Timezone Transition Date Existence Verification:
+    // Bounded Calendar Month Length Validation (length_of), Nonexistent Date Rejection (e.g. Feb 30),
+    // and Wall-Clock Transition Arithmetic Determinism.
+
+    let custom_tz = "/corp.example.com/LeapTransitionZone";
+    // Valid leap year transition in 2024 (Feb 29) vs invalid non-leap transition in 2025
+    let ics_valid = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20240229T020000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+TZNAME:STD\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:leap-tz-158\r\n\
+DTSTART;TZID={custom_tz}:20240301T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20240305T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+
+    let ev_valid = ical_to_event(&ics_valid).expect("parse valid leap year timezone transition");
+    let rule_valid = ev_valid.recurrence_rule.expect("recurrence rule present");
+    // Standard offset (+0100) applied to 2024-03-05T12:00:00Z -> 2024-03-05T13:00:00
+    assert_eq!(
+        rule_valid.until.as_deref(),
+        Some("2024-03-05T13:00:00"),
+        "valid leap year transition onset calculated successfully"
+    );
+
+    // Corrupt timezone with impossible date (Feb 30th)
+    let corrupt_tz = "/corp.example.com/CorruptFeb30";
+    let ics_corrupt = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{corrupt_tz}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20260230T020000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+TZNAME:STD\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:corrupt-tz-158\r\n\
+DTSTART;TZID={corrupt_tz}:20260401T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260405T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+
+    let ev_corrupt = ical_to_event(&ics_corrupt).expect("parse event with corrupt timezone");
+    let rule_corrupt = ev_corrupt.recurrence_rule.expect("recurrence rule present");
+    // Nonexistent date Feb 30 cannot resolve in zone.rs, so UNTIL retains Z and fails maps_recurrence_rule
+    assert!(
+        rule_corrupt.until.as_deref().unwrap_or("").ends_with('Z'),
+        "corrupt observance transition date refused and left unconverted with Z"
+    );
+    assert!(
+        !maps_recurrence_rule(&rule_corrupt),
+        "unconverted UNTIL rule flagged as unmappable"
+    );
+}
+
+#[test]
+fn differential_oracle_component_ast_serialization_crlf_and_empty_param_suppression() {
+    // Divergence 159 against Stalwart differential oracle:
+    // Component::write_into, Component::to_ics, and EntryExt::with_named_params:
+    // Component AST Serialization: Canonical CRLF Envelope Delimitation, Empty Parameter Suppression,
+    // Standard vs Non-Standard Parameter/Property Token Preservation, and Recursive Subcomponent Hierarchy.
+
+    let mut event = CalendarEvent {
+        uid: Some("ast-ser-159".to_owned()),
+        title: Some("Serialization Architecture Review".to_owned()),
+        description: Some("Reviewing CRLF and AST hierarchy".to_owned()),
+        start: Some("2026-09-01T09:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        priority: Some(2),
+        ..CalendarEvent::default()
+    };
+
+    let mut alerts = std::collections::BTreeMap::new();
+    alerts.insert(
+        "a1".to_owned(),
+        serde_json::json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            }
+        }),
+    );
+    event.alerts = Some(alerts);
+
+    let ics = event_to_ical(&event);
+
+    // 1. CRLF verification: All line breaks must be \r\n, no bare \n
+    assert!(ics.contains("\r\n"), "must contain CRLF line breaks");
+    let bare_lf_count = ics.replace("\r\n", "").matches('\n').count();
+    assert_eq!(bare_lf_count, 0, "must contain zero bare LF characters");
+
+    // 2. Component boundaries and hierarchy
+    assert!(
+        ics.starts_with("BEGIN:VCALENDAR\r\n"),
+        "root starts with BEGIN:VCALENDAR"
+    );
+    assert!(
+        ics.ends_with("END:VCALENDAR\r\n"),
+        "root ends with END:VCALENDAR"
+    );
+    assert!(ics.contains("BEGIN:VEVENT\r\n"), "contains BEGIN:VEVENT");
+    assert!(ics.contains("END:VEVENT\r\n"), "contains END:VEVENT");
+
+    // VALARM is child component inside VEVENT
+    let vevent_start = ics.find("BEGIN:VEVENT\r\n").expect("VEVENT start");
+    let vevent_end = ics.find("END:VEVENT\r\n").expect("VEVENT end");
+    let valarm_start = ics.find("BEGIN:VALARM\r\n").expect("VALARM start");
+    let valarm_end = ics.find("END:VALARM\r\n").expect("VALARM end");
+
+    assert!(
+        valarm_start > vevent_start && valarm_end < vevent_end,
+        "VALARM subcomponent nested inside VEVENT component"
+    );
+
+    // 3. Empty parameter suppression: no empty parameters like ";=" or ";PARAM=;" or ";;"
+    assert!(
+        !ics.contains(";="),
+        "no empty parameter name or value assignment"
+    );
+    assert!(
+        !ics.contains(";;"),
+        "no empty adjacent parameter delimiters"
+    );
+
+    // 4. Property names uppercase and non-standard properties preserved
+    assert!(
+        ics.contains("UID:ast-ser-159\r\n"),
+        "UID property serialized"
+    );
+    assert!(
+        ics.contains("X-JMAP-UID:ast-ser-159\r\n"),
+        "non-standard X-JMAP-UID property preserved in uppercase"
+    );
+
+    // 5. Line length: no physical line exceeds 75 octets
+    for line in ics.split("\r\n") {
+        assert!(
+            line.len() <= 75,
+            "line length ({}) exceeds 75 octets: {:?}",
+            line.len(),
+            line
+        );
+    }
+}
