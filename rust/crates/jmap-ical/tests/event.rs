@@ -24236,3 +24236,291 @@ END:VCALENDAR\r\n";
     );
     assert_eq!(ev_utc.show_without_time, None);
 }
+
+#[test]
+fn differential_oracle_rrule_multi_line_narrowing_first_readable_selection() {
+    // Divergence 116 against Stalwart differential oracle:
+    // RFC 5545 section 3.8.5.3 allows multiple RRULE lines, but jscalendarbis section 3.3.3
+    // models event recurrence as a single RecurrenceRule object.
+    // In jmap-ical:
+    // 1. First readable RRULE line is selected via component_entries(vevent, "RRULE").filter_map(...).next().
+    // 2. Secondary/subsequent RRULE lines are silently dropped rather than failing the parse or creating multi-rules.
+    // 3. Unreadable initial RRULE lines are skipped by filter_map in favor of the first valid RRULE.
+
+    // 1. Multiple RRULE lines: first is valid (DAILY), second is valid (WEEKLY). First wins.
+    let multi_rrule_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:multi-rrule-1\r\n\
+DTSTART:20260905T100000Z\r\n\
+RRULE:FREQ=DAILY\r\n\
+RRULE:FREQ=WEEKLY;BYDAY=MO\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev1 = ical_to_event(multi_rrule_ics).expect("parse multi rrule");
+    let rule1 = ev1.recurrence_rule.as_ref().expect("rule present");
+    assert_eq!(
+        rule1.frequency, "daily",
+        "first readable RRULE must be selected"
+    );
+    let out_ics1 = event_to_ical(&ev1);
+    assert!(
+        out_ics1.contains("RRULE:FREQ=DAILY\r\n"),
+        "emits only the first rule: {out_ics1}"
+    );
+    assert!(
+        !out_ics1.contains("WEEKLY"),
+        "secondary rule must not be emitted: {out_ics1}"
+    );
+
+    // 2. First RRULE is unreadable (invalid syntax), second is valid (MONTHLY). Second wins.
+    let unreadable_first_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:multi-rrule-2\r\n\
+DTSTART:20260905T100000Z\r\n\
+RRULE:NOT_A_VALID_RRULE\r\n\
+RRULE:FREQ=MONTHLY;BYMONTHDAY=15\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev2 = ical_to_event(unreadable_first_ics).expect("parse fallback rrule");
+    let rule2 = ev2.recurrence_rule.expect("rule present");
+    assert_eq!(
+        rule2.frequency, "monthly",
+        "unreadable first RRULE bypassed in favor of first valid RRULE"
+    );
+    assert_eq!(rule2.by_month_day.as_deref(), Some(&[15][..]));
+}
+
+#[test]
+fn differential_oracle_event_version_stamping_root_vs_embedded_override_prohibition() {
+    // Divergence 117 against Stalwart differential oracle:
+    // Standalone event version stamping (version: "2.0") vs embedded override version prohibition.
+    // In jmap-ical:
+    // 1. Root standalone Event is stamped with version: "2.0" in ical_to_event per jscalendarbis section 3.1.2.
+    // 2. Embedded recurrence overrides (read_overrides -> read_vevent) have version: None.
+    // 3. Serializing to iCalendar and reparsing preserves root version: "2.0" and unversioned overrides.
+
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:ver-test\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Master Series\r\n\
+RRULE:FREQ=DAILY\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:ver-test\r\n\
+RECURRENCE-ID:20260902T100000Z\r\n\
+DTSTART:20260902T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Modified Occurrence\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse version test");
+    assert_eq!(
+        ev.version.as_deref(),
+        Some("2.0"),
+        "root event must state version: 2.0"
+    );
+
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+    let patch = overrides.get("2026-09-02T10:00:00").expect("patch present");
+    assert!(
+        patch.get("version").is_none(),
+        "embedded recurrence override patch must NOT state version property"
+    );
+    assert_eq!(patch.get("title"), Some(&json!("Modified Occurrence")));
+
+    // Outbound serialization and reparse
+    let out_ics = event_to_ical(&ev);
+    let reparsed = ical_to_event(&out_ics).expect("reparse version test");
+    assert_eq!(reparsed.version.as_deref(), Some("2.0"));
+    let reparsed_overrides = reparsed.recurrence_overrides.expect("reparsed overrides");
+    let reparsed_patch = reparsed_overrides
+        .get("2026-09-02T10:00:00")
+        .expect("reparsed patch");
+    assert!(reparsed_patch.get("version").is_none());
+}
+
+#[test]
+fn differential_oracle_read_duration_mutual_exclusivity_precedence_and_wall_clock_fallback() {
+    // Divergence 118 against Stalwart differential oracle:
+    // DURATION vs DTEND mutual exclusivity precedence and wall-clock difference fallback.
+    // In jmap-ical:
+    // 1. Explicit DURATION takes absolute precedence over conflicting DTEND.
+    // 2. When DURATION is absent, DTEND - DTSTART calculates wall-clock duration via instant().
+    // 3. When neither is present, duration is None (RFC 8984 defaults to PT0S).
+
+    // 1. Conflicting DURATION:PT2H and DTEND (5 hours later): DURATION wins
+    let conflict_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:dur-conflict\r\n\
+DTSTART:20260901T100000Z\r\n\
+DTEND:20260901T150000Z\r\n\
+DURATION:PT2H\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_conflict = ical_to_event(conflict_ics).expect("parse conflict ics");
+    assert_eq!(
+        ev_conflict.duration.as_deref(),
+        Some("PT2H"),
+        "DURATION must take absolute precedence over DTEND"
+    );
+
+    // 2. Only DTEND present (Evolution appointment creation pattern): wall-clock fallback
+    let dtend_only_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:dtend-only\r\n\
+DTSTART:20260901T090000\r\n\
+DTEND:20260901T123000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_dtend = ical_to_event(dtend_only_ics).expect("parse dtend only");
+    assert_eq!(
+        ev_dtend.duration.as_deref(),
+        Some("PT3H30M"),
+        "DTEND - DTSTART must calculate wall-clock duration"
+    );
+
+    // 3. Neither present: duration is None
+    let neither_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:neither\r\n\
+DTSTART:20260901T090000\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_neither = ical_to_event(neither_ics).expect("parse neither");
+    assert_eq!(
+        ev_neither.duration, None,
+        "missing DURATION and DTEND must result in duration: None"
+    );
+}
+
+#[test]
+fn differential_oracle_read_time_zones_redrawability_and_solidus_scoping() {
+    // Divergence 119 against Stalwart differential oracle:
+    // read_time_zones redrawability requirement (vtimezone_of), custom solidus scoping, and dangling prevention.
+    // In jmap-ical:
+    // 1. Custom solidus TZID (/custom/zone) with redrawable VTIMEZONE is ingested into event.time_zones.
+    // 2. Custom solidus TZID with un-drawable VTIMEZONE (corrupt rules/offsets) is dropped, triggering maps_time_zone refusal.
+    // 3. Standard IANA TZID with VTIMEZONE is resolved directly and omitted from event.time_zones.
+
+    // 1. Custom solidus zone with complete redrawable VTIMEZONE
+    let custom_valid_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/custom.org/Berlin\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:19700329T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:custom-zone-valid\r\n\
+DTSTART;TZID=/custom.org/Berlin:20260615T140000\r\n\
+DURATION:PT1H\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_valid = ical_to_event(custom_valid_ics).expect("parse valid custom zone");
+    assert_eq!(
+        ev_valid.time_zone.as_deref(),
+        Some("/custom.org/Berlin"),
+        "custom solidus TZID preserved"
+    );
+    let tz_map = ev_valid
+        .time_zones
+        .as_ref()
+        .expect("time_zones map populated");
+    assert!(
+        tz_map.contains_key("/custom.org/Berlin"),
+        "redrawable custom zone ingested into time_zones"
+    );
+    assert!(
+        maps_time_zone(&ev_valid),
+        "event with redrawable custom zone satisfies maps_time_zone"
+    );
+
+    // 2. Custom solidus zone with un-drawable VTIMEZONE (e.g. invalid offset format +9999)
+    let custom_invalid_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/custom.org/Broken\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+9999\r\n\
+TZOFFSETTO:+0100\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:custom-zone-broken\r\n\
+DTSTART;TZID=/custom.org/Broken:20260615T140000\r\n\
+DURATION:PT1H\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_invalid = ical_to_event(custom_invalid_ics).expect("parse broken custom zone");
+    assert_eq!(ev_invalid.time_zone.as_deref(), Some("/custom.org/Broken"));
+    assert_eq!(
+        ev_invalid.time_zones, None,
+        "un-drawable custom VTIMEZONE must not be ingested into time_zones"
+    );
+    assert!(
+        !maps_time_zone(&ev_invalid),
+        "dangling custom zone without time_zones definition must be refused by maps_time_zone"
+    );
+
+    // 3. Standard IANA timezone accompanied by VTIMEZONE: omitted from time_zones
+    let iana_with_vtz_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:America/New_York\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701101T020000\r\n\
+TZOFFSETFROM:-0400\r\n\
+TZOFFSETTO:-0500\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:iana-with-vtz\r\n\
+DTSTART;TZID=America/New_York:20260615T140000\r\n\
+DURATION:PT1H\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_iana = ical_to_event(iana_with_vtz_ics).expect("parse iana with vtz");
+    assert_eq!(ev_iana.time_zone.as_deref(), Some("America/New_York"));
+    assert_eq!(
+        ev_iana.time_zones, None,
+        "standard IANA timezone must be omitted from event.time_zones"
+    );
+    assert!(maps_time_zone(&ev_iana));
+}
