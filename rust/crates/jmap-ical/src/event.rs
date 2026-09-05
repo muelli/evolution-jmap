@@ -2641,7 +2641,7 @@ pub fn value_text_str(value: &ICalendarValue) -> Option<String> {
     value_text(value).map(|(s, _)| s)
 }
 
-fn value_text(value: &ICalendarValue) -> Option<(String, bool)> {
+pub fn value_text(value: &ICalendarValue) -> Option<(String, bool)> {
     let typed = |value: String| Some((value, false));
     match value {
         ICalendarValue::Text(text) => Some((text.clone(), true)),
@@ -2668,7 +2668,7 @@ fn value_text(value: &ICalendarValue) -> Option<(String, bool)> {
     }
 }
 
-fn date_time_text(stamp: &PartialDateTime) -> String {
+pub fn date_time_text(stamp: &PartialDateTime) -> String {
     let kind = match (stamp.year.is_some(), stamp.hour.is_some()) {
         (true, true) => ICalendarValueType::DateTime,
         (true, false) => ICalendarValueType::Date,
@@ -2683,7 +2683,7 @@ fn date_time_text(stamp: &PartialDateTime) -> String {
     }
 }
 
-fn param_text(value: &ICalendarParameterValue) -> String {
+pub fn param_text(value: &ICalendarParameterValue) -> String {
     match value {
         ICalendarParameterValue::Text(text) => text.clone(),
         ICalendarParameterValue::Integer(number) => number.to_string(),
