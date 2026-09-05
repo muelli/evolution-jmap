@@ -35621,3 +35621,349 @@ fn differential_oracle_wall_clock_offset_arithmetic_and_day_rollover() {
     // 4. Four-digit year boundary clamping in moved
     assert!(jmap_ical::event::moved("0000-01-01T01:00:00", -7200).is_none());
 }
+
+#[test]
+fn differential_oracle_vtimezone_observance_transition_scoping_and_earliest_fallback() {
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Europe/Berlin\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:19700329T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal = jmap_ical::event::parse_ical(ics).expect("parse vcalendar");
+    let vtz = cal
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtimezone component");
+    let observances: Vec<&calcard::icalendar::ICalendarComponent> = vtz
+        .component_ids
+        .iter()
+        .filter_map(|id| cal.components.get(*id as usize))
+        .collect();
+
+    assert_eq!(observances.len(), 2);
+
+    // 1. Summer instant (June 2026): in force offset is +0200 (7200 seconds)
+    let offset_summer = jmap_ical::event::zone_offset_at(&observances, "2026-06-15T12:00:00");
+    assert_eq!(offset_summer, Some(7200));
+
+    // 2. Winter instant (December 2026): in force offset is +0100 (3600 seconds)
+    let offset_winter = jmap_ical::event::zone_offset_at(&observances, "2026-12-15T12:00:00");
+    assert_eq!(offset_winter, Some(3600));
+
+    // 3. Instant prior to all transitions (1960-01-01): falls back to earliest transition's TZOFFSETFROM
+    let offset_early = jmap_ical::event::zone_offset_at(&observances, "1960-01-01T00:00:00");
+    assert!(offset_early.is_some());
+
+    // 4. Empty observances returns None
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&[], "2026-06-15T12:00:00"),
+        None
+    );
+
+    // 5. RDATE with period '/' is rejected by onsets, returning None
+    let ics_period_rdate = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/PeriodZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20260101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0000\r\n\
+RDATE;VALUE=PERIOD:20260101T000000/P1D\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let cal_period = jmap_ical::event::parse_ical(ics_period_rdate).expect("parse period rdate");
+    let vtz_period = cal_period
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtimezone component");
+    let obs_period: Vec<&calcard::icalendar::ICalendarComponent> = vtz_period
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_period.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_period, "2026-06-15T12:00:00"),
+        None
+    );
+}
+
+#[test]
+fn differential_oracle_vtimezone_transition_day_grammar_and_bounded_epoch_scan() {
+    // Test transition day patterns via recurrence UNTIL evaluation
+    // 1. Day::Nth with negative ordinal (-1SU) and positive ordinal (2SU)
+    let ics_nth = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/NthZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000301T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=2SU;BYMONTH=3\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001001T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:nth-event-1\r\n\
+DTSTART;TZID=Custom/NthZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260601T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_nth = jmap_ical::event::ical_to_event(ics_nth).expect("parse nth");
+    let rule_nth = ev_nth.recurrence_rule.expect("rule nth");
+    // June 1 is in daylight savings (+0200), so 12:00:00Z becomes 14:00:00 local
+    assert_eq!(rule_nth.until.as_deref(), Some("2026-06-01T14:00:00"));
+
+    // 2. Day::WeekdayAmong (tzdata date run idiom: BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29)
+    let ics_run = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/RunZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000323T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29;BYMONTH=3\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001023T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:run-event-1\r\n\
+DTSTART;TZID=Custom/RunZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260701T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_run = jmap_ical::event::ical_to_event(ics_run).expect("parse run");
+    let rule_run = ev_run.recurrence_rule.expect("rule run");
+    assert_eq!(rule_run.until.as_deref(), Some("2026-07-01T14:00:00"));
+
+    // 3. Day::OfMonth (single day of month, e.g. BYMONTHDAY=15)
+    let ics_monthday = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/FixedDayZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000315T020000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYMONTHDAY=15;BYMONTH=3\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001015T030000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0000\r\n\
+RRULE:FREQ=YEARLY;BYMONTHDAY=15;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:fixed-day-event-1\r\n\
+DTSTART;TZID=Custom/FixedDayZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260501T100000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_md = jmap_ical::event::ical_to_event(ics_monthday).expect("parse monthday");
+    let rule_md = ev_md.recurrence_rule.expect("rule monthday");
+    assert_eq!(rule_md.until.as_deref(), Some("2026-05-01T11:00:00"));
+}
+
+#[test]
+fn differential_oracle_vtimezone_restated_time_of_day_and_leap_second_rejection() {
+    // 1. Restated BYHOUR and BYMINUTE on transition rules (Lotus Notes style)
+    let ics_notes = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/NotesZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000301T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3;BYHOUR=2;BYMINUTE=30;BYSECOND=0\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001001T000000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10;BYHOUR=3;BYMINUTE=30;BYSECOND=0\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:notes-event-1\r\n\
+DTSTART;TZID=Custom/NotesZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260601T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_notes = jmap_ical::event::ical_to_event(ics_notes).expect("parse notes zone");
+    let rule_notes = ev_notes.recurrence_rule.expect("rule notes");
+    assert_eq!(rule_notes.until.as_deref(), Some("2026-06-01T14:00:00"));
+
+    // 2. Leap second 60 in transition rule BYSECOND is rejected
+    // Placing a leap second into a transition onset pushes it into the next minute,
+    // so zone::restated refuses BYSECOND=60, causing UNTIL resolution to preserve Z
+    let ics_leap_transition = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/LeapZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=1;BYMONTHDAY=1;BYSECOND=60\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:leap-event-1\r\n\
+DTSTART;TZID=Custom/LeapZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260601T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_leap = jmap_ical::event::ical_to_event(ics_leap_transition).expect("parse leap zone");
+    let rule_leap = ev_leap.recurrence_rule.expect("rule leap");
+    // Because the transition rule carries BYSECOND=60, restated returns None,
+    // rule_onsets fails, zone offset is None, and read_until preserves the trailing Z
+    assert!(
+        rule_leap.until.as_ref().unwrap().ends_with('Z'),
+        "unresolvable transition rule must preserve trailing Z"
+    );
+
+    // 3. Multi-value hours in transition rule (e.g. BYHOUR=2,3) rejected
+    let ics_multi_hour = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/MultiHourZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=1;BYMONTHDAY=1;BYHOUR=2,3\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:multi-hour-event-1\r\n\
+DTSTART;TZID=Custom/MultiHourZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260601T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_multi = jmap_ical::event::ical_to_event(ics_multi_hour).expect("parse multi hour");
+    let rule_multi = ev_multi.recurrence_rule.expect("rule multi");
+    assert!(
+        rule_multi.until.as_ref().unwrap().ends_with('Z'),
+        "multi-hour transition rule must preserve trailing Z"
+    );
+}
+
+#[test]
+fn differential_oracle_freebusy_availability_fail_closed_and_address_normalization() {
+    use jmap_ical::{busy_periods_to_vfreebusy, free_busy_type};
+    use jmap_proto::principals::BusyPeriod;
+    use jmap_proto::state::UtcDate;
+
+    // 1. Status mappings
+    assert_eq!(free_busy_type("confirmed"), "BUSY");
+    assert_eq!(free_busy_type("tentative"), "BUSY-TENTATIVE");
+    assert_eq!(free_busy_type("unavailable"), "BUSY-UNAVAILABLE");
+    assert_eq!(free_busy_type("other_future_status"), "BUSY");
+    assert_eq!(free_busy_type(""), "BUSY");
+
+    // 2. Fail-closed semantics: invalid dates anywhere in window or periods return None
+    let window_start = UtcDate::new("2026-09-01T08:00:00Z");
+    let window_end = UtcDate::new("2026-09-01T18:00:00Z");
+
+    let invalid_period = BusyPeriod {
+        utc_start: UtcDate::new("not-a-valid-date"),
+        utc_end: UtcDate::new("2026-09-01T10:00:00Z"),
+        busy_status: "confirmed".to_owned(),
+        event: None,
+    };
+    assert_eq!(
+        busy_periods_to_vfreebusy(
+            "user@example.com",
+            &window_start,
+            &window_end,
+            &[invalid_period]
+        ),
+        None,
+        "unreadable busy period must refuse the entire component to prevent false free-time reporting"
+    );
+
+    let invalid_window_start = UtcDate::new("invalid-start");
+    assert_eq!(
+        busy_periods_to_vfreebusy("user@example.com", &invalid_window_start, &window_end, &[]),
+        None,
+        "unreadable query window start must refuse the entire component"
+    );
+
+    // 3. Sub-second fraction truncation in UtcDate
+    let subsecond_period = BusyPeriod {
+        utc_start: UtcDate::new("2026-09-01T09:00:00.123Z"),
+        utc_end: UtcDate::new("2026-09-01T10:00:00.999Z"),
+        busy_status: "confirmed".to_owned(),
+        event: None,
+    };
+    let vfb = busy_periods_to_vfreebusy(
+        "user@example.com",
+        &window_start,
+        &window_end,
+        &[subsecond_period],
+    )
+    .expect("render freebusy with subsecond fraction");
+    assert!(vfb.contains("FREEBUSY;FBTYPE=BUSY:20260901T090000Z/20260901T100000Z"));
+    assert!(!vfb.contains(".123"));
+    assert!(!vfb.contains(".999"));
+
+    // 4. Attendee mailto: scheme normalization
+    for attendee in [
+        "user@example.com",
+        "mailto:user@example.com",
+        "MAILTO:user@example.com",
+    ] {
+        let out = busy_periods_to_vfreebusy(attendee, &window_start, &window_end, &[])
+            .expect("render empty freebusy");
+        assert!(
+            out.contains("ATTENDEE:mailto:user@example.com\r\n"),
+            "expected normalized ATTENDEE line, got: {out}"
+        );
+        assert!(!out.contains("mailto:mailto:"));
+    }
+}

@@ -5045,3 +5045,77 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and date-time arithmetic determinism. Enforces 24-hour bounded day rollover, handles Gregorian leap-year month carrying, clamps years to four digits (`0000..=9999`), and rejects negative zero offsets.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.256 Divergence 256: `zone::offset_at`, `zone_offset_at`, `onsets`, and `rule_onsets`: VTIMEZONE Historical Observance Transition Rule Resolution: Chronological Transition Scoping, Standard/Daylight Component Filtering, Onset Sorting (`in_force` vs `first`), and Earliest Pre-Transition Fallback (`TZOFFSETFROM`)
+
+- **Observed Behavior**:
+  Resolving the UTC offset in force at an arbitrary UTC instant from document `VTIMEZONE` components (to convert between UTC `UNTIL` in RFC 5545 and local `until` in RFC 8984) requires parsing `STANDARD` and `DAYLIGHT` subcomponents, deriving transition onsets across years, and choosing the offset of the latest transition at or before the target instant. In `jmap-ical`:
+  1. Component filtering (`offset_at`): Iterates over `observances` and filters strictly for subcomponents whose `component_type` is `STANDARD` or `DAYLIGHT`. Irrelevant or unknown subcomponents are ignored.
+  2. Onset computation and period rejection (`onsets`): Extracts `DTSTART` as the first transition onset. For `RDATE` entries, if any value contains a solidus (`/`, denoting a period), `onsets` returns `None` because transitions are instantaneous points in time rather than periods. For `RRULE` entries, onsets are derived via `rule_onsets`.
+  3. Chronological transition sorting (`in_force` and `first`): Compares each onset against `target` (the target UTC instant). `in_force` tracks the latest transition where `onset <= target`, recording `TZOFFSETTO` as the active offset. `first` tracks the globally earliest transition onset, recording its `TZOFFSETFROM`.
+  4. Pre-transition fallback: If the target instant precedes all transitions stated in the definition (`in_force` is `None`), `offset_at` falls back to `first`'s `TZOFFSETFROM`, which represents the historical offset before the definition began.
+  5. Unresolvable definition refusal: If `observances` is empty or no valid onsets can be resolved, `offset_at` returns `None`. Downstream callers (`read_until`) preserve the trailing `Z` marker, which `maps_recurrence_rule` refuses, preventing silent offset distortion.
+  6. In contrast, differential oracles or simplistic parsers ignore historical transitions, apply the host system's current timezone offset regardless of date era, assume standard time year-round, or fail on dates before the first transition onset.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.5 (`Time Zone Component`), Section 3.8.3.3 (`Time Zone Offset From`), and Section 3.8.3.4 (`Time Zone Offset To`) define `VTIMEZONE` transition semantics.
+  2. RFC 8984 Section 4.3.3 (`RecurrenceRule`) and Section 4.7.2 (`TimeZoneRule`) govern recurrence endpoints and timezone offsets.
+- **Adjudication**:
+  Conforming specification boundary and historical observance transition evaluation determinism. Correctly scopes summer and winter offsets, enforces instantaneous transition boundaries, supports pre-transition historical fallbacks, and refuses ambiguous definitions.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.257 Divergence 257: `zone::Day::named`, `zone::Day::of`, `zone::Falls`, and `SEARCH`: VTIMEZONE Recurrence Transition Day Grammar: Ordinal Weekdays (`Day::Nth`), Weekday Among Date Runs (`Day::WeekdayAmong`), Day of Month (`Day::OfMonth`), and Bounded 40-Year Epoch Scanning
+
+- **Observed Behavior**:
+  RFC 5545 recurrence rules on timezone observances specify transition days across multiple grammatical shapes: ordinal weekdays, tzdata date run bounding, single month days, or defaults from start times. In `jmap-ical`:
+  1. Grammatical variant classification (`Day::named`): Classifies transition day specifications into four structured representations:
+     - `Day::Nth(nth, weekday)`: Requires a signed, non-zero ordinal (such as `-1SU` for last Sunday or `2SU` for second Sunday) and a 2-letter weekday. Zero ordinals are rejected.
+     - `Day::WeekdayAmong(weekday, dates)`: Matches a weekday without an ordinal paired with a comma-separated list of non-zero month days (e.g. `BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29`), representing tzdata's common "first Sunday on or after the 23rd" idiom.
+     - `Day::OfMonth(day)`: Matches a single non-zero month day, supporting negative month-end indices.
+     - `Day::OfStart(day)`: Falls back to the day of `DTSTART` when no `BYDAY` or `BYMONTHDAY` is specified.
+  2. Calendar year day evaluation (`Day::of` and `Falls`): Resolves the transition day against the specific month length of the target year. Returns `Falls::On(day)` for a single valid day. Returns `Falls::Never` if the day does not occur in that year (such as February 29 in a non-leap year, or a fifth Sunday in a 4-Sunday month), correctly skipping that year without aborting the rule. Returns `Falls::Set` if multiple dates in a run match the weekday, refusing ambiguous multi-transition rules.
+  3. Bounded epoch scanning (`SEARCH = 40`): Limits historical search back 40 years from the target year. This fixed bound safely covers 4-year and 40-year February 29 leap year cycles while protecting against unbounded loops on pathologically ancient definitions.
+  4. In contrast, differential oracles or naive date libraries crash on negative ordinals, mistake non-occurrence years (`Falls::Never`) for syntax errors, loop indefinitely searching for February 29 transitions, or pick an arbitrary date when multiple days match.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`) and Section 3.6.5 (`Time Zone Component`) specify transition recurrence rules and `BYDAY`/`BYMONTHDAY` interactions.
+  2. RFC 8984 Section 4.7.2 (`TimeZoneRule`) specifies observance recurrence structures.
+- **Adjudication**:
+  Conforming specification boundary and transition rule day resolution determinism. Accurately evaluates ordinal weekdays, date run limits, negative month-day offsets, and bounded 40-year historical scans.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.258 Divergence 258: `zone::restated`, `restated(of_day, hour, minute, second)`, and `only`: Observance Time-of-Day Restatement: Field Replacement Bounding, Strict Range Validation (`0..=23`, `0..=59`), Transition Leap Second Prohibition, and Sub-Day Set Refusal
+
+- **Observed Behavior**:
+  Transition rules emitted by legacy groupware systems (such as Lotus Notes or IBM Domino) restate the time of day using `BYHOUR`, `BYMINUTE`, and `BYSECOND` on `YEARLY` recurrence rules, overriding `DTSTART`'s time of day. In `jmap-ical`:
+  1. Time-of-day field replacement (`restated`): Overrides the base time of day (`of_day`, seconds from midnight) with values from `BYHOUR`, `BYMINUTE`, and `BYSECOND` when present on a `YEARLY` transition rule.
+  2. Strict range validation (`only`): Restricts `BYHOUR` to `0..=23`, `BYMINUTE` to `0..=59`, and `BYSECOND` to `0..=59`. Values outside these boundaries cause `restated` to return `None`.
+  3. Transition leap second prohibition: While general calendar events tolerate leap second 60 per RFC 5545 Section 3.3.12, `restated` strictly rejects `second == 60` (`0..=59` bound). Placing a leap second on a transition onset would push the transition into the subsequent minute, distorting recurrence offset boundaries.
+  4. Sub-day set refusal: If multiple values are specified (for example `BYHOUR=2,3`), `field.parse::<i64>()` fails and `only` returns `None`. A rule specifying multiple transition times in a single day is rejected rather than choosing an arbitrary onset.
+  5. In contrast, differential oracles or naive parsers ignore `BYHOUR`/`BYMINUTE` in transition rules (miscalculating daylight transitions by hours), accept multiple transition hours per day, or allow leap second offsets to corrupt transition boundaries.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`) and Section 3.6.5 (`Time Zone Component`) define time-of-day expansion and transition rules.
+  2. RFC 8984 Section 4.7.2 (`TimeZoneRule`) defines observance timing.
+- **Adjudication**:
+  Conforming specification boundary and transition time-of-day precision. Restates transition times cleanly, bounds fields strictly, rejects transition leap seconds, and refuses multi-transition sub-day sets.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.259 Divergence 259: `free_busy_type`, `busy_periods_to_vfreebusy`, `instant`, and `mailto`: Free/Busy Availability Mapping: Closed Draft Busy Status Mapping, Fail-Closed Option Semantics, Sub-Second Fraction Truncation, and Address Scheme Normalization
+
+- **Observed Behavior**:
+  Translating JMAP `Principal/getAvailability` (`BusyPeriod` arrays) into RFC 5545 `VFREEBUSY` components for Evolution's meeting scheduler requires mapping draft busy statuses, enforcing fail-closed error boundaries, truncating sub-second fractions, and normalizing attendee calendar addresses. In `jmap-ical`:
+  1. Draft busy status mapping (`free_busy_type`): Maps JMAP draft busy statuses to RFC 5545 Section 3.2.9 `FBTYPE` tokens: `"tentative"` maps to `"BUSY-TENTATIVE"`, `"unavailable"` maps to `"BUSY-UNAVAILABLE"`, and all other values (including `"confirmed"` or unknown future draft values) map safely to `"BUSY"`. Because `getAvailability` only reports periods when the user is unavailable, unknown values must never be reported as free.
+  2. Fail-closed error semantics (`busy_periods_to_vfreebusy`): Unlike general event mapping which drops unreadable properties to salvage the appointment, free/busy mapping inverts this behavior. If the query window (`utc_start`/`utc_end`) or any busy period timestamp cannot be parsed, `busy_periods_to_vfreebusy` returns `None`. Dropping an unreadable period would report the attendee as free when they are actually busy, causing schedulers to double-book meetings.
+  3. Sub-second fraction truncation (`instant`): RFC 3339 Section 5.6 allows fractional seconds in ISO 8601 UTC dates (such as `.123Z`), while RFC 5545 `DATE-TIME` forbids fractions. `instant` slices the fractional digits prior to `Z`, formatting clean UTC timestamps without rejecting the period.
+  4. Attendee address scheme normalization (`mailto`): All three EDS calendar backends require `ATTENDEE:mailto:<address>`. `mailto` normalizes bare addresses (`user@example.com`) or addresses with existing schemes (`mailto:` or `MAILTO:`), preventing duplicate `mailto:mailto:` prefixes.
+  5. In contrast, differential oracles or permissive converters drop unreadable busy periods (reporting false availability and causing meeting conflicts), reject fractional seconds outright, or emit duplicated address schemes.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.9 (`Free/Busy Time`) and Section 3.2.9 (`Free/Busy Time Type`) define `VFREEBUSY` and `FBTYPE` properties.
+  2. Draft-ietf-jmap-calendars Section 2.2 (`Principal/getAvailability`) defines `BusyPeriod` structures and availability methods.
+  3. RFC 3339 Section 5.6 (`Internet Date/Time Format`) defines UTC date strings and fractional seconds.
+- **Adjudication**:
+  Conforming specification boundary and scheduling availability safety. Implements fail-closed refusal on unreadable periods, maps draft busy statuses defensively, truncates fractional seconds, and normalizes calendar addresses idempotently.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
