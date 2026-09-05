@@ -2944,5 +2944,79 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.136 Divergence 136: `drawn_link` and `read_links`: RFC 7986 §5.10 `IMAGE` vs RFC 5545 §3.8.1.1 `ATTACH` Dual Mapping (`rel: "icon"`), Mandatory `VALUE=URI` on `IMAGE`, Parameter Disjointness (`DISPLAY` vs `SIZE`), and Unsigned Integer Validation (`stated_size`)
+
+- **Observed Behavior**:
+  RFC 8984 §4.2.7 unifies external links into a single `links: Map<Id, Link>` map. In iCalendar, external resources are divided across RFC 5545 §3.8.1.1 `ATTACH` (documents, payloads) and RFC 7986 §5.10 `IMAGE` (pictures, icons). In `jmap-ical`:
+  1. Link classification by relation (`rel: "icon"`): If `link.rel == "icon"`, `drawn_link` emits `IMAGE`. Otherwise, it emits `ATTACH`.
+  2. Mandatory `VALUE=URI` parameter on `IMAGE`: RFC 7986 §5.10 `imageparam` makes `VALUE=URI` explicitly required in its ABNF grammar for URI alternatives (`imageparam = ... / "VALUE" "=" "URI"`). `drawn_link` writes `VALUE=URI` on all emitted `IMAGE` lines.
+  3. Default `URI` value type omission on `ATTACH`: RFC 5545 §3.8.1.1 specifies `URI` as the default value type for `ATTACH`, with no grammar requirement to restate `VALUE=URI`. `drawn_link` omits `VALUE=URI` on `ATTACH`, keeping lines compact.
+  4. Parameter disjointness: `DISPLAY` (RFC 7986 §6.1: `BADGE`, `GRAPHIC`, `FULLSIZE`, `THUMBNAIL`) is emitted exclusively on `IMAGE` lines and is omitted on `ATTACH`. `SIZE` (RFC 8607 §4.1: octet count) is emitted exclusively on `ATTACH` lines; RFC 7986 §5.10 defines no `SIZE` parameter on `IMAGE`.
+  5. Unsigned integer size validation (`stated_size`): `stated_size` validates `link.size.as_u64()`. Negative integers, fractions, or non-numeric values return `None`, dropping the parameter rather than writing invalid integers.
+  6. Inbound parsing (`read_links`): An `IMAGE` line sets `link.rel = "icon"` and extracts `DISPLAY` into `link.display`. An `ATTACH` line extracts `SIZE` (as `u64`) into `link.size`. Extraneous parameters (`DISPLAY` on `ATTACH` or `SIZE` on `IMAGE`) are ignored.
+  7. In contrast, differential oracles or naive CalDAV serializers often omit `VALUE=URI` on `IMAGE` (violating RFC 7986 §5.10 grammar), emit `DISPLAY` on `ATTACH`, or serialize negative and fractional size values.
+- **Specification and Architectural Context**:
+  1. RFC 7986 §5.10 explicitly requires `VALUE=URI` when referencing images by URI, unlike RFC 5545 §3.8.1.1 where `URI` is the unstated default. Conforming to the specific RFC grammar for each property ensures maximum interoperability across CalDAV validators.
+  2. Enforcing parameter disjointness prevents invalid parameter leakage (such as attaching `DISPLAY` to general document attachments) that causes parser rejections in `libical`.
+  3. Restricting `SIZE` to valid non-negative unsigned integers protects downstream storage from integer underflow or invalid parameter formatting.
+- **Adjudication**:
+  Conforming specification boundary and resource parameter fidelity. Distinguishes `IMAGE` and `ATTACH` by link relation, enforces mandatory `VALUE=URI` on `IMAGE`, maintains strict parameter disjointness, and validates unsigned integer size.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.137 Divergence 137: `component_entry`, `component_entries`, `entry_text`, and `entry_texts`: Multi-Valued Property Joining (Comma-Separated `entry_text` vs `entry_texts` Slice), Case-Insensitive Name Filtering, and Comma Join Delimitation vs Raw Token Separation
+
+- **Observed Behavior**:
+  RFC 5545 allows properties to declare multiple values separated by commas (such as `CATEGORIES:tag1,tag2`) or repeat the property across multiple lines (`CATEGORIES:tag1` followed by `CATEGORIES:tag2`). In `jmap-ical`:
+  1. Multi-valued property joining (`entry_text`): Aggregates all values of an `ICalendarEntry` by joining their string representations with commas `,` (`entry.values.iter().filter_map(value_text_str).collect::<Vec<_>>().join(",")`).
+  2. Individual token extraction (`entry_texts`): Extracts each scalar value in `entry.values` as an individual `String` element without string concatenation or re-splitting.
+  3. Multi-line aggregation in `read_keywords`: Evaluates `component_entries(vevent, "CATEGORIES").flat_map(entry_texts)` to collect both multi-line and comma-separated category entries, trimming surrounding whitespace and discarding empty tokens.
+  4. Case-insensitive property name matching: `component_entry` and `component_entries` perform ASCII case-insensitive name matching (`entry.name.as_str().eq_ignore_ascii_case(name)`). This tolerates lowercase or mixed-case property names (such as `summary:`, `description:`, `categories:`, `dtstart:`) emitted by non-standard calendar agents.
+  5. In contrast, differential oracles or rigid AST parsers that match property names case-sensitively drop lowercase property lines, or re-parse comma-joined strings producing escape corruption when values contain escaped commas (`\,`).
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.1 mandates that property names are case-insensitive. In real-world environments, webmail gateways and third-party exporters frequently emit lowercase or mixed-case property names.
+  2. Preserving individual parsed value tokens in `entry_texts` avoids re-parsing concatenated strings and prevents accidental splitting on escaped commas inside category or text names.
+  3. Supporting both multi-line property declarations and comma-separated tokens ensures lossless category ingestion into JSCalendar Sets.
+- **Adjudication**:
+  Conforming specification boundary and parser tolerance defense. Matches property names case-insensitively, preserves parsed value token boundaries, and merges multi-line and comma-separated properties into clean Sets.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.138 Divergence 138: `entry_param` and `entry_param_values`: Case-Insensitive Parameter Name Resolution, Multi-Occurrence Parameter Value Extraction (e.g. `FEATURE`), and Parameter AST Text Flattening (`param_text`)
+
+- **Observed Behavior**:
+  RFC 5545 §3.2 specifies that property parameter names and values are case-insensitive unless specified otherwise, and some properties admit multi-valued or repeated parameters (such as `FEATURE` on `CONFERENCE`, RFC 7986 §5.11). In `jmap-ical`:
+  1. Case-insensitive parameter lookup: `entry_param` finds the first parameter where `param.name.as_str().eq_ignore_ascii_case(name)` matches, extracting its flattened string value via `param_text(&param.value)`.
+  2. Multi-occurrence parameter extraction: `entry_param_values` iterates over all parameters on an entry matching `name` case-insensitively, collecting all values into a `Vec<String>`. This ensures all `FEATURE` tokens across repeated parameter definitions (such as `CONFERENCE;FEATURE=AUDIO;FEATURE=VIDEO:...` or `feature=audio`) are captured into `features`.
+  3. Parameter AST text flattening (`param_text`): Systematically converts all 19 `ICalendarParameterValue` variants into plain strings, handling enums, booleans (`TRUE`/`FALSE`), integers, durations, features, and relations, returning empty strings for `Null` and `Uri::Data`.
+  4. In contrast, differential oracles or permissive parsers often only read the first parameter instance (discarding subsequent parameter declarations), fail on lowercase parameter names (`feature=video`), or fail to unwrap typed parameter variants.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.2 defines parameter names as case-insensitive. In real-world calendar feeds, parameter names appear with varying capitalization.
+  2. Repeated parameter declarations (such as multiple `FEATURE` parameters on a single `CONFERENCE` line) are explicitly permitted by RFC 7986 §5.11. Capturing all occurrences ensures complete feature set extraction for video conference endpoints.
+  3. Robust AST unwrapping ensures that typed parameter variants emitted by `calcard` are converted into clean strings without loss of metadata.
+- **Adjudication**:
+  Conforming specification boundary and parameter extraction completeness. Resolves parameter names case-insensitively, extracts all repeated parameter occurrences, and flattens typed parameter AST variants cleanly.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.139 Divergence 139: `spelled` and `PARTICIPATION_STATUSES`: Strict Bidirectional Enumeration Mapping, String vs Set (`roles`/`participationStatus`) Resolution, and Five-State Closed Vocabulary Enforcement (`needs-action`, `accepted`, `declined`, `tentative`, `delegated`)
+
+- **Observed Behavior**:
+  RFC 8984 §4.4.6 defines `participationStatus` for participants, and RFC 5545 §3.2.12 defines `PARTSTAT` on `ATTENDEE`. In `jmap-ical`:
+  1. Five-state closed vocabulary (`PARTICIPATION_STATUSES`): Maps `needs-action` to `NEEDS-ACTION`, `accepted` to `ACCEPTED`, `declined` to `DECLINED`, `tentative` to `TENTATIVE`, and `delegated` to `DELEGATED`.
+  2. Dual input resolution in `spelled`: Supports both a scalar `Value::String` (looked up case-insensitively) and a Set `Value::Object` (where keys matching table entries with value `Value::Bool(true)` are selected in table precedence order).
+  3. Unmodeled and non-calendar status rejection: Any status outside this closed 5-state vocabulary (for example, RFC 5545 `VTODO` task statuses `COMPLETED` or `IN-PROCESS`, or arbitrary strings) returns `None` and is dropped from `PARTSTAT` on `ATTENDEE` lines.
+  4. Case-insensitive matching and canonical emission: Participant status values are matched case-insensitively and emitted as canonical uppercase RFC 5545 parameter tokens.
+  5. In contrast, differential oracles or permissive parsers often pass through arbitrary strings (such as `COMPLETED` or lowercase `accepted`) into `PARTSTAT` or fail to evaluate boolean Set representations, generating non-standard iCalendar syntax that breaks strict CalDAV validators.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.2.12 explicitly defines `partstat-event` as a closed enumerated set consisting of `NEEDS-ACTION`, `ACCEPTED`, `DECLINED`, `TENTATIVE`, and `DELEGATED`. Values like `COMPLETED` and `IN-PROCESS` are defined exclusively for `VTODO` components and are syntactically illegal on `VEVENT` attendees.
+  2. In Evolution Data Server, attendees with invalid `PARTSTAT` values cause UI rendering errors in the meeting participant list. Suppressing unmodeled or invalid task statuses protects calendar integrity.
+  3. Supporting both scalar strings and boolean Set representations ensures compatibility with varying JSON structures across JMAP implementations.
+- **Adjudication**:
+  Conforming specification boundary and participant status validation. Enforces the closed 5-state `partstat-event` vocabulary, resolves scalar strings and Sets, rejects task-only statuses, and emits canonical uppercase parameters.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 
