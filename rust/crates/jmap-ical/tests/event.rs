@@ -34773,3 +34773,164 @@ fn differential_oracle_rrule_by_parts_ordering_and_validation() {
     assert!(!rrule_str.contains("INTERVAL=1"));
     assert!(!rrule_str.contains("WKST=MO"));
 }
+
+#[test]
+fn differential_oracle_inbound_rrule_parsing_and_until_offset_resolution() {
+    let ends_utc = jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(Some("UTC")));
+
+    // 1. Valid RRULE parsing and frequency extraction
+    let rule = jmap_ical::event::rrule_to_rule("FREQ=DAILY", ends_utc).expect("parse daily");
+    assert_eq!(rule.frequency, "daily");
+    assert_eq!(rule.rule_type.as_deref(), Some("RecurrenceRule"));
+    assert_eq!(rule.interval, None);
+    assert_eq!(rule.count, None);
+
+    // 2. Case normalization and parameter extraction
+    let rule_case = jmap_ical::event::rrule_to_rule("freq=WEEKLY;interval=2;count=10", ends_utc)
+        .expect("parse weekly");
+    assert_eq!(rule_case.frequency, "weekly");
+    assert_eq!(rule_case.interval, Some(2));
+    assert_eq!(rule_case.count, Some(10));
+
+    // 3. Missing FREQ returns None
+    assert!(jmap_ical::event::rrule_to_rule("INTERVAL=2;COUNT=5", ends_utc).is_none());
+
+    // 4. UNTIL with missing date-time digits terminates loop (break) and drops trailing parts
+    let rule_malformed_until =
+        jmap_ical::event::rrule_to_rule("FREQ=DAILY;UNTIL=whenever;BYDAY=MO", ends_utc)
+            .expect("parse before break");
+    assert_eq!(rule_malformed_until.frequency, "daily");
+    assert_eq!(rule_malformed_until.until, None);
+    assert_eq!(rule_malformed_until.by_day, None);
+
+    // 5. UNTIL with valid date-time digits but invalid calendar date is preserved for gating
+    let rule_bad_date =
+        jmap_ical::event::rrule_to_rule("FREQ=DAILY;UNTIL=20261301T000000Z;COUNT=3", ends_utc)
+            .expect("parse bad date");
+    assert_eq!(rule_bad_date.frequency, "daily");
+    assert_eq!(rule_bad_date.count, Some(3));
+    assert_eq!(rule_bad_date.until.as_deref(), Some("20261301T000000Z"));
+
+    // 6. read_until with Ends::In (UTC conversion)
+    let rule_until_utc =
+        jmap_ical::event::rrule_to_rule("FREQ=DAILY;UNTIL=20260905T120000Z", ends_utc)
+            .expect("parse until utc");
+    assert_eq!(rule_until_utc.until.as_deref(), Some("2026-09-05T12:00:00"));
+
+    // 7. read_until with Ends::At (fixed offset conversion)
+    let ends_plus_two = jmap_ical::event::Ends::At("+0200");
+    let rule_until_offset =
+        jmap_ical::event::rrule_to_rule("FREQ=DAILY;UNTIL=20260905T140000Z", ends_plus_two)
+            .expect("parse until offset");
+    assert_eq!(
+        rule_until_offset.until.as_deref(),
+        Some("2026-09-05T16:00:00")
+    );
+
+    // 8. read_until with floating local time (no Z)
+    let rule_until_floating =
+        jmap_ical::event::rrule_to_rule("FREQ=DAILY;UNTIL=20260905T120000", ends_utc)
+            .expect("parse floating until");
+    assert_eq!(
+        rule_until_floating.until.as_deref(),
+        Some("2026-09-05T12:00:00")
+    );
+}
+
+#[test]
+fn differential_oracle_inbound_nday_byday_ordinal_parsing_and_zero_rejection() {
+    // 1. Plain 2-letter weekday tokens
+    let nday_mo = jmap_ical::event::to_nday("MO");
+    assert_eq!(nday_mo.day, "mo");
+    assert_eq!(nday_mo.nth_of_period, None);
+
+    let nday_fr = jmap_ical::event::to_nday("fr");
+    assert_eq!(nday_fr.day, "fr");
+    assert_eq!(nday_fr.nth_of_period, None);
+
+    // 2. Unsigned and signed positive ordinals
+    let nday_2we = jmap_ical::event::to_nday("2WE");
+    assert_eq!(nday_2we.day, "we");
+    assert_eq!(nday_2we.nth_of_period, Some(2));
+
+    let nday_plus_3tu = jmap_ical::event::to_nday("+3TU");
+    assert_eq!(nday_plus_3tu.day, "tu");
+    assert_eq!(nday_plus_3tu.nth_of_period, Some(3));
+
+    // 3. Negative ordinals
+    let nday_minus_1fr = jmap_ical::event::to_nday("-1FR");
+    assert_eq!(nday_minus_1fr.day, "fr");
+    assert_eq!(nday_minus_1fr.nth_of_period, Some(-1));
+
+    // 4. Zero ordinal is strictly rejected and kept verbatim as day token
+    let nday_zero_mo = jmap_ical::event::to_nday("0MO");
+    assert_eq!(nday_zero_mo.day, "0mo");
+    assert_eq!(nday_zero_mo.nth_of_period, None);
+
+    let nday_zero_signed = jmap_ical::event::to_nday("+0TU");
+    assert_eq!(nday_zero_signed.day, "+0tu");
+    assert_eq!(nday_zero_signed.nth_of_period, None);
+
+    // 5. Overflow and arbitrary string tokens preserved in day
+    let nday_invalid = jmap_ical::event::to_nday("SOMETHING");
+    assert_eq!(nday_invalid.day, "something");
+    assert_eq!(nday_invalid.nth_of_period, None);
+
+    let nday_overflow = jmap_ical::event::to_nday("+99999999999999999999TU");
+    assert_eq!(nday_overflow.day, "+99999999999999999999tu");
+    assert_eq!(nday_overflow.nth_of_period, None);
+}
+
+#[test]
+fn differential_oracle_inbound_month_day_signed_token_parsing_and_zero_sentinel() {
+    // 1. Standard positive and negative integers
+    assert_eq!(jmap_ical::event::to_month_day("15"), 15);
+    assert_eq!(jmap_ical::event::to_month_day("-1"), -1);
+    assert_eq!(jmap_ical::event::to_month_day("-31"), -31);
+
+    // 2. Leading plus sign is accepted by str::parse
+    assert_eq!(jmap_ical::event::to_month_day("+10"), 10);
+    assert_eq!(jmap_ical::event::to_month_day("+1"), 1);
+
+    // 3. Unparseable strings return sentinel 0
+    assert_eq!(jmap_ical::event::to_month_day("invalid"), 0);
+    assert_eq!(jmap_ical::event::to_month_day(""), 0);
+    assert_eq!(jmap_ical::event::to_month_day("15L"), 0);
+    assert_eq!(jmap_ical::event::to_month_day("0"), 0);
+
+    // 4. Verify sentinel 0 is rejected by outbound serialization helpers
+    assert_eq!(jmap_ical::event::month_day_token(0), None);
+    assert_eq!(jmap_ical::event::year_day_token(0), None);
+    assert_eq!(jmap_ical::event::week_no_token(0), None);
+    assert_eq!(jmap_ical::event::set_position_token(0), None);
+}
+
+#[test]
+fn differential_oracle_inbound_time_of_day_subday_parsing_and_u32_max_sentinel() {
+    // 1. Valid sub-day time values including midnight zero
+    assert_eq!(jmap_ical::event::to_time_of_day("0"), 0);
+    assert_eq!(jmap_ical::event::to_time_of_day("9"), 9);
+    assert_eq!(jmap_ical::event::to_time_of_day("23"), 23);
+    assert_eq!(jmap_ical::event::to_time_of_day("59"), 59);
+    assert_eq!(jmap_ical::event::to_time_of_day("60"), 60);
+
+    // 2. Unparseable tokens return u32::MAX sentinel
+    assert_eq!(jmap_ical::event::to_time_of_day("bad"), u32::MAX);
+    assert_eq!(jmap_ical::event::to_time_of_day("-5"), u32::MAX);
+    assert_eq!(jmap_ical::event::to_time_of_day(""), u32::MAX);
+    assert_eq!(jmap_ical::event::to_time_of_day("12:30"), u32::MAX);
+
+    // 3. Verify u32::MAX is rejected by time_of_day_part outbound serialization
+    assert_eq!(
+        jmap_ical::event::time_of_day_part("BYHOUR", Some(&[u32::MAX]), 23),
+        None
+    );
+    assert_eq!(
+        jmap_ical::event::time_of_day_part("BYMINUTE", Some(&[u32::MAX]), 59),
+        None
+    );
+    assert_eq!(
+        jmap_ical::event::time_of_day_part("BYSECOND", Some(&[u32::MAX]), 60),
+        None
+    );
+}
