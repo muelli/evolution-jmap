@@ -35353,3 +35353,271 @@ END:VCALENDAR\r\n";
     // Priority was omitted on detached instance, so it is deleted with null
     assert_eq!(patch.get("priority"), Some(&json!(null)));
 }
+
+#[test]
+fn differential_oracle_mapped_vs_override_properties_scope_and_contract() {
+    use jmap_ical::event::{MAPPED_PROPERTIES, OVERRIDE_PROPERTIES};
+
+    // 1. MAPPED_PROPERTIES contains exactly 17 vetted properties
+    assert_eq!(MAPPED_PROPERTIES.len(), 17);
+    for prop in [
+        "title",
+        "description",
+        "start",
+        "timeZone",
+        "duration",
+        "showWithoutTime",
+        "status",
+        "freeBusyStatus",
+        "priority",
+        "privacy",
+        "locations",
+        "virtualLocations",
+        "links",
+        "keywords",
+        "alerts",
+        "recurrenceRule",
+        "recurrenceOverrides",
+    ] {
+        assert!(
+            MAPPED_PROPERTIES.contains(&prop),
+            "missing {prop} in MAPPED_PROPERTIES"
+        );
+    }
+
+    // 2. OVERRIDE_PROPERTIES contains exactly 11 restatable properties
+    assert_eq!(OVERRIDE_PROPERTIES.len(), 11);
+    for prop in [
+        "title",
+        "description",
+        "start",
+        "timeZone",
+        "duration",
+        "status",
+        "freeBusyStatus",
+        "priority",
+        "privacy",
+        "keywords",
+        "alerts",
+    ] {
+        assert!(
+            OVERRIDE_PROPERTIES.contains(&prop),
+            "missing {prop} in OVERRIDE_PROPERTIES"
+        );
+    }
+
+    // 3. Properties allowed on series but barred from occurrence overrides
+    for barred in [
+        "locations",
+        "virtualLocations",
+        "links",
+        "showWithoutTime",
+        "recurrenceRule",
+        "recurrenceOverrides",
+    ] {
+        assert!(MAPPED_PROPERTIES.contains(&barred));
+        assert!(!OVERRIDE_PROPERTIES.contains(&barred));
+    }
+
+    // 4. Server-only and unmodeled properties excluded from both sets
+    for unmapped in [
+        "participants",
+        "calendarIds",
+        "color",
+        "locale",
+        "localizations",
+        "useDefaultAlerts",
+        "extra",
+    ] {
+        assert!(!MAPPED_PROPERTIES.contains(&unmapped));
+        assert!(!OVERRIDE_PROPERTIES.contains(&unmapped));
+    }
+
+    // 5. Inbound ical_to_event drops unmapped properties to preserve server state
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Example Corp.//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:prop-scope-test-1\r\n\
+DTSTART:20260910T090000Z\r\n\
+SUMMARY:Contract Test\r\n\
+ORGANIZER;CN=Owner:mailto:owner@example.com\r\n\
+ATTENDEE;CN=Guest:mailto:guest@example.com\r\n\
+CREATED:20260901T120000Z\r\n\
+LAST-MODIFIED:20260905T120000Z\r\n\
+DTSTAMP:20260905T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = jmap_ical::event::ical_to_event(ics).expect("parse ics");
+    // participants must be None because scheduling state is not mapped
+    assert!(event.participants.is_none());
+    // created and updated must be None because timestamps are server store-owned
+    assert!(event.created.is_none());
+    assert!(event.updated.is_none());
+    // calendar_ids must be None because it is backend managed
+    assert!(event.calendar_ids.is_none());
+}
+
+#[test]
+fn differential_oracle_recurrence_dates_and_modified_instance_absorption() {
+    use jmap_proto::calendars::CalendarEvent;
+    use serde_json::json;
+
+    let mut event = CalendarEvent {
+        id: Some("series-recur-1".into()),
+        uid: Some("series-recur-1".into()),
+        start: Some("2026-09-10T09:00:00".into()),
+        duration: Some("PT1H".into()),
+        title: Some("Daily Series".into()),
+        time_zone: Some("UTC".into()),
+        ..Default::default()
+    };
+
+    let mut overrides = std::collections::BTreeMap::new();
+    // 1. Modified instance with changed title (drawn as detached component)
+    overrides.insert(
+        "2026-09-11T09:00:00".to_owned(),
+        json!({
+            "title": "Modified Title"
+        }),
+    );
+    // 2. Unmappable override with unmodeled fields only (fallback to RDATE)
+    overrides.insert(
+        "2026-09-12T09:00:00".to_owned(),
+        json!({
+            "unsupportedField": "something"
+        }),
+    );
+    // 3. Excluded instance (emitted as EXDATE)
+    overrides.insert(
+        "2026-09-13T09:00:00".to_owned(),
+        json!({
+            "excluded": true
+        }),
+    );
+    // 4. No-op instance with excluded: false only (not modified, absorbed or omitted)
+    overrides.insert(
+        "2026-09-14T09:00:00".to_owned(),
+        json!({
+            "excluded": false
+        }),
+    );
+
+    event.recurrence_overrides = Some(overrides);
+
+    // recurrence_dates for excluded: true returns only the EXDATE timestamp
+    let exdates = jmap_ical::event::recurrence_dates(&event, true);
+    assert_eq!(exdates, vec!["20260913T090000"]);
+
+    // recurrence_dates for excluded: false returns only overrides where modified_instance is None
+    // The modified instance (09-11) is absorbed by the detached component,
+    // while the unmappable instance (09-12) and no-op instance (09-14) fall back to RDATE
+    let rdates = jmap_ical::event::recurrence_dates(&event, false);
+    assert!(!rdates.contains(&"20260911T090000".to_owned()));
+    assert!(rdates.contains(&"20260912T090000".to_owned()));
+    assert!(rdates.contains(&"20260914T090000".to_owned()));
+
+    // Outbound iCalendar serialization
+    let ics = jmap_ical::event::event_to_ical(&event);
+    // 09-11 is serialized as a detached VEVENT carrying RECURRENCE-ID
+    assert!(ics.contains("RECURRENCE-ID:20260911T090000Z"));
+    assert!(ics.contains("SUMMARY:Modified Title"));
+    // 09-13 is serialized as EXDATE
+    assert!(ics.contains("EXDATE:20260913T090000Z"));
+    // 09-11 must NOT be listed on an RDATE line
+    if let Some(rdate_line) = ics.lines().find(|line| line.starts_with("RDATE")) {
+        assert!(!rdate_line.contains("20260911T090000Z"));
+        assert!(rdate_line.contains("20260912T090000Z"));
+    }
+}
+
+#[test]
+fn differential_oracle_gregorian_date_time_validation_and_leap_second() {
+    // 1. Calendar date existence validation via exists
+    // Leap years
+    assert!(jmap_ical::event::exists("20240229", "120000"));
+    assert!(jmap_ical::event::exists("20000229", "120000")); // century leap year (divisible by 400)
+    assert!(!jmap_ical::event::exists("19000229", "120000")); // century non-leap year (divisible by 100)
+    assert!(!jmap_ical::event::exists("20260229", "120000")); // non-leap year
+
+    // RFC 5545 §3.3.12 and RFC 3339 §5.6 leap second 60 tolerance
+    assert!(jmap_ical::event::exists("20260630", "235960"));
+    assert!(!jmap_ical::event::exists("20260630", "235961")); // second 61 is illegal
+
+    // Out-of-bounds dates and times
+    assert!(!jmap_ical::event::exists("20260431", "120000")); // April has 30 days
+    assert!(!jmap_ical::event::exists("20261301", "120000")); // month 13
+    assert!(!jmap_ical::event::exists("20260100", "120000")); // day 0
+    assert!(!jmap_ical::event::exists("20260101", "240000")); // hour 24
+    assert!(!jmap_ical::event::exists("20260101", "126000")); // minute 60
+
+    // 2. date_time_digits: sub-second truncation and non-ASCII digit rejection
+    assert_eq!(
+        jmap_ical::event::date_time_digits("20260905T123045.123Z"),
+        Some(("20260905", "123045"))
+    );
+    assert_eq!(
+        jmap_ical::event::date_time_digits("20260905T123045Z"),
+        Some(("20260905", "123045"))
+    );
+    assert_eq!(
+        jmap_ical::event::date_time_digits("20260905"),
+        Some(("20260905", "000000"))
+    );
+    assert!(jmap_ical::event::date_time_digits("20260905T12304a").is_none());
+    assert!(jmap_ical::event::date_time_digits("whenever").is_none());
+
+    // 3. to_local_date_time formatting and normalization
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20260915"),
+        Some("2026-09-15T00:00:00".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20260915T103000Z"),
+        Some("2026-09-15T10:30:00".to_owned())
+    );
+    assert!(jmap_ical::event::to_local_date_time("20260229T100000").is_none());
+}
+
+#[test]
+fn differential_oracle_wall_clock_offset_arithmetic_and_day_rollover() {
+    // 1. offset_seconds: standard parsing and negative zero rejection
+    assert_eq!(jmap_ical::event::offset_seconds("+0200"), Some(7200));
+    assert_eq!(jmap_ical::event::offset_seconds("-0500"), Some(-18000));
+    assert_eq!(jmap_ical::event::offset_seconds("+05:30"), Some(19800));
+    assert_eq!(jmap_ical::event::offset_seconds("-0000"), None); // RFC 5545 §3.3.14 forbids -0000
+
+    // 2. at_offset and from_offset across month/year boundaries
+    // Underflow across month boundary in non-leap year (March 1 -> Feb 28)
+    assert_eq!(
+        jmap_ical::event::at_offset("2026-03-01T01:30:00", "-0500"),
+        Some("2026-02-28T20:30:00".to_owned())
+    );
+    // Underflow across month boundary in leap year (March 1 -> Feb 29)
+    assert_eq!(
+        jmap_ical::event::at_offset("2024-03-01T01:30:00", "-0500"),
+        Some("2024-02-29T20:30:00".to_owned())
+    );
+    // Underflow across year boundary (Jan 1 -> Dec 31)
+    assert_eq!(
+        jmap_ical::event::at_offset("2026-01-01T01:30:00", "-0500"),
+        Some("2025-12-31T20:30:00".to_owned())
+    );
+    // Overflow across year boundary (Dec 31 -> Jan 1)
+    assert_eq!(
+        jmap_ical::event::at_offset("2026-12-31T23:30:00", "+0200"),
+        Some("2027-01-01T01:30:00".to_owned())
+    );
+
+    // 3. Bidirectional inversion
+    let utc = "2026-09-05T15:00:00";
+    let local = jmap_ical::event::at_offset(utc, "+0300").expect("local");
+    assert_eq!(
+        jmap_ical::event::from_offset(&local, "+0300"),
+        Some(utc.to_owned())
+    );
+
+    // 4. Four-digit year boundary clamping in moved
+    assert!(jmap_ical::event::moved("0000-01-01T01:00:00", -7200).is_none());
+}
