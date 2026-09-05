@@ -468,7 +468,7 @@ pub const CONFERENCE_FEATURES: [(&str, &str); 7] = [
 /// document attached to it — RFC 8984 §1.4.11 lets `display` be set only when
 /// the relation is this one, and it is what sends a link to `IMAGE` (RFC 7986
 /// §5.10) instead of `ATTACH`.
-const ICON_REL: &str = "icon";
+pub const ICON_REL: &str = "icon";
 
 /// What a picture of the event is for: RFC 8984 §1.4.11's `display` and RFC 7986
 /// §6.1's `DISPLAY` parameter, which name the same four intentions in the same
@@ -478,7 +478,7 @@ const ICON_REL: &str = "icon";
 /// format's clothes, and dropping it is the *safe* direction here: §6.1 requires
 /// a reader that meets a `DISPLAY` it does not know to show no image at all,
 /// where the absent parameter means its default of `BADGE`.
-const LINK_DISPLAYS: [(&str, &str); 4] = [
+pub const LINK_DISPLAYS: [(&str, &str); 4] = [
     ("badge", "BADGE"),
     ("graphic", "GRAPHIC"),
     ("fullsize", "FULLSIZE"),
@@ -489,7 +489,7 @@ const LINK_DISPLAYS: [(&str, &str); 4] = [
 /// which is what RFC 5545 §3.2.8's `FMTTYPE` is made of. Everything outside
 /// them — a `;` that would start another parameter, a `:` that would end them
 /// all, a space, a line break — makes the type unwritable.
-const RESTRICTED_NAME_CHARS: [char; 9] = ['!', '#', '$', '&', '-', '^', '_', '.', '+'];
+pub const RESTRICTED_NAME_CHARS: [char; 9] = ['!', '#', '$', '&', '-', '^', '_', '.', '+'];
 
 /// What sort of participant it is: RFC 8984 §4.4.6's `kind` and RFC 5545
 /// §3.2.3's `CUTYPE`. The two vocabularies say the same four things and differ
@@ -938,7 +938,7 @@ pub fn drawn_participants(event: &CalendarEvent) -> Vec<ICalendarEntry> {
 /// therefore shows one of (see [`drawn_place`]), RFC 7986 §5.11 states that the
 /// property "can be specified multiple times", so a map of several places needs
 /// nothing left out and nothing patched in place.
-fn drawn_conferences(event: &CalendarEvent) -> Vec<ICalendarEntry> {
+pub fn drawn_conferences(event: &CalendarEvent) -> Vec<ICalendarEntry> {
     event
         .virtual_locations
         .iter()
@@ -964,7 +964,7 @@ fn drawn_conferences(event: &CalendarEvent) -> Vec<ICalendarEntry> {
 /// VirtualLocation, and a place with none is dropped rather than guessed at.
 /// Such an entry is one the drawing left out, which is what
 /// [`maps_virtual_locations`] refuses a save over.
-fn drawn_conference(key: &str, location: &Value) -> Option<ICalendarEntry> {
+pub fn drawn_conference(key: &str, location: &Value) -> Option<ICalendarEntry> {
     let uri = location
         .get("uri")?
         .as_str()
@@ -981,7 +981,7 @@ fn drawn_conference(key: &str, location: &Value) -> Option<ICalendarEntry> {
 /// The ways of taking part this place offers, in [`CONFERENCE_FEATURES`] order.
 /// The values of a set are `true` (RFC 8984 §1.4.3); anything else says nothing
 /// was set.
-fn joining_features(location: &Value) -> Vec<&'static str> {
+pub fn joining_features(location: &Value) -> Vec<&'static str> {
     let features = location.get("features");
     CONFERENCE_FEATURES
         .iter()
@@ -1002,7 +1002,7 @@ fn joining_features(location: &Value) -> Vec<&'static str> {
 /// [`ICON_REL`] is what tells them apart, since it is the relation RFC 8984
 /// §1.4.11 attaches `display` to. Both admit being stated more than once, so —
 /// as with `CONFERENCE`, and unlike `LOCATION` — nothing is left out.
-fn drawn_links(event: &CalendarEvent) -> Vec<ICalendarEntry> {
+pub fn drawn_links(event: &CalendarEvent) -> Vec<ICalendarEntry> {
     event
         .links
         .iter()
@@ -1025,7 +1025,7 @@ fn drawn_links(event: &CalendarEvent) -> Vec<ICalendarEntry> {
 /// entry of the server's map it is a drawing of. Position could not do that job —
 /// an editor that drops a line it has no URI for would slide every later
 /// resource onto the wrong entry.
-fn drawn_link(key: &str, link: &Value) -> Option<ICalendarEntry> {
+pub fn drawn_link(key: &str, link: &Value) -> Option<ICalendarEntry> {
     let href = link
         .get("href")?
         .as_str()
@@ -1066,7 +1066,7 @@ fn drawn_link(key: &str, link: &Value) -> Option<ICalendarEntry> {
 /// spelling here. Checking the grammar rather than trusting the server is also
 /// what keeps a `;` or a `:` out of a parameter value, and a CR or an LF out of
 /// the line.
-fn media_type(link: &Value) -> Option<&str> {
+pub fn media_type(link: &Value) -> Option<&str> {
     let media_type = link.get("contentType")?.as_str()?;
     let (name, subtype) = media_type.split_once('/')?;
     [name, subtype]
@@ -1079,7 +1079,7 @@ fn media_type(link: &Value) -> Option<&str> {
 /// any of the alphanumerics and [`RESTRICTED_NAME_CHARS`]. The length limit the
 /// production also states is not checked — a name of 200 characters is odd, not
 /// dangerous, and refusing it would drop a type a reader would have understood.
-fn restricted_name(name: &str) -> bool {
+pub fn restricted_name(name: &str) -> bool {
     name.starts_with(|first: char| first.is_ascii_alphanumeric())
         && name
             .chars()
@@ -1092,7 +1092,7 @@ fn restricted_name(name: &str) -> bool {
 /// RFC 8984 §1.4.11 makes `size` an UnsignedInt — the octets the user would
 /// download — so a negative number, a fraction or a string is not one, and
 /// stating it anyway would put a value outside §4.1's `1*DIGIT` on the line.
-fn stated_size(link: &Value) -> Option<String> {
+pub fn stated_size(link: &Value) -> Option<String> {
     Some(link.get("size")?.as_u64()?.to_string())
 }
 
@@ -2312,7 +2312,7 @@ fn modified_instance(event: &CalendarEvent, id: &str, patch: &Value) -> Option<C
 /// Each value is a rendered `YYYYMMDDTHHMMSS`; the caller has already decided
 /// whether the event is written as a date, which is the only case where the time
 /// may be dropped.
-fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> ICalendarEntry {
+pub fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> ICalendarEntry {
     let prop = ICalendarProperty::parse(name.as_bytes())
         .unwrap_or_else(|| ICalendarProperty::Other(name.to_ascii_uppercase()));
     match (as_a_date, zone) {
@@ -2381,7 +2381,7 @@ fn dated(name: &str, values: &[String], as_a_date: bool, zone: Option<&str>) -> 
 /// and better than an occurrence the user cannot see at all. Where the rules
 /// already generate that instant the `RDATE` is a duplicate, and RFC 5545
 /// §3.8.5.2 has the recurrence set absorb it.
-fn recurrence_dates(event: &CalendarEvent, is_excluded: bool) -> Vec<String> {
+pub fn recurrence_dates(event: &CalendarEvent, is_excluded: bool) -> Vec<String> {
     event
         .recurrence_overrides
         .iter()
@@ -4378,7 +4378,7 @@ pub fn days_in_month_of(year: i64, month: i64) -> Option<i64> {
 /// `RRULE` holds — showing a weekly event on the wrong days beats showing none
 /// — and [`maps_recurrence_rule`] is how the save path knows not to write that
 /// narrowing back.
-fn rule_to_rrule(rule: &RecurrenceRule, ends: Ends, as_a_date: bool) -> Option<String> {
+pub fn rule_to_rrule(rule: &RecurrenceRule, ends: Ends, as_a_date: bool) -> Option<String> {
     if !writable(rule) {
         return None;
     }
@@ -4522,7 +4522,7 @@ pub fn time_of_day_part(name: &str, values: Option<&[u32]>, largest: u32) -> Opt
 /// `BYDAY=2MO,TH` leaves an event that no longer happens on the Monday at all,
 /// which is a worse lie than an event shown on every day of the week the series
 /// starts on.
-fn by_day_part(rule: &RecurrenceRule) -> Option<String> {
+pub fn by_day_part(rule: &RecurrenceRule) -> Option<String> {
     let days = rule.by_day.as_ref()?;
     // `BYDAY=` names no day and is not a rule part any reader can use.
     if days.is_empty() {
@@ -4545,7 +4545,7 @@ fn by_day_part(rule: &RecurrenceRule) -> Option<String> {
 /// recurrence. Writing the weekday without its ordinal is not the fallback,
 /// because "the second Monday" and "every Monday" are different events and the
 /// second one fills the user's calendar.
-fn by_day_token(day: &NDay, frequency: &str) -> Option<String> {
+pub fn by_day_token(day: &NDay, frequency: &str) -> Option<String> {
     if !day.extra.is_empty() {
         return None;
     }
@@ -4563,7 +4563,7 @@ fn by_day_token(day: &NDay, frequency: &str) -> Option<String> {
 
 /// Whether a frequency gives an `nthOfPeriod` a period to count within — the
 /// `MONTHLY`/`YEARLY` of RFC 5545 §3.3.10.
-fn counts_within_a_period(frequency: &str) -> bool {
+pub fn counts_within_a_period(frequency: &str) -> bool {
     ["monthly", "yearly"]
         .iter()
         .any(|period| period.eq_ignore_ascii_case(frequency))
@@ -4575,7 +4575,7 @@ fn counts_within_a_period(frequency: &str) -> bool {
 ///
 /// It is all the days or none of them, for the same reason: a `BYMONTHDAY`
 /// holding a subset is a different recurrence, not a narrower view of one.
-fn by_month_day_part(rule: &RecurrenceRule) -> Option<String> {
+pub fn by_month_day_part(rule: &RecurrenceRule) -> Option<String> {
     let days = rule.by_month_day.as_ref()?;
     // `BYMONTHDAY=` names no day, and a week is not a period a day of the month
     // sits inside: RFC 5545 §3.3.10 says the part MUST NOT be specified when
@@ -4590,7 +4590,7 @@ fn by_month_day_part(rule: &RecurrenceRule) -> Option<String> {
 
 /// One day of the month as an `RRULE` writes it — `15`, `-1` — or `None` for a
 /// value no `BYMONTHDAY` can carry.
-fn month_day_token(day: i32) -> Option<String> {
+pub fn month_day_token(day: i32) -> Option<String> {
     match day {
         // RFC 5545's `ordmoday` is 1 to 31, which RFC 8984 §4.3.3 counts
         // backwards from the end of the month as well. Zero is no day of any
@@ -4612,7 +4612,7 @@ fn month_day_token(day: i32) -> Option<String> {
 /// `DAILY`, `WEEKLY` or `MONTHLY` — none of which holds a year — but it *is*
 /// defined beside `HOURLY`, `MINUTELY` and `SECONDLY`, limiting the occurrences
 /// those expand to.
-fn by_year_day_part(rule: &RecurrenceRule) -> Option<String> {
+pub fn by_year_day_part(rule: &RecurrenceRule) -> Option<String> {
     let days = rule.by_year_day.as_ref()?;
     // `BYYEARDAY=` names no day, and a content line libical refuses costs the
     // whole component — every field of the event, not just its recurrence.
@@ -4633,7 +4633,7 @@ pub fn holds_a_year(frequency: &str) -> bool {
 
 /// One day of the year as an `RRULE` writes it — `100`, `-1` — or `None` for a
 /// value no `BYYEARDAY` can carry.
-fn year_day_token(day: i32) -> Option<String> {
+pub fn year_day_token(day: i32) -> Option<String> {
     match day {
         // RFC 5545's `yeardaynum` is 1 to 366 — 366 for the leap day — which
         // RFC 8984 §4.3.3 counts backwards from 31 December as well. Zero is no
@@ -4660,7 +4660,7 @@ fn year_day_token(day: i32) -> Option<String> {
 /// [`first_day_of_week_part`] carries; §3.3.10 numbers the weeks by ISO 8601
 /// from that day. Carrying this part while that one was unmodeled would have
 /// shown weeks counted from a day the server never named.
-fn by_week_no_part(rule: &RecurrenceRule) -> Option<String> {
+pub fn by_week_no_part(rule: &RecurrenceRule) -> Option<String> {
     let weeks = rule.by_week_no.as_ref()?;
     // `BYWEEKNO=` names no week, and a content line libical refuses costs the
     // whole component — every field of the event, not just its recurrence.
@@ -4673,7 +4673,7 @@ fn by_week_no_part(rule: &RecurrenceRule) -> Option<String> {
 
 /// One week of the year as an `RRULE` writes it — `20`, `-1` — or `None` for a
 /// value no `BYWEEKNO` can carry.
-fn week_no_token(week: i32) -> Option<String> {
+pub fn week_no_token(week: i32) -> Option<String> {
     match week {
         // RFC 5545's `ordwk` is 1 to 53 — 53 for the week a long year has and a
         // short one does not — which RFC 8984 §4.3.3 counts backwards from the
@@ -4694,7 +4694,7 @@ fn week_no_token(week: i32) -> Option<String> {
 /// There is no frequency gate. RFC 5545 §3.3.10 defines `BYMONTH` at every
 /// frequency — limiting the occurrences a shorter period expands to, rather than
 /// expanding them — unlike `BYMONTHDAY`, which a week has no room for.
-fn by_month_part(rule: &RecurrenceRule) -> Option<String> {
+pub fn by_month_part(rule: &RecurrenceRule) -> Option<String> {
     let months = rule.by_month.as_ref()?;
     // `BYMONTH=` names no month and is not a rule part any reader can use.
     if months.is_empty() {
@@ -4722,7 +4722,7 @@ fn by_month_part(rule: &RecurrenceRule) -> Option<String> {
 /// Every other refusal is a month no year has, and libical answers those two
 /// ways — dropping the whole `RRULE`, or keeping a rule that can never occur.
 /// `jmap-backend-cal/tests/marshal.rs` records which is which.
-fn month_token(month: &str) -> Option<&str> {
+pub fn month_token(month: &str) -> Option<&str> {
     match month.parse::<u32>() {
         Ok(number @ 1..=12) if month == number.to_string() => Some(month),
         _ => None,
@@ -4750,7 +4750,7 @@ fn month_token(month: &str) -> Option<&str> {
 ///
 /// There is no frequency gate: §3.3.10 defines the part at every frequency, and
 /// libical keeps it beside each one.
-fn by_set_position_part(rule: &RecurrenceRule, selects_from_a_set: bool) -> Option<String> {
+pub fn by_set_position_part(rule: &RecurrenceRule, selects_from_a_set: bool) -> Option<String> {
     let positions = rule.by_set_position.as_ref()?;
     // `BYSETPOS=` selects nothing, and a content line libical refuses costs the
     // whole component — every field of the event, not just its recurrence.
@@ -4763,7 +4763,7 @@ fn by_set_position_part(rule: &RecurrenceRule, selects_from_a_set: bool) -> Opti
 
 /// One occurrence of the set as an `RRULE` writes it — `1`, `-1` — or `None`
 /// for a value no `BYSETPOS` can carry.
-fn set_position_token(position: i32) -> Option<String> {
+pub fn set_position_token(position: i32) -> Option<String> {
     match position {
         // RFC 5545's `setposday` is spelled as `yeardaynum` is, so 1 to 366 —
         // the most occurrences a `BYYEARDAY` can put in one interval's set —
@@ -4793,7 +4793,7 @@ fn set_position_token(position: i32) -> Option<String> {
 /// There is no frequency gate. §3.3.10 says only where the part is
 /// *significant* — a fortnightly series' weeks, a `BYWEEKNO` — which is a reader's
 /// business, and libical keeps the day beside every frequency.
-fn first_day_of_week_part(rule: &RecurrenceRule) -> Option<String> {
+pub fn first_day_of_week_part(rule: &RecurrenceRule) -> Option<String> {
     let day = weekday_token(rule.first_day_of_week.as_deref()?)?;
     (day != "MO").then(|| format!("WKST={day}"))
 }
@@ -4807,7 +4807,7 @@ fn first_day_of_week_part(rule: &RecurrenceRule) -> Option<String> {
 /// differently reads as an edit the user never made. Anything else is a day no
 /// week starts on, and `WKST=XX` costs libical the whole `RRULE` — every field of
 /// the event, not just its recurrence.
-fn weekday_token(day: &str) -> Option<&'static str> {
+pub fn weekday_token(day: &str) -> Option<&'static str> {
     if !day.bytes().all(|byte| byte.is_ascii_lowercase()) {
         return None;
     }
@@ -4880,15 +4880,15 @@ fn read_until(value: &str, ends: Ends) -> String {
 /// The definition is what [`read_until`] needs and nothing else does, so it is
 /// `None` on the drawing side, which has only a name to go on.
 #[derive(Clone, Copy)]
-struct Zoned<'a> {
-    name: Option<&'a str>,
-    observances: Option<&'a [&'a ICalendarComponent]>,
+pub struct Zoned<'a> {
+    pub name: Option<&'a str>,
+    pub observances: Option<&'a [&'a ICalendarComponent]>,
 }
 
 impl<'a> Zoned<'a> {
     /// A zone named and not defined: what the drawing side has, and what a
     /// document carrying no `VTIMEZONE` for it gives the reading side.
-    fn named(name: Option<&'a str>) -> Self {
+    pub fn named(name: Option<&'a str>) -> Self {
         Self {
             name,
             observances: None,
@@ -4910,7 +4910,7 @@ pub fn zone_offset_at(observances: &[&ICalendarComponent], utc: &str) -> Option<
 /// What a recurrence rule's `UNTIL` is stated against — the one thing mapping a
 /// rule needs beyond the rule itself, in either direction.
 #[derive(Clone, Copy)]
-enum Ends<'a> {
+pub enum Ends<'a> {
     /// In the zone the component naming the rule is in, as `read_start`
     /// resolved it — a zone with no name at all being a floating component.
     In(Zoned<'a>),
