@@ -26755,3 +26755,228 @@ END:VCALENDAR\r\n"
     );
     assert!(maps_recurrence_rule(&rule));
 }
+
+#[test]
+fn differential_oracle_unstateable_until_endpoint_isolation_and_error_decoupling() {
+    // Divergence 148 against Stalwart differential oracle:
+    // unstateable_until diagnostic isolation: extracts unstateable UNTIL timestamps without
+    // conflating them with other recurrence rule structural errors.
+    let valid_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        until: Some("2026-10-15T10:00:00".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(unstateable_until(&valid_rule), None);
+
+    let no_until_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        until: None,
+        ..Default::default()
+    };
+    assert_eq!(unstateable_until(&no_until_rule), None);
+
+    let invalid_until_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        until: Some("not-a-valid-datetime".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        unstateable_until(&invalid_until_rule),
+        Some("not-a-valid-datetime")
+    );
+
+    // If a rule is refused for structural reasons (e.g. invalid byMonth component)
+    // but until is valid, unstateable_until returns None, preserving error isolation.
+    let bad_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        until: Some("2026-10-15T10:00:00".to_string()),
+        by_month: Some(vec!["13".to_string()]),
+        ..Default::default()
+    };
+    assert!(!maps_recurrence_rule(&bad_rule));
+    assert_eq!(unstateable_until(&bad_rule), None);
+}
+
+#[test]
+fn differential_oracle_rrule_entry_synthetic_envelope_parsing_and_syntax_verification() {
+    // Divergence 149 against Stalwart differential oracle:
+    // rrule_entry and Parser::entry synthetic component envelope AST parsing: validates serialized
+    // recurrence rules through synthetic component envelope AST parsing before emission.
+    let mut ev = fixture_event();
+    ev.recurrence_rule = Some(RecurrenceRule {
+        frequency: "weekly".to_string(),
+        interval: Some(2),
+        count: Some(5),
+        ..Default::default()
+    });
+
+    let ics = event_to_ical(&ev);
+    assert!(
+        ics.contains("RRULE:FREQ=WEEKLY;COUNT=5;INTERVAL=2"),
+        "valid RRULE parsed and serialized through rrule_entry: {ics}"
+    );
+
+    // Observance transition rule parsing through rrule_entry in vtimezone_of:
+    let tz_def = json!({
+        "@type": "TimeZone",
+        "timeZoneId": "/corp.example.com/ParsedZone",
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-10-25T03:00:00",
+            "offsetFrom": "+02:00",
+            "offsetTo": "+01:00",
+            "recurrenceRules": [{
+                "frequency": "yearly",
+                "byMonth": ["10"],
+                "byDay": [{ "day": "su", "nthOfPeriod": -1 }]
+            }],
+            "names": { "CST": true }
+        }]
+    });
+
+    let mut tz_event = fixture_event();
+    tz_event.time_zone = Some("/corp.example.com/ParsedZone".to_string());
+    let mut time_zones = BTreeMap::new();
+    time_zones.insert("/corp.example.com/ParsedZone".to_string(), tz_def);
+    tz_event.time_zones = Some(time_zones);
+
+    let tz_ics = event_to_ical(&tz_event);
+    assert!(
+        tz_ics.contains("RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10"),
+        "observance recurrence rule parsed and emitted through rrule_entry: {tz_ics}"
+    );
+}
+
+#[test]
+fn differential_oracle_restated_observance_time_of_day_replacement_and_range_validation() {
+    // Divergence 150 against Stalwart differential oracle:
+    // restated: YEARLY transition rule time-of-day replacement (BYHOUR, BYMINUTE, BYSECOND),
+    // bounded field validation (0..=23, 0..=59), leap second 60 refusal, and multi-value set rejection.
+    let custom_tz = "/corp.example.com/RestatedZone";
+    // Standard rule specifies DTSTART at midnight (00:00:00), but RRULE specifies BYHOUR=3;BYMINUTE=30.
+    // Transition onset replaces the midnight time-of-day with 03:30:00.
+    let ics = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T000000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20301025T010000Z;BYDAY=-1SU;BYMONTH=10;BYHOUR=3;BYMINUTE=30\r\n\
+TZNAME:CST\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:19700329T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20300329T010000Z;BYDAY=-1SU;BYMONTH=3;BYHOUR=2;BYMINUTE=0\r\n\
+TZNAME:CDT\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:restated-zone-150\r\n\
+DTSTART;TZID={custom_tz}:20260401T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260405T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(&ics).expect("parse event with restated timezone rule");
+    assert_eq!(ev.time_zone.as_deref(), Some(custom_tz));
+    let rule = ev.recurrence_rule.expect("recurrence rule present");
+    // In April 2026, DAYLIGHT transition (+0200) is in force.
+    assert_eq!(
+        rule.until.as_deref(),
+        Some("2026-04-05T14:00:00"),
+        "UNTIL converted accurately with restated transition rules"
+    );
+
+    // Out-of-bounds BYHOUR (BYHOUR=25) is refused
+    let ics_bad_hour = ics.replace("BYHOUR=3", "BYHOUR=25");
+    let ev_bad = ical_to_event(&ics_bad_hour).expect("parse event with invalid hour rule");
+    // Without resolvable transition rules, zoned UNTIL cannot be converted to local time
+    let rule_bad = ev_bad.recurrence_rule.expect("rule present");
+    assert!(
+        rule_bad.until.as_deref().unwrap().ends_with('Z'),
+        "unresolvable transition leaves UNTIL with trailing Z"
+    );
+
+    // Multi-value set (BYHOUR=2,3) is refused as ambiguous transition set
+    let ics_set_hour = ics.replace("BYHOUR=3", "BYHOUR=2,3");
+    let ev_set = ical_to_event(&ics_set_hour).expect("parse event with set hour rule");
+    let rule_set = ev_set.recurrence_rule.expect("rule present");
+    assert!(
+        rule_set.until.as_deref().unwrap().ends_with('Z'),
+        "ambiguous multi-value transition leaves UNTIL with trailing Z"
+    );
+}
+
+#[test]
+fn differential_oracle_day_weekday_among_tzdata_idiom_and_falls_determinism() {
+    // Divergence 151 against Stalwart differential oracle:
+    // Day::named, Day::of, and Falls: Libical tzdata idiom ingestion (BYDAY + BYMONTHDAY range),
+    // ordinal conflict refusal, leap year / calendar gap skipping (Falls::Never), and multi-day transition refusal (Falls::Set).
+    let custom_tz = "/corp.example.com/TzdataZone";
+    // tzdata idiom: first Sunday on or after Oct 23 -> BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29
+    let ics = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20301025T010000Z;BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29;BYMONTH=10\r\n\
+TZNAME:CST\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:19700329T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20300329T010000Z;BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29;BYMONTH=3\r\n\
+TZNAME:CDT\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:tzdata-zone-151\r\n\
+DTSTART;TZID={custom_tz}:20260401T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20260405T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(&ics).expect("parse event with tzdata idiom timezone");
+    assert_eq!(ev.time_zone.as_deref(), Some(custom_tz));
+    let rule = ev.recurrence_rule.expect("recurrence rule present");
+    // In April 2026, DAYLIGHT (+0200) resolved via tzdata idiom rule
+    assert_eq!(
+        rule.until.as_deref(),
+        Some("2026-04-05T14:00:00"),
+        "UNTIL converted accurately using WeekdayAmong tzdata transition rule"
+    );
+
+    // Ordinal combined with BYMONTHDAY is forbidden and refused
+    let ics_ordinal_conflict = ics.replace("BYDAY=SU", "BYDAY=1SU");
+    let ev_conflict =
+        ical_to_event(&ics_ordinal_conflict).expect("parse event with ordinal conflict");
+    let rule_conflict = ev_conflict.recurrence_rule.expect("rule present");
+    assert!(
+        rule_conflict.until.as_deref().unwrap().ends_with('Z'),
+        "ordinal conflict on WeekdayAmong leaves UNTIL with trailing Z"
+    );
+
+    // Negative month day (BYMONTHDAY=-1) in observance rule
+    let ics_neg_day = ics.replace("BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29", "BYMONTHDAY=-1");
+    let ev_neg = ical_to_event(&ics_neg_day).expect("parse event with negative month day rule");
+    let rule_neg = ev_neg.recurrence_rule.expect("rule present");
+    assert_eq!(
+        rule_neg.until.as_deref(),
+        Some("2026-04-05T14:00:00"),
+        "negative month day evaluates to last day of month"
+    );
+}
