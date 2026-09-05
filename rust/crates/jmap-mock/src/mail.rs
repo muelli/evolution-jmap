@@ -1823,6 +1823,38 @@ pub fn email_submission_set(
     Ok(result)
 }
 
+/// `EmailSubmission/get` (RFC 8621 §7.4). A submission id naming nothing is
+/// silently absent from the result, the same as [`thread_get`] and
+/// [`identity_get`] treat a missing id.
+pub fn email_submission_get(
+    state: &mut ServerState,
+    arguments: Value,
+) -> Result<Value, MethodError> {
+    let request: GetRequest = parse_arguments(arguments)?;
+    let account = account_mut(state, &request.account_id)?;
+
+    let mut list = Vec::new();
+    let mut not_found = Vec::new();
+    match &request.ids {
+        None => list.extend(account.submissions.iter().map(|(_, s)| s.clone())),
+        Some(ids) => {
+            for id in ids {
+                match account.submissions.get(id) {
+                    Some(submission) => list.push(submission.clone()),
+                    None => not_found.push(id.clone()),
+                }
+            }
+        }
+    }
+
+    to_result(&GetResponse {
+        account_id: request.account_id,
+        state: account.submissions.state(),
+        list,
+        not_found,
+    })
+}
+
 /// `EmailSubmission/query` (RFC 8621 §7.3): filter by `emailIds`,
 /// `identityIds`, `threadIds`, `undoStatus`, or a `sendAt` range.
 pub fn email_submission_query(
