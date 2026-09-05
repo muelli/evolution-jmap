@@ -3515,4 +3515,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.168 Divergence 168: `utc_offset`: RFC 5545 §3.3.14 UTC Offset Grammar, Colon Stripping, Negative Zero (`-0000`) Strict Prohibition, Sub-Minute Seconds Canonicalization, and Bounded Component Verification (`0..=23`, `0..=59`, `0..=60`)
+
+- **Observed Behavior**:
+  RFC 5545 §3.3.14 specifies UTC-OFFSET format (`("+" / "-") 2DIGIT 2DIGIT [2DIGIT]`), whereas RFC 8984 JSON models offsets with colons (`+02:00`, `-05:00:15`). In `jmap-ical`:
+  1. Colon stripping and flexible ingestion (`utc_offset`): Ingests both standard 4/6-digit iCalendar offsets (`+0200`, `-0500`) and colon-separated representations (`+02:00`, `-05:00`), stripping colons prior to digit validation.
+  2. Sub-minute seconds canonicalization: When seconds are zero or omitted (e.g. `+02:00` or `+02:00:00`), `utc_offset` canonicalizes the output to 4 ASCII digits (`+0200`). Only when seconds are non-zero (e.g. `+01:23:45`) does it emit 6 digits (`+012345`).
+  3. Strict negative zero prohibition: RFC 5545 §3.3.14 explicitly forbids `-0000` because the sign denotes direction relative to UTC and negative zero does not exist. `utc_offset` returns `None` for `-0000`, `-00:00`, `-000000`, and `-00:00:00`, preventing malformed offsets from being emitted.
+  4. Bounded component verification: Enforces `hours <= 23`, `minutes <= 59`, and `seconds <= 60` (explicitly permitting leap second 60). Out-of-bounds offsets (`+2400`, `+0160`, `+010061`) return `None`.
+  5. In contrast, differential oracles or permissive parsers permit `-0000` (which triggers parse errors in libical), fail on colons, or emit non-canonical 6-digit offsets with trailing `00` (`+020000`).
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.3.14 defines UTC-OFFSET syntax and explicitly bans negative zero.
+  2. Canonical 4-digit offset formatting ensures byte-level compatibility across CalDAV servers and Evolution Data Server.
+- **Adjudication**:
+  Conforming specification boundary and UTC offset serialization fidelity. Strips colons, canonicalizes zero-second offsets to 4 digits, enforces component bounds with leap second tolerance, and strictly prohibits negative zero.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.169 Divergence 169: `check_structure`, `check_depth`, `parse_ical`, and `MAX_DEPTH`: Component Tree Nesting Depth Limit (`MAX_DEPTH = 32`), Structural Envelope Pairing (`BEGIN`/`END`), Stack Overflow Denial-of-Service Defense, and Trailing Content Detection (`ICalError::Trailing`)
+
+- **Observed Behavior**:
+  Corrupt, malicious, or deeply nested iCalendar streams present denial-of-service risks through unbounded stack consumption during recursive AST drop. In `jmap-ical`:
+  1. Balanced component envelope validation (`check_structure`): Tracks open components on a stack. Strips UTF-8 BOM (`\u{feff}`). Verifies that every `END:<name>` precisely closes the innermost open component. If a mismatch occurs, returns `ICalError::Mismatched { expected, found }`.
+  2. Unterminated component detection: If the calendar stream reaches EOF while components remain unclosed, returns `ICalError::Unterminated(name)`.
+  3. Trailing content refusal: `parse_ical` rejects any content following `END:VCALENDAR` with `ICalError::Trailing`, preventing multi-calendar batch streams from having whole events dropped silently.
+  4. Bounded nesting depth limit (`check_depth`): Iteratively enforces `MAX_DEPTH = 32`. Any document nesting components deeper than 32 levels is refused with `ICalError::TooDeep(component_type)`, protecting against process aborts from stack overflow during recursion.
+  5. VCALENDAR root envelope enforcement: `parse_ical` requires the outermost component to be `VCALENDAR`, returning `ICalError::NotACalendar` for bare components.
+  6. In contrast, differential oracles or naive recursive parsers lack nesting depth limits (vulnerable to stack overflow crashes on adversarial inputs), silently drop unclosed components, or swallow trailing calendars without error.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.4 defines iCalendar stream structure with matching `BEGIN` and `END` delimiters.
+  2. Bounding component depth to 32 guarantees safe AST deallocation in memory-constrained desktop environments.
+- **Adjudication**:
+  Conforming specification boundary and defensive parser architecture. Enforces exact BEGIN/END pairing, detects trailing content, validates VCALENDAR roots, and bounds nesting depth via `MAX_DEPTH`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.170 Divergence 170: `read_definition`, `observance`, `vtimezone_of`, and `read_time_zones`: Round-Trip TimeZone AST Gating, Whole-Component Rejection on Unserializable Observances, and Strict RFC 5545 §3.6.5 Observance Count Verification (`observances > 0`)
+
+- **Observed Behavior**:
+  RFC 8984 §4.7.2 models custom timezones in `timeZones`, corresponding to RFC 5545 §3.6.5 `VTIMEZONE` components. In `jmap-ical`:
+  1. Strict observance count gating: RFC 5545 §3.6.5 requires at least one subcomponent (`STANDARD` or `DAYLIGHT`). Both `read_definition` and `vtimezone_of` enforce `observances > 0`. A `VTIMEZONE` containing zero observances is refused as saying nothing about what time it is, leaving `event.time_zones` as `None`.
+  2. Mandatory observance property verification: Observances must specify `DTSTART`, `TZOFFSETFROM`, and `TZOFFSETTO`. If any property is absent or contains an unreadable offset, the observance returns `None`.
+  3. Round-trip redrawability gating (`read_time_zones`): Verifies `vtimezone_of(tzid, &definition).is_some()`. A zone that cannot be rendered back byte-for-byte is read as no definition at all, preventing half-zones from being emitted.
+  4. Recurrence rule preservation and gating: Transitions repeating via `RRULE` are validated with `maps_recurrence_rule`. Observances containing unmappable rules are rejected whole rather than emitted with altered transition dates.
+  5. In contrast, differential oracles or naive serializers emit empty `VTIMEZONE` components (violating RFC 5545 §3.6.5 grammar), drop unmappable recurrence parts silently (causing daylight saving transitions to move to incorrect dates), or emit invalid offsets.
+- **Specification and Architectural Context**:
+  1. RFC 5545 §3.6.5 defines `VTIMEZONE` requirements, mandating at least one observance subcomponent.
+  2. Refusing unredrawable timezone definitions ensures that only deterministic, lossless timezone definitions are stored and synchronized.
+- **Adjudication**:
+  Conforming specification boundary and timezone definition lifecycle fidelity. Enforces non-empty observances, validates mandatory properties, gates redrawability, and prevents transition corruption.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.171 Divergence 171: `value_text`, `param_text`, and `PartialDateTime`: calcard AST Value Extraction, Parameter Coercion, Binary Attachment Suppression (`ICalendarValue::Binary`), and Negative-Zero Timezone Offset Normalization (`-0000` to `+0000`)
+
+- **Observed Behavior**:
+  Translating calcard AST entries into JSCalendar structures requires scalar value extraction and defensive parameter sanitization. In `jmap-ical`:
+  1. Inline binary attachment suppression (`value_text`): `ICalendarValue::Binary` and `ICalendarValue::Uri(Uri::Data(_))` return `None`. Inline base64 attachments and data URIs are stripped from stringification, protecting memory and adhering to the remote URI link reference model.
+  2. Parameter text coercion (`param_text`): Coerces parameter AST variants (`Text`, `Cutype`, `Partstat`, `Role`, `Fbtype`) to string representations, while mapping `Uri::Data` and `Null` to empty strings.
+  3. Negative zero offset normalization: In `date_time_text`, if a formatted `PartialDateTime` yields `"-0000"`, it is normalized to `"+0000"`, preventing negative zero representations from polluting date-time strings.
+  4. Closed vocabulary type preservation: Maps standard property and parameter types while safely ignoring unsupported binary payloads.
+  5. In contrast, differential oracles or unvetted AST serializers emit base64 blobs into text fields (causing severe memory bloating) or leak `-0000` into timezone representations.
+- **Specification and Architectural Context**:
+  1. RFC 8984 §1.4.11 and RFC 5545 §3.8.1.1 distinguish remote link references from inline binary payloads.
+  2. Sanitizing AST values at extraction protects downstream consumers from memory spikes and parser faults.
+- **Adjudication**:
+  Conforming specification boundary and AST value extraction robustness. Strips inline binary data and data URIs, coerces parameters safely, and normalizes negative zero offsets.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 

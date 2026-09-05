@@ -1932,7 +1932,7 @@ fn observance(name: &str, rule: &Value) -> Option<Component> {
 ///
 /// `-0000` is picked out by the grammar itself: §3.3.14 forbids it, because the
 /// sign says which side of UTC the zone is on and there is no negative zero.
-fn utc_offset(value: &str) -> Option<String> {
+pub fn utc_offset(value: &str) -> Option<String> {
     let (sign, digits) = value.split_at_checked(1)?;
     if !matches!(sign, "+" | "-") {
         return None;
@@ -2511,7 +2511,7 @@ pub fn parse_ical(text: &str) -> Result<ICalendar, ICalError> {
     Ok(calendar)
 }
 
-fn check_structure(text: &str) -> Result<(), ICalError> {
+pub fn check_structure(text: &str) -> Result<(), ICalError> {
     let mut open: Vec<String> = Vec::new();
     for line in unfold(text.strip_prefix('\u{feff}').unwrap_or(text)) {
         let Some((keyword, name)) = line.split_once(':') else {
