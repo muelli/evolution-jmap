@@ -32874,3 +32874,283 @@ fn differential_oracle_calendar_stream_component_ordering_and_custom_vtimezone()
         assert!(!line.contains('\r'), "no bare carriage returns permitted");
     }
 }
+
+#[test]
+fn differential_oracle_inbound_ast_property_and_parameter_extraction() {
+    // Divergence 220 against Stalwart differential oracle:
+    // entry_text, entry_texts, entry_raw_value, entry_param, entry_param_values,
+    // component_entry, component_entries, and component_text:
+    // Inbound Component AST Property and Parameter Extraction: Case-Insensitive Name Matching,
+    // Comma-Separated Multi-Value Flattening, Raw String vs Structured Value Fallback,
+    // and Missing Parameter Gating.
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ast-extract-220\r\n",
+        "DTSTART:20260115T100000Z\r\n",
+        "SUMMARY:Engineering Standup\r\n",
+        "ATTENDEE;CN=\"Lead Architect\";ROLE=REQ-PARTICIPANT;CUTYPE=INDIVIDUAL:mailto:lead@example.com\r\n",
+        "CATEGORIES:Engineering,Planning,Core\r\n",
+        "X-CUSTOM;TAG=alpha;TAG=beta:payload-data\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let cal = jmap_ical::event::parse_ical(ics).expect("parse calendar stream");
+    let vevent = cal
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VEVENT"))
+        .expect("vevent");
+
+    // 1. Case-insensitive component_entry and component_text extraction
+    assert!(jmap_ical::event::component_entry(vevent, "summary").is_some());
+    assert!(jmap_ical::event::component_entry(vevent, "SUMMARY").is_some());
+    assert_eq!(
+        jmap_ical::event::component_text(vevent, "summary"),
+        Some("Engineering Standup".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::component_text(vevent, "nonexistent"),
+        None
+    );
+
+    // 2. entry_text vs entry_texts on comma-separated values
+    let cat_entry = jmap_ical::event::component_entry(vevent, "CATEGORIES").expect("categories");
+    assert_eq!(
+        jmap_ical::event::entry_text(cat_entry),
+        "Engineering,Planning,Core"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_texts(cat_entry),
+        vec!["Engineering", "Planning", "Core"]
+    );
+
+    // 3. Case-insensitive parameter extraction: entry_param and entry_param_values
+    let attendee_entry = jmap_ical::event::component_entry(vevent, "ATTENDEE").expect("attendee");
+    assert_eq!(
+        jmap_ical::event::entry_param(attendee_entry, "cn"),
+        Some("Lead Architect".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(attendee_entry, "role"),
+        Some("REQ-PARTICIPANT".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(attendee_entry, "missing"),
+        None
+    );
+
+    let custom_entry = jmap_ical::event::component_entry(vevent, "X-CUSTOM").expect("x-custom");
+    assert_eq!(
+        jmap_ical::event::entry_param_values(custom_entry, "tag"),
+        vec!["alpha", "beta"]
+    );
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(custom_entry),
+        "payload-data"
+    );
+}
+
+#[test]
+fn differential_oracle_outbound_ast_component_tree_and_entry_ext() {
+    use jmap_ical::event::EntryExt;
+
+    // Divergence 221 against Stalwart differential oracle:
+    // Component, make_entry, EntryExt, with_named_param, with_named_params, write_into, and to_ics:
+    // Outbound iCalendar AST Construction: Hierarchical Component Assembly, Parameter Name/Value Wrapping,
+    // Dynamic Fallback to RFC 5545 Other Variants, and Stream CRLF Termination.
+
+    // 1. AST component creation and fluent entry extension
+    let mut vevent = jmap_ical::event::Component::new("VEVENT")
+        .with(jmap_ical::event::make_entry("UID", "tree-221"))
+        .with(jmap_ical::event::make_entry("SUMMARY", "Architecture Sync"))
+        .with(
+            jmap_ical::event::make_entry("ATTENDEE", "mailto:peer@example.com")
+                .with_named_param("CN", "Peer Reviewer")
+                .with_named_params("ROLE", ["REQ-PARTICIPANT"]),
+        );
+
+    // 2. Child component nesting (VALARM within VEVENT)
+    let valarm = jmap_ical::event::Component::new("VALARM")
+        .with(jmap_ical::event::make_entry("ACTION", "DISPLAY"))
+        .with(jmap_ical::event::make_entry("TRIGGER", "-PT15M"));
+    vevent = vevent.with_child(valarm);
+
+    let ics = vevent.to_ics();
+    assert!(ics.starts_with("BEGIN:VEVENT\r\n"));
+    assert!(ics.contains("UID:tree-221\r\n"));
+    assert!(ics.contains("SUMMARY:Architecture Sync\r\n"));
+    assert!(ics.contains(
+        "ATTENDEE;CN=\"Peer Reviewer\";ROLE=REQ-PARTICIPANT:mailto:peer@example.com\r\n"
+    ));
+    assert!(ics.contains("BEGIN:VALARM\r\n"));
+    assert!(ics.contains("ACTION:DISPLAY\r\n"));
+    assert!(ics.contains("TRIGGER:-PT15M\r\n"));
+    assert!(ics.contains("END:VALARM\r\n"));
+    assert!(ics.ends_with("END:VEVENT\r\n"));
+
+    // 3. Fallback to Other variants for non-standard component types and properties
+    let custom_comp = jmap_ical::event::Component::new("X-CUSTOM-CONTAINER")
+        .with(jmap_ical::event::make_entry("X-METRIC", "42"));
+    let custom_ics = custom_comp.to_ics();
+    assert!(custom_ics.contains("BEGIN:X-CUSTOM-CONTAINER\r\n"));
+    assert!(custom_ics.contains("X-METRIC:42\r\n"));
+    assert!(custom_ics.contains("END:X-CUSTOM-CONTAINER\r\n"));
+}
+
+#[test]
+fn differential_oracle_date_time_arithmetic_offset_and_civil_month_rollover() {
+    // Divergence 222 against Stalwart differential oracle:
+    // at_offset, from_offset, moved, days_in_month_of, offset_seconds, and utc_offset:
+    // Wall-Clock Date-Time Arithmetic and UTC Offset Translation: Proleptic Gregorian Calendar Arithmetic,
+    // Month Boundary Rollover, Four-Digit Year Clamping (0000..=9999), and Negative Zero (-0000) UTC Offset Rejection.
+
+    // 1. UTC offset normalization and negative zero rejection
+    assert_eq!(
+        jmap_ical::event::utc_offset("+0200"),
+        Some("+0200".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("+02:00"),
+        Some("+0200".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("-0500"),
+        Some("-0500".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("+0545"),
+        Some("+0545".to_string())
+    );
+    assert_eq!(jmap_ical::event::utc_offset("-0000"), None);
+    assert_eq!(jmap_ical::event::utc_offset("-00:00"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+2500"), None);
+
+    // 2. offset_seconds computation
+    assert_eq!(jmap_ical::event::offset_seconds("+0200"), Some(7200));
+    assert_eq!(jmap_ical::event::offset_seconds("-0500"), Some(-18000));
+    assert_eq!(jmap_ical::event::offset_seconds("+0545"), Some(20700));
+
+    // 3. at_offset and from_offset conversions
+    assert_eq!(
+        jmap_ical::event::at_offset("2026-01-15T12:00:00", "+0200"),
+        Some("2026-01-15T14:00:00".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::at_offset("2026-01-15T12:00:00", "-0500"),
+        Some("2026-01-15T07:00:00".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::from_offset("2026-01-15T14:00:00", "+0200"),
+        Some("2026-01-15T12:00:00".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::from_offset("2026-01-15T07:00:00", "-0500"),
+        Some("2026-01-15T12:00:00".to_string())
+    );
+
+    // 4. moved with month end and leap year rollovers
+    // Forward rollover across month boundary
+    assert_eq!(
+        jmap_ical::event::moved("2026-01-31T23:30:00", 3600),
+        Some("2026-02-01T00:30:00".to_string())
+    );
+    // Backward rollover across non-leap year February
+    assert_eq!(
+        jmap_ical::event::moved("2026-03-01T00:30:00", -3600),
+        Some("2026-02-28T23:30:00".to_string())
+    );
+    // Backward rollover across leap year February (2024 is leap year)
+    assert_eq!(
+        jmap_ical::event::moved("2024-03-01T00:30:00", -3600),
+        Some("2024-02-29T23:30:00".to_string())
+    );
+    // Year boundary rollovers
+    assert_eq!(
+        jmap_ical::event::moved("2026-12-31T23:30:00", 3600),
+        Some("2027-01-01T00:30:00".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::moved("2026-01-01T00:30:00", -3600),
+        Some("2025-12-31T23:30:00".to_string())
+    );
+
+    // 5. days_in_month_of validation
+    assert_eq!(jmap_ical::event::days_in_month_of(2024, 2), Some(29));
+    assert_eq!(jmap_ical::event::days_in_month_of(2026, 2), Some(28));
+    assert_eq!(jmap_ical::event::days_in_month_of(2026, 13), None);
+}
+
+#[test]
+fn differential_oracle_date_time_conversion_existence_and_leap_second_tolerance() {
+    // Divergence 223 against Stalwart differential oracle:
+    // to_local_date_time, to_ical_date_time, to_utc_date_time, date_time_digits, strip, exists, and days_in_month:
+    // Bi-directional Timestamp String Conversion and Existence Validation: Exact Digit Bounding,
+    // Gregorian Leap Year Validation, Leap Second (60) Tolerance, and Malformed Date-Time String Rejection.
+
+    // 1. date_time_digits structure extraction
+    assert_eq!(
+        jmap_ical::event::date_time_digits("20260115T103000Z"),
+        Some(("20260115", "103000"))
+    );
+    assert_eq!(
+        jmap_ical::event::date_time_digits("20260115"),
+        Some(("20260115", "000000"))
+    );
+    assert_eq!(jmap_ical::event::date_time_digits("invalid"), None);
+
+    // 2. exists and days_in_month validation
+    assert!(jmap_ical::event::exists("20260115", "103000"));
+    assert!(jmap_ical::event::exists("20240229", "120000")); // leap year
+    assert!(!jmap_ical::event::exists("20260229", "120000")); // non-leap year
+    assert!(!jmap_ical::event::exists("20261315", "120000")); // invalid month
+    assert!(!jmap_ical::event::exists("20260100", "120000")); // invalid day 0
+    assert!(!jmap_ical::event::exists("20260115", "240000")); // invalid hour 24
+    assert!(jmap_ical::event::exists("20260630", "235960")); // RFC 5545 leap second 60 permitted
+    assert!(!jmap_ical::event::exists("20260630", "235961")); // second 61 rejected
+
+    // 3. to_local_date_time conversion
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20260115T103000Z"),
+        Some("2026-01-15T10:30:00".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20260115"),
+        Some("2026-01-15T00:00:00".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20260229T103000"),
+        None
+    );
+
+    // 4. to_ical_date_time conversion
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2026-01-15T10:30:00"),
+        Some("20260115T103000".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2026-02-29T10:30:00"),
+        None
+    );
+
+    // 5. to_utc_date_time conversion
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-01-15T10:30:00Z"),
+        Some("20260115T103000Z".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-01-15T10:30:00"),
+        None
+    );
+
+    // 6. strip separator utility
+    assert_eq!(
+        jmap_ical::event::strip("2026-01-15", '-', 8),
+        Some("20260115".to_string())
+    );
+    assert_eq!(jmap_ical::event::strip("2026-01-15", '-', 6), None);
+}
