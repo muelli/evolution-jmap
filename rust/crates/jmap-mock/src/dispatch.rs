@@ -299,7 +299,8 @@ fn handle_method(
         | "ContactCard/changes"
         | "Calendar/changes"
         | "CalendarEvent/changes"
-        | "EmailSubmission/changes" => {
+        | "EmailSubmission/changes"
+        | "ParticipantIdentity/changes" => {
             let request: jmap_proto::methods::ChangesRequest = parse_arguments(arguments)?;
             let page_size = state.changes_page_size;
             let account = account_mut(state, &request.account_id)?;
@@ -325,6 +326,11 @@ fn handle_method(
                 "EmailSubmission/changes" => {
                     crate::setops::store_changes(&account.submissions, request, page_size)
                 }
+                "ParticipantIdentity/changes" => crate::setops::store_changes(
+                    &account.participant_identities,
+                    request,
+                    page_size,
+                ),
                 _ => crate::setops::store_changes(&account.calendar_events, request, page_size),
             }?;
             to_result(&response)
@@ -344,6 +350,8 @@ fn handle_method(
         "CalendarEventNotification/set" => {
             crate::calendars::calendar_event_notification_set(state, arguments, caller)
         }
+        "ParticipantIdentity/get" => crate::calendars::participant_identity_get(state, arguments),
+        "ParticipantIdentity/set" => crate::calendars::participant_identity_set(state, arguments),
         "Principal/get" => crate::principals::principal_get(state, arguments),
         "Principal/query" => crate::principals::principal_query(state, arguments),
         "Principal/getAvailability" => {
