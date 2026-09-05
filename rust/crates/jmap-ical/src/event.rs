@@ -3416,7 +3416,7 @@ fn read_vevent(
 /// `None` rather than an empty map for a component that names no place: the save
 /// path reads an edit off a difference from what was shown, and an empty map
 /// would claim the event happens nowhere where the component made no claim.
-fn read_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
+pub fn read_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
     let property = component_entry(vevent, "LOCATION")?;
     let name = entry_text(property);
     if name.is_empty() {
@@ -3455,7 +3455,7 @@ fn read_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>
 /// reason [`read_locations`] gives: the save path reads an edit off a
 /// difference from what was shown, and an empty map would claim the event is
 /// joined nowhere where the component made no claim at all.
-fn read_virtual_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
+pub fn read_virtual_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
     let lines: Vec<&ICalendarEntry> = component_entries(vevent, "CONFERENCE").collect();
     let keys: Vec<Option<String>> = lines
         .iter()
@@ -3538,7 +3538,7 @@ fn read_virtual_locations(vevent: &ICalendarComponent) -> Option<BTreeMap<String
 /// reason [`read_locations`] gives.
 ///
 /// [`syntax`]: crate::syntax
-fn read_links(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
+pub fn read_links(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
     let lines: Vec<&ICalendarEntry> = vevent
         .entries
         .iter()
@@ -3602,7 +3602,7 @@ fn read_links(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
 /// could fetch — RFC 8089's `file` scheme, which is what Evolution's attachment
 /// store hands out. Compared case-insensitively, since RFC 3986 §3.1 makes a
 /// scheme case-insensitive.
-fn fetched_locally(href: &str) -> bool {
+pub fn fetched_locally(href: &str) -> bool {
     href.split_once(':')
         .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("file"))
 }
@@ -3633,7 +3633,7 @@ fn fetched_locally(href: &str) -> bool {
 /// [`read_locations`] gives: the save path reads an edit off a difference from
 /// what was shown, and an empty set would claim the event is untagged where the
 /// component made no claim at all.
-fn read_keywords(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
+pub fn read_keywords(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>> {
     let tags: BTreeMap<String, Value> = component_entries(vevent, "CATEGORIES")
         .flat_map(entry_texts)
         .map(|tag| tag.trim().to_owned())
@@ -3645,7 +3645,7 @@ fn read_keywords(vevent: &ICalendarComponent) -> Option<BTreeMap<String, Value>>
 
 /// Whether a value is an RFC 8984 §1.4.4 `Id`: 1 to 255 octets of letters,
 /// digits, `-` and `_`.
-fn names_map_entry(value: &str) -> bool {
+pub fn names_map_entry(value: &str) -> bool {
     (1..=255).contains(&value.len())
         && value
             .bytes()
@@ -4900,6 +4900,11 @@ impl<'a> Zoned<'a> {
     fn offset_at(&self, utc: &str) -> Option<i64> {
         crate::zone::offset_at(self.observances?, utc)
     }
+}
+
+/// The offset from UTC in force at `utc` in the zone described by `observances`.
+pub fn zone_offset_at(observances: &[&ICalendarComponent], utc: &str) -> Option<i64> {
+    crate::zone::offset_at(observances, utc)
 }
 
 /// What a recurrence rule's `UNTIL` is stated against — the one thing mapping a

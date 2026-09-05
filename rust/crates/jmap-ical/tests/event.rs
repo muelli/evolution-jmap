@@ -33522,3 +33522,368 @@ fn differential_oracle_ast_rrule_synthetic_envelope_and_value_coercion() {
     let p_null = ICalendarParameterValue::Null;
     assert_eq!(jmap_ical::event::param_text(&p_null), "");
 }
+
+#[test]
+fn differential_oracle_vtimezone_horizon_windowing_and_onset_resolution() {
+    // Divergence 228 against Stalwart differential oracle:
+    // offset_at, onsets, rule_onsets, restated, and SEARCH:
+    // VTIMEZONE Multi-Observance Horizon Windowing (SEARCH = 40),
+    // Chronological Onset Discovery, Sub-Day Time Restatement, and Leap Second (60) Rejection.
+
+    // 1. Sub-day time restatement in transition rule:
+    // Lotus Notes restates BYHOUR/BYMINUTE/BYSECOND in RRULE, which overrides DTSTART time.
+    let custom_tz_restated = "/custom.example.org/RestatedTime";
+    let ics_restated = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz_restated}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T020000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29;BYMONTH=10;BYHOUR=3;BYMINUTE=30;BYSECOND=0\r\n\
+TZNAME:CET\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:19700329T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=25,26,27,28,29,30,31;BYMONTH=3;BYHOUR=2;BYMINUTE=0;BYSECOND=0\r\n\
+TZNAME:CEST\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:restated-time-event\r\n\
+DTSTART;TZID={custom_tz_restated}:20261101T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20261025T011500Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+    // On 2026-10-25: transition happens at 03:30 local (+0200 = 01:30 UTC).
+    // Target UNTIL is 01:15:00 UTC (before 01:30 UTC transition).
+    // Active offset is still daylight (+0200) -> 03:15:00 local!
+    let ev_restated = ical_to_event(&ics_restated).expect("parse restated event");
+    let rule = ev_restated.recurrence_rule.expect("rule");
+    assert_eq!(
+        rule.until.as_deref(),
+        Some("2026-10-25T03:15:00"),
+        "sub-day restated BYHOUR/BYMINUTE takes effect at 03:30:00"
+    );
+
+    // 2. Leap second 60 refusal in transition rule:
+    // BYSECOND=60 is refused by restated, making the rule unresolvable (retaining Zulu format).
+    let custom_tz_leap = "/custom.example.org/LeapSecond";
+    let ics_leap = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz_leap}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T020000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29;BYMONTH=10;BYSECOND=60\r\n\
+TZNAME:CET\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:leap-second-event\r\n\
+DTSTART;TZID={custom_tz_leap}:20261101T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=20261110T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+    let ev_leap = ical_to_event(&ics_leap).expect("parse leap event");
+    let rule_leap = ev_leap.recurrence_rule.expect("rule");
+    assert_eq!(
+        rule_leap.until.as_deref(),
+        Some("2026-11-10T12:00:00Z"),
+        "BYSECOND=60 is refused in timezone transition, preserving unmapped Zulu until"
+    );
+
+    // 3. Fallback to TZOFFSETFROM for target instant preceding the earliest transition onset:
+    let custom_tz_fallback = "/custom.example.org/Fallback";
+    let ics_fallback = format!(
+        "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:{custom_tz_fallback}\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0300\r\n\
+TZOFFSETTO:+0400\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=1;BYMONTHDAY=1\r\n\
+TZNAME:FALLBACK\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:fallback-event\r\n\
+DTSTART;TZID={custom_tz_fallback}:19800101T100000\r\n\
+RRULE:FREQ=DAILY;UNTIL=19800601T100000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n"
+    );
+    let ev_fallback = ical_to_event(&ics_fallback).expect("parse fallback event");
+    let rule_fallback = ev_fallback.recurrence_rule.expect("rule");
+    // Target 1980 is before earliest transition (2000). Offset falls back to TZOFFSETFROM (+0300):
+    // 10:00:00Z + 3h = 13:00:00 local.
+    assert_eq!(
+        rule_fallback.until.as_deref(),
+        Some("1980-06-01T13:00:00"),
+        "pre-onset target instant falls back to earliest TZOFFSETFROM"
+    );
+}
+
+#[test]
+fn differential_oracle_inbound_location_parsing_and_virtual_locations() {
+    // Divergence 229 against Stalwart differential oracle:
+    // read_locations, read_virtual_locations, CONFERENCE_FEATURES, and names_map_entry:
+    // Inbound Physical and Virtual Location Parsing: Empty Location Dropping vs None-Return Gating,
+    // Case-Insensitive Feature Translation, Invented Key Collision Avoidance, and Malformed URI Refusal.
+
+    // 1. names_map_entry ID format validation (1..=255 octets of alphanumeric, '_', '-')
+    assert!(jmap_ical::event::names_map_entry("valid_key-123"));
+    assert!(jmap_ical::event::names_map_entry("a"));
+    assert!(!jmap_ical::event::names_map_entry(""));
+    assert!(!jmap_ical::event::names_map_entry("key with space"));
+    assert!(!jmap_ical::event::names_map_entry("key:with:colon"));
+
+    // 2. Empty LOCATION property is dropped (returns None)
+    let ics_empty_loc = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:empty-loc-event\r\n\
+DTSTART:20260115T100000Z\r\n\
+LOCATION:\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_empty_loc = ical_to_event(ics_empty_loc).expect("parse");
+    assert_eq!(
+        ev_empty_loc.locations, None,
+        "empty LOCATION property drops to None to avoid spurious save deletions"
+    );
+
+    // 3. Valid LOCATION with X-JMAP-KEY
+    let ics_keyed_loc = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:keyed-loc-event\r\n\
+DTSTART:20260115T100000Z\r\n\
+LOCATION;X-JMAP-KEY=office_42:Conference Room B\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_keyed_loc = ical_to_event(ics_keyed_loc).expect("parse");
+    let locs = ev_keyed_loc.locations.expect("locations map present");
+    assert!(locs.contains_key("office_42"));
+    assert_eq!(
+        locs["office_42"]["name"],
+        Value::String("Conference Room B".to_string())
+    );
+
+    // 4. Virtual locations: case-insensitive features, valid URIs, invented key collision avoidance
+    let ics_conf = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:conf-event\r\n\
+DTSTART:20260115T100000Z\r\n\
+CONFERENCE;VALUE=URI;X-JMAP-KEY=v1;LABEL=Main Room;FEATURE=AUDIO;FEATURE=video:https://meet.example.com/main\r\n\
+CONFERENCE:https://meet.example.com/overflow\r\n\
+CONFERENCE:not-a-valid-uri\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_conf = ical_to_event(ics_conf).expect("parse");
+    let virtual_locs = ev_conf
+        .virtual_locations
+        .expect("virtual locations present");
+    // Non-URI dropped:
+    assert_eq!(virtual_locs.len(), 2);
+    // Explicit key preserved:
+    assert!(virtual_locs.contains_key("v1"));
+    assert_eq!(virtual_locs["v1"]["name"], "Main Room");
+    assert_eq!(virtual_locs["v1"]["uri"], "https://meet.example.com/main");
+    assert_eq!(virtual_locs["v1"]["features"]["audio"], true);
+    assert_eq!(virtual_locs["v1"]["features"]["video"], true);
+    // Invented key v2 avoids collision with v1:
+    assert!(virtual_locs.contains_key("v2"));
+    assert_eq!(
+        virtual_locs["v2"]["uri"],
+        "https://meet.example.com/overflow"
+    );
+}
+
+#[test]
+fn differential_oracle_inbound_links_and_local_file_privacy_defense() {
+    // Divergence 230 against Stalwart differential oracle:
+    // read_links, fetched_locally, IMAGE, ATTACH, FMTTYPE, and SIZE:
+    // Inbound Link and Attachment Ingestion: File Scheme Rejection (file:// Local Path Privacy Leak Prevention),
+    // Non-URI / Inline Binary Payload Dropping (VALUE=BINARY), Case-Insensitive Property Identification,
+    // MIME Type Extraction, RFC 8607 Size Parsing, and Display Relation Invariant Enforcement (ICON_REL = "icon").
+
+    // 1. fetched_locally privacy detector
+    assert!(jmap_ical::event::fetched_locally(
+        "file:///home/user/document.pdf"
+    ));
+    assert!(jmap_ical::event::fetched_locally(
+        "FILE:///var/data/secret.txt"
+    ));
+    assert!(jmap_ical::event::fetched_locally("File://localhost/path"));
+    assert!(!jmap_ical::event::fetched_locally(
+        "https://example.com/document.pdf"
+    ));
+    assert!(!jmap_ical::event::fetched_locally(
+        "http://example.com/file"
+    ));
+    assert!(!jmap_ical::event::fetched_locally(
+        "mailto:user@example.com"
+    ));
+
+    // 2. Inbound VEVENT with attachments: file: scheme dropped, non-URI dropped, valid ATTACH and IMAGE parsed
+    let ics_links = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:links-event\r\n\
+DTSTART:20260115T100000Z\r\n\
+ATTACH:file:///home/runner/secret-attachment.pdf\r\n\
+ATTACH:bare-unadorned-text-not-a-uri\r\n\
+ATTACH;FMTTYPE=application/pdf;SIZE=1048576;X-JMAP-KEY=doc1:https://files.example.com/agenda.pdf\r\n\
+IMAGE;DISPLAY=BADGE;FMTTYPE=image/png:https://files.example.com/logo.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_links = ical_to_event(ics_links).expect("parse");
+    let links = ev_links.links.expect("links map present");
+    // Only two valid links survived (file: and non-URI dropped):
+    assert_eq!(links.len(), 2);
+    // Explicit key doc1:
+    assert!(links.contains_key("doc1"));
+    assert_eq!(
+        links["doc1"]["href"],
+        "https://files.example.com/agenda.pdf"
+    );
+    assert_eq!(links["doc1"]["contentType"], "application/pdf");
+    assert_eq!(links["doc1"]["size"], 1048576);
+
+    // IMAGE gets rel: "icon", display: "badge", contentType: "image/png":
+    let img_link = links
+        .values()
+        .find(|link| link["href"] == "https://files.example.com/logo.png")
+        .expect("image link");
+    assert_eq!(img_link["rel"], "icon");
+    assert_eq!(img_link["display"], "badge");
+    assert_eq!(img_link["contentType"], "image/png");
+}
+
+#[test]
+fn differential_oracle_category_keywords_start_time_and_override_precedence() {
+    // Divergence 231 against Stalwart differential oracle:
+    // read_keywords, read_start, read_overrides, CATEGORIES, and DTSTART:
+    // Inbound Category Keywords, Date vs Date-Time Start Disambiguation (shows_without_time),
+    // and Multi-Tier Recurrence Override Resolution (EXDATE Precedence over RDATE, Detached VEVENT Instance Winner).
+
+    // 1. read_keywords: multiple CATEGORIES lines, whitespace trimming, empty token dropping, set deduplication
+    let ics_keywords = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:keywords-event\r\n\
+DTSTART:20260115T100000Z\r\n\
+CATEGORIES:Sprint , Backend , Planning\r\n\
+CATEGORIES: Backend,   , Core\r\n\
+CATEGORIES:,, \r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_keywords = ical_to_event(ics_keywords).expect("parse");
+    let kw = ev_keywords.keywords.expect("keywords present");
+    assert_eq!(kw.len(), 4);
+    assert_eq!(kw["Sprint"], true);
+    assert_eq!(kw["Backend"], true);
+    assert_eq!(kw["Planning"], true);
+    assert_eq!(kw["Core"], true);
+
+    // 2. Date vs Date-time start disambiguation:
+    // All-day date (VALUE=DATE or no T) sets show_without_time: true, midnight start, and suppresses TZID.
+    let ics_allday = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:allday-event\r\n\
+DTSTART;VALUE=DATE;TZID=America/New_York:20260704\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_allday = ical_to_event(ics_allday).expect("parse");
+    assert_eq!(ev_allday.start.as_deref(), Some("2026-07-04T00:00:00"));
+    assert_eq!(ev_allday.show_without_time, Some(true));
+    assert_eq!(
+        ev_allday.time_zone, None,
+        "all-day date start ignores TZID parameter"
+    );
+
+    // Timed start sets show_without_time: None (RFC 8984 default false):
+    let ics_timed = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:timed-event\r\n\
+DTSTART:20260704T153000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_timed = ical_to_event(ics_timed).expect("parse");
+    assert_eq!(ev_timed.start.as_deref(), Some("2026-07-04T15:30:00"));
+    assert_eq!(ev_timed.show_without_time, None);
+    assert_eq!(ev_timed.time_zone.as_deref(), Some("Etc/UTC"));
+
+    // 3. Multi-tier override precedence: EXDATE wins over RDATE, detached VEVENT wins over both
+    let ics_overrides = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:series-1\r\n\
+DTSTART:20260101T090000Z\r\n\
+RRULE:FREQ=DAILY;COUNT=10\r\n\
+RDATE:20260103T090000Z,20260104T090000Z\r\n\
+EXDATE:20260103T090000Z\r\n\
+EXDATE:20260105T090000Z\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:series-1\r\n\
+RECURRENCE-ID:20260105T090000Z\r\n\
+SUMMARY:Rescheduled Session\r\n\
+DTSTART:20260105T140000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_series = ical_to_event(ics_overrides).expect("parse");
+    let overrides = ev_series.recurrence_overrides.expect("overrides present");
+
+    // Instant 2026-01-03: both RDATE and EXDATE present -> EXDATE wins:
+    assert_eq!(
+        overrides["2026-01-03T09:00:00"]["excluded"],
+        Value::Bool(true),
+        "EXDATE wins over conflicting RDATE"
+    );
+
+    // Instant 2026-01-04: only RDATE present -> empty patch (happens as series):
+    assert_eq!(
+        overrides["2026-01-04T09:00:00"],
+        json!({}),
+        "RDATE creates non-excluded override instance"
+    );
+
+    // Instant 2026-01-05: both EXDATE and detached VEVENT present -> detached VEVENT wins:
+    assert_eq!(
+        overrides["2026-01-05T09:00:00"]["title"],
+        Value::String("Rescheduled Session".to_string()),
+        "detached VEVENT override wins over EXDATE"
+    );
+    assert_ne!(
+        overrides["2026-01-05T09:00:00"].get("excluded"),
+        Some(&Value::Bool(true)),
+        "detached VEVENT is not marked as excluded"
+    );
+}
