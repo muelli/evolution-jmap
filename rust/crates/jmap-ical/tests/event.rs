@@ -35967,3 +35967,398 @@ fn differential_oracle_freebusy_availability_fail_closed_and_address_normalizati
         assert!(!out.contains("mailto:mailto:"));
     }
 }
+
+#[test]
+fn differential_oracle_vtimezone_transition_weekday_arithmetic_and_epoch_shift() {
+    // 1. Epoch-relative civil day shifting and Euclidean modulo arithmetic
+    // 1970-01-01 was Thursday (index 3 in MO, TU, WE, TH, FR, SA, SU)
+    assert_eq!(
+        (jmap_ical::event::days_from_civil(1970, 1, 1) + 3).rem_euclid(7),
+        3,
+        "1970-01-01 must be Thursday (3)"
+    );
+    // 1970-01-04 was Sunday (index 6)
+    assert_eq!(
+        (jmap_ical::event::days_from_civil(1970, 1, 4) + 3).rem_euclid(7),
+        6,
+        "1970-01-04 must be Sunday (6)"
+    );
+    // 1970-01-05 was Monday (index 0)
+    assert_eq!(
+        (jmap_ical::event::days_from_civil(1970, 1, 5) + 3).rem_euclid(7),
+        0,
+        "1970-01-05 must be Monday (0)"
+    );
+    // 2026-09-05 is Saturday (index 5)
+    assert_eq!(
+        (jmap_ical::event::days_from_civil(2026, 9, 5) + 3).rem_euclid(7),
+        5,
+        "2026-09-05 must be Saturday (5)"
+    );
+    // 2026-09-06 is Sunday (index 6)
+    assert_eq!(
+        (jmap_ical::event::days_from_civil(2026, 9, 6) + 3).rem_euclid(7),
+        6,
+        "2026-09-06 must be Sunday (6)"
+    );
+    // 2026-09-07 is Monday (index 0)
+    assert_eq!(
+        (jmap_ical::event::days_from_civil(2026, 9, 7) + 3).rem_euclid(7),
+        0,
+        "2026-09-07 must be Monday (0)"
+    );
+
+    // 2. Month length bounding via days_in_month
+    assert_eq!(jmap_ical::event::days_in_month(2024, 2), 29);
+    assert_eq!(jmap_ical::event::days_in_month(2026, 2), 28);
+    assert_eq!(jmap_ical::event::days_in_month(2000, 2), 29);
+    assert_eq!(jmap_ical::event::days_in_month(1900, 2), 28);
+    assert_eq!(jmap_ical::event::days_in_month(2026, 4), 30);
+    assert_eq!(jmap_ical::event::days_in_month(2026, 12), 31);
+    assert_eq!(jmap_ical::event::days_in_month(2026, 13), 0);
+
+    // 3. VTIMEZONE transition rule using tzdata date run idiom (first Sunday in April)
+    // In April 2026, April 1 is Wednesday (2), so Sunday falls on April 5
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/AprilFirstSundayZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000401T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=1,2,3,4,5,6,7;BYMONTH=4\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001001T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal = jmap_ical::event::parse_ical(ics).expect("parse cal");
+    let vtz = cal
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtimezone");
+    let observances: Vec<&calcard::icalendar::ICalendarComponent> = vtz
+        .component_ids
+        .iter()
+        .filter_map(|id| cal.components.get(*id as usize))
+        .collect();
+
+    // Prior to April 5 02:00:00 (e.g. 2026-04-04): in force offset is winter (+0100 = 3600)
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&observances, "2026-04-04T12:00:00"),
+        Some(3600)
+    );
+    // After April 5 02:00:00 (e.g. 2026-04-06): in force offset is summer (+0200 = 7200)
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&observances, "2026-04-06T12:00:00"),
+        Some(7200)
+    );
+}
+
+#[test]
+fn differential_oracle_vtimezone_local_datetime_decomposition_and_seconds_at() {
+    // 1. Nonexistent calendar date in DTSTART (e.g. February 30th) returns None in zone_offset_at
+    let ics_feb30 = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/Feb30Zone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20260230T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal = jmap_ical::event::parse_ical(ics_feb30).expect("parse cal");
+    let vtz = cal
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtimezone");
+    let observances: Vec<&calcard::icalendar::ICalendarComponent> = vtz
+        .component_ids
+        .iter()
+        .filter_map(|id| cal.components.get(*id as usize))
+        .collect();
+
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&observances, "2026-06-01T12:00:00"),
+        None,
+        "DTSTART on February 30 must refuse the observance onset rather than rolling to March"
+    );
+
+    // 2. February 29 in non-leap year skips that year (Falls::Never) and searches earlier
+    let ics_leap_rule = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/LeapDayZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20200229T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20201025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=10;BYMONTHDAY=25\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_leap = jmap_ical::event::parse_ical(ics_leap_rule).expect("parse cal leap");
+    let vtz_leap = cal_leap
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtimezone");
+    let obs_leap: Vec<&calcard::icalendar::ICalendarComponent> = vtz_leap
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_leap.components.get(*id as usize))
+        .collect();
+
+    // In 2024 (leap year), the Feb 29 rule triggers daylight savings (+0200 = 7200) in summer.
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_leap, "2024-06-01T12:00:00"),
+        Some(7200),
+        "In leap year 2024, Feb 29 daylight transition must trigger +0200 in summer"
+    );
+
+    // In 2026 (non-leap), Feb 29 never occurs (Falls::Never), so daylight is never entered.
+    // The standard transition from October 2025 remains in force (+0100 = 3600).
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_leap, "2026-06-01T12:00:00"),
+        Some(3600),
+        "In non-leap year 2026, absence of Feb 29 keeps 2025 standard time in force"
+    );
+}
+
+#[test]
+fn differential_oracle_vtimezone_rule_onsets_frequency_gates_and_silent_truncation() {
+    // 1. FREQ=MONTHLY transition rule is refused
+    let ics_monthly = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/MonthlyZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=MONTHLY;BYDAY=-1SU\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal = jmap_ical::event::parse_ical(ics_monthly).expect("parse");
+    let vtz = cal
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs: Vec<&calcard::icalendar::ICalendarComponent> = vtz
+        .component_ids
+        .iter()
+        .filter_map(|id| cal.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs, "2026-06-01T12:00:00"),
+        None,
+        "FREQ=MONTHLY on transition rules must be refused"
+    );
+
+    // 2. INTERVAL=2 transition rule is refused
+    let ics_interval2 = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/Interval2Zone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;INTERVAL=2;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_int = jmap_ical::event::parse_ical(ics_interval2).expect("parse");
+    let vtz_int = cal_int
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_int: Vec<&calcard::icalendar::ICalendarComponent> = vtz_int
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_int.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_int, "2026-06-01T12:00:00"),
+        None,
+        "INTERVAL != 1 on transition rules must be refused"
+    );
+
+    // 3. Exchange / Zimbra WKST tolerance on yearly transition rule
+    let ics_wkst = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/ExchangeZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001029T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10;WKST=MO\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000326T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3;WKST=MO\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_wkst = jmap_ical::event::parse_ical(ics_wkst).expect("parse");
+    let vtz_wkst = cal_wkst
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_wkst: Vec<&calcard::icalendar::ICalendarComponent> = vtz_wkst
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_wkst.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_wkst, "2026-06-01T12:00:00"),
+        Some(7200),
+        "WKST parameter must be tolerated on yearly transition rules"
+    );
+
+    // 4. Unmodeled part refusal (e.g. BYWEEKNO on transition rule)
+    let ics_weekno = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/WeekNoZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYWEEKNO=40;BYDAY=SU\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_wn = jmap_ical::event::parse_ical(ics_weekno).expect("parse");
+    let vtz_wn = cal_wn
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_wn: Vec<&calcard::icalendar::ICalendarComponent> = vtz_wn
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_wn.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_wn, "2026-06-01T12:00:00"),
+        None,
+        "BYWEEKNO on transition rules must be refused"
+    );
+}
+
+#[test]
+fn differential_oracle_vtimezone_day_of_month_evaluation_and_negative_offsets() {
+    // 1. Negative month-day offset (BYMONTHDAY=-1) in October (always 31)
+    let ics_neg_day = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/NegDayZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000331T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYMONTHDAY=-1;BYMONTH=3\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001031T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYMONTHDAY=-1;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal = jmap_ical::event::parse_ical(ics_neg_day).expect("parse");
+    let vtz = cal
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs: Vec<&calcard::icalendar::ICalendarComponent> = vtz
+        .component_ids
+        .iter()
+        .filter_map(|id| cal.components.get(*id as usize))
+        .collect();
+
+    // On 2026-03-30 (before March 31): winter offset (+0100 = 3600)
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs, "2026-03-30T12:00:00"),
+        Some(3600)
+    );
+    // On 2026-04-01 (after March 31): summer offset (+0200 = 7200)
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs, "2026-04-01T12:00:00"),
+        Some(7200)
+    );
+
+    // 2. Ambiguous date run with multiple matching weekdays produces Falls::Set and is refused
+    let ics_multi_match = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/MultiMatchZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=1,2,3,4,5,6,7,8,9,10,11,12,13,14;BYMONTH=11\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_multi = jmap_ical::event::parse_ical(ics_multi_match).expect("parse");
+    let vtz_multi = cal_multi
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_multi: Vec<&calcard::icalendar::ICalendarComponent> = vtz_multi
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_multi.components.get(*id as usize))
+        .collect();
+
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_multi, "2026-11-15T12:00:00"),
+        None,
+        "Ambiguous date run with multiple matching weekdays must trigger Falls::Set and refuse"
+    );
+}
