@@ -7,7 +7,7 @@ use jmap_proto::Id;
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventNotification, CalendarEventNotificationQueryFilter,
     CalendarEventParseRequest, CalendarEventParseResponse, CalendarEventQueryFilter,
-    CalendarEventSetRequest,
+    CalendarEventSetRequest, ParticipantIdentity, ParticipantIdentitySetRequest,
 };
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
@@ -243,5 +243,106 @@ impl Client {
         Err(set_failure(
             response.not_destroyed.as_ref().and_then(|map| map.get(id)),
         ))
+    }
+
+    /// Fetch all participant identities (`ParticipantIdentity/get` with
+    /// `ids: null`, draft-ietf-jmap-calendars-28 §3.1).
+    pub fn participant_identities(
+        &self,
+        account_id: &Id,
+    ) -> Result<Vec<ParticipantIdentity>, Error> {
+        let arguments = self.single_call(
+            USING,
+            "ParticipantIdentity/get",
+            &GetRequest::all(account_id.clone()),
+        )?;
+        let response: GetResponse<ParticipantIdentity> = serde_json::from_value(arguments)?;
+        Ok(response.list)
+    }
+
+    /// Create a participant identity; returns the stored identity (with
+    /// server-set `id` and `isDefault`).
+    pub fn participant_identity_create(
+        &self,
+        account_id: &Id,
+        identity: &ParticipantIdentity,
+    ) -> Result<ParticipantIdentity, Error> {
+        let request = ParticipantIdentitySetRequest::new(
+            SetRequest::<ParticipantIdentity>::new(account_id.clone())
+                .create("new", identity.clone()),
+        );
+        let response = self.participant_identity_set(&request)?;
+        if let Some(created) = response
+            .created
+            .as_ref()
+            .and_then(|created| created.get("new"))
+        {
+            return Ok(created.clone());
+        }
+        Err(set_failure(
+            response.not_created.as_ref().and_then(|map| map.get("new")),
+        ))
+    }
+
+    /// Apply a patch to a participant identity (RFC 8620 PatchObject).
+    pub fn participant_identity_update(
+        &self,
+        account_id: &Id,
+        id: &Id,
+        patch: Value,
+    ) -> Result<(), Error> {
+        let request = ParticipantIdentitySetRequest::new(
+            SetRequest::<ParticipantIdentity>::new(account_id.clone()).update(id.clone(), patch),
+        );
+        let response = self.participant_identity_set(&request)?;
+        if response
+            .updated
+            .as_ref()
+            .is_some_and(|updated| updated.contains_key(id))
+        {
+            return Ok(());
+        }
+        Err(set_failure(
+            response.not_updated.as_ref().and_then(|map| map.get(id)),
+        ))
+    }
+
+    /// Destroy a participant identity. Fails with `cannotDestroyDefault` if
+    /// it is the current default: make another one default first via
+    /// [`Client::participant_identity_set_default`].
+    pub fn participant_identity_destroy(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
+        let request = ParticipantIdentitySetRequest::new(
+            SetRequest::<ParticipantIdentity>::new(account_id.clone()).destroy(id.clone()),
+        );
+        let response = self.participant_identity_set(&request)?;
+        if response
+            .destroyed
+            .as_ref()
+            .is_some_and(|destroyed| destroyed.contains(id))
+        {
+            return Ok(());
+        }
+        Err(set_failure(
+            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
+        ))
+    }
+
+    /// Make `id` the default participant identity, demoting whichever one
+    /// was default before (draft-ietf-jmap-calendars-28 §3.2
+    /// `onSuccessSetIsDefault`). Silently does nothing if `id` does not
+    /// name a live identity.
+    pub fn participant_identity_set_default(&self, account_id: &Id, id: &Id) -> Result<(), Error> {
+        let request = ParticipantIdentitySetRequest::new(SetRequest::new(account_id.clone()))
+            .setting_default(id.to_string());
+        self.participant_identity_set(&request)?;
+        Ok(())
+    }
+
+    fn participant_identity_set(
+        &self,
+        request: &ParticipantIdentitySetRequest,
+    ) -> Result<SetResponse<ParticipantIdentity>, Error> {
+        let arguments = self.single_call(USING, "ParticipantIdentity/set", request)?;
+        Ok(serde_json::from_value(arguments)?)
     }
 }
