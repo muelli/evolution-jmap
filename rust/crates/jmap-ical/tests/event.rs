@@ -30381,3 +30381,435 @@ fn differential_oracle_category_tags_formatting_and_ast_scalar_extraction() {
         "inline binary payload is suppressed"
     );
 }
+
+#[test]
+fn differential_oracle_line_folding_and_escape_sequence_preservation() {
+    // Divergence 188 against Stalwart differential oracle:
+    // fold_overlong_lines, MAX_LINE_OCTETS, and unfold: Content Line Folding:
+    // RFC 5545 Section 3.1 75-Octet Limit Enforcement, UTF-8 Character Boundary Alignment,
+    // Escape Sequence Split Prevention (Odd Backslash Run Detection), and Continuation Line Budgeting.
+
+    // 1. MAX_LINE_OCTETS equals 75
+    assert_eq!(jmap_ical::event::MAX_LINE_OCTETS, 75);
+
+    // 2. Lines within 75 octets pass through untouched (zero-cost pass-through)
+    let short_line = "SUMMARY:Team Sync Meeting\r\nLOCATION:Room 101".to_string();
+    assert_eq!(
+        jmap_ical::event::fold_overlong_lines(short_line.clone()),
+        short_line
+    );
+
+    // 3. Lines exceeding 75 octets are folded with continuation lines prefixed by space
+    let long_summary = format!("DESCRIPTION:{}", "A".repeat(120));
+    let folded = jmap_ical::event::fold_overlong_lines(long_summary);
+    let parts: Vec<&str> = folded.split("\r\n").collect();
+    assert!(parts.len() >= 2);
+    for (i, line) in parts.iter().enumerate() {
+        assert!(
+            line.len() <= jmap_ical::event::MAX_LINE_OCTETS,
+            "line {i} length {} exceeds MAX_LINE_OCTETS",
+            line.len()
+        );
+        if i > 0 {
+            assert!(
+                line.starts_with(' '),
+                "continuation line must start with space"
+            );
+        }
+    }
+
+    // 4. Multi-byte UTF-8 character boundaries are respected (no split inside code points)
+    let prefix = format!("SUMMARY:{}", "a".repeat(65));
+    let multibyte_line = format!("{prefix}€€€€");
+    let folded_mb = jmap_ical::event::fold_overlong_lines(multibyte_line);
+    for line in folded_mb.split("\r\n") {
+        assert!(line.len() <= jmap_ical::event::MAX_LINE_OCTETS);
+        // Valid UTF-8 string slicing guarantees no broken characters
+        assert!(std::str::from_utf8(line.as_bytes()).is_ok());
+    }
+
+    // 5. Escape sequence preservation: odd backslash run steps back so escape pair stays together
+    let esc_prefix = format!("X-TEST:{}", "x".repeat(67)); // 74 octets
+    let with_escape = format!(r"{esc_prefix}\nrest of content");
+    let folded_esc = jmap_ical::event::fold_overlong_lines(with_escape);
+    let esc_lines: Vec<&str> = folded_esc.split("\r\n").collect();
+    assert!(esc_lines[0].len() <= jmap_ical::event::MAX_LINE_OCTETS);
+    assert!(
+        !esc_lines[0].ends_with('\\'),
+        "cut point stepped back so backslash is not isolated at line end"
+    );
+}
+
+#[test]
+fn differential_oracle_physical_and_virtual_location_gating() {
+    // Divergence 189 against Stalwart differential oracle:
+    // maps_locations, maps_virtual_locations, drawn_place, and place_name:
+    // Physical and Virtual Location Outbound Gating: RFC 5545 Section 3.8.1.7 Single Primary LOCATION Enforcement,
+    // RFC 7986 Section 5.11 Multi-Conference Support, Vocabulary-Restricted Conference Features (CONFERENCE_FEATURES),
+    // and Empty Name String Suppression.
+
+    // 1. maps_locations: empty map is valid
+    let empty_locs = BTreeMap::new();
+    assert!(jmap_ical::event::maps_locations(&empty_locs));
+
+    // 2. Single physical location with string name and valid key passes
+    let mut single_loc = BTreeMap::new();
+    single_loc.insert("loc1".to_string(), json!({"name": "Main Conference Room"}));
+    assert!(jmap_ical::event::maps_locations(&single_loc));
+
+    // Single physical location with absent name passes
+    let mut no_name_loc = BTreeMap::new();
+    no_name_loc.insert(
+        "loc1".to_string(),
+        json!({"description": "Building 4 Floor 2"}),
+    );
+    assert!(jmap_ical::event::maps_locations(&no_name_loc));
+
+    // Non-string name fails maps_locations
+    let mut bad_name_loc = BTreeMap::new();
+    bad_name_loc.insert("loc1".to_string(), json!({"name": 12345}));
+    assert!(!jmap_ical::event::maps_locations(&bad_name_loc));
+
+    // Empty key fails maps_locations
+    let mut empty_key_loc = BTreeMap::new();
+    empty_key_loc.insert("".to_string(), json!({"name": "Room"}));
+    assert!(!jmap_ical::event::maps_locations(&empty_key_loc));
+
+    // Multiple physical locations fails maps_locations (RFC 5545 single LOCATION constraint)
+    let mut multi_loc = BTreeMap::new();
+    multi_loc.insert("loc1".to_string(), json!({"name": "Room A"}));
+    multi_loc.insert("loc2".to_string(), json!({"name": "Room B"}));
+    assert!(
+        !jmap_ical::event::maps_locations(&multi_loc),
+        "multiple physical locations cannot be mapped without data loss"
+    );
+
+    // 3. maps_virtual_locations: supports multiple entries (RFC 7986 Section 5.11)
+    let mut multi_vloc = BTreeMap::new();
+    multi_vloc.insert(
+        "v1".to_string(),
+        json!({
+            "uri": "https://meet.example.com/team-sync",
+            "name": "Team Standup",
+            "features": { "video": true, "audio": true }
+        }),
+    );
+    multi_vloc.insert(
+        "v2".to_string(),
+        json!({
+            "uri": "tel:+15551234567",
+            "features": { "phone": true }
+        }),
+    );
+    assert!(jmap_ical::event::maps_virtual_locations(&multi_vloc));
+
+    // Invalid URI fails maps_virtual_locations
+    let mut bad_uri_vloc = BTreeMap::new();
+    bad_uri_vloc.insert(
+        "v1".to_string(),
+        json!({
+            "uri": "not-a-valid-uri",
+            "name": "Invalid Place"
+        }),
+    );
+    assert!(!jmap_ical::event::maps_virtual_locations(&bad_uri_vloc));
+
+    // Unknown feature vocabulary fails maps_virtual_locations
+    let mut bad_feat_vloc = BTreeMap::new();
+    bad_feat_vloc.insert(
+        "v1".to_string(),
+        json!({
+            "uri": "https://meet.example.com/sync",
+            "features": { "telepathy": true }
+        }),
+    );
+    assert!(!jmap_ical::event::maps_virtual_locations(&bad_feat_vloc));
+
+    // Non-boolean feature value fails maps_virtual_locations
+    let mut non_bool_vloc = BTreeMap::new();
+    non_bool_vloc.insert(
+        "v1".to_string(),
+        json!({
+            "uri": "https://meet.example.com/sync",
+            "features": { "video": "enabled" }
+        }),
+    );
+    assert!(!jmap_ical::event::maps_virtual_locations(&non_bool_vloc));
+
+    // 4. drawn_place and place_name: selects first named location in map order, ignores empty names
+    let mut order_locs = BTreeMap::new();
+    order_locs.insert("b".to_string(), json!({"name": "Second Room"}));
+    order_locs.insert("a".to_string(), json!({"name": "First Room"}));
+    let ev_order = CalendarEvent {
+        locations: Some(order_locs),
+        ..CalendarEvent::default()
+    };
+    let (key, name) = jmap_ical::event::drawn_place(&ev_order).unwrap();
+    assert_eq!(key, "a");
+    assert_eq!(name, "First Room");
+
+    let mut empty_named_locs = BTreeMap::new();
+    empty_named_locs.insert("a".to_string(), json!({"name": ""}));
+    empty_named_locs.insert("b".to_string(), json!({"name": "Valid Room"}));
+    let ev_empty_name = CalendarEvent {
+        locations: Some(empty_named_locs),
+        ..CalendarEvent::default()
+    };
+    let (key2, name2) = jmap_ical::event::drawn_place(&ev_empty_name).unwrap();
+    assert_eq!(key2, "b");
+    assert_eq!(name2, "Valid Room");
+
+    assert_eq!(
+        jmap_ical::event::place_name(&json!({"name": "Auditorium"})),
+        Some("Auditorium")
+    );
+    assert_eq!(jmap_ical::event::place_name(&json!({"name": ""})), None);
+    assert_eq!(jmap_ical::event::place_name(&json!({})), None);
+}
+
+#[test]
+fn differential_oracle_alert_masking_and_trigger_serialization() {
+    // Divergence 190 against Stalwart differential oracle:
+    // maps_alerts, uses_default_alerts, drawn_alert, drawn_trigger, and drawn_alarms:
+    // Alert and Alarm Outbound Serialization: RFC 8984 Section 4.5.1 Default Alert Masking (useDefaultAlerts),
+    // RFC 9074 Section 6 Stable UID Preservation, RFC 8984 Section 4.5.3 OffsetTrigger Mapping with Canonical RELATED (START vs END),
+    // Absolute Trigger Rejection, and Summary-Derived DESCRIPTION Generation.
+
+    // 1. uses_default_alerts: masks alarms when defaults are active
+    let ev_def = CalendarEvent {
+        use_default_alerts: Some(true),
+        ..CalendarEvent::default()
+    };
+    assert!(jmap_ical::event::uses_default_alerts(&ev_def));
+    assert!(
+        !jmap_ical::event::maps_alerts(&ev_def),
+        "events using default alerts must not map individual alerts"
+    );
+
+    let mut extra = BTreeMap::new();
+    extra.insert("useDefaultAlerts".to_string(), Value::Bool(true));
+    let ev_extra_def = CalendarEvent {
+        extra,
+        ..CalendarEvent::default()
+    };
+    assert!(jmap_ical::event::uses_default_alerts(&ev_extra_def));
+    assert!(!jmap_ical::event::maps_alerts(&ev_extra_def));
+
+    let ev_no_def = CalendarEvent::default();
+    assert!(!jmap_ical::event::uses_default_alerts(&ev_no_def));
+
+    // 2. drawn_trigger: OffsetTrigger start vs end
+    let trigger_start = json!({
+        "@type": "OffsetTrigger",
+        "offset": "-PT15M",
+        "relativeTo": "start"
+    });
+    let (offset_start, related_start) = jmap_ical::event::drawn_trigger(&trigger_start).unwrap();
+    assert_eq!(offset_start, "-PT15M");
+    assert!(
+        related_start.is_empty(),
+        "start is default and requires no RELATED parameter"
+    );
+
+    let trigger_end = json!({
+        "offset": "PT0S",
+        "relativeTo": "end"
+    });
+    let (offset_end, related_end) = jmap_ical::event::drawn_trigger(&trigger_end).unwrap();
+    assert_eq!(offset_end, "PT0S");
+    assert_eq!(related_end, vec!["END"]);
+
+    // AbsoluteTrigger is rejected
+    let trigger_abs = json!({
+        "@type": "AbsoluteTrigger",
+        "when": "2026-09-05T12:00:00Z"
+    });
+    assert!(jmap_ical::event::drawn_trigger(&trigger_abs).is_none());
+
+    // Unknown relativeTo is rejected
+    let trigger_invalid = json!({
+        "offset": "-PT15M",
+        "relativeTo": "custom"
+    });
+    assert!(jmap_ical::event::drawn_trigger(&trigger_invalid).is_none());
+
+    // 3. Outbound VALARM generation with UID, ACTION, TRIGGER, and DESCRIPTION
+    let mut alerts = BTreeMap::new();
+    alerts.insert(
+        "alarm-key-42".to_string(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT30M"
+            }
+        }),
+    );
+    let ev_alarm = CalendarEvent {
+        uid: Some("alarm-event-uid".to_string()),
+        start: Some("2026-09-05T14:00:00".to_string()),
+        title: Some("Project Demo".to_string()),
+        alerts: Some(alerts),
+        ..CalendarEvent::default()
+    };
+    assert!(jmap_ical::event::maps_alerts(&ev_alarm));
+    let ics = jmap_ical::event::event_to_ical(&ev_alarm);
+    assert!(ics.contains("BEGIN:VALARM"));
+    assert!(ics.contains("UID:alarm-key-42"));
+    assert!(ics.contains("ACTION:DISPLAY"));
+    assert!(ics.contains("TRIGGER:-PT30M"));
+    assert!(ics.contains("DESCRIPTION:Project Demo"));
+    assert!(ics.contains("END:VALARM"));
+
+    // Unrecognized alarm action fails maps_alerts
+    let mut unmodeled_alerts = BTreeMap::new();
+    unmodeled_alerts.insert(
+        "alarm-email".to_string(),
+        json!({
+            "action": "email",
+            "trigger": { "offset": "-PT10M" }
+        }),
+    );
+    let ev_unmodeled = CalendarEvent {
+        alerts: Some(unmodeled_alerts),
+        ..CalendarEvent::default()
+    };
+    assert!(!jmap_ical::event::maps_alerts(&ev_unmodeled));
+}
+
+#[test]
+fn differential_oracle_participant_roster_and_organizer_serialization() {
+    // Divergence 191 against Stalwart differential oracle:
+    // drawn_participants, calendar_address, stated_name, holds_role, expects_reply, and spelled:
+    // Outbound Attendee and Organizer Serialization: RFC 5545 Section 3.6.1 Single ORGANIZER Selection for Multi-Owner Events,
+    // Owner Attendee Omission vs Inclusion, IMIP Calendar Address URI Validation (names_a_uri),
+    // Set-Order Priority Role Mapping (PARTICIPANT_ROLES), and RFC 5545 Section 3.2.17 RSVP=TRUE Conditional Parameter Attachment.
+
+    // 1. Single ORGANIZER selection for multi-owner events
+    let mut multi_owners = BTreeMap::new();
+    multi_owners.insert(
+        "p1".to_string(),
+        json!({
+            "name": "First Organizer",
+            "sendTo": { "imip": "mailto:first@example.com" },
+            "roles": { "owner": true }
+        }),
+    );
+    multi_owners.insert(
+        "p2".to_string(),
+        json!({
+            "name": "Second Organizer",
+            "sendTo": { "imip": "mailto:second@example.com" },
+            "roles": { "owner": true }
+        }),
+    );
+    let ev_owners = CalendarEvent {
+        participants: Some(multi_owners),
+        ..CalendarEvent::default()
+    };
+    let entries = jmap_ical::event::drawn_participants(&ev_owners);
+    let org_entries: Vec<_> = entries
+        .iter()
+        .filter(|e| e.name.as_str() == "ORGANIZER")
+        .collect();
+    assert_eq!(
+        org_entries.len(),
+        1,
+        "RFC 5545 admits exactly one ORGANIZER line per event"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(org_entries[0]),
+        "mailto:first@example.com"
+    );
+
+    // Pure owner (no other attendee role) emits no ATTENDEE line
+    let has_first_attendee = entries.iter().any(|e| {
+        e.name.as_str() == "ATTENDEE"
+            && jmap_ical::event::entry_raw_value(e) == "mailto:first@example.com"
+    });
+    assert!(
+        !has_first_attendee,
+        "pure owner without attendee roles emits only ORGANIZER"
+    );
+
+    // 2. Owner who also attends emits both ORGANIZER and ATTENDEE
+    let mut attending_owner = BTreeMap::new();
+    attending_owner.insert(
+        "p1".to_string(),
+        json!({
+            "name": "Attending Owner",
+            "sendTo": { "imip": "mailto:attending@example.com" },
+            "roles": { "owner": true, "attendee": true }
+        }),
+    );
+    let ev_attending = CalendarEvent {
+        participants: Some(attending_owner),
+        ..CalendarEvent::default()
+    };
+    let att_entries = jmap_ical::event::drawn_participants(&ev_attending);
+    assert_eq!(att_entries.len(), 2);
+    assert_eq!(att_entries[0].name.as_str(), "ORGANIZER");
+    assert_eq!(att_entries[1].name.as_str(), "ATTENDEE");
+
+    // 3. Role precedence order in PARTICIPANT_ROLES
+    let mut multi_role_map = serde_json::Map::new();
+    multi_role_map.insert("attendee".to_string(), Value::Bool(true));
+    multi_role_map.insert("chair".to_string(), Value::Bool(true));
+    let mapped_role = jmap_ical::event::spelled(
+        &jmap_ical::event::PARTICIPANT_ROLES,
+        Some(&Value::Object(multi_role_map)),
+    );
+    assert_eq!(
+        mapped_role,
+        Some("CHAIR"),
+        "chair role takes precedence over attendee in PARTICIPANT_ROLES"
+    );
+
+    // 4. Address validation: names_a_uri and calendar_address
+    assert!(jmap_ical::event::names_a_uri("mailto:user@example.com"));
+    assert!(jmap_ical::event::names_a_uri(
+        "urn:uuid:550e8400-e29b-41d4-a716-446655440000"
+    ));
+    assert!(!jmap_ical::event::names_a_uri("user@example.com")); // missing scheme
+    assert!(!jmap_ical::event::names_a_uri(
+        "mailto:user name@example.com"
+    )); // whitespace forbidden
+    assert!(!jmap_ical::event::names_a_uri(""));
+
+    let participant_valid_uri = json!({
+        "sendTo": { "imip": "mailto:valid@example.com" }
+    });
+    assert_eq!(
+        jmap_ical::event::calendar_address(&participant_valid_uri),
+        Some("mailto:valid@example.com")
+    );
+
+    let participant_invalid_uri = json!({
+        "sendTo": { "imip": "invalid-address" }
+    });
+    assert_eq!(
+        jmap_ical::event::calendar_address(&participant_invalid_uri),
+        None
+    );
+
+    // 5. RSVP parameter conditional attachment (expects_reply)
+    let mut rsvp_participants = BTreeMap::new();
+    rsvp_participants.insert(
+        "p1".to_string(),
+        json!({
+            "sendTo": { "imip": "mailto:rsvp@example.com" },
+            "expectReply": true
+        }),
+    );
+    let ev_rsvp = CalendarEvent {
+        participants: Some(rsvp_participants),
+        ..CalendarEvent::default()
+    };
+    let rsvp_entries = jmap_ical::event::drawn_participants(&ev_rsvp);
+    assert_eq!(rsvp_entries.len(), 1);
+    assert_eq!(
+        jmap_ical::event::entry_param(&rsvp_entries[0], "RSVP"),
+        Some("TRUE".to_string())
+    );
+}
