@@ -2876,4 +2876,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.132 Divergence 132: `check_structure` and `parse_ical`: UTF-8 Byte Order Mark (`\u{feff}`) Stripping, Case-Insensitive Envelope Tag Matching, and Delimiter Name Normalization
+
+- **Observed Behavior**:
+  RFC 5545 §3.1 requires UTF-8 character encoding without a Byte Order Mark (BOM). Exporters on Windows and Microsoft Exchange frequently prefix serialized `.ics` streams with a UTF-8 BOM (`\xEF\xBB\xBF`). In `jmap-ical`:
+  1. UTF-8 BOM stripping: In `check_structure`, `text.strip_prefix('\u{feff}').unwrap_or(text)` strips the leading Byte Order Mark before passing the buffer to `unfold`. If the BOM were left in place, `split_once(':')` on the initial line would yield key `\u{feff}BEGIN`, causing `check_structure` to reject the document with `Err(ICalError::NotACalendar)`.
+  2. Case-insensitive envelope keywords: Keyword evaluation tests `keyword.eq_ignore_ascii_case("BEGIN")` and `keyword.eq_ignore_ascii_case("END")`, accepting lowercase or mixed-case control keywords (such as `begin:vcalendar` or `End:VCALENDAR`).
+  3. Delimiter name normalization: Component names are extracted via `name.trim().to_ascii_uppercase()`, correctly matching delimiters that carry surrounding whitespace or lowercase letters. Empty component names (`BEGIN: `) are safely skipped.
+  4. In contrast, differential oracles or byte-oriented parsers fail with envelope validation errors when encountering files prefixed with a UTF-8 BOM or mixed-case delimiters.
+- **Specification and Architectural Context**:
+  1. Real-world calendar exports from Microsoft Outlook and Windows mail clients routinely include a UTF-8 BOM. Failing to strip the leading marker would prevent desktop users from importing valid appointment files.
+  2. RFC 5545 §3.1 mandates case-insensitivity for property and component names. Normalizing names to uppercase during envelope verification ensures robust bracketing across varied implementations.
+- **Adjudication**:
+  Conforming specification boundary and wire encoding interoperability. Strips UTF-8 BOM, matches `BEGIN` and `END` case-insensitively, and normalizes component envelope names.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.133 Divergence 133: `drawn_time_zones` and `definition_of`: All-Day Event `VTIMEZONE` Suppression (`as_a_date`), Redundant Standard IANA / UTC Zone Omission, and Dual-Key Solidus Lookup (`/prefix` vs `prefix`)
+
+- **Observed Behavior**:
+  RFC 5545 §3.6.5 specifies `VTIMEZONE` and §3.2.19 explicitly forbids `TZID` parameters beside `VALUE=DATE`. RFC 8984 §4.7.2 models custom timezone definitions in `timeZones`. In `jmap-ical`:
+  1. All-day event `VTIMEZONE` suppression: In `drawn_time_zones`, if `as_a_date` is true, the function immediately returns an empty vector (`return Vec::new()`), suppressing all `VTIMEZONE` components. Because all-day dates carry no `TZID`, no timezone definitions are referenced in the document.
+  2. Redundant standard IANA and UTC omission: `names_time_zone(tzid) || is_utc(tzid)` skips emitting `VTIMEZONE` blocks for standard IANA zones (such as `Europe/Berlin`) and UTC zones (`UTC`, `Etc/UTC`). Standard zones resolve directly against the host operating system zone database.
+  3. Custom timezone deduplication: `seen.insert(tzid)` ensures that even if multiple occurrences or components reference the same custom solidus timezone, only one `VTIMEZONE` block is drawn.
+  4. Dual-key solidus lookup: `definition_of` resolves `tzid` via `definitions.get(tzid).or_else(|| definitions.get(tzid.trim_start_matches('/')))`. RFC 8984 §1.4.9 requires solidus prefixes (`/custom-zone`) for custom identifiers, while RFC 8984 §1.4.4 `Id` syntax forbids slashes. Resolving under both spellings ensures round-trip stability regardless of server key normalization.
+  5. In contrast, differential oracles or naive CalDAV serializers often emit redundant `VTIMEZONE` blocks for standard IANA zones or fail to resolve custom solidus keys when the leading slash is stripped in dictionary keys.
+- **Specification and Architectural Context**:
+  1. Emitting `VTIMEZONE` blocks on all-day events where no property carries a `TZID` bloats the stream with unused definitions.
+  2. Emitting redundant `VTIMEZONE` blocks for standard IANA zones risks overriding accurate host timezone transitions with stale observance snapshots.
+  3. Reconciling solidus-prefixed and bare dictionary keys eliminates an interoperability pitfall between RFC 8984 §1.4.4 and §1.4.9.
+- **Adjudication**:
+  Conforming specification boundary and timezone emission minimalism. Suppresses `VTIMEZONE` on all-day events, omits standard IANA and UTC zones, deduplicates custom definitions, and resolves dual-key solidus prefixes.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.134 Divergence 134: `vevent_of`: Recurrence Override `RECURRENCE-ID` Timezone Resolution on Master Series Clock (`series_zone`) vs Override Moved `DTSTART` Timezone and Floating Series Preservation
+
+- **Observed Behavior**:
+  RFC 5545 §3.8.4.4 specifies that `RECURRENCE-ID` identifies the specific occurrence being replaced from the recurrence set, and its date-time value MUST be resolved against the timezone of the original recurrence rule (the master series clock). RFC 8984 §4.3.4 models overrides with modified properties (including `timeZone` and `start`). In `jmap-ical`:
+  1. Series clock evaluation: In `vevent_of`, `RECURRENCE-ID` is serialized via `dated(RECURRENCE_ID, &[recurrence_id], as_a_date, series_zone)`. It is formatted in `series_zone` (the master series timezone), attaching `TZID=<series_zone>` (or UTC `'Z'` if the series is UTC, or floating if the series is floating).
+  2. Moved instance clock independence: The detached occurrence's `DTSTART` is serialized using the override's own timezone (`instance.time_zone`). If an occurrence is rescheduled to a different timezone (for example, master series in `America/New_York`, override moved to `Europe/London`), `RECURRENCE-ID` remains in `America/New_York` while `DTSTART` carries `TZID=Europe/London`.
+  3. Floating series preservation: If the master series is floating (`series_zone` is `None`), `RECURRENCE-ID` is emitted without a `TZID` parameter, even if the detached occurrence specifies a zoned `DTSTART`.
+  4. In contrast, differential oracles or naive CalDAV emitters often stamp the override's new `TZID` onto `RECURRENCE-ID`, desynchronizing occurrence identifiers from the recurrence rule.
+- **Specification and Architectural Context**:
+  1. `RECURRENCE-ID` acts as a foreign key pointing into the occurrences generated by the master `RRULE`. It must match the master recurrence clock exactly so that calendar engines can locate and replace the modified instance.
+  2. If `RECURRENCE-ID` adopted the override's moved timezone, it would name an occurrence instant that never existed in the master series, causing calendar stores to treat the override as an orphaned or corrupt component.
+- **Adjudication**:
+  Conforming specification boundary and recurrence override linkage fidelity. Binds `RECURRENCE-ID` strictly to the master series timezone clock while permitting detached `DTSTART` to move across timezones.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.135 Divergence 135: `names_a_uri`: Strict RFC 3986 §3.1 URI Syntax Validation, Alphabetic Scheme Enforcement, Non-Empty Scheme-Specific Part, and Whitespace / CRLF Injection Defense
+
+- **Observed Behavior**:
+  RFC 5545 and RFC 7986 define URI-valued properties and parameters (`CONFERENCE;VALUE=URI`, `ATTACH;VALUE=URI`, `IMAGE;VALUE=URI`, `ORGANIZER:mailto:...`, `ATTENDEE:mailto:...`). RFC 3986 §3.1 specifies URI syntax. In `jmap-ical`, URIs are written directly to content lines without RFC 5545 backslash escaping. In `jmap-ical`:
+  1. Structural syntax check: `names_a_uri` verifies `scheme.starts_with(|c| c.is_ascii_alphabetic())`, ensures all scheme characters are ASCII alphanumeric or `+`, `-`, `.`, requires a colon `:`, and asserts `!rest.is_empty()`.
+  2. Total whitespace and CRLF rejection: `!value.chars().any(char::is_whitespace)` rejects any URI containing spaces, tabs, CR (`\r`), or LF (`\n`). Because URIs on content lines skip `syntax::escape`, rejecting whitespace and control characters provides an essential defense against CRLF header injection and line corruption.
+  3. Inbound filtering: `read_virtual_locations` drops `CONFERENCE` lines that fail `names_a_uri`. `read_links` drops `ATTACH` and `IMAGE` lines that fail `names_a_uri`. `calendar_address` drops `sendTo.imip` entries that fail `names_a_uri`.
+  4. Bare address and empty scheme rejection: Bare email addresses lacking a scheme (`alice@example.com`) or empty schemes (`mailto:`) return `false` and are excluded.
+  5. Outbound validation: `drawn_conference` and `maps_virtual_locations` refuse invalid or injected URIs on export.
+  6. In contrast, differential oracles or permissive parsers may accept bare email addresses, accept empty schemes, or pass unescaped whitespace and newlines through to content lines, triggering syntax errors in `libical` or enabling CRLF injection.
+- **Specification and Architectural Context**:
+  1. RFC 3986 §3.1 mandates that URI schemes must begin with an alphabetic character and contain no whitespace.
+  2. Content lines in iCalendar format properties like `CONFERENCE` and `ATTACH` directly without backslash escaping. If a URI contains a carriage return or line feed, it splits physical lines and injects arbitrary calendar headers. Strict rejection at `names_a_uri` guarantees injection immunity.
+- **Adjudication**:
+  Conforming specification boundary and protocol injection defense. Enforces strict RFC 3986 URI syntax, mandates alphabetic scheme prefixes, rejects bare email addresses and empty schemes, and protects unescaped content lines against whitespace and CRLF injection.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 

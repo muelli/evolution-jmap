@@ -25452,3 +25452,333 @@ END:VCALENDAR\r\n";
         empty_ev.time_zones
     );
 }
+
+#[test]
+fn differential_oracle_check_structure_utf8_bom_and_case_insensitive_envelope() {
+    // Divergence 132 against Stalwart differential oracle:
+    // check_structure and parse_ical UTF-8 BOM (\u{feff}) stripping, case-insensitive
+    // envelope tag matching, and trailing content detection (ICalError::Trailing).
+    // In jmap-ical:
+    // 1. strip_prefix('\u{feff}') removes leading UTF-8 Byte Order Mark from Outlook/Windows
+    //    exports before unfolding, allowing BEGIN:VCALENDAR to match.
+    // 2. Keyword matching for BEGIN and END is case-insensitive, and component names are
+    //    trimmed and converted to uppercase, accepting mixed-case delimiters.
+    // 3. Extraneous content outside the closing END:VCALENDAR returns ICalError::Trailing.
+
+    // 1. UTF-8 BOM prefix stripped cleanly
+    let bom_ics = "\u{feff}BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:bom-test-132\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:BOM Event\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(bom_ics).expect("parse ics with UTF-8 BOM");
+    assert_eq!(
+        ev.id.as_ref().map(|id| id.as_str()),
+        Some("bom-test-132"),
+        "UID parsed through BOM"
+    );
+    assert_eq!(
+        ev.title.as_deref(),
+        Some("BOM Event"),
+        "SUMMARY parsed through BOM"
+    );
+
+    // 2. Mixed-case envelope and component delimiters accepted
+    let mixed_case_ics = "begin:vcalendar\r\n\
+version:2.0\r\n\
+prodid:test\r\n\
+Begin:VEVENT\r\n\
+UID:case-test-132\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Mixed Case Envelope\r\n\
+end:vevent\r\n\
+End:VCALENDAR\r\n";
+
+    let case_ev = ical_to_event(mixed_case_ics).expect("parse mixed-case envelope");
+    assert_eq!(
+        case_ev.id.as_ref().map(|id| id.as_str()),
+        Some("case-test-132")
+    );
+    assert_eq!(case_ev.title.as_deref(), Some("Mixed Case Envelope"));
+
+    // 3. Trailing content after END:VCALENDAR returns ICalError::Trailing
+    let trailing_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:trailing-test-132\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n\
+trailing line after calendar\r\n";
+
+    let trailing_err =
+        jmap_ical::event::parse_ical(trailing_ics).expect_err("trailing content rejected");
+    assert!(
+        matches!(trailing_err, ICalError::Trailing(ref line) if line.contains("trailing line")),
+        "ICalError::Trailing detected: {trailing_err:?}"
+    );
+}
+
+#[test]
+fn differential_oracle_drawn_time_zones_all_day_suppression_and_dual_key_solidus() {
+    // Divergence 133 against Stalwart differential oracle:
+    // drawn_time_zones all-day event VTIMEZONE suppression (as_a_date), redundant standard
+    // IANA / UTC zone omission, custom zone deduplication, and definition_of dual-key lookup.
+    // In jmap-ical:
+    // 1. If an event is all-day (shows_without_time: true), drawn_time_zones returns an empty
+    //    vector because RFC 5545 section 3.2.19 forbids TZID on VALUE=DATE properties.
+    // 2. Standard IANA timezones and UTC are omitted from VTIMEZONE blocks (resolving via host tzdata).
+    // 3. Multiple components referencing the same custom solidus zone emit exactly one VTIMEZONE block.
+    // 4. definition_of resolves custom solidus definitions under both \"/custom/...\" and \"custom/...\" keys.
+
+    let custom_def = json!({
+        "@type": "TimeZone",
+        "tzId": "/custom/corp-tz-133",
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "1970-01-01T00:00:00",
+            "offsetFrom": "+02:00",
+            "offsetTo": "+02:00"
+        }]
+    });
+
+    // 1. All-day event suppresses VTIMEZONE emission even when custom time_zones is present
+    let allday_event = CalendarEvent {
+        id: Some("allday-tz-133".into()),
+        start: Some("2026-09-01T00:00:00".to_owned()),
+        show_without_time: Some(true),
+        duration: Some("P1D".to_owned()),
+        time_zones: Some(BTreeMap::from([(
+            "/custom/corp-tz-133".to_owned(),
+            custom_def.clone(),
+        )])),
+        ..Default::default()
+    };
+    let ics_allday = event_to_ical(&allday_event);
+    assert!(ics_allday.contains("DTSTART;VALUE=DATE:20260901"));
+    assert!(
+        !ics_allday.contains("BEGIN:VTIMEZONE"),
+        "all-day event suppresses VTIMEZONE: {ics_allday}"
+    );
+
+    // 2. Standard IANA zone emits TZID on DTSTART but omits VTIMEZONE block
+    let iana_event = CalendarEvent {
+        id: Some("iana-tz-133".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..Default::default()
+    };
+    let ics_iana = event_to_ical(&iana_event);
+    assert!(ics_iana.contains("DTSTART;TZID=Europe/Berlin:20260901T100000"));
+    assert!(
+        !ics_iana.contains("BEGIN:VTIMEZONE"),
+        "standard IANA zone omits VTIMEZONE block: {ics_iana}"
+    );
+
+    // 3. Custom solidus timezone with dual-key storage (key without leading slash) resolves via definition_of
+    let unslashed_key_event = CalendarEvent {
+        id: Some("unslashed-key-133".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("/custom/corp-tz-133".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("daily")),
+        recurrence_overrides: Some(
+            serde_json::from_value(json!({
+                "2026-09-02T10:00:00": {
+                    "timeZone": "/custom/corp-tz-133"
+                }
+            }))
+            .unwrap(),
+        ),
+        time_zones: Some(BTreeMap::from([(
+            "custom/corp-tz-133".to_owned(),
+            custom_def,
+        )])),
+        ..Default::default()
+    };
+    let ics_custom = event_to_ical(&unslashed_key_event);
+    assert!(ics_custom.contains("DTSTART;TZID=/custom/corp-tz-133:20260901T100000"));
+    assert!(ics_custom.contains("BEGIN:VTIMEZONE\r\nTZID:/custom/corp-tz-133\r\n"));
+
+    // Exactly one VTIMEZONE block emitted despite series and override both referencing the custom zone
+    let vtimezone_count = ics_custom.matches("BEGIN:VTIMEZONE").count();
+    assert_eq!(
+        vtimezone_count, 1,
+        "custom timezone block deduplicated across series and overrides: {ics_custom}"
+    );
+}
+
+#[test]
+fn differential_oracle_vevent_of_recurrence_id_series_zone_clock_alignment() {
+    // Divergence 134 against Stalwart differential oracle:
+    // vevent_of recurrence override RECURRENCE-ID evaluation on master series clock (series_zone)
+    // vs detached instance moved DTSTART timezone and floating series preservation.
+    // In jmap-ical:
+    // 1. RECURRENCE-ID is formatted in series_zone because it names the occurrence slot
+    //    generated by the master recurrence rule on the series' clock (RFC 5545 section 3.8.4.4).
+    // 2. DTSTART on the detached instance is formatted in the instance's own time_zone,
+    //    allowing the occurrence to move to a different timezone while RECURRENCE-ID stays anchored.
+    // 3. Floating master series produces floating RECURRENCE-ID without TZID parameter,
+    //    even if the detached override specifies a zoned DTSTART.
+
+    // 1. Zoned series with override moved to different timezone
+    let series_event = CalendarEvent {
+        id: Some("series-clock-134".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("America/New_York".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("daily")),
+        recurrence_overrides: Some(
+            serde_json::from_value(json!({
+                "2026-09-02T10:00:00": {
+                    "start": "2026-09-02T16:00:00",
+                    "timeZone": "Europe/London"
+                }
+            }))
+            .unwrap(),
+        ),
+        ..Default::default()
+    };
+
+    let ics_zoned = event_to_ical(&series_event);
+    assert!(
+        ics_zoned.contains("RECURRENCE-ID;TZID=America/New_York:20260902T100000"),
+        "RECURRENCE-ID anchored to master series timezone: {ics_zoned}"
+    );
+    assert!(
+        ics_zoned.contains("DTSTART;TZID=Europe/London:20260902T160000"),
+        "DTSTART on detached instance uses override timezone: {ics_zoned}"
+    );
+
+    // 2. Floating series (no timezone) with override moved into a timezone
+    let floating_series = CalendarEvent {
+        id: Some("floating-series-134".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: None,
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("daily")),
+        recurrence_overrides: Some(
+            serde_json::from_value(json!({
+                "2026-09-02T10:00:00": {
+                    "start": "2026-09-02T10:00:00",
+                    "timeZone": "Asia/Tokyo"
+                }
+            }))
+            .unwrap(),
+        ),
+        ..Default::default()
+    };
+
+    let ics_floating = event_to_ical(&floating_series);
+    assert!(
+        ics_floating.contains("RECURRENCE-ID:20260902T100000"),
+        "RECURRENCE-ID on floating series has no TZID parameter: {ics_floating}"
+    );
+    assert!(
+        ics_floating.contains("DTSTART;TZID=Asia/Tokyo:20260902T100000"),
+        "DTSTART on moved override carries Asia/Tokyo TZID: {ics_floating}"
+    );
+}
+
+#[test]
+fn differential_oracle_names_a_uri_scheme_syntax_and_crlf_injection_defense() {
+    // Divergence 135 against Stalwart differential oracle:
+    // names_a_uri RFC 3986 section 3.1 syntax validation, alphabetic scheme enforcement,
+    // bare address rejection, and whitespace / CRLF line injection defense.
+    // In jmap-ical:
+    // 1. names_a_uri requires an alphabetic scheme prefix, colon, and non-empty body.
+    // 2. Any whitespace, carriage return (\r), or line feed (\n) causes names_a_uri to return false,
+    //    protecting unescaped URI lines (CONFERENCE, ATTACH, ATTENDEE) from CRLF injection.
+    // 3. read_virtual_locations drops CONFERENCE lines with malformed, scheme-less, or injected URIs.
+    // 4. read_links drops ATTACH lines with scheme-less filenames or whitespace.
+    // 5. drawn_conference and maps_virtual_locations refuse invalid or injected URIs on export.
+
+    let dirty_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:uri-defense-135\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+CONFERENCE;VALUE=URI;LABEL=Valid Conf:https://example.com/join-135\r\n\
+CONFERENCE;VALUE=URI;LABEL=Bare Address:example.com/join-bare\r\n\
+CONFERENCE;VALUE=URI;LABEL=Digit Scheme:123bad:meeting\r\n\
+CONFERENCE;VALUE=URI;LABEL=Space URI:https://example.com/call with spaces\r\n\
+ATTACH:https://example.com/presentation.pdf\r\n\
+ATTACH:not-a-uri-attachment.pdf\r\n\
+ATTACH:https://example.com/space in path.pdf\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(dirty_ics).expect("parse ics with dirty URIs");
+
+    // Only the valid HTTPS conference endpoint survives; scheme-less, digit-prefix, and space URIs are dropped
+    let virtual_locs = ev.virtual_locations.expect("virtual_locations present");
+    assert_eq!(
+        virtual_locs.len(),
+        1,
+        "only 1 valid conference endpoint kept: {virtual_locs:?}"
+    );
+    let loc = virtual_locs
+        .values()
+        .next()
+        .expect("valid conference entry");
+    assert_eq!(
+        loc.get("uri").and_then(Value::as_str),
+        Some("https://example.com/join-135")
+    );
+    assert_eq!(loc.get("name").and_then(Value::as_str), Some("Valid Conf"));
+
+    // Only the valid HTTPS attachment survives; scheme-less filename and space-containing URI are dropped
+    let links = ev.links.expect("links present");
+    assert_eq!(links.len(), 1, "only 1 valid attachment kept: {links:?}");
+    let link = links.values().next().expect("valid link entry");
+    assert_eq!(
+        link.get("href").and_then(Value::as_str),
+        Some("https://example.com/presentation.pdf")
+    );
+
+    // Outbound validation: maps_virtual_locations rejects invalid scheme or whitespace URIs
+    let valid_vloc = BTreeMap::from([(
+        "v1".to_owned(),
+        json!({"@type": "VirtualLocation", "uri": "https://example.com/valid"}),
+    )]);
+    assert!(maps_virtual_locations(&valid_vloc));
+
+    let bare_vloc = BTreeMap::from([(
+        "v1".to_owned(),
+        json!({"@type": "VirtualLocation", "uri": "bare-domain.com/path"}),
+    )]);
+    assert!(
+        !maps_virtual_locations(&bare_vloc),
+        "bare address without scheme refused"
+    );
+
+    let space_vloc = BTreeMap::from([(
+        "v1".to_owned(),
+        json!({"@type": "VirtualLocation", "uri": "https://example.com/call with spaces"}),
+    )]);
+    assert!(
+        !maps_virtual_locations(&space_vloc),
+        "space-containing URI refused"
+    );
+
+    let crlf_vloc = BTreeMap::from([(
+        "v1".to_owned(),
+        json!({"@type": "VirtualLocation", "uri": "https://example.com/call\r\nX-INJECTED:bad"}),
+    )]);
+    assert!(
+        !maps_virtual_locations(&crlf_vloc),
+        "CRLF-containing URI refused"
+    );
+}
