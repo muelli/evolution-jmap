@@ -21,10 +21,10 @@ pub struct Quota {
     pub name: String,
     pub resource_type: String,
     pub used: u64,
-    pub limit: u64,
+    pub hard_limit: u64,
     pub scope: String,
     #[serde(default)]
-    pub data_types: Vec<String>,
+    pub types: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warn_limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -41,9 +41,9 @@ impl Quota {
         name: impl Into<String>,
         resource_type: impl Into<String>,
         used: u64,
-        limit: u64,
+        hard_limit: u64,
         scope: impl Into<String>,
-        data_types: impl IntoIterator<Item = impl Into<String>>,
+        types: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
         Self {
             id: id.into(),
@@ -51,9 +51,9 @@ impl Quota {
             name: name.into(),
             resource_type: resource_type.into(),
             used,
-            limit,
+            hard_limit,
             scope: scope.into(),
-            data_types: data_types.into_iter().map(Into::into).collect(),
+            types: types.into_iter().map(Into::into).collect(),
             warn_limit: None,
             soft_limit: None,
             description: None,
@@ -87,7 +87,10 @@ impl Quota {
     }
 }
 
-/// `Quota/query` filter (RFC 9425 §4).
+/// `Quota/query` filter (RFC 9425 §4.4). Every condition, when present, must
+/// match for the `Quota` to match: `name` and `type` are substring tests
+/// (`name` against the Quota's own `name`, `type` against its `types` list),
+/// `scope` and `resourceType` are exact matches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaQueryFilter {
@@ -98,7 +101,7 @@ pub struct QuotaQueryFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data_types: Option<Vec<String>>,
+    pub r#type: Option<String>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -123,11 +126,8 @@ impl QuotaQueryFilter {
         self
     }
 
-    pub fn with_data_types(
-        mut self,
-        data_types: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
-        self.data_types = Some(data_types.into_iter().map(Into::into).collect());
+    pub fn with_type(mut self, r#type: impl Into<String>) -> Self {
+        self.r#type = Some(r#type.into());
         self
     }
 

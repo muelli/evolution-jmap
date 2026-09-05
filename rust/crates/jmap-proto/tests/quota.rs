@@ -31,9 +31,9 @@ fn quota_round_trips_through_camel_case_json() {
     assert_eq!(val["name"], "Storage Quota");
     assert_eq!(val["resourceType"], "octets");
     assert_eq!(val["used"], 512_000);
-    assert_eq!(val["limit"], 1_000_000);
+    assert_eq!(val["hardLimit"], 1_000_000);
     assert_eq!(val["scope"], "account");
-    assert_eq!(val["dataTypes"], json!(["Mail", "Contacts"]));
+    assert_eq!(val["types"], json!(["Mail", "Contacts"]));
     assert_eq!(val["warnLimit"], 800_000);
     assert_eq!(val["softLimit"], 900_000);
     assert_eq!(val["description"], "Primary account storage limit");
@@ -49,9 +49,9 @@ fn quota_minimal_deserialization_and_forward_compatibility() {
         "name": "Message Count Limit",
         "resourceType": "count",
         "used": 1500,
-        "limit": 5000,
+        "hardLimit": 5000,
         "scope": "domain",
-        "dataTypes": ["Mail"],
+        "types": ["Mail"],
         "futureQuotaProperty": "unlimited-archive"
     });
 
@@ -60,9 +60,9 @@ fn quota_minimal_deserialization_and_forward_compatibility() {
     assert_eq!(q.name, "Message Count Limit");
     assert_eq!(q.resource_type, "count");
     assert_eq!(q.used, 1500);
-    assert_eq!(q.limit, 5000);
+    assert_eq!(q.hard_limit, 5000);
     assert_eq!(q.scope, "domain");
-    assert_eq!(q.data_types, vec!["Mail".to_string()]);
+    assert_eq!(q.types, vec!["Mail".to_string()]);
     assert!(q.account_id.is_none());
     assert!(q.warn_limit.is_none());
     assert!(q.soft_limit.is_none());
@@ -76,13 +76,13 @@ fn quota_query_filter_round_trips_and_builders() {
         .with_name("Storage")
         .with_resource_type(quota_resource_type::OCTETS)
         .with_scope(quota_scope::ACCOUNT)
-        .with_data_types(vec![quota_data_type::MAIL]);
+        .with_type(quota_data_type::MAIL);
 
     let val = serde_json::to_value(&filter).expect("to_value");
     assert_eq!(val["name"], "Storage");
     assert_eq!(val["resourceType"], "octets");
     assert_eq!(val["scope"], "account");
-    assert_eq!(val["dataTypes"], json!(["Mail"]));
+    assert_eq!(val["type"], "Mail");
 
     let round: QuotaQueryFilter = serde_json::from_value(val).expect("from_value");
     assert_eq!(round, filter);
