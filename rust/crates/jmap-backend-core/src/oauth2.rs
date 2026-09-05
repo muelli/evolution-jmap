@@ -113,8 +113,10 @@ use std::sync::OnceLock;
 
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, EOAuth2Services, ESource, ESourceAuthentication,
-    e_oauth2_services_is_oauth2_alias, e_oauth2_services_new, e_source_authentication_get_method,
-    e_source_authentication_get_type, e_source_get_oauth2_access_token_sync,
+    ESourceCredentialsProvider, e_oauth2_services_is_oauth2_alias, e_oauth2_services_new,
+    e_source_authentication_get_method, e_source_authentication_get_type,
+    e_source_credentials_provider_new, e_source_credentials_provider_ref_credentials_source,
+    e_source_get_oauth2_access_token_sync, e_source_get_parent, e_source_registry_new_sync,
 };
 use gio_sys::{
     G_DBUS_ERROR_NAME_HAS_NO_OWNER, G_DBUS_ERROR_SERVICE_UNKNOWN, G_IO_ERROR_NOT_FOUND,
@@ -197,6 +199,144 @@ fn services() -> *mut EOAuth2Services {
     SERVICES
         .get_or_init(|| Services(unsafe { e_oauth2_services_new() }))
         .0
+}
+
+/// The process's `ESourceCredentialsProvider`, and the `ESourceRegistry` it
+/// needs to stay usable, both kept alive for as long as the process is.
+///
+/// Two pointers rather than one because `e_source_credentials_provider_new`
+/// keeps only a `GWeakRef` to the registry it is given
+/// (`e-source-credentials-provider.c`), so a provider whose registry has been
+/// released is a provider whose every lookup returns NULL. Holding both is the
+/// same deliberate never-release as [`Services`] above, and for a stronger
+/// reason: an `ESourceRegistry` is a D-Bus client that loads the whole source
+/// list on construction, so building one per question would put a round trip in
+/// front of every connect.
+struct Credentials {
+    provider: *mut ESourceCredentialsProvider,
+    _registry: *mut eds_sys::ESourceRegistry,
+}
+
+// SAFETY: the provider pointer is only ever handed to
+// `e_source_credentials_provider_ref_credentials_source`, which takes the
+// registry's own lock around the source lookups it makes and returns a
+// reference of its own. Both pointers are written once, under `OnceLock`, and
+// read-only afterwards; the registry's is never dereferenced here at all.
+unsafe impl Send for Credentials {}
+// SAFETY: as `Send`.
+unsafe impl Sync for Credentials {}
+
+static CREDENTIALS: OnceLock<Credentials> = OnceLock::new();
+
+/// The held provider, created on the first child source that asks.
+///
+/// NULL when no registry could be reached, which is a process with no session
+/// bus: a unit test, or a backend whose daemon is gone. That answers "resolve
+/// to nothing" and [`credentials_source`] then leaves the source as it found
+/// it, which is this function's behaviour before it existed.
+fn credentials_provider() -> *mut ESourceCredentialsProvider {
+    CREDENTIALS
+        .get_or_init(|| {
+            let mut error: *mut GError = ptr::null_mut();
+            // SAFETY: a NULL cancellable and a writable out-parameter. The
+            // registry comes back as a reference this holder keeps; EDS's own
+            // singleton means a process that already has one is handed that
+            // one rather than building a second.
+            let registry = unsafe { e_source_registry_new_sync(ptr::null_mut(), &mut error) };
+            if registry.is_null() {
+                // SAFETY: NULL or a GError this call owns; the message is a
+                // string the struct owns and is only read here.
+                let message = unsafe {
+                    if error.is_null() {
+                        None
+                    } else {
+                        read_string((*error).message)
+                    }
+                };
+                tracing::debug!(
+                    reason = ?message,
+                    "no source registry, so a child account's token is fetched on the child"
+                );
+                // SAFETY: as above.
+                unsafe {
+                    if !error.is_null() {
+                        g_error_free(error);
+                    }
+                }
+                return Credentials {
+                    provider: ptr::null_mut(),
+                    _registry: ptr::null_mut(),
+                };
+            }
+            // SAFETY: a live registry from the call above.
+            let provider = unsafe { e_source_credentials_provider_new(registry) };
+            Credentials {
+                provider,
+                _registry: registry,
+            }
+        })
+        .provider
+}
+
+/// The source whose stored credentials `source` actually uses: its collection,
+/// when it has one, and otherwise `source` itself.
+///
+/// ## Why this is not the source the backend was built from
+///
+/// An account's mail, address books and calendars are separate `ESource`s under
+/// one collection, and only the collection holds the refresh token. EDS still
+/// answers `e_source_get_oauth2_access_token_sync` on any of them, so asking on
+/// the child *works*, and that is the trap. EDS 3.52 computes the answer for the
+/// source as given, so two children asking at once are two independent refresh
+/// exchanges, each spending the same stored refresh token. A server that
+/// rotates refresh tokens sees the second spend as a replay and revokes the
+/// whole grant, which is a consent prompt for every service on the account at
+/// once. Measured against Fastmail on 3.52.3: three children, three exchanges
+/// inside two seconds, then `401` with `a revocation tombstone stands for this
+/// session`.
+///
+/// Resolving first is what Evolution's own mail session does before the same
+/// call (`mail_session_get_oauth2_access_token_sync`,
+/// `src/libemail-engine/e-mail-session.c`) and the rule it applies is EDS's
+/// [`e_source_credentials_provider_ref_credentials_source`]: walk to the
+/// nearest collection ancestor, then keep it only if
+/// `e_util_can_use_collection_as_credential_source` agrees the two sources
+/// really do share a login.
+///
+/// EDS 3.61 resolves internally as well (eds#645), which makes this redundant
+/// there rather than wrong: the walk finds the collection already in hand. It
+/// stays for 3.52, which is the version this project targets.
+///
+/// # Safety
+///
+/// `source` must be a valid `ESource`. The returned pointer is either `source`
+/// itself, borrowed, or a reference this function transfers to the caller,
+/// which is what the `owned` flag beside it says.
+unsafe fn credentials_source(source: *mut ESource) -> (*mut ESource, bool) {
+    // Only a source with a parent can have a collection above it, and asking
+    // costs a provider, which costs a registry, and building one of those
+    // inside `evolution-source-registry` is a process calling itself over
+    // D-Bus. The collection backend runs there and passes its own collection
+    // source, whose parent is empty, so this returns before that can happen.
+    // SAFETY: a valid source by this function's contract; the parent is a
+    // string the source owns and is only read here.
+    let parent = unsafe { read_string(e_source_get_parent(source)) };
+    if parent.is_none_or(|parent| parent.is_empty()) {
+        return (source, false);
+    }
+
+    let provider = credentials_provider();
+    if provider.is_null() {
+        return (source, false);
+    }
+
+    // SAFETY: a live provider this module holds, and a valid source. The
+    // reference that comes back is transfer-full, which the `true` says.
+    let holder = unsafe { e_source_credentials_provider_ref_credentials_source(provider, source) };
+    if holder.is_null() {
+        return (source, false);
+    }
+    (holder, true)
 }
 
 /// Whether `[Authentication] Method` names OAuth 2.0 — see the module docs for
@@ -589,6 +729,17 @@ pub unsafe fn access_token(
     cancellable: *mut GCancellable,
 ) -> Result<String, ConnectError> {
     let account_id = unsafe { read_string(eds_sys::e_source_get_uid(source)) };
+    // SAFETY: a valid source by this function's contract.
+    let (holder, owned) = unsafe { credentials_source(source) };
+    if owned {
+        // SAFETY: a live source from the call above.
+        let holder_id = unsafe { read_string(eds_sys::e_source_get_uid(holder)) };
+        tracing::trace!(
+            ?account_id,
+            ?holder_id,
+            "the account's collection holds the credentials, so the token is fetched on it"
+        );
+    }
     tracing::debug!(?account_id, "fetching OAuth 2.0 access token via EDS");
     let mut token = ptr::null_mut();
     let mut expires_in = 0;
@@ -599,13 +750,19 @@ pub unsafe fn access_token(
     // this call owns, and the GError likewise.
     let ok = unsafe {
         e_source_get_oauth2_access_token_sync(
-            source,
+            holder,
             cancellable,
             &mut token,
             &mut expires_in,
             &mut error,
         )
     };
+
+    if owned {
+        // SAFETY: a reference `credentials_source` transferred to this call and
+        // nothing above kept.
+        unsafe { gobject_sys::g_object_unref(holder.cast()) };
+    }
 
     if ok == GFALSE || token.is_null() {
         // SAFETY: `error` is NULL or a GError this call owns; reading its
@@ -1079,5 +1236,42 @@ mod tests {
             "empty_token"
         );
         assert!(SilentRefreshFailureReason::EmptyToken.escalates_to_consent());
+    }
+
+    /// A source with no parent is its own credentials source, and is answered
+    /// without a provider being built.
+    ///
+    /// This is the guard the collection backend depends on, not a detail. That
+    /// backend runs inside `evolution-source-registry` and calls
+    /// [`access_token`] on the collection source it was constructed from, whose
+    /// `Parent` is empty; were the parent check not first, the process would
+    /// build an `ESourceRegistry`, a D-Bus client of itself, to answer a
+    /// question whose answer is already the source in hand.
+    ///
+    /// The un-owned half of the answer is asserted too: a caller that unrefs
+    /// what it did not take drops the backend's own source.
+    #[test]
+    fn a_parentless_source_is_its_own_credentials_source() {
+        let uid = CString::new("no-parent").unwrap();
+        let mut error = ptr::null_mut();
+        // SAFETY: a NUL-terminated uid, no D-Bus object, a GError out-parameter.
+        let source =
+            unsafe { eds_sys::e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
+        assert!(!source.is_null(), "e_source_new_with_uid failed");
+
+        // SAFETY: the live source built above.
+        let (holder, owned) = unsafe { credentials_source(source) };
+        assert_eq!(holder, source, "a parentless source resolves to itself");
+        assert!(
+            !owned,
+            "nothing was referenced, so nothing is to be released"
+        );
+        assert!(
+            CREDENTIALS.get().is_none(),
+            "answering this must not have built a credentials provider"
+        );
+
+        // SAFETY: this owns the only reference the constructor returned.
+        unsafe { gobject_sys::g_object_unref(source.cast()) };
     }
 }
