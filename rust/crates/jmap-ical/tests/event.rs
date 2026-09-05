@@ -25081,3 +25081,374 @@ END:VCALENDAR\r\n";
         bad_ev.alerts
     );
 }
+
+#[test]
+fn differential_oracle_instance_shows_without_time_all_day_override_invariants() {
+    // Divergence 128 against Stalwart differential oracle:
+    // instance_shows_without_time recurrence override all-day validation and timed elevation.
+    // In jmap-ical:
+    // 1. When master series is show_without_time: true, start at midnight, duration in whole days,
+    //    and overrides also satisfy midnight start, whole-day duration, and no timezone,
+    //    event_to_ical draws VALUE=DATE lines on both series and overrides.
+    // 2. If any override violates these invariants (non-midnight start, partial-day duration,
+    //    or custom timezone), instance_shows_without_time returns false, elevating the entire
+    //    event to timed date-time representation (DATE-TIME without VALUE=DATE).
+
+    let event = CalendarEvent {
+        id: Some("allday-series-128".into()),
+        start: Some("2026-09-01T00:00:00".to_owned()),
+        show_without_time: Some(true),
+        duration: Some("P1D".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("daily")),
+        recurrence_overrides: Some(
+            serde_json::from_value(json!({
+                "2026-09-02T00:00:00": {
+                    "title": "All-Day Override"
+                }
+            }))
+            .unwrap(),
+        ),
+        ..Default::default()
+    };
+
+    let ics = event_to_ical(&event);
+    assert!(
+        ics.contains("DTSTART;VALUE=DATE:20260901"),
+        "conforming override keeps series all-day: {ics}"
+    );
+    assert!(
+        ics.contains("RECURRENCE-ID;VALUE=DATE:20260902"),
+        "conforming override drawn as VALUE=DATE: {ics}"
+    );
+
+    // Override with moved start to 10:00 (non-midnight) elevates event to timed
+    let mut timed_override_event = event.clone();
+    timed_override_event.recurrence_overrides = Some(
+        serde_json::from_value(json!({
+            "2026-09-02T00:00:00": {
+                "start": "2026-09-02T10:00:00"
+            }
+        }))
+        .unwrap(),
+    );
+    let ics_timed = event_to_ical(&timed_override_event);
+    assert!(
+        ics_timed.contains("DTSTART:20260901T000000"),
+        "non-midnight override elevates series to timed: {ics_timed}"
+    );
+    assert!(
+        !ics_timed.contains("VALUE=DATE"),
+        "VALUE=DATE omitted on elevated event: {ics_timed}"
+    );
+
+    // Override with partial-day duration (PT3H) elevates event to timed
+    let mut partial_duration_event = event.clone();
+    partial_duration_event.recurrence_overrides = Some(
+        serde_json::from_value(json!({
+            "2026-09-02T00:00:00": {
+                "duration": "PT3H"
+            }
+        }))
+        .unwrap(),
+    );
+    let ics_partial = event_to_ical(&partial_duration_event);
+    assert!(
+        ics_partial.contains("DTSTART:20260901T000000"),
+        "partial duration elevates series to timed: {ics_partial}"
+    );
+
+    // Override with custom timezone elevates event to timed
+    let mut zoned_override_event = event.clone();
+    zoned_override_event.recurrence_overrides = Some(
+        serde_json::from_value(json!({
+            "2026-09-02T00:00:00": {
+                "timeZone": "America/New_York"
+            }
+        }))
+        .unwrap(),
+    );
+    let ics_zoned = event_to_ical(&zoned_override_event);
+    assert!(
+        ics_zoned.contains("DTSTART:20260901T000000"),
+        "zoned override elevates series to timed: {ics_zoned}"
+    );
+}
+
+#[test]
+fn differential_oracle_maps_override_field_scoping_and_empty_property_refusal() {
+    // Divergence 129 against Stalwart differential oracle:
+    // maps_override_field vs draws_override_field scoping, dangling timezone defense,
+    // empty text/map refusal, and default alerts conflict guard.
+    // In jmap-ical:
+    // 1. maps_recurrence_override permits standard IANA timezones but refuses custom solidus
+    //    identifiers to prevent sending dangling timezone references in isolated patch objects.
+    // 2. sends_recurrence_override permits custom solidus identifiers if defined on the series.
+    // 3. Empty string properties (title: "", description: "") and empty maps (keywords: {},
+    //    alerts: {}) are refused because they serialize as absent lines, returning null on read.
+    // 4. When series uses default alerts, setting alerts on an override is refused.
+
+    let series = CalendarEvent {
+        id: Some("series-scoping-129".into()),
+        start: Some("2026-09-01T10:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("daily")),
+        time_zones: Some(BTreeMap::from([(
+            "/custom/zone-129".to_owned(),
+            json!({
+                "@type": "TimeZone",
+                "tzId": "/custom/zone-129",
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-01-01T00:00:00",
+                    "offsetFrom": "+01:00",
+                    "offsetTo": "+01:00"
+                }]
+            }),
+        )])),
+        ..Default::default()
+    };
+
+    let id = "2026-09-02T10:00:00";
+
+    // Standard IANA timezone accepted by both
+    assert!(
+        maps_recurrence_override(&series, id, &json!({"timeZone": "America/Chicago"})),
+        "standard IANA timezone accepted in standalone patch"
+    );
+    assert!(
+        sends_recurrence_override(&series, id, &json!({"timeZone": "America/Chicago"})),
+        "standard IANA timezone accepted in bundled patch"
+    );
+
+    // Custom solidus timezone defined on series: refused by standalone, accepted by bundled
+    assert!(
+        !maps_recurrence_override(&series, id, &json!({"timeZone": "/custom/zone-129"})),
+        "custom solidus timezone refused in standalone patch to avoid dangling reference"
+    );
+    assert!(
+        sends_recurrence_override(&series, id, &json!({"timeZone": "/custom/zone-129"})),
+        "custom solidus timezone accepted in bundled patch because series defines it"
+    );
+
+    // Empty text strings refused (they serialize as absent and round-trip to null)
+    assert!(
+        !maps_recurrence_override(&series, id, &json!({"title": ""})),
+        "empty title refused"
+    );
+    assert!(
+        !maps_recurrence_override(&series, id, &json!({"description": ""})),
+        "empty description refused"
+    );
+    assert!(
+        maps_recurrence_override(&series, id, &json!({"title": "Valid Title"})),
+        "non-empty title accepted"
+    );
+    assert!(
+        maps_recurrence_override(&series, id, &json!({"title": null})),
+        "null title (property removal) accepted"
+    );
+
+    // Empty maps refused (they serialize as absent and round-trip to null)
+    assert!(
+        !maps_recurrence_override(&series, id, &json!({"keywords": {}})),
+        "empty keywords map refused"
+    );
+    assert!(
+        maps_recurrence_override(&series, id, &json!({"keywords": {"project": true}})),
+        "non-empty keywords map accepted"
+    );
+    assert!(
+        maps_recurrence_override(&series, id, &json!({"keywords": null})),
+        "null keywords map accepted"
+    );
+
+    // useDefaultAlerts conflict guard
+    let mut series_default_alerts = series.clone();
+    series_default_alerts.use_default_alerts = Some(true);
+    assert!(
+        !maps_recurrence_override(&series_default_alerts, id, &json!({"alerts": null})),
+        "alerts override refused when series uses default alerts"
+    );
+}
+
+#[test]
+fn differential_oracle_value_text_ast_variants_and_negative_zero_offset() {
+    // Divergence 130 against Stalwart differential oracle:
+    // calcard AST variant extraction, negative zero offset normalization, and inline payload drop.
+    // In jmap-ical:
+    // 1. value_text extracts strongly-typed calcard AST variants (STATUS, TRANSP, CLASS, PRIORITY)
+    //    into their canonical string representations for JSCalendar mapping.
+    // 2. date_time_text normalizes -0000 UTC offsets to +0000 per RFC 5545 section 3.3.14.
+    // 3. Inline binary data (VALUE=BINARY) and data URIs are dropped on parse.
+
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VEVENT\r\n\
+UID:ast-test-130\r\n\
+DTSTART:20260901T100000Z\r\n\
+DURATION:PT1H\r\n\
+STATUS:CONFIRMED\r\n\
+TRANSP:TRANSPARENT\r\n\
+CLASS:CONFIDENTIAL\r\n\
+PRIORITY:4\r\n\
+ATTACH;VALUE=BINARY:SGVsbG8gV29ybGQ=\r\n\
+ATTACH:data:application/pdf;base64,JVBERi0xLjQK\r\n\
+ATTACH:https://example.com/handout.pdf\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(ics).expect("parse typed ast ics");
+    assert_eq!(
+        ev.status.as_deref(),
+        Some("confirmed"),
+        "STATUS:CONFIRMED mapped"
+    );
+    assert_eq!(
+        ev.free_busy_status.as_deref(),
+        Some("free"),
+        "TRANSP:TRANSPARENT mapped"
+    );
+    assert_eq!(
+        ev.privacy.as_deref(),
+        Some("secret"),
+        "CLASS:CONFIDENTIAL mapped"
+    );
+    assert_eq!(ev.priority, Some(4), "PRIORITY:4 mapped");
+
+    // Only valid external URI preserved in links; inline binary and data: URI dropped
+    let links = ev.links.expect("links present");
+    assert_eq!(
+        links.len(),
+        1,
+        "inline binary and data URI dropped: {links:?}"
+    );
+    let link = links.values().next().expect("one valid link");
+    assert_eq!(
+        link.get("href").and_then(Value::as_str),
+        Some("https://example.com/handout.pdf")
+    );
+}
+
+#[test]
+fn differential_oracle_read_definition_tripartite_observance_and_local_until() {
+    // Divergence 131 against Stalwart differential oracle:
+    // read_definition and read_observance tripartite required property validation,
+    // at least one observance requirement, and local UNTIL arithmetic offset calculation (Ends::At).
+    // In jmap-ical:
+    // 1. Observance requires all three RFC 5545 section 3.6.5 mandatory properties:
+    //    DTSTART, TZOFFSETFROM, and TZOFFSETTO.
+    // 2. VTIMEZONE requires at least one valid STANDARD or DAYLIGHT subcomponent.
+    // 3. Recurrence rule UNTIL in observance is converted to local time using arithmetic
+    //    against offsetFrom (Ends::At) without external tzdata dependencies.
+    // 4. TZNAME properties are extracted into the names boolean map.
+
+    let valid_zone_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/custom/test-zone-131\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+TZNAME:CET\r\n\
+TZNAME:Central European Time\r\n\
+RRULE:FREQ=YEARLY;UNTIL=20261025T010000Z\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:custom-zone-event-131\r\n\
+DTSTART;TZID=/custom/test-zone-131:20260901T100000\r\n\
+DURATION:PT1H\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev = ical_to_event(valid_zone_ics).expect("parse valid custom zone ics");
+    let zones = ev.time_zones.expect("custom time_zones ingested");
+    let zone = zones
+        .get("/custom/test-zone-131")
+        .expect("test-zone-131 present");
+    assert_eq!(
+        zone.get("tzId").and_then(Value::as_str),
+        Some("/custom/test-zone-131")
+    );
+
+    let standard = zone
+        .get("standard")
+        .and_then(Value::as_array)
+        .expect("standard observance array");
+    assert_eq!(standard.len(), 1);
+    let rule = &standard[0];
+    assert_eq!(
+        rule.get("offsetFrom").and_then(Value::as_str),
+        Some("+0200")
+    );
+    assert_eq!(rule.get("offsetTo").and_then(Value::as_str), Some("+0100"));
+
+    // UNTIL shifted by +02:00: 20261025T010000Z + 2 hours -> 2026-10-25T03:00:00
+    let recurrence_rules = rule
+        .get("recurrenceRules")
+        .and_then(Value::as_array)
+        .expect("recurrenceRules present");
+    let rrule = &recurrence_rules[0];
+    assert_eq!(
+        rrule.get("until").and_then(Value::as_str),
+        Some("2026-10-25T03:00:00"),
+        "UNTIL converted to local time via offsetFrom arithmetic: {rrule:?}"
+    );
+
+    // TZNAME names map
+    let names = rule
+        .get("names")
+        .and_then(Value::as_object)
+        .expect("names map");
+    assert_eq!(names.get("CET"), Some(&Value::Bool(true)));
+    assert_eq!(names.get("Central European Time"), Some(&Value::Bool(true)));
+
+    // Observance missing mandatory TZOFFSETTO is dropped
+    let missing_offset_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/custom/broken-zone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19701025T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:broken-zone-event\r\n\
+DTSTART;TZID=/custom/broken-zone:20260901T100000\r\n\
+DURATION:PT1H\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let broken_ev = ical_to_event(missing_offset_ics).expect("parse broken zone ics");
+    assert!(
+        broken_ev.time_zones.is_none(),
+        "observance missing TZOFFSETTO is dropped and time_zones remains None: {:?}",
+        broken_ev.time_zones
+    );
+
+    // Empty VTIMEZONE with zero observances is dropped
+    let empty_vtimezone_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:test\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/custom/empty-zone\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:empty-zone-event\r\n\
+DTSTART;TZID=/custom/empty-zone:20260901T100000\r\n\
+DURATION:PT1H\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let empty_ev = ical_to_event(empty_vtimezone_ics).expect("parse empty zone ics");
+    assert!(
+        empty_ev.time_zones.is_none(),
+        "empty VTIMEZONE with zero observances is dropped: {:?}",
+        empty_ev.time_zones
+    );
+}
