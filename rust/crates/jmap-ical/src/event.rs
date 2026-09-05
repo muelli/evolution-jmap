@@ -1701,7 +1701,9 @@ fn instance_calendar(event: &CalendarEvent, method: &str, recurrence_id: &str) -
         .is_some_and(|start| shows_without_time(event, start));
     let zone = event.time_zone.as_deref();
 
-    let vevent = vevent_of(event, as_a_date, zone, Some(recurrence_id));
+    let rendered_recurrence_id =
+        to_ical_date_time(recurrence_id).unwrap_or_else(|| recurrence_id.to_owned());
+    let vevent = vevent_of(event, as_a_date, zone, Some(&rendered_recurrence_id));
 
     let mut calendar = Component::new("VCALENDAR")
         .with(make_entry("VERSION", "2.0"))

@@ -4845,5 +4845,69 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.244 Divergence 244: `scheduling_ical`, `instance_calendar`, `event_calendar`, and `METHOD`: Outbound iTIP Scheduling Message Envelope and Occurrence-Scoped Payload Synthesis
+
+- **Observed Behavior**:
+  Generating iCalendar payloads for iTIP scheduling transactions (`sendSchedulingMessages`) requires wrapping events in a `VCALENDAR` carrying the `METHOD` property (such as `REQUEST`, `CANCEL`, `REPLY`), and narrowing messages for individual occurrences to single-`VEVENT` objects. In `jmap-ical`:
+  1. Envelope `METHOD` property injection: `event_calendar(event, Some(method))` and `instance_calendar(event, method, recurrence_id)` attach `METHOD:<method>` to the root `VCALENDAR` container alongside `VERSION:2.0` and `PRODID`. Standard `event_to_ical` omits `METHOD` because stored calendar components do not carry a method.
+  2. Single occurrence scope isolation (`instance_calendar`): When `recurrence_id` is supplied to `scheduling_ical`, `instance_calendar` emits a single `VEVENT` carrying `RECURRENCE-ID` and suppresses the series `RRULE`, `EXDATE`, and `RDATE` properties, as well as any other detached occurrence components. The message reflects only the specific meeting instance being rescheduled or canceled.
+  3. Recurrence ID formatting (`to_ical_date_time`): In `instance_calendar`, `recurrence_id` is normalized via `to_ical_date_time` to compact iCalendar timestamp digits (`YYYYMMDDTHHMMSS`), ensuring proper date slicing for all-day events and matching RFC 5545 syntax.
+  4. Dedicated `VTIMEZONE` definition containment: `instance_calendar` extracts and includes only the `VTIMEZONE` definitions needed for the single occurrence start timezone, avoiding unneeded definitions for other instances.
+  5. In contrast, differential oracles or monolithic serializers lack iTIP method injection, emit whole series with all overrides even when notifying attendees of a single canceled occurrence, or fail to format `RECURRENCE-ID` parameters correctly.
+- **Specification and Architectural Context**:
+  1. RFC 5546 Section 3.2 (`Methods`) and draft-ietf-jmap-calendars-28 Section 5.9.2 (`iTIP message generation`) govern scheduling messages.
+  2. RFC 5545 Section 3.8.4.4 (`RECURRENCE-ID`) identifies single recurrence instances.
+- **Adjudication**:
+  Conforming specification boundary and iTIP scheduling message serialization fidelity. Embeds specified `METHOD` tokens, isolates individual recurrence instances via `RECURRENCE-ID`, normalizes timestamps, and scopes timezone definitions.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.245 Divergence 245: `ical_to_event`, `version`, `read_vevent`, and `read_overrides`: Top-Level vs Embedded Component JSCalendar Version Tagging
+
+- **Observed Behavior**:
+  Ingesting iCalendar objects into JSCalendar structures requires stamping the protocol version, while strictly distinguishing top-level event records from embedded override instances. In `jmap-ical`:
+  1. Standalone version stamping (`version: Some("2.0".to_owned())`): In `ical_to_event`, the top-level `CalendarEvent` is explicitly stamped with `version: Some("2.0".to_owned())`. Draft-ietf-jmap-calendars-28 Section 1.4 normatively defines `CalendarEvent` against `jscalendarbis`, which requires standalone events to declare their specification version. Servers (such as Fastmail and Stalwart) reject `CalendarEvent/set create` calls without `version: "2.0"`, returning `invalidProperties: ["version"]`.
+  2. Embedded instance version prohibition: In `read_vevent`, `version: None` is left unpopulated on all constructed events. Recurrence override objects inside `recurrenceOverrides` are embedded sub-objects; `jscalendarbis` Section 3.1.2 explicitly forbids the `version` property on embedded objects. Stamping `version` inside `read_vevent` would produce schema validation failures on patch payloads.
+  3. Detached-only stream master fallback: When an incoming `.ics` stream contains only detached `VEVENT` components (all carrying `RECURRENCE-ID` without a master series), `ical_to_event` falls back to treating the first component as the master series, stamping `version: "2.0"` on it and salvaging the event rather than aborting with an error.
+  4. In contrast, differential oracles or naive converters omit `version` entirely, emit legacy `"1.0"`, stamp `version` indiscriminately onto nested override patches, or crash when encountering streams composed solely of detached components.
+- **Specification and Architectural Context**:
+  1. draft-ietf-jmap-calendars-28 Section 1.4 and draft-ietf-calext-jscalendarbis Section 3.1.2 (`version`) define version syntax and embedding constraints.
+- **Adjudication**:
+  Conforming specification evolution and JSCalendar schema fidelity. Stamps mandatory `"2.0"` on top-level events, excludes `version` from embedded override objects, and resolves detached-only calendar streams gracefully.
+- **Status**:
+  Conforming specification evolution. Documented and pinned in `tests/event.rs`.
+
+### 13.246 Divergence 246: `calendar_address`, `names_a_uri`, `IMIP`, and `drawn_participants`: Participant Calendar Address Extraction and URI Validation
+
+- **Observed Behavior**:
+  Ingesting participant records into RFC 5545 `ATTENDEE` and `ORGANIZER` lines requires extracting valid calendar addresses from JSCalendar `sendTo` maps, validating URI syntax, and suppressing non-routable communication channels. In `jmap-ical`:
+  1. Strict `sendTo` IMIP channel gating (`IMIP = "imip"`): RFC 8984 Section 4.4.6 models contact routing via `sendTo: {"imip": "mailto:user@example.com", ...}`. RFC 6047 (iMIP) specifies scheduling via email. `calendar_address` extracts specifically `participant["sendTo"]["imip"]`. Other channels (such as web form URLs, SMS, or telephone numbers) cannot be carried on an iCalendar `ATTENDEE` or `ORGANIZER` line and are safely ignored.
+  2. RFC 3986 URI syntax verification (`names_a_uri`): `names_a_uri` enforces that the address begins with an alphabetic scheme followed by `:`, contains non-empty authority/path text, contains no whitespace, and contains only legal scheme characters (`+`, `-`, `.`). Values that fail URI syntax (such as bare email addresses without `mailto:` or strings with whitespace) are rejected.
+  3. Line suppression on invalid address: If a participant lacks a valid `imip` URI, `drawn_participants` skips the participant entirely rather than inventing an address or emitting a malformed `ATTENDEE` or `ORGANIZER` line that would cause `libical` to reject the entire component.
+  4. Non-existent `calendarAddress` property resistance: Rejects legacy or non-standard property names like `calendarAddress` that do not exist on RFC 8984 `Participant` objects.
+  5. In contrast, differential oracles or permissive converters emit invalid `ATTENDEE:` lines with empty addresses, accept bare non-URI strings, or crash on missing `imip` entries.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.3 (`CAL-ADDRESS`), RFC 6047 (`iMIP`), RFC 3986 Section 3.1 (`URI Scheme`), and RFC 8984 Section 4.4.6 (`sendTo`) define calendar address format and participant routing.
+- **Adjudication**:
+  Conforming specification boundary and participant routing fidelity. Enforces `sendTo/imip` extraction, verifies RFC 3986 URI scheme syntax, and suppresses non-routable participants from outbound lines.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.247 Divergence 247: `read_vevent`, `definition`, `Zoned`, and `Ends::In`: Inbound Timezone Definition Scoping and Observance Resolution for Series Recurrence Rule `UNTIL` Conversion
+
+- **Observed Behavior**:
+  Converting an inbound RFC 5545 `RRULE:UNTIL` UTC timestamp to a JSCalendar local wall-clock time requires finding the exact UTC offset in force at that instant, which depends on binding the event's `DTSTART` timezone to the corresponding `VTIMEZONE` component in the document. In `jmap-ical`:
+  1. Timezone parameter matching against document `VTIMEZONE` components: In `read_vevent`, `definition` inspects `DTSTART`'s `TZID` parameter. It queries `zones` by raw `tzid`, and if not found, scans `zones.values()` for an observance whose canonical `name` matches `tzid` or matches the resolved `time_zone`.
+  2. Observance slice extraction: When a matching `Zone` is identified, its observance subcomponents (`observances: &[&ICalendarComponent]`) are extracted and passed to `Ends::In(Zoned { name, observances })`. This provides `zone::offset_at` with the exact historical and recurring transition rules (`STANDARD`/`DAYLIGHT`) needed to compute the wall-clock offset for `read_until`.
+  3. All-day and floating event defense: If `time_zone` is `None` (for floating events or all-day `VALUE=DATE` events), `definition` evaluates to `None`. Per RFC 5545 Section 3.2.19, `TZID` does not apply to `VALUE=DATE`. Suppressing `definition` ensures that floating or all-day events never shift their `UNTIL` timestamp by an irrelevant timezone offset.
+  4. Unmatched zone fallback: If `DTSTART` names a timezone not defined in the document, `definition` is `None`. `read_until` detects `zone.name.is_some_and(|name| !is_utc(name))` and appends `Z` or preserves the raw instant verbatim, ensuring that `maps_recurrence_rule` flags the unresolvable rule rather than silently guessing an arbitrary offset.
+  5. In contrast, differential oracles or naive parsers assume UTC for all `UNTIL` properties without checking `VTIMEZONE`, fail to link resolved canonical zone names to document observances, or apply timezone offsets to all-day `VALUE=DATE` events.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`), Section 3.2.19 (`TZID`), Section 3.6.5 (`VTIMEZONE`), and RFC 8984 Section 4.3.3 (`RecurrenceRule`) govern timezone definitions and recurrence endpoints.
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule endpoint resolution fidelity. Scopes `VTIMEZONE` observances by property parameter and resolved canonical name, suppresses timezone offsets for all-day/floating series, and preserves unresolvable endpoints verbatim for save-path protection.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
 
