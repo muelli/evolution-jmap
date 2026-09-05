@@ -414,6 +414,14 @@ pub struct CalendarEvent {
     pub locale: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub localizations: Option<BTreeMap<String, Value>>,
+    /// Section 5.6: whether this account is the event's origin (section
+    /// 10.9.5), i.e. the one that invites and withdraws rather than only
+    /// ever answering. Server-set, and computed fresh on every
+    /// `CalendarEvent/get` rather than stored, since a
+    /// `ParticipantIdentity/set` can change which address is "this account"
+    /// between two fetches of the same event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_origin: Option<bool>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
