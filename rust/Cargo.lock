@@ -381,6 +381,7 @@ dependencies = [
  "base64",
  "evolution-jmap-ical",
  "evolution-jmap-proto",
+ "evolution-jmap-vcard",
  "percent-encoding",
  "serde",
  "serde_json",
