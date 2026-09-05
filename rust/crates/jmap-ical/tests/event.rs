@@ -36362,3 +36362,428 @@ END:VCALENDAR\r\n";
         "Ambiguous date run with multiple matching weekdays must trigger Falls::Set and refuse"
     );
 }
+
+#[test]
+fn differential_oracle_vtimezone_onsets_rdate_period_rejection_and_offset_subtraction() {
+    // 1. DTSTART transition instant subtraction: observance DTSTART:20000326T020000 with TZOFFSETFROM:+0100 (3600)
+    // The UTC onset is 2000-03-26T01:00:00Z. Target at or after 01:00:00 gets +0200; target before gets +0100.
+    let ics_sub = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/OffsetSubZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000326T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_sub = jmap_ical::event::parse_ical(ics_sub).expect("parse");
+    let vtz_sub = cal_sub
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_sub: Vec<&calcard::icalendar::ICalendarComponent> = vtz_sub
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_sub.components.get(*id as usize))
+        .collect();
+
+    // At 2000-03-26T00:59:59Z (before 01:00:00Z): winter offset (+0100 = 3600)
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_sub, "2000-03-26T00:59:59"),
+        Some(3600)
+    );
+    // At 2000-03-26T01:00:00Z (exact transition instant): summer offset (+0200 = 7200)
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_sub, "2000-03-26T01:00:00"),
+        Some(7200)
+    );
+
+    // 2. RDATE containing period '/' must be refused
+    let ics_period = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/PeriodZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000326T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RDATE;VALUE=PERIOD:20000326T020000Z/PT1H\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_per = jmap_ical::event::parse_ical(ics_period).expect("parse");
+    let vtz_per = cal_per
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_per: Vec<&calcard::icalendar::ICalendarComponent> = vtz_per
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_per.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_per, "2000-04-01T12:00:00"),
+        None,
+        "Period values with '/' in VTIMEZONE RDATE must be refused"
+    );
+
+    // 3. Multi-value RDATE list without periods parses and tracks onsets
+    let ics_multi_rdate = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/MultiRdateZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000326T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RDATE:20010325T020000,20020331T020000\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_mr = jmap_ical::event::parse_ical(ics_multi_rdate).expect("parse");
+    let vtz_mr = cal_mr
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_mr: Vec<&calcard::icalendar::ICalendarComponent> = vtz_mr
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_mr.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_mr, "2001-04-01T12:00:00"),
+        Some(7200)
+    );
+}
+
+#[test]
+fn differential_oracle_vtimezone_day_named_token_extraction_and_zero_rejection() {
+    // 1. Plus-prefixed ordinal stripping: BYDAY=+1SU parses like 1SU
+    let ics_plus = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/PlusZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000305T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=+1SU;BYMONTH=3\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001001T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=+1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_plus = jmap_ical::event::parse_ical(ics_plus).expect("parse");
+    let vtz_plus = cal_plus
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_plus: Vec<&calcard::icalendar::ICalendarComponent> = vtz_plus
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_plus.components.get(*id as usize))
+        .collect();
+
+    // In 2026, March 1 is Sunday. So +1SU is March 1. On 2026-03-02, daylight (+0200 = 7200) is in force.
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_plus, "2026-03-02T12:00:00"),
+        Some(7200)
+    );
+
+    // 2. Zero ordinal rejection: BYDAY=0SU must return None
+    let ics_zero_ord = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/ZeroOrdZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=0SU;BYMONTH=1\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_zo = jmap_ical::event::parse_ical(ics_zero_ord).expect("parse");
+    let vtz_zo = cal_zo
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_zo: Vec<&calcard::icalendar::ICalendarComponent> = vtz_zo
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_zo.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_zo, "2026-06-01T12:00:00"),
+        None,
+        "Zero ordinal in BYDAY=0SU must be rejected"
+    );
+
+    // 3. Zero month-day rejection: BYMONTHDAY=0 must return None
+    let ics_zero_md = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/ZeroMonthDayZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYMONTHDAY=0;BYMONTH=1\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_zmd = jmap_ical::event::parse_ical(ics_zero_md).expect("parse");
+    let vtz_zmd = cal_zmd
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_zmd: Vec<&calcard::icalendar::ICalendarComponent> = vtz_zmd
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_zmd.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_zmd, "2026-06-01T12:00:00"),
+        None,
+        "BYMONTHDAY=0 must be rejected"
+    );
+
+    // 4. Ordinal combined with date run: BYDAY=1SU;BYMONTHDAY=1,2,3 must return None
+    let ics_ord_run = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/OrdRunZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTHDAY=1,2,3,4,5,6,7;BYMONTH=1\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal_or = jmap_ical::event::parse_ical(ics_ord_run).expect("parse");
+    let vtz_or = cal_or
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let obs_or: Vec<&calcard::icalendar::ICalendarComponent> = vtz_or
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_or.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_or, "2026-06-01T12:00:00"),
+        None,
+        "Combining ordinal in BYDAY with BYMONTHDAY must be refused"
+    );
+}
+
+#[test]
+fn differential_oracle_outbound_vevent_id_priority_and_dual_zone_scoping() {
+    // 1. Server ID vs UID priority: id: Some("server-100"), uid: Some("uid-200")
+    let event_both = CalendarEvent {
+        id: Some("server-100".into()),
+        uid: Some("uid-200".to_owned()),
+        title: Some("Sync Meeting".to_owned()),
+        start: Some("2026-06-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_both = event_to_ical(&event_both);
+    assert_eq!(line(&ics_both, "UID:"), "UID:server-100");
+    assert_eq!(line(&ics_both, "X-JMAP-UID:"), "X-JMAP-UID:uid-200");
+
+    // Fallback when id is None: UID becomes uid-200
+    let event_uid_only = CalendarEvent {
+        id: None,
+        uid: Some("uid-200".to_owned()),
+        title: Some("New Meeting".to_owned()),
+        start: Some("2026-06-01T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let ics_uid_only = event_to_ical(&event_uid_only);
+    assert_eq!(line(&ics_uid_only, "UID:"), "UID:uid-200");
+    assert_eq!(line(&ics_uid_only, "X-JMAP-UID:"), "X-JMAP-UID:uid-200");
+
+    // 2. Dual-zone occurrence disambiguation: series in Europe/Berlin, override in America/New_York
+    let event_recur = CalendarEvent {
+        id: Some("rec-1".into()),
+        title: Some("Recurring Standup".to_owned()),
+        start: Some("2026-01-15T13:00:00".to_owned()),
+        time_zone: Some("Europe/Berlin".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        recurrence_rule: Some(RecurrenceRule::new("weekly")),
+        recurrence_overrides: Some(
+            [(
+                "2026-01-22T13:00:00".to_owned(),
+                json!({
+                    "start": "2026-01-22T09:00:00",
+                    "timeZone": "America/New_York"
+                }),
+            )]
+            .into(),
+        ),
+        ..CalendarEvent::default()
+    };
+    let ics_recur = event_to_ical(&event_recur);
+    assert_eq!(vevents(&ics_recur), 2);
+    let instance = vevent(&ics_recur, 1);
+    // RECURRENCE-ID carries series zone (Europe/Berlin)
+    assert_eq!(
+        line(instance, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260122T130000"
+    );
+    // DTSTART carries instance zone (America/New_York)
+    assert_eq!(
+        line(instance, "DTSTART"),
+        "DTSTART;TZID=America/New_York:20260122T090000"
+    );
+
+    // 3. Single-occurrence iTIP scheduling message payload (instance_calendar)
+    let ics_itip =
+        jmap_ical::event::scheduling_ical(&event_recur, "REQUEST", Some("2026-01-22T13:00:00"));
+    assert_eq!(line(&ics_itip, "METHOD:"), "METHOD:REQUEST");
+    assert_eq!(
+        vevents(&ics_itip),
+        1,
+        "Single-occurrence iTIP message must contain exactly one VEVENT"
+    );
+    assert_eq!(
+        line(&ics_itip, "RECURRENCE-ID"),
+        "RECURRENCE-ID;TZID=Europe/Berlin:20260122T130000"
+    );
+}
+
+#[test]
+fn differential_oracle_inbound_vevent_envelope_and_date_tzid_ignorance() {
+    // 1. Embedded recurrence override version isolation:
+    // Top-level event receives version "2.0", while embedded override instances have version None.
+    let ics_override = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:E100\r\n\
+DTSTART:20260115T100000\r\n\
+DURATION:PT1H\r\n\
+RRULE:FREQ=WEEKLY\r\n\
+SUMMARY:Series Event\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:E100\r\n\
+RECURRENCE-ID:20260122T100000\r\n\
+DTSTART:20260122T100000\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Overridden Instance\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event = jmap_ical::event::ical_to_event(ics_override).expect("parse");
+    assert_eq!(event.version.as_deref(), Some("2.0"));
+    let overrides = event.recurrence_overrides.expect("overrides");
+    let patch = overrides.get("2026-01-22T10:00:00").expect("patch");
+    assert!(
+        patch.get("version").is_none(),
+        "Embedded recurrence override patch must not carry version"
+    );
+
+    // 2. Server-owned lifecycle instant drop (CREATED, DTSTAMP, LAST-MODIFIED)
+    let ics_timestamps = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:E101\r\n\
+DTSTART:20260601T120000Z\r\n\
+CREATED:20260501T100000Z\r\n\
+DTSTAMP:20260515T120000Z\r\n\
+LAST-MODIFIED:20260520T140000Z\r\n\
+SUMMARY:Timestamp Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_ts = jmap_ical::event::ical_to_event(ics_timestamps).expect("parse");
+    assert_eq!(
+        event_ts.created, None,
+        "CREATED must be dropped on inbound import"
+    );
+    assert_eq!(
+        event_ts.updated, None,
+        "DTSTAMP and LAST-MODIFIED must be dropped on inbound import"
+    );
+
+    // 3. Scheduling state masking: ORGANIZER and ATTENDEE lines must result in participants: None
+    let ics_sched = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:E102\r\n\
+DTSTART:20260601T120000Z\r\n\
+ORGANIZER;CN=Owner:mailto:owner@example.com\r\n\
+ATTENDEE;CN=Guest;ROLE=REQ-PARTICIPANT:mailto:guest@example.com\r\n\
+SUMMARY:Scheduling Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_sched = jmap_ical::event::ical_to_event(ics_sched).expect("parse");
+    assert_eq!(
+        event_sched.participants, None,
+        "Inbound participants must be None for scheduling safety"
+    );
+
+    // 4. DATE-valued TZID ignorance: DTSTART;TZID=America/New_York:20260601
+    // Per RFC 5545 Section 3.2.19, TZID does not apply to DATE values.
+    let ics_date_tzid = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:E103\r\n\
+DTSTART;TZID=America/New_York:20260601\r\n\
+DURATION:P1D\r\n\
+SUMMARY:All-Day with Bogus TZID\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_dt = jmap_ical::event::ical_to_event(ics_date_tzid).expect("parse");
+    assert_eq!(event_dt.start.as_deref(), Some("2026-06-01T00:00:00"));
+    assert_eq!(
+        event_dt.time_zone, None,
+        "DATE-valued DTSTART must ignore TZID parameter"
+    );
+    assert_eq!(
+        event_dt.show_without_time,
+        Some(true),
+        "DATE-valued DTSTART must set showWithoutTime to true"
+    );
+}
