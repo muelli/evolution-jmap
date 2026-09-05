@@ -4013,7 +4013,7 @@ fn instant(value: &str) -> Option<i64> {
 
 /// Days from 1970-01-01 to a proleptic Gregorian date, by Howard Hinnant's
 /// `days_from_civil`. Exact for every year either format can spell.
-pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+pub fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     // Count the year as starting in March, which puts a leap day at the end of
     // it and so needs no special case.
     let year = year - i64::from(month <= 2);
@@ -4180,7 +4180,7 @@ fn is_utc(zone: &str) -> bool {
 /// are refused rather than guessed at. A sub-second fraction, which neither
 /// format's DATE-TIME carries, falls out of [`strip`]'s digit count and is
 /// refused the same way.
-pub(crate) fn to_utc_date_time(value: &str) -> Option<String> {
+pub fn to_utc_date_time(value: &str) -> Option<String> {
     let local = value.strip_suffix(['Z', 'z'])?;
     to_ical_date_time(local).map(|stamp| format!("{stamp}Z"))
 }
@@ -4222,7 +4222,7 @@ fn date_time_digits(value: &str) -> Option<(&str, &str)> {
 /// `2026-01-15T13:00:00`. A date without a time is read as midnight:
 /// `showWithoutTime` is not modeled yet, and an all-day event that lost its
 /// start entirely would be worse than one pinned to the top of the day.
-pub(crate) fn to_local_date_time(value: &str) -> Option<String> {
+pub fn to_local_date_time(value: &str) -> Option<String> {
     let (date, time) = date_time_digits(value)?;
     if !exists(date, time) {
         return None;
@@ -4259,7 +4259,7 @@ pub(crate) fn strip(value: &str, separator: char, digits: usize) -> Option<Strin
 ///
 /// Both callers have already established that the arguments are 8 and 6 ASCII
 /// digits.
-pub(crate) fn exists(date: &str, time: &str) -> bool {
+pub fn exists(date: &str, time: &str) -> bool {
     let field = |value: &str| value.parse::<u32>().unwrap_or(u32::MAX);
     let (year, month, day) = (field(&date[..4]), field(&date[4..6]), field(&date[6..8]));
     let (hour, minute, second) = (field(&time[..2]), field(&time[2..4]), field(&time[4..6]));
@@ -4273,7 +4273,7 @@ pub(crate) fn exists(date: &str, time: &str) -> bool {
 }
 
 /// The length of a month, in the proleptic Gregorian calendar both formats use.
-pub(crate) fn days_in_month(year: u32, month: u32) -> u32 {
+pub fn days_in_month(year: u32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -4299,7 +4299,7 @@ fn from_offset(local: &str, offset: &str) -> Option<String> {
 
 /// An RFC 5545 §3.3.14 UTC offset as a count of seconds east of UTC, through
 /// [`utc_offset`] so that only a spelling both formats admit is read at all.
-pub(crate) fn offset_seconds(offset: &str) -> Option<i64> {
+pub fn offset_seconds(offset: &str) -> Option<i64> {
     let offset = utc_offset(offset)?;
     let (sign, digits) = offset.split_at_checked(1)?;
     let field = |at: usize| digits.get(at..at + 2)?.parse::<i64>().ok();
