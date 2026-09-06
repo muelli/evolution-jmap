@@ -36787,3 +36787,273 @@ END:VCALENDAR\r\n";
         "DATE-valued DTSTART must set showWithoutTime to true"
     );
 }
+
+#[test]
+fn differential_oracle_locations_key_preservation_and_invented_fallback() {
+    // 1. Location key preservation via X-JMAP-KEY
+    let ics_keyed = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:L100\r\n\
+DTSTART:20260701T090000Z\r\n\
+DURATION:PT1H\r\n\
+LOCATION;X-JMAP-KEY=office:HQ Room 101\r\n\
+SUMMARY:Keyed Location Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_keyed = jmap_ical::event::ical_to_event(ics_keyed).expect("parse");
+    let locations = event_keyed.locations.expect("locations map");
+    assert_eq!(locations.len(), 1);
+    let loc_obj = locations.get("office").expect("office entry");
+    assert_eq!(loc_obj["@type"], "Location");
+    assert_eq!(loc_obj["name"], "HQ Room 101");
+
+    // 2. Invented key fallback when X-JMAP-KEY is missing
+    let ics_unkeyed = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:L101\r\n\
+DTSTART:20260701T090000Z\r\n\
+DURATION:PT1H\r\n\
+LOCATION:Conference Room B\r\n\
+SUMMARY:Unkeyed Location Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_unkeyed = jmap_ical::event::ical_to_event(ics_unkeyed).expect("parse");
+    let unkeyed_locs = event_unkeyed.locations.expect("unkeyed locations");
+    assert_eq!(unkeyed_locs.len(), 1);
+    let fallback_obj = unkeyed_locs.get("l1").expect("l1 invented fallback");
+    assert_eq!(fallback_obj["@type"], "Location");
+    assert_eq!(fallback_obj["name"], "Conference Room B");
+
+    // 3. Map entry key validation (names_map_entry)
+    assert!(jmap_ical::event::names_map_entry("l1"));
+    assert!(jmap_ical::event::names_map_entry("office_2-A"));
+    assert!(!jmap_ical::event::names_map_entry(""));
+    assert!(!jmap_ical::event::names_map_entry("invalid space"));
+    assert!(!jmap_ical::event::names_map_entry("punct/slash"));
+
+    // 4. Structural multi-location shielding (maps_locations)
+    let mut map_one = BTreeMap::new();
+    map_one.insert(
+        "l1".to_owned(),
+        json!({"@type": "Location", "name": "Room A"}),
+    );
+    assert!(jmap_ical::maps_locations(&map_one));
+
+    let mut map_multi = map_one.clone();
+    map_multi.insert(
+        "l2".to_owned(),
+        json!({"@type": "Location", "name": "Room B"}),
+    );
+    assert!(
+        !jmap_ical::maps_locations(&map_multi),
+        "Multiple locations cannot be mapped outbound to a single LOCATION line"
+    );
+
+    // Empty location line returns None
+    let ics_empty_loc = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:L102\r\n\
+DTSTART:20260701T090000Z\r\n\
+DURATION:PT1H\r\n\
+LOCATION:\r\n\
+SUMMARY:Empty Location\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let event_empty = jmap_ical::event::ical_to_event(ics_empty_loc).expect("parse");
+    assert_eq!(event_empty.locations, None);
+}
+
+#[test]
+fn differential_oracle_virtual_locations_multi_conference_and_features() {
+    // 1. Multi-entry CONFERENCE mapping with explicit keys and positional invented keys
+    let ics_conf = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:V100\r\n\
+DTSTART:20260701T100000Z\r\n\
+DURATION:PT30M\r\n\
+CONFERENCE;X-JMAP-KEY=zoom1;LABEL=Main Zoom;FEATURE=VIDEO,AUDIO:https://zoom.example.com/j/12345\r\n\
+CONFERENCE;LABEL=Phone Bridge;FEATURE=PHONE:tel:+123456789\r\n\
+SUMMARY:Multi Conference Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_conf = jmap_ical::event::ical_to_event(ics_conf).expect("parse");
+    let vlocs = event_conf.virtual_locations.expect("virtual locations");
+    assert_eq!(vlocs.len(), 2);
+
+    let zoom = vlocs.get("zoom1").expect("zoom1 entry");
+    assert_eq!(zoom["@type"], "VirtualLocation");
+    assert_eq!(zoom["uri"], "https://zoom.example.com/j/12345");
+    assert_eq!(zoom["name"], "Main Zoom");
+    assert_eq!(zoom["features"]["video"], true);
+    assert_eq!(zoom["features"]["audio"], true);
+
+    let phone = vlocs.get("v1").expect("v1 invented entry");
+    assert_eq!(phone["@type"], "VirtualLocation");
+    assert_eq!(phone["uri"], "tel:+123456789");
+    assert_eq!(phone["name"], "Phone Bridge");
+    assert_eq!(phone["features"]["phone"], true);
+
+    // 2. Non-URI conference rejection
+    let ics_bad_conf = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:V101\r\n\
+DTSTART:20260701T100000Z\r\n\
+DURATION:PT30M\r\n\
+CONFERENCE:not a valid uri\r\n\
+SUMMARY:Bad Conference\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_bad = jmap_ical::event::ical_to_event(ics_bad_conf).expect("parse");
+    assert_eq!(
+        event_bad.virtual_locations, None,
+        "Non-URI conference values must be dropped"
+    );
+
+    // 3. maps_virtual_locations validation
+    assert!(jmap_ical::maps_virtual_locations(&vlocs));
+    let mut bad_vlocs = vlocs.clone();
+    bad_vlocs.insert(
+        "".to_owned(),
+        json!({"@type": "VirtualLocation", "uri": "https://example.com"}),
+    );
+    assert!(
+        !jmap_ical::maps_virtual_locations(&bad_vlocs),
+        "Empty key in virtualLocations must be refused"
+    );
+}
+
+#[test]
+fn differential_oracle_links_attachments_images_and_local_filtering() {
+    // 1. Inbound ATTACH and IMAGE bifurcation and parameter mapping
+    let ics_links = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:K100\r\n\
+DTSTART:20260701T110000Z\r\n\
+DURATION:PT1H\r\n\
+ATTACH;FMTTYPE=application/pdf;SIZE=1024;X-JMAP-KEY=agenda:https://example.com/agenda.pdf\r\n\
+IMAGE;DISPLAY=BADGE;X-JMAP-KEY=banner:https://example.com/banner.png\r\n\
+ATTACH:file:///home/runner/secret.key\r\n\
+SUMMARY:Links Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_links = jmap_ical::event::ical_to_event(ics_links).expect("parse");
+    let links = event_links.links.expect("links map");
+    assert_eq!(links.len(), 2, "file: attachment must be dropped");
+
+    let doc = links.get("agenda").expect("agenda entry");
+    assert_eq!(doc["@type"], "Link");
+    assert_eq!(doc["href"], "https://example.com/agenda.pdf");
+    assert_eq!(doc["contentType"], "application/pdf");
+    assert_eq!(doc["size"], 1024);
+    assert!(doc.get("rel").is_none());
+
+    let img = links.get("banner").expect("banner entry");
+    assert_eq!(img["@type"], "Link");
+    assert_eq!(img["href"], "https://example.com/banner.png");
+    assert_eq!(img["rel"], "icon");
+    assert_eq!(img["display"], "badge");
+
+    // 2. Local file path security isolation (fetched_locally)
+    assert!(jmap_ical::event::fetched_locally("file:///tmp/secret.doc"));
+    assert!(jmap_ical::event::fetched_locally(
+        "FILE:///home/runner/note.txt"
+    ));
+    assert!(!jmap_ical::event::fetched_locally(
+        "https://example.com/file"
+    ));
+    assert!(!jmap_ical::event::fetched_locally("data:text/plain,hello"));
+
+    // 3. Media type restricted-name grammar check
+    assert!(jmap_ical::event::restricted_name("application"));
+    assert!(jmap_ical::event::restricted_name("vnd.custom+json"));
+    assert!(!jmap_ical::event::restricted_name(
+        "text/plain;charset=utf-8"
+    ));
+}
+
+#[test]
+fn differential_oracle_keywords_and_duration_fallback_normalization() {
+    // 1. Multi-line CATEGORIES set merging and upfront whitespace trimming
+    let ics_cats = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:W100\r\n\
+DTSTART:20260701T120000Z\r\n\
+DURATION:PT1H\r\n\
+CATEGORIES:Project, Planning\r\n\
+CATEGORIES:Planning , Urgent , ,   \r\n\
+SUMMARY:Categories Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_cats = jmap_ical::event::ical_to_event(ics_cats).expect("parse");
+    let keywords = event_cats.keywords.expect("keywords set");
+    assert_eq!(keywords.len(), 3);
+    assert_eq!(keywords.get("Project"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Planning"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get("Urgent"), Some(&Value::Bool(true)));
+    assert_eq!(keywords.get(""), None);
+
+    // 2. Duration derivation from DTEND fallback
+    let ics_dtend = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:W101\r\n\
+DTSTART:20260701T090000\r\n\
+DTEND:20260701T103000\r\n\
+SUMMARY:DTEND Fallback Test\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let event_dtend = jmap_ical::event::ical_to_event(ics_dtend).expect("parse");
+    assert_eq!(
+        event_dtend.duration.as_deref(),
+        Some("PT1H30M"),
+        "Missing DURATION must fall back to DTEND - DTSTART"
+    );
+
+    // 3. Stated duration normalization and positive sign stripping
+    assert_eq!(
+        jmap_ical::event::stated_duration("+PT1H"),
+        Some("PT1H".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::stated_duration("P1DT2H30M"),
+        Some("P1DT2H30M".to_owned())
+    );
+    assert_eq!(jmap_ical::event::stated_duration("-PT1H"), None);
+
+    // 4. Period length calculation in recurrence dates
+    assert_eq!(
+        jmap_ical::event::period_length("20260701T100000Z", "PT2H"),
+        Some("PT2H".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::period_length("20260701T100000Z", "20260701T123000Z"),
+        Some("PT2H30M".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::period_length("20260701T120000Z", "20260701T100000Z"),
+        None,
+        "Negative period duration must be rejected"
+    );
+}

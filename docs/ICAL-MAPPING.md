@@ -5261,4 +5261,79 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.268 Divergence 268: `read_locations`, `maps_locations`, `X_JMAP_KEY`, `INVENTED_KEY`, and `names_map_entry`: Inbound and Outbound Physical Location Mapping: Single-Entry Patch Targeting via X-JMAP-KEY, Positional Invented Key Fallback (`l1`), Safe Map-Entry Identifier Validation (`1..=255` ASCII Alphanumeric / `-` / `_`), Non-String Name Rejection, and Structural Multi-Location Shielding
+
+- **Observed Behavior**:
+  Translating physical location data between iCalendar and JSCalendar requires handling single vs multiple location lines, coordinating entry keys across round trips, and protecting server-side location sub-properties. In `jmap-ical`:
+  1. Single-entry patch targeting (`maps_locations`): RFC 8984 Section 4.2.5 models `locations` as a map of `Location` objects, each containing optional `description`, `coordinates`, `links`, and `locationTypes` alongside `name`. However, RFC 5545 Section 3.6.1 permits only a single `LOCATION` text property on a `VEVENT`. When multiple locations are present in `event.locations`, `maps_locations` returns `false`, preventing the save path from updating `locations` and protecting un-shown secondary places from being overwritten.
+  2. Safe map-entry key validation (`names_map_entry`): In `read_locations`, `entry_param(property, X_JMAP_KEY)` extracts the originating key if present. To prevent untrusted iCalendar content lines from injecting malformed JSON Pointer segments or un-safe identifiers into the JMAP patch path, `names_map_entry` verifies that the key length is within `1..=255` bytes and contains strictly ASCII alphanumeric characters, hyphens, or underscores (`[a-zA-Z0-9_-]`). Malformed keys are discarded and replaced with the safe invented default.
+  3. Positional invented key fallback (`INVENTED_KEY = "l1"`): When a `LOCATION` line arrives without an `X-JMAP-KEY` parameter (such as from standard desktop calendar clients or third-party groupware), `read_locations` files the place under `INVENTED_KEY` (`"l1"`). This enables a newly typed location to be created seamlessly on the JMAP server under a deterministic key.
+  4. Non-string name and empty value rejection: If the `LOCATION` property value is empty after unfolding, or if `maps_locations` encounters a `location` object where `name` is neither absent nor a string (e.g. numeric, boolean, or array), the property is rejected.
+  5. In contrast, differential oracles or permissive converters overwrite entire location maps (destroying coordinates and rich metadata), blindly trust arbitrary parameter values as map keys, or synthesize empty location records for bare `LOCATION:` lines.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.12 (`Location`) defines the single-text location property.
+  2. RFC 8984 Section 4.2.5 (`Location`) defines rich location structures and map representations.
+  3. RFC 8620 Section 5.3 defines JSON Pointer patch paths (`locations/<key>/name`).
+- **Adjudication**:
+  Conforming specification boundary and location property synchronization safety. Enforces single-entry patch scoping, validates map keys strictly against identifier grammars, falls back cleanly to deterministic invented keys, and protects server-held unmodeled sub-properties.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.269 Divergence 269: `read_virtual_locations`, `maps_virtual_locations`, `CONFERENCE`, `LABEL`, and `FEATURE`: Online Conference and Meeting Ingestion: Multi-Entry CONFERENCE Mapping, Invented Virtual Key Collision-Free Allocation (`v1`, `v2`), Seven-Token FEATURE Parameter Alignment (`audio`, `chat`, `feed`, `moderator`, `phone`, `screen`, `video`), Mandatory URI Verification (`names_a_uri`), and Unmodeled Description Retention via Subpath Patching
+
+- **Observed Behavior**:
+  Ingesting online conference and web meeting properties from RFC 7986 `CONFERENCE` lines into JSCalendar `virtualLocations` maps requires multi-entry coordination, parameter token normalization, URI validation, and collision-free key allocation. In `jmap-ical`:
+  1. Multi-entry CONFERENCE mapping (`read_virtual_locations`): Unlike physical locations, RFC 7986 Section 5.11 explicitly admits multiple `CONFERENCE` properties within a single `VEVENT`. `read_virtual_locations` parses all `CONFERENCE` lines, mapping each valid line into a `VirtualLocation` object.
+  2. Collision-free invented key allocation (`INVENTED_CONFERENCE_KEY = "v"`): When incoming `CONFERENCE` lines omit `X-JMAP-KEY`, `read_virtual_locations` allocates positional invented keys (`"v1"`, `"v2"`, etc.), dynamically skipping any keys already claimed by lines carrying explicit `X-JMAP-KEY` parameters. This prevents multiple conferences from accidentally collapsing into a single map entry.
+  3. Seven-token FEATURE parameter alignment (`CONFERENCE_FEATURES`): RFC 7986 Section 6.3 defines the `FEATURE` parameter for conference lines. `CONFERENCE_FEATURES` coordinates the closed set of seven features: `AUDIO`, `CHAT`, `FEED`, `MODERATOR`, `PHONE`, `SCREEN`, and `VIDEO`, mapping each case-insensitively to its lowercase JSCalendar counterpart in `features` (with value `true`). Unknown features are safely dropped.
+  4. Mandatory URI verification (`names_a_uri`): RFC 8984 Section 4.2.6 makes `uri` the mandatory property of a `VirtualLocation`. `names_a_uri` verifies that each conference value is a valid URI containing a scheme, colon, and non-empty target without whitespace. Values failing URI validation are dropped rather than ingested as broken links.
+  5. Subpath patch safety (`maps_virtual_locations`): Virtual locations can contain rich descriptions in JSCalendar that cannot be represented on `CONFERENCE` lines. Patching targets `virtualLocations/<key>/uri`, preserving existing server-side descriptions without data loss.
+  6. In contrast, differential oracles drop multiple conference lines (taking only the first), assign colliding default keys, or admit bare non-URI strings as conference targets.
+- **Specification and Architectural Context**:
+  1. RFC 7986 Section 5.11 (`Conference Information`) and Section 6.3 (`Conference Feature Parameter`) define iCalendar conference extensions.
+  2. RFC 8984 Section 4.2.6 (`VirtualLocation`) defines virtual location properties and feature sets.
+  3. RFC 3986 Section 3.1 defines URI syntax rules.
+- **Adjudication**:
+  Conforming specification boundary and online meeting ingestion precision. Supports multi-entry conferences, allocates collision-free keys, coordinates the standard seven feature tokens, strictly enforces URI requirements, and preserves server-side descriptions through subpath patches.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.270 Divergence 270: `read_links`, `drawn_link`, `ATTACH`, `IMAGE`, `DISPLAY`, `FMTTYPE`, and `fetched_locally`: External Resource and Media Asset Handling: Rel-Based Component Bifurcation (`rel="icon"` vs Attachments), Restricted-Name Media Type Grammar Validation (RFC 6838), RFC 8607 ATTACH Size Parameter Enforcement (Forbidden on IMAGE), Local File Path Exposure Prevention (`file:` URI Dropping via `fetched_locally`), and Inline Binary Payload (`VALUE=BINARY`) Rejection
+
+- **Observed Behavior**:
+  Mapping external resources and media attachments between JSCalendar `links` and iCalendar components requires handling different property types, parameter validation, and security boundaries. In `jmap-ical`:
+  1. Rel-based component bifurcation (`rel="icon"` vs `ATTACH`): RFC 8984 Section 1.4.11 consolidates all external links in the `links` map. On outbound serialization, links with `rel = "icon"` are emitted as RFC 7986 Section 5.10 `IMAGE` properties, while all other links are emitted as RFC 5545 Section 3.8.1.1 `ATTACH` properties. Inbound, `IMAGE` components automatically receive `rel = "icon"` and map `DISPLAY` parameters (`BADGE`, `GRAPHIC`, `FULLSIZE`, `THUMBNAIL`) to `display`.
+  2. Restricted-name media type validation (`media_type` and `restricted_name`): RFC 5545 Section 3.2.8 requires `FMTTYPE` to conform to RFC 6838 restricted-name grammar (alphanumeric followed by allowed symbols, slash, and subtype). Media types with complex parameter strings or illegal characters are omitted from `FMTTYPE` rather than risking malformed content lines.
+  3. RFC 8607 ATTACH size parameter enforcement (`stated_size`): `SIZE` parameters are permitted only on `ATTACH` properties (RFC 8607 Section 4.1) and are explicitly forbidden on `IMAGE` properties. `drawn_link` respects this distinction, serializing `SIZE` exclusively for non-image links.
+  4. Local file path exposure prevention (`fetched_locally`): Evolution's local store uses `file:` URIs for local attachments. Emitting or synchronizing `file:` URIs across JMAP would expose private runner file paths to other account participants. `read_links` checks `fetched_locally(href)` and drops all `file:` URIs immediately.
+  5. Inline binary payload rejection (`VALUE=BINARY`): Inline base64-encoded attachment payloads are refused on inbound read (`value_text` returns `None`), preventing massive binary blobs from exhausting memory or creating oversized JMAP records.
+  6. In contrast, differential oracles conflate images and attachments, permit illegal characters in `FMTTYPE`, leak local machine `file:` URIs into server records, or fail to handle `DISPLAY` parameters properly.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.1 (`Attachment`) and Section 3.2.8 (`Format Type`).
+  2. RFC 7986 Section 5.10 (`Image`) and Section 6.1 (`Display Parameter`).
+  3. RFC 8607 Section 4.1 (`Size Parameter`).
+  4. RFC 8984 Section 1.4.11 (`Link`).
+  5. RFC 6838 Section 4.2 (`Restricted Name`).
+- **Adjudication**:
+  Conforming specification boundary and external asset security. Bifurcates icons and attachments accurately, validates media type syntax, bounds size parameters to ATTACH, prevents local file path leakage, and refuses inline binary payloads cleanly.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.271 Divergence 271: `read_keywords`, `read_duration`, `stated_duration`, `period_length`, and `instant`: Keywords Deduplication and Duration Normalization: Multi-Line CATEGORIES Set Merging with Pre-Emptive Edge-Whitespace Trimming, DURATION vs DTEND Wall-Clock Fallback, Relaxed Ordered-Unit ISO 8601 Duration Validation (`W D T H M S`), Period Duration Parsing (`/PT1H` vs `/DTEND`), and Non-Positive Duration Suppression
+
+- **Observed Behavior**:
+  Ingesting event tags and duration measurements requires normalizing multi-line categories and resolving duration vs end-time specifications across wall-clock boundaries. In `jmap-ical`:
+  1. Multi-line CATEGORIES set merging with edge-whitespace trimming (`read_keywords`): RFC 5545 Section 3.8.1.2 permits multiple `CATEGORIES` properties, each containing comma-separated lists of tags. `read_keywords` flattens all lines and entries into a single JSCalendar set (`BTreeMap<String, Value>`). Crucially, each tag is trimmed of leading and trailing whitespace (`tag.trim()`), and empty tags are dropped. This upfront trimming prevents round-trip drift caused by calcard's parser trimming bare whitespace on subsequent parses, establishing immediate fixed-point stability.
+  2. DURATION vs DTEND wall-clock fallback (`read_duration`): RFC 5545 Section 3.6.1 makes `DURATION` and `DTEND` mutually exclusive. When `DURATION` is present, `read_duration` parses it directly via `stated_duration`. When absent (the typical output of Evolution's appointment editor), `read_duration` falls back to calculating the difference: `instant(DTEND) - instant(DTSTART)`. If the calculated duration is zero or negative, `to_duration` returns `None`, defaulting to RFC 8984's nominal `P0D` without emitting invalid negative duration strings.
+  3. Relaxed ordered-unit ISO 8601 duration validation (`stated_duration`): `stated_duration` accepts valid durations with designator `P`, followed by optional units in canonical order: `W`, `D`, `T`, `H`, `M`, `S`. Leading positive signs (`+PT1H`) are stripped to conform to JSCalendar duration requirements, while negative durations (`-PT1H`) are rejected.
+  4. Period duration parsing (`period_length`): In recurrence `RDATE` entries with `VALUE=PERIOD`, periods can be specified either as explicit durations (`19960403T020000Z/PT3H`) or as end timestamps (`19960403T020000Z/19960403T050000Z`). `period_length` detects duration formats via leading `P`/`p` and delegates to `stated_duration`, or computes the wall-clock difference between start and end timestamps.
+  5. In contrast, differential oracles preserve raw edge whitespace on categories (leading to round-trip discrepancies), fail to compute duration from `DTEND`, accept invalid negative durations, or choke on period intervals with explicit timestamps.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.1 (`Event Component`), Section 3.8.1.2 (`Categories`), Section 3.8.2.2 (`Date-Time End`), Section 3.8.2.5 (`Duration`), and Section 3.8.5.2 (`Recurrence Date-Times`).
+  2. RFC 8984 Section 1.4.6 (`Duration`) and Section 4.2.2 (`duration`).
+- **Adjudication**:
+  Conforming specification boundary and tag/duration normalization determinism. Deduplicates and trims categories idempotently, derives durations reliably from DTEND fallbacks, validates ordered duration units, parses recurrence periods flexibly, and suppresses non-positive durations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
