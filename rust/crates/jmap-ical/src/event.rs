@@ -865,7 +865,7 @@ pub fn is_type(value: Option<&Value>, name: &str) -> bool {
 /// The `VALARM`s to draw beside an event, one per reminder the document can
 /// carry, in the order the map holds them — which is sorted, so a re-rendering is
 /// stable; the save path diffs against a re-rendering of what the server holds.
-fn drawn_alarms(event: &CalendarEvent) -> Vec<Component> {
+pub fn drawn_alarms(event: &CalendarEvent) -> Vec<Component> {
     if uses_default_alerts(event) {
         return Vec::new();
     }
