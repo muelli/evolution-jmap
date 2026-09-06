@@ -839,6 +839,39 @@ mod payload {
     }
 
     #[test]
+    fn a_series_request_shows_a_dropped_occurrence_as_excluded_to_who_lost_it() {
+        // section 5.9.2.1: a series participant a recurrence override drops
+        // from one occurrence must still see that occurrence, in a message
+        // about the series, as excluded, not as a gap the payload says
+        // nothing about.
+        let fixture = Fixture::new();
+        let id = fixture.create(&series(&fixture.calendar_id), false);
+
+        let mut patch = override_patch(SECOND, json!({"participants/bob": null}));
+        patch
+            .as_object_mut()
+            .unwrap()
+            .insert("title".to_owned(), json!("Design review (moved)"));
+        fixture.update(&id, patch, true);
+
+        let sent = fixture.sent_full_since(0);
+        let series_request = sent
+            .iter()
+            .find(|message| message.recipient == BOB && message.recurrence_id.is_none())
+            .expect("Bob is still on the series, so he is re-requested for it");
+        assert_eq!(series_request.method, "REQUEST");
+        let ical = series_request.ical.replace("\r\n ", "");
+        assert!(
+            ical.contains("EXDATE:20260608T100000"),
+            "the occurrence Bob was dropped from reads as excluded to him: {ical}"
+        );
+        assert!(
+            !ical.contains("RECURRENCE-ID"),
+            "an excluded instance is not also drawn as a modified one: {ical}"
+        );
+    }
+
+    #[test]
     fn hide_attendees_trims_the_guest_list_a_recipient_is_shown() {
         let fixture = Fixture::new();
         let mut event = meeting(&fixture.calendar_id);
