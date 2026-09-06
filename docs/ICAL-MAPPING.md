@@ -5643,3 +5643,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and custom timezone definition integrity. Scopes custom zones to solidus prefixes, requires complete standard and daylight observances, strictly prohibits `-0000` offsets, and enforces round-trip redrawability gating.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.288 Divergence 288: `windows_time_zone_to_iana`, `unique_tzid_to_iana`, `resolve_canonical_time_zone`, `names_time_zone`, and `WINDOWS_TIME_ZONES`: Timezone Identifier Canonicalization, CLDR Windows Zone Table Mapping, Globally Unique Solidus Tail Extraction, and Syntactic IANA Shape Validation
+
+- **Observed Behavior**:
+  Canonicalizing legacy or proprietary timezone identifiers into standard IANA Time Zone Database names requires mapping vendor tables, stripping synthetic prefixes, and validating identifier syntax. In `jmap-ical`:
+  1. CLDR Windows timezone mapping (`windows_time_zone_to_iana`, `WINDOWS_TIME_ZONES`): Ingests Windows display names, strips leading/trailing whitespace and quotation marks (`trim().trim_matches('"')`), and matches against `WINDOWS_TIME_ZONES` (derived from Unicode CLDR `windowsZones`). Translates standard Windows registry names to canonical IANA equivalents (for example, `"W. Europe Standard Time"` to `"Europe/Berlin"`, `"Romance Standard Time"` to `"Europe/Paris"`, and `"Pacific Standard Time"` to `"America/Los_Angeles"`). Unmapped or proprietary names return `None`.
+  2. Globally unique TZID area tail extraction (`unique_tzid_to_iana`): RFC 5545 Section 3.8.3.1 permits globally unique identifiers starting with a solidus character (`/`). `unique_tzid_to_iana` scans path segments for known IANA continental area prefixes (`Africa`, `America`, `Asia`, `Europe`, etc.) or `UTC`/`GMT`. When a recognized area is encountered, it extracts the candidate tail and verifies it with `names_time_zone`. For example, `"/freeassociation.sourceforge.net/Europe/Berlin"` resolves to `"Europe/Berlin"`. Bare or un-prefixed strings return `None`.
+  3. Syntactic IANA shape validation (`names_time_zone`): Verifies that every `/`-delimited segment is non-empty and consists strictly of ASCII alphanumeric characters, underscores, hyphens, or plus signs (`[a-zA-Z0-9_+-]`). Rejects leading solidi, consecutive slashes (`Europe//Berlin`), or spaces.
+  4. Multi-tier resolution pipeline (`resolve_canonical_time_zone`): Evaluates Windows names first via `windows_time_zone_to_iana`, direct IANA syntax via `names_time_zone`, and peeled unique solidus tails via `unique_tzid_to_iana`.
+  5. In contrast, differential oracles or permissive parsers emit raw proprietary Windows display names into JSCalendar `timeZone`, preserve vendor URLs as unresolvable identifiers, or fail on quoted timezone strings.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.3.1 (`Time Zone Identifier`).
+  2. RFC 8984 Section 1.4.9 (`TimeZoneId`).
+  3. Unicode CLDR (`windowsZones`).
+- **Adjudication**:
+  Conforming specification boundary and timezone identifier canonicalization fidelity. Normalizes Windows registry names to CLDR IANA counterparts, peels vendor prefixes from globally unique solidus identifiers, and enforces syntactic IANA shape boundaries.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.289 Divergence 289: `prune_time_zones`, `referred_zones`, `read_time_zones`, and `stated_zones`: Custom Timezone Definition Lifecycle and Unreferenced Map Pruning: Series and Detached Override Zone Extraction, Dual-Key Match Resolution, and Empty Map Elimination
+
+- **Observed Behavior**:
+  Managing custom timezone definitions in JSCalendar `timeZones` requires synchronizing definition lifetimes with actual usage across series and override instances. In `jmap-ical`:
+  1. Comprehensive reference auditing (`referred_zones`): Scans both the master series `timeZone` and every detached instance patch in `recurrence_overrides` (`patch.get("timeZone")`). This guarantees that moving the master series to UTC while an override retains a custom zone does not prematurely delete the custom definition needed by the occurrence.
+  2. Dual-key match resolution: When matching referenced zone identifiers against stored definitions in `event.time_zones`, `prune_time_zones` evaluates `referred == tzid || referred.trim_start_matches('/') == tzid`. This aligns with `definition_of`, ensuring that definitions stored under bare or solidus keys resolve reliably without accidental dropping.
+  3. Empty map elimination: If all referenced custom timezones are pruned, `prune_time_zones` resets `event.time_zones = None` rather than leaving an empty map `{}`. In JMAP RFC 8620 and `draft-ietf-jmap-calendars`, sending `{}` can trigger validation rejections or unnecessary patch churn.
+  4. In contrast, differential oracles or naive stores inspect only the master series timezone (orphaning override timezone references), drop definitions due to solidus prefix mismatches, or persist empty `timeZones: {}` objects on the wire.
+- **Specification and Architectural Context**:
+  1. RFC 8984 Section 1.4.9 (`TimeZoneId`) and Section 4.7.2 (`timeZones`).
+  2. RFC 8620 Section 5.3 (`/set`).
+- **Adjudication**:
+  Conforming specification boundary and custom timezone lifecycle management. Protects override instance timezone references, handles dual-key solidus matching, and eliminates empty timezone maps.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.290 Divergence 290: `read_start`, `shows_without_time`, `instance_shows_without_time`, `at_midnight`, `whole_days`, and `names_a_time_of_day`: All-Day Event Detection and Bidirectional Invariant Synchronization: Parameterless Date-Only Detection, Midnight Local Start Assignment, DATE-Property TZID Stripping, Timed-Event Default Preservation, and Outbound Multi-Condition All-Day Gating
+
+- **Observed Behavior**:
+  Reconciling RFC 5545 date values (`VALUE=DATE`) with JSCalendar all-day event properties (`showWithoutTime`) requires maintaining invariant boundaries across parsing and serialization. In `jmap-ical`:
+  1. Parameter-independent date detection (`read_start`): Inspects `DTSTART`. If the rendered timestamp lacks `T` or `t` delimiters (such as `20260601`), it is classified as date-only, regardless of whether `VALUE=DATE` was explicitly provided or omitted by upstream parsers.
+  2. Midnight start normalization and TZID stripping: Date-only starts are assigned midnight local time (`T00:00:00`), and `showWithoutTime` is set to `Some(true)`. Per RFC 5545 Section 3.2.19, `TZID` does not apply to `DATE` values; any `TZID` parameter on a date-only property is strictly ignored, setting `time_zone: None`.
+  3. Timed event schema default preservation: Timed starts (containing `T`) resolve their timezone and set `showWithoutTime: None` rather than `Some(false)`. RFC 8984 defines `false` as the schema default; omitting the property prevents spurious merge-patch mutations during cache synchronization.
+  4. Outbound all-day multi-condition gating (`shows_without_time`): An event is serialized as `VALUE=DATE` only if: `showWithoutTime == Some(true)`, `time_zone.is_none()`, `at_midnight(start)` (ends with `T000000`), `duration` represents `whole_days` (no sub-day time component), recurrence `until` lands at midnight, the recurrence rule contains no sub-day parts via `names_a_time_of_day` (`BYHOUR`, `BYMINUTE`, `BYSECOND`), and all override instances satisfy `instance_shows_without_time`.
+  5. In contrast, differential oracles or permissive converters allow `TZID` on DATE values, set explicit `false` booleans on timed events, or serialize all-day events with sub-day recurrence rules that violate RFC 5545 Section 3.3.10.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.19 (`Time Zone Identifier`), Section 3.6.1 (`Event Component`), and Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.1.5 (`showWithoutTime`).
+- **Adjudication**:
+  Conforming specification boundary and all-day event mapping determinism. Enforces parameterless date detection, strips illegal TZID parameters on dates, preserves timed-event default omission, and strictly gates outbound all-day serialization against sub-day recurrence rules.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.291 Divergence 291: `read_locations`, `read_virtual_locations`, `read_links`, `read_keywords`, and `names_map_entry`: Inbound Map Entry Extraction and Structured Key Validation: RFC 8984 Section 1.4.4 Id Syntax Gating, Parameter X-JMAP-KEY Preservation, Collision-Free Positional Key Synthesis, Local File URI Filtering, and Category Whitespace Trimming
+
+- **Observed Behavior**:
+  Ingesting iCalendar properties into JSCalendar maps (`locations`, `virtualLocations`, `links`, `keywords`) requires validating keys against identifier grammar, synthesizing conflict-free keys, and sanitizing property values. In `jmap-ical`:
+  1. Strict map entry ID validation (`names_map_entry`): Verifies that map keys conform to RFC 8984 Section 1.4.4 `Id` syntax: length between 1 and 255 octets, containing exclusively ASCII alphanumeric characters, underscores, or hyphens (`[a-zA-Z0-9_-]`). Disallows spaces, colons, dots, or control characters.
+  2. Stable key preservation and fallback: `read_locations`, `read_virtual_locations`, and `read_links` extract `X-JMAP-KEY`. If the parameter value satisfies `names_map_entry`, the key is retained. If missing or invalid, the parser synthesizes positional keys (`l1`, `v1`, `k1`).
+  3. Collision-free positional key synthesis: When synthesizing invented keys for multiple entries, the parser checks existing keys in the document, avoiding collisions so that multiple properties do not overwrite each other.
+  4. Local file URI filtering (`fetched_locally`): In `read_links`, URIs starting with `file:` (case-insensitive) are dropped. Local paths from personal disks cannot be fetched by remote participants and risk leaking filesystem hierarchy data into shared calendars.
+  5. Category set whitespace trimming (`read_keywords`): Splits `CATEGORIES` lines on commas, trims leading/trailing whitespace from each token, filters out empty items, and deduplicates entries into a set with boolean `true` values.
+  6. In contrast, differential oracles or naive converters accept invalid keys with punctuation or colons, generate colliding synthetic keys, leak local `file:` paths to the server, or retain un-trimmed whitespace in keywords.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.1 (`Attachment`), Section 3.8.1.2 (`Categories`), and Section 3.8.1.12 (`Location`).
+  2. RFC 7986 Section 5.10 (`Image`) and Section 5.11 (`Conference`).
+  3. RFC 8984 Section 1.4.4 (`Id`), Section 4.2.5 (`Location`), Section 4.2.6 (`VirtualLocation`), Section 4.2.7 (`Link`), and Section 4.4.3 (`keywords`).
+- **Adjudication**:
+  Conforming specification boundary and calendar map entry ingestion safety. Enforces RFC 8984 Section 1.4.4 ID constraints on map keys, avoids key collisions during positional synthesis, strips un-sharable local file URIs, and trims category keywords.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.

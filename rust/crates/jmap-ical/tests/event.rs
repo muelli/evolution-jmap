@@ -38437,3 +38437,325 @@ fn differential_oracle_defines_time_zone_solidus_and_redrawability() {
     let tz_map = event_parsed.time_zones.expect("time_zones map");
     assert!(tz_map.contains_key("/custom/redrawable"));
 }
+
+#[test]
+fn differential_oracle_tzid_canonicalization_cldr_windows_and_unique_tails() {
+    // 1. windows_time_zone_to_iana lookups with trimming and quotes handling
+    assert_eq!(
+        jmap_ical::windows_time_zone_to_iana("W. Europe Standard Time"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::windows_time_zone_to_iana("Romance Standard Time"),
+        Some("Europe/Paris")
+    );
+    assert_eq!(
+        jmap_ical::windows_time_zone_to_iana("Pacific Standard Time"),
+        Some("America/Los_Angeles")
+    );
+    assert_eq!(
+        jmap_ical::windows_time_zone_to_iana("  \"FLE Standard Time\"  "),
+        Some("Europe/Kyiv")
+    );
+    assert_eq!(
+        jmap_ical::windows_time_zone_to_iana("Custom Mars Time"),
+        None
+    );
+
+    // 2. unique_tzid_to_iana solidus tail extraction
+    assert_eq!(
+        jmap_ical::unique_tzid_to_iana("/freeassociation.sourceforge.net/Europe/Berlin"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::unique_tzid_to_iana("/mozilla.org/20050126_1/America/New_York"),
+        Some("America/New_York")
+    );
+    assert_eq!(
+        jmap_ical::unique_tzid_to_iana("/custom/vendor/UTC"),
+        Some("UTC")
+    );
+    assert_eq!(
+        jmap_ical::unique_tzid_to_iana("Bare/Europe/Berlin"),
+        None,
+        "Non-solidus TZIDs must return None"
+    );
+    assert_eq!(
+        jmap_ical::unique_tzid_to_iana("/vendor/UnknownArea/Zone"),
+        None,
+        "Unknown area prefixes must not peel"
+    );
+
+    // 3. resolve_canonical_time_zone multi-tier resolution
+    assert_eq!(
+        jmap_ical::resolve_canonical_time_zone("W. Europe Standard Time"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::resolve_canonical_time_zone("Asia/Tokyo"),
+        Some("Asia/Tokyo")
+    );
+    assert_eq!(
+        jmap_ical::resolve_canonical_time_zone("/vendor/Europe/London"),
+        Some("Europe/London")
+    );
+    assert_eq!(
+        jmap_ical::resolve_canonical_time_zone("Invalid Zone Name With Spaces"),
+        None
+    );
+
+    // 4. names_time_zone syntactic IANA shape validation
+    assert!(jmap_ical::names_time_zone("Europe/Berlin"));
+    assert!(jmap_ical::names_time_zone("America/Argentina/Buenos_Aires"));
+    assert!(jmap_ical::names_time_zone("Etc/GMT+5"));
+    assert!(jmap_ical::names_time_zone("UTC"));
+    assert!(!jmap_ical::names_time_zone(""));
+    assert!(!jmap_ical::names_time_zone("/Europe/Berlin"));
+    assert!(!jmap_ical::names_time_zone("Europe//Berlin"));
+    assert!(!jmap_ical::names_time_zone("Europe/Berlin Standard Time"));
+}
+
+#[test]
+fn differential_oracle_custom_timezone_pruning_and_dual_key_resolution() {
+    let dummy_zone = json!({
+        "@type": "TimeZone",
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "2026-01-01T00:00:00",
+            "offsetFrom": "+01:00",
+            "offsetTo": "+01:00"
+        }]
+    });
+
+    // 1. prune_time_zones retains referenced custom zones for series and overrides
+    let mut event = fixture_event();
+    event.time_zone = Some("/custom/series_zone".to_owned());
+    event.recurrence_overrides = Some({
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(
+            "2026-06-01T10:00:00".to_owned(),
+            json!({ "timeZone": "/custom/override_zone" }),
+        );
+        map
+    });
+    event.time_zones = Some({
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("/custom/series_zone".to_owned(), dummy_zone.clone());
+        map.insert("/custom/override_zone".to_owned(), dummy_zone.clone());
+        map.insert("/custom/unused_zone".to_owned(), dummy_zone.clone());
+        map
+    });
+
+    jmap_ical::prune_time_zones(&mut event);
+    let tz_map = event.time_zones.as_ref().expect("time_zones present");
+    assert!(tz_map.contains_key("/custom/series_zone"));
+    assert!(tz_map.contains_key("/custom/override_zone"));
+    assert!(!tz_map.contains_key("/custom/unused_zone"));
+
+    // 2. Override retention when series clears timezone
+    event.time_zone = None;
+    jmap_ical::prune_time_zones(&mut event);
+    let tz_map_override = event.time_zones.as_ref().expect("time_zones present");
+    assert!(!tz_map_override.contains_key("/custom/series_zone"));
+    assert!(tz_map_override.contains_key("/custom/override_zone"));
+
+    // 3. Complete pruning sets time_zones to None rather than empty map
+    event.recurrence_overrides = None;
+    jmap_ical::prune_time_zones(&mut event);
+    assert_eq!(event.time_zones, None);
+
+    // 4. Dual-key matching: definition with bare key matches solidus reference
+    let mut event_bare = fixture_event();
+    event_bare.time_zone = Some("/custom/bare_zone".to_owned());
+    event_bare.time_zones = Some({
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("custom/bare_zone".to_owned(), dummy_zone);
+        map
+    });
+    jmap_ical::prune_time_zones(&mut event_bare);
+    let tz_map_bare = event_bare.time_zones.as_ref().expect("bare matched");
+    assert!(tz_map_bare.contains_key("custom/bare_zone"));
+}
+
+#[test]
+fn differential_oracle_all_day_dtstart_midnight_and_subday_rrule_gating() {
+    // 1. Inbound date-only DTSTART maps to showWithoutTime: true and midnight start
+    let ics_date_only = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-all-day-1\r\n",
+        "DTSTART:20260601\r\n",
+        "DURATION:P1D\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event = ical_to_event(ics_date_only).expect("parse date only");
+    assert_eq!(event.start.as_deref(), Some("2026-06-01T00:00:00"));
+    assert_eq!(event.time_zone, None);
+    assert_eq!(event.show_without_time, Some(true));
+
+    // 2. Inbound date-only DTSTART with invalid TZID strips TZID per RFC 5545 Section 3.2.19
+    let ics_date_tzid = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-all-day-tzid\r\n",
+        "DTSTART;TZID=Europe/Berlin:20260601\r\n",
+        "DURATION:P1D\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_tzid = ical_to_event(ics_date_tzid).expect("parse date tzid");
+    assert_eq!(event_tzid.start.as_deref(), Some("2026-06-01T00:00:00"));
+    assert_eq!(event_tzid.time_zone, None);
+    assert_eq!(event_tzid.show_without_time, Some(true));
+
+    // 3. Inbound timed DTSTART preserves showWithoutTime: None default
+    let ics_timed = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-timed-1\r\n",
+        "DTSTART:20260601T143000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_timed = ical_to_event(ics_timed).expect("parse timed");
+    assert_eq!(event_timed.start.as_deref(), Some("2026-06-01T14:30:00"));
+    assert_eq!(event_timed.time_zone.as_deref(), Some("Etc/UTC"));
+    assert_eq!(event_timed.show_without_time, None);
+
+    // 4. shows_without_time outbound gating and whole_days
+    assert!(jmap_ical::event::whole_days("P1D"));
+    assert!(jmap_ical::event::whole_days("P2W"));
+    assert!(jmap_ical::event::whole_days("P1W3D"));
+    assert!(!jmap_ical::event::whole_days("PT1H"));
+    assert!(!jmap_ical::event::whole_days("P1DT2H"));
+    assert!(!jmap_ical::event::whole_days("-P1D"));
+
+    assert!(jmap_ical::event::at_midnight("20260601T000000"));
+    assert!(!jmap_ical::event::at_midnight("20260601T090000"));
+
+    let mut all_day_ev = fixture_event();
+    all_day_ev.show_without_time = Some(true);
+    all_day_ev.time_zone = None;
+    all_day_ev.duration = Some("P1D".to_owned());
+    assert!(jmap_ical::event::shows_without_time(
+        &all_day_ev,
+        "20260601T000000"
+    ));
+
+    // Sub-day recurrence part (BYHOUR) prohibits all-day representation
+    let rrule_with_hour = RecurrenceRule {
+        frequency: "daily".to_owned(),
+        by_hour: Some(vec![10]),
+        ..Default::default()
+    };
+    assert!(jmap_ical::event::names_a_time_of_day(&rrule_with_hour));
+    all_day_ev.recurrence_rule = Some(rrule_with_hour);
+    assert!(!jmap_ical::event::shows_without_time(
+        &all_day_ev,
+        "20260601T000000"
+    ));
+}
+
+#[test]
+fn differential_oracle_inbound_map_entry_id_validation_and_invented_keys() {
+    // 1. names_map_entry RFC 8984 Section 1.4.4 Id validation
+    assert!(jmap_ical::event::names_map_entry("a1"));
+    assert!(jmap_ical::event::names_map_entry("loc_42"));
+    assert!(jmap_ical::event::names_map_entry("uuid-123-abc"));
+    assert!(!jmap_ical::event::names_map_entry(""));
+    assert!(!jmap_ical::event::names_map_entry("has space"));
+    assert!(!jmap_ical::event::names_map_entry("colon:forbidden"));
+    assert!(!jmap_ical::event::names_map_entry("dot.forbidden"));
+    let too_long = "a".repeat(256);
+    assert!(!jmap_ical::event::names_map_entry(&too_long));
+
+    // 2. read_locations preserves valid X-JMAP-KEY and falls back to l1 on invalid
+    let ics_loc = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-loc-test\r\n",
+        "DTSTART:20260601T100000Z\r\n",
+        "LOCATION;X-JMAP-KEY=office_1:Meeting Room 101\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_loc = ical_to_event(ics_loc).expect("parse loc");
+    let locs = ev_loc.locations.expect("locations");
+    assert!(locs.contains_key("office_1"));
+    assert_eq!(locs["office_1"]["name"], json!("Meeting Room 101"));
+
+    let ics_loc_invalid = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-loc-invalid\r\n",
+        "DTSTART:20260601T100000Z\r\n",
+        "LOCATION;X-JMAP-KEY=invalid key with spaces:Meeting Room 102\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_loc_inv = ical_to_event(ics_loc_invalid).expect("parse loc invalid");
+    let locs_inv = ev_loc_inv.locations.expect("locations invalid");
+    assert!(locs_inv.contains_key("l1"));
+
+    // 3. read_links filters file: URIs and maps IMAGE to rel: icon
+    let ics_links = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-links-test\r\n",
+        "DTSTART:20260601T100000Z\r\n",
+        "ATTACH;X-JMAP-KEY=local_file:file:///home/user/document.pdf\r\n",
+        "ATTACH;FMTTYPE=application/pdf;SIZE=1024;X-JMAP-KEY=remote_file:https://example.com/doc.pdf\r\n",
+        "IMAGE;VALUE=URI;DISPLAY=BADGE;X-JMAP-KEY=icon_1:https://example.com/icon.png\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_links = ical_to_event(ics_links).expect("parse links");
+    let links = ev_links.links.expect("links");
+    assert!(
+        !links.contains_key("local_file"),
+        "file: URI must be dropped"
+    );
+    assert!(links.contains_key("remote_file"));
+    assert_eq!(
+        links["remote_file"]["contentType"],
+        json!("application/pdf")
+    );
+    assert_eq!(links["remote_file"]["size"], json!(1024));
+    assert!(links.contains_key("icon_1"));
+    assert_eq!(links["icon_1"]["rel"], json!("icon"));
+    assert_eq!(links["icon_1"]["display"], json!("badge"));
+
+    // 4. read_keywords parses CATEGORIES with comma splitting and trimming
+    let ics_keywords = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-keywords-test\r\n",
+        "DTSTART:20260601T100000Z\r\n",
+        "CATEGORIES:urgent, project-x , urgent\r\n",
+        "CATEGORIES:planning\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_kw = ical_to_event(ics_keywords).expect("parse keywords");
+    let kw = ev_kw.keywords.expect("keywords");
+    assert_eq!(kw.len(), 3);
+    assert_eq!(kw.get("urgent"), Some(&json!(true)));
+    assert_eq!(kw.get("project-x"), Some(&json!(true)));
+    assert_eq!(kw.get("planning"), Some(&json!(true)));
+}
