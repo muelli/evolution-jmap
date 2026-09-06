@@ -5494,5 +5494,77 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.280 Divergence 280: `rule_to_rrule`, `named_by_parts`, `time_of_day_part`, `by_hour_part`, `by_minute_part`, and `by_second_part`: Outbound Recurrence Rule Serialization and Libical Subpart Ordering: COUNT-Before-INTERVAL Alignment, Default INTERVAL=1 Suppression, Sub-Day Time Bounds (Hours 0..=23, Minutes 0..=59, Seconds 0..=60 for Leap Seconds), and All-or-Nothing Value Gating
+
+- **Observed Behavior**:
+  Serializing JSCalendar `recurrenceRule` (RFC 8984 Section 4.3.1) into RFC 5545 `RRULE` strings requires enforcing strict subpart ordering, canonical default suppression, and sub-day range bounds. In `jmap-ical`:
+  1. Libical subpart ordering: RFC 5545 Section 3.3.10 allows `RRULE` parts in arbitrary order, but `libical` writes `COUNT` ahead of `INTERVAL`, and places time-of-day parts (`BYSECOND`, `BYMINUTE`, `BYHOUR`) ahead of day parts (`BYDAY`, `BYMONTHDAY`, etc.). `rule_to_rrule` and `named_by_parts` mirror this ordering exactly, ensuring byte-for-byte round-trip equality when cached in EDS.
+  2. Default `INTERVAL=1` suppression: RFC 5545 Section 3.3.10 specifies 1 as the default value for `INTERVAL`. `rule_to_rrule` suppresses `INTERVAL=1`, reducing wire overhead and preventing round-trip diff churn.
+  3. Sub-day precision bounds (`time_of_day_part`): Enforces `hour <= 23` in `by_hour_part`, `minute <= 59` in `by_minute_part`, and `second <= 60` in `by_second_part`. Second value 60 is explicitly admitted for standard UTC leap seconds, matching `libical` behavior.
+  4. All-or-nothing gating: If an array of times is empty or any single element exceeds its bound, `time_of_day_part` returns `None`. Emitting a partial array of times would change the recurrence schedule rather than restricting it, so the entire part is dropped, causing `maps_recurrence_rule` to flag the rule.
+  5. In contrast, differential oracles or naive serializers emit subparts in non-canonical order, include redundant `INTERVAL=1` tokens, reject valid leap second 60, or emit partial time-of-day lists.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`recurrenceRule`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule serialization determinism. Enforces libical-aligned part ordering, suppresses default unit intervals, validates sub-day bounds with leap second tolerance, and gates time-of-day parts atomically.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.281 Divergence 281: `by_day_part`, `by_day_token`, `counts_within_a_period`, `by_month_day_part`, and `month_day_token`: Outbound Recurrence Rule Weekday and Day-of-Month Parameter Formatting: Frequency Period Scoping (Ordinals Restricted to MONTHLY/YEARLY), Zero-Ordinal Prohibition, WEEKLY Frequency BYMONTHDAY Exclusion, and Negative Offset Normalization (-31..=-1)
+
+- **Observed Behavior**:
+  Formatting `BYDAY` and `BYMONTHDAY` recurrence rule parts requires validating ordinals against frequency periods and rejecting illegal combinations. In `jmap-ical`:
+  1. Frequency period scoping (`counts_within_a_period`): RFC 5545 Section 3.3.10 specifies that `BYDAY` MUST NOT carry numeric prefixes (ordinals like `2MO` or `-1FR`) when `FREQ` is not `MONTHLY` or `YEARLY`. `by_day_token` checks `counts_within_a_period(frequency)`. If an ordinal is attached to a `DAILY` or `WEEKLY` rule, `by_day_token` returns `None`.
+  2. Zero-ordinal prohibition: RFC 8984 Section 4.3.3 and RFC 5545 `ordwk` strictly forbid ordinal 0. If `nth_of_period == Some(0)`, `by_day_token` returns `None`.
+  3. Atomic weekday list gating (`by_day_part`): If any weekday token fails validation or if `by_day` is empty, `by_day_part` returns `None`. A subset of days would represent a different event schedule.
+  4. WEEKLY frequency `BYMONTHDAY` exclusion: RFC 5545 Section 3.3.10 dictates that `BYMONTHDAY` MUST NOT be specified when `FREQ=WEEKLY`. `by_month_day_part` checks `"weekly".eq_ignore_ascii_case(&rule.frequency)` and returns `None`.
+  5. Day-of-month bounds (`month_day_token`): Admits positive days `1..=31` and negative offsets `-31..=-1` (counting backwards from month end). Value 0 and values outside `[-31, 31]` are rejected.
+  6. In contrast, differential oracles or permissive serializers allow numeric ordinals on `DAILY`/`WEEKLY` rules, serialize invalid `BYMONTHDAY` on `WEEKLY` events, or accept day 0.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.3 (`NDay`).
+- **Adjudication**:
+  Conforming specification boundary and calendar recurrence grammar enforcement. Scopes weekday ordinals strictly to monthly and yearly frequencies, rejects zero ordinals, excludes day-of-month parts from weekly rules, and validates signed day-of-month offsets.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.282 Divergence 282: `by_year_day_part`, `holds_a_year`, `year_day_token`, `by_week_no_part`, `week_no_token`, `by_month_part`, and `month_token`: Outbound Recurrence Rule Year-Day, Week-Number, and Month Tokenization: Non-Yearly Frequency BYYEARDAY Exclusion (DAILY/WEEKLY/MONTHLY Forbidden), Strict YEARLY-Only BYWEEKNO Gating, Ordinal Bounds (-366..=366 and -53..=53), Leading-Zero Month Rejection (`03` Refusal), and Non-Gregorian Leap Month (`5L`) Exclusion
+
+- **Observed Behavior**:
+  Formatting `BYYEARDAY`, `BYWEEKNO`, and `BYMONTH` recurrence parts requires adhering to frequency exclusivity tables and preventing representation ambiguity. In `jmap-ical`:
+  1. `BYYEARDAY` frequency exclusion (`holds_a_year`): RFC 5545 Section 3.3.10 states that `BYYEARDAY` MUST NOT be specified beside `DAILY`, `WEEKLY`, or `MONTHLY` (frequencies smaller than a year). `by_year_day_part` returns `None` for these frequencies while allowing it for `YEARLY`, `HOURLY`, `MINUTELY`, and `SECONDLY`.
+  2. Strict `YEARLY`-only `BYWEEKNO` gating: RFC 5545 Section 3.3.10 restricts `BYWEEKNO` exclusively to `YEARLY` frequency. `by_week_no_part` returns `None` if frequency is anything other than `yearly`.
+  3. Year-day and week-number bounds: `year_day_token` validates `-366..=-1 | 1..=366` (366 accounts for leap years). `week_no_token` validates `-53..=-1 | 1..=53`. Ordinal 0 is rejected in both.
+  4. Leading-zero month rejection (`month_token`): While RFC 5545 allows two-digit month numbers (`03`), `libical` and `calcard` re-render them as single digits (`3`). `month_token` requires `month == number.to_string()`, rejecting leading zeroes (`"03"`) to prevent un-edited diff churn on re-save.
+  5. Non-Gregorian leap month rejection: JSCalendar RFC 8984 Section 4.3.3 permits strings such as `"5L"` for leap months in non-Gregorian calendar systems (RFC 7529 RSCALE). Because `jmap-ical` operates within Gregorian calendars, non-numeric month tokens are rejected (`None`).
+  6. In contrast, differential oracles or permissive converters emit `BYWEEKNO` beside non-yearly frequencies, permit `BYYEARDAY` beside `DAILY` or `WEEKLY`, accept 0, or emit non-canonical two-digit month numbers.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`recurrenceRule`).
+  3. RFC 7529 (`RSCALE`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule range safety. Restricts year-day and week-number parts to allowed frequencies, bounds leap year days and weeks, prevents leading-zero month diff churn, and safely refuses unmodeled leap months.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.283 Divergence 283: `by_set_position_part`, `set_position_token`, `first_day_of_week_part`, `weekday_token`, and `read_until`: Recurrence Rule Set Position Dependency Gating (`selects_from_a_set`), First Day of Week Default Normalization (`WKST=MO` Suppression), Strict Lowercase Weekday Code Validation, and Inbound UNTIL Floating vs UTC Offset Normalization
+
+- **Observed Behavior**:
+  Serializing set positions, week start parameters, and reading recurrence end dates requires handling syntactic dependencies and timezone shifts. In `jmap-ical`:
+  1. Set position dependency gating (`by_set_position_part`): RFC 5545 Section 3.3.10 dictates that `BYSETPOS` MUST only be used in conjunction with other `BYxxx` rule parts that expand into a set. `selects_from_a_set` checks whether other parts were actually written. If no other `BYxxx` parts are active, `by_set_position_part` returns `None`. Without other parts, `BYSETPOS=1` is a redundant no-op and `BYSETPOS=2` creates an empty series that never recurs.
+  2. Set position bounds (`set_position_token`): Admits `-366..=-1 | 1..=366`, rejecting 0.
+  3. First day of week default normalization (`first_day_of_week_part`): RFC 5545 Section 3.3.10 specifies Monday (`MO`) as default `WKST`. `libical` drops `WKST=MO` upon parse. `first_day_of_week_part` suppresses `WKST=MO` (`day != "MO"`), preventing spurious diffs on round trip.
+  4. Lowercase weekday token validation (`weekday_token`): RFC 8984 Section 4.3.3 specifies lowercase weekday tokens (`"mo"`, `"tu"`, etc.). `weekday_token` requires all bytes to be lowercase ASCII, returning `None` for uppercase or mixed-case input to preserve canonical formatting.
+  5. Inbound `UNTIL` timezone conversion and fallback (`read_until`): When `UNTIL` is a UTC date-time ending with `Z` or `z`, `read_until` converts it to local time via `Ends::At` (fixed offset) or `Ends::In` (VTIMEZONE observance lookup). If the timezone is undefined and cannot be resolved, `read_until` retains the `Z` suffix or preserves the value verbatim, signaling `writable` and `maps_recurrence_rule` that the end date cannot be safely saved back without offset corruption.
+  6. In contrast, differential oracles serialize `BYSETPOS` without accompanying `BYxxx` parts, emit redundant `WKST=MO`, or fail to shift UTC `UNTIL` dates to local time.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`recurrenceRule`) and Section 4.3.3 (`NDay`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule dependency safety. Gates set positions against active rule parts, suppresses default Monday week start, validates lowercase weekday syntax, and coordinates UTC UNTIL offset resolution.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
 

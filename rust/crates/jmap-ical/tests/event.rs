@@ -37768,3 +37768,283 @@ fn differential_oracle_drawn_alerts_default_suppression_and_valarm() {
         "Absolute trigger must be refused"
     );
 }
+
+#[test]
+fn differential_oracle_rule_to_rrule_libical_subpart_ordering_and_time_bounds() {
+    // 1. Libical subpart ordering: FREQ -> COUNT -> INTERVAL -> BYSECOND -> BYMINUTE -> BYHOUR
+    let rule = RecurrenceRule {
+        frequency: "daily".to_owned(),
+        count: Some(5),
+        interval: Some(2),
+        by_hour: Some(vec![9, 17]),
+        by_minute: Some(vec![30]),
+        by_second: Some(vec![0]),
+        ..Default::default()
+    };
+    let rrule = jmap_ical::event::rule_to_rrule(
+        &rule,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+        false,
+    )
+    .expect("rrule");
+    assert_eq!(
+        rrule, "FREQ=DAILY;COUNT=5;INTERVAL=2;BYSECOND=0;BYMINUTE=30;BYHOUR=9,17",
+        "Parts must appear in libical order with COUNT before INTERVAL and time-of-day before date parts"
+    );
+
+    // 2. Default INTERVAL=1 suppression
+    let rule_unit = RecurrenceRule {
+        frequency: "daily".to_owned(),
+        interval: Some(1),
+        ..Default::default()
+    };
+    let rrule_unit = jmap_ical::event::rule_to_rrule(
+        &rule_unit,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+        false,
+    )
+    .expect("rrule");
+    assert_eq!(rrule_unit, "FREQ=DAILY");
+    assert!(!rrule_unit.contains("INTERVAL"));
+
+    // 3. Hour bounds: 0..=23
+    let mut hour_rule = RecurrenceRule {
+        by_hour: Some(vec![0, 23]),
+        ..Default::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_hour_part(&hour_rule).as_deref(),
+        Some("BYHOUR=0,23")
+    );
+    hour_rule.by_hour = Some(vec![24]);
+    assert_eq!(jmap_ical::event::by_hour_part(&hour_rule), None);
+
+    // 4. Minute bounds: 0..=59
+    let mut min_rule = RecurrenceRule {
+        by_minute: Some(vec![0, 59]),
+        ..Default::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_minute_part(&min_rule).as_deref(),
+        Some("BYMINUTE=0,59")
+    );
+    min_rule.by_minute = Some(vec![60]);
+    assert_eq!(jmap_ical::event::by_minute_part(&min_rule), None);
+
+    // 5. Second bounds: 0..=60 (leap second 60 permitted per RFC 5545 and libical)
+    let mut sec_rule = RecurrenceRule {
+        by_second: Some(vec![0, 59, 60]),
+        ..Default::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_second_part(&sec_rule).as_deref(),
+        Some("BYSECOND=0,59,60")
+    );
+    sec_rule.by_second = Some(vec![61]);
+    assert_eq!(jmap_ical::event::by_second_part(&sec_rule), None);
+
+    // 6. Empty array returns None (all-or-nothing gating)
+    sec_rule.by_second = Some(vec![]);
+    assert_eq!(jmap_ical::event::by_second_part(&sec_rule), None);
+}
+
+#[test]
+fn differential_oracle_by_day_part_frequency_period_scoping_and_month_day() {
+    // 1. Weekday ordinals scoped to MONTHLY and YEARLY
+    let nday_ord = NDay {
+        nth_of_period: Some(2),
+        ..NDay::new("mo")
+    };
+    assert_eq!(
+        jmap_ical::event::by_day_token(&nday_ord, "monthly").as_deref(),
+        Some("2MO")
+    );
+    assert_eq!(
+        jmap_ical::event::by_day_token(&nday_ord, "yearly").as_deref(),
+        Some("2MO")
+    );
+    assert_eq!(jmap_ical::event::by_day_token(&nday_ord, "daily"), None);
+    assert_eq!(jmap_ical::event::by_day_token(&nday_ord, "weekly"), None);
+
+    // 2. Plain weekday without ordinal permitted at any frequency
+    let nday_plain = NDay::new("tu");
+    assert_eq!(
+        jmap_ical::event::by_day_token(&nday_plain, "weekly").as_deref(),
+        Some("TU")
+    );
+    assert_eq!(
+        jmap_ical::event::by_day_token(&nday_plain, "daily").as_deref(),
+        Some("TU")
+    );
+
+    // 3. Ordinal 0 strictly rejected
+    let nday_zero = NDay {
+        nth_of_period: Some(0),
+        ..NDay::new("fr")
+    };
+    assert_eq!(jmap_ical::event::by_day_token(&nday_zero, "monthly"), None);
+
+    // 4. by_month_day_part forbidden on WEEKLY frequency
+    let mut mday_rule = RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        by_month_day: Some(vec![15]),
+        ..Default::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_month_day_part(&mday_rule),
+        None,
+        "BYMONTHDAY must be refused beside FREQ=WEEKLY"
+    );
+
+    mday_rule.frequency = "monthly".to_owned();
+    assert_eq!(
+        jmap_ical::event::by_month_day_part(&mday_rule).as_deref(),
+        Some("BYMONTHDAY=15")
+    );
+
+    // 5. month_day_token signed range
+    assert_eq!(jmap_ical::event::month_day_token(1).as_deref(), Some("1"));
+    assert_eq!(jmap_ical::event::month_day_token(31).as_deref(), Some("31"));
+    assert_eq!(jmap_ical::event::month_day_token(-1).as_deref(), Some("-1"));
+    assert_eq!(
+        jmap_ical::event::month_day_token(-31).as_deref(),
+        Some("-31")
+    );
+    assert_eq!(jmap_ical::event::month_day_token(0), None);
+    assert_eq!(jmap_ical::event::month_day_token(32), None);
+    assert_eq!(jmap_ical::event::month_day_token(-32), None);
+}
+
+#[test]
+fn differential_oracle_by_year_day_week_no_and_month_tokens() {
+    // 1. by_year_day_part and holds_a_year frequency gating
+    let mut yday_rule = RecurrenceRule {
+        by_year_day: Some(vec![100, -1]),
+        frequency: "yearly".to_owned(),
+        ..Default::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_year_day_part(&yday_rule).as_deref(),
+        Some("BYYEARDAY=100,-1")
+    );
+
+    yday_rule.frequency = "hourly".to_owned();
+    assert_eq!(
+        jmap_ical::event::by_year_day_part(&yday_rule).as_deref(),
+        Some("BYYEARDAY=100,-1")
+    );
+
+    yday_rule.frequency = "daily".to_owned();
+    assert_eq!(jmap_ical::event::by_year_day_part(&yday_rule), None);
+    yday_rule.frequency = "weekly".to_owned();
+    assert_eq!(jmap_ical::event::by_year_day_part(&yday_rule), None);
+    yday_rule.frequency = "monthly".to_owned();
+    assert_eq!(jmap_ical::event::by_year_day_part(&yday_rule), None);
+
+    // 2. year_day_token bounds
+    assert_eq!(jmap_ical::event::year_day_token(1).as_deref(), Some("1"));
+    assert_eq!(
+        jmap_ical::event::year_day_token(366).as_deref(),
+        Some("366")
+    );
+    assert_eq!(
+        jmap_ical::event::year_day_token(-366).as_deref(),
+        Some("-366")
+    );
+    assert_eq!(jmap_ical::event::year_day_token(0), None);
+    assert_eq!(jmap_ical::event::year_day_token(367), None);
+    assert_eq!(jmap_ical::event::year_day_token(-367), None);
+
+    // 3. by_week_no_part strictly yearly
+    let mut wno_rule = RecurrenceRule {
+        by_week_no: Some(vec![20, -1]),
+        frequency: "yearly".to_owned(),
+        ..Default::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_week_no_part(&wno_rule).as_deref(),
+        Some("BYWEEKNO=20,-1")
+    );
+    wno_rule.frequency = "hourly".to_owned();
+    assert_eq!(jmap_ical::event::by_week_no_part(&wno_rule), None);
+
+    // 4. week_no_token bounds
+    assert_eq!(jmap_ical::event::week_no_token(1).as_deref(), Some("1"));
+    assert_eq!(jmap_ical::event::week_no_token(53).as_deref(), Some("53"));
+    assert_eq!(jmap_ical::event::week_no_token(-53).as_deref(), Some("-53"));
+    assert_eq!(jmap_ical::event::week_no_token(0), None);
+    assert_eq!(jmap_ical::event::week_no_token(54), None);
+
+    // 5. month_token canonical single digits vs leading zero and leap month
+    assert_eq!(jmap_ical::event::month_token("3"), Some("3"));
+    assert_eq!(jmap_ical::event::month_token("12"), Some("12"));
+    assert_eq!(jmap_ical::event::month_token("03"), None);
+    assert_eq!(jmap_ical::event::month_token("0"), None);
+    assert_eq!(jmap_ical::event::month_token("13"), None);
+    assert_eq!(jmap_ical::event::month_token("5L"), None);
+}
+
+#[test]
+fn differential_oracle_set_position_wkst_default_and_read_until_offset() {
+    // 1. by_set_position_part dependency gating
+    let setpos_rule = RecurrenceRule {
+        by_set_position: Some(vec![1, -1]),
+        ..Default::default()
+    };
+    // When selects_from_a_set is false (no other BYxxx parts)
+    assert_eq!(
+        jmap_ical::event::by_set_position_part(&setpos_rule, false),
+        None
+    );
+    // When selects_from_a_set is true
+    assert_eq!(
+        jmap_ical::event::by_set_position_part(&setpos_rule, true).as_deref(),
+        Some("BYSETPOS=1,-1")
+    );
+
+    // 2. set_position_token bounds
+    assert_eq!(
+        jmap_ical::event::set_position_token(1).as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        jmap_ical::event::set_position_token(-1).as_deref(),
+        Some("-1")
+    );
+    assert_eq!(
+        jmap_ical::event::set_position_token(366).as_deref(),
+        Some("366")
+    );
+    assert_eq!(jmap_ical::event::set_position_token(0), None);
+    assert_eq!(jmap_ical::event::set_position_token(367), None);
+
+    // 3. first_day_of_week_part: Monday suppressed
+    let mut wkst_rule = RecurrenceRule {
+        first_day_of_week: Some("mo".to_owned()),
+        ..Default::default()
+    };
+    assert_eq!(jmap_ical::event::first_day_of_week_part(&wkst_rule), None);
+
+    wkst_rule.first_day_of_week = Some("su".to_owned());
+    assert_eq!(
+        jmap_ical::event::first_day_of_week_part(&wkst_rule).as_deref(),
+        Some("WKST=SU")
+    );
+
+    // 4. weekday_token requires lowercase
+    assert_eq!(jmap_ical::event::weekday_token("mo"), Some("MO"));
+    assert_eq!(jmap_ical::event::weekday_token("MO"), None);
+    assert_eq!(jmap_ical::event::weekday_token("Mo"), None);
+    assert_eq!(jmap_ical::event::weekday_token("invalid"), None);
+
+    // 5. read_until with Ends::At (fixed offset)
+    let until_utc = "20260701T120000Z";
+    let until_local = jmap_ical::event::read_until(until_utc, jmap_ical::event::Ends::At("+0200"));
+    assert_eq!(until_local, "2026-07-01T14:00:00");
+
+    // 6. read_until floating date-time remains unshifted
+    let until_floating = "20260701T120000";
+    let unshifted =
+        jmap_ical::event::read_until(until_floating, jmap_ical::event::Ends::At("+0200"));
+    assert_eq!(unshifted, "2026-07-01T12:00:00");
+}
