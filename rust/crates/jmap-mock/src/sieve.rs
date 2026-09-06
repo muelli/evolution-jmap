@@ -228,7 +228,7 @@ pub fn sieve_script_set(state: &mut ServerState, arguments: Value) -> Result<Val
     to_result(&SetResponse {
         account_id,
         old_state: Some(old_state),
-        new_state: account.sieve_scripts.state(),
+        new_state: Some(account.sieve_scripts.state()),
         created: (!created.is_empty()).then_some(created),
         updated: (!updated.is_empty()).then_some(updated),
         destroyed: (!destroyed.is_empty()).then_some(destroyed),

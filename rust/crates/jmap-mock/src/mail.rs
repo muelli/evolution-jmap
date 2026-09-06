@@ -322,7 +322,7 @@ pub fn mailbox_set(state: &mut ServerState, arguments: Value) -> Result<Value, M
     to_result(&SetResponse {
         account_id: request.account_id,
         old_state: Some(old_state),
-        new_state: account.mailboxes.state(),
+        new_state: Some(account.mailboxes.state()),
         created: (!created.is_empty()).then_some(created),
         updated: (!updated.is_empty()).then_some(updated),
         destroyed: (!destroyed.is_empty()).then_some(destroyed),
@@ -1060,7 +1060,7 @@ pub fn vacation_response_set(
     to_result(&SetResponse {
         account_id: request.account_id,
         old_state: Some(old_state),
-        new_state: account.vacation_response.state(),
+        new_state: Some(account.vacation_response.state()),
         created: None,
         updated: (!updated.is_empty()).then_some(updated),
         destroyed: None,
@@ -1257,7 +1257,7 @@ pub fn email_set(state: &mut ServerState, arguments: Value) -> Result<Value, Met
     to_result(&SetResponse {
         account_id: request.account_id,
         old_state: Some(old_state),
-        new_state: account.emails.state(),
+        new_state: Some(account.emails.state()),
         created: (!created.is_empty()).then_some(created),
         updated: (!updated.is_empty()).then_some(updated),
         destroyed: (!destroyed.is_empty()).then_some(destroyed),
@@ -1796,7 +1796,7 @@ pub fn email_submission_set(
     let mut result = to_result(&SetResponse {
         account_id: request.set.account_id,
         old_state: Some(old_state),
-        new_state: account.submissions.state(),
+        new_state: Some(account.submissions.state()),
         created: (!created.is_empty()).then_some(created),
         updated: (!updated.is_empty()).then_some(updated),
         destroyed: None,

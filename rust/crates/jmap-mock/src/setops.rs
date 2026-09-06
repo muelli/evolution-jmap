@@ -233,7 +233,7 @@ where
     Ok(SetResponse {
         account_id: request.account_id,
         old_state: Some(old_state),
-        new_state: store.state(),
+        new_state: Some(store.state()),
         created: (!created.is_empty()).then_some(created),
         updated: (!updated.is_empty()).then_some(updated),
         destroyed: (!destroyed.is_empty()).then_some(destroyed),

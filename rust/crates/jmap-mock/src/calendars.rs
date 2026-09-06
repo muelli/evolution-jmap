@@ -817,7 +817,7 @@ pub fn calendar_event_notification_set(
     to_result(&SetResponse::<CalendarEventNotification> {
         account_id: request.account_id,
         old_state: Some(old_state),
-        new_state: account.calendar_event_notifications.state(),
+        new_state: Some(account.calendar_event_notifications.state()),
         created: None,
         updated: None,
         destroyed: (!destroyed.is_empty()).then_some(destroyed),
@@ -1061,7 +1061,7 @@ pub fn participant_identity_set(
     to_result(&SetResponse {
         account_id,
         old_state: Some(old_state),
-        new_state: account.participant_identities.state(),
+        new_state: Some(account.participant_identities.state()),
         created: (!created.is_empty()).then_some(created),
         updated: (!updated.is_empty()).then_some(updated),
         destroyed: (!destroyed.is_empty()).then_some(destroyed),
