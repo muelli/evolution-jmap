@@ -1296,7 +1296,7 @@ fn principals_owner_and_share_notification_forward_compatibility() {
         serde_json::from_value(set_resp_payload).expect("SetResponse deserializes cleanly");
     assert_eq!(set_resp.account_id.as_str(), "acc_user");
     assert_eq!(set_resp.old_state.as_ref().unwrap().as_str(), "state_1");
-    assert_eq!(set_resp.new_state.as_str(), "state_2");
+    assert_eq!(set_resp.new_state.as_ref().unwrap().as_str(), "state_2");
     assert!(set_resp.created.as_ref().unwrap().contains_key("c1"));
     assert!(
         set_resp
