@@ -169,7 +169,16 @@ pub struct SetResponse<T> {
     pub account_id: Id,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_state: Option<State>,
-    pub new_state: State,
+    /// The state `Foo/get` will now return.
+    ///
+    /// RFC 8620 §5.3 types this `String`, not `String|null`, but Fastmail
+    /// answers `VacationResponse/set` with `"newState": null` (its
+    /// `VacationResponse/get` reports `"state": ""`, so it tracks no state for
+    /// the singleton at all). Refusing that is refusing a `200` whose `updated`
+    /// says the change was applied, which reports a save that happened as a
+    /// failure, so the null is taken as the "no state" it means.
+    #[serde(default)]
+    pub new_state: Option<State>,
     /// Server-set properties (at minimum `id`) per creation id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<BTreeMap<String, T>>,
@@ -190,7 +199,7 @@ impl<T> SetResponse<T> {
         Self {
             account_id: account_id.into(),
             old_state: None,
-            new_state: new_state.into(),
+            new_state: Some(new_state.into()),
             created: None,
             updated: None,
             destroyed: None,

@@ -1539,7 +1539,7 @@ fn set_response_and_set_request_builders_and_roundtrip() {
 
     assert_eq!(resp.account_id.as_str(), "A1");
     assert_eq!(resp.old_state.as_ref().unwrap().as_str(), "s_old");
-    assert_eq!(resp.new_state.as_str(), "s_new");
+    assert_eq!(resp.new_state.as_ref().unwrap().as_str(), "s_new");
     assert!(resp.created.as_ref().unwrap().contains_key("c1"));
     assert!(resp.updated.as_ref().unwrap().contains_key(&Id::new("u1")));
     assert_eq!(resp.destroyed.as_ref().unwrap(), &vec![Id::new("d1")]);
@@ -1566,6 +1566,45 @@ fn set_response_and_set_request_builders_and_roundtrip() {
 
     let round_resp: SetResponse<serde_json::Value> = serde_json::from_value(resp_val).unwrap();
     assert_eq!(round_resp, resp);
+}
+
+/// Fastmail answers `VacationResponse/set` with a null `newState`, and the
+/// response still has to parse.
+///
+/// RFC 8620 §5.3 types `newState` as `String`, not `String|null`, so this is
+/// the server bending the spec. Refusing it is worse than accepting it: the
+/// `updated` member in the same payload says the change *was* applied, so a
+/// parse failure here reports a save that happened as a save that failed, and
+/// the user writes it again. The payload below is verbatim from
+/// api.fastmail.com, 2026-09-05, for an empty (no-op) patch.
+#[test]
+fn set_response_accepts_the_null_new_state_fastmail_sends() {
+    use jmap_proto::id::Id;
+    use jmap_proto::mail::VacationResponse;
+    use jmap_proto::methods::SetResponse;
+
+    let payload = serde_json::json!({
+        "newState": null,
+        "oldState": null,
+        "updated": { "singleton": null },
+        "accountId": "u7dbe43a0"
+    });
+
+    // The instantiation `vacation_response_update` actually parses into, so the
+    // test fails if the singleton's own shape ever stops fitting.
+    let response: SetResponse<VacationResponse> =
+        serde_json::from_value(payload).expect("a null newState is not a parse failure");
+
+    assert_eq!(response.new_state, None, "null newState reads as no state");
+    assert_eq!(response.old_state, None);
+    assert!(
+        response
+            .updated
+            .as_ref()
+            .expect("updated is present")
+            .contains_key(&Id::new("singleton")),
+        "the singleton was updated, which is what makes refusing this payload harmful"
+    );
 }
 
 #[test]
