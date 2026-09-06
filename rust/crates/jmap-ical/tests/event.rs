@@ -38048,3 +38048,392 @@ fn differential_oracle_set_position_wkst_default_and_read_until_offset() {
         jmap_ical::event::read_until(until_floating, jmap_ical::event::Ends::At("+0200"));
     assert_eq!(unshifted, "2026-07-01T12:00:00");
 }
+
+#[test]
+fn differential_oracle_rrule_to_rule_ast_tokenization_and_sentinels() {
+    // 1. Case-insensitive key/value tokenization
+    let rule_str = "freq=monthly;interval=2;count=5;wkst=su";
+    let rule = jmap_ical::event::rrule_to_rule(rule_str, jmap_ical::event::Ends::At("+0000"))
+        .expect("parsed rule");
+    assert_eq!(rule.frequency, "monthly");
+    assert_eq!(rule.interval, Some(2));
+    assert_eq!(rule.count, Some(5));
+    assert_eq!(rule.first_day_of_week.as_deref(), Some("su"));
+
+    // 2. Truncation on malformed UNTIL syntax (missing date-time digits)
+    let malformed_until = "FREQ=WEEKLY;UNTIL=GARBAGE;BYDAY=MO";
+    let rule_truncated =
+        jmap_ical::event::rrule_to_rule(malformed_until, jmap_ical::event::Ends::At("+0000"))
+            .expect("truncated rule");
+    assert_eq!(rule_truncated.frequency, "weekly");
+    assert_eq!(rule_truncated.until, None);
+    assert_eq!(rule_truncated.by_day, None);
+
+    // 3. to_nday signed ordinal decomposition and zero-ordinal rejection
+    let nday_pos = jmap_ical::event::to_nday("2MO");
+    assert_eq!(nday_pos.nth_of_period, Some(2));
+    assert_eq!(nday_pos.day, "mo");
+
+    let nday_plus = jmap_ical::event::to_nday("+3TU");
+    assert_eq!(nday_plus.nth_of_period, Some(3));
+    assert_eq!(nday_plus.day, "tu");
+
+    let nday_neg = jmap_ical::event::to_nday("-1FR");
+    assert_eq!(nday_neg.nth_of_period, Some(-1));
+    assert_eq!(nday_neg.day, "fr");
+
+    let nday_zero = jmap_ical::event::to_nday("0MO");
+    assert_eq!(nday_zero.nth_of_period, None);
+    assert_eq!(nday_zero.day, "0mo");
+
+    let nday_invalid = jmap_ical::event::to_nday("INVALID");
+    assert_eq!(nday_invalid.nth_of_period, None);
+    assert_eq!(nday_invalid.day, "invalid");
+
+    // 4. to_month_day parsing and sentinel zero (0)
+    assert_eq!(jmap_ical::event::to_month_day("15"), 15);
+    assert_eq!(jmap_ical::event::to_month_day("-1"), -1);
+    assert_eq!(jmap_ical::event::to_month_day("+10"), 10);
+    assert_eq!(jmap_ical::event::to_month_day("abc"), 0);
+
+    // 5. to_time_of_day parsing and sentinel u32::MAX
+    assert_eq!(jmap_ical::event::to_time_of_day("0"), 0);
+    assert_eq!(jmap_ical::event::to_time_of_day("23"), 23);
+    assert_eq!(jmap_ical::event::to_time_of_day("invalid"), u32::MAX);
+}
+
+#[test]
+fn differential_oracle_zone_offset_at_boundary_and_horizon_windowing() {
+    // 1. Instant-boundary: exact onset receives TZOFFSETTO
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/BoundaryZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20260101T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0100\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20260329T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+
+    let cal = jmap_ical::event::parse_ical(ics).expect("parse cal");
+    let vtz = cal
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let observances: Vec<&calcard::icalendar::ICalendarComponent> = vtz
+        .component_ids
+        .iter()
+        .filter_map(|id| cal.components.get(*id as usize))
+        .collect();
+
+    // In 2026, March 29 is the last Sunday. Local DTSTART is 02:00:00, with offsetFrom +0100 (3600),
+    // so the UTC instant of the onset is 01:00:00 UTC (2026-03-29T01:00:00).
+    // Exactly at onset: receives daylight offset (+0200 = 7200).
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&observances, "2026-03-29T01:00:00"),
+        Some(7200)
+    );
+    // One second before onset: receives standard offset (+0100 = 3600).
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&observances, "2026-03-29T00:59:59"),
+        Some(3600)
+    );
+
+    // 2. Earliest transition fallback for targets before all onsets
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&observances, "1970-01-01T00:00:00"),
+        Some(3600)
+    );
+
+    // 3. RDATE with period duration `/` is refused
+    let ics_period_rdate = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/PeriodRdateZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20260101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RDATE;VALUE=PERIOD:20260101T000000Z/PT1H\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let cal_period = jmap_ical::event::parse_ical(ics_period_rdate).expect("parse period");
+    let vtz_per = cal_period
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz_per");
+    let obs_per: Vec<&calcard::icalendar::ICalendarComponent> = vtz_per
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_period.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_per, "2026-06-01T12:00:00"),
+        None,
+        "Period RDATE with duration must be refused on transitions"
+    );
+
+    // 4. Restated time of day in RRULE replaces DTSTART time
+    let ics_restated = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/RestatedZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20260101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0000\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20260101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=6;BYMONTHDAY=1;BYHOUR=4;BYMINUTE=30;BYSECOND=0\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let cal_restated = jmap_ical::event::parse_ical(ics_restated).expect("parse restated");
+    let vtz_res = cal_restated
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz_res");
+    let obs_res: Vec<&calcard::icalendar::ICalendarComponent> = vtz_res
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_restated.components.get(*id as usize))
+        .collect();
+    // At 2026-06-01 04:29:59 UTC: standard offset (0)
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_res, "2026-06-01T04:29:59"),
+        Some(0)
+    );
+    // At 2026-06-01 04:30:00 UTC: restated daylight offset (+0100 = 3600)
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_res, "2026-06-01T04:30:00"),
+        Some(3600)
+    );
+}
+
+#[test]
+fn differential_oracle_zone_day_grammar_weekday_among_and_falls() {
+    // 1. tzdata WeekdayAmong idiom (consecutive 7-day range matching a single weekday)
+    let ics_weekday_among = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/WeekdayAmongZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20260101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0000\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20260329T020000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=SU;BYMONTHDAY=25,26,27,28,29,30,31\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let cal = jmap_ical::event::parse_ical(ics_weekday_among).expect("parse cal");
+    let vtz = cal
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz");
+    let observances: Vec<&calcard::icalendar::ICalendarComponent> = vtz
+        .component_ids
+        .iter()
+        .filter_map(|id| cal.components.get(*id as usize))
+        .collect();
+
+    // In March 2026, Sunday in range 25..=31 is March 29.
+    // Local start is 02:00:00, offsetFrom is 0, so onset is 2026-03-29T02:00:00 UTC.
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&observances, "2026-03-29T01:59:59"),
+        Some(0)
+    );
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&observances, "2026-03-29T02:00:00"),
+        Some(3600)
+    );
+
+    // 2. Ambiguous multi-date set refusal (Falls::Set)
+    let ics_multi_match = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/MultiMatchZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20260101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=SU;BYMONTHDAY=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let cal_multi = jmap_ical::event::parse_ical(ics_multi_match).expect("parse multi");
+    let vtz_multi = cal_multi
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz_multi");
+    let obs_multi: Vec<&calcard::icalendar::ICalendarComponent> = vtz_multi
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_multi.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_multi, "2026-06-01T12:00:00"),
+        None,
+        "Date run holding multiple matches for the weekday must be refused with Falls::Set"
+    );
+
+    // 3. Day::OfMonth with negative offset (-1 for last day of month)
+    let ics_neg_day = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/NegDayZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20260101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0000\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20260228T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=-1\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let cal_neg = jmap_ical::event::parse_ical(ics_neg_day).expect("parse neg");
+    let vtz_neg = cal_neg
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz_neg");
+    let obs_neg: Vec<&calcard::icalendar::ICalendarComponent> = vtz_neg
+        .component_ids
+        .iter()
+        .filter_map(|id| cal_neg.components.get(*id as usize))
+        .collect();
+    // In 2026 (non-leap), Feb -1 is Feb 28.
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_neg, "2026-02-28T00:00:00"),
+        Some(7200)
+    );
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_neg, "2026-02-27T23:59:59"),
+        Some(0)
+    );
+}
+
+#[test]
+fn differential_oracle_defines_time_zone_solidus_and_redrawability() {
+    // 1. defines_time_zone requires solidus prefix
+    let valid_def = json!({
+        "@type": "TimeZone",
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "2026-01-01T00:00:00",
+            "offsetFrom": "+01:00",
+            "offsetTo": "+01:00"
+        }]
+    });
+    let mut event = fixture_event();
+    event.time_zones = Some({
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("/custom/solidus_zone".to_owned(), valid_def.clone());
+        map.insert("Europe/Berlin".to_owned(), valid_def.clone());
+        map
+    });
+
+    assert!(jmap_ical::defines_time_zone(&event, "/custom/solidus_zone"));
+    assert!(
+        !jmap_ical::defines_time_zone(&event, "Europe/Berlin"),
+        "Bare IANA names must not be accepted by defines_time_zone"
+    );
+    assert!(
+        !jmap_ical::defines_time_zone(&event, "/nonexistent"),
+        "Nonexistent timezones must return false"
+    );
+
+    // 2. Empty observance list cannot be drawn whole
+    let empty_def = json!({
+        "@type": "TimeZone",
+        "standard": []
+    });
+    event.time_zones = Some({
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("/custom/empty_zone".to_owned(), empty_def);
+        map
+    });
+    assert!(
+        !jmap_ical::defines_time_zone(&event, "/custom/empty_zone"),
+        "Empty observances must be refused"
+    );
+
+    // 3. utc_offset parsing and negative-zero prohibition
+    assert_eq!(
+        jmap_ical::event::utc_offset("+0200").as_deref(),
+        Some("+0200")
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("-05:00").as_deref(),
+        Some("-0500")
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("+053045").as_deref(),
+        Some("+053045")
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("-0000"),
+        None,
+        "-0000 is prohibited per RFC 5545 Section 3.3.14"
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("+0000").as_deref(),
+        Some("+0000")
+    );
+    assert_eq!(jmap_ical::event::utc_offset("invalid"), None);
+
+    // 4. Inbound read_time_zones preserves redrawable definitions and drops incomplete ones
+    let ics_custom_tz = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:/custom/redrawable\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19700101T000000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0100\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-tz-custom\r\n",
+        "DTSTART;TZID=/custom/redrawable:20260101T100000\r\n",
+        "DURATION:PT1H\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_parsed = ical_to_event(ics_custom_tz).expect("parsed event");
+    let tz_map = event_parsed.time_zones.expect("time_zones map");
+    assert!(tz_map.contains_key("/custom/redrawable"));
+}
