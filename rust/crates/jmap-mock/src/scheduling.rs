@@ -22,11 +22,13 @@
 //!   draft itself advises against for interoperability;
 //! * the iMIP licence in §5.9.2 to drop changes the server deems inessential,
 //!   which would make the mock's output depend on a judgement call;
-//! * `hideAttendees` (§5.1.3), which would trim the attendee list a built
-//!   message carries;
 //! * §5.9.2.1's rule that a message to somebody dropped from one occurrence
 //!   must still *show* that occurrence as excluded, which the payload does
 //!   not render specially yet.
+//!
+//! `hideAttendees` (§5.1.3) *is* modelled: [`build_ical`] trims the
+//! participant map it hands to the renderer down to the owners plus the
+//! message's own recipient, whenever the event sets it.
 //!
 //! Per-instance participant sets are modelled (§5.9.2.1's MUST that
 //! "participants are only sent information about recurrence instances they
@@ -38,7 +40,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jmap_proto::Id;
 use jmap_proto::calendars::{
-    CalendarEvent, PER_USER_PROPERTIES, participant_participation_status, scheduling_method,
+    CalendarEvent, PER_USER_PROPERTIES, participant_participation_status, participant_role,
+    scheduling_method,
 };
 use serde_json::{Map, Value};
 
@@ -141,7 +144,7 @@ fn origin_messages(
     let sender = subject.organizer_calendar_address.clone();
     let mut messages = Vec::new();
     let mut send = |method: &str, recipient: &str, recurrence_id: Scope| {
-        let ical = build_ical(subject, method, &recurrence_id);
+        let ical = build_ical(subject, method, &recurrence_id, recipient);
         messages.push(RecordedSchedulingMessage {
             method: method.to_owned(),
             event_id: change.id.clone(),
@@ -292,7 +295,7 @@ fn reply_messages(
         if answer.is_none_or(|status| status == participant_participation_status::NEEDS_ACTION) {
             continue;
         }
-        let ical = build_ical(subject, scheduling_method::REPLY, &None);
+        let ical = build_ical(subject, scheduling_method::REPLY, &None, &organizer);
         messages.push(RecordedSchedulingMessage {
             method: scheduling_method::REPLY.to_owned(),
             event_id: change.id.clone(),
@@ -332,7 +335,7 @@ fn reply_messages(
                 continue;
             }
             let scope = Some(recurrence_id.clone());
-            let ical = build_ical(subject, scheduling_method::REPLY, &scope);
+            let ical = build_ical(subject, scheduling_method::REPLY, &scope, &organizer);
             messages.push(RecordedSchedulingMessage {
                 method: scheduling_method::REPLY.to_owned(),
                 event_id: change.id.clone(),
@@ -449,15 +452,61 @@ fn participants_at(event: &CalendarEvent, recurrence_id: &str) -> Map<String, Va
 /// `method` names it, and narrowed to one occurrence when `recurrence_id`
 /// says the message is about one rather than the whole event. Building who
 /// gets a message is entirely the caller's job; this only ever builds what
-/// it says.
-fn build_ical(event: &CalendarEvent, method: &str, recurrence_id: &Scope) -> String {
+/// it says, `recipient` included: it decides nothing about who hears about
+/// the event, only what a message already addressed to `recipient` shows
+/// them (§5.1.3's `hideAttendees`).
+fn build_ical(
+    event: &CalendarEvent,
+    method: &str,
+    recurrence_id: &Scope,
+    recipient: &str,
+) -> String {
     match recurrence_id {
-        None => jmap_ical::scheduling_ical(event, method, None),
+        None => {
+            let event = attendees_shown_to(event, recipient);
+            jmap_ical::scheduling_ical(&event, method, None)
+        }
         Some(recurrence_id) => {
             let instance = instance_event(event, recurrence_id);
+            let instance = attendees_shown_to(&instance, recipient);
             jmap_ical::scheduling_ical(&instance, method, Some(recurrence_id))
         }
     }
+}
+
+/// §5.1.3: with `hideAttendees` set, only the owners of the event may see
+/// the full guest list; everyone else sees only the owners and themselves.
+/// §5.9.2.1 extends the same rule to what a scheduling message states. Leaves
+/// the event as it is when `hideAttendees` is not set.
+fn attendees_shown_to(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
+    if event.hide_attendees != Some(true) {
+        return event.clone();
+    }
+    let mut event = event.clone();
+    let recipient = normalize_uri(recipient);
+    if let Some(participants) = event.participants.take() {
+        event.participants = Some(
+            participants
+                .into_iter()
+                .filter(|(_, participant)| {
+                    holds_role(participant, participant_role::OWNER)
+                        || calendar_address(participant)
+                            .is_some_and(|address| normalize_uri(address) == recipient)
+                })
+                .collect(),
+        );
+    }
+    event
+}
+
+/// RFC 8984 §4.4.6: a participant's `roles` is a set, keyed by role name to
+/// `true`. jmap-ical's own copy of this test is private to the iCalendar
+/// mapping, so this is kept as a small local duplicate rather than exported.
+fn holds_role(participant: &Value, role: &str) -> bool {
+    participant
+        .get("roles")
+        .and_then(|roles| roles.get(role))
+        .is_some_and(|held| held == &Value::Bool(true))
 }
 
 /// The occurrence `recurrence_id` names, as a `CalendarEvent` of its own: the

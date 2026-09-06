@@ -365,6 +365,12 @@ pub struct CalendarEvent {
     /// true again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_draft: Option<bool>,
+    /// Whether only the owners of the event may see the full guest list
+    /// (draft-ietf-jmap-calendars-28 §5.1.3): everyone else sees only the
+    /// owners and themselves. §5.9.2.1 extends the same rule to a
+    /// scheduling message's own payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hide_attendees: Option<bool>,
     /// jscalendarbis §3.3.3 (draft-ietf-calext-jscalendarbis): a single
     /// `RecurrenceRule`, not RFC 8984's plural `recurrenceRules` array — the
     /// property was renamed and restructured from array-valued to
