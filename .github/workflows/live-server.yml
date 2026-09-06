@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The Integration testing track's gated CI leg (docs/manual-test-live-server.md):
+# runs the live_server suites against the disposable Stalwart VM the runner
+# shares a VPC with, instead of a human doing docs/manual-test-live-server.md
+# by hand. workflow_dispatch only, and self-hosted, on purpose: ci.yml's
+# header explains why a public repo's automatic (push/PR) pipeline never runs
+# on the self-hosted runner (a fork PR could ride it to the VM's
+# credentials); runner-smoke.yml already carries the same exception for the
+# same reason, since workflow_dispatch cannot be triggered by an untrusted
+# fork PR.
+#
+# Seeds its own throwaway accounts on a fresh per-run domain (never the
+# operator's own manual-test account), so a failed or concurrent run can
+# never corrupt another one's fixtures. Skips (does not fail) if the Stalwart
+# VM is currently napped and this runner cannot wake it; only the operator
+# can start it back up (see harness/live-server/live-server-env.sh).
+
+name: Live server integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-server:
+    runs-on: [self-hosted, gcp]
+    steps:
+      - uses: actions/checkout@v4
+      # The runner service does not inherit the login PATH: cargo lives in
+      # ~/.cargo/bin, stalwart-cli in ~/.local/bin (runner-smoke.yml's note).
+      - run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Seed throwaway Stalwart accounts for this run
+        run: |
+          set -euo pipefail
+          source "$HOME/evolution-night-shift/harness/live-server/live-server-env.sh"
+          domain="agent-ci-$GITHUB_RUN_ID.test"
+          pass1=$(openssl rand -hex 16)
+          pass2=$(openssl rand -hex 16)
+          echo "::add-mask::$pass1"
+          echo "::add-mask::$pass2"
+          "$HOME/evolution-night-shift/harness/stalwart/stw" seed "$domain" agent1 "$pass1"
+          "$HOME/evolution-night-shift/harness/stalwart/stw" seed "$domain" agent2 "$pass2"
+          {
+            echo "JMAP_LIVE_SERVER_URL=$STALWART_URL"
+            echo "JMAP_LIVE_SERVER_USER=agent1@$domain"
+            echo "JMAP_LIVE_SERVER_PASSWORD=$pass1"
+            echo "JMAP_LIVE_SERVER_WRITE_USER=agent1@$domain"
+            echo "JMAP_LIVE_SERVER_WRITE_PASSWORD=$pass1"
+            echo "JMAP_LIVE_SERVER_RECIPIENT_USER=agent2@$domain"
+            echo "JMAP_LIVE_SERVER_RECIPIENT_PASSWORD=$pass2"
+          } >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: live-server
+          workspaces: rust
+      # jmap-client's own read/write suite (docs/manual-test-live-server.md).
+      - run: cargo test -p evolution-jmap-client --features live-server -- --ignored
+        working-directory: rust
+      # The sync crates' live-server counterparts: no live-server feature of
+      # their own, #[ignore] alone keeps them out of a plain `cargo test`.
+      - run: cargo test -p evolution-jmap-mail-sync -- --ignored
+        working-directory: rust
+      - run: cargo test -p evolution-jmap-cal-sync -- --ignored
+        working-directory: rust
+      - run: cargo test -p evolution-jmap-book-sync -- --ignored
+        working-directory: rust
+      - run: cargo test -p evolution-jmap-collection-sync -- --ignored
+        working-directory: rust
