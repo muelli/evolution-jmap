@@ -37313,3 +37313,458 @@ fn differential_oracle_utc_datetime_normalization_subsecond_and_leap_second_gati
     assert!(jmap_ical::event::exists("20000229", "000000"));
     assert!(!jmap_ical::event::exists("19000229", "000000"));
 }
+
+#[test]
+fn differential_oracle_drawn_participants_roster_organizer_and_kinds() {
+    // 1. Conforming owner and attendee participant serialization
+    let mut event = fixture_event();
+    let mut participants = BTreeMap::new();
+
+    let owner = json!({
+        "name": "Alice",
+        "roles": { "owner": true, "chair": true },
+        "sendTo": { "imip": "mailto:alice@example.com" },
+        "kind": "individual",
+        "participationStatus": "accepted",
+        "expectReply": true
+    });
+    participants.insert("p1".to_owned(), owner);
+
+    let guest = json!({
+        "name": "Bob",
+        "roles": { "attendee": true },
+        "sendTo": { "imip": "mailto:bob@example.com" },
+        "kind": "location",
+        "participationStatus": "tentative",
+        "expectReply": false
+    });
+    participants.insert("p2".to_owned(), guest);
+
+    event.participants = Some(participants);
+
+    let lines = jmap_ical::event::drawn_participants(&event);
+    assert_eq!(lines.len(), 3, "Expected 1 ORGANIZER and 2 ATTENDEE lines");
+
+    // First line: ORGANIZER for Alice
+    assert_eq!(lines[0].name.as_str(), "ORGANIZER");
+    assert_eq!(
+        jmap_ical::event::entry_text(&lines[0]),
+        "mailto:alice@example.com"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[0], "CN").as_deref(),
+        Some("Alice")
+    );
+
+    // Second line: ATTENDEE for Alice (since chair role is held)
+    assert_eq!(lines[1].name.as_str(), "ATTENDEE");
+    assert_eq!(
+        jmap_ical::event::entry_text(&lines[1]),
+        "mailto:alice@example.com"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[1], "CN").as_deref(),
+        Some("Alice")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[1], "CUTYPE").as_deref(),
+        Some("INDIVIDUAL")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[1], "ROLE").as_deref(),
+        Some("CHAIR")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[1], "PARTSTAT").as_deref(),
+        Some("ACCEPTED")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[1], "RSVP").as_deref(),
+        Some("TRUE")
+    );
+
+    // Third line: ATTENDEE for Bob (location kind maps to ROOM)
+    assert_eq!(lines[2].name.as_str(), "ATTENDEE");
+    assert_eq!(
+        jmap_ical::event::entry_text(&lines[2]),
+        "mailto:bob@example.com"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[2], "CN").as_deref(),
+        Some("Bob")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[2], "CUTYPE").as_deref(),
+        Some("ROOM"),
+        "JSCalendar location kind must map to iCalendar CUTYPE=ROOM"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[2], "ROLE").as_deref(),
+        Some("REQ-PARTICIPANT")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[2], "PARTSTAT").as_deref(),
+        Some("TENTATIVE")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[2], "RSVP"),
+        None,
+        "RSVP must be omitted when expectReply is false"
+    );
+
+    // 2. Owner who does not attend (only owner role): emitted on ORGANIZER only
+    let non_attending_owner = json!({
+        "roles": { "owner": true },
+        "sendTo": { "imip": "mailto:boss@example.com" }
+    });
+
+    let mut single_owner_map = BTreeMap::new();
+    single_owner_map.insert("p_boss".to_owned(), non_attending_owner);
+    event.participants = Some(single_owner_map);
+
+    let boss_lines = jmap_ical::event::drawn_participants(&event);
+    assert_eq!(
+        boss_lines.len(),
+        1,
+        "Non-attending owner must only emit ORGANIZER"
+    );
+    assert_eq!(boss_lines[0].name.as_str(), "ORGANIZER");
+
+    // 3. Helper functions: calendar_address, names_a_uri, holds_role, expects_reply
+    assert!(jmap_ical::event::names_a_uri("mailto:user@example.com"));
+    assert!(jmap_ical::event::names_a_uri("https://example.com/cal"));
+    assert!(!jmap_ical::event::names_a_uri("invalid uri with spaces"));
+    assert!(!jmap_ical::event::names_a_uri("no-colon-string"));
+
+    let participant_val = json!({
+        "sendTo": { "imip": "mailto:test@example.com" },
+        "roles": { "owner": true },
+        "expectReply": true
+    });
+    assert_eq!(
+        jmap_ical::event::calendar_address(&participant_val),
+        Some("mailto:test@example.com")
+    );
+    assert!(jmap_ical::event::holds_role(&participant_val, "owner"));
+    assert!(!jmap_ical::event::holds_role(&participant_val, "attendee"));
+    assert!(jmap_ical::event::expects_reply(&participant_val));
+}
+
+#[test]
+fn differential_oracle_drawn_conferences_canonical_features_and_uri_gating() {
+    // 1. Conforming virtual location serialization
+    let mut event = fixture_event();
+    let mut virtual_locations = BTreeMap::new();
+
+    let conf1 = json!({
+        "uri": "https://meet.example.com/xyz",
+        "name": "Team Sync",
+        "features": {
+            "video": true,
+            "audio": true,
+            "chat": true
+        }
+    });
+    virtual_locations.insert("v1".to_owned(), conf1);
+
+    event.virtual_locations = Some(virtual_locations);
+
+    let lines = jmap_ical::event::drawn_conferences(&event);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].name.as_str(), "CONFERENCE");
+    assert_eq!(
+        jmap_ical::event::entry_text(&lines[0]),
+        "https://meet.example.com/xyz"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[0], "VALUE").as_deref(),
+        Some("URI"),
+        "RFC 7986 Section 5.11 requires VALUE=URI on conference entries"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[0], "LABEL").as_deref(),
+        Some("Team Sync")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&lines[0], "X-JMAP-KEY").as_deref(),
+        Some("v1")
+    );
+
+    // Feature tokens must be emitted in canonical CONFERENCE_FEATURES order: AUDIO, CHAT, VIDEO
+    let emitted_features = jmap_ical::event::entry_param_values(&lines[0], "FEATURE");
+    assert_eq!(emitted_features, vec!["AUDIO", "CHAT", "VIDEO"]);
+
+    // 2. Multi-entry conferences: multiple entries are preserved
+    let conf2 = json!({
+        "uri": "tel:+1234567890",
+        "name": "Phone Dial-in"
+    });
+    event
+        .virtual_locations
+        .as_mut()
+        .unwrap()
+        .insert("v2".to_owned(), conf2);
+
+    let multi_lines = jmap_ical::event::drawn_conferences(&event);
+    assert_eq!(
+        multi_lines.len(),
+        2,
+        "Both conference lines must be serialized"
+    );
+
+    // 3. Invalid non-URI is rejected by drawn_conference
+    let invalid_conf = json!({
+        "uri": "invalid conference target without scheme"
+    });
+    assert!(
+        jmap_ical::event::drawn_conference("v_bad", &invalid_conf).is_none(),
+        "Non-URI conference target must be rejected"
+    );
+
+    // 4. Helper function: joining_features
+    let loc_features = json!({
+        "features": {
+            "phone": true,
+            "moderator": true
+        }
+    });
+    let joined = jmap_ical::event::joining_features(&loc_features);
+    assert_eq!(joined, vec!["MODERATOR", "PHONE"]);
+}
+
+#[test]
+fn differential_oracle_drawn_links_images_and_media_type_validation() {
+    // 1. Rel-based component bifurcation: icon becomes IMAGE, enclosure becomes ATTACH
+    let mut event = fixture_event();
+    let mut links = BTreeMap::new();
+
+    let icon_link = json!({
+        "href": "https://example.com/logo.png",
+        "rel": "icon",
+        "display": "badge",
+        "contentType": "image/png"
+    });
+    links.insert("l1".to_owned(), icon_link);
+
+    let doc_link = json!({
+        "href": "https://example.com/agenda.pdf",
+        "rel": "enclosure",
+        "size": 1048576,
+        "contentType": "application/pdf"
+    });
+    links.insert("l2".to_owned(), doc_link);
+
+    event.links = Some(links);
+
+    let lines = jmap_ical::event::drawn_links(&event);
+    assert_eq!(lines.len(), 2);
+
+    // "l1": icon -> IMAGE
+    let image_entry = lines
+        .iter()
+        .find(|e| e.name.as_str() == "IMAGE")
+        .expect("IMAGE entry");
+    assert_eq!(
+        jmap_ical::event::entry_text(image_entry),
+        "https://example.com/logo.png"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(image_entry, "VALUE").as_deref(),
+        Some("URI"),
+        "RFC 7986 Section 5.10 requires VALUE=URI on IMAGE"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(image_entry, "DISPLAY").as_deref(),
+        Some("BADGE")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(image_entry, "FMTTYPE").as_deref(),
+        Some("image/png")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(image_entry, "X-JMAP-KEY").as_deref(),
+        Some("l1")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(image_entry, "SIZE"),
+        None,
+        "SIZE parameter is forbidden on IMAGE properties"
+    );
+
+    // "l2": enclosure -> ATTACH
+    let attach_entry = lines
+        .iter()
+        .find(|e| e.name.as_str() == "ATTACH")
+        .expect("ATTACH entry");
+    assert_eq!(
+        jmap_ical::event::entry_text(attach_entry),
+        "https://example.com/agenda.pdf"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(attach_entry, "VALUE"),
+        None,
+        "URI is default value type for ATTACH, VALUE parameter omitted"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(attach_entry, "DISPLAY"),
+        None,
+        "DISPLAY parameter is forbidden on ATTACH properties"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(attach_entry, "SIZE").as_deref(),
+        Some("1048576"),
+        "RFC 8607 Section 4.1 SIZE parameter serialized on ATTACH"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(attach_entry, "FMTTYPE").as_deref(),
+        Some("application/pdf")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(attach_entry, "X-JMAP-KEY").as_deref(),
+        Some("l2")
+    );
+
+    // 2. Restricted-name media type validation (RFC 6838)
+    assert!(jmap_ical::event::restricted_name("application"));
+    assert!(jmap_ical::event::restricted_name("pdf"));
+    assert!(jmap_ical::event::restricted_name("svg+xml"));
+    assert!(!jmap_ical::event::restricted_name("plain; charset=utf-8"));
+    assert!(!jmap_ical::event::restricted_name("invalid/type"));
+
+    let link_with_params = json!({
+        "href": "https://example.com/note.txt",
+        "contentType": "text/plain; charset=utf-8"
+    });
+    assert_eq!(
+        jmap_ical::event::media_type(&link_with_params),
+        None,
+        "Media type with parameters must not be emitted in FMTTYPE"
+    );
+
+    // 3. Stated size extraction
+    let link_with_size = json!({
+        "size": 42000
+    });
+    assert_eq!(
+        jmap_ical::event::stated_size(&link_with_size),
+        Some("42000".to_owned())
+    );
+}
+
+#[test]
+fn differential_oracle_drawn_alerts_default_suppression_and_valarm() {
+    // 1. Conforming alert serialization to VALARM
+    let alert = json!({
+        "@type": "Alert",
+        "action": "display",
+        "trigger": {
+            "@type": "OffsetTrigger",
+            "offset": "-PT15M",
+            "relativeTo": "start"
+        }
+    });
+    let valarm = jmap_ical::event::drawn_alert("a1", &alert, Some("Dentist"))
+        .expect("VALARM component drawn");
+    assert_eq!(valarm.component_type.as_str(), "VALARM");
+
+    let uid = valarm.entries.iter().find(|e| e.name.as_str() == "UID");
+    assert_eq!(
+        uid.map(jmap_ical::event::entry_text).as_deref(),
+        Some("a1"),
+        "RFC 9074 Section 6 VALARM UID parameter must preserve map key"
+    );
+
+    let action = valarm.entries.iter().find(|e| e.name.as_str() == "ACTION");
+    assert_eq!(
+        action.map(jmap_ical::event::entry_text).as_deref(),
+        Some("DISPLAY")
+    );
+
+    let trigger = valarm.entries.iter().find(|e| e.name.as_str() == "TRIGGER");
+    assert_eq!(
+        trigger.map(jmap_ical::event::entry_text).as_deref(),
+        Some("-PT15M")
+    );
+    assert_eq!(
+        trigger.and_then(|e| jmap_ical::event::entry_param(e, "RELATED")),
+        None,
+        "RELATED must be omitted when trigger is relative to start (default)"
+    );
+
+    let desc = valarm
+        .entries
+        .iter()
+        .find(|e| e.name.as_str() == "DESCRIPTION");
+    assert_eq!(
+        desc.map(jmap_ical::event::entry_text).as_deref(),
+        Some("Dentist"),
+        "RFC 5545 Section 3.6.6 requires DESCRIPTION on DISPLAY alarms"
+    );
+
+    // 2. End-relative trigger: RELATED=END attached
+    let end_alert = json!({
+        "@type": "Alert",
+        "action": "display",
+        "trigger": {
+            "@type": "OffsetTrigger",
+            "offset": "PT10M",
+            "relativeTo": "end"
+        }
+    });
+    let end_valarm = jmap_ical::event::drawn_alert("a2", &end_alert, None).expect("end valarm");
+    let end_trigger = end_valarm
+        .entries
+        .iter()
+        .find(|e| e.name.as_str() == "TRIGGER")
+        .expect("TRIGGER entry");
+    assert_eq!(
+        jmap_ical::event::entry_param(end_trigger, "RELATED").as_deref(),
+        Some("END")
+    );
+
+    // 3. Document-wide useDefaultAlerts suppression
+    let mut event = fixture_event();
+    let mut alerts = BTreeMap::new();
+    alerts.insert("a1".to_owned(), alert.clone());
+    event.alerts = Some(alerts);
+
+    event.use_default_alerts = Some(true);
+    assert!(jmap_ical::event::uses_default_alerts(&event));
+    assert!(
+        !jmap_ical::event::maps_alerts(&event),
+        "maps_alerts must refuse when useDefaultAlerts is true"
+    );
+    let alarms = jmap_ical::event::drawn_alarms(&event);
+    assert!(
+        alarms.is_empty(),
+        "drawn_alarms must suppress all VALARM components when useDefaultAlerts is true"
+    );
+
+    // 4. Non-display action refusal
+    let email_alert = json!({
+        "@type": "Alert",
+        "action": "email",
+        "trigger": {
+            "@type": "OffsetTrigger",
+            "offset": "-PT15M"
+        }
+    });
+    assert!(
+        jmap_ical::event::drawn_alert("a_email", &email_alert, None).is_none(),
+        "Non-display action email must be refused"
+    );
+
+    // 5. Absolute trigger refusal
+    let abs_alert = json!({
+        "@type": "Alert",
+        "action": "display",
+        "trigger": {
+            "@type": "AbsoluteTrigger",
+            "when": "2026-07-01T12:00:00Z"
+        }
+    });
+    assert!(
+        jmap_ical::event::drawn_alert("a_abs", &abs_alert, None).is_none(),
+        "Absolute trigger must be refused"
+    );
+}

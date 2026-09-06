@@ -5412,4 +5412,87 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.276 Divergence 276: `drawn_participants`, `calendar_address`, `names_a_uri`, `holds_role`, `expects_reply`, and `spelled`: Outbound Participant Roster and Organizer Serialization: RFC 5545 Section 3.6.1 Single Primary `ORGANIZER` Selection, Attending Owner Dual-Line Bifurcation, Set-Order Priority Role Mapping (`PARTICIPANT_ROLES`), Four-Kind `CUTYPE` Translation (`ROOM` for `location`), and Conditional `RSVP=TRUE` Attachment
+
+- **Observed Behavior**:
+  Serializing JSCalendar `participants` maps into RFC 5545 `ORGANIZER` and `ATTENDEE` property lines requires resolving ownership models, multi-role precedence, parameter translation, and address validation. In `jmap-ical`:
+  1. Single primary `ORGANIZER` selection: RFC 8984 Section 4.4.6 permits multiple participants to hold the `owner` role (`roles: {"owner": true}`). RFC 5545 Section 3.6.1 restricts a `VEVENT` to at most one `ORGANIZER` line. `drawn_participants` tracks `organizer_drawn` across the participant map in deterministic iteration order. Only the first owner encountered emits an `ORGANIZER` line with parameter `CN=<name>`, while subsequent owners do not emit duplicate `ORGANIZER` lines.
+  2. Attending owner dual-line bifurcation: If an owner holds only the `owner` role (`role.is_none()`), the participant is emitted solely on `ORGANIZER` and omitted from `ATTENDEE`, treating them as a host who called the meeting without attending. If the owner also holds an attendee role (such as `attendee` or `chair`), `drawn_participants` emits both `ORGANIZER` and `ATTENDEE` lines, reflecting that the organizer is on the guest list.
+  3. Role precedence hierarchy (`PARTICIPANT_ROLES`): RFC 8984 `roles` is a set, whereas RFC 5545 `ROLE` is a scalar parameter. `spelled(&PARTICIPANT_ROLES, ...)` selects the first matching role in priority order: `chair` (`CHAIR`), `informational` (`NON-PARTICIPANT`), `optional` (`OPT-PARTICIPANT`), and `attendee` (`REQ-PARTICIPANT`).
+  4. Four-kind `CUTYPE` translation (`PARTICIPANT_KINDS`): Translates `kind` to RFC 5545 `CUTYPE`: `individual` (`INDIVIDUAL`), `group` (`GROUP`), `resource` (`RESOURCE`), and `location` (`ROOM`). Unrecognized kinds are omitted from `CUTYPE`.
+  5. Conditional `RSVP=TRUE` attachment: RFC 5545 Section 3.2.17 specifies `FALSE` as the default for `RSVP`. `drawn_participants` attaches `RSVP=TRUE` only when `expects_reply(participant)` is true (`expectReply: true`), suppressing the parameter when false or unstated.
+  6. Calendar address filtering (`names_a_uri`): Extracts the `imip` address from `sendTo`. If missing or if the address is not a valid RFC 3986 URI with a scheme and target without whitespace, the participant is skipped entirely, preventing malformed lines from breaking parser consumers.
+  7. In contrast, differential oracles or naive serializers emit multiple `ORGANIZER` lines, omit attending organizers from the guest list, emit non-URI addresses into `ATTENDEE`, or serialize unmodeled roles.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.1 (`Event Component`), Section 3.8.4.1 (`Attendee`), Section 3.8.4.3 (`Organizer`), and Section 3.2.16 (`Role`).
+  2. RFC 8984 Section 4.4.6 (`Participant`).
+  3. RFC 6047 Section 2.1 (`iMIP`).
+- **Adjudication**:
+  Conforming specification boundary and guest list serialization precision. Emits a single primary organizer, bifurcates attending from non-attending owners, enforces role precedence ordering, translates calendar user types accurately, and guards against malformed addresses.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.277 Divergence 277: `drawn_conferences`, `drawn_conference`, `joining_features`, `CONFERENCE_FEATURES`, and `names_a_uri`: Outbound Virtual Locations and Online Conference Serialization: RFC 7986 Section 5.11 Multi-Entry Conference Admission, Mandatory `VALUE=URI` Parameter Attachment, Seven-Feature Token Normalization and Alphabetical Ordering, and Subpath Patch Key (`X-JMAP-KEY`) Retention
+
+- **Observed Behavior**:
+  Serializing JSCalendar `virtualLocations` into RFC 7986 `CONFERENCE` lines requires multi-entry coordination, mandatory value type enforcement, feature parameter mapping, and patch key preservation. In `jmap-ical`:
+  1. Multi-entry conference admission: Unlike physical `LOCATION`, RFC 7986 Section 5.11 explicitly allows `CONFERENCE` to appear multiple times in a `VEVENT`. `drawn_conferences` iterates over `event.virtual_locations`, serializing all valid entries without truncation.
+  2. Mandatory `VALUE=URI` parameter attachment: RFC 7986 Section 5.11 grammar specifies that `confparam` requires `VALUE=URI` on URI-based conference lines. `drawn_conference` attaches `VALUE=URI` explicitly, ensuring conformance with strict RFC 7986 parsers.
+  3. Mandatory URI validation (`names_a_uri`): The `uri` property is the mandatory core of a virtual location. `drawn_conference` validates the URI using `names_a_uri`. Any entry with an invalid or non-URI string is omitted (`None`).
+  4. Seven-feature token normalization (`CONFERENCE_FEATURES`): Evaluates `location.features`. For each feature defined in the standard seven-token set (`audio`, `chat`, `feed`, `moderator`, `phone`, `screen`, `video`), if the value is boolean `true`, the uppercase iCalendar token is collected in fixed canonical order. Unknown features or false values are ignored.
+  5. Descriptive label attachment (`stated_name`): If `location.name` is present and non-empty, it is serialized as parameter `LABEL=<name>`. Empty strings are suppressed.
+  6. Patch key retention (`X-JMAP-KEY`): Emits parameter `X-JMAP-KEY=<key>` so that round-trip synchronization paths can associate subsequent edits with the specific server-side virtual location map entry.
+  7. In contrast, differential oracles or naive serializers drop multiple conference lines (retaining only the first), omit mandatory `VALUE=URI` parameters, scramble feature ordering, or accept bare non-URI strings.
+- **Specification and Architectural Context**:
+  1. RFC 7986 Section 5.11 (`Conference Information`) and Section 6.3 (`Conference Feature Parameter`).
+  2. RFC 8984 Section 4.2.6 (`VirtualLocation`).
+  3. RFC 3986 Section 3.1 (`URI Scheme`).
+- **Adjudication**:
+  Conforming specification boundary and virtual meeting serialization fidelity. Serializes multi-entry conference lines, attaches mandatory `VALUE=URI`, orders feature tokens canonically, preserves map entry patch keys, and enforces URI syntax strictly.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.278 Divergence 278: `drawn_links`, `drawn_link`, `ICON_REL`, `media_type`, `restricted_name`, `stated_size`, and `LINK_DISPLAYS`: Outbound External Resource and Media Asset Serialization: Rel-Based Component Bifurcation (`IMAGE` vs `ATTACH`), RFC 8607 `SIZE` Parameter Attachment Exclusivity, RFC 7986 `DISPLAY` Parameter Gating, and RFC 6838 Restricted-Name `FMTTYPE` Grammar Validation
+
+- **Observed Behavior**:
+  Translating JSCalendar `links` into iCalendar property lines requires partitioning resources across separate component types and respecting parameter constraints. In `jmap-ical`:
+  1. Rel-based component bifurcation: RFC 8984 Section 1.4.11 unifies attachments and icons in a single `links` map. On outbound serialization, links with `rel == "icon"` (`ICON_REL`) are emitted as RFC 7986 Section 5.10 `IMAGE` properties with required `VALUE=URI`. All other links are emitted as RFC 5545 Section 3.8.1.1 `ATTACH` properties with default URI value type.
+  2. Display parameter gating (`LINK_DISPLAYS`): RFC 7986 Section 6.1 permits the `DISPLAY` parameter (`BADGE`, `GRAPHIC`, `FULLSIZE`, `THUMBNAIL`) exclusively on `IMAGE` properties. `drawn_link` serializes `DISPLAY` on `IMAGE` lines while omitting it from `ATTACH` lines.
+  3. Size parameter exclusivity (`stated_size`): RFC 8607 Section 4.1 defines the `SIZE` parameter for `ATTACH` properties, giving download size in octets. RFC 7986 Section 5.10 does not admit `SIZE` on `IMAGE`. `drawn_link` serializes `SIZE` solely on `ATTACH` properties and never on `IMAGE`.
+  4. Restricted-name media type validation (`media_type` and `restricted_name`): RFC 5545 Section 3.2.8 requires `FMTTYPE` to consist of a type and subtype separated by `/`, each conforming to RFC 6838 Section 4.2 restricted-name grammar. Media types containing parameters (e.g. `; charset=utf-8`) or disallowed characters are omitted from `FMTTYPE`, preventing parameter injection.
+  5. Patch key preservation (`X-JMAP-KEY`): Attaches `X-JMAP-KEY=<key>` to every emitted `IMAGE` and `ATTACH` line, identifying which map entry the line represents for JSON Pointer patching (`links/<key>/href`).
+  6. Mandatory URI validation on href: Validates `href` via `names_a_uri`. Links with invalid addresses are dropped rather than emitting broken properties.
+  7. In contrast, differential oracles or permissive converters attach `SIZE` to `IMAGE` lines, attach `DISPLAY` to `ATTACH` lines, emit malformed `FMTTYPE` parameters with unescaped semicolons, or confuse icons with regular file attachments.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.1 (`Attachment`) and Section 3.2.8 (`Format Type`).
+  2. RFC 7986 Section 5.10 (`Image`) and Section 6.1 (`Display Parameter`).
+  3. RFC 8607 Section 4.1 (`Size Parameter`).
+  4. RFC 8984 Section 1.4.11 (`Link`).
+  5. RFC 6838 Section 4.2 (`Restricted Name`).
+- **Adjudication**:
+  Conforming specification boundary and external asset serialization safety. Bifurcates icons and file attachments accurately, restricts `SIZE` to `ATTACH` and `DISPLAY` to `IMAGE`, validates media types against restricted-name syntax, and preserves patch keys.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.279 Divergence 279: `drawn_alert`, `drawn_alarms`, `maps_alerts`, `uses_default_alerts`, `stated_offset`, and `DISPLAY_ALERT`: Outbound Reminder Alarm Serialization and Default Alerts Suppression: RFC 8984 `useDefaultAlerts` Document-Wide Alarm Suppression, `ACTION:DISPLAY` Action Scope Enforcement, `OffsetTrigger` Signed Duration Formatting, `RELATED=END` Parameter Gating, and RFC 9074 `VALARM` `UID` Key Preservation
+
+- **Observed Behavior**:
+  Serializing reminder alarms from JSCalendar `alerts` into RFC 5545 `VALARM` subcomponents requires enforcing action constraints, handling default alert overrides, formatting trigger offsets, and maintaining stable identifiers. In `jmap-ical`:
+  1. Default alerts suppression (`uses_default_alerts`): RFC 8984 Section 4.5.1 defines `useDefaultAlerts`. When true, the event uses the user's personal default alarms and ignores the `alerts` property. `drawn_alarms` checks `uses_default_alerts(event)` and returns an empty vector, suppressing all `VALARM` subcomponents. Additionally, `maps_alerts` returns `false` when default alerts are active, preventing unsynced alert patches.
+  2. Action scope enforcement (`DISPLAY_ALERT`): RFC 8984 Section 4.5.2 admits `action: "display"`. RFC 5545 Section 3.6.6 defines `ACTION:DISPLAY`. Non-display actions (such as email or audio) require properties not modeled in JSCalendar (e.g. `SUMMARY` and `ATTENDEE` for email). `drawn_alert` verifies `action == "display"`, rejecting unmodeled action types (`None`).
+  3. OffsetTrigger signed duration formatting (`stated_offset`): Alerts must use `OffsetTrigger`. Absolute triggers and non-duration offsets are refused. Negative offsets (reminders before the event) serialize as `-PT...`.
+  4. Trigger relationship parameter gating: RFC 5545 Section 3.2.14 and RFC 8984 Section 4.5.3 both default trigger relationship to the start of the event. When `relativeTo == "end"`, `drawn_alert` attaches parameter `RELATED=END`. When start-relative, the parameter is omitted to adhere to RFC defaults.
+  5. Title description fallback: RFC 5545 Section 3.6.6 makes `DESCRIPTION` mandatory on `ACTION:DISPLAY` alarms. `drawn_alert` uses the event's `title` as `DESCRIPTION`, or omits the line if the title is empty.
+  6. Stable UID key preservation: RFC 9074 Section 6 specifies that `VALARM` components may have `UID` properties. `drawn_alert` emits `UID=<key>` on the `VALARM`, preserving the map key across round trips so updates do not re-key existing alarms.
+  7. In contrast, differential oracles or permissive converters emit `VALARM` components even when `useDefaultAlerts` is true, serialize unmodeled email alarms without required recipient fields, or omit `UID` properties on alarms.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`), Section 3.8.6.1 (`Action`), and Section 3.8.6.3 (`Trigger`).
+  2. RFC 8984 Section 4.5.1 (`useDefaultAlerts`), Section 4.5.2 (`Alert`), and Section 4.5.3 (`OffsetTrigger`).
+  3. RFC 9074 Section 6 (`VALARM UID Property`).
+- **Adjudication**:
+  Conforming specification boundary and alarm component serialization integrity. Suppresses alarms when default alerts are active, enforces display action scope, formats signed trigger offsets, attaches `RELATED=END` conditionally, and preserves alarm keys via `UID`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
