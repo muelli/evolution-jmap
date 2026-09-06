@@ -837,4 +837,71 @@ mod payload {
              Carol alone: {ical}"
         );
     }
+
+    #[test]
+    fn hide_attendees_trims_the_guest_list_a_recipient_is_shown() {
+        let fixture = Fixture::new();
+        let mut event = meeting(&fixture.calendar_id);
+        event.hide_attendees = Some(true);
+        event.participants = Some(
+            [
+                ("alice".to_owned(), owner_participant(ALICE)),
+                ("bob".to_owned(), participant(BOB, "needs-action")),
+                ("carol".to_owned(), participant(CAROL, "needs-action")),
+            ]
+            .into(),
+        );
+
+        fixture.create(&event, true);
+
+        let sent = fixture.sent_full_since(0);
+        let to_bob = sent
+            .iter()
+            .find(|message| message.recipient == BOB)
+            .expect("Bob was sent something");
+        assert!(
+            to_bob.ical.contains("mailto:alice@example.com"),
+            "Bob still sees the organizer, an owner: {}",
+            to_bob.ical
+        );
+        assert!(
+            to_bob.ical.contains("mailto:bob@example.net"),
+            "and himself: {}",
+            to_bob.ical
+        );
+        assert!(
+            !to_bob.ical.contains("mailto:carol@example.org"),
+            "but not Carol, since attendees are hidden from him: {}",
+            to_bob.ical
+        );
+    }
+
+    #[test]
+    fn without_hide_attendees_a_recipient_sees_the_whole_guest_list() {
+        let fixture = Fixture::new();
+        let mut event = meeting(&fixture.calendar_id);
+        event.participants = Some(
+            [
+                ("alice".to_owned(), owner_participant(ALICE)),
+                ("bob".to_owned(), participant(BOB, "needs-action")),
+                ("carol".to_owned(), participant(CAROL, "needs-action")),
+            ]
+            .into(),
+        );
+
+        fixture.create(&event, true);
+
+        let sent = fixture.sent_full_since(0);
+        let to_bob = sent
+            .iter()
+            .find(|message| message.recipient == BOB)
+            .expect("Bob was sent something");
+        // RFC 5545 §3.1 folds a physical line over 75 octets, which Carol's
+        // address crosses; undo that before the substring check.
+        let ical = to_bob.ical.replace("\r\n ", "");
+        assert!(
+            ical.contains("mailto:carol@example.org"),
+            "hideAttendees is not set, so Bob sees the full guest list: {ical}"
+        );
+    }
 }
