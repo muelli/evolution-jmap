@@ -5336,4 +5336,80 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.272 Divergence 272: `fold_overlong_lines`, `MAX_LINE_OCTETS`, `unfold`, and `rrule_entry`: Outbound Content Line Folding and Entry Synthesis: 75-Octet Line Budgeting (`MAX_LINE_OCTETS = 75`), UTF-8 Code Point Boundary Protection (`is_char_boundary`), Escape Sequence Split Prevention (Odd Backslash Run Detection), and Synthetic VEVENT RRULE AST Parsing
+
+- **Observed Behavior**:
+  Serializing calendar components into compliant RFC 5545 iCalendar byte streams requires strict adherence to physical line length limits, parameter and property AST creation, and robust folding. In `jmap-ical`:
+  1. 75-octet line folding (`fold_overlong_lines`): RFC 5545 Section 3.1 requires lines of text to be no longer than 75 octets, excluding the line break. Lines longer than 75 octets are folded by inserting a CRLF immediately followed by a single whitespace character (space ` `).
+  2. UTF-8 multi-byte boundary protection: `fold_overlong_lines` verifies `rest.is_char_boundary(cut)`. If a cut point falls in the middle of a multi-byte UTF-8 sequence, it steps backwards to the boundary, guaranteeing that every physical line is valid UTF-8.
+  3. Backslash escape sequence split protection: If an odd sequence of backslashes immediately precedes the proposed cut point (`bytes().rev().take_while(|b| *b == b'\\').count() % 2 == 1`), the final backslash escapes the character on the other side of the cut (e.g. `\,`, `\;`, `\n`, `\\`). `fold_overlong_lines` steps back one octet (`cut -= 1`), keeping the escape pair intact on the continuation line.
+  4. Loop prevention: If `cut == 0`, `fold_overlong_lines` finds the first char boundary, ensuring forward progress.
+  5. Calcard line-folding gap repair: Upstream `calcard` skips folding checks when empty trailing text slots occur in structured values, and emits recurrence rules (`ICalendarValue::RecurrenceRule`) without line folding (upstream issue stalwartlabs/calcard#25). `fold_overlong_lines` guarantees that all lines emitted by `event_to_ical` adhere strictly to the 75-octet limit.
+  6. Synthetic envelope RRULE parsing (`rrule_entry`): Wraps raw RRULE strings in `BEGIN:VEVENT\r\nRRULE:{rrule_str}\r\nEND:VEVENT\r\n` to leverage `calcard::Parser`'s robust grammar parser, extracting the typed entry safely.
+  7. Typed entry and parameter extension (`make_entry`, `EntryExt`): Builds typed `ICalendarEntry` and attaches parameters with uppercase normalization for unknown properties/parameters (`Other(uppercase)`).
+  8. In contrast, differential oracles or naive serializers omit line folding on long recurrence rules, fracture multi-byte UTF-8 sequences across physical lines, or split backslash escape pairs across CRLF boundaries.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.1 (`Content Lines`) defines the 75-octet folding requirement and continuation line syntax.
+  2. RFC 5545 Section 3.3.10 (`Recurrence Rule`) and Section 3.3.11 (`Text`) govern escaping and property parameters.
+- **Adjudication**:
+  Conforming specification boundary and serializer transport safety. Enforces 75-octet folding limits, preserves UTF-8 multi-byte boundaries, protects backslash escape pairs from bifurcation, and parses recurrence rules safely via transient synthetic envelopes.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.273 Divergence 273: `shows_without_time`, `instance_shows_without_time`, `at_midnight`, `whole_days`, and `names_a_time_of_day`: Outbound All-Day Event Verification and DATE-Value Degradation Guard: Floating Timezone Requirement (`time_zone.is_none()`), Midnight Start Alignment (`at_midnight`), Whole-Day Duration Verification (`whole_days`), Recurrence Time Exclusion (`names_a_time_of_day`), and Recurrence Override Consistency (`instance_shows_without_time`)
+
+- **Observed Behavior**:
+  In RFC 8984, all-day events are designated by `showWithoutTime: true`. In RFC 5545, all-day events are represented by `DTSTART;VALUE=DATE`. Transitioning between these models requires strict conformance to iCalendar restrictions. In `jmap-ical`:
+  1. Floating timezone requirement: RFC 5545 Section 3.2.19 explicitly states that `TZID` MUST NOT be specified on `DATE` values. `shows_without_time` verifies `event.time_zone.is_none()`. If an event specifies `showWithoutTime: true` but carries a timezone (such as `Europe/Berlin`), it cannot be represented as `VALUE=DATE` without stripping the timezone or producing an illegal parameter; `shows_without_time` returns `false`, gracefully degrading to a timed `DATE-TIME` event.
+  2. Midnight start alignment (`at_midnight`): An all-day event must begin at the top of the day (`T000000`). If `start` starts at any other time (e.g. `09:00:00`), `shows_without_time` returns `false`.
+  3. Whole-day duration verification (`whole_days`): RFC 5545 Section 3.6.1 restricts durations on `VALUE=DATE` events to whole days (e.g. `P1D`, `P2D`, `P1W`). `whole_days` strips designator `P`/`p` and verifies that no `T` or `t` time designator exists. Negative durations and sub-day durations (e.g. `PT1H`, `P1DT2H`) fail this check, causing `shows_without_time` to return `false`.
+  4. Recurrence rule time exclusion (`names_a_time_of_day`): RFC 5545 Section 3.3.10 explicitly forbids `BYHOUR`, `BYMINUTE`, and `BYSECOND` on recurrence rules paired with `VALUE=DATE` `DTSTART`. `shows_without_time` verifies `!names_a_time_of_day(rule)` and that `rule.until` (if present) falls at midnight.
+  5. Recurrence override instance consistency (`instance_shows_without_time`): Every override in `recurrenceOverrides` must also satisfy all-day constraints: its identifier must be at midnight, its modified start must be at midnight, its duration must be whole days, and it must have floating time. If any override moves to a non-midnight time or specifies a timezone, `shows_without_time` returns `false`, elevating the entire series and its overrides to timed `DATE-TIME` representations to preserve the exact meeting moment.
+  6. In contrast, differential oracles or permissive serializers attach illegal `TZID` parameters to `VALUE=DATE` lines, emit non-midnight start times on DATE lines, or emit forbidden `BYHOUR` rules beside all-day events.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.19 (`Time Zone Identifier`), Section 3.3.5 (`DATE`), Section 3.6.1 (`Event Component`), and Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.1.5 (`showWithoutTime`) and Section 4.3.4 (`recurrenceOverrides`).
+- **Adjudication**:
+  Conforming specification boundary and all-day serialization integrity. Enforces floating timezone requirements, midnight start alignment, whole-day durations, sub-day recurrence rule exclusions, and override consistency, falling back cleanly to timed `DATE-TIME` when invariants are violated.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.274 Divergence 274: `days_from_civil`, `instant`, `to_duration`, and `period_length`: Proleptic Gregorian Timeline Arithmetic and Wall-Clock Duration Generation: March-Based Leap Day Alignment (Howard Hinnant Algorithm), Euclidean Era Folding (`div_euclid(400)`), Linear Epoch Second Difference Measurement, Nominal Day (`P<N>D`) Duration Formatting, and Non-Positive Duration Suppression
+
+- **Observed Behavior**:
+  Deriving event durations and period lengths across wall clocks requires epoch-relative Gregorian arithmetic without dependencies on external calendar libraries. In `jmap-ical`:
+  1. Howard Hinnant's civil calendar algorithm (`days_from_civil`): Counts days from the 1970-01-01 Unix epoch to any proleptic Gregorian date. By treating the year as beginning on March 1 (`year = year - (month <= 2)`), February 29 naturally falls at the very end of the year, completely eliminating special-case leap day branch logic.
+  2. Euclidean 400-year era folding (`div_euclid(400)`): Groups years into 400-year cycles containing exactly 146,097 days (`97` leap years per era: `year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year`). Using `div_euclid` ensures non-negative offsets even for dates prior to 1970.
+  3. Wall-clock second calculation (`instant`): Converts `DTSTART` and `DTEND` local date-times into linear second counts on their respective wall clocks (`days_from_civil(y, m, d) * 86_400 + h * 3600 + m * 60 + s`).
+  4. Nominal day duration formatting (`to_duration`): Formats positive elapsed seconds into standard ISO 8601 strings. When seconds include whole 86,400-second days (`seconds / 86_400 > 0`), it emits nominal days `P<N>D` rather than 24 hours (`PT24H`). In RFC 8984 Section 4.2.2, a nominal day survives daylight saving changes without shifting appointment wall-clock times.
+  5. Non-positive duration suppression: Elapsed seconds less than or equal to zero return `None`, defaulting to RFC 8984's nominal `P0D` without emitting invalid negative durations.
+  6. Recurrence period parsing (`period_length`): In recurrence `RDATE` entries with `VALUE=PERIOD`, handles both duration intervals (`/PT3H`) and timestamp pairs (`/20260701T120000Z`), measuring end-to-start second deltas and formatting via `to_duration`.
+  7. In contrast, differential oracles or naive date math produce incorrect day offsets across leap centuries, emit fixed 24-hour durations that drift across daylight transitions, or accept negative durations.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.6 (`DURATION`), Section 3.3.9 (`PERIOD`), and Section 3.8.2.5 (`Duration`).
+  2. RFC 8984 Section 1.4.6 (`Duration`) and Section 4.2.2 (`duration`).
+- **Adjudication**:
+  Conforming specification boundary and timeline arithmetic precision. Implements exact March-based Gregorian day counting across centuries, formats durations as nominal days across DST transitions, parses recurrence periods flexibly, and suppresses non-positive durations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.275 Divergence 275: `to_utc_date_time`, `to_ical_date_time`, `strip`, and `exists`: UTC Date-Time Normalization, Mandatory 'Z' Suffix Gating, Sub-Second Truncation Rejection, and Proleptic Gregorian Date Existence Validation: Century Leap Year Bounding, RFC 5545 / RFC 3339 Leap Second 60 Allowance, and Strict Separator-Stripping Digit Counting
+
+- **Observed Behavior**:
+  Translating timestamps between JSCalendar UTCDateTime / LocalDateTime and RFC 5545 DATE-TIME requires enforcing ISO 8601 syntax, UTC suffix requirements, and valid calendar dates. In `jmap-ical`:
+  1. Mandatory 'Z' suffix validation (`to_utc_date_time`): RFC 8984 Section 1.4.5 requires UTCDateTime to end with `Z` or `z`. `to_utc_date_time` uses `strip_suffix(['Z', 'z'])?`. A local date-time string lacking `Z` is rejected (`None`) rather than guessed to be UTC, preventing timezone offset distortion.
+  2. Separator stripping and digit count verification (`strip`): `strip(value, '-', 8)` and `strip(value, ':', 6)` extract date and time components by removing separator characters and verifying that the remaining string contains strictly ASCII digits of the exact expected length.
+  3. Sub-second fraction rejection: If a timestamp contains sub-second fractions (e.g. `2026-07-01T13:00:00.500Z`), `strip` finds 9 time characters instead of 6, returning `None`. This prevents unrepresentable sub-second precision from leaking into RFC 5545 DATE-TIME properties.
+  4. Proleptic Gregorian existence validation (`exists` and `days_in_month`): Validates month `1..=12`, hour `0..=23`, minute `0..=59`, and day `1..=days_in_month(year, month)`. Correctly applies century leap year rules (years divisible by 4, except century years unless divisible by 400).
+  5. Leap second 60 tolerance: RFC 5545 Section 3.3.12 and RFC 3339 Section 5.6 both permit second value `60` for leap seconds. `exists` checks `second <= 60`, preserving leap seconds rather than rejecting them. Second values of 61 or higher are rejected.
+  6. In contrast, differential oracles or permissive parsers silently coerce local timestamps to UTC, discard sub-second precision silently without validation, reject valid leap seconds, or accept impossible calendar dates (such as February 29 in non-leap years or month 13).
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.4 (`DATE-TIME`) and Section 3.3.12 (`TIME`).
+  2. RFC 8984 Section 1.4.5 (`LocalDateTime`) and Section 1.4.8 (`UTCDateTime`).
+  3. RFC 3339 Section 5.6 (`Internet Date/Time Format`).
+- **Adjudication**:
+  Conforming specification boundary and timestamp validation fidelity. Strictly enforces 'Z' suffixes on UTC date-times, rejects sub-second fractions, validates Gregorian calendar dates with century leap year rules, and supports standard leap seconds.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
