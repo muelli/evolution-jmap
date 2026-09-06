@@ -21,14 +21,14 @@
 //! * the ADD message §5.9.2.1 permits for a single added instance, which the
 //!   draft itself advises against for interoperability;
 //! * the iMIP licence in §5.9.2 to drop changes the server deems inessential,
-//!   which would make the mock's output depend on a judgement call;
-//! * §5.9.2.1's rule that a message to somebody dropped from one occurrence
-//!   must still *show* that occurrence as excluded, which the payload does
-//!   not render specially yet.
+//!   which would make the mock's output depend on a judgement call.
 //!
 //! `hideAttendees` (§5.1.3) *is* modelled: [`build_ical`] trims the
 //! participant map it hands to the renderer down to the owners plus the
-//! message's own recipient, whenever the event sets it.
+//! message's own recipient, whenever the event sets it. So is §5.9.2.1's rule
+//! that a series-scope message to somebody a recurrence override dropped
+//! from one occurrence must still show that occurrence as excluded: see
+//! [`occurrences_excluded_for`].
 //!
 //! Per-instance participant sets are modelled (§5.9.2.1's MUST that
 //! "participants are only sent information about recurrence instances they
@@ -43,7 +43,7 @@ use jmap_proto::calendars::{
     CalendarEvent, PER_USER_PROPERTIES, participant_participation_status, participant_role,
     scheduling_method,
 };
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::patch::apply_patch;
 use crate::state::{AccountState, RecordedSchedulingMessage};
@@ -463,7 +463,8 @@ fn build_ical(
 ) -> String {
     match recurrence_id {
         None => {
-            let event = attendees_shown_to(event, recipient);
+            let event = occurrences_excluded_for(event, recipient);
+            let event = attendees_shown_to(&event, recipient);
             jmap_ical::scheduling_ical(&event, method, None)
         }
         Some(recurrence_id) => {
@@ -472,6 +473,47 @@ fn build_ical(
             jmap_ical::scheduling_ical(&instance, method, Some(recurrence_id))
         }
     }
+}
+
+/// §5.9.2.1: "If a participant is invited to a recurring event, but removed
+/// via a recurrence override from a particular instance, any scheduling
+/// messages to this participant MUST return the instance as excluded."
+/// A series-scope message (`recurrence_id` is `None` in [`build_ical`]) draws
+/// the event as it actually stands, which still has that occurrence's real
+/// override, participants and all; this rewrites the recipient's own copy
+/// so any occurrence they were dropped from, while remaining a series
+/// participant, reads as excluded instead, the only thing an `excluded`
+/// override may say (jmap-ical's own [`jmap_ical::event`] docs on
+/// `OVERRIDE_PROPERTIES`). Leaves the event untouched for a recipient who is
+/// not a series-level participant to begin with: they were never told about
+/// occurrences at all, so there is nothing to exclude them from.
+fn occurrences_excluded_for(event: &CalendarEvent, recipient: &str) -> CalendarEvent {
+    let recipient = normalize_uri(recipient);
+    let in_series = participants(event).values().any(|participant| {
+        calendar_address(participant).is_some_and(|address| normalize_uri(address) == recipient)
+    });
+    let Some(overrides) = in_series
+        .then_some(event.recurrence_overrides.as_ref())
+        .flatten()
+    else {
+        return event.clone();
+    };
+    let rewritten: BTreeMap<String, Value> = overrides
+        .iter()
+        .map(|(recurrence_id, override_)| {
+            let still_present = participants_at(event, recurrence_id).values().any(|p| {
+                calendar_address(p).is_some_and(|address| normalize_uri(address) == recipient)
+            });
+            if still_present {
+                (recurrence_id.clone(), override_.clone())
+            } else {
+                (recurrence_id.clone(), json!({"excluded": true}))
+            }
+        })
+        .collect();
+    let mut event = event.clone();
+    event.recurrence_overrides = Some(rewritten);
+    event
 }
 
 /// §5.1.3: with `hideAttendees` set, only the owners of the event may see
