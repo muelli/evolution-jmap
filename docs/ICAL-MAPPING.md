@@ -5566,5 +5566,80 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.284 Divergence 284: `rrule_to_rule`, `to_nday`, `to_month_day`, `to_time_of_day`, and `date_time_digits`: Inbound Recurrence Rule Parsing and AST Reconstruction: Case-Insensitive Semicolon Tokenization, Truncation on Malformed UNTIL Syntax (Absence of DATE-TIME Digits), Leading Plus (`+`) and Minus (`-`) Ordinal Decomposition in `to_nday` with Non-Zero Validation (`nth != 0`), Day and Time Error Sentinels (`0` for `BYMONTHDAY`/`BYYEARDAY`/`BYWEEKNO`/`BYSETPOS` and `u32::MAX` for `BYHOUR`/`BYMINUTE`/`BYSECOND`), and Case-Insensitive `WKST` Lowercasing
 
+- **Observed Behavior**:
+  Parsing RFC 5545 `RRULE` strings into JSCalendar `RecurrenceRule` structures (RFC 8984 Section 4.3.1) requires handling diverse syntax variants, parameter tokenization, and strict failure sentinels. In `jmap-ical`:
+  1. Semicolon and key-value tokenization (`rrule_to_rule`): Splits the input string on `;` into key-value pairs (`split_once('=')`). Keys are matched case-insensitively using uppercase ASCII normalization (`key.to_ascii_uppercase()`), accommodating varied client casings (`freq`, `Freq`, `FREQ`).
+  2. Truncation on malformed `UNTIL` syntax: When encountering `UNTIL`, `rrule_to_rule` inspects the value with `date_time_digits(value)`. If the value lacks the structural shape of a DATE-TIME or DATE (missing 8 date digits or 6 time digits, e.g. `UNTIL=GARBAGE`), `rrule_to_rule` breaks immediately out of the parsing loop. Trailing parts are dropped, preventing corrupted rules from passing without validation.
+  3. `BYDAY` signed ordinal decomposition (`to_nday`): Strips leading sign characters (`+` or `-`) to extract digit prefixes and separates ordinals from two-letter weekday tokens. If the ordinal parses to a non-zero integer (`nth != 0`), it constructs `NDay { nth_of_period: Some(nth), day: weekday.to_ascii_lowercase(), .. }`. If `nth == 0` or if the ordinal cannot be parsed, the raw token is preserved verbatim in `day` (e.g. `"0mo"`), ensuring downstream serialization (`by_day_token`) and validation (`maps_recurrence_rule`) reject the invalid rule.
+  4. Day and month error sentinels (`to_month_day`): Parses tokens for `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, and `BYSETPOS`. Unparseable tokens evaluate to `0` via `token.parse().unwrap_or(0)`. Because day 0, week 0, and position 0 are illegal across RFC 5545 recurrence grammars, this sentinel guarantees that downstream serializers (`month_day_token`, `year_day_token`, `week_no_token`, `set_position_token`) reject the entry.
+  5. Time-of-day error sentinels (`to_time_of_day`): In `BYSECOND`, `BYMINUTE`, and `BYHOUR`, `0` represents midnight, the zeroth minute, and the zeroth second. Consequently, `to_time_of_day` returns `u32::MAX` for unparseable tokens (`token.parse().unwrap_or(u32::MAX)`). This sentinel reliably exceeds valid time bounds (hour <= 23, minute <= 59, second <= 60), causing `time_of_day_part` and `maps_recurrence_rule` to flag the rule.
+  6. Week start lowercasing: `WKST` values are normalized to lowercase ASCII (`rule.first_day_of_week = Some(value.to_ascii_lowercase())`), matching JSCalendar expectations.
+  7. In contrast, differential oracles or permissive parsers accept ordinal 0 as valid, silently drop unparseable tokens, or use 0 as a sentinel for time-of-day values, creating false midnight transitions.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`recurrenceRule`) and Section 4.3.3 (`NDay`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence grammar parsing safety. Enforces case-insensitive part extraction, safely truncates on structurally malformed UNTIL values, preserves malformed weekday tokens for validation gating, and applies distinct error sentinels for days versus times.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.285 Divergence 285: `zone::offset_at`, `zone::onsets`, `zone::rule_onsets`, `zone::restated`, and `zone::SEARCH`: `VTIMEZONE` Observance Transition Offset Calculation: Instant-Boundary Evaluation (Latest Transition at or Before Instant), Historical Horizon Windowing (`SEARCH = 40` Years), Start-Relative Occurrence Calculation (`seconds_at - from`), RDATE Period Exclusion (`/` Prohibition), and Sub-Hour/Sub-Minute Restatement Alignment
+
+- **Observed Behavior**:
+  Computing the UTC offset in force at an arbitrary target instant from `VTIMEZONE` components requires evaluating observance boundaries and recurrence transitions. In `jmap-ical`:
+  1. Instant-boundary evaluation (`offset_at`): Evaluates all `STANDARD` and `DAYLIGHT` observance subcomponents. For a given UTC target instant `utc`, it tracks the latest transition occurring at or before the target (`onset <= target`). If the target instant falls exactly on an onset, the new offset (`TZOFFSETTO`) is in force, adhering to RFC 5545 Section 3.8.3.3.
+  2. Earliest transition fallback: If the target instant precedes all transitions described in the `VTIMEZONE`, `offset_at` returns the `TZOFFSETFROM` of the earliest transition encountered (`first`), which is the only offset known prior to the described transitions.
+  3. Start-relative occurrence calculation (`onsets`): RFC 5545 Section 3.6.5 dates an observance in the zone it defines, relative to its `TZOFFSETFROM`. `onsets` computes UTC instants by subtracting the offset: `seconds_at(&start)? - from`.
+  4. `RDATE` period exclusion: `onsets` refuses any `RDATE` containing `/` (period durations). A transition represents a point in time, not a duration; period RDATEs in transitions are non-conformant.
+  5. Historical horizon windowing (`SEARCH = 40` years): `rule_onsets` bounds the search to at most 40 years prior to the target year (`earliest = start_year.max(last - SEARCH + 1)`). This covers long-period recurrence intervals (such as leap-day February 29 transitions or multi-year weekday-among patterns) without unbounded execution time.
+  6. Sub-hour and sub-minute restatement alignment (`restated`): When `RRULE` restates `BYHOUR`, `BYMINUTE`, or `BYSECOND` (common in Lotus Notes exports), `restated` overrides the time of day from `DTSTART`. Leap second 60 is refused on transition times (`(0..=59).contains(&second)`), ensuring transitions land on valid civil minutes.
+  7. In contrast, differential oracles or naive timezone evaluators iterate unbounded historical ranges, accept period durations on transition RDATEs, or drift across sub-hour/sub-minute restatements.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.5 (`Time Zone Component`), Section 3.8.3.3 (`Time Zone Offset To`), and Section 3.8.3.4 (`Time Zone Offset From`).
+  2. RFC 8984 Section 4.7.2 (`timeZones`).
+- **Adjudication**:
+  Conforming specification boundary and timezone offset evaluation precision. Accurately evaluates transition boundaries, provides earliest-offset fallback for pre-onset dates, bounds historical search to 40 years, excludes period durations on transitions, and aligns restated times of day.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.286 Divergence 286: `zone::Day::named`, `zone::Day::of`, `zone::Falls`, `zone::weekday_named`, `zone::weekday`, and `zone::length_of`: Timezone Transition Day-of-Month Rule Resolution: Four-Grammar Day Classification (`Day::Nth`, `Day::WeekdayAmong`, `Day::OfMonth`, `Day::OfStart`), Sunday-Relative Day Arithmetic (`rem_euclid(7)`), Ambiguous Multi-Date Set Refusal (`Falls::Set`), and Year-Gap Skip (`Falls::Never`)
+
+- **Observed Behavior**:
+  Determining the specific calendar day for a timezone recurrence transition requires decoding varied recurrence idioms into civil dates. In `jmap-ical`:
+  1. Four-grammar day classification (`Day::named`): Parses recurrence day specifications into four distinct structural forms:
+     - `Day::Nth(nth, wanted)`: Parsed from `BYDAY` with an ordinal (e.g. `-1SU` for last Sunday, `2MO` for second Monday). Explicit `+` signs are stripped, and `nth == 0` is strictly refused.
+     - `Day::WeekdayAmong(wanted, dates)`: Parsed from a `BYDAY` weekday without ordinal combined with a `BYMONTHDAY` date list (e.g. `BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29`), matching tzdata's common "first Sunday on or after day D" idiom. Zero-valued days are rejected.
+     - `Day::OfMonth(date)`: Parsed from `BYMONTHDAY` alone without `BYDAY` (e.g. `BYMONTHDAY=25` or negative offset `-1`).
+     - `Day::OfStart(start)`: When neither `BYDAY` nor `BYMONTHDAY` is present, the day is taken directly from `DTSTART`.
+  2. Sunday-relative day arithmetic (`weekday`): Uses `(days_from_civil(year, month, day) + 3).rem_euclid(7)` to determine the day of the week, where Monday is 0 and Sunday is 6, calibrated to the Thursday 1970-01-01 Unix epoch.
+  3. Ambiguous multi-date set refusal (`Falls::Set`): When evaluating `Day::WeekdayAmong`, if more than one date in the run matches the target weekday within that month, `Day::of` returns `Falls::Set`. Rather than arbitrarily picking the first or last occurrence, `rule_onsets` treats multi-match sets as unresolvable, refusing the rule.
+  4. Non-occurring year gap skip (`Falls::Never`): If a rule does not occur in a particular year (such as a 5th Sunday in a month with only 4 Sundays, day 31 in a 30-day month, or February 29 in a non-leap year), `Day::of` returns `Falls::Never`. `rule_onsets` skips that year and continues scanning earlier years within the 40-year window, correctly locating the prior active transition.
+  5. In contrast, differential oracles or naive timezone algorithms fail to parse tzdata `WeekdayAmong` idioms, pick arbitrary dates when multiple dates match, or halt with errors on non-leap years.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.7.2 (`timeZones`).
+- **Adjudication**:
+  Conforming specification boundary and transition rule day resolution determinism. Classifies day rules into four canonical variants, handles tzdata date runs, computes Euclidean weekday arithmetic, safely skips non-occurring years, and refuses ambiguous multi-match sets.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.287 Divergence 287: `defines_time_zone`, `vtimezone_of`, `observance`, `utc_offset`, and `read_time_zones`: Custom Timezone Serialization and Round-Trip Redrawability Enforcement: Solidus Prefix Verification (`tzid.starts_with('/')`), Standard and Daylight Subcomponent Extraction, Required Property Completeness (`DTSTART`, `TZOFFSETFROM`, `TZOFFSETTO`), Strict Two-Way Sign Handling (`-0000` Prohibition), and Round-Trip Redrawability Gating
+
+- **Observed Behavior**:
+  Serializing custom timezone definitions from JSCalendar `timeZones` into RFC 5545 `VTIMEZONE` components requires verifying structural identifiers, complete observance rules, and valid UTC offsets. In `jmap-ical`:
+  1. Solidus prefix verification (`defines_time_zone`): Enforces that custom timezone identifiers begin with a solidus (`tzid.starts_with('/')`). RFC 8984 Section 1.4.9 reserves bare names for canonical IANA identifiers; custom identifiers must be solidus-prefixed to prevent namespace collisions.
+  2. Redrawability verification (`vtimezone_of`): Resolves the definition via `definition_of` and verifies that `vtimezone_of` can serialize the definition whole. If any observance rule cannot be drawn, `defines_time_zone` returns `false`.
+  3. Standard and daylight subcomponent extraction: `vtimezone_of` iterates over `standard` and `daylight` rule lists, constructing child components for each valid entry. RFC 5545 Section 3.6.5 requires at least one subcomponent; if `observances == 0`, `vtimezone_of` returns `None`.
+  4. Required property completeness (`observance`): An observance component requires `DTSTART`, `TZOFFSETFROM`, and `TZOFFSETTO`. If any of these properties is missing or fails conversion, `observance` returns `None`, causing `vtimezone_of` to reject the entire zone.
+  5. Strict UTC offset parsing and negative-zero prohibition (`utc_offset`): Parses `±hhmm[ss]`, strips colons, and validates field ranges (hours <= 23, minutes <= 59, seconds <= 60). Crucially, RFC 5545 Section 3.3.14 forbids `-0000` because the sign designates the hemisphere relative to UTC and negative zero is undefined. If `sign == "-"` and `(hours, minutes, seconds) == (0, 0, 0)`, `utc_offset` returns `None`.
+  6. Inbound round-trip redrawability filtering (`read_time_zones`): When reading `VTIMEZONE` components into `event.time_zones`, `read_time_zones` tests `vtimezone_of(tzid, &definition).is_none()`. If the parsed definition cannot be serialized back out with exact fidelity, it is dropped, preventing corrupted or incomplete custom definitions from being saved to the server.
+  7. In contrast, differential oracles permit non-solidus custom timezone identifiers, serialize empty `VTIMEZONE` components without observances, emit invalid `-0000` offsets, or accept incomplete observance rules missing required offsets.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.5 (`Time Zone Component`), Section 3.3.14 (`UTC Offset`), and Section 3.8.3.1 (`Time Zone Identifier`).
+  2. RFC 8984 Section 1.4.9 (`TimeZoneId`) and Section 4.7.2 (`timeZones`).
+- **Adjudication**:
+  Conforming specification boundary and custom timezone definition integrity. Scopes custom zones to solidus prefixes, requires complete standard and daylight observances, strictly prohibits `-0000` offsets, and enforces round-trip redrawability gating.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
