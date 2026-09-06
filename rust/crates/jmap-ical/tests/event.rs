@@ -37057,3 +37057,259 @@ END:VCALENDAR\r\n";
         "Negative period duration must be rejected"
     );
 }
+
+#[test]
+fn differential_oracle_folding_overlong_lines_utf8_boundaries_and_escape_preservation() {
+    use jmap_ical::event::{MAX_LINE_OCTETS, fold_overlong_lines};
+
+    // 1. Short lines (<= 75 octets) are returned verbatim without reallocation
+    let short = "SUMMARY:Short event title\r\nDESCRIPTION:Brief note\r\n";
+    assert_eq!(fold_overlong_lines(short.to_owned()), short);
+
+    // 2. Long lines (> 75 octets) are folded at 75 octets with CRLF space
+    let long_line = format!("DESCRIPTION:{}\r\n", "A".repeat(100));
+    let folded = fold_overlong_lines(long_line);
+    for line in folded.split("\r\n") {
+        assert!(
+            line.len() <= MAX_LINE_OCTETS,
+            "folded line must not exceed 75 octets: len={}",
+            line.len()
+        );
+    }
+    assert!(folded.contains("\r\n "));
+
+    // 3. Multi-byte UTF-8 character boundary protection
+    let prefix = "SUMMARY:".to_string() + &"X".repeat(65);
+    let text_utf8 = format!("{prefix}€rest of the text\r\n");
+    let folded_utf8 = fold_overlong_lines(text_utf8);
+    for line in folded_utf8.split("\r\n") {
+        assert!(
+            line.len() <= MAX_LINE_OCTETS,
+            "line length must be <= 75: len={}",
+            line.len()
+        );
+    }
+    let unfolded = folded_utf8.replace("\r\n ", "");
+    assert!(unfolded.contains('€'));
+
+    // 4. Backslash escape sequence integrity
+    let prefix_esc = "DESCRIPTION:".to_string() + &"Y".repeat(61) + "\\nMore text\r\n";
+    let folded_esc = fold_overlong_lines(prefix_esc);
+    for line in folded_esc.split("\r\n") {
+        assert!(line.len() <= MAX_LINE_OCTETS);
+    }
+    let unfolded_esc = folded_esc.replace("\r\n ", "");
+    assert!(unfolded_esc.contains("\\nMore text"));
+}
+
+#[test]
+fn differential_oracle_shows_without_time_all_day_gating_and_override_elevation() {
+    // 1. Conforming all-day event: floating time, midnight start, whole-day duration
+    let mut event = fixture_event();
+    event.show_without_time = Some(true);
+    event.time_zone = None;
+    event.start = Some("2026-07-01T00:00:00".to_owned());
+    event.duration = Some("P1D".to_owned());
+    event.recurrence_rule = None;
+    event.recurrence_overrides = None;
+    assert!(
+        jmap_ical::event::shows_without_time(&event, "20260701T000000"),
+        "Conforming all-day event must qualify for VALUE=DATE"
+    );
+
+    // 2. Non-floating timezone disqualification (RFC 5545 Section 3.2.19)
+    event.time_zone = Some("Europe/Berlin".to_owned());
+    assert!(
+        !jmap_ical::event::shows_without_time(&event, "20260701T000000"),
+        "Event carrying timezone cannot be emitted as VALUE=DATE"
+    );
+    event.time_zone = None;
+
+    // 3. Non-midnight start disqualification
+    assert!(
+        !jmap_ical::event::shows_without_time(&event, "20260701T090000"),
+        "Non-midnight start cannot be emitted as VALUE=DATE"
+    );
+
+    // 4. Sub-day duration disqualification
+    event.duration = Some("PT1H".to_owned());
+    assert!(
+        !jmap_ical::event::shows_without_time(&event, "20260701T000000"),
+        "Sub-day duration cannot be emitted as VALUE=DATE"
+    );
+    event.duration = Some("P1D".to_owned());
+
+    // 5. Recurrence rule with sub-day time part disqualification (RFC 5545 Section 3.3.10)
+    let rule_with_time = RecurrenceRule {
+        frequency: "daily".to_owned(),
+        by_hour: Some(vec![10]),
+        ..Default::default()
+    };
+    event.recurrence_rule = Some(rule_with_time);
+    assert!(
+        !jmap_ical::event::shows_without_time(&event, "20260701T000000"),
+        "RRULE specifying BYHOUR cannot stand beside VALUE=DATE"
+    );
+    event.recurrence_rule = None;
+
+    // 6. Recurrence override instance inconsistency elevates event to timed DATE-TIME
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        "2026-07-02T00:00:00".to_owned(),
+        json!({ "start": "2026-07-02T09:00:00" }),
+    );
+    event.recurrence_overrides = Some(overrides);
+    assert!(
+        !jmap_ical::event::shows_without_time(&event, "20260701T000000"),
+        "Override with non-midnight start must elevate series to DATE-TIME"
+    );
+
+    // 7. Helper functions: whole_days and at_midnight
+    assert!(jmap_ical::event::whole_days("P1D"));
+    assert!(jmap_ical::event::whole_days("P2W"));
+    assert!(!jmap_ical::event::whole_days("PT1H"));
+    assert!(!jmap_ical::event::whole_days("P1DT2H"));
+    assert!(!jmap_ical::event::whole_days("-P1D"));
+    assert!(jmap_ical::event::at_midnight("20260701T000000"));
+    assert!(!jmap_ical::event::at_midnight("20260701T120000"));
+}
+
+#[test]
+fn differential_oracle_days_from_civil_hinnant_algorithm_and_nominal_duration() {
+    // 1. Howard Hinnant's days_from_civil: Unix epoch and historical boundaries
+    assert_eq!(
+        jmap_ical::event::days_from_civil(1970, 1, 1),
+        0,
+        "1970-01-01 is Unix epoch day 0"
+    );
+    assert_eq!(
+        jmap_ical::event::days_from_civil(1969, 12, 31),
+        -1,
+        "1969-12-31 is day -1"
+    );
+    let feb28_2024 = jmap_ical::event::days_from_civil(2024, 2, 28);
+    let feb29_2024 = jmap_ical::event::days_from_civil(2024, 2, 29);
+    let mar01_2024 = jmap_ical::event::days_from_civil(2024, 3, 1);
+    assert_eq!(feb29_2024 - feb28_2024, 1);
+    assert_eq!(mar01_2024 - feb29_2024, 1);
+
+    let feb28_2026 = jmap_ical::event::days_from_civil(2026, 2, 28);
+    let mar01_2026 = jmap_ical::event::days_from_civil(2026, 3, 1);
+    assert_eq!(mar01_2026 - feb28_2026, 1);
+
+    // 2. Wall-clock linear epoch second conversion (instant)
+    let epoch_secs = jmap_ical::event::instant("19700101T000000").expect("instant");
+    assert_eq!(epoch_secs, 0);
+
+    let sec_1h = jmap_ical::event::instant("19700101T010000").expect("instant");
+    assert_eq!(sec_1h, 3600);
+
+    assert_eq!(jmap_ical::event::instant("invalid-date"), None);
+
+    // 3. Nominal day duration formatting (to_duration)
+    assert_eq!(
+        jmap_ical::event::to_duration(86_400),
+        Some("P1D".to_owned()),
+        "86,400 seconds must be formatted as nominal day P1D, not PT24H"
+    );
+    assert_eq!(
+        jmap_ical::event::to_duration(172_800),
+        Some("P2D".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::to_duration(90_000),
+        Some("P1DT1H".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::to_duration(3661),
+        Some("PT1H1M1S".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::to_duration(0),
+        None,
+        "Zero duration yields None"
+    );
+    assert_eq!(
+        jmap_ical::event::to_duration(-3600),
+        None,
+        "Negative duration yields None"
+    );
+
+    // 4. Period duration measurement (period_length)
+    assert_eq!(
+        jmap_ical::event::period_length("20260701T090000Z", "20260701T170000Z"),
+        Some("PT8H".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::period_length("20260701T090000Z", "PT2H30M"),
+        Some("PT2H30M".to_owned())
+    );
+}
+
+#[test]
+fn differential_oracle_utc_datetime_normalization_subsecond_and_leap_second_gating() {
+    // 1. Mandatory 'Z' / 'z' suffix validation on UTCDateTime
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-07-01T15:30:00Z"),
+        Some("20260701T153000Z".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-07-01T15:30:00z"),
+        Some("20260701T153000Z".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-07-01T15:30:00"),
+        None,
+        "Local date-time without Z cannot be converted to UTC"
+    );
+
+    // 2. Sub-second fraction rejection
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-07-01T15:30:00.500Z"),
+        None,
+        "Sub-second fractions must be rejected"
+    );
+
+    // 3. to_ical_date_time proleptic conversion
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2026-07-01T15:30:00"),
+        Some("20260701T153000".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2026-02-29T12:00:00"),
+        None,
+        "Non-existent Feb 29 in 2026 must be rejected"
+    );
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2024-02-29T12:00:00"),
+        Some("20240229T120000".to_owned()),
+        "Valid Feb 29 in leap year 2024 must succeed"
+    );
+
+    // 4. Separator stripping with exact digit validation (strip)
+    assert_eq!(
+        jmap_ical::event::strip("2026-07-01", '-', 8),
+        Some("20260701".to_owned())
+    );
+    assert_eq!(jmap_ical::event::strip("2026-07-011", '-', 8), None);
+    assert_eq!(
+        jmap_ical::event::strip("15:30:00", ':', 6),
+        Some("153000".to_owned())
+    );
+    assert_eq!(jmap_ical::event::strip("15:30:00.500", ':', 6), None);
+
+    // 5. Calendar existence validation and leap second 60 allowance (exists)
+    assert!(jmap_ical::event::exists("20260701", "235959"));
+    assert!(
+        jmap_ical::event::exists("20260701", "235960"),
+        "RFC 5545 Section 3.3.12 and RFC 3339 Section 5.6 leap second 60 is permitted"
+    );
+    assert!(!jmap_ical::event::exists("20260701", "235961"));
+    assert!(!jmap_ical::event::exists("20261301", "000000"));
+    assert!(!jmap_ical::event::exists("20260001", "000000"));
+    assert!(!jmap_ical::event::exists("20260732", "000000"));
+
+    // Century leap year rules:
+    assert!(jmap_ical::event::exists("20000229", "000000"));
+    assert!(!jmap_ical::event::exists("19000229", "000000"));
+}
