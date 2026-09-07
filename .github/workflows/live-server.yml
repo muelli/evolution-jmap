@@ -46,28 +46,23 @@ jobs:
           echo "::add-mask::$pass2"
           "$HOME/evolution-night-shift/harness/stalwart/stw" seed "$domain" agent1 "$pass1"
           "$HOME/evolution-night-shift/harness/stalwart/stw" seed "$domain" agent2 "$pass2"
-          # Resolve to the stable internal IP here rather than handing the
-          # test binary the hostname: confirmed 2026-09-07 that this exact
-          # hostname resolves and curls fine in every shell step of this job,
-          # yet every live_server test's own DNS lookup for it fails
-          # ("failed to lookup address information: Name or service not
-          # known") regardless of thread count (ruled out a parallel-lookup
-          # race) or working directory (ruled out a stale checkout/cache).
-          # The cause is still unclear; resolving once, where it is proven to
-          # work, sidesteps it and removes an entire class of DNS flakiness
-          # from a job that only ever talks to this one fixed VM anyway.
-          host=$(echo "$STALWART_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')
-          ip=$(getent hosts "$host" | awk '{print $1; exit}')
-          [ -n "$ip" ] || { echo "could not resolve $host" >&2; exit 1; }
-          resolved_url=${STALWART_URL/$host/$ip}
           {
-            echo "JMAP_LIVE_SERVER_URL=$resolved_url"
+            echo "JMAP_LIVE_SERVER_URL=$STALWART_URL"
             echo "JMAP_LIVE_SERVER_USER=agent1@$domain"
             echo "JMAP_LIVE_SERVER_PASSWORD=$pass1"
             echo "JMAP_LIVE_SERVER_WRITE_USER=agent1@$domain"
             echo "JMAP_LIVE_SERVER_WRITE_PASSWORD=$pass1"
             echo "JMAP_LIVE_SERVER_RECIPIENT_USER=agent2@$domain"
             echo "JMAP_LIVE_SERVER_RECIPIENT_PASSWORD=$pass2"
+            # This runner's bootstrap gave Stalwart a per-run serverHostname
+            # (mail.<this random test domain>) purely so seeded accounts have
+            # somewhere to belong; that hostname resolves nowhere, so every
+            # session document's apiUrl/uploadUrl names an unreachable
+            # origin. jmap-client's own live_server.rs already documents the
+            # fix for exactly this ("only if apiUrl names an unreachable
+            # origin"): opt into the rewrite back onto JMAP_LIVE_SERVER_URL's
+            # own host, scoped to this job's test steps only, never globally.
+            echo "JMAP_LIVE_SERVER_REBASE_URLS=1"
           } >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
