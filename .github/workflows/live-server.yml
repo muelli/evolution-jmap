@@ -46,8 +46,22 @@ jobs:
           echo "::add-mask::$pass2"
           "$HOME/evolution-night-shift/harness/stalwart/stw" seed "$domain" agent1 "$pass1"
           "$HOME/evolution-night-shift/harness/stalwart/stw" seed "$domain" agent2 "$pass2"
+          # Resolve to the stable internal IP here rather than handing the
+          # test binary the hostname: confirmed 2026-09-07 that this exact
+          # hostname resolves and curls fine in every shell step of this job,
+          # yet every live_server test's own DNS lookup for it fails
+          # ("failed to lookup address information: Name or service not
+          # known") regardless of thread count (ruled out a parallel-lookup
+          # race) or working directory (ruled out a stale checkout/cache).
+          # The cause is still unclear; resolving once, where it is proven to
+          # work, sidesteps it and removes an entire class of DNS flakiness
+          # from a job that only ever talks to this one fixed VM anyway.
+          host=$(echo "$STALWART_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')
+          ip=$(getent hosts "$host" | awk '{print $1; exit}')
+          [ -n "$ip" ] || { echo "could not resolve $host" >&2; exit 1; }
+          resolved_url=${STALWART_URL/$host/$ip}
           {
-            echo "JMAP_LIVE_SERVER_URL=$STALWART_URL"
+            echo "JMAP_LIVE_SERVER_URL=$resolved_url"
             echo "JMAP_LIVE_SERVER_USER=agent1@$domain"
             echo "JMAP_LIVE_SERVER_PASSWORD=$pass1"
             echo "JMAP_LIVE_SERVER_WRITE_USER=agent1@$domain"
@@ -59,30 +73,8 @@ jobs:
         with:
           shared-key: live-server
           workspaces: rust
-      # TEMPORARY diagnostic (2026-09-07): the seed step's own `stw` calls
-      # reach Stalwart fine, but every live_server test then fails DNS
-      # resolution ("failed to lookup address information") for the exact
-      # same JMAP_LIVE_SERVER_URL host, which resolves and curls fine over a
-      # plain interactive ssh session on this same VM. Trying to see what
-      # differs in the job's own process environment. Remove this step once
-      # the cause is found.
-      - name: DEBUG env and DNS
-        run: |
-          echo "JMAP_LIVE_SERVER_URL=$JMAP_LIVE_SERVER_URL"
-          host=$(echo "$JMAP_LIVE_SERVER_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')
-          echo "host=$host"
-          getent hosts "$host" || echo "getent FAILED"
-          curl -sS -m 5 -o /dev/null -w 'curl: HTTP %{http_code}\n' "$JMAP_LIVE_SERVER_URL/" || echo "curl FAILED"
-          echo "--- env (proxy/dns related) ---"
-          env | grep -iE 'proxy|dns|resolv' || echo "(none)"
-          echo "--- resolv.conf ---"; cat /etc/resolv.conf
-          echo "--- nsswitch hosts line ---"; grep ^hosts /etc/nsswitch.conf
       # jmap-client's own read/write suite (docs/manual-test-live-server.md).
-      # TEMPORARY: --test-threads=1 while testing a theory that a burst of
-      # concurrent DNS lookups against the internal resolver, one per
-      # parallel test thread (8 on this runner), is what breaks the
-      # resolution the DEBUG step just proved works fine in isolation.
-      - run: cargo test -p evolution-jmap-client --features live-server -- --ignored --test-threads=1
+      - run: cargo test -p evolution-jmap-client --features live-server -- --ignored
         working-directory: rust
       # The sync crates' live-server counterparts: no live-server feature of
       # their own, #[ignore] alone keeps them out of a plain `cargo test`.
