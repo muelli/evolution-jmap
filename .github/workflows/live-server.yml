@@ -78,7 +78,11 @@ jobs:
           echo "--- resolv.conf ---"; cat /etc/resolv.conf
           echo "--- nsswitch hosts line ---"; grep ^hosts /etc/nsswitch.conf
       # jmap-client's own read/write suite (docs/manual-test-live-server.md).
-      - run: cargo test -p evolution-jmap-client --features live-server -- --ignored
+      # TEMPORARY: --test-threads=1 while testing a theory that a burst of
+      # concurrent DNS lookups against the internal resolver, one per
+      # parallel test thread (8 on this runner), is what breaks the
+      # resolution the DEBUG step just proved works fine in isolation.
+      - run: cargo test -p evolution-jmap-client --features live-server -- --ignored --test-threads=1
         working-directory: rust
       # The sync crates' live-server counterparts: no live-server feature of
       # their own, #[ignore] alone keeps them out of a plain `cargo test`.
