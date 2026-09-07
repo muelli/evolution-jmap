@@ -59,6 +59,24 @@ jobs:
         with:
           shared-key: live-server
           workspaces: rust
+      # TEMPORARY diagnostic (2026-09-07): the seed step's own `stw` calls
+      # reach Stalwart fine, but every live_server test then fails DNS
+      # resolution ("failed to lookup address information") for the exact
+      # same JMAP_LIVE_SERVER_URL host, which resolves and curls fine over a
+      # plain interactive ssh session on this same VM. Trying to see what
+      # differs in the job's own process environment. Remove this step once
+      # the cause is found.
+      - name: DEBUG env and DNS
+        run: |
+          echo "JMAP_LIVE_SERVER_URL=$JMAP_LIVE_SERVER_URL"
+          host=$(echo "$JMAP_LIVE_SERVER_URL" | sed -E 's#^[a-z]+://##; s#[:/].*$##')
+          echo "host=$host"
+          getent hosts "$host" || echo "getent FAILED"
+          curl -sS -m 5 -o /dev/null -w 'curl: HTTP %{http_code}\n' "$JMAP_LIVE_SERVER_URL/" || echo "curl FAILED"
+          echo "--- env (proxy/dns related) ---"
+          env | grep -iE 'proxy|dns|resolv' || echo "(none)"
+          echo "--- resolv.conf ---"; cat /etc/resolv.conf
+          echo "--- nsswitch hosts line ---"; grep ^hosts /etc/nsswitch.conf
       # jmap-client's own read/write suite (docs/manual-test-live-server.md).
       - run: cargo test -p evolution-jmap-client --features live-server -- --ignored
         working-directory: rust
