@@ -15,6 +15,28 @@ use std::path::PathBuf;
 /// would be claiming support for releases nothing here has been held against.
 const MIN_EVO: &str = "3.52";
 
+/// Where GtkUIManager stopped being the answer: NEWS says the rewrite to
+/// EUIManager landed in 3.55.1, a 3.56 development release, so `>= 3.55` is
+/// the boundary between a system with `<gtk/gtk.h>`'s deprecated
+/// `GtkAction`/`GtkActionGroup`/`GtkUIManager` wired through Evolution's
+/// composer and mail-reader menus, and one with `e-util/e-ui-manager.h`'s
+/// `EUIAction`/`EUIActionGroup`/`EUIManager` instead. jmap-ui picks between
+/// the two at compile time, keyed off the `evolution_eui_manager` cfg this
+/// file emits (see `main`), rather than choosing a floor and dropping the
+/// other side of it: the two VMs this project is actually tested against sit
+/// one on each side.
+const MIN_EVO_EUI_MANAGER: (u32, u32) = (3, 55);
+
+/// Parses a dotted version string's first two components, ignoring the rest —
+/// all this compares is "before or after the EUIManager rewrite", never a
+/// specific patch level.
+fn version_major_minor(version: &str) -> (u32, u32) {
+    let mut parts = version.split('.');
+    let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (major, minor)
+}
+
 /// The classes the setup module subclasses, and their accessors. Everything
 /// else in Evolution's headers — the pages, the assistant, the notebook — is
 /// reached through the vfuncs of these classes or not at all, so the surface
@@ -77,6 +99,16 @@ const ALLOWED_TYPES: &[&str] = &[
     // disagree about, so generating it here does not repeat the mistake
     // [`BLOCKED_TYPES`] exists to prevent.
     "ECalClientSourceType",
+    // The one EUIManager-era struct whose *layout* jmap-ui needs rather than
+    // just a pointer to: an array of these is built and handed to
+    // `e_ui_manager_add_actions_with_eui_data` by value, the way a
+    // `GtkActionEntry` array once was to `gtk_action_group_add_actions` (never
+    // called here — actions were built one at a time instead, per the note
+    // by `gtk_action_new` below). Present only when Evolution's headers
+    // define it (`>= 3.55`, `MIN_EVO_EUI_MANAGER`): `allowlist_type` matching
+    // nothing is not an error, and jmap-ui's own use of it is behind the same
+    // `evolution_eui_manager` cfg this file emits.
+    "EUIActionEntry",
 ];
 
 /// String macros this crate reads rather than hand-copies: the parameter
@@ -175,6 +207,8 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_msg_composer_get_message",
     "e_msg_composer_get_message_finish",
     "e_html_editor_get_ui_manager",
+    // 3.52's composer path only; see `gtk_action_new` below on the EUIManager
+    // era's own group story.
     "e_html_editor_get_action_group",
     // The From gate's registry, by evolution-ews's own chain: the table hands
     // out its From header, the header hands out the registry it was built
@@ -187,27 +221,56 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     "e_composer_header_table_dup_identity_uid",
     // The snooze surfaces, a function at a time. The shell view: its GType is
     // the first extensible, its name is the "is this the mail view" gate, and
-    // the window is where the 3.52 action/menu layer lives.
+    // — on 3.52 — the window is where the action/menu layer lives.
     "e_shell_view_get_type",
     "e_shell_view_get_name",
-    "e_shell_view_get_shell_window",
     "e_shell_view_get_shell_content",
+    // 3.52's path to the composer/reader menu layer: the window's own
+    // GtkUIManager and one of its pre-existing action groups ("mail").
+    "e_shell_view_get_shell_window",
     "e_shell_window_get_ui_manager",
     "e_shell_window_get_action_group",
+    // 3.55+'s path to the same layer: the shell view answers for its own
+    // EUIManager directly (confirmed against a real in-tree extension on this
+    // exact type, `e-rss-shell-view-extension.c`, which merges in
+    // `constructed()` with no wait), so a snooze menu no longer needs the
+    // window in between at all.
+    "e_shell_view_get_ui_manager",
     // The registry the snooze gate resolves the folder's account source
     // against; the shell singleton is the one place a shell-view extension
     // can be sure of one.
     "e_shell_get_default",
     "e_shell_get_registry",
     // The detached message window, the second extensible: it merges into a
-    // GtkUIManager of its own and *is* its own EMailReader.
+    // GtkUIManager of its own (3.52) and *is* its own EMailReader.
     "e_mail_browser_get_type",
     "e_mail_browser_get_ui_manager",
     // The reader face both surfaces hand the snooze action: the selection,
-    // the folder it sits in, and (for the browser) the action group.
+    // the folder it sits in, and (3.52 only, for the browser) the action
+    // group. 3.55+ answers `get_ui_manager` on the reader interface itself —
+    // one call shared by the shell's mail view and the detached browser
+    // alike, where 3.52 needed a different accessor on each.
     "e_mail_reader_get_selected_uids",
     "e_mail_reader_ref_folder",
     "e_mail_reader_get_action_group",
+    "e_mail_reader_get_ui_manager",
+    // The EUIManager era's own way to add a batch of actions and merge the
+    // `.eui` XML that places them, in one call: no pre-existing action group
+    // to add into (`gtk_action_group_add_action`'s replacement creates and
+    // returns its own, named by `group_name`), and no separate merge step
+    // (`gtk_ui_manager_add_ui_from_string`'s replacement is the `eui`
+    // argument). `get_action_group`/`e_ui_action_group_get_action` are how the
+    // submenu's own action is found again afterwards, to gate its sensitivity
+    // and tooltip — the two menus (snooze's popup item, send-later's composer
+    // submenu) each register under their own group name rather than an
+    // existing Evolution one, matching how `mailing-list-actions.c` and
+    // `e-composer-to-meeting.c` do it upstream.
+    "e_ui_manager_add_actions_with_eui_data",
+    "e_ui_manager_get_action_group",
+    "e_ui_action_group_get_action",
+    "e_ui_action_set_sensitive",
+    "e_ui_action_set_tooltip",
+    "e_ui_action_set_label",
     // Evolution's date entry, for the vacation page's from/to fields. The
     // "no date set" pair is the load-bearing part: it is how a nullable
     // `fromDate`/`toDate` is expressed in the UI without the page parsing
@@ -309,9 +372,10 @@ const ALLOWED_GTK_FUNCTIONS: &[&str] = &[
     // The body should take the page's spare height; everything else keeps
     // its natural size.
     "gtk_widget_set_vexpand",
-    // The scheduled-send actions: GtkAction-era (Evolution 3.52's composer
-    // still merges through GtkUIManager; 3.56 replaced the whole layer, which
-    // is jmap-ui's `menu` seam to port then). Actions are built one by one —
+    // The scheduled-send and snooze actions, on Evolution < 3.55: the
+    // GtkAction era, still what the composer and mail-reader menus merge
+    // through there (`evolution_eui_manager` picks the EUIManager-era
+    // functions above instead, on 3.55+). Actions are built one by one —
     // `gtk_action_new` + a `g_signal_connect` on `activate` — rather than
     // through `gtk_action_group_add_actions`, whose `GtkActionEntry` array is
     // a struct layout the blocklist keeps out.
@@ -502,6 +566,16 @@ const BLOCKED_EVO_TYPES: &[&str] = &[
     "_?EMailBrowser[A-Za-z]*",
     "_?EMailReader",
     "_?EMailReaderInterface",
+    // The EUIManager era's own trio (3.55+, when they exist at all — see
+    // `MIN_EVO_EUI_MANAGER`): reached only as pointers, so [`EVO_HANDLES`]
+    // supplies them, exactly like the GTK-era classes above. Spelled exactly,
+    // with no wildcard tail, so `EUIActionEntry` — the one struct among them
+    // whose *fields* jmap-ui writes, see ALLOWED_TYPES — stays generatable;
+    // a `EUIAction[A-Za-z]*`-shaped pattern would catch that name too and
+    // leave nothing behind to build an array of.
+    "_?EUIManager",
+    "_?EUIAction",
+    "_?EUIActionGroup",
     // A GtkHBox subclass: generating its class struct would pull in the GTK
     // ones BLOCKED_GTK_TYPES exists to keep out.
     "_?EDateEdit[A-Za-z]*",
@@ -593,6 +667,15 @@ const EVO_HANDLES: &[&str] = &[
     "EShellContent",
     "EMailBrowser",
     "EMailReader",
+    // The EUIManager era's own menu/action trio (3.55+), reached only as
+    // pointers — `EUIActionEntry` is the one struct among them whose layout
+    // jmap-ui needs, and is in ALLOWED_TYPES instead, generated for real when
+    // Evolution's headers define it. Harmless to list unconditionally on an
+    // older Evolution that never defines the real types: an opaque handle
+    // nothing here constructs on that side of `evolution_eui_manager`.
+    "EUIManager",
+    "EUIAction",
+    "EUIActionGroup",
     // The vacation page's date fields; reached only as pointers.
     "EDateEdit",
 ];
@@ -644,13 +727,23 @@ fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=build.rs");
 
+    // Declared up front regardless of which branch below fires: a custom cfg
+    // rustc has not seen asked-about is a warning (`unexpected_cfgs`) as of
+    // the 2024 edition's lint, and this one is asked about from jmap-ui, a
+    // different crate than the one emitting it.
+    println!("cargo:rustc-check-cfg=cfg(evolution_eui_manager)");
+
     let mut clang_args = Vec::new();
     let mut link_paths: Vec<String> = Vec::new();
+    let mut evo_version: Option<String> = None;
     for pkg in ["evolution-shell-3.0", "evolution-mail-3.0"] {
         let lib = pkg_config::Config::new()
             .atleast_version(MIN_EVO)
             .probe(pkg)
             .unwrap_or_else(|e| panic!("{pkg} >= {MIN_EVO} not found: {e}"));
+        if evo_version.is_none() {
+            evo_version = Some(lib.version.clone());
+        }
         clang_args.extend(
             lib.include_paths
                 .iter()
@@ -712,6 +805,29 @@ fn main() {
     // is; a directory with a colon in its name would break it, and would break
     // `LD_LIBRARY_PATH` and `-Wl,-rpath` in exactly the same way.
     println!("cargo:libdirs={}", link_paths.join(":"));
+
+    // Which menu/action layer wrapper.h's `JMAP_EVO_EUI_MANAGER` picks
+    // between (see `MIN_EVO_EUI_MANAGER`) and what jmap-ui's own `#[cfg]`s key
+    // off. Both packages probed above share one Evolution release, so either
+    // version answers the question; the loop keeps whichever answered first.
+    let eui_manager = evo_version
+        .as_deref()
+        .map(version_major_minor)
+        .is_some_and(|version| version >= MIN_EVO_EUI_MANAGER);
+    clang_args.push(format!(
+        "-DJMAP_EVO_EUI_MANAGER={}",
+        u8::from(eui_manager)
+    ));
+    if eui_manager {
+        println!("cargo:rustc-cfg=evolution_eui_manager");
+    }
+    // `cargo:rustc-cfg` only reaches this crate's own compilation; jmap-ui's
+    // `#[cfg(evolution_eui_manager)]` needs the same answer for itself, and
+    // gets it the way it already gets `DEP_EVOLUTION_SHELL_LIBDIRS` — this
+    // crate's `links = "evolution-shell"` key, Cargo's own channel for a
+    // build script telling a dependent something (`cargo:eui_manager=1` here
+    // becomes `DEP_EVOLUTION_SHELL_EUI_MANAGER` there).
+    println!("cargo:eui_manager={}", u8::from(eui_manager));
 
     let mut builder = bindgen::Builder::default()
         .header("wrapper.h")

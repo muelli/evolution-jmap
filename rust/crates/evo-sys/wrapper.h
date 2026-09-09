@@ -54,6 +54,25 @@
 #include <mail/e-mail-reader.h>
 #include <mail/e-mail-browser.h>
 
+/* The EUIManager era's own menu/action classes (Evolution >= 3.55, see
+ * build.rs's `MIN_EVO_EUI_MANAGER`): `EUIManager` itself, `EUIAction` and its
+ * batch-registration entry struct, and `EUIActionGroup`, which is what a
+ * submenu's own action is found back through once merged. `-DJMAP_EVO_EUI_MANAGER`
+ * is build.rs's own answer to the same version question, passed as a clang
+ * argument rather than tested here some other way, so there is exactly one
+ * place that decides it. Guarded behind `__E_UTIL_H_INSIDE__` for the same
+ * reason `e-source-config-backend.h` below is: these headers refuse to be
+ * included any other way. On an older Evolution the macro is defined to `0`
+ * and these three includes simply do not happen — no such headers exist there
+ * to include — which is why every symbol they would have defined is only ever
+ * allowlisted, never required, elsewhere in build.rs. */
+#if JMAP_EVO_EUI_MANAGER
+#define __E_UTIL_H_INSIDE__
+#include <e-util/e-ui-manager.h>
+#include <e-util/e-ui-action.h>
+#include <e-util/e-ui-action-group.h>
+#endif
+
 /* The second class this crate's consumers subclass, and the only route by
  * which Evolution's New Address Book and New Calendar dialogs can be made to
  * offer JMAP at all: `ESourceConfig` builds one candidate per registered
