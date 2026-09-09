@@ -6,6 +6,15 @@
 //! click through the composer's own message builder to
 //! [`crate::send_later::submit::schedule_send`].
 //!
+//! Two menu layers, chosen at compile time by `evolution_eui_manager` (see
+//! `evo-sys/build.rs`): Evolution < 3.55 merges through `GtkUIManager` and the
+//! editor's own "core" `GtkActionGroup`; >= 3.55 merges through `EUIManager`,
+//! registering under this extension's own group name rather than an existing
+//! one (matching how `e-composer-to-meeting.c` upstream registers its own
+//! "composer" group for exactly this extensible) — one call,
+//! `e_ui_manager_add_actions_with_eui_data`, both builds the actions and
+//! places the `.eui` fragment that was two steps on the GTK side.
+//!
 //! The gate re-runs on every From switch (`EComposerHeaderTable`'s
 //! `notify::identity-uid`): level 1 is the identity's transport backend name
 //! — the evolution-ews chain, identity source → `[Mail Submission]`
@@ -35,24 +44,37 @@ use eds_sys::{
     e_source_get_parent, e_source_mail_submission_get_transport_uid, e_source_registry_ref_source,
 };
 use evo_sys::{
-    E_COMPOSER_HEADER_FROM, EMsgComposer, GTK_BUTTONS_CLOSE, GTK_DIALOG_DESTROY_WITH_PARENT,
-    GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_RESPONSE_CANCEL, GTK_RESPONSE_OK, GtkAction,
-    GtkActionGroup, GtkWindow, e_composer_header_get_registry,
-    e_composer_header_table_dup_identity_uid, e_composer_header_table_get_header,
-    e_date_edit_get_time, e_date_edit_new, e_date_edit_set_show_time, e_date_edit_set_time,
-    e_html_editor_get_action_group, e_html_editor_get_ui_manager, e_msg_composer_get_editor,
-    e_msg_composer_get_header_table, e_msg_composer_get_message, e_msg_composer_get_message_finish,
-    e_msg_composer_get_type, gtk_action_get_name, gtk_action_group_add_action,
-    gtk_action_group_get_action, gtk_action_new, gtk_action_set_sensitive, gtk_container_add,
+    E_COMPOSER_HEADER_FROM, EHTMLEditor, EMsgComposer, GTK_BUTTONS_CLOSE,
+    GTK_DIALOG_DESTROY_WITH_PARENT, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_RESPONSE_CANCEL,
+    GTK_RESPONSE_OK, GtkWindow,
+    e_composer_header_get_registry, e_composer_header_table_dup_identity_uid,
+    e_composer_header_table_get_header, e_date_edit_get_time, e_date_edit_new,
+    e_date_edit_set_show_time, e_date_edit_set_time, e_html_editor_get_ui_manager,
+    e_msg_composer_get_editor, e_msg_composer_get_header_table, e_msg_composer_get_message,
+    e_msg_composer_get_message_finish, e_msg_composer_get_type, gtk_container_add,
     gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run,
-    gtk_message_dialog_new, gtk_ui_manager_add_ui_from_string, gtk_ui_manager_ensure_update,
-    gtk_widget_destroy, gtk_widget_show_all, gtk_window_set_title, gtk_window_set_transient_for,
+    gtk_message_dialog_new, gtk_widget_destroy, gtk_widget_show_all, gtk_window_set_title,
+    gtk_window_set_transient_for,
+};
+#[cfg(not(evolution_eui_manager))]
+use evo_sys::{
+    GtkAction, GtkActionGroup, e_html_editor_get_action_group, gtk_action_get_name,
+    gtk_action_group_add_action, gtk_action_group_get_action, gtk_action_new,
+    gtk_action_set_sensitive, gtk_ui_manager_add_ui_from_string, gtk_ui_manager_ensure_update,
+};
+#[cfg(evolution_eui_manager)]
+use evo_sys::{
+    EUIAction, EUIActionEntry, EUIActionGroup, GVariant, e_ui_action_group_get_action,
+    e_ui_action_set_label, e_ui_action_set_sensitive, e_ui_action_set_tooltip,
+    e_ui_manager_add_actions_with_eui_data, e_ui_manager_get_action_group, g_action_get_name,
 };
 use gio_sys::GAsyncResult;
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, g_free, gpointer};
+#[cfg(not(evolution_eui_manager))]
+use gobject_sys::g_object_set;
 use gobject_sys::{
-    GObject, GObjectClass, GParamSpec, g_object_get_data, g_object_set, g_object_set_data_full,
-    g_object_unref, g_signal_connect_data,
+    GObject, GObjectClass, GParamSpec, g_object_get_data, g_object_set_data_full, g_object_unref,
+    g_signal_connect_data,
 };
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::{extension_if_present, read_string};
@@ -87,6 +109,19 @@ const TOO_FAR: &CStr = N_(c"The chosen time is further ahead than the server acc
 const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time");
 const NOT_FUTURE: &CStr = N_(c"That time has already passed — choose one in the future");
 
+/// The submenu's own action, whichever menu layer built it.
+#[cfg(not(evolution_eui_manager))]
+type MenuAction = *mut GtkAction;
+#[cfg(evolution_eui_manager)]
+type MenuAction = *mut EUIAction;
+
+/// The group the preset actions live in, so their labels can be brought up to
+/// date afterwards — "Today, 18:00" is only true until 18:00.
+#[cfg(not(evolution_eui_manager))]
+type MenuActionGroup = *mut GtkActionGroup;
+#[cfg(evolution_eui_manager)]
+type MenuActionGroup = *mut EUIActionGroup;
+
 /// Per-composer state, boxed as qdata on the composer.
 struct SendState {
     /// The connected account behind the current From identity, once the
@@ -96,10 +131,10 @@ struct SendState {
     generation: u64,
     /// The submenu's own action, whose sensitivity and tooltip are the gate's
     /// visible half.
-    menu_action: *mut GtkAction,
+    menu_action: MenuAction,
     /// The group the preset actions live in, so their labels can be brought
     /// up to date — "Today, 18:00" is only true until 18:00.
-    action_group: *mut GtkActionGroup,
+    action_group: MenuActionGroup,
 }
 
 static GENERATIONS: AtomicU64 = AtomicU64::new(1);
@@ -168,6 +203,16 @@ fn action_name(preset: Preset) -> CString {
 /// The submenu's own XML, with one item per offered moment plus the custom
 /// entry — built rather than a constant, because which moments are offered
 /// is [`schedule::offered`]'s to say.
+///
+/// 3.52 merges into the `<menubar name='main-menu'>` root's own
+/// `pre-edit-menu`/`custom-actions-placeholder` placeholders (evolution-ews's
+/// own composer extensions use the same pair). 3.55+ merges the same way,
+/// under `<eui><menu id='main-menu'>`, `id`-addressed placeholders and
+/// `<item>` rather than `<menuitem>` — confirmed against a real in-tree
+/// composer extension on this exact structure, `e-composer-to-meeting.c`,
+/// whose own merge nests one `<item>` exactly where this one nests a whole
+/// `<submenu>`.
+#[cfg(not(evolution_eui_manager))]
 fn ui_definition() -> CString {
     let mut items = String::new();
     for preset in schedule::offered() {
@@ -186,27 +231,59 @@ fn ui_definition() -> CString {
     ))
     .unwrap_or_default()
 }
+#[cfg(evolution_eui_manager)]
+fn ui_definition() -> CString {
+    let mut items = String::new();
+    for preset in schedule::offered() {
+        items.push_str(&format!(
+            "<item action='jmap-send-later-{}'/>",
+            schedule::slug(preset)
+        ));
+    }
+    items.push_str("<separator/><item action='jmap-send-later-custom'/>");
+    CString::new(format!(
+        "<eui>\
+<menu id='main-menu'>\
+<placeholder id='pre-edit-menu'><submenu action='file-menu'>\
+<placeholder id='custom-actions-placeholder'>\
+<submenu action='jmap-send-later-menu'>{items}</submenu>\
+</placeholder></submenu></placeholder>\
+</menu>\
+</eui>"
+    ))
+    .unwrap_or_default()
+}
 
-/// Chains up, merges the menu (insensitive), and arms the gate.
-unsafe extern "C" fn constructed(object: *mut GObject) {
-    guard("JmapSendLaterExtension::constructed", (), || unsafe {
-        // SAFETY: the parent class of a live instance is initialised and alive.
-        let parent = subclass::parent_class::<GObjectClass>(JmapSendLaterExtension::parent_type());
-        if let Some(chained) = parent.and_then(|class| class.constructed) {
-            chained(object);
-        }
+/// This extension's own group name under `EUIManager`, matching how
+/// `e-composer-to-meeting.c` registers its own "composer" group for the same
+/// extensible rather than joining an existing one.
+#[cfg(evolution_eui_manager)]
+const GROUP_NAME: &CStr = c"jmap-send-later";
 
-        // SAFETY: GObject passes a live instance; the extensible is the
-        // composer this extension was instantiated for.
-        let composer: *mut EMsgComposer =
-            e_extension_get_extensible(object.cast::<EExtension>()).cast();
-        let editor = e_msg_composer_get_editor(composer);
-        let ui_manager = e_html_editor_get_ui_manager(editor);
-        let action_group = e_html_editor_get_action_group(editor, c"core".as_ptr());
-        if ui_manager.is_null() || action_group.is_null() {
-            return;
-        }
+/// The submenu's own action and the group its presets live in, built through
+/// whichever menu layer is compiled in — 3.52's pre-existing "core" group and
+/// a `gtk_ui_manager_add_ui_from_string` merge, or 3.55+'s own new group and
+/// `e_ui_manager_add_actions_with_eui_data`'s one call for both.
+///
+/// # Safety
+///
+/// `composer` must be a live composer; `editor` its own editor.
+#[cfg(not(evolution_eui_manager))]
+unsafe fn build_menu(
+    composer: *mut EMsgComposer,
+    editor: *mut EHTMLEditor,
+) -> Option<(MenuAction, MenuActionGroup)> {
+    // SAFETY: a live editor per this function's contract.
+    let ui_manager = unsafe { e_html_editor_get_ui_manager(editor) };
+    // SAFETY: as above.
+    let action_group = unsafe { e_html_editor_get_action_group(editor, c"core".as_ptr()) };
+    if ui_manager.is_null() || action_group.is_null() {
+        return None;
+    }
 
+    // SAFETY: live objects, checked above; each action's reference passes to
+    // the group.
+    unsafe {
         // The submenu's own action; label only, activated by its items.
         let menu_action = gtk_action_new(
             c"jmap-send-later-menu".as_ptr(),
@@ -270,6 +347,122 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             g_error_free(error);
         }
         gtk_ui_manager_ensure_update(ui_manager);
+        Some((menu_action, action_group))
+    }
+}
+
+/// # Safety
+///
+/// `composer` must be a live composer; `editor` its own editor.
+#[cfg(evolution_eui_manager)]
+unsafe fn build_menu(
+    composer: *mut EMsgComposer,
+    editor: *mut EHTMLEditor,
+) -> Option<(MenuAction, MenuActionGroup)> {
+    // SAFETY: a live editor per this function's contract.
+    let ui_manager = unsafe { e_html_editor_get_ui_manager(editor) };
+    if ui_manager.is_null() {
+        return None;
+    }
+
+    let mut names: Vec<CString> = schedule::offered()
+        .iter()
+        .copied()
+        .map(action_name)
+        .collect();
+    names.push(CString::new("jmap-send-later-custom").unwrap_or_default());
+
+    let mut entries: Vec<EUIActionEntry> = Vec::with_capacity(1 + names.len());
+    entries.push(EUIActionEntry {
+        name: c"jmap-send-later-menu".as_ptr(),
+        icon_name: ptr::null(),
+        label: translate_static(N_(c"Send _Later")),
+        accel: ptr::null(),
+        tooltip: translate_static(CHECKING),
+        activate: None,
+        parameter_type: ptr::null(),
+        state: ptr::null(),
+        change_state: None,
+    });
+    // One action per offered moment, plus the custom entry; all share
+    // `on_activate`, which recovers the moment from the action's own name.
+    for name in &names {
+        let is_custom = name.to_bytes().ends_with(b"-custom");
+        entries.push(EUIActionEntry {
+            name: name.as_ptr(),
+            icon_name: ptr::null(),
+            // `refresh_labels` fills in the real "Today, 18:00"-style label
+            // an instant later, but `e_ui_action_group_add` (called
+            // synchronously inside `e_ui_manager_add_actions_with_eui_data`,
+            // before that has a chance to run) warns if an action's label is
+            // NULL at the moment it is added — a placeholder here silences
+            // that without changing what the menu ever actually shows.
+            label: if is_custom {
+                translate_static(N_(c"_Custom Time…"))
+            } else {
+                translate_static(N_(c"…"))
+            },
+            accel: ptr::null(),
+            tooltip: ptr::null(),
+            activate: Some(on_activate),
+            parameter_type: ptr::null(),
+            state: ptr::null(),
+            change_state: None,
+        });
+    }
+
+    let ui = ui_definition();
+    // SAFETY: a live manager; `entries`' pointers are 'static or
+    // `translate_static`'s process-lifetime strings, so the array need not
+    // outlive this one call.
+    unsafe {
+        e_ui_manager_add_actions_with_eui_data(
+            ui_manager,
+            GROUP_NAME.as_ptr(),
+            ptr::null(),
+            entries.as_ptr(),
+            entries.len() as std::ffi::c_int,
+            composer.cast(),
+            ui.as_ptr(),
+        );
+    }
+
+    // SAFETY: a live manager.
+    let action_group = unsafe { e_ui_manager_get_action_group(ui_manager, GROUP_NAME.as_ptr()) };
+    if action_group.is_null() {
+        tracing::error!("the Send Later menu could not be merged");
+        return None;
+    }
+    // SAFETY: a live group just found.
+    let menu_action =
+        unsafe { e_ui_action_group_get_action(action_group, c"jmap-send-later-menu".as_ptr()) };
+    if menu_action.is_null() {
+        return None;
+    }
+    // SAFETY: a live action just found.
+    unsafe { set_action_sensitive(menu_action, false) };
+    // SAFETY: a live group just found.
+    unsafe { refresh_labels(action_group) };
+    Some((menu_action, action_group))
+}
+
+/// Chains up, merges the menu (insensitive), and arms the gate.
+unsafe extern "C" fn constructed(object: *mut GObject) {
+    guard("JmapSendLaterExtension::constructed", (), || unsafe {
+        // SAFETY: the parent class of a live instance is initialised and alive.
+        let parent = subclass::parent_class::<GObjectClass>(JmapSendLaterExtension::parent_type());
+        if let Some(chained) = parent.and_then(|class| class.constructed) {
+            chained(object);
+        }
+
+        // SAFETY: GObject passes a live instance; the extensible is the
+        // composer this extension was instantiated for.
+        let composer: *mut EMsgComposer =
+            e_extension_get_extensible(object.cast::<EExtension>()).cast();
+        let editor = e_msg_composer_get_editor(composer);
+        let Some((menu_action, action_group)) = build_menu(composer, editor) else {
+            return;
+        };
 
         let state = Box::new(RefCell::new(SendState {
             link: None,
@@ -283,8 +476,12 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             Box::into_raw(state).cast(),
             Some(drop_state),
         );
-        // The menu action's reference now lives in the state (via the group);
-        // the local one from gtk_action_new is the group's, released here.
+        // 3.52 only: the menu action's reference now lives in the state (via
+        // the group); the local one from `gtk_action_new` was the group's,
+        // released here. 3.55+'s `menu_action` is a borrowed reference from
+        // the manager's own group, never owned here, so there is none to
+        // release.
+        #[cfg(not(evolution_eui_manager))]
         g_object_unref(menu_action.cast());
 
         // Re-gate on every From switch, and once for the identity the
@@ -335,15 +532,16 @@ unsafe fn refuse_menu(composer: *mut GObject, why: &CStr) {
     // SAFETY: the action is the group's, alive with the composer; a tooltip
     // is a plain property.
     unsafe {
-        gtk_action_set_sensitive(state.menu_action, GFALSE);
+        set_action_sensitive(state.menu_action, false);
         set_tooltip(state.menu_action, translate(why));
     }
 }
 
 /// # Safety
 ///
-/// `action` must be a live GtkAction.
-unsafe fn set_tooltip(action: *mut GtkAction, text: String) {
+/// `action` must be a live action of whichever menu layer is compiled in.
+#[cfg(not(evolution_eui_manager))]
+unsafe fn set_tooltip(action: MenuAction, text: String) {
     let text = CString::new(text).unwrap_or_default();
     // SAFETY: per the contract; the property machinery copies the string.
     unsafe {
@@ -354,6 +552,29 @@ unsafe fn set_tooltip(action: *mut GtkAction, text: String) {
             ptr::null::<std::ffi::c_char>(),
         );
     }
+}
+/// # Safety
+///
+/// `action` must be a live `EUIAction`.
+#[cfg(evolution_eui_manager)]
+unsafe fn set_tooltip(action: MenuAction, text: String) {
+    let text = CString::new(text).unwrap_or_default();
+    // SAFETY: per the contract; the setter copies the string.
+    unsafe { e_ui_action_set_tooltip(action, text.as_ptr()) };
+}
+
+/// # Safety
+///
+/// `action` must be a live action of whichever menu layer is compiled in.
+#[cfg(not(evolution_eui_manager))]
+unsafe fn set_action_sensitive(action: MenuAction, sensitive: bool) {
+    // SAFETY: per the contract.
+    unsafe { gtk_action_set_sensitive(action, if sensitive { GTRUE } else { GFALSE }) };
+}
+#[cfg(evolution_eui_manager)]
+unsafe fn set_action_sensitive(action: MenuAction, sensitive: bool) {
+    // SAFETY: per the contract.
+    unsafe { e_ui_action_set_sensitive(action, if sensitive { GTRUE } else { GFALSE }) };
 }
 
 /// The gate, both levels; runs on the main loop.
@@ -380,7 +601,7 @@ unsafe fn gate(composer: *mut GObject) {
         state.generation = generation;
         // SAFETY: the action and group live with the composer.
         unsafe {
-            gtk_action_set_sensitive(state.menu_action, GFALSE);
+            set_action_sensitive(state.menu_action, false);
             set_tooltip(state.menu_action, translate(CHECKING));
             refresh_labels(state.action_group);
         }
@@ -533,7 +754,7 @@ unsafe fn apply_gate(
         Ok(link) if link.features.max_hold.is_some() => {
             // SAFETY: the action lives with the composer.
             unsafe {
-                gtk_action_set_sensitive(state.menu_action, GTRUE);
+                set_action_sensitive(state.menu_action, true);
                 set_tooltip(state.menu_action, translate(OFFERED));
             }
             state.link = Some(Arc::new(link));
@@ -541,14 +762,14 @@ unsafe fn apply_gate(
         Ok(_) => {
             // SAFETY: as above.
             unsafe {
-                gtk_action_set_sensitive(state.menu_action, GFALSE);
+                set_action_sensitive(state.menu_action, false);
                 set_tooltip(state.menu_action, translate(NOT_OFFERED));
             }
         }
         Err(message) => {
             // SAFETY: as above.
             unsafe {
-                gtk_action_set_sensitive(state.menu_action, GFALSE);
+                set_action_sensitive(state.menu_action, false);
                 set_tooltip(state.menu_action, translate_with(NOT_REACHED, &[&message]));
             }
         }
@@ -567,7 +788,8 @@ unsafe fn apply_gate(
 ///
 /// `action_group` must be a live `GtkActionGroup` holding this submenu's
 /// actions, on the main loop.
-unsafe fn refresh_labels(action_group: *mut GtkActionGroup) {
+#[cfg(not(evolution_eui_manager))]
+unsafe fn refresh_labels(action_group: MenuActionGroup) {
     if action_group.is_null() {
         return;
     }
@@ -591,6 +813,32 @@ unsafe fn refresh_labels(action_group: *mut GtkActionGroup) {
                 label.as_ptr(),
                 ptr::null::<std::ffi::c_char>(),
             );
+        }
+    }
+}
+/// # Safety
+///
+/// `action_group` must be a live `EUIActionGroup` holding this submenu's
+/// actions, on the main loop.
+#[cfg(evolution_eui_manager)]
+unsafe fn refresh_labels(action_group: MenuActionGroup) {
+    if action_group.is_null() {
+        return;
+    }
+    for preset in schedule::offered() {
+        let Some(occurrence) = schedule::resolve(preset) else {
+            continue;
+        };
+        let name = action_name(preset);
+        // SAFETY: a live group per the contract; the action is the group's
+        // own (or NULL, which is skipped), and the setter copies the label.
+        unsafe {
+            let action = e_ui_action_group_get_action(action_group, name.as_ptr());
+            if action.is_null() {
+                continue;
+            }
+            let label = CString::new(occurrence.label).unwrap_or_default();
+            e_ui_action_set_label(action, label.as_ptr());
         }
     }
 }
@@ -694,26 +942,43 @@ unsafe fn activate_custom(composer: *mut GObject) {
 /// # Safety
 ///
 /// GLib's signal machinery; `composer` is the connection's data pointer.
+#[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn on_activate(action: *mut GtkAction, composer: gpointer) {
     guard("JmapSendLaterExtension::activate", (), || {
         // SAFETY: a live action GLib is emitting on; the name is its own.
         let name = unsafe { read_string(gtk_action_get_name(action)) };
-        let Some(slug) = name
-            .as_deref()
-            .and_then(|name| name.strip_prefix("jmap-send-later-"))
-        else {
-            return;
-        };
-        tracing::trace!(slug, "send-later: menu item activated");
-        // SAFETY: the composer is alive — its own menu emitted.
-        unsafe {
-            if slug == "custom" {
-                activate_custom(composer.cast());
-            } else if let Some(preset) = schedule::from_slug(slug) {
-                activate(composer.cast(), preset);
-            }
-        }
+        dispatch_activation(name.as_deref(), composer);
     });
+}
+#[cfg(evolution_eui_manager)]
+unsafe extern "C" fn on_activate(action: *mut EUIAction, _value: *mut GVariant, composer: gpointer) {
+    guard("JmapSendLaterExtension::activate", (), || {
+        // SAFETY: a live action GLib is emitting on; `EUIAction` implements
+        // `GAction`, whose own API is where a name comes from (the type's own
+        // accessors are for the *map* name a stateful action registers
+        // under, a different thing).
+        let name = unsafe { read_string(g_action_get_name(action.cast())) };
+        dispatch_activation(name.as_deref(), composer);
+    });
+}
+
+/// The one dispatch both menu layers' `activate` trampolines share: which
+/// moment was clicked is recovered from the action's own name (read
+/// differently per layer, see the two `on_activate`s above), so adding a
+/// preset is a line in [`schedule::offered`] rather than another trampoline.
+fn dispatch_activation(name: Option<&str>, composer: gpointer) {
+    let Some(slug) = name.and_then(|name| name.strip_prefix("jmap-send-later-")) else {
+        return;
+    };
+    tracing::trace!(slug, "send-later: menu item activated");
+    // SAFETY: the composer is alive — its own menu emitted.
+    unsafe {
+        if slug == "custom" {
+            activate_custom(composer.cast());
+        } else if let Some(preset) = schedule::from_slug(slug) {
+            activate(composer.cast(), preset);
+        }
+    }
 }
 
 /// What one click carries into the async message build.
