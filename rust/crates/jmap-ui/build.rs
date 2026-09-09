@@ -26,6 +26,8 @@ use std::env;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=DEP_EVOLUTION_SHELL_LIBDIRS");
+    println!("cargo:rerun-if-env-changed=DEP_EVOLUTION_SHELL_EUI_MANAGER");
+    println!("cargo:rustc-check-cfg=cfg(evolution_eui_manager)");
 
     // Absent only if `evo-sys` stopped publishing it, which is a build to fail
     // rather than one to quietly produce binaries that cannot start.
@@ -35,5 +37,16 @@ fn main() {
         // `-rpath` and not `-rpath-link`: this has to be recorded in the file,
         // not merely used while linking it.
         println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
+    }
+
+    // Which menu/action layer this crate's own `#[cfg(evolution_eui_manager)]`
+    // blocks pick: `evo-sys`'s build script decided it against the Evolution
+    // headers actually installed and published the answer the same way it
+    // publishes `libdirs` — this crate reads it back and re-emits its own
+    // `rustc-cfg`, `cargo:rustc-cfg` being scoped to the crate that sets it.
+    let eui_manager = env::var("DEP_EVOLUTION_SHELL_EUI_MANAGER")
+        .expect("evo-sys published no DEP_EVOLUTION_SHELL_EUI_MANAGER");
+    if eui_manager == "1" {
+        println!("cargo:rustc-cfg=evolution_eui_manager");
     }
 }
