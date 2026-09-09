@@ -368,36 +368,59 @@ unsafe fn apply_outcome(
     page: *mut GObject,
     outcome: Result<(Arc<AccountLink>, VacationForm), String>,
 ) {
-    let Some(ui) = (unsafe { state(page) }) else {
+    let Some(cell) = (unsafe { state(page) }) else {
         return;
     };
-    let mut ui = ui.borrow_mut();
     match outcome {
         Ok((link, form)) if link.features.vacation => {
-            // SAFETY: the page's own live children.
+            // The widget pointers are Copy; read them under a short immutable
+            // borrow and release it before touching any widget.
+            // `set_bool` on `enabled` calls GTK's own toggle setter, which
+            // emits `"toggled"` synchronously whenever the value actually
+            // changes (an already-enabled responder does exactly that) —
+            // that reenters `on_toggled`, which itself borrows this same
+            // `RefCell`. Holding a borrow across the call is a panic
+            // ("already mutably borrowed"), not a maybe.
+            let (enabled, from_date, to_date, subject, buffer, status, grid) = {
+                let ui = cell.borrow();
+                (
+                    ui.enabled,
+                    ui.from_date,
+                    ui.to_date,
+                    ui.subject,
+                    ui.buffer,
+                    ui.status,
+                    ui.grid,
+                )
+            };
+            // SAFETY: the page's own live children; no borrow of `cell` is
+            // held across any of these calls.
             unsafe {
-                set_bool(ui.enabled.cast(), form.enabled);
-                set_date(ui.from_date, &form.from_date);
-                set_date(ui.to_date, &form.to_date);
-                set_text(ui.subject.cast(), &form.subject);
-                set_text(ui.buffer.cast(), &form.body);
-                gtk_label_set_text(ui.status.cast(), c"".as_ptr());
-                gtk_widget_set_sensitive(ui.enabled, GTRUE);
-                gtk_widget_set_sensitive(ui.grid, if form.enabled { GTRUE } else { GFALSE });
+                set_bool(enabled.cast(), form.enabled);
+                set_date(from_date, &form.from_date);
+                set_date(to_date, &form.to_date);
+                set_text(subject.cast(), &form.subject);
+                set_text(buffer.cast(), &form.body);
+                gtk_label_set_text(status.cast(), c"".as_ptr());
+                gtk_widget_set_sensitive(enabled, GTRUE);
+                gtk_widget_set_sensitive(grid, if form.enabled { GTRUE } else { GFALSE });
             }
+            let mut ui = cell.borrow_mut();
             ui.baseline = Some(form);
             ui.link = Some(link);
         }
         Ok(_) => {
             let text = std::ffi::CString::new(translate(NOT_OFFERED)).unwrap_or_default();
+            let status = cell.borrow().status;
             // SAFETY: the page's own live status label.
-            unsafe { gtk_label_set_text(ui.status.cast(), text.as_ptr()) };
+            unsafe { gtk_label_set_text(status.cast(), text.as_ptr()) };
         }
         Err(message) => {
             let text = translate_with(LOAD_FAILED, &[&message]);
             let text = std::ffi::CString::new(text).unwrap_or_default();
+            let status = cell.borrow().status;
             // SAFETY: as above.
-            unsafe { gtk_label_set_text(ui.status.cast(), text.as_ptr()) };
+            unsafe { gtk_label_set_text(status.cast(), text.as_ptr()) };
         }
     }
 }
