@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `JmapSnoozeBrowserExtension`: the same snooze submenu in the detached
-//! message window, which has a GtkUIManager of its own and *is* its own
+//! message window, which has a menu layer of its own (3.52: a GtkUIManager;
+//! 3.55+: an EUIManager, reached the same way the shell case's mail view now
+//! is, through the shared `EMailReader` interface) and *is* its own
 //! `EMailReader` — the duplication 3.52's design asks of every module
 //! (there is no shared reader-actions extension point; worth an upstream
 //! issue, tracked in the project plan).
@@ -10,10 +12,14 @@
 use std::ffi::CStr;
 
 use eds_sys::{EExtension, EExtensionClass, e_extension_get_extensible, e_extension_get_type};
+use evo_sys::{EMailBrowser, e_mail_browser_get_type};
+#[cfg(not(evolution_eui_manager))]
 use evo_sys::{
-    E_MAIL_READER_ACTION_GROUP_STANDARD, EMailBrowser, e_mail_browser_get_type,
-    e_mail_browser_get_ui_manager, e_mail_reader_get_action_group,
+    E_MAIL_READER_ACTION_GROUP_STANDARD, e_mail_browser_get_ui_manager,
+    e_mail_reader_get_action_group,
 };
+#[cfg(evolution_eui_manager)]
+use evo_sys::e_mail_reader_get_ui_manager;
 use glib_sys::{GType, gpointer};
 use gobject_sys::{GObject, GObjectClass, g_signal_connect_data};
 use jmap_backend_core::subclass::{self, ObjectSubclass};
@@ -70,11 +76,22 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
         // instance pointer).
         let browser: *mut EMailBrowser =
             e_extension_get_extensible(object.cast::<EExtension>()).cast();
+        #[cfg(not(evolution_eui_manager))]
         action::install(
             browser.cast(),
             browser.cast(),
             e_mail_browser_get_ui_manager(browser),
             e_mail_reader_get_action_group(browser.cast(), E_MAIL_READER_ACTION_GROUP_STANDARD),
+        );
+        // 3.55+: the browser answers for its own EUIManager through the same
+        // EMailReader accessor the shell case's mail view now uses too — one
+        // call shared by both windows, where 3.52 needed a different one on
+        // each.
+        #[cfg(evolution_eui_manager)]
+        action::install(
+            browser.cast(),
+            browser.cast(),
+            e_mail_reader_get_ui_manager(browser.cast()),
         );
 
         // Selection changes in a browser go through the reader's own signal.

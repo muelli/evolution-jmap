@@ -2,8 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The snooze submenu itself, shared by the two window extensions: the merge
-//! into a GtkUIManager, the sensitivity that follows the selection and the
+//! into the menu layer, the sensitivity that follows the selection and the
 //! account, and the activation that snoozes what is selected.
+//!
+//! Two menu layers, chosen at compile time by `evolution_eui_manager` (see
+//! `evo-sys/build.rs`): Evolution < 3.55 merges through `GtkUIManager` and a
+//! `GtkActionGroup` the caller already has (the window's "mail" group, or the
+//! browser's standard one); >= 3.55 merges through `EUIManager`, which needs
+//! no pre-existing group — `install` creates and names its own — and takes
+//! the whole action-plus-menu-placement in one call,
+//! `e_ui_manager_add_actions_with_eui_data`. Both sides fill the same
+//! [`SnoozeState`] and drive the same selection/gate/activation logic below;
+//! only the registration, and the sensitivity/tooltip/label setters, differ.
 //!
 //! The gate is the module's usual two levels, with the second one cached
 //! module-wide ([`crate::session_cache::shared`]): the folder's provider
@@ -22,17 +32,27 @@ use eds_sys::{
     camel_service_get_uid, e_source_get_parent, e_source_registry_ref_source,
 };
 use evo_sys::{
-    EMailReader, EShellContent, GTK_BUTTONS_CLOSE, GTK_MESSAGE_ERROR, GtkAction, GtkActionGroup,
-    GtkUIManager, e_mail_reader_get_selected_uids, e_mail_reader_ref_folder, e_shell_get_default,
-    e_shell_get_registry, gtk_action_group_add_action, gtk_action_new, gtk_action_set_sensitive,
-    gtk_dialog_run, gtk_message_dialog_new, gtk_ui_manager_add_ui_from_string,
-    gtk_ui_manager_ensure_update, gtk_widget_destroy,
+    EMailReader, EShellContent, GTK_BUTTONS_CLOSE, GTK_MESSAGE_ERROR, e_mail_reader_get_selected_uids,
+    e_mail_reader_ref_folder, e_shell_get_default, e_shell_get_registry, gtk_dialog_run,
+    gtk_message_dialog_new, gtk_widget_destroy,
 };
-use glib_sys::{GError, GFALSE, GTRUE, g_error_free, gpointer};
-use gobject_sys::{
-    GObject, g_object_get, g_object_get_data, g_object_set, g_object_set_data_full, g_object_unref,
-    g_signal_connect_data,
+#[cfg(not(evolution_eui_manager))]
+use evo_sys::{
+    GtkAction, GtkActionGroup, GtkUIManager, gtk_action_group_add_action, gtk_action_new,
+    gtk_action_set_sensitive, gtk_ui_manager_add_ui_from_string, gtk_ui_manager_ensure_update,
 };
+#[cfg(evolution_eui_manager)]
+use evo_sys::{
+    EUIAction, EUIActionEntry, EUIManager, GVariant, e_ui_action_group_get_action,
+    e_ui_action_set_sensitive, e_ui_action_set_tooltip, e_ui_manager_add_actions_with_eui_data,
+    e_ui_manager_get_action_group,
+};
+#[cfg(not(evolution_eui_manager))]
+use glib_sys::{GError, g_error_free};
+use glib_sys::{GFALSE, GTRUE, gpointer};
+#[cfg(not(evolution_eui_manager))]
+use gobject_sys::{g_object_set, g_signal_connect_data};
+use gobject_sys::{GObject, g_object_get, g_object_get_data, g_object_set_data_full, g_object_unref};
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard;
@@ -59,6 +79,12 @@ const OFFERED: &CStr = N_(c"The server hides the message until then and wakes it
 const SNOOZE_FAILED: &CStr = N_(c"The message could not be snoozed: %1$s");
 const NO_CLOCK: &CStr = N_(c"The local calendar could not name the chosen time");
 
+/// The submenu's own action, whichever menu layer built it.
+#[cfg(not(evolution_eui_manager))]
+type MenuAction = *mut GtkAction;
+#[cfg(evolution_eui_manager)]
+type MenuAction = *mut EUIAction;
+
 /// One reader window's snooze state, boxed as qdata on the extensible.
 struct SnoozeState {
     /// The reader whose selection and folder the actions read: the mail view
@@ -66,7 +92,7 @@ struct SnoozeState {
     /// alive as long as the owner is.
     reader: *mut EMailReader,
     /// The submenu's action, the gate's visible half.
-    menu_action: *mut GtkAction,
+    menu_action: MenuAction,
     /// The service uid a capability fetch is in flight for, so one slow
     /// account is asked once and not per `update-actions`.
     pending: Option<String>,
@@ -92,9 +118,16 @@ unsafe extern "C" fn drop_state(data: gpointer) {
     drop(unsafe { Box::from_raw(data.cast::<RefCell<SnoozeState>>()) });
 }
 
+/// One `activate` handler per preset, matching whichever menu layer's
+/// callback shape is compiled in.
+#[cfg(not(evolution_eui_manager))]
+type ActivateFn = unsafe extern "C" fn(*mut GtkAction, gpointer);
+#[cfg(evolution_eui_manager)]
+type ActivateFn = unsafe extern "C" fn(*mut EUIAction, *mut GVariant, gpointer);
+
 /// The three presets, sharing `send_later`'s moments on purpose: one set of
 /// habits, two menus.
-const PRESETS: &[(&CStr, &CStr, unsafe extern "C" fn(*mut GtkAction, gpointer))] = &[
+const PRESETS: &[(&CStr, &CStr, ActivateFn)] = &[
     (c"jmap-snooze-hour", N_(c"For One _Hour"), activate_hour),
     (
         c"jmap-snooze-tomorrow",
@@ -108,23 +141,53 @@ const PRESETS: &[(&CStr, &CStr, unsafe extern "C" fn(*mut GtkAction, gpointer))]
     ),
 ];
 
-/// Appended straight to the popup: 3.52's `/mail-message-popup` has no
-/// third-party placeholder (the similarly named one belongs to the preview
-/// pane's popup), so a direct child is the only seat at this table.
+/// This extension's own group name under `EUIManager`: not one of
+/// Evolution's own (the way `mailing-list-actions.c` and
+/// `e-composer-to-meeting.c` upstream each register their own group rather
+/// than joining an existing one — action references inside the merged `.eui`
+/// resolve across the whole manager, not just this group, so nothing about
+/// placement depends on the name).
+#[cfg(evolution_eui_manager)]
+const GROUP_NAME: &CStr = c"jmap-snooze";
+
+/// Appended straight to the popup: `/mail-message-popup` (3.52's
+/// `<popup name='mail-message-popup'>`, 3.55+'s `<menu id='mail-message-popup'>`)
+/// has no third-party placeholder in either era (the similarly named one
+/// belongs to the preview pane's popup — confirmed against 3.56's own
+/// `evolution-mail-reader.eui`, which still only reserves
+/// `mail-message-popup-common-actions` for itself there), so a direct child
+/// is the only seat at this table on either side of `evolution_eui_manager`.
+/// `mail-to-task.c` merges a new submenu into the same popup the same way,
+/// with no `is-popup` restated on the merge fragment.
+#[cfg(not(evolution_eui_manager))]
 const UI: &CStr = c"<popup name='mail-message-popup'>\
 <menu action='jmap-snooze-menu'>\
 <menuitem action='jmap-snooze-hour'/>\
 <menuitem action='jmap-snooze-tomorrow'/>\
 <menuitem action='jmap-snooze-monday'/>\
 </menu></popup>";
+#[cfg(evolution_eui_manager)]
+const UI: &CStr = c"<eui>\
+<menu id='mail-message-popup'>\
+<submenu action='jmap-snooze-menu'>\
+<item action='jmap-snooze-hour'/>\
+<item action='jmap-snooze-tomorrow'/>\
+<item action='jmap-snooze-monday'/>\
+</submenu>\
+</menu>\
+</eui>";
 
-/// Merge the submenu into `ui_manager`/`action_group` and hang the state on
-/// `owner`. Idempotent per owner: a second call finds the state and leaves.
+/// Merge the submenu into `ui_manager` (3.52: `action_group` too, a group the
+/// caller already has; 3.55+ creates and names its own, see `GROUP_NAME`) and
+/// hang the state on `owner`. Idempotent per owner: a second call finds the
+/// state and leaves.
 ///
 /// # Safety
 ///
-/// `owner` must be a live GObject outliving `reader`, `ui_manager` and
-/// `action_group`, all live and belonging to the same window; main loop only.
+/// `owner` must be a live GObject outliving `reader` and `ui_manager` (3.52:
+/// and `action_group`), all live and belonging to the same window; main loop
+/// only.
+#[cfg(not(evolution_eui_manager))]
 pub(crate) unsafe fn install(
     owner: *mut GObject,
     reader: *mut EMailReader,
@@ -160,10 +223,9 @@ pub(crate) unsafe fn install(
             g_signal_connect_data(
                 action.cast(),
                 c"activate".as_ptr(),
-                Some(std::mem::transmute::<
-                    unsafe extern "C" fn(*mut GtkAction, gpointer),
-                    unsafe extern "C" fn(),
-                >(*handler)),
+                Some(std::mem::transmute::<ActivateFn, unsafe extern "C" fn()>(
+                    *handler,
+                )),
                 owner.cast(),
                 None,
                 0,
@@ -202,6 +264,108 @@ pub(crate) unsafe fn install(
         g_object_unref(menu_action.cast());
         update_sensitivity(owner);
     }
+}
+
+/// # Safety
+///
+/// `owner` must be a live GObject outliving `reader` and `ui_manager`, both
+/// live and belonging to the same window; main loop only.
+#[cfg(evolution_eui_manager)]
+pub(crate) unsafe fn install(
+    owner: *mut GObject,
+    reader: *mut EMailReader,
+    ui_manager: *mut EUIManager,
+) {
+    if unsafe { state(owner) }.is_some() {
+        return;
+    }
+    if reader.is_null() || ui_manager.is_null() {
+        return;
+    }
+
+    // SAFETY: live manager per this function's contract; every entry's
+    // pointer is either 'static (the preset names, PRESETS itself) or
+    // `translate_static`'s process-lifetime string, so the array need not
+    // outlive this call by more than its own duration, which owning it here
+    // already covers.
+    let menu_action = unsafe {
+        let mut entries = vec![EUIActionEntry {
+            name: c"jmap-snooze-menu".as_ptr(),
+            icon_name: ptr::null(),
+            label: translate_static(N_(c"S_nooze")),
+            accel: ptr::null(),
+            tooltip: translate_static(CHECKING),
+            activate: None,
+            parameter_type: ptr::null(),
+            state: ptr::null(),
+            change_state: None,
+        }];
+        entries.extend(PRESETS.iter().map(|(name, label, handler)| EUIActionEntry {
+            name: name.as_ptr(),
+            icon_name: ptr::null(),
+            label: translate_static(label),
+            accel: ptr::null(),
+            tooltip: ptr::null(),
+            activate: Some(*handler),
+            parameter_type: ptr::null(),
+            state: ptr::null(),
+            change_state: None,
+        }));
+
+        e_ui_manager_add_actions_with_eui_data(
+            ui_manager,
+            GROUP_NAME.as_ptr(),
+            ptr::null(),
+            entries.as_ptr(),
+            entries.len() as std::ffi::c_int,
+            owner.cast(),
+            UI.as_ptr(),
+        );
+
+        let group = e_ui_manager_get_action_group(ui_manager, GROUP_NAME.as_ptr());
+        e_ui_action_group_get_action(group, c"jmap-snooze-menu".as_ptr())
+    };
+    if menu_action.is_null() {
+        tracing::error!("the snooze submenu could not be merged");
+        return;
+    }
+    // SAFETY: `menu_action` is the live action `e_ui_action_group_get_action`
+    // just found, non-NULL per the check above.
+    unsafe { set_action_sensitive(menu_action, false) };
+
+    tracing::trace!("snooze submenu merged into a JMAP-capable reader window");
+    let snooze = Box::new(RefCell::new(SnoozeState {
+        reader,
+        menu_action,
+        pending: None,
+    }));
+    // SAFETY: `owner` is live; the box's ownership passes to the qdata.
+    // `menu_action` is a borrowed reference from the manager's own group
+    // (`e_ui_action_group_get_action` does not transfer one), unlike the
+    // 3.52 path above, so there is none to release here.
+    unsafe {
+        g_object_set_data_full(
+            owner,
+            STATE_KEY.as_ptr(),
+            Box::into_raw(snooze).cast(),
+            Some(drop_state),
+        );
+        update_sensitivity(owner);
+    }
+}
+
+/// # Safety
+///
+/// `action` must be a live action of whichever menu layer is compiled in.
+#[cfg(not(evolution_eui_manager))]
+unsafe fn set_action_sensitive(action: MenuAction, sensitive: bool) {
+    // SAFETY: per the contract.
+    unsafe { gtk_action_set_sensitive(action, if sensitive { GTRUE } else { GFALSE }) };
+}
+#[cfg(evolution_eui_manager)]
+unsafe fn set_action_sensitive(action: MenuAction, sensitive: bool) {
+    // SAFETY: per the contract.
+    unsafe { e_ui_action_set_sensitive(action, if sensitive { GTRUE } else { GFALSE }) };
 }
 
 /// The `update-actions` half: sensitivity from the selection, the folder's
@@ -243,7 +407,7 @@ pub(crate) unsafe fn update_sensitivity(owner: *mut GObject) {
         Some((sensitive, tooltip)) => {
             // SAFETY: the action lives with the owner's window.
             unsafe {
-                gtk_action_set_sensitive(menu_action, if sensitive { GTRUE } else { GFALSE });
+                set_action_sensitive(menu_action, sensitive);
                 set_tooltip(menu_action, tooltip);
             }
         }
@@ -258,7 +422,7 @@ pub(crate) unsafe fn update_sensitivity(owner: *mut GObject) {
             }
             // SAFETY: as above.
             unsafe {
-                gtk_action_set_sensitive(menu_action, GFALSE);
+                set_action_sensitive(menu_action, false);
                 set_tooltip(menu_action, translate(CHECKING));
             }
             // SAFETY: the reader is alive; the source reference is the
@@ -311,7 +475,7 @@ pub(crate) unsafe fn update_sensitivity(owner: *mut GObject) {
                             if let Err(message) = outcome {
                                 let menu_action = snooze.menu_action;
                                 drop(snooze);
-                                gtk_action_set_sensitive(menu_action, GFALSE);
+                                set_action_sensitive(menu_action, false);
                                 set_tooltip(menu_action, translate_with(NOT_REACHED, &[&message]));
                                 return;
                             }
@@ -411,21 +575,53 @@ struct SendSource(*mut ESource);
 // source's property lock.
 unsafe impl Send for SendSource {}
 
+#[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn activate_hour(_action: *mut GtkAction, owner: gpointer) {
     guard("snooze::hour", (), || unsafe {
         // SAFETY: the owner is alive — its own menu emitted.
         activate(owner.cast(), Preset::InOneHour);
     });
 }
+#[cfg(evolution_eui_manager)]
+unsafe extern "C" fn activate_hour(_action: *mut EUIAction, _value: *mut GVariant, owner: gpointer) {
+    guard("snooze::hour", (), || unsafe {
+        // SAFETY: as the 3.52 trampoline of the same name.
+        activate(owner.cast(), Preset::InOneHour);
+    });
+}
 
+#[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn activate_tomorrow(_action: *mut GtkAction, owner: gpointer) {
     guard("snooze::tomorrow", (), || unsafe {
         // SAFETY: as `activate_hour`.
         activate(owner.cast(), Preset::TimeOfDay(8));
     });
 }
+#[cfg(evolution_eui_manager)]
+unsafe extern "C" fn activate_tomorrow(
+    _action: *mut EUIAction,
+    _value: *mut GVariant,
+    owner: gpointer,
+) {
+    guard("snooze::tomorrow", (), || unsafe {
+        // SAFETY: as `activate_hour`.
+        activate(owner.cast(), Preset::TimeOfDay(8));
+    });
+}
 
+#[cfg(not(evolution_eui_manager))]
 unsafe extern "C" fn activate_monday(_action: *mut GtkAction, owner: gpointer) {
+    guard("snooze::monday", (), || unsafe {
+        // SAFETY: as `activate_hour`.
+        activate(owner.cast(), Preset::NextWorkday);
+    });
+}
+#[cfg(evolution_eui_manager)]
+unsafe extern "C" fn activate_monday(
+    _action: *mut EUIAction,
+    _value: *mut GVariant,
+    owner: gpointer,
+) {
     guard("snooze::monday", (), || unsafe {
         // SAFETY: as `activate_hour`.
         activate(owner.cast(), Preset::NextWorkday);
@@ -517,8 +713,9 @@ fn snooze_all(link: &AccountLink, uids: &[String], until: &str) -> Result<usize,
 
 /// # Safety
 ///
-/// `action` must be a live GtkAction.
-unsafe fn set_tooltip(action: *mut GtkAction, text: String) {
+/// `action` must be a live action of whichever menu layer is compiled in.
+#[cfg(not(evolution_eui_manager))]
+unsafe fn set_tooltip(action: MenuAction, text: String) {
     let text = CString::new(text).unwrap_or_default();
     // SAFETY: per the contract; the property machinery copies the string.
     unsafe {
@@ -529,6 +726,15 @@ unsafe fn set_tooltip(action: *mut GtkAction, text: String) {
             ptr::null::<std::ffi::c_char>(),
         );
     }
+}
+/// # Safety
+///
+/// `action` must be a live `EUIAction`.
+#[cfg(evolution_eui_manager)]
+unsafe fn set_tooltip(action: MenuAction, text: String) {
+    let text = CString::new(text).unwrap_or_default();
+    // SAFETY: per the contract; the setter copies the string.
+    unsafe { e_ui_action_set_tooltip(action, text.as_ptr()) };
 }
 
 /// A modal explanation, parentless: the reader window a snooze failed in may
