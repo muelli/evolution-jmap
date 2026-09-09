@@ -118,17 +118,22 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use eds_sys::{
-    CamelDataCache, camel_data_cache_add, camel_data_cache_get, camel_data_cache_new,
-    camel_data_cache_remove, camel_data_cache_set_expire_access,
-    camel_data_cache_set_expire_enabled, time_t,
+    CamelDataCache, CamelFolder, CamelFolderClass, camel_data_cache_add, camel_data_cache_get,
+    camel_data_cache_get_filename, camel_data_cache_new, camel_data_cache_remove,
+    camel_data_cache_set_expire_access, camel_data_cache_set_expire_enabled, time_t,
 };
 use gio_sys::{
     g_input_stream_read, g_io_stream_close, g_io_stream_get_input_stream,
     g_io_stream_get_output_stream, g_output_stream_write_all,
 };
-use glib_sys::{GError, GFALSE, GTRUE, g_clear_error};
+use glib_sys::{GError, GFALSE, GTRUE, g_clear_error, g_free, gchar};
+use jmap_backend_core::error::fail;
+use jmap_backend_core::marshal::{dup_string, read_string};
 use jmap_backend_core::owned::Owned;
-use jmap_backend_core::trampoline::{log_critical, log_critical_for_message};
+use jmap_backend_core::trampoline::{guard_ptr, log_critical, log_critical_for_message};
+
+use crate::connect::StoreError;
+use crate::folder::JmapFolder;
 
 /// The subdirectory entries live in, below the account's cache directory.
 ///
@@ -452,6 +457,39 @@ impl MessageCache {
         stored
     }
 
+    /// The on-disk path an entry for `uid` would have, whether or not it is
+    /// actually cached there yet.
+    ///
+    /// `camel_data_cache_get_filename` is a pure path computation — the same
+    /// one `camel_data_cache_add`/`_get` use internally — so this answers
+    /// even for a message never fetched, exactly as `camel-imapx-folder.c`'s
+    /// own `get_filename` does (it returns the computation unchecked, no
+    /// existence test). That is safe here for the same reason it is safe
+    /// there: every caller of `CamelFolderClass::get_filename` already treats
+    /// a path it cannot open as "no local copy" and falls back to reading the
+    /// message another way (`e-mail-formatter-source.c`'s "View Source" is
+    /// exactly this fallback) — never as a promise the file exists.
+    ///
+    /// `None` for the same reason [`Self::key`] refuses: a uid that is not a
+    /// valid JMAP id is not a filename this cache would ever create.
+    pub fn filename(&self, uid: &str) -> Option<String> {
+        let key = self.key(uid)?;
+        let cache = self.lock();
+
+        // SAFETY: a live cache, two NUL-terminated strings alive across the
+        // call. The pointer this hands back is a fresh `g_malloc`'d string
+        // this call owns.
+        let raw =
+            unsafe { camel_data_cache_get_filename(cache.as_ptr(), MESSAGES.as_ptr(), key.as_ptr()) };
+        // SAFETY: `raw` is NULL or the fresh allocation above, read before the
+        // one free below; `read_string` copies rather than borrowing past it.
+        let path = unsafe { read_string(raw) };
+        // SAFETY: `raw` is NULL or a `g_malloc`'d pointer this function owns;
+        // `g_free` on NULL is a defined no-op.
+        unsafe { g_free(raw.cast()) };
+        path
+    }
+
     /// A uid as the file name it is about to become, or `None` if it is not one.
     fn key(&self, uid: &str) -> Option<CString> {
         if !valid_key(uid) {
@@ -473,6 +511,52 @@ impl MessageCache {
     /// failed.
     fn lock(&self) -> MutexGuard<'_, Owned<CamelDataCache>> {
         self.cache.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Installs the vfunc on a class whose first member is a `CamelFolderClass`.
+///
+/// # Safety
+///
+/// `class` must point at an initialised class struct that leads with a
+/// `CamelFolderClass` — which is every descendant of `CamelFolder`.
+pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
+    // SAFETY: the contract above.
+    let vfuncs = unsafe { &mut *class };
+    vfuncs.get_filename = Some(get_filename);
+}
+
+/// Answers where `uid` is (or would be) cached on disk — what "Save Message
+/// As", "View Source" and friends read the raw message bytes from rather than
+/// asking Camel to re-serialize them.
+///
+/// A path on success, whether or not a file is there yet; NULL with the error
+/// set only when this folder has no cache at all to compute one from — see
+/// [`MessageCache::filename`] for why the common case never needs to check.
+unsafe extern "C" fn get_filename(
+    folder: *mut CamelFolder,
+    uid: *const gchar,
+    error: *mut *mut GError,
+) -> *mut gchar {
+    // SAFETY: Camel's contract for the vfunc: a valid instance of ours, a
+    // NUL-terminated uid alive for the call, and an out-parameter that is
+    // NULL or writable and currently NULL.
+    unsafe {
+        guard_ptr("get_filename", error, || {
+            let Some(uid) = read_string(uid) else {
+                return fail(error, &StoreError::NoLocalFile, StoreError::to_gerror);
+            };
+            let Some(this) = JmapFolder::borrow(folder) else {
+                return fail(error, &StoreError::NoLocalFile, StoreError::to_gerror);
+            };
+            let Some(cache) = this.cache() else {
+                return fail(error, &StoreError::NoLocalFile, StoreError::to_gerror);
+            };
+            match cache.filename(&uid) {
+                Some(path) => dup_string(&path),
+                None => fail(error, &StoreError::NoLocalFile, StoreError::to_gerror),
+            }
+        })
     }
 }
 

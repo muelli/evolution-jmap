@@ -253,6 +253,18 @@ unsafe impl ObjectSubclass for JmapFolder {
         // SAFETY: as above.
         unsafe { crate::quota::install_vfuncs(class.cast::<CamelFolderClass>()) };
 
+        // And where a message a user asks to view the source of, or save,
+        // reads its raw bytes from on disk. `CamelFolder`'s own base class
+        // leaves this NULL and asserts on a class that has not filled it in —
+        // so without this line "View Source" and "Save Message As" fall back
+        // to re-serializing the message from memory (which still works) with
+        // a `camel-CRITICAL` logged at every call. This line is what answers
+        // the same way `camel-imapx-folder.c` does, from this folder's own
+        // on-disk cache (see `crate::cache`).
+        //
+        // SAFETY: as above.
+        unsafe { crate::cache::install_vfuncs(class.cast::<CamelFolderClass>()) };
+
         // And what the folder answers when it is asked which of its messages
         // match an expression — which is not only the search bar: every
         // message-list view is one ("Unread Messages", "Hide Deleted

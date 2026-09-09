@@ -130,6 +130,58 @@ fn a_stored_message_reads_back_byte_for_byte() {
     );
 }
 
+/// The path `filename` answers, read as an ordinary file, is the exact bytes
+/// `store` wrote — the whole point of a filename `CamelFolderClass::get_filename`
+/// can hand a caller in place of re-serializing the message.
+#[test]
+fn a_stored_messages_filename_reads_back_the_same_bytes() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+
+    assert!(cache.store("M1", SOURCE, None));
+    let path = cache.filename("M1").expect("a filename for a cached entry");
+    assert_eq!(
+        fs::read(&path).expect("the filename names a readable file"),
+        SOURCE,
+        "the file at the filename was not the cached message"
+    );
+}
+
+/// `camel_data_cache_get_filename` is a pure path computation, the same one
+/// `store` and `load` use internally to find the entry — so it answers for a
+/// uid that was never stored too, exactly as `camel-imapx-folder.c`'s own
+/// `get_filename` does (no existence check). What is not there yet is the
+/// file, not the answer.
+#[test]
+fn an_uncached_uid_still_gets_a_computed_filename() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+
+    let path = cache
+        .filename("M1")
+        .expect("a filename computed for an uncached uid");
+    assert!(
+        !Path::new(&path).exists(),
+        "a uid nothing stored already has a file on disk"
+    );
+}
+
+/// The same refusal `store`/`load` give a uid that is a path in disguise:
+/// `filename` is one more way this cache turns a uid into a file name, and a
+/// hostile one gets no path out of it either.
+#[test]
+fn a_uid_that_is_a_path_gets_no_filename() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+
+    for hostile in ["../escape", "..", ".", "sub/dir", "/absolute", ""] {
+        assert!(
+            cache.filename(hostile).is_none(),
+            "{hostile:?} was accepted as a cache key"
+        );
+    }
+}
+
 #[test]
 fn a_uid_that_was_never_cached_is_a_miss() {
     let scratch = Scratch::new();
