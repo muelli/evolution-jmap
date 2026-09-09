@@ -161,6 +161,18 @@ pub enum StoreError {
     /// so the folder-properties dialog that reads this vfunc treats a JMAP
     /// account exactly like an IMAP one with quotas turned off.
     NoQuota,
+    /// `get_filename` was called and this folder has no local message cache
+    /// to compute a path from — the account's cache directory could not be
+    /// made when the folder was built (see `crate::cache`) — or was given a
+    /// uid that names no local file this cache would ever create.
+    ///
+    /// Not a failure of the connection or the account: every caller of
+    /// `camel_folder_get_filename` already treats a NULL answer as "no local
+    /// copy" and falls back to reading the message another way
+    /// (`e-mail-formatter-source.c`'s "View Source" is exactly this
+    /// fallback). Reported as `G_IO_ERROR_NOT_SUPPORTED`, [`Self::NoQuota`]'s
+    /// own code for the same shape of "nothing to report".
+    NoLocalFile,
 }
 
 impl From<SourceError> for StoreError {
@@ -229,6 +241,7 @@ impl fmt::Display for StoreError {
                 f.write_str("this account has no Drafts or Sent folder to send a message from")
             }
             Self::NoQuota => f.write_str("no quota information available for this account"),
+            Self::NoLocalFile => f.write_str("this message has no local file"),
         }
     }
 }
@@ -308,7 +321,7 @@ impl StoreError {
                 (gio_sys::g_io_error_quark(), gio_sys::G_IO_ERROR_CANCELLED)
             },
             // SAFETY: as above.
-            Self::NoQuota => unsafe {
+            Self::NoQuota | Self::NoLocalFile => unsafe {
                 (
                     gio_sys::g_io_error_quark(),
                     gio_sys::G_IO_ERROR_NOT_SUPPORTED,
