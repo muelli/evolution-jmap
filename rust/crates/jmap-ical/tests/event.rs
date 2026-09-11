@@ -40031,3 +40031,258 @@ fn differential_oracle_conferences_and_links_attachment_bifurcation() {
     assert!(!unfolded.contains("ATTACH;VALUE=URI"));
     assert!(!unfolded.contains("ATTACH;DISPLAY="));
 }
+
+#[test]
+fn differential_oracle_drawn_alerts_default_masking_and_valarm_synthesis() {
+    let mut event = fixture_event();
+    event.title = Some("Sprint Retrospective".to_string());
+    let mut alerts = std::collections::BTreeMap::new();
+    alerts.insert(
+        "alert1".to_string(),
+        serde_json::json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            }
+        }),
+    );
+    alerts.insert(
+        "alert2".to_string(),
+        serde_json::json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "PT5M",
+                "relativeTo": "end"
+            }
+        }),
+    );
+    event.alerts = Some(alerts);
+    event.use_default_alerts = Some(false);
+
+    // maps_alerts validates successfully when use_default_alerts is false
+    assert!(jmap_ical::event::maps_alerts(&event));
+    assert!(!jmap_ical::event::uses_default_alerts(&event));
+
+    let valarms = jmap_ical::event::drawn_alarms(&event);
+    assert_eq!(valarms.len(), 2);
+
+    // Serialization via event_to_ical includes both VALARM blocks with UID, ACTION, TRIGGER, DESCRIPTION
+    let ics = jmap_ical::event_to_ical(&event);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded.contains("BEGIN:VALARM\r\n"));
+    assert!(unfolded.contains("UID:alert1\r\n"));
+    assert!(unfolded.contains("ACTION:DISPLAY\r\n"));
+    assert!(unfolded.contains("TRIGGER:-PT15M\r\n"));
+    assert!(unfolded.contains("DESCRIPTION:Sprint Retrospective\r\n"));
+    assert!(unfolded.contains("UID:alert2\r\n"));
+    assert!(unfolded.contains("TRIGGER;RELATED=END:PT5M\r\n"));
+
+    // Masking when use_default_alerts is true
+    event.use_default_alerts = Some(true);
+    assert!(jmap_ical::event::uses_default_alerts(&event));
+    assert!(!jmap_ical::event::maps_alerts(&event));
+    assert!(jmap_ical::event::drawn_alarms(&event).is_empty());
+    let ics_masked = jmap_ical::event_to_ical(&event);
+    assert!(!ics_masked.contains("BEGIN:VALARM"));
+
+    // Unsupported action (e.g. email) or absolute trigger fails drawn_alert
+    let invalid_action = serde_json::json!({
+        "@type": "Alert",
+        "action": "email",
+        "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"}
+    });
+    assert!(jmap_ical::event::drawn_alert("a3", &invalid_action, None).is_none());
+
+    let abs_trigger = serde_json::json!({
+        "@type": "Alert",
+        "action": "display",
+        "trigger": {"@type": "AbsoluteTrigger", "when": "2026-09-15T09:00:00Z"}
+    });
+    assert!(jmap_ical::event::drawn_alert("a4", &abs_trigger, None).is_none());
+}
+
+#[test]
+fn differential_oracle_rrule_serialization_libical_subparts_and_ordering() {
+    // Canonical libical subpart ordering: FREQ, COUNT, UNTIL, INTERVAL, time parts, day parts, BYSETPOS, WKST
+    let rule = RecurrenceRule {
+        frequency: "yearly".to_string(),
+        count: Some(5),
+        interval: Some(2),
+        by_second: Some(vec![0, 30, 60]), // leap second 60 permitted
+        by_minute: Some(vec![15, 45]),
+        by_hour: Some(vec![9, 17]),
+        by_month: Some(vec!["3".to_string(), "10".to_string()]),
+        by_set_position: Some(vec![1, -1]),
+        first_day_of_week: Some("su".to_string()),
+        ..RecurrenceRule::default()
+    };
+
+    let rrule_str = jmap_ical::event::rule_to_rrule(
+        &rule,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+        false,
+    )
+    .expect("valid rule");
+    assert_eq!(
+        rrule_str,
+        "FREQ=YEARLY;COUNT=5;INTERVAL=2;BYSECOND=0,30,60;BYMINUTE=15,45;BYHOUR=9,17;BYMONTH=3,10;BYSETPOS=1,-1;WKST=SU"
+    );
+
+    // Default INTERVAL=1 suppression and WKST=MO suppression
+    let default_rule = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        interval: Some(1),
+        first_day_of_week: Some("mo".to_string()),
+        ..RecurrenceRule::default()
+    };
+    let default_rrule = jmap_ical::event::rule_to_rrule(
+        &default_rule,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+        false,
+    )
+    .expect("valid rule");
+    assert_eq!(default_rrule, "FREQ=WEEKLY");
+    assert!(!default_rrule.contains("INTERVAL="));
+    assert!(!default_rrule.contains("WKST="));
+
+    // Frequency constraints:
+    // BYMONTHDAY forbidden on WEEKLY
+    let invalid_weekly = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        by_month_day: Some(vec![15]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::by_month_day_part(&invalid_weekly).is_none());
+
+    // BYWEEKNO allowed ONLY on YEARLY
+    let invalid_monthly_weekno = RecurrenceRule {
+        frequency: "monthly".to_string(),
+        by_week_no: Some(vec![12]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::by_week_no_part(&invalid_monthly_weekno).is_none());
+
+    // BYYEARDAY forbidden on DAILY/WEEKLY/MONTHLY
+    let invalid_daily_yearday = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_year_day: Some(vec![100]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::by_year_day_part(&invalid_daily_yearday).is_none());
+
+    // BYDAY ordinal (nthOfPeriod) requires MONTHLY or YEARLY
+    let nday_with_nth = jmap_proto::calendars::NDay {
+        day: "mo".to_string(),
+        nth_of_period: Some(2),
+        extra: Default::default(),
+        day_type: None,
+    };
+    assert!(jmap_ical::event::by_day_token(&nday_with_nth, "monthly").is_some());
+    assert!(jmap_ical::event::by_day_token(&nday_with_nth, "weekly").is_none());
+}
+
+#[test]
+fn differential_oracle_rrule_parsing_token_decomposition_and_sentinels() {
+    // 1. Full RRULE string parsing with case insensitivity
+    let raw = "freq=weekly;interval=2;count=10;byday=2MO,-1FR;byhour=9,17;bysetpos=1;wkst=su";
+    let rule = jmap_ical::event::rrule_to_rule(
+        raw,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+    )
+    .expect("valid rule");
+    assert_eq!(rule.frequency, "weekly");
+    assert_eq!(rule.interval, Some(2));
+    assert_eq!(rule.count, Some(10));
+    assert_eq!(rule.first_day_of_week, Some("su".to_string()));
+    assert_eq!(rule.by_hour, Some(vec![9, 17]));
+    assert_eq!(rule.by_set_position, Some(vec![1]));
+
+    let days = rule.by_day.expect("days present");
+    assert_eq!(days.len(), 2);
+    assert_eq!(days[0].day, "mo");
+    assert_eq!(days[0].nth_of_period, Some(2));
+    assert_eq!(days[1].day, "fr");
+    assert_eq!(days[1].nth_of_period, Some(-1));
+
+    // 2. Truncation on malformed UNTIL (no date-time digits)
+    let malformed_until = "FREQ=DAILY;UNTIL=MALFORMED_NO_DIGITS;COUNT=5";
+    let truncated = jmap_ical::event::rrule_to_rule(
+        malformed_until,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+    )
+    .expect("parsed base");
+    assert_eq!(truncated.frequency, "daily");
+    assert!(truncated.until.is_none());
+    assert!(truncated.count.is_none()); // COUNT was after UNTIL and dropped by break
+
+    // 3. Leading plus sign in to_nday
+    let plus_day = jmap_ical::event::to_nday("+3TU");
+    assert_eq!(plus_day.day, "tu");
+    assert_eq!(plus_day.nth_of_period, Some(3));
+
+    // 4. Sentinels: 0 for invalid monthday/setpos, u32::MAX for invalid time of day
+    assert_eq!(jmap_ical::event::to_month_day("invalid"), 0);
+    assert_eq!(jmap_ical::event::to_time_of_day("invalid"), u32::MAX);
+    assert_eq!(jmap_ical::event::to_time_of_day("0"), 0); // 0 is valid midnight
+}
+
+#[test]
+fn differential_oracle_recurrence_rule_capability_gating_and_extension_shielding() {
+    // 1. Valid conforming rule passes maps_recurrence_rule
+    let valid_rule = RecurrenceRule {
+        frequency: "monthly".to_string(),
+        interval: Some(1),
+        by_month_day: Some(vec![15]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::maps_recurrence_rule(&valid_rule));
+    assert!(jmap_ical::event::writable(&valid_rule));
+    assert!(jmap_ical::event::unstateable_until(&valid_rule).is_none());
+
+    // 2. Non-Gregorian rscale or skip extension is refused
+    let mut rscale_rule = valid_rule.clone();
+    rscale_rule.rscale = Some("hebrew".to_string());
+    assert!(!jmap_ical::event::maps_recurrence_rule(&rscale_rule));
+
+    let mut skip_rule = valid_rule.clone();
+    skip_rule.skip = Some("backward".to_string());
+    assert!(!jmap_ical::event::maps_recurrence_rule(&skip_rule));
+
+    let mut extra_rule = valid_rule.clone();
+    extra_rule
+        .extra
+        .insert("customField".to_string(), serde_json::json!("value"));
+    assert!(!jmap_ical::event::maps_recurrence_rule(&extra_rule));
+
+    // 3. Missing frequency fails writable
+    let empty_freq = RecurrenceRule {
+        frequency: "".to_string(),
+        ..RecurrenceRule::default()
+    };
+    assert!(!jmap_ical::event::writable(&empty_freq));
+    assert!(!jmap_ical::event::maps_recurrence_rule(&empty_freq));
+
+    // 4. Unstateable until is flagged
+    let unstateable = RecurrenceRule {
+        frequency: "daily".to_string(),
+        until: Some("not-a-valid-date-time".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert!(!jmap_ical::event::writable(&unstateable));
+    assert_eq!(
+        jmap_ical::event::unstateable_until(&unstateable),
+        Some("not-a-valid-date-time")
+    );
+
+    // 5. Dependent BYSETPOS requires companion expanding part
+    let orphan_setpos = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_set_position: Some(vec![1]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!jmap_ical::event::maps_recurrence_rule(&orphan_setpos));
+}
