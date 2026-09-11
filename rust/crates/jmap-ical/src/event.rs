@@ -1886,7 +1886,7 @@ pub fn defines_time_zone(event: &CalendarEvent, tzid: &str) -> bool {
 /// `recurrenceOverrides` of an observance, which would need a `RDATE` per
 /// transition and describes a zone whose past was corrected rather than one whose
 /// future differs.
-fn vtimezone_of(tzid: &str, definition: &Value) -> Option<Component> {
+pub fn vtimezone_of(tzid: &str, definition: &Value) -> Option<Component> {
     let mut vtimezone = Component::new("VTIMEZONE").with(make_entry("TZID", tzid));
     let mut observances = 0;
     for (name, member) in [("STANDARD", "standard"), ("DAYLIGHT", "daylight")] {
@@ -1914,7 +1914,7 @@ fn vtimezone_of(tzid: &str, definition: &Value) -> Option<Component> {
 /// makes mandatory, so a rule missing one is not a rule. `DTSTART` is a local
 /// time and has no `TZID`: §3.6.5 resolves it against `TZOFFSETFROM`, which is
 /// why an observance can date itself in the zone it is defining.
-fn observance(name: &str, rule: &Value) -> Option<Component> {
+pub fn observance(name: &str, rule: &Value) -> Option<Component> {
     let member = |name: &str| rule.get(name).and_then(Value::as_str);
     // The offset this observance's own local times are stated in, which its
     // `UNTIL` needs as well as its `DTSTART` — see [`Ends::At`].
@@ -3123,7 +3123,7 @@ fn stated_zones<'a>(components: &'a [ICalendarComponent]) -> Zones<'a> {
 /// zone is a different zone, so a `VTIMEZONE` this mapping cannot state whole is
 /// read as no definition at all. It also makes the round trip exact — what comes
 /// back out is byte for byte what came in.
-fn read_time_zones(
+pub fn read_time_zones(
     components: &[ICalendarComponent],
     event: &CalendarEvent,
 ) -> Option<BTreeMap<String, Value>> {
@@ -3164,7 +3164,7 @@ fn read_time_zones(
 /// of those references the event answers. [`read_time_zones`] collects the
 /// definitions for them; [`prune_time_zones`] drops the definitions for
 /// everything else.
-fn referred_zones(event: &CalendarEvent) -> impl Iterator<Item = &str> {
+pub fn referred_zones(event: &CalendarEvent) -> impl Iterator<Item = &str> {
     std::iter::once(event.time_zone.as_deref())
         .chain(
             event
@@ -3216,7 +3216,7 @@ pub fn prune_time_zones(event: &mut CalendarEvent) {
 /// `recurrenceOverrides` have no iCalendar spelling this crate writes, so a
 /// value invented for them here would be this side making a claim about the zone
 /// rather than reporting one.
-fn read_definition(
+pub fn read_definition(
     vtimezone: &ICalendarComponent,
     components: &[ICalendarComponent],
 ) -> Option<Value> {
@@ -3252,7 +3252,7 @@ fn read_definition(
 /// `TZOFFSETFROM`, which is how an observance dates itself in the zone it is
 /// defining, and it is why the value is read as a local date-time rather than
 /// through the zone lookup every other `DTSTART` in the document goes through.
-fn read_observance(component: &ICalendarComponent) -> Option<Value> {
+pub fn read_observance(component: &ICalendarComponent) -> Option<Value> {
     let mut rule = Map::new();
     rule.insert("@type".to_owned(), json!("TimeZoneRule"));
     rule.insert(

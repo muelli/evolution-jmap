@@ -40286,3 +40286,426 @@ fn differential_oracle_recurrence_rule_capability_gating_and_extension_shielding
     };
     assert!(!jmap_ical::event::maps_recurrence_rule(&orphan_setpos));
 }
+
+#[test]
+fn differential_oracle_canonical_timezone_resolution_pipeline() {
+    // 1. Syntactic IANA timezone shape validation (names_time_zone)
+    assert!(jmap_ical::event::names_time_zone("Europe/Berlin"));
+    assert!(jmap_ical::event::names_time_zone(
+        "America/Argentina/Buenos_Aires"
+    ));
+    assert!(jmap_ical::event::names_time_zone("Etc/GMT+5"));
+    assert!(jmap_ical::event::names_time_zone("UTC"));
+
+    // Refuses initial solidus, empty segments, Windows names with spaces or dots, invalid punctuation
+    assert!(!jmap_ical::event::names_time_zone(
+        "/freeassociation.sourceforge.net/Europe/Berlin"
+    ));
+    assert!(!jmap_ical::event::names_time_zone("Europe//Berlin"));
+    assert!(!jmap_ical::event::names_time_zone(
+        "W. Europe Standard Time"
+    ));
+    assert!(!jmap_ical::event::names_time_zone("Custom Zone"));
+    assert!(!jmap_ical::event::names_time_zone("Zone*Name"));
+
+    // 2. Windows timezone display name translation (windows_time_zone_to_iana)
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("W. Europe Standard Time"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("Romance Standard Time"),
+        Some("Europe/Paris")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("GMT Standard Time"),
+        Some("Europe/London")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("Russian Standard Time"),
+        Some("Europe/Moscow")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("Eastern Standard Time"),
+        Some("America/New_York")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("UTC-02"),
+        Some("Etc/GMT+2")
+    );
+    // Trims whitespace and quotes
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("  \"W. Europe Standard Time\"  "),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::event::windows_time_zone_to_iana("NonExistent Standard Time"),
+        None
+    );
+
+    // 3. Globally unique solidus vendor prefix peeling (unique_tzid_to_iana)
+    assert_eq!(
+        jmap_ical::event::unique_tzid_to_iana("/freeassociation.sourceforge.net/Europe/Berlin"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::event::unique_tzid_to_iana("/citadel.org/20260101_1/America/New_York"),
+        Some("America/New_York")
+    );
+    assert_eq!(
+        jmap_ical::event::unique_tzid_to_iana("/vendor.example.com/UTC"),
+        Some("UTC")
+    );
+    assert_eq!(
+        jmap_ical::event::unique_tzid_to_iana("freeassociation.sourceforge.net/Europe/Berlin"),
+        None
+    );
+    assert_eq!(
+        jmap_ical::event::unique_tzid_to_iana("/custom.org/UnknownArea/City"),
+        None
+    );
+
+    // 4. Unified canonical resolution pipeline (resolve_canonical_time_zone)
+    assert_eq!(
+        jmap_ical::event::resolve_canonical_time_zone("W. Europe Standard Time"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::event::resolve_canonical_time_zone("Europe/Berlin"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::event::resolve_canonical_time_zone(
+            "/freeassociation.sourceforge.net/Europe/Berlin"
+        ),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        jmap_ical::event::resolve_canonical_time_zone("/custom/unknown"),
+        None
+    );
+}
+
+#[test]
+fn differential_oracle_vtimezone_serialization_utc_offset_and_observance_gating() {
+    // 1. Strict UTC-offset formatting and validation (utc_offset)
+    assert_eq!(
+        jmap_ical::event::utc_offset("+0200"),
+        Some("+0200".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("-0500"),
+        Some("-0500".to_string())
+    );
+    // ISO colons stripped
+    assert_eq!(
+        jmap_ical::event::utc_offset("+02:00"),
+        Some("+0200".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("-05:00:00"),
+        Some("-0500".to_string())
+    );
+    // Non-zero seconds preserved in 6-digit form
+    assert_eq!(
+        jmap_ical::event::utc_offset("+054515"),
+        Some("+054515".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::utc_offset("+05:45:15"),
+        Some("+054515".to_string())
+    );
+    // RFC 5545 Section 3.3.14 forbids negative zero
+    assert_eq!(jmap_ical::event::utc_offset("-0000"), None);
+    assert_eq!(jmap_ical::event::utc_offset("-00:00"), None);
+    // Out of range fields refused
+    assert_eq!(jmap_ical::event::utc_offset("+2500"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+0160"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+010061"), None);
+    assert_eq!(jmap_ical::event::utc_offset("0200"), None);
+    assert_eq!(jmap_ical::event::utc_offset("+02AA"), None);
+
+    // 2. Observance subcomponent construction and validation (observance)
+    let valid_rule = serde_json::json!({
+        "@type": "TimeZoneRule",
+        "start": "2026-03-29T02:00:00",
+        "offsetFrom": "+0100",
+        "offsetTo": "+0200",
+        "names": {"CEST": true}
+    });
+    let obs =
+        jmap_ical::event::observance("DAYLIGHT", &valid_rule).expect("valid daylight observance");
+    assert_eq!(obs.component_type.as_str(), "DAYLIGHT");
+
+    // Missing mandatory fields in observance rule fails
+    let missing_start = serde_json::json!({
+        "@type": "TimeZoneRule",
+        "offsetFrom": "+0100",
+        "offsetTo": "+0200"
+    });
+    assert!(jmap_ical::event::observance("STANDARD", &missing_start).is_none());
+
+    let missing_from = serde_json::json!({
+        "@type": "TimeZoneRule",
+        "start": "2026-10-25T03:00:00",
+        "offsetTo": "+0100"
+    });
+    assert!(jmap_ical::event::observance("STANDARD", &missing_from).is_none());
+
+    let missing_to = serde_json::json!({
+        "@type": "TimeZoneRule",
+        "start": "2026-10-25T03:00:00",
+        "offsetFrom": "+0200"
+    });
+    assert!(jmap_ical::event::observance("STANDARD", &missing_to).is_none());
+
+    // 3. VTIMEZONE component drawing (vtimezone_of)
+    let valid_definition = serde_json::json!({
+        "@type": "TimeZone",
+        "tzId": "/custom/berlin",
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "2026-10-25T03:00:00",
+            "offsetFrom": "+0200",
+            "offsetTo": "+0100",
+            "names": {"CET": true}
+        }],
+        "daylight": [{
+            "@type": "TimeZoneRule",
+            "start": "2026-03-29T02:00:00",
+            "offsetFrom": "+0100",
+            "offsetTo": "+0200",
+            "names": {"CEST": true}
+        }]
+    });
+    let vtz = jmap_ical::event::vtimezone_of("/custom/berlin", &valid_definition)
+        .expect("drawn vtimezone");
+    assert_eq!(vtz.component_type.as_str(), "VTIMEZONE");
+
+    // Empty definition with no observances returns None
+    let empty_definition = serde_json::json!({
+        "@type": "TimeZone",
+        "tzId": "/custom/empty"
+    });
+    assert!(jmap_ical::event::vtimezone_of("/custom/empty", &empty_definition).is_none());
+
+    // 4. Timezone capability gating (defines_time_zone, maps_time_zone)
+    let mut event = fixture_event();
+    event.time_zone = Some("/custom/berlin".to_string());
+    let mut time_zones = std::collections::BTreeMap::new();
+    time_zones.insert("/custom/berlin".to_string(), valid_definition);
+    event.time_zones = Some(time_zones);
+
+    assert!(jmap_ical::event::defines_time_zone(
+        &event,
+        "/custom/berlin"
+    ));
+    assert!(jmap_ical::event::maps_time_zone(&event));
+
+    // Undefined custom solidus zone fails capability check
+    event.time_zone = Some("/custom/missing".to_string());
+    assert!(!jmap_ical::event::defines_time_zone(
+        &event,
+        "/custom/missing"
+    ));
+    assert!(!jmap_ical::event::maps_time_zone(&event));
+}
+
+#[test]
+fn differential_oracle_time_zones_ingestion_lifecycle_and_pruning() {
+    // 1. Reference aggregation across series and recurrence overrides (referred_zones)
+    let mut event = fixture_event();
+    event.time_zone = Some("/custom/series_zone".to_string());
+    let mut overrides = std::collections::BTreeMap::new();
+    overrides.insert(
+        "2026-06-01T10:00:00".to_string(),
+        serde_json::json!({
+            "timeZone": "/custom/override_zone"
+        }),
+    );
+    event.recurrence_overrides = Some(overrides);
+
+    let referred: std::collections::BTreeSet<String> = jmap_ical::event::referred_zones(&event)
+        .map(str::to_owned)
+        .collect();
+    assert!(referred.contains("/custom/series_zone"));
+    assert!(referred.contains("/custom/override_zone"));
+    assert_eq!(referred.len(), 2);
+
+    // 2. Orphan definition pruning (prune_time_zones)
+    let mut time_zones = std::collections::BTreeMap::new();
+    let def = serde_json::json!({
+        "@type": "TimeZone",
+        "tzId": "zone",
+        "standard": [{
+            "@type": "TimeZoneRule",
+            "start": "2026-01-01T00:00:00",
+            "offsetFrom": "+0000",
+            "offsetTo": "+0000"
+        }]
+    });
+    time_zones.insert("/custom/series_zone".to_string(), def.clone());
+    time_zones.insert("/custom/override_zone".to_string(), def.clone());
+    time_zones.insert("/custom/orphan_zone".to_string(), def.clone());
+    event.time_zones = Some(time_zones);
+
+    jmap_ical::event::prune_time_zones(&mut event);
+    let active_zones = event.time_zones.as_ref().expect("active zones present");
+    assert!(active_zones.contains_key("/custom/series_zone"));
+    assert!(active_zones.contains_key("/custom/override_zone"));
+    assert!(!active_zones.contains_key("/custom/orphan_zone"));
+
+    // Clearing timezone references causes prune_time_zones to set time_zones to None
+    event.time_zone = None;
+    event.recurrence_overrides = None;
+    jmap_ical::event::prune_time_zones(&mut event);
+    assert!(event.time_zones.is_none());
+
+    // 3. Full round trip ingestion and serialization of custom VTIMEZONE
+    let custom_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/custom/testzone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0100\r\n\
+TZNAME:TST\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:custom-tz-event\r\n\
+DTSTART;TZID=/custom/testzone:20260601T100000\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Custom Timezone Event\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let parsed_event = jmap_ical::event::ical_to_event(custom_ics).expect("parse custom tz");
+    assert_eq!(parsed_event.time_zone.as_deref(), Some("/custom/testzone"));
+    let read_zones = parsed_event
+        .time_zones
+        .as_ref()
+        .expect("time_zones ingested");
+    assert!(read_zones.contains_key("/custom/testzone"));
+
+    let re_emitted = jmap_ical::event::event_to_ical(&parsed_event);
+    assert!(re_emitted.contains("BEGIN:VTIMEZONE\r\n"));
+    assert!(re_emitted.contains("TZID:/custom/testzone\r\n"));
+    assert!(re_emitted.contains("TZNAME:TST\r\n"));
+}
+
+#[test]
+fn differential_oracle_zone_transition_day_calculation_restatement_and_windowing() {
+    // 1. Day::Nth: BYDAY with ordinal (e.g. 2SU in March)
+    let ics_nth = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/NthZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001105T020000\r\n\
+TZOFFSETFROM:-0400\r\n\
+TZOFFSETTO:-0500\r\n\
+RRULE:FREQ=YEARLY;BYDAY=1SU;BYMONTH=11\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000312T020000\r\n\
+TZOFFSETFROM:-0500\r\n\
+TZOFFSETTO:-0400\r\n\
+RRULE:FREQ=YEARLY;BYDAY=2SU;BYMONTH=3\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:nth-event\r\n\
+DTSTART;TZID=Custom/NthZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260601T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_nth = jmap_ical::event::ical_to_event(ics_nth).expect("parse nth zone");
+    let rule_nth = ev_nth.recurrence_rule.expect("rule nth");
+    // UNTIL converted with -0400 offset in June: 12:00:00Z - 4h = 08:00:00
+    assert_eq!(rule_nth.until.as_deref(), Some("2026-06-01T08:00:00"));
+
+    // 2. Day::WeekdayAmong: Tzdata idiom BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29
+    let ics_among = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/AmongZone\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000326T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29;BYMONTH=3\r\n\
+END:DAYLIGHT\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001029T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:among-event\r\n\
+DTSTART;TZID=Custom/AmongZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260601T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_among = jmap_ical::event::ical_to_event(ics_among).expect("parse among zone");
+    let rule_among = ev_among.recurrence_rule.expect("rule among");
+    // June is in DAYLIGHT (+0200): 12:00:00Z + 2h = 14:00:00
+    assert_eq!(rule_among.until.as_deref(), Some("2026-06-01T14:00:00"));
+
+    // 3. Day::OfMonth and Day::OfStart
+    let ics_month_day = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/FixedDayZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYMONTH=4;BYMONTHDAY=1\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:fixed-day-event\r\n\
+DTSTART;TZID=Custom/FixedDayZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260601T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_fixed = jmap_ical::event::ical_to_event(ics_month_day).expect("parse fixed day zone");
+    let rule_fixed = ev_fixed.recurrence_rule.expect("rule fixed");
+    assert_eq!(rule_fixed.until.as_deref(), Some("2026-06-01T14:00:00"));
+
+    // 4. Set rejection: multiple matching days in year (Falls::Set) causes rule refusal
+    let ics_set = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/SetZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=SU;BYMONTHDAY=1,2,3,4,5,6,7,8,9,10,11,12,13,14;BYMONTH=3\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:set-event\r\n\
+DTSTART;TZID=Custom/SetZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260601T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_set = jmap_ical::event::ical_to_event(ics_set).expect("parse set zone");
+    let rule_set = ev_set.recurrence_rule.expect("rule set");
+    // Transition rule refused due to Falls::Set, so zone offset is None and until preserves trailing Z
+    assert!(rule_set.until.as_ref().unwrap().ends_with('Z'));
+}
