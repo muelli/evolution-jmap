@@ -6017,3 +6017,81 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.308 Divergence 308: `maps_keyword`, `drawn_tags`, `read_keywords`, and `names_map_entry`: Bidirectional Keywords and Categories Mapping: RFC 5545 `CATEGORIES` Delimiter Handling, Whitespace Trimming, Carriage Return Rejection, Deterministic Lexicographical Set Ordering, and Map Entry Identifier Gating
+
+- **Observed Behavior**:
+  Translating keywords and categories between RFC 5545 and JSCalendar RFC 8984 requires validating individual tag tokens, sorting sets deterministically for change detection, and handling multi-value line formatting. In `jmap-ical`:
+  1. Boolean set membership gating (`maps_keyword`): RFC 8984 Section 4.2.4 models `keywords` as a set (`Type[Boolean]`). `maps_keyword` requires `set == &Value::Bool(true)`. Entries set to `false`, `null`, or non-boolean values are rejected.
+  2. Whitespace and carriage return rejection: Tags whose content is empty after trimming (`tag.trim().is_empty()`) or that contain raw carriage return bytes (`tag.contains('\r')`) return `false`. This protects content line boundaries and prevents blank tag emissions (`CATEGORIES:alpha,,beta`).
+  3. Deterministic lexicographical sorting (`drawn_tags`): Outbound categories are iterated from the underlying `BTreeMap`, filtering through `maps_keyword` and producing a sorted list of tag strings. Because the save path calculates minimal deltas by diffing against re-rendered server state, canonical ordering prevents spurious patch churn caused by arbitrary set serialization order.
+  4. Inbound category token extraction (`read_keywords`): When reading inbound `CATEGORIES` lines, values are split on commas, trimmed of surrounding whitespace, and validated against `names_map_entry`. Each conforming token is stored in the `keywords` map with boolean `true`.
+  5. In contrast, differential oracles or permissive converters accept blank category tokens, preserve raw carriage returns that corrupt line framing, or emit unsorted tags that trigger false positive diff churn during synchronization.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.2 (`Categories`).
+  2. RFC 8984 Section 4.2.4 (`keywords`).
+- **Adjudication**:
+  Conforming specification boundary and keyword set serialization determinism. Enforces boolean truthiness, trims whitespace, strips invalid carriage returns, preserves canonical BTreeMap key ordering, and validates category token syntax.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.309 Divergence 309: `maps_locations`, `drawn_place`, `place_name`, `read_locations`, and `names_map_entry`: Bidirectional Physical Location Mapping: RFC 5545 Section 3.8.1.7 Single Primary `LOCATION` Enforcement, Multi-Location Save Suppression (`maps_locations`), Empty Name Filtering (`place_name`), Subpath Patch Key Tracking (`X-JMAP-KEY`), and Fallback Positional Key Synthesis (`l1`)
+
+- **Observed Behavior**:
+  Mapping physical locations between RFC 5545 and RFC 8984 requires managing asymmetric cardinality constraints, preserving map keys across round trips, and preventing destructive overwrite during desktop saves. In `jmap-ical`:
+  1. Single physical location cardinality and save gating (`maps_locations`): RFC 5545 Section 3.8.1.7 permits only a single `LOCATION` property per `VEVENT`. If `event.locations` contains more than one entry, `maps_locations` returns `false`. This signals to the synchronization engine that the property cannot be replaced whole without discarding unmodeled secondary venues, protecting multi-room or multi-campus calendar bookings from data loss.
+  2. Single-entry validation: For a single location, `maps_locations` requires the map key to be non-empty and the `name` field to be either absent or a string. Numeric, boolean, or array names fail gating.
+  3. Primary location selection and empty name filtering (`drawn_place`, `place_name`): `drawn_place` selects the first entry in map order whose `name` is a non-empty string (`place_name`). Missing or empty string names are omitted, preventing bare `LOCATION:` lines.
+  4. Subpath patch key tracking (`X-JMAP-KEY`): `drawn_place` emits parameter `X-JMAP-KEY=<key>` alongside `LOCATION`. When read back in `read_locations`, this key allows targeted subpath patching (`locations/<key>/name`) rather than whole-collection replacement.
+  5. Fallback positional key synthesis: If an inbound `LOCATION` property lacks `X-JMAP-KEY`, `read_locations` synthesizes stable positional identifier `"l1"`.
+  6. In contrast, differential oracles overwrite multi-location collections unconditionally on save, emit blank `LOCATION:` lines, or lose server map key associations.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.7 (`Location`).
+  2. RFC 8984 Section 4.2.5 (`locations`).
+- **Adjudication**:
+  Conforming specification boundary and location property integrity. Enforces single-location cardinality constraints, suppresses destructive whole-map updates, filters empty names, tracks subpath patch keys, and provides stable positional fallback keys.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.310 Divergence 310: `drawn_participants`, `calendar_address`, `names_a_uri`, `stated_name`, `holds_role`, `expects_reply`, and `spelled`: Outbound Participant Roster and Organizer Serialization: RFC 5545 Section 3.6.1 Single Primary `ORGANIZER` Selection, Attending Owner Dual-Line Bifurcation, Set-Order Priority Role Mapping (`PARTICIPANT_ROLES`), Four-Kind `CUTYPE` Translation (`ROOM` for `location`), Participation Status Normalization (`PARTSTAT`), and Conditional `RSVP=TRUE` Parameter Attachment
+
+- **Observed Behavior**:
+  Serializing the participant roster from JSCalendar into iCalendar components requires managing distinct organizer and attendee representations, translating role and participation status vocabularies, and filtering invalid calendar user addresses. In `jmap-ical`:
+  1. Address extraction and URI validation (`calendar_address`, `names_a_uri`): Extracts the participant address from `sendTo["imip"]` and validates it against RFC 3986 URI syntax via `names_a_uri`. Participants lacking a valid URI address are omitted from outbound serialization, avoiding malformed lines that would cause downstream parsers to reject the entire component.
+  2. Single primary organizer selection (`drawn_participants`): RFC 8984 Section 4.4.6 permits multiple participants to carry the `owner` role. RFC 5545 Section 3.6.1 restricts a `VEVENT` to at most one `ORGANIZER` line. `drawn_participants` tracks `organizer_drawn`: only the first owner encountered emits `ORGANIZER`, while subsequent owners do not emit duplicate organizer lines.
+  3. Attending owner dual-line bifurcation: If an owner holds only the `owner` role, they are emitted exclusively on `ORGANIZER` and omitted from `ATTENDEE` (calling the meeting without attending). If the owner also holds an attendee role (such as `attendee` or `chair`), `drawn_participants` emits both `ORGANIZER` and `ATTENDEE` lines so the organizer is included on the guest list.
+  4. Priority role mapping (`PARTICIPANT_ROLES`): Translates `roles` sets into RFC 5545 `ROLE` parameters using precedence order: `chair` ↔ `CHAIR`, `informational` ↔ `NON-PARTICIPANT`, `optional` ↔ `OPT-PARTICIPANT`, and `attendee` ↔ `REQ-PARTICIPANT`.
+  5. Four-kind calendar user type translation (`PARTICIPANT_KINDS`): Maps participant kinds to RFC 5545 `CUTYPE` values: `individual` ↔ `INDIVIDUAL`, `group` ↔ `GROUP`, `resource` ↔ `RESOURCE`, and `location` ↔ `ROOM`.
+  6. Conditional RSVP expectation (`expects_reply`): Because RFC 5545 defaults `RSVP` to `FALSE`, `RSVP=TRUE` is attached only when `expectReply: true`, keeping output compact.
+  7. In contrast, differential oracles emit multiple ORGANIZER lines, omit attending organizers from the guest list, or emit invalid addresses that cause downstream parser failures.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.3 (`Calendar User Type`), Section 3.2.16 (`Participation Role`), Section 3.2.17 (`RSVP Expectation`), Section 3.2.12 (`Participation Status`), Section 3.6.1 (`Event Component`), Section 3.8.4.1 (`Attendee`), and Section 3.8.4.3 (`Organizer`).
+  2. RFC 8984 Section 4.4.6 (`participants`).
+- **Adjudication**:
+  Conforming specification boundary and participant roster fidelity. Enforces single organizer constraints, bifurcates attending owners accurately, maps participant roles and kinds deterministically, and gates RSVP parameters.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.311 Divergence 311: `drawn_conferences`, `drawn_conference`, `joining_features`, `CONFERENCE_FEATURES`, `drawn_links`, `drawn_link`, `media_type`, `restricted_name`, and `stated_size`: Outbound Virtual Locations and External Link Attachments: RFC 7986 `CONFERENCE` Multi-Entry Admission with Mandatory `VALUE=URI` and Seven-Feature Gating, Rel-Based Attachment Bifurcation (`IMAGE` with `DISPLAY` for Icons vs `ATTACH` for Documents), RFC 6838 Restricted-Name `FMTTYPE` Sanitation, and RFC 8607 `SIZE` Parameter Formatting
+
+- **Observed Behavior**:
+  Exporting virtual locations and external link resources requires coordinating distinct iCalendar specifications (RFC 5545, RFC 7986, RFC 8607) and distinguishing inline visual assets from general attachments. In `jmap-ical`:
+  1. Multi-entry online conference admission (`drawn_conferences`): Unlike physical `LOCATION`, RFC 7986 Section 5.11 permits multiple `CONFERENCE` lines. `drawn_conferences` serializes every entry in `event.virtual_locations` in stable map order.
+  2. Mandatory `VALUE=URI` on conferences: RFC 7986 Section 5.11 makes `VALUE=URI` mandatory on the URI production. `drawn_conference` explicitly emits `VALUE=URI` to comply with strict conforming readers.
+  3. Feature parameter mapping (`joining_features`, `CONFERENCE_FEATURES`): Evaluates `location.features`, mapping boolean flags to uppercase tokens in fixed `CONFERENCE_FEATURES` order: `audio` ↔ `AUDIO`, `chat` ↔ `CHAT`, `feed` ↔ `FEED`, `moderator` ↔ `MODERATOR`, `phone` ↔ `PHONE`, `screen` ↔ `SCREEN`, `video` ↔ `VIDEO`.
+  4. Rel-based attachment bifurcation (`drawn_links`, `drawn_link`): Inspects `link.rel`:
+     - If `rel == "icon"`, emits RFC 7986 Section 5.10 `IMAGE` with mandatory `VALUE=URI`, `DISPLAY` parameter (`badge`, `graphic`, `fullsize`, `thumbnail`), `FMTTYPE`, and `X-JMAP-KEY`.
+     - If `rel != "icon"` (or missing), emits RFC 5545 Section 3.8.1.1 `ATTACH` without `VALUE=URI` (the default) and without `DISPLAY` (forbidden on ATTACH). Emits `FMTTYPE` and `SIZE`.
+  5. Media type grammar sanitation (`media_type`, `restricted_name`): Enforces RFC 6838 Section 4.2 restricted-name grammar on type and subtype (`[A-Za-z0-9][A-Za-z0-9!#$&+^_.-]*`). Drops content-type parameters (such as charset or boundary) to shield against delimiter and newline injection in parameter values.
+  6. Octet size parameter formatting (`stated_size`): Emits RFC 8607 Section 4.1 `SIZE` parameter only when `size` is an unsigned integer.
+  7. In contrast, differential oracles omit mandatory `VALUE=URI` on conferences, emit illegal `DISPLAY` parameters on ATTACH, or pass unvalidated media type strings containing delimiters.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.8 (`Format Type`) and Section 3.8.1.1 (`Attachment`).
+  2. RFC 7986 Section 5.10 (`Image`), Section 5.11 (`Conference`), and Section 6.1 (`Display`).
+  3. RFC 8607 Section 4.1 (`Size Parameter`).
+  4. RFC 6838 Section 4.2 (`Restricted-Name Grammar`).
+  5. RFC 8984 Section 4.2.6 (`virtualLocations`) and Section 4.2.7 (`links`).
+- **Adjudication**:
+  Conforming specification boundary and multimedia/attachment serialization safety. Mandates `VALUE=URI` on conferences and images, enforces seven-feature canonical order, bifurcates images and attachments by relation, sanitizes media types against RFC 6838, and formats octet sizes strictly.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
