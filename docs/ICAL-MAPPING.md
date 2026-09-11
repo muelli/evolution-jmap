@@ -6095,3 +6095,85 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.312 Divergence 312: `maps_alerts`, `uses_default_alerts`, `drawn_alert`, `drawn_trigger`, `is_type`, and `drawn_alarms`: Outbound Reminder Alarm Serialization and Default Alerts Masking: RFC 8984 Section 4.5.1 `useDefaultAlerts` Document-Wide Alarm Suppression, `ACTION:DISPLAY` Action Scope Enforcement, `OffsetTrigger` Signed Duration Normalization, `RELATED=START` / `RELATED=END` Parameter Gating, Event Title `DESCRIPTION` Derivation, and RFC 9074 `VALARM` `UID` Key Preservation
+
+- **Observed Behavior**:
+  Translating reminder alarms from JSCalendar into RFC 5545 `VALARM` components requires coordinating user alert preferences, restricting alarm action kinds, formatting signed trigger intervals, and tracking map keys across round trips. In `jmap-ical`:
+  1. Default alert masking (`uses_default_alerts`, `maps_alerts`, `drawn_alarms`): RFC 8984 Section 4.5.1 specifies that when `useDefaultAlerts` is `true`, any `alerts` on the event are ignored and replaced by the client's own reminder defaults. `uses_default_alerts` checks both `event.use_default_alerts == Some(true)` and `event.extra["useDefaultAlerts"] == true`. When set, `drawn_alarms` returns an empty list, omitting all `VALARM` components from outbound serialization. This protects recipient notification preferences from being overridden by sender-defined alarms. Furthermore, `maps_alerts` returns `false` if non-empty alerts exist while `useDefaultAlerts: true`, preventing saves from silently dropping unwritten alarms.
+  2. Single action scope (`ACTION:DISPLAY`): RFC 5545 Section 3.6.6 defines `DISPLAY`, `AUDIO`, and `EMAIL` alarms. RFC 8984 Section 4.5.2 restricts Alert actions to `display`. `drawn_alert` verifies that `action` is either absent or `"display"`. Non-display actions (such as `audio` or `email`, which require binary sound payloads or full email participant bodies not modeled in JSCalendar) return `None` and fail gating.
+  3. Offset trigger parameterization (`drawn_trigger`): Evaluates `OffsetTrigger` durations via `stated_offset`. Negative offsets (e.g. `-PT15M` for 15 minutes prior) and positive offsets (`PT5M` for 5 minutes after) are parsed. When `relativeTo == "end"`, parameter `RELATED=END` is attached. When start-relative (or omitted), `RELATED` is omitted, adhering to RFC 5545 Section 3.2.14 defaults. Absolute triggers (`AbsoluteTrigger`) return `None` to prevent alarms from falling out of sync when events are rescheduled.
+  4. Mandatory title description fallback: RFC 5545 Section 3.6.6 makes `DESCRIPTION` mandatory on `ACTION:DISPLAY` alarms. `drawn_alert` populates `DESCRIPTION` with `event.title`, or omits the line if title is empty.
+  5. Stable UID key preservation: RFC 9074 Section 6 assigns `UID` properties to `VALARM` components. `drawn_alert` emits `UID=<key>` using the map key from `event.alerts`, preserving identifier associations across round trips.
+  6. In contrast, differential oracles omit `VALARM` `UID` tracking, emit redundant `RELATED=START` parameters, fail to suppress alarms when `useDefaultAlerts: true`, or emit unmodeled alarm actions.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.14 (`Alarm Trigger Relationship`), Section 3.6.6 (`Alarm Component`), Section 3.8.6.1 (`Action`), Section 3.8.6.2 (`Description`), and Section 3.8.6.3 (`Trigger`).
+  2. RFC 8984 Section 4.5.1 (`useDefaultAlerts`), Section 4.5.2 (`action`), and Section 4.5.3 (`OffsetTrigger`).
+  3. RFC 9074 Section 6 (`UID Property in VALARM`).
+- **Adjudication**:
+  Conforming specification boundary and alarm notification fidelity. Suppresses document-wide alarms when default alerts are active, enforces display action scope, parameterizes offset triggers strictly, injects title descriptions, and preserves alarm UID keys.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.313 Divergence 313: `rule_to_rrule`, `named_by_parts`, `time_of_day_part`, `by_hour_part`, `by_minute_part`, `by_second_part`, `by_day_part`, `by_day_token`, `counts_within_a_period`, `by_month_day_part`, `month_day_token`, `by_year_day_part`, `holds_a_year`, `year_day_token`, `by_week_no_part`, `week_no_token`, `by_month_part`, `month_token`, `by_set_position_part`, `set_position_token`, `first_day_of_week_part`, and `weekday_token`: Outbound Recurrence Rule Serialization and Libical Subpart Ordering: Frequency Specification, Default `INTERVAL=1` Suppression, `COUNT` Ahead of `UNTIL`, Sub-Day Time Bounds (Hours 0..=23, Minutes 0..=59, Seconds 0..=60), Day Token Signed Ordinals, and Strict Set Position Ordering
+
+- **Observed Behavior**:
+  Serializing JSCalendar `RecurrenceRule` objects into RFC 5545 `RRULE` strings requires aligning subpart order with libical expectations, suppressing protocol defaults to avoid cache churn, and enforcing frequency-dependent part constraints. In `jmap-ical`:
+  1. Libical canonical subpart ordering: Although RFC 5545 Section 3.3.10 allows parts in arbitrary order, libical (used by Evolution Data Server) writes `COUNT` ahead of `INTERVAL`, and places time-of-day parts (`BYSECOND`, `BYMINUTE`, `BYHOUR`) finest unit outwards ahead of calendar date parts (`BYDAY`, `BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYMONTH`), followed by `BYSETPOS` and `WKST`. `rule_to_rrule` mirrors this exact layout, ensuring byte-level stability during cache reconciliation.
+  2. Default parameter suppression (`INTERVAL=1`, `WKST=MO`): RFC 5545 defaults `INTERVAL` to 1 and `WKST` to Monday. `rule_to_rrule` suppresses `INTERVAL=1`, and `first_day_of_week_part` suppresses `WKST=MO`. Emitting default parameters causes libical to strip them on load, which would trigger false positive diff churn during synchronization.
+  3. Frequency-dependent subpart gating:
+     - `by_day_token`: Numeric ordinals (`nthOfPeriod`, e.g. `2MO`, `-1FR`) are permitted only when frequency is `monthly` or `yearly` (`counts_within_a_period`). Ordinals beside daily or weekly frequencies are refused. Ordinal `0` is forbidden.
+     - `by_month_day_part`: Forbidden when `FREQ=WEEKLY` (`RFC 5545 Section 3.3.10`). Bounds are `-31..=-1 | 1..=31`.
+     - `by_year_day_part`: Forbidden beside `daily`, `weekly`, or `monthly`. Bounds are `-366..=-1 | 1..=366`.
+     - `by_week_no_part`: Allowed only when `FREQ=YEARLY`. Bounds are `-53..=-1 | 1..=53`.
+     - `by_month_part`: Constrained to months 1 through 12 without leading zeros. Non-Gregorian leap months (e.g. `5L`) are refused.
+     - `by_set_position_part`: Requires `!named_by_parts(rule).is_empty()`, bounding positions to `-366..=-1 | 1..=366`.
+  4. Time-of-day bounds and leap second tolerance (`time_of_day_part`): Bounds `BYHOUR` to `0..=23`, `BYMINUTE` to `0..=59`, and `BYSECOND` to `0..=60` (accommodating UTC leap seconds per RFC 5545 Section 3.3.10). Empty arrays or out-of-range values return `None`.
+  5. All-or-nothing subpart emission: If any token in an expanding part fails validation, the entire subpart returns `None`, preventing partial sets from silently corrupting recurrence schedules.
+  6. In contrast, differential oracles emit rule parts in arbitrary order, serialize redundant default parameters (`INTERVAL=1`, `WKST=MO`), or emit ordinals beside weekly frequencies.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`RecurrenceRule`) and Section 4.3.3 (`NDay`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule serialization determinism. Enforces canonical libical subpart ordering, suppresses protocol defaults, bounds time-of-day parts with leap second tolerance, and gates frequency-dependent subparts strictly.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.314 Divergence 314: `rrule_to_rule`, `read_until`, `to_nday`, `to_month_day`, `to_time_of_day`, and `date_time_digits`: Inbound `RRULE` Recurrence Rule Parsing and Token Decomposition: Semicolon and Equals Tokenization, Case-Insensitive Part Matching, Malformed `UNTIL` Syntax Truncation Canary (`date_time_digits`), Signed Ordinal Day Parsing (`to_nday`), Time-of-Day Digit Decomposition, and Error Sentinel Assignment (`0` vs `u32::MAX`)
+
+- **Observed Behavior**:
+  Parsing RFC 5545 `RRULE` property lines into JSCalendar `RecurrenceRule` structures requires tokenizing key-value pairs, normalizing casing, handling malformed parameters defensibly, and mapping invalid tokens to safe sentinels. In `jmap-ical`:
+  1. Semicolon and key-value tokenization (`rrule_to_rule`): Decomposes parts on `;` and key-value pairs on `=`. Normalizes keys to uppercase ASCII, matching part names case-insensitively. Lowercases frequencies and weekdays to match JSCalendar conventions.
+  2. Malformed `UNTIL` syntax truncation canary (`date_time_digits`): When an `UNTIL` parameter has no date-time digits at all (such as `UNTIL=GARBAGE`), `rrule_to_rule` executes `break`, dropping all subsequent rule parts. This canary reproduces calcard parser truncation semantics and prevents unparseable trailing tokens from corrupting the recurrence structure. In contrast, structurally plausible date-time values with invalid calendar dates (such as month 13 in `UNTIL=20261301T000000Z`) succeed in `date_time_digits` and are preserved verbatim by `read_until` so `maps_recurrence_rule` can flag them on export.
+  3. Day ordinal extraction (`to_nday`): Decomposes signed tokens (`+2TU`, `-1FR`, `MO`). Strips leading plus signs, which JSCalendar does not admit. Rejects ordinal 0. Tokens that fail decomposition retain the raw token as the day string, causing `by_day_token` to refuse them on outbound serialization.
+  4. Error sentinels (`to_month_day` vs `to_time_of_day`):
+     - For day and week numbers (`BYMONTHDAY`, `BYYEARDAY`, `BYWEEKNO`, `BYSETPOS`), unparseable tokens resolve to sentinel `0`. Because zero is an impossible calendar day or week number, it is safely flagged by outbound token validators.
+     - For times of day (`BYSECOND`, `BYMINUTE`, `BYHOUR`), zero represents a valid timestamp (midnight, zeroth minute, zeroth second). Unparseable tokens instead resolve to sentinel `u32::MAX`, which `time_of_day_part` reliably refuses.
+  5. In contrast, differential oracles panic on malformed `UNTIL` values, allow invalid ordinal 0 tokens, or conflate error sentinels with valid midnight times.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`RecurrenceRule`) and Section 4.3.3 (`NDay`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule parsing robustness. Decomposes rule parts case-insensitively, applies truncation canaries on digit-less until values, decomposes signed weekday ordinals, and assigns safe error sentinels.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.315 Divergence 315: `maps_recurrence_rule`, `unstateable_until`, `writable`, and `RecurrenceRule::extra`: Outbound Recurrence Rule Capability Gating and Extension Shielding: Unmodeled Extension Rejection (`rscale`, `skip`, unrecognized `extra` properties), Unbounded Rule Gating, Frequency and Interval Validation, and Unresolvable / Non-Existent `UNTIL` Timestamp Diagnostics
+
+- **Observed Behavior**:
+  Validating JSCalendar `recurrenceRule` structures prior to RFC 5545 serialization requires ensuring complete capability support, shielding against unmodeled calendar systems, and isolating diagnostic failure modes. In `jmap-ical`:
+  1. Extension and unmodeled field shielding (`maps_recurrence_rule`): Verifies that `rule.extra.is_empty()`, `rule.rscale.is_none()`, and `rule.skip.is_none()`. Non-Gregorian recurrence scales (RFC 7529 RSCALE) or skip rules cannot be accurately represented in standard RFC 5545 `RRULE` strings and would silently corrupt recurrence schedules, so they are strictly refused.
+  2. Base writability validation (`writable`): Verifies that `rule.frequency` is non-empty and that `until` (if present) can be converted to an RFC 5545 date-time string via `to_ical_date_time`. A recurrence rule lacking a frequency or specifying an unparseable end date cannot be safely serialized, because omitting `until` would turn a bounded series into an infinite recurrence.
+  3. Subpart round-trip completeness verification: Evaluates every present subpart (`by_day`, `by_month_day`, `by_year_day`, `by_week_no`, `by_month`, `by_second`, `by_minute`, `by_hour`, `by_set_position`, `first_day_of_week`) through its respective serialization formatter. If any subpart fails validation, `maps_recurrence_rule` returns `false`, preventing partial or corrupted rules from being emitted.
+  4. Dependent set position gating: In `maps_recurrence_rule`, `by_set_position` requires accompanying expanding parts (`!named_by_parts(rule).is_empty()`). A rule carrying only `bySetPosition` without other set-generating parts is rejected.
+  5. Actionable error reporting (`unstateable_until`): Distinguishes unresolvable UTC until instants (where timezone context is unresolvable) from structural recurrence syntax failures, allowing callers to surface precise diagnostic feedback to users.
+  6. In contrast, differential oracles silently drop unmodeled recurrence fields (such as non-Gregorian scales or skip rules), alter recurrence frequencies without notification, or emit invalid `RRULE` lines.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`RecurrenceRule`).
+  3. RFC 7529 (`Non-Gregorian Recurrence Rules in iCalendar`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule capability safety. Shields against unsupported calendar system extensions, enforces atomic subpart completeness, gates dependent set positions, and isolates unresolvable until endpoints.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
