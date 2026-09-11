@@ -15,7 +15,7 @@
 //! See `docs/AUDIT-FFI.md`, findings F2 and F4.
 
 use jmap_ical::error::ICalError;
-use jmap_ical::event_to_ical;
+use jmap_ical::{event_to_ical, scheduling_ical};
 use jmap_proto::calendars::{CalendarEvent, RecurrenceRule};
 
 fn event() -> CalendarEvent {
@@ -484,6 +484,56 @@ fn adversarial_multibyte_utf8_slice_boundary_matrix() {
         assert_eq!(
             event.title.as_deref(),
             Some(format!("Summary {ch}").as_str())
+        );
+    }
+}
+
+/// The scheduling payload is the same rendering wrapped in a `METHOD`-bearing
+/// `VCALENDAR`, so it inherits F2's guarantee — but `METHOD` and the
+/// `RECURRENCE-ID` that scopes a message to one occurrence are two values
+/// `event_to_ical` never writes, and both are written by
+/// `scheduling_ical`'s own callers. Neither may end a content line.
+///
+/// See `docs/AUDIT-FFI-20260911.md`, the re-verification of F1/F2.
+#[test]
+fn a_crlf_in_a_scheduling_method_or_recurrence_id_cannot_add_a_property() {
+    let baseline = line_names(&scheduling_ical(&event(), "REQUEST", None));
+    assert_eq!(
+        baseline,
+        ["BEGIN", "VERSION", "PRODID", "METHOD", "BEGIN", "UID", "SUMMARY", "DTSTART", "END", "END"]
+    );
+
+    for hostile in [
+        "REQUEST\r\nX-INJECTED:yes",
+        "REQUEST\nATTENDEE:mailto:mallory@example.com",
+        "REQUEST\r\nEND:VCALENDAR\r\nBEGIN:VCALENDAR",
+        "REQUEST\rX-INJECTED:yes",
+    ] {
+        let ics = scheduling_ical(&event(), hostile, None);
+        assert_eq!(
+            line_names(&ics),
+            baseline,
+            "the METHOD {hostile:?} changed the document's shape:\n{ics}"
+        );
+    }
+
+    let scoped = line_names(&scheduling_ical(&event(), "REQUEST", Some("20260115T130000Z")));
+    assert_eq!(
+        scoped,
+        [
+            "BEGIN", "VERSION", "PRODID", "METHOD", "BEGIN", "UID", "RECURRENCE-ID", "SUMMARY",
+            "DTSTART", "END", "END"
+        ]
+    );
+    for hostile in [
+        "20260115T130000Z\r\nX-INJECTED:yes",
+        "20260115T130000Z\r\nEND:VEVENT\r\nBEGIN:VEVENT",
+    ] {
+        let ics = scheduling_ical(&event(), "REQUEST", Some(hostile));
+        assert_eq!(
+            line_names(&ics),
+            scoped,
+            "the RECURRENCE-ID {hostile:?} changed the document's shape:\n{ics}"
         );
     }
 }
