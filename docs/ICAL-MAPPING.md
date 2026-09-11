@@ -6250,5 +6250,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.320 Divergence 320: `zone::offset_at`, `zone_offset_at`, `Zoned::offset_at`, and `Transition`: In-Document Timezone Offset Resolution Pipeline: Observance Ingestion Filtering (`STANDARD` and `DAYLIGHT`), `TZOFFSETFROM` / `TZOFFSETTO` Seconds Extraction, Chronological Transition Traversal, Latest Transition Selection (`onset <= target`), Initial Baseline Offset Fallback (Earliest `TZOFFSETFROM` for Pre-Transition Targets), and Whole-Zone Failure Containment (`Option<i64>`)
 
+- **Observed Behavior**:
+  Determining the UTC offset in force at a target instant from in-document `VTIMEZONE` definitions requires filtering subcomponents, extracting signed offset seconds, evaluating transition onsets chronologically, selecting the active transition, and handling historical timestamps before the earliest described transition. In `jmap-ical`:
+  1. Observance subcomponent filtering (`offset_at`): Scans the `VTIMEZONE` subcomponent slice and admits only `STANDARD` and `DAYLIGHT` components. Other subcomponents or metadata blocks are ignored, preventing unexpected records from corrupting offset calculations.
+  2. Strict offset extraction: Converts `TZOFFSETFROM` and `TZOFFSETTO` strings into signed integer second counts via `offset_seconds`. If either property is missing or unparseable on an observance, `offset_at` returns `None`.
+  3. Chronological transition traversal and active offset selection: For each valid observance, evaluates all transition onsets in the target year. Compares each onset against `target` (the target UTC instant as seconds from Unix epoch). If `onset <= target`, it updates `in_force = Some((onset, to))` whenever the onset is later than any previously observed match.
+  4. Initial baseline offset fallback: If the target timestamp precedes all described transition onsets in the document, `offset_at` tracks the globally earliest transition (`first = Some((onset, from))`) and falls back to its `TZOFFSETFROM`. This preserves the historical standard time in effect prior to the onset of seasonal transitions, rather than failing or defaulting to zero.
+  5. Whole-zone failure containment (`Option<i64>`): If any observance fails onset evaluation or offset parsing, `offset_at` fails closed with `None`. This prevents partial or corrupt rules from silently shifting event start times by hours.
+  6. In contrast, differential oracles choose arbitrary observances, fail to look back before the earliest transition, or emit zero offset on unhandled historical dates.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.5 (`Time Zone Component`), Section 3.8.3.3 (`Time Zone Offset From`), and Section 3.8.3.4 (`Time Zone Offset To`).
+  2. RFC 8984 Section 1.4.9 (`TimeZoneId`) and Section 4.7.2 (`timeZones`).
+- **Adjudication**:
+  Conforming specification boundary and timezone offset resolution fidelity. Filters valid observance components, tracks chronologically in-force transitions, provides earliest-offset fallback, and fails closed when transitions cannot be calculated.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.321 Divergence 321: `zone::onsets`, `zone::rule_onsets`, `SEARCH`, and Period Rejection: Inbound Observance Onset Calculation: `DTSTART` Seed Instance, Explicit `RDATE` Instant Parsing, Period Range Rejection (Slash Delimiter Syntax `/` Refusal), Strict `FREQ=YEARLY` and `INTERVAL=1` Conformance, Explicit `COUNT` and `UNTIL` Bounding, and Finite 40-Year Horizon Lookback
+
+- **Observed Behavior**:
+  Calculating the transition onset instants for a `STANDARD` or `DAYLIGHT` observance requires converting local times against `TZOFFSETFROM`, parsing explicit recurrence dates, enforcing yearly recurrence grammar, rejecting period ranges, and bounding search horizons. In `jmap-ical`:
+  1. Seed `DTSTART` onset (`onsets`): RFC 5545 Section 3.6.5 dates an observance in the zone it defines, resolved against the offset it is moving from (`TZOFFSETFROM`). `onsets` converts `DTSTART` to local date-time and subtracts `from` seconds to yield the first UTC onset: `seconds_at(&start)? - from`.
+  2. Explicit `RDATE` instant parsing and period rejection: Iterates over all `RDATE` property entries. Crucially, RFC 5545 Section 3.8.5.2 permits period syntax (`date/duration` or `date/date`), but transition shifts are instantaneous changes, not durations. `onsets` explicitly checks `if date.contains('/') { return None; }`, refusing period syntax rather than misinterpreting a period duration as a second transition instant. Discrete date-times are converted to UTC instants by subtracting `from`.
+  3. Yearly recurrence rule constraints (`rule_onsets`): In-document timezone transition rules are yearly seasonal shifts. `rule_onsets` mandates `FREQ=YEARLY`. Any other frequency (such as `MONTHLY`, `WEEKLY`, or `DAILY`) returns `None`. It mandates `INTERVAL=1` (multi-year transition intervals are refused).
+  4. Bounded search horizon (`SEARCH = 40`): Restricts onset searches to a 40-year window backwards from the target year. If a rule has occurrences further back but none within the search window, the rule is refused rather than silently treated as inactive.
+  5. `UNTIL` and `COUNT` parameter evaluation: Parses `UNTIL` date-times, differentiating between UTC values ending in `Z`/`z` and local values (which subtract `from`). Caps evaluation at `count` occurrences or `until` dates.
+  6. In contrast, differential oracles accept period syntax in transition `RDATE`s (distorting transition calendars), lack finite lookback limits leading to potential CPU exhaustion, or miscalculate local vs UTC `UNTIL` parameters in observances.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`), Section 3.6.5 (`Time Zone Component`), and Section 3.8.5.2 (`Recurrence Date-Times`).
+  2. RFC 8984 Section 4.3.1 (`RecurrenceRule`) and Section 4.7.3 (`TimeZoneRule`).
+- **Adjudication**:
+  Conforming specification boundary and observance recurrence calculation safety. Seeds initial DTSTART onsets, rejects period syntax in RDATE, enforces strict yearly recurrence with INTERVAL=1, and bounds searches to a 40-year horizon.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.322 Divergence 322: `zone::parts`, `zone::seconds_at`, `zone::seconds`, `zone::length_of`, and `days_from_civil`: Pure Civil Calendar Epoch Arithmetic: Date-Time String Decomposition (`YYYYMMDDTHHMMSS` and `YYYY-MM-DDTHH:MM:SS`), Gregorian Leap Year Rules (Divisibility by 4, 100, 400), Month Length Validation (`1..=12`, `28..=31` Days), Sub-Day Second Bounds (`0..=86400`), and Epoch Timestamp Synthesis without External Runtime Dependencies
+
+- **Observed Behavior**:
+  Computing UTC epoch timestamps from date-time strings without external datetime libraries requires robust string decomposition, Gregorian leap year calculations, month day boundary validation, and sub-day second aggregation. In `jmap-ical`:
+  1. Dual-format date-time string decomposition (`parts`): Accepts compact iCalendar format `YYYYMMDDTHHMMSS` (15 characters) and formatted ISO 8601 / RFC 3339 format `YYYY-MM-DDTHH:MM:SS` (19 characters). Decomposes strings into numeric year, month, day, hour, minute, and second fields.
+  2. Gregorian leap year rules and month length validation (`length_of`, `days_in_month`): Validates that `month` is between 1 and 12. For February, computes leap year status: a year is a leap year if divisible by 4, except if divisible by 100 unless also divisible by 400. Validates that `day` is between 1 and the exact number of days in that month (`length_of(year, month)`). Out-of-bounds days return `None`.
+  3. Sub-day second bounds and leap second accommodation: Validates `hour <= 23`, `minute <= 59`, and `second <= 60` (accommodating UTC leap seconds). Aggregates into seconds of day, clamping leap seconds to 86,400.
+  4. Epoch timestamp synthesis (`seconds`, `days_from_civil`): Calculates the total elapsed days from the civil epoch (1970-01-01) using Hinnant's algorithm (`days_from_civil`). Multiplies days by 86,400 seconds and adds second-of-day, returning signed 64-bit epoch seconds (`i64`).
+  5. In contrast, differential oracles or generic datetime parsers panic on leap seconds, miscalculate leap years on century boundaries (such as 1900 vs 2000), or overflow on negative historical epochs.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.4 (`Date`) and Section 3.3.5 (`Date-Time`).
+  2. RFC 8984 Section 1.4.1 (`LocalDateTime`) and Section 1.4.2 (`UTCDateTime`).
+- **Adjudication**:
+  Conforming specification boundary and epoch arithmetic determinism. Implements exact Gregorian calendar rules, bounds months and days strictly, tolerates leap seconds, and computes epoch timestamps deterministically.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.323 Divergence 323: `read_until`, `Ends::In`, `Ends::At`, `Zoned`, and `unstateable_until`: Recurrence Rule UNTIL Endpoint Evaluation: UTC Instant Detection (`Z` / `z`), Fixed-Offset Observance Projection (`Ends::At`), In-Document Zone Offset Projection (`Ends::In`), Trailing-Z Retention Sentinel for Unresolvable Custom Timezones (`format!("{local}Z")`), and Diagnostics for Unprojectable Series Endpoints (`unstateable_until`)
+
+- **Observed Behavior**:
+  Translating recurrence rule `UNTIL` boundaries between RFC 5545 (which mandates UTC for zoned events) and JSCalendar RFC 8984 Section 4.3.1 (which mandates local date-time in the event's timezone) requires projecting timestamps according to the enclosing scope and isolating unresolvable endpoints. In `jmap-ical`:
+  1. UTC instant detection (`read_until`): Converts the `UNTIL` string to local date-time format via `to_local_date_time`. If the original string does not end in `Z` or `z`, it is already local time (floating or date-only) and is returned directly.
+  2. Fixed-offset observance projection (`Ends::At`): In `VTIMEZONE` observances, `DTSTART` and `UNTIL` resolve against the component's `TZOFFSETFROM`. `read_until` projects the UTC instant using `at_offset(&local, offset)`. If offset projection fails, the original value is preserved.
+  3. In-document timezone projection (`Ends::In`): In event components, `read_until` projects the UTC instant into local time by querying `zone.offset_at(&local)`. If the zone definition supplies the offset, it moves the timestamp via `moved(&local, offset)`.
+  4. Trailing-Z retention sentinel for unresolvable custom timezones: If `zone.offset_at` returns `None` (for an unresolvable custom timezone) and the zone is not UTC (`zone.name.is_some_and(|name| !is_utc(name))`), `read_until` formats the string with a trailing `Z`: `format!("{local}Z")`. This sentinel signals downstream consumers that the endpoint could not be resolved to local time.
+  5. Actionable outbound capability diagnostics (`unstateable_until`): When evaluating whether an event can be serialized to iCalendar, `unstateable_until` inspects `rule.until`. If the until timestamp carries a trailing `Z` or cannot be converted to an RFC 5545 date-time, `unstateable_until` returns `Some(until)`, pinpointing the exact unresolvable recurrence boundary rather than failing with an opaque syntax error.
+  6. In contrast, differential oracles strip trailing `Z` indiscriminately (skewing UNTIL by the timezone offset), emit UTC UNTIL in local properties, or fail without diagnostics when timezones are unresolvable.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`RecurrenceRule`) and Section 4.7.3 (`TimeZoneRule`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule endpoint projection fidelity. Distinguishes fixed-offset and in-document timezone projections, marks unresolvable custom timezones with trailing-Z sentinels, and surfaces diagnostic feedback via `unstateable_until`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
