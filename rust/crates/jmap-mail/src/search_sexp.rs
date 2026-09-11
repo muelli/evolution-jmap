@@ -22,14 +22,22 @@
 //! §4.4.1's `text`/`body`/`from`/... fields, and the generic `header`
 //! two-element form): `header-matches`, `header-starts-with`,
 //! `header-ends-with`, `header-has-words`, `header-soundex` and
-//! `header-exists` have no equivalent and are left untranslated, as is
-//! `system-flag` (Camel's flag names and JMAP's `$`-prefixed keywords do not
-//! line up one to one; RFC-SUPPORT.md tracks that as its own gap). A
-//! sub-expression that cannot be translated fails the whole tree rather than
-//! being dropped: dropping a child of `and` would query the server for more
-//! than the user asked, and dropping one of `or` for less.
+//! `header-exists` have no equivalent and are left untranslated.
+//! `system-flag` (Camel's flag-name table, `camel_system_flag` in
+//! `camel-folder-summary.c`) translates the six names that line up exactly
+//! with a JMAP field (`answered`/`draft`/`flagged`/`seen`/`junk`/`notjunk`
+//! to their `$`-prefixed keyword, `attachments` to `hasAttachment`); the
+//! remaining four have no JMAP equivalent and stay untranslated: `deleted`
+//! (JMAP models removal as an `Email/set` destroy or a mailbox-membership
+//! change, never a flag on a message that still exists), `secure` (local
+//! S/MIME verification state, not anything a server tracks), `junklearn`
+//! (an internal training-state flag for the junk filter) and any name
+//! Camel itself does not recognise either. A sub-expression that cannot be
+//! translated fails the whole tree rather than being dropped: dropping a
+//! child of `and` would query the server for more than the user asked, and
+//! dropping one of `or` for less.
 
-use jmap_proto::mail::EmailQueryFilter;
+use jmap_proto::mail::{EmailQueryFilter, keyword};
 use jmap_proto::methods::Filter;
 
 /// One node of the subset of e-sexp this module parses: lists, strings and
@@ -167,6 +175,32 @@ fn header_contains(header: &str, value: &str) -> Option<Filter<EmailQueryFilter>
     Some(Filter::condition(filter))
 }
 
+/// Builds a condition for `(system-flag "<name>")` where `name` is one of
+/// the six Camel system flags with an exact JMAP equivalent; `None` for the
+/// other four Camel recognises (see the module doc) and for anything Camel
+/// itself would not recognise. Matched case-insensitively, the same way
+/// `camel_system_flag` itself compares names.
+fn system_flag(name: &str) -> Option<Filter<EmailQueryFilter>> {
+    let filter = if name.eq_ignore_ascii_case("answered") {
+        EmailQueryFilter::default().has_keyword(keyword::ANSWERED)
+    } else if name.eq_ignore_ascii_case("draft") {
+        EmailQueryFilter::default().has_keyword(keyword::DRAFT)
+    } else if name.eq_ignore_ascii_case("flagged") {
+        EmailQueryFilter::default().has_keyword(keyword::FLAGGED)
+    } else if name.eq_ignore_ascii_case("seen") {
+        EmailQueryFilter::default().has_keyword(keyword::SEEN)
+    } else if name.eq_ignore_ascii_case("junk") {
+        EmailQueryFilter::default().has_keyword(keyword::JUNK)
+    } else if name.eq_ignore_ascii_case("notjunk") {
+        EmailQueryFilter::default().has_keyword(keyword::NOT_JUNK)
+    } else if name.eq_ignore_ascii_case("attachments") {
+        EmailQueryFilter::default().has_attachment(true)
+    } else {
+        return None;
+    };
+    Some(Filter::condition(filter))
+}
+
 /// Translates a boolean-valued e-sexp node. `and`/`or`/`not` and
 /// `match-all` are structural and recurse; every leaf function this module
 /// knows an exact JMAP equivalent for is matched by name; anything else
@@ -211,6 +245,10 @@ fn translate_bool(expr: &SExpr) -> Option<Filter<EmailQueryFilter>> {
             Some(Filter::condition(
                 EmailQueryFilter::default().body(as_str(value)?),
             ))
+        }
+        "system-flag" => {
+            let [name] = args else { return None };
+            system_flag(as_str(name)?)
         }
         _ => None,
     }
@@ -316,7 +354,92 @@ mod tests {
     #[test]
     fn unsupported_function_is_untranslatable() {
         assert_eq!(translate(r#"(header-matches "From" "x")"#), None);
+    }
+
+    #[test]
+    fn system_flag_maps_each_camel_flag_with_a_jmap_equivalent() {
+        assert_eq!(
+            translate(r#"(system-flag "Answered")"#),
+            Some(Filter::condition(
+                EmailQueryFilter::default().has_keyword(keyword::ANSWERED)
+            ))
+        );
+        assert_eq!(
+            translate(r#"(system-flag "Draft")"#),
+            Some(Filter::condition(
+                EmailQueryFilter::default().has_keyword(keyword::DRAFT)
+            ))
+        );
+        assert_eq!(
+            translate(r#"(system-flag "Flagged")"#),
+            Some(Filter::condition(
+                EmailQueryFilter::default().has_keyword(keyword::FLAGGED)
+            ))
+        );
+        assert_eq!(
+            translate(r#"(system-flag "Seen")"#),
+            Some(Filter::condition(
+                EmailQueryFilter::default().has_keyword(keyword::SEEN)
+            ))
+        );
+        assert_eq!(
+            translate(r#"(system-flag "Junk")"#),
+            Some(Filter::condition(
+                EmailQueryFilter::default().has_keyword(keyword::JUNK)
+            ))
+        );
+        assert_eq!(
+            translate(r#"(system-flag "NotJunk")"#),
+            Some(Filter::condition(
+                EmailQueryFilter::default().has_keyword(keyword::NOT_JUNK)
+            ))
+        );
+        assert_eq!(
+            translate(r#"(system-flag "Attachments")"#),
+            Some(Filter::condition(
+                EmailQueryFilter::default().has_attachment(true)
+            ))
+        );
+    }
+
+    #[test]
+    fn system_flag_matches_camel_case_insensitively() {
+        // camel_system_flag itself compares with g_ascii_strcasecmp.
+        assert_eq!(
+            translate(r#"(system-flag "SEEN")"#),
+            Some(Filter::condition(
+                EmailQueryFilter::default().has_keyword(keyword::SEEN)
+            ))
+        );
+        assert_eq!(
+            translate(r#"(system-flag "seen")"#),
+            Some(Filter::condition(
+                EmailQueryFilter::default().has_keyword(keyword::SEEN)
+            ))
+        );
+    }
+
+    #[test]
+    fn system_flag_negates_through_not() {
+        assert_eq!(
+            translate(r#"(not (system-flag "Seen"))"#),
+            Some(Filter::not([Filter::condition(
+                EmailQueryFilter::default().has_keyword(keyword::SEEN)
+            )]))
+        );
+    }
+
+    #[test]
+    fn system_flag_names_with_no_jmap_equivalent_are_untranslatable() {
+        // `deleted`: JMAP models removal as a destroy or mailbox-membership
+        // change, never a flag on a message that still exists.
         assert_eq!(translate(r#"(system-flag "Deleted")"#), None);
+        // `secure`: local S/MIME verification state, not a server keyword.
+        assert_eq!(translate(r#"(system-flag "Secure")"#), None);
+        // `junklearn`: the junk filter's internal training-state flag.
+        assert_eq!(translate(r#"(system-flag "JunkLearn")"#), None);
+        // A name Camel's own flag table does not recognise either.
+        assert_eq!(translate(r#"(system-flag "NotARealFlag")"#), None);
     }
 
     #[test]
