@@ -5935,3 +5935,85 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and calendar container assembly determinism. Structures VCALENDAR envelopes with mandatory VERSION 2.0 and PRODID, injects iTIP METHOD headers, isolates single-instance scheduling components, enforces override inheritance with whole-set replacement, and synchronizes UID namespaces.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.304 Divergence 304: `free_busy_type`, `busy_periods_to_vfreebusy`, `instant`, and `mailto`: Free/Busy Availability Envelope Shape (`VFREEBUSY`), Query Window Demarcation, Attendee Address Normalization (`mailto:` URI Prefix Idempotence), Closed Draft Status Mapping (`BUSY`, `BUSY-TENTATIVE`, `BUSY-UNAVAILABLE`), RFC 3339 Sub-Second Fraction Truncation, and Fail-Closed Whole-Component Refusal Integrity (`Option<String>`)
+
+- **Observed Behavior**:
+  Translating JMAP `Principal/getAvailability` (`BusyPeriod` collections) into RFC 5545 `VFREEBUSY` components for Evolution Data Server (`ECalBackendSync::get_free_busy_sync`) requires coordinating envelope formats, query window boundaries, address syntax, status semantics, and error handling. In `jmap-ical`:
+  1. Bare `VFREEBUSY` envelope shape: Generates a single bare `VFREEBUSY` component per user without an outer `VCALENDAR` container envelope, matching the established conventions of Evolution Data Server backend implementations (`ECalMetaBackend`, CalDAV, and EWS).
+  2. Query window demarcation: Restates the requested search interval as `DTSTART` and `DTEND` on the `VFREEBUSY` component. This demarcates the time window the component answers, allowing schedulers to distinguish between an attendee who is genuinely free throughout the interval versus a component answering a different query window.
+  3. Attendee address normalization (`mailto`): Evolution Data Server passes attendee identifiers as bare email addresses (e.g. `alice@example.com`). `mailto` ensures the identifier carries the RFC 5545 Section 3.3.3 `CAL-ADDRESS` scheme. If `mailto:` is already present (case-insensitively), it is preserved without double-prefixing (`mailto:mailto:...`).
+  4. Closed draft status mapping (`free_busy_type`): Maps `BusyPeriod.busy_status` onto RFC 5545 Section 3.2.9 `FBTYPE` parameters: `"tentative"` maps to `"BUSY-TENTATIVE"`, `"unavailable"` maps to `"BUSY-UNAVAILABLE"`, and `"confirmed"` maps to `"BUSY"`. Crucially, any unrecognized or future draft status also defaults safely to `"BUSY"`. Because free/busy schedulers interpret unmapped periods as free time, falling back to `"BUSY"` ensures meetings are not scheduled over unknown commitments.
+  5. Sub-second fraction truncation (`instant`): RFC 3339 Section 5.6 permits fractional seconds on `UTCDate` timestamps (e.g. `2026-06-01T10:00:00.123Z`). `instant` truncates valid ASCII digit sub-second fractions, converting the timestamp into a standard integer-second RFC 5545 `DATE-TIME` string (`20260601T100000Z`). Timestamps lacking the trailing `Z` or containing non-digit fractions return `None`.
+  6. Fail-closed whole-component refusal integrity: Unlike event ingestion where corrupted individual properties are dropped to salvage the meeting, free/busy mapping returns `Option<String>`. If any timestamp in the query window or busy period list fails to parse, `busy_periods_to_vfreebusy` returns `None`. Dropping a corrupted busy period would falsely report the attendee as free, risking conflicting calendar bookings. Refusing the component leaves the attendee's row blank in the scheduling UI ("we do not know" rather than a confident wrong answer).
+  7. In contrast, differential oracles or permissive converters wrap availability in full `VCALENDAR` envelopes with synthetic `UID` and `DTSTAMP` clock fields, drop unmapped busy statuses (leaving attendees vulnerable to double booking), emit illegal fractional seconds on `FREEBUSY` lines, or double-prefix `mailto:` schemes.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.4 (`Free/Busy Component`), Section 3.8.2.6 (`Free/Busy Time`), Section 3.2.9 (`Free/Busy Time Type`), Section 3.3.3 (`Calendar User Address`), and Section 3.3.4 (`Date-Time`).
+  2. RFC 3339 Section 5.6 (`Internet Date/Time Format`).
+  3. draft-ietf-jmap-calendars-28 Section 2.2 (`Principal/getAvailability`).
+- **Adjudication**:
+  Conforming specification boundary and free/busy availability scheduling fidelity. Formats bare VFREEBUSY components, demarcates query windows, normalizes mailto prefixes idempotently, maps busy statuses with safe busy fallbacks, truncates sub-second fractions, and enforces fail-closed whole-component refusal.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.305 Divergence 305: `fold_overlong_lines`, `MAX_LINE_OCTETS`, `unfold`, and `rrule_entry`: Outbound Content Line Folding (`MAX_LINE_OCTETS = 75`), Zero-Cost Pass-Through Budgeting, UTF-8 Multi-Byte Code Point Boundary Protection (`is_char_boundary`), Escape Sequence Split Prevention (Odd Backslash Run Detection), Upstream Calcard Line Folding Gap Repair, and Synthetic Envelope Recurrence Rule AST Parsing (`rrule_entry`)
+
+- **Observed Behavior**:
+  Serializing calendar components into standard RFC 5545 byte streams requires strictly bounding physical line lengths, preserving UTF-8 encoding boundaries, protecting delimiter escape sequences, and synthesizing structured property entries. In `jmap-ical`:
+  1. 75-octet line folding (`fold_overlong_lines`): RFC 5545 Section 3.1 mandates that lines of text MUST NOT exceed 75 octets, excluding the CRLF line break. If all lines in the rendered text satisfy `line.len() <= MAX_LINE_OCTETS` (75 octets), `fold_overlong_lines` returns the string directly without heap allocation or copying. Lines exceeding 75 octets are split into continuation lines prefixed with CRLF and a single space character (`\r\n `), with 74 octets of payload budget per continuation line.
+  2. UTF-8 multi-byte code point boundary protection: Multi-byte UTF-8 sequences (such as 3-byte Euro symbols `€` or 4-byte emoji) must never be fractured across line breaks. `fold_overlong_lines` evaluates `rest.is_char_boundary(cut)`. If a proposed cut point falls inside a multi-byte sequence, it steps backwards to the preceding character boundary, ensuring that every physical line is valid UTF-8.
+  3. Escape sequence split prevention: If an odd sequence of backslashes immediately precedes the proposed cut point (`bytes().rev().take_while(|b| *b == b'\\').count() % 2 == 1`), the final backslash acts as an escape character for the octet following the cut (e.g. `\,`, `\;`, `\n`, `\\`). `fold_overlong_lines` steps back one octet (`cut -= 1`), keeping the escape character and the escaped payload together on the continuation line to prevent downstream parsers from corrupting escaped delimiters.
+  4. Forward progress guarantee: If `cut == 0` (such as when an indivisible multi-byte character begins at the start of a continuation budget), `fold_overlong_lines` locates the first character boundary, preventing infinite loops.
+  5. Upstream calcard line folding gap repair: Upstream `calcard` skips folding checks when empty trailing text slots occur in structured values, and emits recurrence rules (`ICalendarValue::RecurrenceRule`) without line folding (upstream issue stalwartlabs/calcard#25). `fold_overlong_lines` acts as a defensive post-processor on all emitted iCalendar text, ensuring complete 75-octet conformance.
+  6. Synthetic envelope recurrence rule parsing (`rrule_entry`): When constructing typed `ICalendarEntry` structures for recurrence rules, `rrule_entry` wraps the raw rule string in a synthetic `BEGIN:VEVENT\r\nRRULE:{rrule_str}\r\nEND:VEVENT\r\n` envelope and parses it via `calcard::Parser`, extracting the typed `ICalendarProperty::Rrule` entry safely without custom grammar duplication.
+  7. In contrast, differential oracles or naive serializers emit long recurrence rules without line folding, fracture multi-byte UTF-8 sequences across physical lines, or split backslash escape pairs across CRLF continuation boundaries.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.1 (`Content Lines`) defines the 75-octet line limit and folding syntax.
+  2. RFC 5545 Section 3.3.10 (`Recurrence Rule`) and Section 3.3.11 (`Text`).
+  3. Upstream issue stalwartlabs/calcard#25.
+- **Adjudication**:
+  Conforming specification boundary and wire serialization safety. Enforces 75-octet line limits with zero-cost pass-through budgeting, aligns line breaks to UTF-8 character boundaries, keeps backslash escape pairs intact, and parses recurrence rules safely via synthetic transient envelopes.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.306 Divergence 306: `ical_status`, `known_status`, `read_status`, `ical_transparency`, `known_transparency`, and `read_transparency`: Bidirectional Event Status and Free/Busy Transparency Mapping: RFC 5545 `STATUS` (`CONFIRMED`, `TENTATIVE`, `CANCELLED`) ↔ JSCalendar `status`, RFC 5545 `TRANSP` (`OPAQUE`, `TRANSPARENT`) ↔ JSCalendar `freeBusyStatus`, Case-Insensitive Ingestion, Unknown Value Rejection / Non-Destructive Ingestion, and Conforming Default Value Elision
+
+- **Observed Behavior**:
+  Mapping lifecycle status and free/busy transparency between RFC 5545 and JSCalendar requires translating between closed enumerations, handling case normalization, and preserving default semantics. In `jmap-ical`:
+  1. Closed event status enumeration (`STATUSES`): Maps JSCalendar lowercase statuses to RFC 5545 uppercase `STATUS` values: `"confirmed"` ↔ `"CONFIRMED"`, `"tentative"` ↔ `"TENTATIVE"`, and `"cancelled"` ↔ `"CANCELLED"`. Values outside this closed table (such as `VTODO` task statuses `"in-process"`, `"completed"`, or arbitrary client strings) return `None` and are omitted from outbound serialization.
+  2. Status case-insensitivity on ingestion: When parsing inbound `STATUS` properties in `read_vevent`, values are normalized to lowercase and verified against `known_status`. Values such as `STATUS:Confirmed` or `STATUS:CANCELLED` map reliably to `"confirmed"` and `"cancelled"`.
+  3. Closed transparency enumeration (`FREE_BUSY_STATUSES`): Maps JSCalendar `freeBusyStatus` to RFC 5545 `TRANSP`: `"free"` ↔ `"TRANSPARENT"` and `"busy"` ↔ `"OPAQUE"`. Unrecognized transparency values return `None`.
+  4. Transparency case-insensitivity on ingestion (`read_transparency`): Evaluates `TRANSP` values case-insensitively. Inbound lines such as `TRANSP:transparent` or `TRANSP:OPAQUE` map accurately to `"free"` and `"busy"`.
+  5. Default value elision and non-destructive omission: RFC 8984 defaults `freeBusyStatus` to `"busy"`, while RFC 5545 defaults `TRANSP` to `OPAQUE`. Both formats agree on the default state. When an event carries `free_busy_status: None`, `event_to_ical` omits the `TRANSP` line entirely rather than emitting redundant `TRANSP:OPAQUE`. Similarly, when an inbound component omits `TRANSP`, `read_transparency` returns `None`, allowing saves to avoid generating spurious patch churn against untouched properties.
+  6. In contrast, differential oracles or permissive converters emit invalid task statuses onto `VEVENT` components, map unknown strings through unchecked, or force explicit default lines that pollute change sets during synchronization.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.3.8 (`Status`) and Section 3.8.2.7 (`Time Transparency`).
+  2. RFC 8984 Section 4.4.2 (`freeBusyStatus`) and Section 4.4.4 (`status`).
+- **Adjudication**:
+  Conforming specification boundary and scalar property mapping determinism. Enforces closed status and transparency enumerations, parses case-insensitively, rejects incompatible task statuses, and suppresses redundant default property lines.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.307 Divergence 307: `ical_privacy`, `known_privacy`, `read_privacy`, `known_priority`, and `read_priority`: Bidirectional Privacy and Priority Mapping: RFC 5545 `CLASS` (`PUBLIC`, `PRIVATE`, `CONFIDENTIAL`) ↔ JSCalendar `privacy`, Integer Priority Range Validation (`0..=9`), Inbound Priority 0 Default Suppression, Non-Zero Mapping to JSCalendar, and RFC 8984 Integer Representation Bounds
+
+- **Observed Behavior**:
+  Translating classification privacy and priority between RFC 5545 and JSCalendar requires coordinating distinct property vocabularies, integer range boundaries, and default value representations. In `jmap-ical`:
+  1. Three-tier privacy scale and cross-vocabulary alignment (`PRIVACIES`): Maps JSCalendar `privacy` values to RFC 5545 `CLASS` properties:
+     - `"public"` ↔ `"PUBLIC"`
+     - `"private"` ↔ `"PRIVATE"`
+     - `"secret"` ↔ `"CONFIDENTIAL"`
+     Notice the cross-vocabulary alignment: JSCalendar RFC 8984 Section 4.4.3 uses `"secret"` to denote maximum privacy, whereas RFC 5545 Section 3.8.1.3 spells this `"CONFIDENTIAL"`. `ical_privacy` and `read_privacy` translate between these terms directly.
+  2. Strict classification token protection: RFC 5545 does not admit `"secret"` as a standard classification token. In `read_privacy`, an inbound line `CLASS:secret` is treated as an unrecognized x-name and returns `None`, rather than guessing. Similarly, `ical_privacy("confidential")` returns `None` because the JSCalendar schema defines `"secret"`, preventing vocabulary bleeding across format boundaries.
+  3. Case-insensitivity on inbound classification: Inbound `CLASS` properties are evaluated case-insensitively (`ical.eq_ignore_ascii_case`), accepting forms like `CLASS:confidential` or `CLASS:PUBLIC`.
+  4. Priority integer range bounds (`PRIORITIES = 0..=9`): RFC 5545 Section 3.8.1.9 and RFC 8984 Section 4.4.1 define priority as an integer scale from 0 (undefined) to 1 (highest) to 9 (lowest). `known_priority` validates `0..=9`. Values outside this range (such as negative numbers, 10 or greater, or non-numeric text) return `false`.
+  5. Inbound priority parsing and strict integer syntax (`read_priority`): `read_priority` parses `PRIORITY` text strictly, refusing leading/trailing whitespace, fractions, or multiple values. Values outside `0..=9` return `None`.
+  6. Outbound priority 0 handling: When `event.priority` is `Some(0)`, `event_to_ical` writes `PRIORITY:0` explicitly, ensuring round-trip identity for servers that explicitly record priority 0. When `event.priority` is `None`, the line is omitted, matching RFC defaults.
+  7. In contrast, differential oracles pass unmapped classification strings through blindly, emit out-of-range priority integers (such as negative values), or fail to map between `"secret"` and `"CONFIDENTIAL"`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.3 (`Classification`) and Section 3.8.1.9 (`Priority`).
+  2. RFC 8984 Section 4.4.1 (`priority`) and Section 4.4.3 (`privacy`).
+- **Adjudication**:
+  Conforming specification boundary and classification/priority translation fidelity. Aligns privacy vocabularies between secret and CONFIDENTIAL, protects against cross-format token pollution, parses classification case-insensitively, and bounds priority strictly to integers 0 through 9.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
