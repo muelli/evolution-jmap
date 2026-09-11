@@ -500,7 +500,10 @@ fn a_crlf_in_a_scheduling_method_or_recurrence_id_cannot_add_a_property() {
     let baseline = line_names(&scheduling_ical(&event(), "REQUEST", None));
     assert_eq!(
         baseline,
-        ["BEGIN", "VERSION", "PRODID", "METHOD", "BEGIN", "UID", "SUMMARY", "DTSTART", "END", "END"]
+        [
+            "BEGIN", "VERSION", "PRODID", "METHOD", "BEGIN", "UID", "SUMMARY", "DTSTART", "END",
+            "END"
+        ]
     );
 
     for hostile in [
@@ -517,12 +520,25 @@ fn a_crlf_in_a_scheduling_method_or_recurrence_id_cannot_add_a_property() {
         );
     }
 
-    let scoped = line_names(&scheduling_ical(&event(), "REQUEST", Some("20260115T130000Z")));
+    let scoped = line_names(&scheduling_ical(
+        &event(),
+        "REQUEST",
+        Some("20260115T130000Z"),
+    ));
     assert_eq!(
         scoped,
         [
-            "BEGIN", "VERSION", "PRODID", "METHOD", "BEGIN", "UID", "RECURRENCE-ID", "SUMMARY",
-            "DTSTART", "END", "END"
+            "BEGIN",
+            "VERSION",
+            "PRODID",
+            "METHOD",
+            "BEGIN",
+            "UID",
+            "RECURRENCE-ID",
+            "SUMMARY",
+            "DTSTART",
+            "END",
+            "END"
         ]
     );
     for hostile in [
