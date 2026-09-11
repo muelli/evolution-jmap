@@ -39226,3 +39226,246 @@ fn differential_oracle_recurrence_dates_patch_narrowing_and_dated_forms() {
     let rdates = jmap_ical::event::recurrence_dates(&event, false);
     assert_eq!(rdates, vec!["20260603T100000".to_string()]);
 }
+
+#[test]
+fn differential_oracle_duration_ingestion_wall_clock_hinnant_and_iso8601() {
+    // 1. stated_duration: leading '+' stripped, loose units W D T H M S, negative rejected
+    assert_eq!(
+        jmap_ical::event::stated_duration("+P1D"),
+        Some("P1D".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::stated_duration("P1W2D"),
+        Some("P1W2D".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::stated_duration("PT1H15S"),
+        Some("PT1H15S".to_string())
+    );
+    assert_eq!(jmap_ical::event::stated_duration("-PT1H"), None);
+    assert_eq!(jmap_ical::event::stated_duration("PT"), None);
+    assert_eq!(jmap_ical::event::stated_duration("invalid"), None);
+
+    // 2. days_from_civil: Howard Hinnant proleptic Gregorian civil date algorithm
+    assert_eq!(jmap_ical::event::days_from_civil(1970, 1, 1), 0);
+    // Leap year 2024 has Feb 29
+    let days_2024_feb28 = jmap_ical::event::days_from_civil(2024, 2, 28);
+    let days_2024_feb29 = jmap_ical::event::days_from_civil(2024, 2, 29);
+    let days_2024_mar01 = jmap_ical::event::days_from_civil(2024, 3, 1);
+    assert_eq!(days_2024_feb29 - days_2024_feb28, 1);
+    assert_eq!(days_2024_mar01 - days_2024_feb29, 1);
+    // Century leap year 2000 vs non-leap 1900
+    assert_eq!(
+        jmap_ical::event::days_from_civil(2000, 3, 1)
+            - jmap_ical::event::days_from_civil(2000, 2, 28),
+        2
+    );
+    assert_eq!(
+        jmap_ical::event::days_from_civil(1900, 3, 1)
+            - jmap_ical::event::days_from_civil(1900, 2, 28),
+        1
+    );
+
+    // 3. to_duration: decomposition into days and hours/minutes/seconds
+    assert_eq!(
+        jmap_ical::event::to_duration(5400),
+        Some("PT1H30M".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_duration(86400),
+        Some("P1D".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_duration(90061),
+        Some("P1DT1H1M1S".to_string())
+    );
+    assert_eq!(jmap_ical::event::to_duration(0), None);
+    assert_eq!(jmap_ical::event::to_duration(-3600), None);
+
+    // 4. period_length: stated duration vs instant subtraction
+    assert_eq!(
+        jmap_ical::event::period_length("20260601T100000Z", "PT2H"),
+        Some("PT2H".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::period_length("20260601T100000Z", "20260601T123000Z"),
+        Some("PT2H30M".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::period_length("20260601T100000Z", "20260601T090000Z"),
+        None
+    );
+}
+
+#[test]
+fn differential_oracle_datetime_formatting_component_exists_and_leap_second() {
+    // 1. exists: component validation with month, day, hour, minute, second bounds
+    assert!(jmap_ical::event::exists("20260615", "130000"));
+    // Non-existent month 13
+    assert!(!jmap_ical::event::exists("20261315", "130000"));
+    // Feb 29 in non-leap year 2026
+    assert!(!jmap_ical::event::exists("20260229", "120000"));
+    // Feb 29 in leap year 2024
+    assert!(jmap_ical::event::exists("20240229", "120000"));
+    // Hour 24 invalid
+    assert!(!jmap_ical::event::exists("20260615", "240000"));
+    // Minute 60 invalid
+    assert!(!jmap_ical::event::exists("20260615", "126000"));
+    // Leap second 60 valid per RFC 5545 Section 3.3.12 and RFC 3339 Section 5.6
+    assert!(jmap_ical::event::exists("20261231", "235960"));
+    // Second 61 invalid
+    assert!(!jmap_ical::event::exists("20261231", "235961"));
+
+    // 2. strip: separator removal and exact digit length check
+    assert_eq!(
+        jmap_ical::event::strip("2026-06-15", '-', 8),
+        Some("20260615".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::strip("13:45:30", ':', 6),
+        Some("134530".to_string())
+    );
+    assert_eq!(jmap_ical::event::strip("2026-6-15", '-', 8), None);
+
+    // 3. to_ical_date_time, to_local_date_time, and sub-second fraction truncation
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2026-06-15T13:45:30"),
+        Some("20260615T134530".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20260615T134530"),
+        Some("2026-06-15T13:45:30".to_string())
+    );
+    // Date-only maps to midnight local
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20260615"),
+        Some("2026-06-15T00:00:00".to_string())
+    );
+    // Sub-second fraction truncation
+    assert_eq!(
+        jmap_ical::event::date_time_digits("20260615T134530.999Z"),
+        Some(("20260615", "134530"))
+    );
+
+    // 4. to_utc_date_time: mandatory Z suffix
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-06-15T13:45:30Z"),
+        Some("20260615T134530Z".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_utc_date_time("2026-06-15T13:45:30"),
+        None
+    );
+}
+
+#[test]
+fn differential_oracle_offset_seconds_moved_and_year_bounds() {
+    // 1. offset_seconds: positive, negative, and negative zero rejection
+    assert_eq!(jmap_ical::event::offset_seconds("+0200"), Some(7200));
+    assert_eq!(jmap_ical::event::offset_seconds("-0500"), Some(-18000));
+    assert_eq!(jmap_ical::event::offset_seconds("+0000"), Some(0));
+    assert_eq!(jmap_ical::event::offset_seconds("-0000"), None);
+    assert_eq!(jmap_ical::event::offset_seconds("+0530"), Some(19800));
+
+    // 2. at_offset and from_offset
+    assert_eq!(
+        jmap_ical::event::at_offset("1973-04-29T07:00:00", "-0500"),
+        Some("1973-04-29T02:00:00".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::from_offset("1973-04-29T02:00:00", "-0500"),
+        Some("1973-04-29T07:00:00".to_string())
+    );
+
+    // 3. moved: day rollover and month boundary borrowing
+    // Rollover forward across month end: June 30 + 2h -> July 1 01:00
+    assert_eq!(
+        jmap_ical::event::moved("2026-06-30T23:00:00", 7200),
+        Some("2026-07-01T01:00:00".to_string())
+    );
+    // Rollover backward across month start: July 1 - 2h -> June 30 23:00
+    assert_eq!(
+        jmap_ical::event::moved("2026-07-01T01:00:00", -7200),
+        Some("2026-06-30T23:00:00".to_string())
+    );
+    // Year boundary rollover forward: Dec 31 23:30 + 1h -> Jan 1 00:30 next year
+    assert_eq!(
+        jmap_ical::event::moved("2026-12-31T23:30:00", 3600),
+        Some("2027-01-01T00:30:00".to_string())
+    );
+    // Year boundary rollover backward: Jan 1 00:30 - 1h -> Dec 31 23:30 previous year
+    assert_eq!(
+        jmap_ical::event::moved("2026-01-01T00:30:00", -3600),
+        Some("2025-12-31T23:30:00".to_string())
+    );
+
+    // 4. Four-digit year boundary clamping: 0000..=9999
+    assert_eq!(jmap_ical::event::moved("9999-12-31T23:30:00", 3600), None);
+    assert_eq!(jmap_ical::event::moved("0000-01-01T00:30:00", -3600), None);
+
+    // 5. days_in_month_of
+    assert_eq!(jmap_ical::event::days_in_month_of(2024, 2), Some(29));
+    assert_eq!(jmap_ical::event::days_in_month_of(2026, 2), Some(28));
+    assert_eq!(jmap_ical::event::days_in_month_of(2026, 13), None);
+}
+
+#[test]
+fn differential_oracle_calendar_envelope_itip_method_and_override_inheritance() {
+    let mut event = fixture_event();
+    event.id = Some(jmap_proto::Id::from("server-assigned-event-id"));
+    event.uid = Some("global-uid-xyz".to_string());
+    event.title = Some("Sprint Retrospective".to_string());
+    event.start = Some("2026-06-01T10:00:00".to_string());
+    event.duration = Some("PT1H".to_string());
+
+    // 1. event_to_ical: root envelope has VERSION:2.0, PRODID, but no METHOD
+    let ics = jmap_ical::event_to_ical(&event);
+    assert!(ics.contains("BEGIN:VCALENDAR\r\n"));
+    assert!(ics.contains("VERSION:2.0\r\n"));
+    assert!(ics.contains(&format!("PRODID:{}\r\n", jmap_ical::event::PRODID)));
+    assert!(!ics.contains("METHOD:"));
+    assert!(ics.contains("UID:server-assigned-event-id\r\n"));
+    assert!(ics.contains("X-JMAP-UID:global-uid-xyz\r\n"));
+    assert!(ics.contains("SUMMARY:Sprint Retrospective\r\n"));
+
+    // 2. scheduling_ical without recurrence_id: includes METHOD:REQUEST on whole series
+    let ics_request = jmap_ical::event::scheduling_ical(&event, "REQUEST", None);
+    assert!(ics_request.contains("BEGIN:VCALENDAR\r\n"));
+    assert!(ics_request.contains("METHOD:REQUEST\r\n"));
+    assert!(ics_request.contains("SUMMARY:Sprint Retrospective\r\n"));
+
+    // 3. scheduling_ical with recurrence_id: single VEVENT with RECURRENCE-ID
+    let ics_instance =
+        jmap_ical::event::scheduling_ical(&event, "REQUEST", Some("2026-06-08T10:00:00"));
+    assert!(ics_instance.contains("METHOD:REQUEST\r\n"));
+    assert!(ics_instance.contains("RECURRENCE-ID;TZID=Europe/Berlin:20260608T100000\r\n"));
+    assert_eq!(vevents(&ics_instance), 1);
+
+    // 4. modified_instances override inheritance and whole-set replacement
+    let mut overrides = BTreeMap::new();
+    // Excluded occurrence does not produce modified VEVENT
+    overrides.insert(
+        "2026-06-08T10:00:00".to_string(),
+        json!({ "excluded": true }),
+    );
+    // Modified occurrence inherits title and duration, overrides start and priority
+    overrides.insert(
+        "2026-06-15T10:00:00".to_string(),
+        json!({
+            "title": "Rescheduled Retrospective",
+            "priority": 1
+        }),
+    );
+    event.recurrence_overrides = Some(overrides);
+
+    let ics_series_with_override = jmap_ical::event_to_ical(&event);
+    // Master series + 1 modified instance = 2 VEVENTs (excluded instance does not get VEVENT)
+    assert_eq!(vevents(&ics_series_with_override), 2);
+    // Excluded instance emitted as EXDATE
+    assert!(ics_series_with_override.contains("EXDATE"));
+    // Modified instance carries modified title and RECURRENCE-ID
+    let second_vevent = vevent(&ics_series_with_override, 1);
+    assert!(second_vevent.contains("SUMMARY:Rescheduled Retrospective\r\n"));
+    assert!(second_vevent.contains("RECURRENCE-ID"));
+    assert!(second_vevent.contains("PRIORITY:1\r\n"));
+}
