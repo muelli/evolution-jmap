@@ -41582,3 +41582,307 @@ fn differential_oracle_scheduling_ical_itip_methods_and_instance_narrowing() {
     assert!(instance_ics.contains("METHOD:CANCEL\r\n"));
     assert!(instance_ics.contains("RECURRENCE-ID:20260608T140000Z\r\n"));
 }
+
+#[test]
+fn differential_oracle_ical_framing_check_structure_and_line_folding() {
+    // Audit divergence 328: Inbound iCalendar stream syntactic framing,
+    // document boundary enforcement, nested component tree depth bounding,
+    // and RFC 5545 Section 3.1 75-octet line folding safety.
+    let valid_ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:ev1\r\nDTSTART:20260601T090000Z\r\nSUMMARY:Meeting\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    assert!(jmap_ical::event::check_structure(valid_ics).is_ok());
+    let parsed = jmap_ical::event::parse_ical(valid_ics);
+    assert!(parsed.is_ok());
+
+    // 1. Missing BEGIN:VCALENDAR returns NotACalendar
+    let no_cal = "BEGIN:VEVENT\r\nUID:ev1\r\nEND:VEVENT\r\n";
+    assert_eq!(
+        jmap_ical::event::parse_ical(no_cal),
+        Err(jmap_ical::ICalError::NotACalendar)
+    );
+
+    // 2. Mismatched component envelope returns Mismatched
+    let mismatched = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:ev1\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
+    assert_eq!(
+        jmap_ical::event::check_structure(mismatched),
+        Err(jmap_ical::ICalError::Mismatched {
+            expected: "VEVENT".to_string(),
+            found: "VTODO".to_string(),
+        })
+    );
+
+    // 3. Unterminated component returns Unterminated
+    let unterminated = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:ev1\r\n";
+    assert_eq!(
+        jmap_ical::event::check_structure(unterminated),
+        Err(jmap_ical::ICalError::Unterminated("VEVENT".to_string()))
+    );
+
+    // 4. Leading UTF-8 Byte Order Mark (\u{feff}) is cleanly stripped
+    let bom_ics = format!("\u{feff}{valid_ics}");
+    assert!(jmap_ical::event::check_structure(&bom_ics).is_ok());
+
+    // 5. Line folding: lines exceeding 75 octets fold with CRLF + space without splitting UTF-8
+    let long_summary = "SUMMARY:This is a very long calendar event summary that definitely exceeds the seventy-five octet line length limit mandated by RFC 5545 Section 3.1.\r\n";
+    let folded = jmap_ical::event::fold_overlong_lines(long_summary.to_string());
+    assert!(folded.contains("\r\n "));
+    for line in folded.split("\r\n") {
+        assert!(line.len() <= 75);
+    }
+}
+
+#[test]
+fn differential_oracle_calcard_ast_traversal_and_parameter_extraction() {
+    // Audit divergence 329: Calcard AST component traversal and value extraction:
+    // case-insensitive property and parameter lookups, multi-value parameter flattening,
+    // and raw text value unescaping.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ast-test-123\r\n",
+        "DTSTART;VALUE=DATE-TIME:20260601T100000Z\r\n",
+        "SUMMARY:Review & Planning\r\n",
+        "ATTACH;FMTTYPE=application/pdf;SIZE=1024:https://example.com/spec.pdf\r\n",
+        "CONFERENCE;FEATURE=AUDIO;FEATURE=VIDEO:https://meet.example.com/room\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let calendar = jmap_ical::event::parse_ical(ics).expect("parse ics");
+    let vevent = calendar
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VEVENT"))
+        .expect("vevent component found");
+
+    // 1. Case-insensitive component_entry and component_text lookup
+    let summary_upper = jmap_ical::event::component_entry(vevent, "SUMMARY");
+    let summary_lower = jmap_ical::event::component_entry(vevent, "summary");
+    assert!(summary_upper.is_some());
+    assert_eq!(summary_upper, summary_lower);
+    assert_eq!(
+        jmap_ical::event::component_text(vevent, "summary").as_deref(),
+        Some("Review & Planning")
+    );
+
+    // 2. entry_raw_value extracts URI/text
+    let attach_entry = jmap_ical::event::component_entry(vevent, "ATTACH").expect("attach entry");
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(attach_entry),
+        "https://example.com/spec.pdf"
+    );
+
+    // 3. Case-insensitive parameter extraction via entry_param
+    assert_eq!(
+        jmap_ical::event::entry_param(attach_entry, "fmttype").as_deref(),
+        Some("application/pdf")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(attach_entry, "FMTTYPE").as_deref(),
+        Some("application/pdf")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(attach_entry, "size").as_deref(),
+        Some("1024")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(attach_entry, "NONEXISTENT"),
+        None
+    );
+
+    // 4. Repeated parameters aggregated via entry_param_values
+    let conf_entry = jmap_ical::event::component_entry(vevent, "CONFERENCE").expect("conf entry");
+    let features = jmap_ical::event::entry_param_values(conf_entry, "FEATURE");
+    assert_eq!(features, vec!["AUDIO".to_string(), "VIDEO".to_string()]);
+}
+
+#[test]
+fn differential_oracle_duration_resolution_instant_and_civil_arithmetic() {
+    // Audit divergence 330: Event duration and interval resolution pipeline:
+    // explicit DURATION precedence over DTEND, Howard Hinnant proleptic Gregorian
+    // civil timeline arithmetic, ISO 8601 duration validation, and negative interval refusal.
+
+    // 1. Explicit DURATION takes precedence over DTEND
+    let ics_both = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-1\r\n",
+        "DTSTART:20260601T100000Z\r\n",
+        "DTEND:20260601T120000Z\r\n",
+        "DURATION:PT3H\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let cal_both = jmap_ical::event::parse_ical(ics_both).expect("parse");
+    let vevent_both = cal_both
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VEVENT"))
+        .expect("vevent");
+    let dur_both = jmap_ical::event::read_duration(vevent_both);
+    assert_eq!(dur_both.as_deref(), Some("PT3H"));
+
+    // 2. DTEND minus DTSTART fallback when DURATION absent
+    let ics_dtend = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-2\r\n",
+        "DTSTART:20260601T100000Z\r\n",
+        "DTEND:20260601T114500Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let cal_dtend = jmap_ical::event::parse_ical(ics_dtend).expect("parse");
+    let vevent_dtend = cal_dtend
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VEVENT"))
+        .expect("vevent");
+    let dur_dtend = jmap_ical::event::read_duration(vevent_dtend);
+    assert_eq!(dur_dtend.as_deref(), Some("PT1H45M"));
+
+    // 3. Negative interval (DTEND before DTSTART) returns None
+    let ics_neg = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-3\r\n",
+        "DTSTART:20260601T120000Z\r\n",
+        "DTEND:20260601T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let cal_neg = jmap_ical::event::parse_ical(ics_neg).expect("parse");
+    let vevent_neg = cal_neg
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VEVENT"))
+        .expect("vevent");
+    assert_eq!(jmap_ical::event::read_duration(vevent_neg), None);
+
+    // 4. ISO 8601 stated_duration normalization and negative rejection
+    assert_eq!(
+        jmap_ical::event::stated_duration("+PT1H30M").as_deref(),
+        Some("PT1H30M")
+    );
+    assert_eq!(
+        jmap_ical::event::stated_duration("P2DT4H").as_deref(),
+        Some("P2DT4H")
+    );
+    assert_eq!(jmap_ical::event::stated_duration("-PT1H"), None);
+    assert_eq!(jmap_ical::event::stated_duration("INVALID"), None);
+
+    // 5. period_length evaluates duration strings and timestamp deltas
+    assert_eq!(
+        jmap_ical::event::period_length("20260601T100000Z", "PT2H30M").as_deref(),
+        Some("PT2H30M")
+    );
+    assert_eq!(
+        jmap_ical::event::period_length("20260601T100000Z", "20260601T123000Z").as_deref(),
+        Some("PT2H30M")
+    );
+    assert_eq!(
+        jmap_ical::event::period_length("20260601T120000Z", "20260601T100000Z"),
+        None
+    );
+
+    // 6. days_from_civil epoch calculation and leap years
+    assert_eq!(jmap_ical::event::days_from_civil(1970, 1, 1), 0);
+    // 2024 is a leap year (366 days), 2025 is standard (365 days)
+    let days_2024_01_01 = jmap_ical::event::days_from_civil(2024, 1, 1);
+    let days_2025_01_01 = jmap_ical::event::days_from_civil(2025, 1, 1);
+    assert_eq!(days_2025_01_01 - days_2024_01_01, 366);
+}
+
+#[test]
+fn differential_oracle_read_links_fetched_locally_and_size_parsing() {
+    // Audit divergence 331: External link and attachment ingestion and serialization pipeline:
+    // RFC 8984 Section 4.2.7 Link object synthesis, ATTACH vs IMAGE disambiguation,
+    // file: URI local attachment privacy filtering, RFC 8607 SIZE parameter parsing,
+    // and deterministic map key assignment.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:links-event-1\r\n",
+        "ATTACH;FMTTYPE=application/pdf;SIZE=204800;X-JMAP-KEY=spec-doc:https://example.com/spec.pdf\r\n",
+        "IMAGE;DISPLAY=BADGE:https://example.com/logo.png\r\n",
+        "ATTACH:file:///home/user/confidential-report.pdf\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let calendar = jmap_ical::event::parse_ical(ics).expect("parse ics");
+    let vevent = calendar
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VEVENT"))
+        .expect("vevent");
+    let links = jmap_ical::event::read_links(vevent).expect("links present");
+
+    // 1. ATTACH with custom X-JMAP-KEY preserves key and parses SIZE and FMTTYPE
+    let doc_link = links.get("spec-doc").expect("spec-doc link present");
+    assert_eq!(doc_link["@type"], "Link");
+    assert_eq!(doc_link["href"], "https://example.com/spec.pdf");
+    assert_eq!(doc_link["contentType"], "application/pdf");
+    assert_eq!(doc_link["size"], 204800);
+
+    // 2. IMAGE sets rel: "icon" and extracts display: "badge"
+    let logo_link = links.get("k1").expect("k1 present");
+    assert_eq!(logo_link["@type"], "Link");
+    assert_eq!(logo_link["href"], "https://example.com/logo.png");
+    assert_eq!(logo_link["rel"], "icon");
+    assert_eq!(logo_link["display"], "badge");
+
+    // 3. Local file: URI is strictly filtered out to prevent privacy leaks
+    assert!(jmap_ical::event::fetched_locally(
+        "file:///home/user/confidential-report.pdf"
+    ));
+    assert!(
+        !links
+            .values()
+            .any(|l| l["href"].as_str().unwrap().starts_with("file:"))
+    );
+
+    // 4. Outbound serialization renders ATTACH and IMAGE with parameters
+    let event = CalendarEvent {
+        links: Some(links),
+        ..CalendarEvent::default()
+    };
+    let drawn = jmap_ical::event::drawn_links(&event);
+    assert_eq!(drawn.len(), 2);
+
+    let doc_entry = drawn
+        .iter()
+        .find(|e| e.name.as_str() == "ATTACH")
+        .expect("attach entry");
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(doc_entry),
+        "https://example.com/spec.pdf"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(doc_entry, "X-JMAP-KEY").as_deref(),
+        Some("spec-doc")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(doc_entry, "SIZE").as_deref(),
+        Some("204800")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(doc_entry, "FMTTYPE").as_deref(),
+        Some("application/pdf")
+    );
+
+    let img_entry = drawn
+        .iter()
+        .find(|e| e.name.as_str() == "IMAGE")
+        .expect("image entry");
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(img_entry),
+        "https://example.com/logo.png"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(img_entry, "DISPLAY").as_deref(),
+        Some("BADGE")
+    );
+}
