@@ -459,9 +459,25 @@ unsafe fn server_matches(
     };
     let matches = matches.into_iter().map(|id| id.as_str().to_owned());
     Some(Ok(match restrict {
-        Some(restrict) => matches.filter(|uid| restrict.contains(uid)).collect(),
+        Some(restrict) => narrow(matches, restrict),
         None => matches.collect(),
     }))
+}
+
+/// The server's match set narrowed to the uids the caller asked about.
+///
+/// Through a set rather than `[String]::contains`, and that is not a
+/// micro-optimisation: both lists are folder-sized, so a linear scan per match
+/// is `O(matches x restrict)`. `camel-vee-folder.c` hands `search_by_uids` a
+/// whole subfolder's uids on a rebuild, and a broad expression matches most of
+/// them, so the two sizes are the folder's message count twice over. Measured
+/// on 50 000 x 50 000 of Fastmail-shaped ids: 5.7 s in release and 21.6 s in
+/// debug for the scan, against 7.5 ms and 50 ms for this — a search that looks
+/// to the user like Evolution has hung.
+#[cfg(camel_folder_search_object)]
+fn narrow(matches: impl Iterator<Item = String>, restrict: &[String]) -> Vec<String> {
+    let wanted: std::collections::HashSet<&str> = restrict.iter().map(String::as_str).collect();
+    matches.filter(|uid| wanted.contains(uid.as_str())).collect()
 }
 
 /// The uids of a `GPtrArray` Camel handed over, copied out as strings.
@@ -638,4 +654,48 @@ fn flags(mailbox: &FolderInfo) -> CamelFolderFlags {
         _ => 0,
     };
     CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY | role
+}
+
+#[cfg(all(test, camel_folder_search_object))]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::narrow;
+
+    fn ids(range: std::ops::Range<usize>) -> Vec<String> {
+        range.map(|i| format!("Mdeadbeef{i:07}")).collect()
+    }
+
+    /// The narrowing keeps the server's own order and drops exactly what the
+    /// caller did not ask about — the semantics `[String]::contains` gave,
+    /// which the set must not change.
+    #[test]
+    fn narrowing_keeps_the_asked_for_uids_in_the_servers_order() {
+        let matches = ["M3", "M1", "M2", "M9"].map(str::to_owned);
+        let restrict = ["M2", "M3"].map(str::to_owned);
+        assert_eq!(
+            narrow(matches.iter().cloned(), &restrict),
+            vec!["M3".to_owned(), "M2".to_owned()]
+        );
+        assert!(narrow(matches.into_iter(), &[]).is_empty());
+    }
+
+    /// The size a vFolder rebuild over a real mailbox reaches, at which the
+    /// linear scan this replaced took 21.6 s in a debug build. The deadline is
+    /// two orders of magnitude above what the set version measures (50 ms), so
+    /// it is a guard against the quadratic shape coming back rather than a
+    /// benchmark.
+    #[test]
+    fn narrowing_a_folder_sized_match_set_does_not_take_seconds() {
+        let matches = ids(0..50_000);
+        let restrict = ids(0..50_000);
+        let started = Instant::now();
+        let narrowed = narrow(matches.into_iter(), &restrict);
+        let took = started.elapsed();
+        assert_eq!(narrowed.len(), 50_000);
+        assert!(
+            took < Duration::from_secs(5),
+            "narrowing 50 000 x 50 000 took {took:?}; the linear scan is back"
+        );
+    }
 }
