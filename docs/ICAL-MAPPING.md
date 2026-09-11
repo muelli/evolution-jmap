@@ -5786,3 +5786,77 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.296 Divergence 296: `parse_ical`, `check_structure`, `check_depth`, `MAX_DEPTH`, and `unfold`: Inbound iCalendar Envelope Structure Validation, Component Depth Stack Guard, Byte Order Mark (BOM) Stripping, and CRLF Unfolding
+
+- **Observed Behavior**:
+  Parsing arbitrary or hostile iCalendar streams into structured representations requires validating component nesting depth, ensuring balanced envelope delimiters, stripping Unicode byte order marks, and normalizing folded content lines. In `jmap-ical`:
+  1. Envelope boundary validation (`parse_ical`): Enforces that the root component is strictly `BEGIN:VCALENDAR` and that the stream contains no trailing lines or secondary calendars after `END:VCALENDAR`. Trailing content triggers `ICalError::Trailing`, preventing multi-calendar payloads from silently losing events.
+  2. Component recursion depth guard (`check_depth`, `MAX_DEPTH = 32`): Uses a traversal stack to evaluate component hierarchy depths. If component nesting exceeds `MAX_DEPTH` (32 levels), parsing halts immediately with `ICalError::TooDeep`, defending against stack exhaustion attacks from deeply nested or cyclic malicious payloads.
+  3. Balanced tag structure checking (`check_structure`): Pre-scans unfolded content lines to verify that every `BEGIN:<component>` has a matching `END:<component>`. Tag mismatches return `ICalError::Mismatched { expected, found }`, and truncated inputs return `ICalError::Unterminated(name)`.
+  4. Byte order mark (BOM) tolerance: `check_structure` strips any leading UTF-8 byte order mark (`\u{feff}`) before structure validation, preventing parse aborts on UTF-8 BOM files emitted by Windows exporters.
+  5. Whitespace unfolding (`unfold`): Normalizes CRLF (`\r\n`) and LF (`\n`), stripping continuation prefixes (space `' '` or tab `'\t'`) and reassembling folded content lines before tokenization.
+  6. In contrast, differential oracles or permissive parsers lack component depth limits (vulnerable to unbounded memory or call-stack consumption), accept mismatched or missing `END` delimiters, fail when encountering UTF-8 BOMs, or drop trailing calendars without notification.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.1 (`Content Lines`) and Section 3.4 (`iCalendar Object`).
+  2. RFC 8984 Section 1.4 (`Type Signatures`).
+- **Adjudication**:
+  Conforming specification boundary and defensive parser robustness. Enforces single-calendar envelope containment, protects against stack exhaustion via `MAX_DEPTH`, verifies balanced delimiters, strips UTF-8 BOMs, and normalizes line unfoldings.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.297 Divergence 297: `entry_text`, `entry_texts`, `entry_param`, `entry_param_values`, `component_entry`, `value_text`, `date_time_text`, and `param_text`: Low-Level Value and Parameter Tokenization, Illegal Negative Zero (`-0000`) Normalization, Case-Insensitive Parameter Lookup, and Binary / Data URI Filtering
+
+- **Observed Behavior**:
+  Extracting typed parameters and properties from raw iCalendar tokens requires canonicalizing illegal representations, handling multi-value lists, filtering unsafe binary payloads, and providing case-insensitive parameter lookup. In `jmap-ical`:
+  1. Dynamic date-time classification and negative zero normalization (`date_time_text`): Derives the iCalendar value type based on presence of year and hour components (`DateTime`, `Date`, `Time`, `UtcOffset`). When formatting UTC offsets, if calcard renders `"-0000"`, `date_time_text` explicitly rewrites it to `"+0000"`. RFC 5545 Section 3.3.14 forbids negative zero because sign denotes direction from UTC; normalizing to `"+0000"` ensures strict conformance.
+  2. Unsafe payload and memory shielding (`value_text`): Maps typed iCalendar values (`Text`, `PartialDateTime`, `Duration`, `RecurrenceRule`, `Period`, `Uri::Location`, `Integer`, `Float`, `Boolean`, `Classification`, `Status`, `Transparency`, `Action`, `BusyType`, `ParticipantType`, `ResourceType`, `Proximity`). Unsafe binary blobs (`ICalendarValue::Binary(_)`) and data URIs (`ICalendarValue::Uri(Uri::Data(_))`) return `None`, preventing untrusted embedded binaries from consuming memory.
+  3. Multi-value string joining (`entry_text` vs `entry_texts`): `entry_text` joins multiple values with commas, while `entry_texts` returns them as individual string vectors.
+  4. Case-insensitive parameter matching (`entry_param`, `entry_param_values`): Matches parameter names case-insensitively using `eq_ignore_ascii_case`, ensuring parameters like `VALUE=URI` or `value=uri` resolve reliably.
+  5. In contrast, differential oracles or permissive parsers emit illegal `"-0000"` offsets, load inline data URIs or binary blobs into memory, or fail on lowercase parameter names.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.1 (`Content Lines`), Section 3.2 (`Property Parameters`), Section 3.3.4 (`Date-Time`), and Section 3.3.14 (`UTC Offset`).
+  2. RFC 8984 Section 1.4 (`Type Signatures`).
+- **Adjudication**:
+  Conforming specification boundary and token extraction safety. Normalizes illegal `"-0000"` offsets to `"+0000"`, shields against memory bloat from inline binaries and data URIs, and provides case-insensitive parameter matching.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.298 Divergence 298: `ical_to_event`, `read_vevent`, `read_overrides`, `read_time_zones`, and `version`: Inbound Series Resolution, Detached-Only Fallback Precedence, and RFC 8984 / JSCalendar-bis 2.0 Root Version Stamping
+
+- **Observed Behavior**:
+  Converting an iCalendar component stream into a JSCalendar `CalendarEvent` requires identifying the master series component, accommodating detached-only streams, stamping root object metadata, and preserving nested override isolation. In `jmap-ical`:
+  1. Master series disambiguation: When multiple `VEVENT` components are present, `ical_to_event` selects the first component that lacks a `RECURRENCE-ID` entry as the master series.
+  2. Detached-only fallback resilience: If a document contains only detached occurrences (all `VEVENT`s carry `RECURRENCE-ID`), `ical_to_event` falls back to `vevents.first()`, reading the first detached instance as the base event rather than failing.
+  3. Mandatory root version stamping (`version: "2.0"`): In accordance with draft-ietf-jmap-calendars-28 Section 1.4 and JSCalendar-bis Section 3.1.2, a standalone `CalendarEvent` must state its version (`"2.0"`). `ical_to_event` stamps `event.version = Some("2.0".to_owned())` on the top-level object, satisfying servers (like Fastmail) that reject unversioned creates.
+  4. Recurrence override version omission: `read_vevent` leaves `version` as `None` for embedded recurrence override objects, ensuring override patches conform to RFC 8984 Section 4.3.4 `PatchObject` rules by omitting root version tags.
+  5. Coordinated component lifecycle: Traverses `stated_zones`, `read_vevent`, `read_overrides`, and `read_time_zones` sequentially, ensuring custom timezones referenced across series and override instances are properly retained.
+  6. In contrast, differential oracles drop detached-only streams, omit root `version: "2.0"` (causing server rejection), or erroneously attach `version` to override patches.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.1 (`Event Component`) and Section 3.8.4.4 (`Recurrence ID`).
+  2. RFC 8984 Section 1.4 (`Type Signatures`) and Section 4.3.4 (`PatchObject`).
+  3. draft-ietf-jmap-calendars-28 Section 1.4 (`CalendarEvent`).
+- **Adjudication**:
+  Conforming specification boundary and top-level event assembly determinism. Disambiguates master series components, tolerates detached-only streams, stamps mandatory 2.0 root version, and maintains patch object purity.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.299 Divergence 299: `recurrence_dates`, `dated`, `OVERRIDE_PROPERTIES`, and `is_utc`: Outbound Recurrence Date Aggregation (`RDATE` vs `EXDATE`), Unsupported Patch Narrowing, and Four-Form Date-Time Parameter Encoding (`VALUE=DATE`, UTC `Z`, `TZID`, Floating)
+
+- **Observed Behavior**:
+  Serializing JSCalendar recurrence exceptions and dates into RFC 5545 `RDATE` and `EXDATE` entries requires managing override patch compatibility, aggregating timestamps, and encoding date-times into one of four RFC 5545 forms. In `jmap-ical`:
+  1. Graceful override patch narrowing: In `recurrence_dates(event, is_excluded == false)`, if an override patch defines properties outside `OVERRIDE_PROPERTIES` or fails `modified_instance`, rather than dropping the occurrence entirely, `jmap-ical` narrows the occurrence to an `RDATE`. This guarantees that the appointment remains visible on the calendar at its scheduled instant. Per RFC 5545 Section 3.8.5.2, if the series `RRULE` already covers the instant, the recurrence set absorbs the duplicate.
+  2. Exclusion date extraction: For `is_excluded == true`, `recurrence_dates` filters patches where `excluded(patch) == true` and renders their identifiers as `EXDATE` timestamps.
+  3. Four-form date-time parameter encoding (`dated`):
+     - Form 1 (Date-only): `as_a_date == true` produces 8-digit `YYYYMMDD` with `VALUE=DATE`.
+     - Form 2 (UTC instant): `as_a_date == false` and `is_utc(zone)` produces `YYYYMMDDTHHMMSSZ` with no `TZID`.
+     - Form 3 (Local with timezone): `as_a_date == false` and `Some(zone)` produces local timestamp with `TZID=<zone>`.
+     - Form 4 (Floating local): `as_a_date == false` and `None` produces local timestamp with no `TZID` and no `Z`.
+  4. In contrast, differential oracles or naive serializers discard unsupported patches (hiding meetings), emit redundant `TZID=Etc/UTC` parameters requiring unnecessary `VTIMEZONE` blocks, or confuse floating local times with UTC instants.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.19 (`Time Zone Identifier`), Section 3.3.4 (`Date-Time`), Section 3.3.5 (`Date`), Section 3.8.5.1 (`Exception Date-Times`), and Section 3.8.5.2 (`Recurrence Date-Times`).
+  2. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence date serialization fidelity. Narrows un-renderable patches to `RDATE` to prevent meeting loss, extracts exclusion dates, and formats date-times strictly according to the four RFC 5545 forms.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+

@@ -38969,3 +38969,260 @@ fn differential_oracle_read_overrides_period_duration_and_minimal_patch() {
     assert_eq!(patch["title"], json!("Rescheduled Afternoon"));
     assert_eq!(patch["priority"], Value::Null);
 }
+
+#[test]
+fn differential_oracle_parse_ical_structure_depth_and_unfolding() {
+    // 1. Structure check: balanced tags
+    let ics_valid = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:test-1\r\nDTSTART:20260601T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    assert!(jmap_ical::event::check_structure(ics_valid).is_ok());
+
+    // 2. Mismatched closing tag
+    let ics_mismatch = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:test-1\r\nDTSTART:20260601T100000Z\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
+    match jmap_ical::event::check_structure(ics_mismatch) {
+        Err(ICalError::Mismatched { expected, found }) => {
+            assert_eq!(expected, "VEVENT");
+            assert_eq!(found, "VTODO");
+        }
+        other => panic!("expected Mismatched error, got {other:?}"),
+    }
+
+    // 3. Unterminated component
+    let ics_unterminated = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:test-1\r\nDTSTART:20260601T100000Z\r\nEND:VCALENDAR\r\n";
+    match jmap_ical::event::check_structure(ics_unterminated) {
+        Err(ICalError::Mismatched { expected, found }) => {
+            assert_eq!(expected, "VEVENT");
+            assert_eq!(found, "VCALENDAR");
+        }
+        other => panic!("expected Mismatched error, got {other:?}"),
+    }
+
+    // 4. UTF-8 BOM stripping
+    let ics_bom = "\u{feff}BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:test-bom\r\nDTSTART:20260601T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    assert!(jmap_ical::event::check_structure(ics_bom).is_ok());
+    let parsed_bom = ical_to_event(ics_bom);
+    assert!(parsed_bom.is_ok());
+    assert_eq!(
+        parsed_bom.unwrap().id,
+        Some(jmap_proto::Id::from("test-bom"))
+    );
+
+    // 5. Trailing content after END:VCALENDAR
+    let ics_trailing = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:test-1\r\nDTSTART:20260601T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\nEXTRA_GARBAGE\r\n";
+    match jmap_ical::event::parse_ical(ics_trailing) {
+        Err(ICalError::Trailing(_)) => {}
+        other => panic!("expected Trailing error, got {other:?}"),
+    }
+
+    // 6. Missing BEGIN:VCALENDAR
+    let ics_not_cal = "BEGIN:VEVENT\r\nUID:test-1\r\nDTSTART:20260601T100000Z\r\nEND:VEVENT\r\n";
+    assert!(matches!(
+        jmap_ical::event::parse_ical(ics_not_cal),
+        Err(ICalError::NotACalendar)
+    ));
+}
+
+#[test]
+fn differential_oracle_value_text_tokens_negative_zero_and_params() {
+    use calcard::common::PartialDateTime;
+    use calcard::icalendar::{ICalendarEntry, ICalendarProperty, ICalendarValue, Uri};
+
+    // 1. PartialDateTime UTC offset -0000 normalized to +0000 (RFC 5545 Section 3.3.14)
+    let stamp_neg_zero = PartialDateTime {
+        tz_hour: Some(0),
+        tz_minute: Some(0),
+        tz_minus: true,
+        ..Default::default()
+    };
+    assert_eq!(jmap_ical::event::date_time_text(&stamp_neg_zero), "+0000");
+
+    let stamp_pos_zero = PartialDateTime {
+        tz_hour: Some(0),
+        tz_minute: Some(0),
+        tz_minus: false,
+        ..Default::default()
+    };
+    assert_eq!(jmap_ical::event::date_time_text(&stamp_pos_zero), "+0000");
+
+    // 2. value_text variants
+    let text_val = ICalendarValue::Text("Meeting Subject".to_string());
+    assert_eq!(
+        jmap_ical::event::value_text(&text_val),
+        Some(("Meeting Subject".to_string(), true))
+    );
+
+    let bool_val = ICalendarValue::Boolean(false);
+    assert_eq!(
+        jmap_ical::event::value_text(&bool_val),
+        Some(("FALSE".to_string(), false))
+    );
+
+    let bin_val = ICalendarValue::Binary(vec![0xDE, 0xAD, 0xBE, 0xEF]);
+    assert_eq!(jmap_ical::event::value_text(&bin_val), None);
+
+    let data_uri_val = ICalendarValue::Uri(Uri::Data(calcard::common::Data {
+        content_type: Some("image/png".to_string()),
+        data: vec![0, 1, 2],
+    }));
+    assert_eq!(jmap_ical::event::value_text(&data_uri_val), None);
+
+    // 3. entry_text joins multiple values with comma
+    let multi_entry = ICalendarEntry::new(ICalendarProperty::Categories).with_values(vec![
+        ICalendarValue::Text("WORK".to_string()),
+        ICalendarValue::Text("PROJECT".to_string()),
+    ]);
+    assert_eq!(jmap_ical::event::entry_text(&multi_entry), "WORK,PROJECT");
+    assert_eq!(
+        jmap_ical::event::entry_texts(&multi_entry),
+        vec!["WORK".to_string(), "PROJECT".to_string()]
+    );
+
+    // 4. Case-insensitive parameter lookup
+    use jmap_ical::event::EntryExt;
+    let param_entry = jmap_ical::event::make_entry("DTSTART", "20260601T100000")
+        .with_named_param("TZID", "Europe/Berlin");
+    assert_eq!(
+        jmap_ical::event::entry_param(&param_entry, "tzid"),
+        Some("Europe/Berlin".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&param_entry, "TZID"),
+        Some("Europe/Berlin".to_string())
+    );
+    assert_eq!(jmap_ical::event::entry_param(&param_entry, "missing"), None);
+}
+
+#[test]
+fn differential_oracle_ical_to_event_series_resolution_and_version_stamping() {
+    // 1. Multiple VEVENT stream: first component without RECURRENCE-ID is series
+    let ics_series_and_detached = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:meeting-series-123\r\n",
+        "RECURRENCE-ID:20260602T100000Z\r\n",
+        "DTSTART:20260602T110000Z\r\n",
+        "SUMMARY:Detached First\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:meeting-series-123\r\n",
+        "DTSTART:20260601T100000Z\r\n",
+        "SUMMARY:Master Series Component\r\n",
+        "RRULE:FREQ=DAILY;COUNT=3\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event = ical_to_event(ics_series_and_detached).expect("parse stream");
+    assert_eq!(event.title, Some("Master Series Component".to_string()));
+    // Top-level CalendarEvent must state its version ("2.0")
+    assert_eq!(event.version, Some("2.0".to_string()));
+
+    // Verify overrides map contains the detached occurrence without version property
+    let overrides = event.recurrence_overrides.expect("recurrence overrides");
+    assert!(overrides.contains_key("2026-06-02T10:00:00"));
+    let patch = &overrides["2026-06-02T10:00:00"];
+    assert_eq!(patch.get("version"), None);
+    assert_eq!(patch.get("title"), Some(&json!("Detached First")));
+
+    // 2. Detached-only stream falls back to first VEVENT
+    let ics_detached_only = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:meeting-detached-only\r\n",
+        "RECURRENCE-ID:20260602T100000Z\r\n",
+        "DTSTART:20260602T100000Z\r\n",
+        "SUMMARY:Detached Only\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event_detached = ical_to_event(ics_detached_only).expect("parse detached-only");
+    assert_eq!(event_detached.title, Some("Detached Only".to_string()));
+    assert_eq!(event_detached.version, Some("2.0".to_string()));
+
+    // 3. Calendar with no VEVENT returns NoEvent
+    let ics_no_vevent = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VTODO\r\n",
+        "UID:todo-item\r\n",
+        "SUMMARY:Task\r\n",
+        "END:VTODO\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    assert!(matches!(
+        ical_to_event(ics_no_vevent),
+        Err(ICalError::NoEvent)
+    ));
+}
+
+#[test]
+fn differential_oracle_recurrence_dates_patch_narrowing_and_dated_forms() {
+    use calcard::icalendar::ICalendarProperty;
+
+    // 1. dated with 4 RFC 5545 date-time forms
+    // Form 1: as_a_date == true -> VALUE=DATE, 8 chars YYYYMMDD
+    let entry_date =
+        jmap_ical::event::dated("DTSTART", &["20260601T100000".to_string()], true, None);
+    assert_eq!(entry_date.name, ICalendarProperty::Dtstart);
+    assert_eq!(
+        jmap_ical::event::entry_param(&entry_date, "VALUE"),
+        Some("DATE".to_string())
+    );
+    assert_eq!(jmap_ical::event::entry_text(&entry_date), "20260601");
+
+    // Form 2: as_a_date == false, UTC zone -> trailing Z, no TZID
+    let entry_utc = jmap_ical::event::dated(
+        "DTSTART",
+        &["20260601T100000".to_string()],
+        false,
+        Some("UTC"),
+    );
+    assert_eq!(jmap_ical::event::entry_param(&entry_utc, "TZID"), None);
+    assert_eq!(jmap_ical::event::entry_text(&entry_utc), "20260601T100000Z");
+
+    // Form 3: as_a_date == false, named timezone -> TZID param, no trailing Z
+    let entry_tz = jmap_ical::event::dated(
+        "DTSTART",
+        &["20260601T100000".to_string()],
+        false,
+        Some("Europe/Berlin"),
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(&entry_tz, "TZID"),
+        Some("Europe/Berlin".to_string())
+    );
+    assert_eq!(jmap_ical::event::entry_text(&entry_tz), "20260601T100000");
+
+    // Form 4: as_a_date == false, None zone -> floating local time, no TZID, no Z
+    let entry_floating =
+        jmap_ical::event::dated("DTSTART", &["20260601T100000".to_string()], false, None);
+    assert_eq!(jmap_ical::event::entry_param(&entry_floating, "TZID"), None);
+    assert_eq!(
+        jmap_ical::event::entry_text(&entry_floating),
+        "20260601T100000"
+    );
+
+    // 2. recurrence_dates: exclusion vs narrowing
+    let mut event = fixture_event();
+    let mut overrides = BTreeMap::new();
+    // Excluded instance
+    overrides.insert(
+        "2026-06-02T10:00:00".to_string(),
+        json!({ "excluded": true }),
+    );
+    // Unsupported patch (location property outside OVERRIDE_PROPERTIES) narrows to RDATE
+    overrides.insert(
+        "2026-06-03T10:00:00".to_string(),
+        json!({ "location": "Outside Whitelist" }),
+    );
+    event.recurrence_overrides = Some(overrides);
+
+    let exdates = jmap_ical::event::recurrence_dates(&event, true);
+    assert_eq!(exdates, vec!["20260602T100000".to_string()]);
+
+    let rdates = jmap_ical::event::recurrence_dates(&event, false);
+    assert_eq!(rdates, vec!["20260603T100000".to_string()]);
+}
