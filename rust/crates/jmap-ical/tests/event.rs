@@ -41886,3 +41886,220 @@ fn differential_oracle_read_links_fetched_locally_and_size_parsing() {
         Some("BADGE")
     );
 }
+
+#[test]
+fn differential_oracle_event_timestamps_created_updated_and_store_ownership() {
+    // Audit divergence 332: Event timestamp ingestion and store ownership bifurcation:
+    // RFC 5545 CREATED, DTSTAMP, and LAST-MODIFIED versus RFC 8984 created and updated.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:timestamp-event-1\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "SUMMARY:Timestamp Ingestion Audit\r\n",
+        "CREATED:20260801T080000Z\r\n",
+        "DTSTAMP:20260815T120000Z\r\n",
+        "LAST-MODIFIED:20260820T140000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event = jmap_ical::event::ical_to_event(ics).expect("parse event");
+
+    // 1. Inbound parsing leaves created and updated unpopulated because the
+    // server/store owns these timestamps. Proposing values on import would risk
+    // desynchronizing EDS and JMAP store state.
+    assert!(event.created.is_none());
+    assert!(event.updated.is_none());
+
+    // 2. Outbound serialization renders CREATED, DTSTAMP, and LAST-MODIFIED
+    // when created and updated are provided by the JMAP store.
+    let mut store_event = event.clone();
+    store_event.created = Some("2026-08-01T08:00:00Z".to_string());
+    store_event.updated = Some("2026-08-20T14:00:00Z".to_string());
+    let serialized = jmap_ical::event::event_to_ical(&store_event);
+    assert!(serialized.contains("CREATED:20260801T080000Z\r\n"));
+    assert!(serialized.contains("DTSTAMP:20260820T140000Z\r\n"));
+    assert!(serialized.contains("LAST-MODIFIED:20260820T140000Z\r\n"));
+
+    // 3. When updated is absent on outbound serialization, DTSTAMP and LAST-MODIFIED
+    // are omitted rather than inventing a changing "now" timestamp.
+    let no_update_event = CalendarEvent {
+        id: Some(jmap_proto::Id::from("no-update-ev")),
+        start: Some("2026-09-01T10:00:00".to_string()),
+        ..CalendarEvent::default()
+    };
+    let out_ics = jmap_ical::event::event_to_ical(&no_update_event);
+    assert!(!out_ics.contains("LAST-MODIFIED:"));
+    assert!(!out_ics.contains("DTSTAMP:"));
+}
+
+#[test]
+fn differential_oracle_identifier_scoping_id_uid_and_x_jmap_uid() {
+    // Audit divergence 333: Inbound identifier scoping: JMAP record id versus
+    // JSCalendar uid, and X-JMAP-UID retention.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:external-uid-123\r\n",
+        "X-JMAP-UID:canonical-jsc-uid-456\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "SUMMARY:Identifier Audit\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event = jmap_ical::event::ical_to_event(ics).expect("parse event");
+
+    // 1. UID is mapped to event.id for primary EDS indexing
+    assert_eq!(
+        event.id.as_ref().map(|id| id.as_str()),
+        Some("external-uid-123")
+    );
+
+    // 2. X-JMAP-UID is extracted to event.uid for lossless round-trip preservation
+    assert_eq!(event.uid.as_deref(), Some("canonical-jsc-uid-456"));
+
+    // 3. If X-JMAP-UID is absent, event.uid remains None
+    let bare_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:bare-uid-999\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "SUMMARY:Bare UID\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let bare_event = jmap_ical::event::ical_to_event(bare_ics).expect("parse bare");
+    assert_eq!(
+        bare_event.id.as_ref().map(|id| id.as_str()),
+        Some("bare-uid-999")
+    );
+    assert!(bare_event.uid.is_none());
+
+    // 4. Outbound serialization emits UID from id and retains X-JMAP-UID from uid
+    let out = jmap_ical::event::event_to_ical(&event);
+    assert!(out.contains("UID:external-uid-123\r\n"));
+    assert!(out.contains("X-JMAP-UID:canonical-jsc-uid-456\r\n"));
+}
+
+#[test]
+fn differential_oracle_participant_scheduling_protection_and_inbound_suppression() {
+    // Audit divergence 334: RFC 5546 iTIP scheduling state protection and
+    // asymmetric inbound participant suppression.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:scheduling-guard-1\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "SUMMARY:Team Standup\r\n",
+        "ORGANIZER;CN=Arthur Dent:mailto:arthur@example.com\r\n",
+        "ATTENDEE;CN=Ford Prefect;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:ford@example.com\r\n",
+        "ATTENDEE;CN=Trillian;ROLE=OPT-PARTICIPANT;PARTSTAT=TENTATIVE:mailto:trillian@example.com\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event = jmap_ical::event::ical_to_event(ics).expect("parse event");
+
+    // 1. Inbound participant ingestion is suppressed to protect scheduling state
+    assert!(event.participants.is_none());
+
+    // 2. Outbound participant serialization: drawn_participants correctly renders
+    // ORGANIZER and ATTENDEE lines when participants are present in the event model.
+    let mut participants = BTreeMap::new();
+    participants.insert(
+        "p1".to_string(),
+        json!({
+            "@type": "Participant",
+            "name": "Arthur Dent",
+            "calendarAddress": "mailto:arthur@example.com",
+            "roles": { "owner": true },
+            "participationStatus": "accepted"
+        }),
+    );
+    participants.insert(
+        "p2".to_string(),
+        json!({
+            "@type": "Participant",
+            "name": "Ford Prefect",
+            "calendarAddress": "mailto:ford@example.com",
+            "roles": { "attendee": true },
+            "participationStatus": "accepted",
+            "expectReply": true
+        }),
+    );
+    let active_event = CalendarEvent {
+        participants: Some(participants),
+        ..CalendarEvent::default()
+    };
+    let drawn = jmap_ical::event::drawn_participants(&active_event);
+    assert_eq!(drawn.len(), 2);
+
+    let org = drawn
+        .iter()
+        .find(|e| e.name.as_str() == "ORGANIZER")
+        .expect("organizer");
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(org),
+        "mailto:arthur@example.com"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(org, "CN").as_deref(),
+        Some("Arthur Dent")
+    );
+
+    let att = drawn
+        .iter()
+        .find(|e| e.name.as_str() == "ATTENDEE")
+        .expect("attendee");
+    assert_eq!(
+        jmap_ical::event::entry_raw_value(att),
+        "mailto:ford@example.com"
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(att, "CN").as_deref(),
+        Some("Ford Prefect")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(att, "RSVP").as_deref(),
+        Some("TRUE")
+    );
+}
+
+#[test]
+fn differential_oracle_icalendar_extension_filtering_and_schema_discipline() {
+    // Audit divergence 335: Unknown vendor X-properties filtering and strict schema discipline.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:vendor-ext-event-1\r\n",
+        "DTSTART:20260901T100000Z\r\n",
+        "SUMMARY:Standard Event with Vendor Extensions\r\n",
+        "X-MOZ-GENERATION:5\r\n",
+        "X-MOZ-LASTACK:20260901T100000Z\r\n",
+        "X-MOZ-SNOOZE-TIME:20260901T101500Z\r\n",
+        "X-APPLE-STRUCTURED-LOCATION:geo:37.7749,-122.4194\r\n",
+        "X-MICROSOFT-CDO-BUSYSTATUS:OOF\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event = jmap_ical::event::ical_to_event(ics).expect("parse event");
+
+    // 1. Standard event properties parse cleanly
+    assert_eq!(
+        event.title.as_deref(),
+        Some("Standard Event with Vendor Extensions")
+    );
+    assert_eq!(event.start.as_deref(), Some("2026-09-01T10:00:00"));
+
+    // 2. Unmodeled vendor X-properties are dropped rather than polluting event.extra
+    assert!(event.extra.is_empty());
+}
