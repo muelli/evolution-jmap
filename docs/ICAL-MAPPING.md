@@ -5860,3 +5860,78 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.300 Divergence 300: `read_duration`, `stated_duration`, `period_length`, `instant`, `days_from_civil`, and `to_duration`: Inbound Duration Ingestion, Wall-Clock Arithmetic (Howard Hinnant's Proleptic Gregorian Algorithm), Signed Prefix Normalization, Negative Duration Rejection, and Canonical ISO 8601 Formatting
+
+- **Observed Behavior**:
+  Extracting event durations from iCalendar components or RDATE periods requires handling precedence between explicit `DURATION` and `DTEND` properties, calculating wall-clock spans across Gregorian calendar boundaries, and normalizing ISO 8601 strings into RFC 8984 Duration syntax. In `jmap-ical`:
+  1. Explicit `DURATION` precedence over `DTEND`: In `read_duration`, if a `DURATION` entry is present and passes `stated_duration`, it is returned immediately. Only when `DURATION` is absent does `read_duration` fall back to measuring the span `DTEND - DTSTART` via `instant`.
+  2. Signed prefix normalization and negative rejection (`stated_duration`): RFC 5545 Section 3.3.6 admits signed durations (e.g. `+PT1H` or `-PT1H`). `stated_duration` strips any leading `+` prefix to conform to unsigned RFC 8984 Duration grammar. Negative durations (`-PT...`) return `None` because RFC 8984 provides no representation for negative event lengths.
+  3. Flexible component ordering: `stated_duration` permits `W D T H M S` units in order without requiring rigid RFC 5545 sub-unit nesting, accepting exporter patterns like `PT1H15S` or `P1W2D`.
+  4. Wall-clock duration calculation (`instant`, `days_from_civil`, `to_duration`): `instant` calculates elapsed seconds from 1970-01-01 on the local clock using Howard Hinnant's proleptic Gregorian civil algorithm (`days_from_civil`). It aligns the calendar year to begin in March so leap days fall at year end without special cases. `to_duration` decomposes positive second deltas into nominal days (`P<N>D`) and time fractions (`T<H>H<M>M<S>S`), returning `None` for zero or negative durations.
+  5. Period duration resolution (`period_length`): In RDATE period values (`start/duration` or `start/end`), if the second segment begins with `P` or `p`, it is parsed via `stated_duration`. If it specifies an end instant, `period_length` computes the difference using `instant` and `to_duration`. If the end precedes the start, it returns `None`.
+  6. In contrast, differential oracles or permissive converters admit invalid negative duration strings, fail on leading `+` prefixes, or produce arithmetic inaccuracies across century leap years.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.6 (`Duration`), Section 3.3.9 (`Period of Time`), Section 3.6.1 (`Event Component`), Section 3.8.2.2 (`Date-Time End`), and Section 3.8.2.4 (`Duration`).
+  2. RFC 8984 Section 1.4.6 (`Duration`) and Section 4.2.2 (`duration`).
+- **Adjudication**:
+  Conforming specification boundary and duration calculation fidelity. Enforces `DURATION` precedence over `DTEND`, strips leading plus signs, rejects negative durations, executes exact Gregorian civil date arithmetic, and formats canonical ISO 8601 durations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.301 Divergence 301: `to_utc_date_time`, `to_ical_date_time`, `date_time_digits`, `to_local_date_time`, `strip`, `exists`, and `days_in_month`: Bidirectional Date-Time Formatting, Component Existence Validation (`exists`), Sub-Second Fraction Truncation, Leap Second Preservation (`second <= 60`), and Proleptic Gregorian Month Length Bounds
+
+- **Observed Behavior**:
+  Converting date-time representations between RFC 5545 and JSCalendar RFC 8984 requires validating that date-time tuples identify existing calendar instants, handling date-only formats, stripping separators, and managing edge cases such as leap seconds and fractional second truncation. In `jmap-ical`:
+  1. Component existence validation (`exists`): Verifies that month is 1..=12, day is 1..=days_in_month(year, month), hour is 0..=23, minute is 0..=59, and second is 0..=60. Invalid timestamps (such as month 13, February 29 in non-leap years, or hour 25) are rejected and return `None` rather than poisoning calendar payloads.
+  2. Leap second preservation (`second <= 60`): In accordance with RFC 5545 Section 3.3.12 and RFC 3339 Section 5.6, second values up to 60 are accepted to accommodate official UTC leap seconds.
+  3. Strict separator stripping (`strip`): Filters specified separator characters (`-` for dates, `:` for times) and enforces that exactly the expected number of ASCII digits remains (8 for date, 6 for time).
+  4. Date-only start normalization (`to_local_date_time`): In `to_local_date_time`, if a date string lacks a time component (e.g. `20260601`), it is normalized to midnight local time (`T00:00:00`).
+  5. Sub-second fraction truncation (`date_time_digits`): Truncates trailing fractional second digits from timestamps (such as `20260601T120000.123Z`), extracting the standard 6-digit time component while preserving parser progress.
+  6. UTC date-time suffix gating (`to_utc_date_time`): Requires a trailing `Z` or `z` suffix, ensuring that local or floating timestamps are not accidentally misclassified as UTC instants.
+  7. In contrast, differential oracles or permissive converters permit invalid non-existent dates (such as month 13 or February 30), crash on leap second 60, or fail to parse date-only inputs.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.4 (`Date-Time`), Section 3.3.5 (`Date`), and Section 3.3.12 (`Time`).
+  2. RFC 8984 Section 1.4.2 (`LocalDateTime`) and Section 1.4.3 (`UTCDateTime`).
+  3. RFC 3339 Section 5.6 (`Date/Time Format`).
+- **Adjudication**:
+  Conforming specification boundary and date-time validation determinism. Enforces strict Gregorian month bounds, preserves leap seconds, normalizes date-only values to midnight, and truncates sub-second fractions safely.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.302 Divergence 302: `at_offset`, `from_offset`, `offset_seconds`, `moved`, and `days_in_month_of`: Fixed-Offset UTC/Local Date-Time Projection, Gregorian Day Rollover and Year Boundary Arithmetic (`moved`), Negative/Positive Carry Across Months, and Year Clamping (`0000..=9999`)
+
+- **Observed Behavior**:
+  Projecting timestamps across fixed UTC offsets requires calculating offset second magnitudes, adjusting local clock values across calendar day and month boundaries, and enforcing valid 4-digit year ranges. In `jmap-ical`:
+  1. Offset second extraction (`offset_seconds`): Parses UTC offset strings via `utc_offset`, converting `±HHMM` or `±HHMMSS` to signed second magnitudes. Negative zero offsets (`-0000`) return `None` per RFC 5545 Section 3.3.14.
+  2. Bidirectional fixed-offset projection (`at_offset` vs `from_offset`): `at_offset(utc, offset)` shifts a UTC instant by positive offset seconds to obtain local time. `from_offset(local, offset)` negates the offset to project a local time back to UTC.
+  3. Calendar day and month rollover arithmetic (`moved`): When adjusting `of_day` by offset seconds, if the value exceeds 86400 seconds (24 hours), `moved` carries forward into the next day. If the day exceeds the month length via `days_in_month_of`, it advances the month (and increments the year if month was 12). If the adjusted second value is negative, it borrows backward into the previous day (and decrements the month and year accordingly).
+  4. Four-digit year range clamping (`0000..=9999`): `moved` verifies that the resulting year falls within `0..=9999`. Arithmetic that carries into negative years or beyond 9999 returns `None`, preventing malformed 5-digit years from entering RFC 5545 output.
+  5. In contrast, differential oracles or naive date arithmetic libraries wrap around 32-bit integers, fail on month-end borrow boundaries, or emit 5-digit years that break iCalendar parsers.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.4 (`Date-Time`) and Section 3.3.14 (`UTC Offset`).
+  2. RFC 8984 Section 1.4.2 (`LocalDateTime`).
+- **Adjudication**:
+  Conforming specification boundary and date-time offset projection accuracy. Executes exact Gregorian calendar day rollover and month borrowing, rejects negative zero offsets, and clamps years strictly within four digits.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.303 Divergence 303: `event_calendar`, `instance_calendar`, `scheduling_ical`, `event_to_ical`, `vevent_of`, `modified_instances`, and `modified_instance`: Outbound Calendar Document and Component Assembly: Envelope Version 2.0 and PRODID Stamping, iTIP Method Parameter Injection (`METHOD`), Single-Occurrence Scheduling Message Narrowing (`instance_calendar`), Recurrence Override Inheritance and Replacement Semantics, and Server-Assigned ID UID Alignment (`X_JMAP_UID`)
+
+- **Observed Behavior**:
+  Serializing calendar data into RFC 5545 containers requires coordinating document envelopes, iTIP scheduling methods, master series and detached instance components, custom timezone definitions, and ID namespaces. In `jmap-ical`:
+  1. Root envelope construction (`event_calendar`): Wraps components in a `BEGIN:VCALENDAR` container stamped with `VERSION:2.0` and the standard generator identifier (`PRODID: -//evolution-jmap//JMAP calendar backend//EN`).
+  2. Custom timezone definition placement: `drawn_time_zones` places `VTIMEZONE` blocks before `VEVENT` components so parsers resolve custom timezone definitions before meeting references. Duplicate timezone references across series and overrides are deduplicated.
+  3. iTIP scheduling message generation (`scheduling_ical` and `instance_calendar`): When exporting scheduling messages via `scheduling_ical`, the root envelope injects a `METHOD:<method>` parameter (such as `REQUEST`, `CANCEL`, or `REPLY`). When targeted to a single occurrence via `recurrence_id`, `instance_calendar` narrows the document to a single `VEVENT` carrying `RECURRENCE-ID` while suppressing the series `RRULE`, `EXDATE`, and `RDATE`.
+  4. Recurrence override inheritance and delta application (`modified_instances`, `modified_instance`): In `modified_instance`, detached instances inherit master series properties (such as title, description, duration, locations, virtual locations, links, keywords, alerts, and participants). Patch fields are applied property by property. Excluded instances (`excluded: true`) return `None` and are rendered as `EXDATE` lines rather than separate `VEVENT` components.
+  5. Single-property set replacement: Override patches specifying `keywords` or `alerts` replace the inherited collections entirely rather than merging them. `priority` values can be updated or set to null to clear.
+  6. Identifier synchronization (`vevent_of`): Uses the server-assigned `id` for the `UID` property (aligning with Evolution Data Server cache keys and JMAP method arguments), while preserving `uid` in `X-JMAP-UID`.
+  7. In contrast, differential oracles omit iTIP `METHOD` properties in scheduling envelopes, emit empty detached VEVENTs for canceled occurrences, merge override keyword sets incorrectly, or omit `X-JMAP-UID`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.4 (`iCalendar Object`), Section 3.6.1 (`Event Component`), Section 3.7.2 (`Method`), and Section 3.8.4.4 (`Recurrence ID`).
+  2. RFC 5546 Section 3.2 (`Methods for VEVENT Calendar Components`).
+  3. RFC 8984 Section 4.3.4 (`PatchObject`).
+  4. draft-ietf-jmap-calendars-28 Section 5.9.2 (`iTIP Messages`).
+- **Adjudication**:
+  Conforming specification boundary and calendar container assembly determinism. Structures VCALENDAR envelopes with mandatory VERSION 2.0 and PRODID, injects iTIP METHOD headers, isolates single-instance scheduling components, enforces override inheritance with whole-set replacement, and synchronizes UID namespaces.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
