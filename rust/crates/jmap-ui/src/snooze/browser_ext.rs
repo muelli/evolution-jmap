@@ -14,7 +14,7 @@ use evo_sys::{
     E_MAIL_READER_ACTION_GROUP_STANDARD, EMailBrowser, e_mail_browser_get_type,
     e_mail_browser_get_ui_manager, e_mail_reader_get_action_group,
 };
-use glib_sys::{GType, gpointer};
+use glib_sys::{GType, gpointer, guint};
 use gobject_sys::{GObject, GObjectClass, g_signal_connect_data};
 use jmap_backend_core::subclass::{self, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
@@ -82,7 +82,7 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
             browser.cast(),
             c"update-actions".as_ptr(),
             Some(std::mem::transmute::<
-                unsafe extern "C" fn(*mut GObject, gpointer),
+                unsafe extern "C" fn(*mut GObject, guint, gpointer),
                 unsafe extern "C" fn(),
             >(on_update_actions)),
             std::ptr::null_mut(),
@@ -93,10 +93,19 @@ unsafe extern "C" fn constructed(object: *mut GObject) {
     });
 }
 
+/// Three arguments, not the two `snooze::shell_ext`'s handler takes:
+/// `EMailReader::update-actions` is declared with one `G_TYPE_UINT` and
+/// `g_cclosure_marshal_VOID__UINT` (`e-mail-reader.c:5374-5382`), where
+/// `EShellView`'s same-named signal is `VOID__VOID`. The `state` is the
+/// `EMailReaderActionGroup` bitmask the shell suggests updating; this
+/// extension owns one submenu and re-reads the selection either way, so it
+/// is ignored — but it has to be *declared*, or the user-data slot is the
+/// one the bitmask lands in. `tests/signals.rs` pins that shape.
+///
 /// # Safety
 ///
 /// GLib's signal machinery; `browser` is the emitting reader.
-unsafe extern "C" fn on_update_actions(browser: *mut GObject, _data: gpointer) {
+unsafe extern "C" fn on_update_actions(browser: *mut GObject, _state: guint, _data: gpointer) {
     guard(
         "JmapSnoozeBrowserExtension::update-actions",
         (),
