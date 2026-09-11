@@ -6176,4 +6176,79 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.316 Divergence 316: `names_time_zone`, `windows_time_zone_to_iana`, `unique_tzid_to_iana`, `resolve_canonical_time_zone`, and `WINDOWS_TIME_ZONES`: Timezone Identifier Canonicalization and Resolution Pipeline: CLDR Windows Display Name Translation, RFC 5545 Globally Unique Solidus Vendor Prefix Peeling (`IANA_AREAS`), Strict Syntactic IANA Shape Validation, and Fallback Normalization
+
+- **Observed Behavior**:
+  Translating timezone identifiers between RFC 5545 and JSCalendar RFC 8984 Section 1.4.9 requires mapping platform-specific names into canonical IANA identifiers, stripping vendor URI wrappers, and validating syntactic shapes without embedding an entire Olson database. In `jmap-ical`:
+  1. Syntactic IANA shape validation (`names_time_zone`): Checks whether a timezone identifier satisfies the structural grammar of IANA names without shipping a heavy Olson zoneinfo database. It validates non-empty segments of alphanumeric characters, underscores, hyphens, and plus signs separated by solidus characters (e.g. `Europe/Berlin`, `America/Argentina/Buenos_Aires`, `Etc/GMT+5`, and bare `UTC`). It rejects leading solidus characters (which indicate custom or un-peeled vendor paths), empty segments, Windows display names with spaces or dots, and punctuation characters that could break content line framing.
+  2. Windows display name translation (`windows_time_zone_to_iana`): Ingests legacy Windows registry timezone keys from Exchange and Outlook (e.g. `W. Europe Standard Time`, `Romance Standard Time`, `GMT Standard Time`, `Russian Standard Time`, `UTC-02`). It trims leading and trailing whitespace as well as surrounding double quotes, and matches case-insensitively against the CLDR `windowsZones` lookup table (`WINDOWS_TIME_ZONES`). Conforming entries map cleanly to canonical IANA names (`Europe/Berlin`, `Europe/Paris`, `Europe/London`, `Europe/Moscow`, `Etc/GMT+2`). Unrecognized strings return `None`.
+  3. Globally unique solidus vendor prefix peeling (`unique_tzid_to_iana`): RFC 5545 Section 3.8.3.1 permits globally unique timezone identifiers starting with a solidus character (such as `/freeassociation.sourceforge.net/Europe/Berlin` or `/citadel.org/20260101_1/America/New_York`). `unique_tzid_to_iana` scans path segments for recognized IANA continental area prefixes (`IANA_AREAS`: `Africa`, `America`, `Antarctica`, `Arctic`, `Asia`, `Atlantic`, `Australia`, `Brazil`, `Canada`, `Chile`, `Etc`, `Europe`, `Indian`, `Mexico`, `Pacific`, `US`, `UTC`, `GMT`). If the remaining path tail forms a valid IANA identifier according to `names_time_zone`, it peels the vendor prefix and extracts the canonical tail. Bare or non-solidus strings return `None`.
+  4. Multi-tier canonical resolution pipeline (`resolve_canonical_time_zone`): Evaluates Windows names first via `windows_time_zone_to_iana`, direct IANA syntax via `names_time_zone`, and peeled unique solidus tails via `unique_tzid_to_iana`. Unresolvable custom names return `None`, leaving the raw identifier intact in `zone_of` for local definition lookup.
+  5. In contrast, differential oracles pass Windows display names through verbatim into JSCalendar (which conforming servers reject), fail to peel vendor path prefixes from globally unique TZIDs, or accept invalid punctuation in timezone names.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.19 (`Time Zone Identifier`) and Section 3.8.3.1 (`Time Zone Identifier`).
+  2. RFC 8984 Section 1.4.9 (`TimeZoneId`).
+  3. Unicode CLDR `windowsZones.xml` (Windows to IANA Time Zone Mapping).
+- **Adjudication**:
+  Conforming specification boundary and timezone identifier resolution fidelity. Translates Windows display names via CLDR tables, peels vendor wrappers from globally unique solidus TZIDs, and validates IANA syntactic grammar strictly.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.317 Divergence 317: `maps_time_zone`, `defines_time_zone`, `vtimezone_of`, `observance`, and `utc_offset`: Outbound Timezone Definition Serialization and UTC-Offset Formatting: Solidus Custom TZID Gating, Redrawable Component Completeness (`vtimezone_of`), Mandatory Observance Property Triad (`DTSTART`, `TZOFFSETFROM`, `TZOFFSETTO`), Strict UTC-Offset Grammar (Negative Zero Rejection, ISO Colon Tolerance), and Recurrence Rule Capability Gating
+
+- **Observed Behavior**:
+  Serializing custom timezone definitions from JSCalendar RFC 8984 Section 4.7.2 into RFC 5545 `VTIMEZONE` components requires validating custom solidus identifiers, ensuring full observance completeness, strictly validating UTC offsets, and gating recurrence rules. In `jmap-ical`:
+  1. Custom solidus timezone gating (`defines_time_zone`, `maps_time_zone`): RFC 8984 Section 1.4.9 specifies that custom timezone identifiers start with a solidus (`/`) and resolve only against `event.time_zones`. `defines_time_zone` verifies that `tzid.starts_with('/')` and that `event.time_zones` contains a definition that can be rendered whole via `vtimezone_of`. An identifier that cannot be drawn whole is treated as undefined.
+  2. Redrawable component completeness (`vtimezone_of`): Constructs a `VTIMEZONE` component with `TZID`. RFC 5545 Section 3.6.5 requires at least one subcomponent, and libical rejects empty `VTIMEZONE` components. `vtimezone_of` iterates over `STANDARD` and `DAYLIGHT` rules, requiring at least one valid observance. Partial or unrenderable definitions return `None` rather than emitting half a timezone (which would cause a silent 1-hour clock shift on events).
+  3. Mandatory property triad (`observance`): In RFC 5545 Section 3.6.5 and RFC 8984 Section 4.7.2, an observance rule MUST specify `DTSTART`, `TZOFFSETFROM`, and `TZOFFSETTO`. If any of these three is missing or unparseable, `observance` returns `None`.
+  4. Strict UTC-offset formatting (`utc_offset`): Parses RFC 5545 Section 3.3.14 `±hhmm[ss]` and ISO colons `±hh:mm[:ss]`. Forbids negative zero (`-0000`), bounds `hours <= 23`, `minutes <= 59`, `seconds <= 60`. Emits canonical 4-digit format `±hhmm` when seconds are zero.
+  5. Recurrence rule gating (`maps_recurrence_rule` in `observance`): Transition recurrence rules are validated against `maps_recurrence_rule` ahead of formatting with `Ends::At(&offset_from)`. If the rule contains unsupported extensions or unstateable endpoints, the entire observance fails.
+  6. In contrast, differential oracles emit empty `VTIMEZONE` blocks, omit mandatory `TZOFFSETFROM`/`TZOFFSETTO` properties, emit `-0000`, or emit partial observances that distort daylight saving transitions.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.14 (`UTC Offset`), Section 3.6.5 (`Time Zone Component`), and Section 3.8.3.3 (`Time Zone Offset From` / `To`).
+  2. RFC 8984 Section 1.4.9 (`TimeZoneId`), Section 4.7.2 (`timeZones`), and Section 4.7.3 (`TimeZoneRule`).
+- **Adjudication**:
+  Conforming specification boundary and timezone definition serialization safety. Enforces custom solidus identifier scoping, mandates complete redrawable observances, validates strict UTC offset syntax, and gates transition recurrence rules.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.318 Divergence 318: `read_time_zones`, `prune_time_zones`, `referred_zones`, `read_definition`, and `read_observance`: Inbound Timezone Definition Ingestion and Lifecycle Management: Multi-Instance Reference Aggregation (`referred_zones`), Round-Trip Redrawability Validation, Orphan Definition Pruning (`prune_time_zones`), and Subcomponent Parsing
+
+- **Observed Behavior**:
+  Ingesting RFC 5545 `VTIMEZONE` components into JSCalendar `timeZones` maps requires aggregating references across series and recurrence overrides, verifying redrawability to prevent silent property corruption, and stripping orphaned definitions during updates. In `jmap-ical`:
+  1. Multi-instance reference aggregation (`referred_zones`): Scans `event.time_zone` and every recurrence override patch (`patch["timeZone"]`). In RFC 5545, detached instances can specify their own `TZID`. `referred_zones` ensures that every custom solidus TZID referenced by any instance in the series is tracked.
+  2. Round-trip redrawability verification (`read_time_zones`): Filters definitions to only those that can be redrawn whole via `vtimezone_of(tzid, &definition)`. If a definition parsed from `VTIMEZONE` cannot be cleanly serialized back out, it is dropped from `event.time_zones` for that identifier alone, preventing corruption. Standard IANA zones (e.g. `Europe/Berlin`) are omitted from `time_zones` because they resolve from system databases.
+  3. Orphan definition pruning (`prune_time_zones`): When a caller edits an event and removes or changes a custom timezone, `prune_time_zones` removes entries from `event.time_zones` that are no longer referenced by the series or any override. If the map becomes empty, `event.time_zones` is set to `None` rather than emitting an empty `{}` map.
+  4. Subcomponent parsing (`read_definition` and `read_observance`): Decomposes `VTIMEZONE` subcomponents into `standard` and `daylight` arrays of `TimeZoneRule`. Extracts `DTSTART` via `to_local_date_time`, parses offsets via `utc_offset`, and parses transition recurrence rules via `rrule_to_rule` with `Ends::At(&offset_from)`.
+  5. In contrast, differential oracles retain orphaned timezone definitions indefinitely, fail to track timezone changes in recurrence overrides, or emit empty `{}` objects.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.19 (`Time Zone Identifier`) and Section 3.6.5 (`Time Zone Component`).
+  2. RFC 8984 Section 1.4.9 (`TimeZoneId`), Section 4.3.4 (`recurrenceOverrides`), and Section 4.7.2 (`timeZones`).
+- **Adjudication**:
+  Conforming specification boundary and timezone definition lifecycle management. Aggregates multi-instance zone references, guarantees round-trip redrawability, prunes orphan definitions cleanly, and parses observance rules.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.319 Divergence 319: `zone::Day::named`, `zone::Day::of`, `zone::Falls`, `zone::weekday_named`, `zone::weekday`, `zone::restated`, and `zone::SEARCH`: In-Document Observance Transition Day Calculation: Four-Form Day Specification (`Nth`, `WeekdayAmong`, `OfMonth`, `OfStart`), Set Rejection (`Falls::Set`), Lotus Notes Time Restatement (`restated`), and 40-Year Horizon Windowing
+
+- **Observed Behavior**:
+  Evaluating transition onsets in `VTIMEZONE` components requires parsing recurrence day specifications, calculating civil calendar weekday transitions, restating sub-day times, and bounding historical searches. In `jmap-ical`:
+  1. Four-form day specification (`Day::named`): Parses transition days into four distinct representations:
+     - `Day::Nth`: `BYDAY` with signed ordinal (e.g. `2SU`, `-1SU`). Strips leading `+`, and rejects ordinal 0.
+     - `Day::WeekdayAmong`: Tzdata/libical canonical idiom `BYDAY=SU;BYMONTHDAY=23,24,25,26,27,28,29` ("first Sunday on or after 23rd"). Ordinals on `BYDAY` are forbidden in this mode.
+     - `Day::OfMonth`: Single `BYMONTHDAY` (e.g. `15` or `-1` for last day of month). Multiple dates without `BYDAY` are rejected.
+     - `Day::OfStart`: Fallback to `DTSTART` day when no `BYDAY` or `BYMONTHDAY` is specified.
+  2. Set rejection (`Falls::Set`): When evaluating `Day::of`, if a `WeekdayAmong` range matches multiple days in a given year, it returns `Falls::Set`. Because transition rules describe single transitions rather than recurring events, `rule_onsets` refuses the entire rule upon encountering a set, preventing ambiguous onsets.
+  3. Lotus Notes sub-day time restatement (`restated`): Lotus Notes writes transition rules restating `BYHOUR`, `BYMINUTE`, `BYSECOND`. If present, these replace the time of day from `DTSTART`. Out-of-bounds fields or multiple values return `None`. Leap second 60 is refused in transition rules because placing it would push the onset into the next minute.
+  4. 40-Year horizon windowing (`SEARCH = 40`): Fixed historical search bound of 40 years. Handles leap day (Feb 29) transitions that occur only in leap years, covering century non-leap boundaries (up to 40 years between occurrences).
+  5. In contrast, differential oracles choose arbitrarily between multiple matching transition days, fail on tzdata `WeekdayAmong` patterns, or accept invalid multi-value transition times.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`), Section 3.6.5 (`Time Zone Component`), and Section 3.8.3.3 (`Time Zone Offset From` / `To`).
+  2. RFC 8984 Section 4.3.1 (`RecurrenceRule`) and Section 4.7.3 (`TimeZoneRule`).
+- **Adjudication**:
+  Conforming specification boundary and in-document timezone transition calculation. Parses four-form transition day rules, rejects multi-day sets defensibly, handles Lotus Notes sub-day time restatements, and bounds historical search windows.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
