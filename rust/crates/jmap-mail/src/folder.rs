@@ -477,7 +477,9 @@ unsafe fn server_matches(
 #[cfg(camel_folder_search_object)]
 fn narrow(matches: impl Iterator<Item = String>, restrict: &[String]) -> Vec<String> {
     let wanted: std::collections::HashSet<&str> = restrict.iter().map(String::as_str).collect();
-    matches.filter(|uid| wanted.contains(uid.as_str())).collect()
+    matches
+        .filter(|uid| wanted.contains(uid.as_str()))
+        .collect()
 }
 
 /// The uids of a `GPtrArray` Camel handed over, copied out as strings.
