@@ -39749,3 +39749,285 @@ fn differential_oracle_privacy_class_and_priority_bounds() {
     let ics_invalid = jmap_ical::event_to_ical(&event);
     assert!(!ics_invalid.contains("PRIORITY:15"));
 }
+
+#[test]
+fn differential_oracle_keyword_categories_mapping_and_sorting() {
+    // 1. maps_keyword predicate verification
+    let true_val = serde_json::Value::Bool(true);
+    let false_val = serde_json::Value::Bool(false);
+    let null_val = serde_json::Value::Null;
+    let str_val = serde_json::Value::String("true".to_string());
+
+    assert!(jmap_ical::event::maps_keyword("meeting", &true_val));
+    assert!(jmap_ical::event::maps_keyword("project-x", &true_val));
+    assert!(!jmap_ical::event::maps_keyword("meeting", &false_val));
+    assert!(!jmap_ical::event::maps_keyword("meeting", &null_val));
+    assert!(!jmap_ical::event::maps_keyword("meeting", &str_val));
+    // Whitespace only is rejected
+    assert!(!jmap_ical::event::maps_keyword("", &true_val));
+    assert!(!jmap_ical::event::maps_keyword("   ", &true_val));
+    // Carriage return is rejected
+    assert!(!jmap_ical::event::maps_keyword("tag\rwithcr", &true_val));
+
+    // 2. drawn_tags: deterministic lexicographical sorting and filtering
+    let mut event = fixture_event();
+    let mut keywords = std::collections::BTreeMap::new();
+    keywords.insert("zebra".to_string(), true_val.clone());
+    keywords.insert("alpha".to_string(), true_val.clone());
+    keywords.insert("beta".to_string(), true_val.clone());
+    keywords.insert("ignored_false".to_string(), false_val);
+    keywords.insert("  ".to_string(), true_val.clone());
+    event.keywords = Some(keywords);
+
+    let tags = jmap_ical::event::drawn_tags(&event);
+    assert_eq!(tags, vec!["alpha", "beta", "zebra"]);
+
+    // 3. Outbound event_to_ical serialization
+    let ics = jmap_ical::event_to_ical(&event);
+    assert!(ics.contains("CATEGORIES:alpha,beta,zebra\r\n"));
+
+    // 4. Inbound ical_to_event parsing
+    let parsed = jmap_ical::ical_to_event(&ics).expect("parse ics");
+    let parsed_keywords = parsed.keywords.expect("keywords present");
+    assert_eq!(parsed_keywords.len(), 3);
+    assert_eq!(parsed_keywords.get("alpha"), Some(&true_val));
+    assert_eq!(parsed_keywords.get("beta"), Some(&true_val));
+    assert_eq!(parsed_keywords.get("zebra"), Some(&true_val));
+
+    // Empty or omitted keywords
+    event.keywords = None;
+    let ics_no_keywords = jmap_ical::event_to_ical(&event);
+    assert!(!ics_no_keywords.contains("CATEGORIES:"));
+}
+
+#[test]
+fn differential_oracle_location_single_entry_and_patch_gating() {
+    let mut event = fixture_event();
+
+    // 1. maps_locations: 0 or 1 valid entry passes, multi-entry fails
+    let empty_locations = std::collections::BTreeMap::new();
+    assert!(jmap_ical::event::maps_locations(&empty_locations));
+
+    let mut single_location = std::collections::BTreeMap::new();
+    single_location.insert(
+        "l1".to_string(),
+        serde_json::json!({
+            "@type": "Location",
+            "name": "Conference Room A"
+        }),
+    );
+    assert!(jmap_ical::event::maps_locations(&single_location));
+
+    // Empty key fails
+    let mut empty_key_location = std::collections::BTreeMap::new();
+    empty_key_location.insert(
+        "".to_string(),
+        serde_json::json!({"name": "Conference Room A"}),
+    );
+    assert!(!jmap_ical::event::maps_locations(&empty_key_location));
+
+    // Non-string name fails
+    let mut bad_name_location = std::collections::BTreeMap::new();
+    bad_name_location.insert("l1".to_string(), serde_json::json!({"name": 12345}));
+    assert!(!jmap_ical::event::maps_locations(&bad_name_location));
+
+    // Multiple locations fail whole-map gating
+    let mut multi_locations = std::collections::BTreeMap::new();
+    multi_locations.insert(
+        "l1".to_string(),
+        serde_json::json!({"name": "Conference Room A"}),
+    );
+    multi_locations.insert(
+        "l2".to_string(),
+        serde_json::json!({"name": "Overflow Room B"}),
+    );
+    assert!(!jmap_ical::event::maps_locations(&multi_locations));
+
+    // 2. drawn_place and place_name: first entry with non-empty name selected
+    event.locations = Some(multi_locations);
+    let drawn = jmap_ical::event::drawn_place(&event);
+    assert!(drawn.is_some());
+    let (key, name) = drawn.unwrap();
+    assert_eq!(key, "l1");
+    assert_eq!(name, "Conference Room A");
+
+    // Empty name string is ignored by place_name
+    let empty_name_val = serde_json::json!({"name": ""});
+    assert_eq!(jmap_ical::event::place_name(&empty_name_val), None);
+    let valid_name_val = serde_json::json!({"name": "Building 4"});
+    assert_eq!(
+        jmap_ical::event::place_name(&valid_name_val),
+        Some("Building 4")
+    );
+
+    // 3. Outbound event_to_ical: contains LOCATION and X-JMAP-KEY
+    let ics = jmap_ical::event_to_ical(&event);
+    assert!(ics.contains("LOCATION;X-JMAP-KEY=l1:Conference Room A\r\n"));
+
+    // 4. Inbound ical_to_event: preserves key and extracts name
+    let parsed = jmap_ical::ical_to_event(&ics).expect("parse ics");
+    let locs = parsed.locations.expect("locations present");
+    assert_eq!(locs.len(), 1);
+    let l1 = locs.get("l1").expect("l1 present");
+    assert_eq!(
+        l1.get("name").and_then(serde_json::Value::as_str),
+        Some("Conference Room A")
+    );
+}
+
+#[test]
+fn differential_oracle_participant_roster_and_organizer_bifurcation() {
+    // 1. calendar_address and names_a_uri
+    let valid_addr = serde_json::json!({
+        "sendTo": {
+            "imip": "mailto:alice@example.com"
+        }
+    });
+    assert_eq!(
+        jmap_ical::event::calendar_address(&valid_addr),
+        Some("mailto:alice@example.com")
+    );
+
+    let invalid_addr = serde_json::json!({
+        "sendTo": {
+            "imip": "not-a-uri"
+        }
+    });
+    assert_eq!(jmap_ical::event::calendar_address(&invalid_addr), None);
+    assert!(!jmap_ical::event::names_a_uri("not-a-uri"));
+    assert!(!jmap_ical::event::names_a_uri("mailto: alice@example.com"));
+    assert!(jmap_ical::event::names_a_uri("mailto:alice@example.com"));
+    assert!(jmap_ical::event::names_a_uri("http://example.com/cal"));
+
+    // 2. holds_role and expects_reply
+    let owner_attendee = serde_json::json!({
+        "name": "Alice Smith",
+        "sendTo": {"imip": "mailto:alice@example.com"},
+        "roles": {"owner": true, "attendee": true},
+        "expectReply": true
+    });
+    assert!(jmap_ical::event::holds_role(&owner_attendee, "owner"));
+    assert!(jmap_ical::event::holds_role(&owner_attendee, "attendee"));
+    assert!(!jmap_ical::event::holds_role(&owner_attendee, "chair"));
+    assert!(jmap_ical::event::expects_reply(&owner_attendee));
+
+    let guest = serde_json::json!({
+        "name": "Bob Jones",
+        "sendTo": {"imip": "mailto:bob@example.com"},
+        "roles": {"attendee": true},
+        "kind": "individual",
+        "participationStatus": "accepted"
+    });
+    assert!(!jmap_ical::event::holds_role(&guest, "owner"));
+    assert!(!jmap_ical::event::expects_reply(&guest));
+
+    // 3. Outbound drawn_participants: dual-line bifurcation for attending owner
+    let mut event = fixture_event();
+    let mut participants = std::collections::BTreeMap::new();
+    participants.insert("p1".to_string(), owner_attendee);
+    participants.insert("p2".to_string(), guest);
+    event.participants = Some(participants);
+
+    let lines = jmap_ical::event::drawn_participants(&event);
+    assert_eq!(lines.len(), 3); // 1 ORGANIZER for p1, 1 ATTENDEE for p1, 1 ATTENDEE for p2
+
+    let ics = jmap_ical::event_to_ical(&event);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+    // Primary organizer
+    assert!(unfolded.contains("ORGANIZER;CN=\"Alice Smith\":mailto:alice@example.com\r\n"));
+    // Attending owner attendee line
+    assert!(unfolded.contains(
+        "ATTENDEE;CN=\"Alice Smith\";ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:alice@example.com\r\n"
+    ));
+    // Guest attendee line
+    assert!(unfolded.contains("ATTENDEE;CN=\"Bob Jones\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:bob@example.com\r\n"));
+}
+
+#[test]
+fn differential_oracle_conferences_and_links_attachment_bifurcation() {
+    // 1. Online conferences (CONFERENCE with VALUE=URI and FEATURE)
+    let mut event = fixture_event();
+    let mut virtual_locs = std::collections::BTreeMap::new();
+    virtual_locs.insert(
+        "conf1".to_string(),
+        serde_json::json!({
+            "@type": "VirtualLocation",
+            "name": "Meeting Room",
+            "uri": "https://meet.example.com/room123",
+            "features": {
+                "audio": true,
+                "video": true,
+                "chat": true,
+                "unsupported_feature": true
+            }
+        }),
+    );
+    event.virtual_locations = Some(virtual_locs);
+
+    let conf_lines = jmap_ical::event::drawn_conferences(&event);
+    assert_eq!(conf_lines.len(), 1);
+
+    // 2. Links and attachments bifurcation (IMAGE vs ATTACH)
+    let mut links = std::collections::BTreeMap::new();
+    // Icon image link
+    links.insert(
+        "icon1".to_string(),
+        serde_json::json!({
+            "@type": "Link",
+            "href": "https://example.com/icon.png",
+            "rel": "icon",
+            "display": "thumbnail",
+            "contentType": "image/png"
+        }),
+    );
+    // Document attachment link
+    links.insert(
+        "doc1".to_string(),
+        serde_json::json!({
+            "@type": "Link",
+            "href": "https://example.com/agenda.pdf",
+            "rel": "enclosure",
+            "contentType": "application/pdf",
+            "size": 1048576
+        }),
+    );
+    event.links = Some(links);
+
+    // media_type and restricted_name
+    assert_eq!(
+        jmap_ical::event::media_type(&serde_json::json!({"contentType": "application/pdf"})),
+        Some("application/pdf")
+    );
+    // Media type with parameters is rejected
+    assert_eq!(
+        jmap_ical::event::media_type(
+            &serde_json::json!({"contentType": "text/plain; charset=utf-8"})
+        ),
+        None
+    );
+    assert!(jmap_ical::event::restricted_name("application"));
+    assert!(jmap_ical::event::restricted_name("vnd.custom+xml"));
+    assert!(!jmap_ical::event::restricted_name("invalid/type"));
+
+    // Serialization via event_to_ical
+    let ics = jmap_ical::event_to_ical(&event);
+    let unfolded = ics.replace("\r\n ", "").replace("\r\n\t", "");
+
+    // Virtual location conference line
+    assert!(unfolded.contains("CONFERENCE;VALUE=URI"));
+    assert!(unfolded.contains("FEATURE=AUDIO,CHAT,VIDEO"));
+    assert!(unfolded.contains("LABEL=\"Meeting Room\""));
+    assert!(unfolded.contains("X-JMAP-KEY=conf1:https://meet.example.com/room123\r\n"));
+
+    // Icon image line
+    assert!(unfolded.contains("IMAGE;VALUE=URI"));
+    assert!(unfolded.contains("DISPLAY=THUMBNAIL"));
+    assert!(unfolded.contains("FMTTYPE=image/png"));
+    assert!(unfolded.contains("X-JMAP-KEY=icon1:https://example.com/icon.png\r\n"));
+
+    // Document attachment line
+    assert!(unfolded.contains("ATTACH;FMTTYPE=application/pdf;SIZE=1048576;X-JMAP-KEY=doc1:https://example.com/agenda.pdf\r\n"));
+    // ATTACH does not emit redundant VALUE=URI or illegal DISPLAY
+    assert!(!unfolded.contains("ATTACH;VALUE=URI"));
+    assert!(!unfolded.contains("ATTACH;DISPLAY="));
+}
