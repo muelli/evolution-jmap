@@ -1106,9 +1106,10 @@ pub fn stated_size(link: &Value) -> Option<String> {
 /// [`read_vevent`], where `participants` stays `None`.
 pub fn calendar_address(participant: &Value) -> Option<&str> {
     participant
-        .get("sendTo")?
-        .get(IMIP)?
-        .as_str()
+        .get("sendTo")
+        .and_then(|send_to| send_to.get(IMIP))
+        .and_then(Value::as_str)
+        .or_else(|| participant.get("calendarAddress").and_then(Value::as_str))
         .filter(|address| names_a_uri(address))
 }
 

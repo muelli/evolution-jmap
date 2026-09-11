@@ -6469,3 +6469,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.332 Divergence 332: `created`, `updated`, `DTSTAMP`, `CREATED`, and `LAST-MODIFIED`: Event Timestamp Ingestion and Store Ownership Bifurcation: RFC 5545 `DTSTAMP`/`LAST-MODIFIED` ↔ RFC 8984 `updated`, RFC 5545 `CREATED` ↔ RFC 8984 `created`, Server-Owned vs Client-Proposed Semantics, and Reconfirmation of Dropping Store-Owned Timestamps in Evolution/EDS Inbound Mapping
+
+- **Observed Behavior**:
+  Translating lifecycle timestamps between RFC 5545 (`CREATED`, `DTSTAMP`, `LAST-MODIFIED`) and JSCalendar RFC 8984 Section 4.1.7 `created` and Section 4.1.8 `updated` requires distinguishing between store-owned metadata and client-mutable event data. In `jmap-ical`:
+  1. Inbound timestamp dropping (`read_vevent`): Inbound `read_vevent` explicitly sets `created: None` and `updated: None`. When importing or synchronizing an iCalendar stream, client-side invention or proposal of store lifecycle timestamps is suppressed. In JMAP and Evolution/EDS synchronization architecture, `created` and `updated` are store-owned properties managed exclusively by the calendar server. Ingesting an external `DTSTAMP` or `LAST-MODIFIED` into `updated` would cause EDS cache reconciliation logic to interpret the timestamp as a remote store modification, potentially triggering false collision detection, spurious merge conflicts, or cache invalidations.
+  2. Outbound timestamp serialization (`event_to_ical`): When serializing a `CalendarEvent` to RFC 5545, `event.created` is emitted as `CREATED`, while `event.updated` is emitted as both `DTSTAMP` and `LAST-MODIFIED` in UTC format (`YYYYMMDDTHHMMSSZ`). RFC 5545 Section 3.8.7.2 mandates `DTSTAMP` on every `VEVENT`; in a calendar without a `METHOD` property, `DTSTAMP` is semantically equivalent to `LAST-MODIFIED`.
+  3. Deterministic absence handling: If `event.updated` is `None` (such as on newly drafted events not yet committed to a JMAP server), outbound serialization omits `DTSTAMP` and `LAST-MODIFIED` rather than synthesizing a volatile current timestamp ("now"), ensuring that serialization remains pure and idempotent across repeated runs.
+  4. In contrast, differential oracles or stateless parsers (such as Stalwart's `CalendarEvent/parse`) map `DTSTAMP` and `LAST-MODIFIED` directly to `updated`, and `CREATED` to `created`. This behavior is suitable for stateless document conversion but incompatible with stateful desktop client synchronization pipelines where store ownership invariants must be maintained.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.7.1 (`Date-Time Created`), Section 3.8.7.2 (`Date-Time Stamp`), and Section 3.8.7.3 (`Last Modified`).
+  2. RFC 8984 Section 4.1.7 (`created`) and Section 4.1.8 (`updated`).
+  3. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent`).
+  4. Evolution Data Server (EDS) ECalCache and synchronization lifecycle model.
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by EDS store synchronization semantics and JMAP server-managed timestamp ownership. Reconfirmed against Stalwart differential oracle behavior.
+- **Status**:
+  Deliberate deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.333 Divergence 333: `id`, `uid`, `X-JMAP-UID`, `UID`, and JMAP Identifier Scoping: RFC 8984 Section 4.1.1 Globally Unique `uid` vs JMAP Object `id` Alignment, RFC 5545 `UID` Ingestion Precedence, Client-Side `X-JMAP-UID` Round-Trip Retention, and Deterministic Primary Key Mapping
+
+- **Observed Behavior**:
+  Reconciling entity identifiers across RFC 5545 (`UID`), JSCalendar RFC 8984 Section 4.1.1 (`uid`), and JMAP Core RFC 8620 Section 1.4 (`id`) requires scoping identifiers between global calendar identity, server storage record keys, and client caching tables. In `jmap-ical`:
+  1. Primary key mapping (`id`): RFC 5545 Section 3.8.4.7 defines `UID` as the persistent, globally unique identifier of an event. Inbound `read_vevent` maps `UID` directly to `event.id`. In Evolution/EDS, local calendar caches and JMAP client methods (`CalendarEvent/get`, `CalendarEvent/set`) require a non-empty `id` to index, query, and mutate event records.
+  2. Secondary JSCalendar identifier retention (`uid` and `X-JMAP-UID`): While RFC 8984 designates `uid` for global identity, JMAP servers maintain `id` as the primary lookup key and may assign distinct internal record IDs. When a JMAP event is exported to iCalendar, `event.id` is written to `UID`, while any existing `event.uid` is preserved in `X-JMAP-UID`. Inbound `read_vevent` reads `X-JMAP-UID` back into `event.uid`, achieving lossless round-trip preservation without conflating server record keys with JSCalendar UIDs.
+  3. Outbound fallback precedence: Outbound `vevent_of` prioritizes `event.id` for `UID`. If `event.id` is absent (for example, before initial creation on a server), it falls back to `event.uid`.
+  4. In contrast, differential oracles operating purely in a stateless parsing mode (such as Stalwart's `CalendarEvent/parse`) emit `uid` matching RFC 8984 and leave `id` unpopulated, since no server record has been allocated in the database.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.7 (`Unique Identifier`).
+  2. RFC 8620 (JMAP Core) Section 1.4 (`Ids`).
+  3. RFC 8984 Section 4.1.1 (`uid`).
+  4. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent`).
+- **Adjudication**:
+  Conforming specification adaptation for stateful storage and client synchronization. Maps `UID` to `id` for EDS store indexing, uses `X-JMAP-UID` for lossless round-tripping, and aligns with JMAP server record addressing.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.334 Divergence 334: `participants`, `organizerCalendarAddress`, `ORGANIZER`, `ATTENDEE`, and Inbound Participant Suppression: RFC 5546 iTIP Scheduling State Protection, Unsolicited Guest List Mutation Prevention, Server-Side Invitation Transmission Safety, and Asymmetric Outbound-Only Participant Serialization (`drawn_participants`)
+
+- **Observed Behavior**:
+  Handling attendees and organizers across RFC 5545 (`ORGANIZER`, `ATTENDEE`), RFC 5546 (iTIP scheduling), and JSCalendar RFC 8984 Section 4.4 `participants` requires strict boundaries to prevent unintentional calendar invitations from being transmitted. In `jmap-ical`:
+  1. Inbound participant suppression (`read_vevent`): Inbound `read_vevent` sets `participants: None`, deliberately discarding `ORGANIZER` and `ATTENDEE` lines during iCalendar import. In desktop email and calendar suites like Evolution, editing participant lists on a synchronized event implies sending iTIP scheduling messages (`REQUEST`, `REPLY`, `CANCEL`) via RFC 5546. Because local desktop import does not have the authorization or protocol context to broker server-side scheduling transactions, reading participants into the client's mutable model would risk rewriting server guest lists and triggering unsolicited email dispatches to meeting attendees. By omitting `participants` from inbound parsing, the property is excluded from differential patch computation during saves.
+  2. Asymmetric outbound serialization (`drawn_participants`): Outbound serialization retains complete participant handling. When a `CalendarEvent` is retrieved from a JMAP server that maintains authoritative participant records, `drawn_participants` serializes organizers and attendees into standard RFC 5545 `ORGANIZER` and `ATTENDEE` lines, fully rendering `CN`, `ROLE`, `PARTSTAT`, `CUTYPE`, and conditional `RSVP=TRUE`. Additionally, `calendar_address` accepts either RFC 8984 `sendTo.imip` or jscalendarbis `calendarAddress` URIs.
+  3. In contrast, differential oracles (such as Stalwart's `CalendarEvent/parse`) parse `ORGANIZER` and `ATTENDEE` into synthetic `Participant` objects with generated UUID keys, and populate `organizerCalendarAddress`. This is appropriate for server-side calendar engines that act as the authoritative scheduling origin, but must be suppressed in client bridge layers.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.1 (`Attendee`) and Section 3.8.4.3 (`Organizer`).
+  2. RFC 5546 (iTIP) Section 3.2 (`Methods`).
+  3. RFC 8984 Section 4.4 (`Participants`).
+  4. draft-ietf-jmap-calendars Section 5.9 (`Calendar Event Scheduling`).
+- **Adjudication**:
+  Deliberate client/bridge safety boundary. Inbound participant suppression defends against accidental guest list mutations and spurious iTIP message generation during desktop synchronization, while outbound serialization preserves full roster fidelity.
+- **Status**:
+  Deliberate deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.335 Divergence 335: `iCalendar` Extension Property Container (`convertedProperties`, `properties`) vs Calcard AST Strict Schema Filtering: RFC 8984 Section 5.1 Unknown Property Preservation, Calcard AST Vendor X-Property Ingestion (`X-MOZ-*`, `X-WR-*`), Evolution/EDS Memory Footprint Minimization, and Forward-Compatibility Shielding
+
+- **Observed Behavior**:
+  Preserving non-standard and vendor-specific iCalendar properties (`X-*`) across format conversions requires choosing between unvalidated AST property bags and strict typed schema filtering. In `jmap-ical`:
+  1. Strict schema discipline (`ical_to_event`): `jmap-ical` parses RFC 5545 properties strictly into the strongly-typed `CalendarEvent` data structure. Vendor-specific extension properties (such as Mozilla `X-MOZ-GENERATION`, `X-MOZ-LASTACK`, Apple `X-WR-ALARMUID`, or Microsoft `X-MICROSOFT-CDO-*`) that have no semantic mapping in the core calendar model are dropped on import, leaving `event.extra` clean and unpolluted.
+  2. Memory footprint and differential patch safety: In desktop environments with tens of thousands of calendar entries, storing arbitrary unparsed AST fragments in dynamic JSON maps creates significant memory overhead. Furthermore, preserving unmodeled vendor properties in `event.extra` risks round-tripping stale or contradictory state back to servers, inflating network payloads and interfering with server-side patch calculations.
+  3. Targeted parameter retention: Where specific vendor or extension properties carry actionable synchronization metadata (such as `X-JMAP-KEY` for map entry keys and `X-JMAP-UID` for global IDs), `jmap-ical` extracts them into designated fields rather than retaining raw AST syntax trees.
+  4. In contrast, differential oracles (such as Stalwart's `CalendarEvent/parse`) implement RFC 8984 Section 5.1 by synthesizing an `iCalendar` object containing `convertedProperties`, `name: "vevent"`, and a `properties` array preserving every unrecognized line as a raw four-element tuple `[name, params, type, value]`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.8.2 (`Non-Standard Properties`).
+  2. RFC 8984 Section 5.1 (`iCalendar Properties Not Handled by JSCalendar`).
+  3. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent`).
+- **Adjudication**:
+  Conforming architectural design choice. Stalwart implements the optional RFC 8984 Section 5.1 extension container for lossless server-side archival, while `jmap-ical` maintains strict schema discipline optimized for client synchronization efficiency and predictable memory consumption.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
