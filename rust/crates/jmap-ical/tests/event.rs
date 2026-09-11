@@ -42103,3 +42103,362 @@ fn differential_oracle_icalendar_extension_filtering_and_schema_discipline() {
     // 2. Unmodeled vendor X-properties are dropped rather than polluting event.extra
     assert!(event.extra.is_empty());
 }
+
+#[test]
+fn differential_oracle_recurrence_rule_type_annotation_and_elision() {
+    // Audit divergence 336: Recurrence rule sub-object @type annotation bifurcation:
+    // RFC 8984 mandatory @type: "RecurrenceRule" and @type: "NDay" versus
+    // JSCalendar-bis / Stalwart contextual @type elision, deserialization tolerance,
+    // and structural equivalence.
+
+    // 1. rrule_to_rule and to_nday populate @type per RFC 8984 Sections 4.3.1 and 4.3.3
+    let rule = jmap_ical::event::rrule_to_rule(
+        "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,FR;COUNT=10",
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+    )
+    .expect("rrule parses");
+    assert_eq!(rule.rule_type.as_deref(), Some("RecurrenceRule"));
+    let days = rule.by_day.as_ref().expect("by_day present");
+    assert_eq!(days.len(), 2);
+    assert_eq!(days[0].day_type.as_deref(), Some("NDay"));
+    assert_eq!(days[0].day, "mo");
+    assert_eq!(days[1].day_type.as_deref(), Some("NDay"));
+    assert_eq!(days[1].day, "fr");
+
+    // 2. Deserializing a server payload without @type (matching Stalwart differential oracle)
+    let stalwart_json = r#"{
+        "frequency": "weekly",
+        "interval": 2,
+        "count": 10,
+        "byDay": [
+            { "day": "mo" },
+            { "day": "fr" }
+        ]
+    }"#;
+    let rule_from_server: RecurrenceRule =
+        serde_json::from_str(stalwart_json).expect("deserializes without @type");
+    assert!(rule_from_server.rule_type.is_none());
+    let server_days = rule_from_server.by_day.as_ref().expect("server days");
+    assert!(server_days[0].day_type.is_none());
+    assert_eq!(server_days[0].day, "mo");
+    assert!(server_days[1].day_type.is_none());
+    assert_eq!(server_days[1].day, "fr");
+
+    // 3. maps_recurrence_rule and rule_to_rrule accept rules with or without @type identically
+    assert!(maps_recurrence_rule(&rule));
+    assert!(maps_recurrence_rule(&rule_from_server));
+
+    let rrule_with_type = jmap_ical::event::rule_to_rrule(
+        &rule,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+        false,
+    );
+    let rrule_without_type = jmap_ical::event::rule_to_rrule(
+        &rule_from_server,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+        false,
+    );
+    assert_eq!(rrule_with_type, rrule_without_type);
+    assert_eq!(
+        rrule_without_type.as_deref(),
+        Some("FREQ=WEEKLY;COUNT=10;INTERVAL=2;BYDAY=MO,FR")
+    );
+
+    // 4. Outbound event serialization renders identical RFC 5545 RRULE
+    let event = CalendarEvent {
+        id: Some("type-elision-ev".into()),
+        start: Some("2026-09-01T09:00:00".to_string()),
+        recurrence_rule: Some(rule_from_server),
+        ..CalendarEvent::default()
+    };
+    let ics = event_to_ical(&event);
+    assert!(ics.contains("RRULE:FREQ=WEEKLY;COUNT=10;INTERVAL=2;BYDAY=MO,FR\r\n"));
+}
+
+#[test]
+fn differential_oracle_recurrence_rule_time_of_day_parts_and_zero_values() {
+    // Audit divergence 337: Recurrence rule time-of-day parts ingestion and serialization pipeline:
+    // Finest-unit outward component ordering, exact value range bounding (0..=23, 0..=59, 0..=60),
+    // zero as valid instant value versus u32::MAX sentinel refusal.
+
+    // 1. Component ordering: named_by_parts emits bySecond, byMinute, byHour before days
+    let full_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_second: Some(vec![0, 30]),
+        by_minute: Some(vec![0, 15, 45]),
+        by_hour: Some(vec![9, 17]),
+        by_day: Some(vec![NDay::new("mo")]),
+        ..RecurrenceRule::default()
+    };
+    let parts = jmap_ical::event::named_by_parts(&full_rule);
+    assert_eq!(
+        parts,
+        vec![
+            "BYSECOND=0,30".to_string(),
+            "BYMINUTE=0,15,45".to_string(),
+            "BYHOUR=9,17".to_string(),
+            "BYDAY=MO".to_string(),
+        ]
+    );
+
+    // 2. Zero is a valid time-of-day value (midnight, zeroth minute, zeroth second)
+    let midnight_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_second: Some(vec![0]),
+        by_minute: Some(vec![0]),
+        by_hour: Some(vec![0]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_second_part(&midnight_rule).as_deref(),
+        Some("BYSECOND=0")
+    );
+    assert_eq!(
+        jmap_ical::event::by_minute_part(&midnight_rule).as_deref(),
+        Some("BYMINUTE=0")
+    );
+    assert_eq!(
+        jmap_ical::event::by_hour_part(&midnight_rule).as_deref(),
+        Some("BYHOUR=0")
+    );
+
+    // 3. Exact range bounds: hour <= 23, minute <= 59, second <= 60 (leap second per RFC 5545)
+    let valid_bounds_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_second: Some(vec![60]),
+        by_minute: Some(vec![59]),
+        by_hour: Some(vec![23]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_second_part(&valid_bounds_rule).as_deref(),
+        Some("BYSECOND=60")
+    );
+    assert_eq!(
+        jmap_ical::event::by_minute_part(&valid_bounds_rule).as_deref(),
+        Some("BYMINUTE=59")
+    );
+    assert_eq!(
+        jmap_ical::event::by_hour_part(&valid_bounds_rule).as_deref(),
+        Some("BYHOUR=23")
+    );
+
+    // Out-of-range values return None
+    let bad_hour_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_hour: Some(vec![24]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::by_hour_part(&bad_hour_rule).is_none());
+
+    let bad_minute_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_minute: Some(vec![60]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::by_minute_part(&bad_minute_rule).is_none());
+
+    let bad_second_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        by_second: Some(vec![61]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::by_second_part(&bad_second_rule).is_none());
+
+    // 4. Inbound parsing token mapping: unparseable tokens become u32::MAX
+    assert_eq!(jmap_ical::event::to_time_of_day("0"), 0);
+    assert_eq!(jmap_ical::event::to_time_of_day("59"), 59);
+    assert_eq!(jmap_ical::event::to_time_of_day("bad_token"), u32::MAX);
+
+    // Unparseable token in RRULE string fails time_of_day_part and maps_recurrence_rule
+    let corrupted_rrule = jmap_ical::event::rrule_to_rule(
+        "FREQ=DAILY;BYHOUR=12,bad,18",
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+    )
+    .expect("parses with sentinel");
+    assert!(!maps_recurrence_rule(&corrupted_rrule));
+}
+
+#[test]
+fn differential_oracle_recurrence_rule_period_bounding_and_setpos_prerequisites() {
+    // Audit divergence 338: Recurrence rule period and position bounding:
+    // Gregorian string month filtering (byMonth, 5L refusal), frequency gating (holds_a_year,
+    // YEARLY week isolation), signed day/week limits (-366..=366, -53..=53), and
+    // BYSETPOS expansion set prerequisite enforcement.
+
+    // 1. by_month_part and month_token: canonical unpadded months 1..=12 accepted, 5L refused
+    assert_eq!(jmap_ical::event::month_token("1"), Some("1"));
+    assert_eq!(jmap_ical::event::month_token("12"), Some("12"));
+    assert_eq!(jmap_ical::event::month_token("03"), None); // leading zero rejected
+    assert_eq!(jmap_ical::event::month_token("5L"), None); // non-Gregorian leap month rejected
+    assert_eq!(jmap_ical::event::month_token("13"), None); // out of range
+    assert_eq!(jmap_ical::event::month_token("0"), None);
+
+    let month_rule = RecurrenceRule {
+        frequency: "yearly".to_string(),
+        by_month: Some(vec!["3".to_string(), "9".to_string()]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_month_part(&month_rule).as_deref(),
+        Some("BYMONTH=3,9")
+    );
+
+    // 2. by_year_day_part and holds_a_year frequency gating
+    assert!(jmap_ical::event::holds_a_year("yearly"));
+    assert!(jmap_ical::event::holds_a_year("hourly"));
+    assert!(!jmap_ical::event::holds_a_year("daily"));
+    assert!(!jmap_ical::event::holds_a_year("weekly"));
+    assert!(!jmap_ical::event::holds_a_year("monthly"));
+
+    let yearday_rule_valid = RecurrenceRule {
+        frequency: "yearly".to_string(),
+        by_year_day: Some(vec![1, 100, -1]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_year_day_part(&yearday_rule_valid).as_deref(),
+        Some("BYYEARDAY=1,100,-1")
+    );
+
+    let yearday_rule_invalid_freq = RecurrenceRule {
+        frequency: "monthly".to_string(),
+        by_year_day: Some(vec![1, 100]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::by_year_day_part(&yearday_rule_invalid_freq).is_none());
+
+    assert_eq!(
+        jmap_ical::event::year_day_token(366).as_deref(),
+        Some("366")
+    );
+    assert_eq!(
+        jmap_ical::event::year_day_token(-366).as_deref(),
+        Some("-366")
+    );
+    assert_eq!(jmap_ical::event::year_day_token(0), None);
+    assert_eq!(jmap_ical::event::year_day_token(367), None);
+
+    // 3. by_week_no_part: restricted to YEARLY only
+    let week_rule_yearly = RecurrenceRule {
+        frequency: "yearly".to_string(),
+        by_week_no: Some(vec![1, 26, -1]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_week_no_part(&week_rule_yearly).as_deref(),
+        Some("BYWEEKNO=1,26,-1")
+    );
+
+    let week_rule_monthly = RecurrenceRule {
+        frequency: "monthly".to_string(),
+        by_week_no: Some(vec![1]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::by_week_no_part(&week_rule_monthly).is_none());
+
+    assert_eq!(jmap_ical::event::week_no_token(53).as_deref(), Some("53"));
+    assert_eq!(jmap_ical::event::week_no_token(-53).as_deref(), Some("-53"));
+    assert_eq!(jmap_ical::event::week_no_token(0), None);
+    assert_eq!(jmap_ical::event::week_no_token(54), None);
+
+    // 4. by_set_position_part: requires selects_from_a_set to be true
+    let setpos_rule = RecurrenceRule {
+        frequency: "monthly".to_string(),
+        by_day: Some(vec![NDay::new("mo"), NDay::new("fr")]),
+        by_set_position: Some(vec![1, -1]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_set_position_part(&setpos_rule, true).as_deref(),
+        Some("BYSETPOS=1,-1")
+    );
+    assert!(jmap_ical::event::by_set_position_part(&setpos_rule, false).is_none());
+
+    assert_eq!(
+        jmap_ical::event::set_position_token(1).as_deref(),
+        Some("1")
+    );
+    assert_eq!(
+        jmap_ical::event::set_position_token(-1).as_deref(),
+        Some("-1")
+    );
+    assert_eq!(jmap_ical::event::set_position_token(0), None);
+}
+
+#[test]
+fn differential_oracle_recurrence_rule_weekday_normalization_and_wkst_default() {
+    // Audit divergence 339: Weekday normalization and work week start alignment:
+    // RFC 5545 WKST=MO / RFC 8984 firstDayOfWeek="mo" default omission semantics,
+    // libical round-trip stability, strict lowercase token validation, and
+    // precedence over frequency intervals.
+
+    // 1. first_day_of_week_part: default "mo" is omitted to preserve libical round-trip stability
+    let rule_wkst_mo = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        first_day_of_week: Some("mo".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::first_day_of_week_part(&rule_wkst_mo),
+        None
+    );
+
+    // Non-Monday days are explicitly rendered as WKST=<DAY>
+    let rule_wkst_su = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        first_day_of_week: Some("su".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::first_day_of_week_part(&rule_wkst_su).as_deref(),
+        Some("WKST=SU")
+    );
+
+    let rule_wkst_tu = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        first_day_of_week: Some("tu".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::first_day_of_week_part(&rule_wkst_tu).as_deref(),
+        Some("WKST=TU")
+    );
+
+    // 2. weekday_token requires lowercase 2-letter tokens matching RFC 8984
+    assert_eq!(jmap_ical::event::weekday_token("mo"), Some("MO"));
+    assert_eq!(jmap_ical::event::weekday_token("su"), Some("SU"));
+    assert_eq!(jmap_ical::event::weekday_token("MO"), None); // uppercase rejected to avoid round-trip drift
+    assert_eq!(jmap_ical::event::weekday_token("Mo"), None);
+    assert_eq!(jmap_ical::event::weekday_token("xx"), None);
+
+    // 3. Inbound rrule_to_rule lowers incoming WKST casing to lowercase
+    let rule_parsed_su = jmap_ical::event::rrule_to_rule(
+        "FREQ=WEEKLY;WKST=SU",
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+    )
+    .expect("parses WKST=SU");
+    assert_eq!(rule_parsed_su.first_day_of_week.as_deref(), Some("su"));
+
+    let rule_parsed_mo = jmap_ical::event::rrule_to_rule(
+        "FREQ=WEEKLY;WKST=MO",
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+    )
+    .expect("parses WKST=MO");
+    assert_eq!(rule_parsed_mo.first_day_of_week.as_deref(), Some("mo"));
+
+    // 4. Outbound event serialization omits WKST=MO and preserves non-default WKST
+    let mut event_mo = CalendarEvent {
+        id: Some("wkst-mo-ev".into()),
+        start: Some("2026-09-01T09:00:00".to_string()),
+        recurrence_rule: Some(rule_wkst_mo),
+        ..CalendarEvent::default()
+    };
+    let ics_mo = event_to_ical(&event_mo);
+    assert!(ics_mo.contains("RRULE:FREQ=WEEKLY\r\n"));
+    assert!(!ics_mo.contains("WKST="));
+
+    event_mo.recurrence_rule = Some(rule_wkst_su);
+    let ics_su = event_to_ical(&event_mo);
+    assert!(ics_su.contains("RRULE:FREQ=WEEKLY;WKST=SU\r\n"));
+}
