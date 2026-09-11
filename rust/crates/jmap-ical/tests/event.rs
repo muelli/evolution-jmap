@@ -40709,3 +40709,354 @@ END:VCALENDAR\r\n";
     // Transition rule refused due to Falls::Set, so zone offset is None and until preserves trailing Z
     assert!(rule_set.until.as_ref().unwrap().ends_with('Z'));
 }
+
+#[test]
+fn differential_oracle_offset_at_chronological_traversal_and_earliest_fallback() {
+    let ics_zone = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/SeasonalZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20001029T030000\r\n\
+TZOFFSETFROM:+0200\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=10\r\n\
+END:STANDARD\r\n\
+BEGIN:DAYLIGHT\r\n\
+DTSTART:20000326T020000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+0200\r\n\
+RRULE:FREQ=YEARLY;BYDAY=-1SU;BYMONTH=3\r\n\
+END:DAYLIGHT\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:seasonal-summer-event\r\n\
+DTSTART;TZID=Custom/SeasonalZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20260701T120000Z\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:seasonal-winter-event\r\n\
+DTSTART;TZID=Custom/SeasonalZone:20260101T100000\r\n\
+RRULE:FREQ=WEEKLY;UNTIL=20261201T120000Z\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ical = jmap_ical::event::parse_ical(ics_zone).expect("parse ical");
+    let vtz = ical
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz present");
+    let observances: Vec<&calcard::icalendar::ICalendarComponent> = vtz
+        .component_ids
+        .iter()
+        .filter_map(|id| ical.components.get(*id as usize))
+        .collect();
+
+    // 1. In-force transition chronological matching:
+    // In July 2026 (daylight saving time in force): +0200 = 7200 seconds
+    let offset_summer = jmap_ical::event::zone_offset_at(&observances, "2026-07-01T12:00:00Z");
+    assert_eq!(offset_summer, Some(7200));
+
+    // In December 2026 (standard time in force): +0100 = 3600 seconds
+    let offset_winter = jmap_ical::event::zone_offset_at(&observances, "2026-12-01T12:00:00Z");
+    assert_eq!(offset_winter, Some(3600));
+
+    // 2. Historical fallback: target before the earliest described transition (e.g. 1990)
+    // takes the earliest transition's TZOFFSETFROM (+0100 = 3600 seconds)
+    let offset_pre = jmap_ical::event::zone_offset_at(&observances, "1990-01-01T00:00:00Z");
+    assert_eq!(offset_pre, Some(3600));
+
+    // 3. Whole-zone failure containment: corrupted or missing offset returns None
+    let ics_corrupt = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/CorruptZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20000101T000000\r\n\
+TZOFFSETFROM:+0100\r\n\
+TZOFFSETTO:+9999\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let ical_corrupt = jmap_ical::event::parse_ical(ics_corrupt).expect("parse corrupt ical");
+    let vtz_corrupt = ical_corrupt
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz_corrupt present");
+    let corrupt_obs: Vec<&calcard::icalendar::ICalendarComponent> = vtz_corrupt
+        .component_ids
+        .iter()
+        .filter_map(|id| ical_corrupt.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&corrupt_obs, "2026-06-01T00:00:00Z"),
+        None
+    );
+
+    // 4. Inbound VEVENT UNTIL integration through ical_to_event
+    let ev = jmap_ical::event::ical_to_event(ics_zone).expect("parse seasonal event");
+    let rule = ev.recurrence_rule.expect("rule present");
+    // First VEVENT in document is summer event: UNTIL 12:00:00Z + 2h = 14:00:00
+    assert_eq!(rule.until.as_deref(), Some("2026-07-01T14:00:00"));
+}
+
+#[test]
+fn differential_oracle_observance_onsets_rdate_period_rejection_and_yearly_bounds() {
+    // 1. Explicit discrete RDATE in observance parses and shifts transition onset
+    let ics_rdate = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/RDateZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20200101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RDATE:20260601T000000\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let ical_rdate = jmap_ical::event::parse_ical(ics_rdate).expect("parse rdate ical");
+    let vtz_rdate = ical_rdate
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz_rdate present");
+    let obs_rdate: Vec<&calcard::icalendar::ICalendarComponent> = vtz_rdate
+        .component_ids
+        .iter()
+        .filter_map(|id| ical_rdate.components.get(*id as usize))
+        .collect();
+
+    // Prior to DTSTART 20200101: initial offset (+0000)
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_rdate, "2010-05-01T00:00:00Z"),
+        Some(0)
+    );
+    // After DTSTART and RDATE onset: +0100 (3600 seconds)
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_rdate, "2026-07-01T00:00:00Z"),
+        Some(3600)
+    );
+
+    // 2. Period syntax in RDATE (containing '/') is explicitly refused
+    let ics_period = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/PeriodZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20200101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RDATE;VALUE=PERIOD:20260601T000000/PT1H\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let ical_period = jmap_ical::event::parse_ical(ics_period).expect("parse period ical");
+    let vtz_period = ical_period
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz_period present");
+    let obs_period: Vec<&calcard::icalendar::ICalendarComponent> = vtz_period
+        .component_ids
+        .iter()
+        .filter_map(|id| ical_period.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_period, "2026-07-01T00:00:00Z"),
+        None
+    );
+
+    // 3. Non-YEARLY recurrence frequency in observance is refused
+    let ics_monthly = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/MonthlyZone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20200101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=MONTHLY;BYMONTHDAY=1\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let ical_monthly = jmap_ical::event::parse_ical(ics_monthly).expect("parse monthly ical");
+    let vtz_monthly = ical_monthly
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz_monthly present");
+    let obs_monthly: Vec<&calcard::icalendar::ICalendarComponent> = vtz_monthly
+        .component_ids
+        .iter()
+        .filter_map(|id| ical_monthly.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_monthly, "2026-07-01T00:00:00Z"),
+        None
+    );
+
+    // 4. INTERVAL != 1 in observance rule is refused
+    let ics_interval2 = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:Custom/Interval2Zone\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:20200101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0100\r\n\
+RRULE:FREQ=YEARLY;INTERVAL=2;BYMONTH=3;BYMONTHDAY=1\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+END:VCALENDAR\r\n";
+    let ical_interval2 = jmap_ical::event::parse_ical(ics_interval2).expect("parse interval2 ical");
+    let vtz_interval2 = ical_interval2
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VTIMEZONE"))
+        .expect("vtz_interval2 present");
+    let obs_interval2: Vec<&calcard::icalendar::ICalendarComponent> = vtz_interval2
+        .component_ids
+        .iter()
+        .filter_map(|id| ical_interval2.components.get(*id as usize))
+        .collect();
+    assert_eq!(
+        jmap_ical::event::zone_offset_at(&obs_interval2, "2026-07-01T00:00:00Z"),
+        None
+    );
+}
+
+#[test]
+fn differential_oracle_civil_epoch_arithmetic_leap_years_and_second_bounds() {
+    // 1. Days from civil epoch (1970-01-01) calculation
+    assert_eq!(jmap_ical::event::days_from_civil(1970, 1, 1), 0);
+    assert_eq!(jmap_ical::event::days_from_civil(1970, 1, 2), 1);
+    assert_eq!(jmap_ical::event::days_from_civil(1969, 12, 31), -1);
+    assert_eq!(jmap_ical::event::days_from_civil(2000, 1, 1), 10957);
+    assert_eq!(jmap_ical::event::days_from_civil(2026, 1, 1), 20454);
+    assert_eq!(jmap_ical::event::days_from_civil(1900, 1, 1), -25567);
+
+    // 2. Gregorian leap year rules and month days
+    // 2000: leap year (divisible by 400)
+    assert_eq!(jmap_ical::event::days_in_month(2000, 2), 29);
+    // 1900: not a leap year (divisible by 100, not 400)
+    assert_eq!(jmap_ical::event::days_in_month(1900, 2), 28);
+    // 2024: leap year (divisible by 4)
+    assert_eq!(jmap_ical::event::days_in_month(2024, 2), 29);
+    // 2026: common year
+    assert_eq!(jmap_ical::event::days_in_month(2026, 2), 28);
+
+    // Standard 31-day and 30-day months
+    for m in [1, 3, 5, 7, 8, 10, 12] {
+        assert_eq!(jmap_ical::event::days_in_month(2026, m), 31);
+    }
+    for m in [4, 6, 9, 11] {
+        assert_eq!(jmap_ical::event::days_in_month(2026, m), 30);
+    }
+
+    // 3. Calendar date existence and second-of-day bounds
+    assert!(jmap_ical::event::exists("20240229", "120000"));
+    assert!(!jmap_ical::event::exists("20260229", "120000"));
+    assert!(!jmap_ical::event::exists("20260431", "120000"));
+    assert!(!jmap_ical::event::exists("20260010", "120000"));
+    assert!(!jmap_ical::event::exists("20261310", "120000"));
+
+    // Leap second 60 is tolerated within sub-day second range
+    assert!(jmap_ical::event::exists("20261231", "235960"));
+    assert!(!jmap_ical::event::exists("20261231", "235961"));
+    assert!(!jmap_ical::event::exists("20261231", "240000"));
+
+    // String digit extraction via date_time_digits and format conversions
+    assert_eq!(
+        jmap_ical::event::date_time_digits("20240229T120000Z"),
+        Some(("20240229", "120000"))
+    );
+    assert_eq!(
+        jmap_ical::event::to_local_date_time("20240229T120000Z"),
+        Some("2024-02-29T12:00:00".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::to_ical_date_time("2024-02-29T12:00:00"),
+        Some("20240229T120000".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::at_offset("2026-01-01T00:00:00", "+05:30"),
+        Some("2026-01-01T05:30:00".to_string())
+    );
+    assert_eq!(
+        jmap_ical::event::from_offset("2026-01-01T05:30:00", "+05:30"),
+        Some("2026-01-01T00:00:00".to_string())
+    );
+    // Negative offset with day rollover
+    assert_eq!(
+        jmap_ical::event::at_offset("2026-01-01T02:00:00", "-0500"),
+        Some("2025-12-31T21:00:00".to_string())
+    );
+}
+
+#[test]
+fn differential_oracle_read_until_zoned_projection_and_unstateable_diagnostic() {
+    // 1. Local UNTIL without trailing Z passes through unchanged
+    assert_eq!(
+        jmap_ical::event::read_until("20260601T120000", jmap_ical::event::Ends::At("+0200")),
+        "2026-06-01T12:00:00"
+    );
+
+    // 2. Fixed-offset projection (Ends::At)
+    assert_eq!(
+        jmap_ical::event::read_until("20260601T120000Z", jmap_ical::event::Ends::At("+0200")),
+        "2026-06-01T14:00:00"
+    );
+    assert_eq!(
+        jmap_ical::event::read_until("20260601T120000Z", jmap_ical::event::Ends::At("-0500")),
+        "2026-06-01T07:00:00"
+    );
+
+    // 3. In-document timezone projection (Ends::In):
+    // When custom timezone has no definition in document, read_until preserves
+    // the trailing Z sentinel on non-UTC zones
+    let unresolvable_zoned = jmap_ical::event::Zoned::named(Some("/custom/unknown_zone"));
+    assert_eq!(
+        jmap_ical::event::read_until(
+            "20260601T120000Z",
+            jmap_ical::event::Ends::In(unresolvable_zoned)
+        ),
+        "2026-06-01T12:00:00Z"
+    );
+
+    // UTC zone returns clean local time without Z
+    let utc_zoned = jmap_ical::event::Zoned::named(Some("UTC"));
+    assert_eq!(
+        jmap_ical::event::read_until("20260601T120000Z", jmap_ical::event::Ends::In(utc_zoned)),
+        "2026-06-01T12:00:00"
+    );
+
+    // 4. Actionable outbound capability diagnostics via unstateable_until
+    let unstateable_rule = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        until: Some("2026-06-01T12:00:00Z".to_string()),
+        ..RecurrenceRule::default()
+    };
+    // Trailing Z sentinel is flagged as unstateable endpoint
+    assert_eq!(
+        jmap_ical::event::unstateable_until(&unstateable_rule),
+        Some("2026-06-01T12:00:00Z")
+    );
+    assert!(!jmap_ical::event::maps_recurrence_rule(&unstateable_rule));
+
+    let clean_rule = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        until: Some("2026-06-01T14:00:00".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(jmap_ical::event::unstateable_until(&clean_rule), None);
+    assert!(jmap_ical::event::maps_recurrence_rule(&clean_rule));
+}
