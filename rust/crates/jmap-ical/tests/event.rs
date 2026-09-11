@@ -42462,3 +42462,299 @@ fn differential_oracle_recurrence_rule_weekday_normalization_and_wkst_default() 
     let ics_su = event_to_ical(&event_mo);
     assert!(ics_su.contains("RRULE:FREQ=WEEKLY;WKST=SU\r\n"));
 }
+
+#[test]
+fn differential_oracle_recurrence_rule_ordinal_days_and_month_day_bounding() {
+    // Audit divergence 340: Recurrence rule ordinal days and month-day combinatorial rules:
+    // RFC 5545 ordinal weekday scoping (MONTHLY/YEARLY vs DAILY/WEEKLY), signed month-day bounding
+    // (-31..=31, zero refusal), canonical ingestion parsing (to_nday, to_month_day), and
+    // structural round-trip equivalence.
+
+    // 1. counts_within_a_period: ordinals are scoped strictly to monthly and yearly frequencies
+    assert!(jmap_ical::event::counts_within_a_period("monthly"));
+    assert!(jmap_ical::event::counts_within_a_period("yearly"));
+    assert!(jmap_ical::event::counts_within_a_period("MONTHLY"));
+    assert!(jmap_ical::event::counts_within_a_period("YEARLY"));
+    assert!(!jmap_ical::event::counts_within_a_period("weekly"));
+    assert!(!jmap_ical::event::counts_within_a_period("daily"));
+    assert!(!jmap_ical::event::counts_within_a_period("hourly"));
+
+    // 2. by_day_token: ordinals are formatted when permitted, and refused on other frequencies
+    let day_with_nth = NDay {
+        day: "mo".to_string(),
+        nth_of_period: Some(2),
+        ..NDay::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_day_token(&day_with_nth, "monthly").as_deref(),
+        Some("2MO")
+    );
+    assert_eq!(
+        jmap_ical::event::by_day_token(&day_with_nth, "yearly").as_deref(),
+        Some("2MO")
+    );
+    // On weekly, RFC 5545 Section 3.3.10 prohibits numeric ordinals: refused to prevent event multiplication
+    assert!(jmap_ical::event::by_day_token(&day_with_nth, "weekly").is_none());
+    assert!(jmap_ical::event::by_day_token(&day_with_nth, "daily").is_none());
+
+    // Zero ordinal is invalid in both RFC 5545 and RFC 8984
+    let day_zero = NDay {
+        day: "fr".to_string(),
+        nth_of_period: Some(0),
+        ..NDay::default()
+    };
+    assert!(jmap_ical::event::by_day_token(&day_zero, "monthly").is_none());
+
+    // Negative ordinals count from end of period
+    let day_neg = NDay {
+        day: "fr".to_string(),
+        nth_of_period: Some(-1),
+        ..NDay::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_day_token(&day_neg, "monthly").as_deref(),
+        Some("-1FR")
+    );
+
+    // 3. to_nday: parses signed and unsigned weekday tokens into NDay structures
+    let parsed_pos = jmap_ical::event::to_nday("+3TU");
+    assert_eq!(parsed_pos.day, "tu");
+    assert_eq!(parsed_pos.nth_of_period, Some(3));
+
+    let parsed_neg = jmap_ical::event::to_nday("-1FR");
+    assert_eq!(parsed_neg.day, "fr");
+    assert_eq!(parsed_neg.nth_of_period, Some(-1));
+
+    let parsed_plain = jmap_ical::event::to_nday("WE");
+    assert_eq!(parsed_plain.day, "we");
+    assert_eq!(parsed_plain.nth_of_period, None);
+
+    // Zero ordinal token is kept whole to trigger map refusal rather than silent alteration
+    let parsed_bad_zero = jmap_ical::event::to_nday("0MO");
+    assert_eq!(parsed_bad_zero.day, "0mo");
+    assert_eq!(parsed_bad_zero.nth_of_period, None);
+
+    // 4. month_day_token: signed range -31..=-1 and 1..=31, zero and >31 refused
+    assert_eq!(jmap_ical::event::month_day_token(1).as_deref(), Some("1"));
+    assert_eq!(jmap_ical::event::month_day_token(31).as_deref(), Some("31"));
+    assert_eq!(jmap_ical::event::month_day_token(-1).as_deref(), Some("-1"));
+    assert_eq!(
+        jmap_ical::event::month_day_token(-31).as_deref(),
+        Some("-31")
+    );
+    assert_eq!(jmap_ical::event::month_day_token(0), None);
+    assert_eq!(jmap_ical::event::month_day_token(32), None);
+    assert_eq!(jmap_ical::event::month_day_token(-32), None);
+
+    // 5. by_month_day_part: RFC 5545 Section 3.3.10 prohibits BYMONTHDAY on weekly frequency
+    let month_day_rule = RecurrenceRule {
+        frequency: "monthly".to_string(),
+        by_month_day: Some(vec![1, 15, -1]),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::by_month_day_part(&month_day_rule).as_deref(),
+        Some("BYMONTHDAY=1,15,-1")
+    );
+
+    let weekly_month_day_rule = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        by_month_day: Some(vec![15]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::by_month_day_part(&weekly_month_day_rule).is_none());
+
+    // 6. to_month_day: parsing with zero error sentinel
+    assert_eq!(jmap_ical::event::to_month_day("15"), 15);
+    assert_eq!(jmap_ical::event::to_month_day("-1"), -1);
+    assert_eq!(jmap_ical::event::to_month_day("invalid"), 0);
+}
+
+#[test]
+fn differential_oracle_recurrence_rule_endpoints_count_until_and_utc_projection() {
+    // Audit divergence 341: Recurrence rule endpoint ingestion and serialization:
+    // RFC 5545 / RFC 8984 COUNT vs UNTIL mutual exclusivity, RFC 5545 UTC timestamp formatting
+    // (YYYYMMDDTHHMMSSZ) vs RFC 8984 local LocalDateTime alignment, floating time zone UNTIL handling,
+    // and in-document zone offset projection.
+
+    // 1. rule_to_rrule: all-day event serializes UNTIL in DATE format YYYYMMDD
+    let until_rule = RecurrenceRule {
+        frequency: "daily".to_string(),
+        until: Some("2026-09-30T00:00:00".to_string()),
+        ..RecurrenceRule::default()
+    };
+    let rrule_date = jmap_ical::event::rule_to_rrule(
+        &until_rule,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(None)),
+        true,
+    )
+    .expect("serializes all-day UNTIL");
+    assert_eq!(rrule_date, "FREQ=DAILY;UNTIL=20260930");
+
+    // 2. rule_to_rrule: UTC zone serializes UNTIL with trailing Z
+    let rrule_utc = jmap_ical::event::rule_to_rrule(
+        &until_rule,
+        jmap_ical::event::Ends::In(jmap_ical::event::Zoned::named(Some("UTC"))),
+        false,
+    )
+    .expect("serializes UTC UNTIL");
+    assert_eq!(rrule_utc, "FREQ=DAILY;UNTIL=20260930T000000Z");
+
+    // 3. rule_to_rrule: observance offset serializes projected UTC UNTIL with Z via Ends::At
+    let rrule_offset =
+        jmap_ical::event::rule_to_rrule(&until_rule, jmap_ical::event::Ends::At("+0200"), false)
+            .expect("serializes offset UNTIL");
+    assert_eq!(rrule_offset, "FREQ=DAILY;UNTIL=20260929T220000Z");
+
+    // 4. unstateable_until: isolates unconvertible timestamps without confusing other rule errors
+    let valid_until_rule = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        until: Some("2026-09-30T10:00:00".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(jmap_ical::event::unstateable_until(&valid_until_rule), None);
+
+    let malformed_until_rule = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        until: Some("2026-09-30T10:00:00Z".to_string()),
+        ..RecurrenceRule::default()
+    };
+    assert_eq!(
+        jmap_ical::event::unstateable_until(&malformed_until_rule),
+        Some("2026-09-30T10:00:00Z")
+    );
+
+    // 5. read_until: parses UTC wire timestamps into local LocalDateTime strings
+    let parsed_until_utc =
+        jmap_ical::event::read_until("20260930T120000Z", jmap_ical::event::Ends::At("+0200"));
+    assert_eq!(parsed_until_utc, "2026-09-30T14:00:00");
+}
+
+#[test]
+fn differential_oracle_alarms_uid_key_preservation_action_scope_and_triggers() {
+    // Audit divergence 342: Reminder alarm ingestion, action scope filtering, and map key allocation:
+    // RFC 9074 VALARM UID key preservation vs Stalwart synthetic k1/UUID keys, ACTION:DISPLAY action
+    // scope enforcement (silent dropping of ACTION:AUDIO and ACTION:EMAIL), relative OffsetTrigger
+    // vs absolute date-time trigger dropping, and document-wide useDefaultAlerts alarm masking.
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:alarm-test-ev-1\r\n",
+        "DTSTART:20260925T100000Z\r\n",
+        "SUMMARY:Alarm Test\r\n",
+        "BEGIN:VALARM\r\n",
+        "UID:rfc9074-alarm-key-1\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Reminder 1\r\n",
+        "TRIGGER:-PT15M\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Reminder Nameless\r\n",
+        "TRIGGER:-PT30M\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:AUDIO\r\n",
+        "TRIGGER:-PT10M\r\n",
+        "ATTACH;VALUE=URI:Basso\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Absolute Alarm\r\n",
+        "TRIGGER;VALUE=DATE-TIME:20260925T090000Z\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let alerts = ev.alerts.as_ref().expect("alerts map present");
+
+    // 1. RFC 9074 UID preserved as stable map key
+    assert!(alerts.contains_key("rfc9074-alarm-key-1"));
+    let alert1 = &alerts["rfc9074-alarm-key-1"];
+    assert_eq!(alert1["action"], "display");
+    assert_eq!(alert1["trigger"]["offset"], "-PT15M");
+
+    // 2. Nameless VALARM assigned synthetic a1 key
+    assert!(alerts.contains_key("a1"));
+    let alert2 = &alerts["a1"];
+    assert_eq!(alert2["trigger"]["offset"], "-PT30M");
+
+    // 3. ACTION:AUDIO dropped (not in display reminder scope)
+    // 4. TRIGGER;VALUE=DATE-TIME dropped (not in relative OffsetTrigger scope)
+    assert_eq!(alerts.len(), 2);
+
+    // 5. Outbound serialization writes UID on VALARM and respects useDefaultAlerts
+    let mut ev_out = ev.clone();
+    let ics_out = event_to_ical(&ev_out);
+    assert!(ics_out.contains("UID:rfc9074-alarm-key-1\r\n"));
+    assert!(ics_out.contains("TRIGGER:-PT15M\r\n"));
+
+    ev_out.use_default_alerts = Some(true);
+    assert!(jmap_ical::event::uses_default_alerts(&ev_out));
+    let ics_suppressed = event_to_ical(&ev_out);
+    assert!(!ics_suppressed.contains("BEGIN:VALARM"));
+}
+
+#[test]
+fn differential_oracle_locations_single_primary_conference_features_and_key_tracking() {
+    // Audit divergence 343: Physical and virtual location ingestion, feature set extraction, and subpath map key tracking:
+    // RFC 5545 Section 3.8.1.7 single primary LOCATION enforcement, RFC 7986 CONFERENCE seven-feature flag gating,
+    // X-JMAP-KEY round-trip retention vs Stalwart synthetic UUID keys, and empty location name filtering.
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:location-test-ev-1\r\n",
+        "DTSTART:20260925T100000Z\r\n",
+        "SUMMARY:Location Test\r\n",
+        "LOCATION;X-JMAP-KEY=loc-hq:Convention Center Hall A\r\n",
+        "CONFERENCE;X-JMAP-KEY=conf-main;FEATURE=AUDIO;FEATURE=VIDEO;LABEL=\"Video Bridge\":https://meet.example.com/bridge\r\n",
+        "CONFERENCE;FEATURE=PHONE:tel:+1-555-0199\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(ics).expect("parses calendar");
+
+    // 1. LOCATION with X-JMAP-KEY preserves stable key loc-hq
+    let locations = ev.locations.as_ref().expect("locations map present");
+    assert!(locations.contains_key("loc-hq"));
+    assert_eq!(locations["loc-hq"]["name"], "Convention Center Hall A");
+    assert!(maps_locations(locations));
+
+    // 2. CONFERENCE with X-JMAP-KEY preserves stable key conf-main and extracts features
+    let vlocations = ev
+        .virtual_locations
+        .as_ref()
+        .expect("virtual locations present");
+    assert!(vlocations.contains_key("conf-main"));
+    let conf_main = &vlocations["conf-main"];
+    assert_eq!(conf_main["uri"], "https://meet.example.com/bridge");
+    assert_eq!(conf_main["name"], "Video Bridge");
+    assert_eq!(conf_main["features"]["audio"], true);
+    assert_eq!(conf_main["features"]["video"], true);
+
+    // 3. CONFERENCE without X-JMAP-KEY receives invented key v1
+    assert!(vlocations.contains_key("v1"));
+    let conf_phone = &vlocations["v1"];
+    assert_eq!(conf_phone["uri"], "tel:+1-555-0199");
+    assert_eq!(conf_phone["features"]["phone"], true);
+
+    // 4. Outbound serialization attaches X-JMAP-KEY to preserve keys on round-trip
+    let ics_out = event_to_ical(&ev);
+    assert!(ics_out.contains("LOCATION;X-JMAP-KEY=loc-hq:Convention Center Hall A\r\n"));
+    let unfolded = ics_out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(unfolded.contains("CONFERENCE;VALUE=URI;"));
+    assert!(unfolded.contains("X-JMAP-KEY=conf-main"));
+    assert!(unfolded.contains("FEATURE=AUDIO,VIDEO"));
+    assert!(unfolded.contains("LABEL=\"Video Bridge\""));
+    assert!(unfolded.contains("https://meet.example.com/bridge"));
+    assert!(unfolded.contains("CONFERENCE;VALUE=URI;FEATURE=PHONE;X-JMAP-KEY=v1:tel:+1-555-0199"));
+}
