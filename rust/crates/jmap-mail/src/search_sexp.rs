@@ -55,7 +55,7 @@ enum SExpr {
 /// exact JMAP equivalent for — in which case the caller should search
 /// locally instead, the same fallback a genuine parse failure gets.
 pub fn translate(expression: &str) -> Option<Filter<EmailQueryFilter>> {
-    let (expr, rest) = parse_value(expression.trim_start())?;
+    let (expr, rest) = parse_value(expression.trim_start(), 0)?;
     if !rest.trim().is_empty() {
         // Trailing garbage after the one top-level form the grammar allows.
         return None;
@@ -63,14 +63,32 @@ pub fn translate(expression: &str) -> Option<Filter<EmailQueryFilter>> {
     translate_bool(&expr)
 }
 
+/// How deeply `(` may nest before an expression is refused outright.
+///
+/// [`parse_value`] and [`parse_list`] call each other once per `(`, so without
+/// a cap the nesting depth of the input is the recursion depth of this parser
+/// and a long enough run of open parens overflows the stack — which on a
+/// Camel worker thread inside Evolution is an abort of the whole process, not
+/// a refused search. The module's promise is to fail safely on malformed
+/// input, and a cap is what makes that true of this shape too. 64 matches the
+/// limit `jmap-mail-sync`'s `folder` module puts on a mailbox `parentId`
+/// chain, and is
+/// two orders of magnitude above anything `mail/searchtypes.xml.in` or
+/// `message-list.c` generates: the deepest real expression is a `(match-all
+/// (and (or …) …))`, four levels.
+const MAX_DEPTH: usize = 64;
+
 /// Parses one value (a list, a string, or a bare token) off the front of
-/// `input`, returning it with whatever is left unconsumed.
-fn parse_value(input: &str) -> Option<(SExpr, &str)> {
+/// `input`, returning it with whatever is left unconsumed. `depth` is how
+/// many enclosing lists this value sits in; past [`MAX_DEPTH`] the expression
+/// is refused rather than recursed into.
+fn parse_value(input: &str, depth: usize) -> Option<(SExpr, &str)> {
     let input = skip_ignorable(input);
     let mut chars = input.char_indices();
     let (_, first) = chars.next()?;
     match first {
-        '(' => parse_list(&input[first.len_utf8()..]),
+        '(' if depth >= MAX_DEPTH => None,
+        '(' => parse_list(&input[first.len_utf8()..], depth + 1),
         '"' | '\'' => parse_string(input, first),
         ')' => None,
         _ => Some(parse_token(input)),
@@ -94,8 +112,9 @@ fn skip_ignorable(mut input: &str) -> &str {
 }
 
 /// Parses the elements of a list up to and including its closing `)`; the
-/// opening `(` has already been consumed by the caller.
-fn parse_list(mut input: &str) -> Option<(SExpr, &str)> {
+/// opening `(` has already been consumed by the caller, and `depth` already
+/// counts it.
+fn parse_list(mut input: &str, depth: usize) -> Option<(SExpr, &str)> {
     let mut items = Vec::new();
     loop {
         input = skip_ignorable(input);
@@ -105,7 +124,7 @@ fn parse_list(mut input: &str) -> Option<(SExpr, &str)> {
         if input.is_empty() {
             return None;
         }
-        let (item, rest) = parse_value(input)?;
+        let (item, rest) = parse_value(input, depth)?;
         items.push(item);
         input = rest;
     }
@@ -257,6 +276,47 @@ fn translate_bool(expr: &SExpr) -> Option<Filter<EmailQueryFilter>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run of `(` is the one shape that turns this parser's own recursion
+    /// into the input's nesting depth. Before the cap, 100 000 of them
+    /// overflowed the stack and aborted the process — inside Evolution that
+    /// is every account in the session, not one refused search. `None` is the
+    /// same "search locally" answer any other unparseable expression gets.
+    #[test]
+    fn a_run_of_open_parens_is_refused_rather_than_overflowing_the_stack() {
+        assert_eq!(translate(&"(".repeat(100_000)), None);
+        // Balanced, and just as deep: a well-formed document is refused at
+        // the same depth as a truncated one, since it is the nesting and not
+        // the truncation that costs the stack.
+        let deep = format!("{}{}", "(and ".repeat(50_000), ")".repeat(50_000));
+        assert_eq!(translate(&deep), None);
+    }
+
+    /// The cap refuses only past its own limit: an expression nested to it
+    /// still parses, so no real `searchtypes.xml.in` rule is caught by this.
+    #[test]
+    fn nesting_up_to_the_limit_still_translates() {
+        let leaf = r#"(header-contains "Subject" "s")"#;
+        // One `not` per level, with the leaf at the bottom: `translate` counts
+        // the outermost list as depth 1, so MAX_DEPTH - 1 wrappers plus the
+        // leaf's own list sits exactly at the limit.
+        let at_limit = format!(
+            "{}{leaf}{}",
+            "(not ".repeat(MAX_DEPTH - 1),
+            ")".repeat(MAX_DEPTH - 1)
+        );
+        assert!(
+            translate(&at_limit).is_some(),
+            "an expression at the limit must still translate"
+        );
+
+        let past_limit = format!(
+            "{}{leaf}{}",
+            "(not ".repeat(MAX_DEPTH),
+            ")".repeat(MAX_DEPTH)
+        );
+        assert_eq!(translate(&past_limit), None, "one level past is refused");
+    }
 
     #[test]
     fn header_contains_from() {
