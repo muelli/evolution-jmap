@@ -6320,3 +6320,78 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and recurrence rule endpoint projection fidelity. Distinguishes fixed-offset and in-document timezone projections, marks unresolvable custom timezones with trailing-Z sentinels, and surfaces diagnostic feedback via `unstateable_until`.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.324 Divergence 324: `maps_recurrence_override`, `sends_recurrence_override`, `override_maps_by`, `maps_override_field`, `draws_override_field`, `OVERRIDE_PROPERTIES`, and `excluded`: Outbound Recurrence Override Capability Gating and PatchObject Validation: RFC 8984 Section 4.3.4 PatchObject Shape Verification, Restricted 11-Property Restatement Set (`OVERRIDE_PROPERTIES`), `excluded: true` Exclusion Mutex (`fields.len() == 1`), Null Removal Round-Tripping vs Empty String Refusal, Custom Solidus Timezone Serialization Gating (`sends_recurrence_override` vs `maps_recurrence_override`), and Series Default Alerts Masking
+
+- **Observed Behavior**:
+  Validating JSCalendar `recurrenceOverrides` patch objects prior to RFC 5545 serialization requires enforcing strict structural conformance, restricting editable properties to the supported restatement set, maintaining exclusion mutual exclusivity, and distinguishing patch-level capabilities. In `jmap-ical`:
+  1. PatchObject shape verification (`override_maps_by`): Mandates that each override patch is a JSON object (`patch.as_object()`). Requires the instance `id` key to parse into an RFC 5545 date-time string via `to_ical_date_time`. Unparseable identifiers are rejected, preventing corrupt keys from emitting invalid recurrence headers.
+  2. Exclusion mutual exclusivity (`excluded`, `fields.len() == 1`): RFC 8984 Section 4.3.4 defines `excluded: true` for cancelled occurrences. When `excluded(patch)` is true, `override_maps_by` mandates `fields.len() == 1`. An excluded instance has no occurrence left to display an edited title, description, or start time; attaching other modified fields beside `excluded: true` is rejected, preventing contradictory calendar entries.
+  3. Restricted restatement vocabulary (`OVERRIDE_PROPERTIES`): Constrains patch properties strictly to the 11 supported restatement properties: `title`, `description`, `start`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `priority`, `privacy`, `keywords`, and `alerts`. Unmodeled properties (such as `location`, `participants`, or arbitrary vendor extensions) return false and fail gating.
+  4. Null removal round-tripping vs empty string refusal (`maps_override_field`): In a PatchObject, setting a property to null removes the override, reverting to series defaults. In RFC 5545, this removal is represented by omitting the property line on the detached `VEVENT`. Therefore, null values round-trip safely. Conversely, empty string values (such as `title: ""`) are refused because the iCalendar emitter drops empty text lines, which would deserialize back as null removals rather than empty strings, creating diff churn.
+  5. Timezone gating: `maps_override_field` admits standard IANA names via `names_time_zone` but rejects custom solidus timezones when sending `recurrenceOverrides` alone, because an isolated patch has no container to transmit the companion `timeZones` definition. In contrast, `draws_override_field` and `sends_recurrence_override` permit custom timezones if backed by a matching `timeZones` definition in the series (`defines_time_zone(series, tzid)`).
+  6. Series default alerts masking: If the series specifies `useDefaultAlerts: true`, override alert patches are refused (`!uses_default_alerts(series)`). Empty alert or keyword maps are refused to prevent confusion with null removals.
+  7. In contrast, differential oracles permit arbitrary unmodeled properties in override patches, fail to enforce exclusion mutual exclusivity, or emit dangling custom timezones without companion definitions.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.4 (`Recurrence ID`) and Section 3.8.5.1 (`Exception Date-Times`).
+  2. RFC 8984 Section 4.3.4 (`recurrenceOverrides`) and Section 4.5.1 (`useDefaultAlerts`).
+- **Adjudication**:
+  Conforming specification boundary and override capability safety. Enforces PatchObject grammar, restricts restated properties to `OVERRIDE_PROPERTIES`, mandates exclusion mutual exclusivity, safely handles null removals, and gates custom timezones.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.325 Divergence 325: `read_overrides`, `instance_patch`, `RECURRENCE-ID`, `RANGE=THISANDFUTURE` Refusal, `RDATE` Period Duration Ingestion vs Series Length Filtering, and `EXDATE` Exclusion Ingestion: Inbound Recurrence Overrides Ingestion Pipeline: Occurrence Representation Precedence (Detached `VEVENT` > `EXDATE` > `RDATE`), Series Duration Redundancy Filtering, Non-Date-Time RECURRENCE-ID Rejection, Open-Ended Recurrence Split Prevention (`RANGE=THISANDFUTURE`), and Detached Component Differential Patch Synthesis
+
+- **Observed Behavior**:
+  Ingesting recurrence exceptions from RFC 5545 streams requires resolving conflicting occurrence definitions, filtering redundant durations, isolating open-ended recurrence splits, and synthesizing minimal PatchObjects against the master series. In `jmap-ical`:
+  1. Representation precedence: Resolves multi-source occurrence definitions deterministically. `RDATE` records added occurrences. `EXDATE` records cancelled occurrences (`{"excluded": true}`). Detached `VEVENT` components carrying `RECURRENCE-ID` take precedence over both `RDATE` and `EXDATE`, because an explicit detached component provides the most specific representation of an occurrence.
+  2. Series duration redundancy filtering: For period `RDATE` entries (`start/duration` or `start/end`), extracts duration via `period_length`. If the extracted length equals the master series duration (`length == event.duration`), the duration is omitted and an empty patch `{}` is synthesized. Only differing durations emit `{"duration": length}`. Discrete `RDATE` entries without duration synthesize `{}`.
+  3. Open-ended recurrence split prevention (`RANGE=THISANDFUTURE` refusal): RFC 5545 Section 3.2.13 defines `RANGE=THISANDFUTURE` to modify an occurrence and all subsequent occurrences in the series. JSCalendar `recurrenceOverrides` models per-instance patches and does not support split-tail series within a single object. Attempting to map `RANGE=THISANDFUTURE` to a single override would silently lose changes to subsequent instances. `read_overrides` checks `entry_param(property, "RANGE").is_some()` and safely skips such components, preserving series integrity.
+  4. Non-date-time RECURRENCE-ID rejection: Components whose `RECURRENCE-ID` cannot be converted to local date-time via `to_local_date_time` are skipped, preventing corrupt identifiers from creating dangling overrides.
+  5. Minimal differential patch synthesis (`instance_patch`): Compares detached instances against the master series across the 11 `OVERRIDE_PROPERTIES`. Identical properties are omitted. Changed properties are recorded. Properties present in the master series but omitted in the detached instance emit `null`, accurately recording that the override cleared the series default. Start is compared against `id`: an instance starting at its scheduled time omits `start`, while a moved instance records its new start timestamp.
+  6. In contrast, differential oracles emit redundant duration patches matching the master series, misinterpret `RANGE=THISANDFUTURE` as single-occurrence edits, or emit full object duplicates rather than minimal differential patches.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.13 (`Recurrence Identifier Range`), Section 3.8.4.4 (`Recurrence ID`), Section 3.8.5.1 (`Exception Date-Times`), and Section 3.8.5.2 (`Recurrence Date-Times`).
+  2. RFC 8984 Section 4.3.4 (`recurrenceOverrides`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence override ingestion fidelity. Enforces representation precedence, filters redundant series durations, rejects ambiguous open-ended recurrence ranges, and synthesizes minimal differential PatchObjects.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.326 Divergence 326: `shows_without_time`, `instance_shows_without_time`, `at_midnight`, `whole_days`, and `names_a_time_of_day`: All-Day Event Capability Gating (`VALUE=DATE`) and Floating Time Semantics: RFC 8984 Section 4.1.5 `showWithoutTime` Conformance, Midnight Start Verification (`at_midnight`), Whole-Day Duration Enforcement (`whole_days`), Sub-Day Recurrence Part Rejection (`BYHOUR`, `BYMINUTE`, `BYSECOND`), and Document-Wide Series/Override Consistency
+
+- **Observed Behavior**:
+  Serializing JSCalendar all-day events (`showWithoutTime: true`) into RFC 5545 `VALUE=DATE` properties requires validating clock alignment, duration units, recurrence rules, and override consistency. In `jmap-ical`:
+  1. Midnight start verification (`at_midnight`): RFC 5545 Section 3.8.2.4 `VALUE=DATE` represents a calendar date without a time component. `shows_without_time` verifies `at_midnight(start)` (checking that the rendered timestamp ends in `T000000`). An event starting at a timed hour (such as 09:00) cannot be truncated to date without changing when it occurs.
+  2. Whole-day duration enforcement (`whole_days`): In RFC 5545 Section 3.6.1, a DATE-valued `DTSTART` may only stand beside a duration of whole days (`P<n>D` or `P<n>W`). `whole_days` checks that the duration contains no `T` designator. Sub-day durations (such as `PT1H`) cannot stand beside a date start and disqualify the event from DATE serialization.
+  3. Timezone exclusion: RFC 5545 Section 3.2.19 forbids `TZID` parameters on DATE values. `shows_without_time` requires `event.time_zone.is_none()`. An event with an explicit timezone cannot be serialized as a date.
+  4. Sub-day recurrence part rejection (`names_a_time_of_day`): RFC 5545 Section 3.3.10 explicitly forbids `BYHOUR`, `BYMINUTE`, and `BYSECOND` beside a `VALUE=DATE` start. `names_a_time_of_day` inspects recurrence rule parts; if any sub-day parts are present, or if `rule.until` does not fall at midnight, DATE serialization is refused.
+  5. Series and override consistency (`instance_shows_without_time`): Evaluates every recurrence override in `recurrence_overrides`. If any override instance moves to a timed hour, specifies a sub-day duration, or carries a timezone, `shows_without_time` returns false for the entire document.
+  6. Defensive fallback: When an event specifies `showWithoutTime: true` but fails any conformance precondition, `shows_without_time` returns false. The event is emitted as a timed `DATE-TIME` event on the wire (preserving the exact time and duration), and the save path diffs against this rendering so the server flag is not accidentally cleared.
+  7. In contrast, differential oracles truncate timed events to DATE (losing appointment times), emit illegal `TZID` parameters on DATE lines, or emit sub-day `BYHOUR` rules beside DATE starts.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.19 (`Time Zone Identifier`), Section 3.3.10 (`Recurrence Rule`), Section 3.6.1 (`Event Component`), and Section 3.8.2.4 (`Date-Time Start`).
+  2. RFC 8984 Section 4.1.5 (`showWithoutTime`).
+- **Adjudication**:
+  Conforming specification boundary and all-day event serialization determinism. Enforces midnight alignment, whole-day durations, timezone exclusion, sub-day recurrence part prohibitions, and document-wide override consistency.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.327 Divergence 327: `scheduling_ical`, `event_calendar`, `instance_calendar`, `dated`, and `recurrence_dates`: Outbound Scheduling Message Synthesis, iTIP Method Encapsulation, and Single-Occurrence Narrowing: RFC 5546 iTIP Transport Integration, Top-Level `METHOD` Header Injection (`REQUEST`, `CANCEL`, `REPLY`), Single-Occurrence Calendar Narrowing (`instance_calendar`), Recurrence ID Scoping, and Client Identifier Retention (`X-JMAP-UID`)
+
+- **Observed Behavior**:
+  Generating iCalendar objects for iTIP scheduling transactions (RFC 5546 / draft-ietf-jmap-calendars Section 5.9.2) requires encapsulating calendar components within transport envelopes, setting transaction methods, and isolating single-occurrence updates. In `jmap-ical`:
+  1. iTIP method encapsulation (`scheduling_ical`, `event_calendar`): In contrast to store-level serialization (`event_to_ical`), which emits bare `VCALENDAR` envelopes without transaction methods, `scheduling_ical` injects the requested iTIP `METHOD` parameter (`REQUEST`, `CANCEL`, `REPLY`, `PUBLISH`) as a top-level property.
+  2. Single-occurrence narrowing (`instance_calendar`): When dispatching an update or cancellation for a single recurrence instance (`recurrence_id.is_some()`), `instance_calendar` narrows the calendar payload. Instead of serializing the entire series with its `RRULE`, `EXDATE`, and `RDATE` lists, it synthesizes exactly one `VEVENT` component carrying `RECURRENCE-ID` set to the target occurrence date-time.
+  3. Occurrence state scoping: In single-occurrence scheduling messages, the input `event` represents the resolved occurrence state. Series recurrence rules are omitted from the single-instance cancellation message, preventing invitees from misinterpreting a single-instance cancellation as a series cancellation.
+  4. Identifier alignment: Preserves `UID` continuity across scheduling messages. Emits `event.id` (or `event.uid`) on the primary `UID` line, and attaches `X-JMAP-UID` with the client UUID, ensuring EDS cache alignment and CalDAV scheduling compatibility.
+  5. Multi-instance recurrence date formatting (`dated`, `recurrence_dates`): Groups exclusions (`EXDATE`) and additions (`RDATE`) into consolidated content lines, aligning date formats (`VALUE=DATE` vs `VALUE=DATE-TIME`) and timezones (`TZID`) with the series `DTSTART`.
+  6. In contrast, differential oracles emit entire recurring series for single-occurrence cancellations, omit mandatory `METHOD` headers in scheduling streams, or drop `RECURRENCE-ID` parameters on instance updates.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.7.2 (`Method`) and Section 3.8.4.4 (`Recurrence ID`).
+  2. RFC 5546 (iTIP: iCalendar Transport-Independent Interoperability Protocol) Section 3.2.
+  3. draft-ietf-jmap-calendars Section 5.9.2.
+- **Adjudication**:
+  Conforming specification boundary and scheduling transaction fidelity. Injects iTIP `METHOD` headers, isolates single-occurrence messages via `instance_calendar` with `RECURRENCE-ID`, aligns `UID` and `X-JMAP-UID`, and formats recurrence date lists cleanly.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.

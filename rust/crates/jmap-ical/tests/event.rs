@@ -41060,3 +41060,525 @@ fn differential_oracle_read_until_zoned_projection_and_unstateable_diagnostic() 
     assert_eq!(jmap_ical::event::unstateable_until(&clean_rule), None);
     assert!(jmap_ical::event::maps_recurrence_rule(&clean_rule));
 }
+
+#[test]
+fn differential_oracle_recurrence_override_capability_gating_and_patch_validation() {
+    let series = CalendarEvent {
+        id: Some("SERIES1".into()),
+        title: Some("Team Sync".into()),
+        start: Some("2026-06-01T10:00:00".into()),
+        time_zone: Some("Europe/Berlin".into()),
+        duration: Some("PT1H".into()),
+        ..CalendarEvent::default()
+    };
+
+    // 1. Excluded mutex: single-property excluded: true passes
+    assert!(jmap_ical::event::excluded(&json!({"excluded": true})));
+    assert!(!jmap_ical::event::excluded(&json!({"excluded": false})));
+    assert!(!jmap_ical::event::excluded(&json!({"title": "Sync"})));
+    assert!(jmap_ical::event::maps_recurrence_override(
+        &series,
+        "2026-06-08T10:00:00",
+        &json!({"excluded": true})
+    ));
+
+    // Excluded accompanied by other restated fields is refused
+    assert!(!jmap_ical::event::maps_recurrence_override(
+        &series,
+        "2026-06-08T10:00:00",
+        &json!({"excluded": true, "title": "Cancelled Sync"})
+    ));
+
+    // 2. Instance id date-time parsing
+    assert!(!jmap_ical::event::maps_recurrence_override(
+        &series,
+        "INVALID-DATE-TIME",
+        &json!({"title": "Moved"})
+    ));
+
+    // Non-object patch is refused
+    assert!(!jmap_ical::event::maps_recurrence_override(
+        &series,
+        "2026-06-08T10:00:00",
+        &json!("not an object")
+    ));
+
+    // 3. Closed vocabulary OVERRIDE_PROPERTIES (11 allowed properties)
+    assert_eq!(jmap_ical::event::OVERRIDE_PROPERTIES.len(), 11);
+    for prop in [
+        "title",
+        "description",
+        "start",
+        "timeZone",
+        "duration",
+        "status",
+        "freeBusyStatus",
+        "priority",
+        "privacy",
+        "keywords",
+        "alerts",
+    ] {
+        assert!(jmap_ical::event::OVERRIDE_PROPERTIES.contains(&prop));
+    }
+
+    // Unmodeled property in override patch is refused
+    assert!(!jmap_ical::event::maps_override_field(
+        &series,
+        "location",
+        &json!("Room 101")
+    ));
+    assert!(!jmap_ical::event::maps_override_field(
+        &series,
+        "participants",
+        &json!([])
+    ));
+    assert!(!jmap_ical::event::maps_override_field(
+        &series,
+        "xVendorProperty",
+        &json!("custom")
+    ));
+
+    // 4. Null removal vs empty string refusal
+    assert!(jmap_ical::event::maps_override_field(
+        &series,
+        "title",
+        &Value::Null
+    ));
+    assert!(!jmap_ical::event::maps_override_field(
+        &series,
+        "title",
+        &json!("")
+    ));
+    assert!(jmap_ical::event::maps_override_field(
+        &series,
+        "title",
+        &json!("Renamed Sync")
+    ));
+
+    // 5. Timezone gating: IANA vs custom solidus
+    assert!(jmap_ical::event::maps_override_field(
+        &series,
+        "timeZone",
+        &json!("America/New_York")
+    ));
+    assert!(jmap_ical::event::draws_override_field(
+        &series,
+        "timeZone",
+        &json!("America/New_York")
+    ));
+
+    // Custom solidus timezone without series definition fails both
+    assert!(!jmap_ical::event::maps_override_field(
+        &series,
+        "timeZone",
+        &json!("/custom/corp_zone")
+    ));
+    assert!(!jmap_ical::event::draws_override_field(
+        &series,
+        "timeZone",
+        &json!("/custom/corp_zone")
+    ));
+
+    // Custom solidus timezone with series definition fails maps_override_field
+    // (cannot send definition beside recurrenceOverrides alone), but passes draws_override_field
+    let custom_tzid = "/example.com/Europe-Berlin";
+    let series_with_custom_tz = CalendarEvent {
+        id: Some("SERIES2".into()),
+        time_zone: Some(custom_tzid.into()),
+        time_zones: serde_json::from_value(json!({
+            custom_tzid: {
+                "@type": "TimeZone",
+                "tzId": custom_tzid,
+                "standard": [{
+                    "@type": "TimeZoneRule",
+                    "start": "1970-10-25T03:00:00",
+                    "offsetFrom": "+0200",
+                    "offsetTo": "+0100",
+                }],
+            }
+        }))
+        .unwrap(),
+        ..CalendarEvent::default()
+    };
+    assert!(!jmap_ical::event::maps_override_field(
+        &series_with_custom_tz,
+        "timeZone",
+        &json!(custom_tzid)
+    ));
+    assert!(jmap_ical::event::draws_override_field(
+        &series_with_custom_tz,
+        "timeZone",
+        &json!(custom_tzid)
+    ));
+    assert!(jmap_ical::event::sends_recurrence_override(
+        &series_with_custom_tz,
+        "2026-06-08T10:00:00",
+        &json!({"timeZone": custom_tzid})
+    ));
+
+    // 6. Alerts gating and useDefaultAlerts masking
+    let series_default_alerts = CalendarEvent {
+        use_default_alerts: Some(true),
+        ..CalendarEvent::default()
+    };
+    assert!(!jmap_ical::event::maps_override_field(
+        &series_default_alerts,
+        "alerts",
+        &json!({
+            "a1": {
+                "@type": "Alert",
+                "trigger": {
+                    "@type": "OffsetTrigger",
+                    "offset": "-PT15M"
+                },
+                "action": "display"
+            }
+        })
+    ));
+
+    // Empty alerts map is refused (avoids confusing removal with null)
+    assert!(!jmap_ical::event::maps_override_field(
+        &series,
+        "alerts",
+        &json!({})
+    ));
+    assert!(!jmap_ical::event::maps_override_field(
+        &series,
+        "keywords",
+        &json!({})
+    ));
+}
+
+#[test]
+fn differential_oracle_read_overrides_rdate_period_exdate_and_instance_patch() {
+    // 1. RDATE discrete date-time creates empty override patch
+    let ics_rdate = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:SERIES_RDATE\r\n\
+DTSTART:20260601T100000Z\r\n\
+DURATION:PT1H\r\n\
+RRULE:FREQ=WEEKLY\r\n\
+RDATE:20260603T100000Z\r\n\
+SUMMARY:Recurring Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_rdate = jmap_ical::event::ical_to_event(ics_rdate).expect("parse rdate ics");
+    let overrides_rdate = ev_rdate.recurrence_overrides.expect("overrides present");
+    assert_eq!(
+        overrides_rdate.get("2026-06-03T10:00:00"),
+        Some(&Value::Object(Default::default()))
+    );
+
+    // 2. RDATE period with matching vs differing duration
+    let ics_period = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:SERIES_PERIOD\r\n\
+DTSTART:20260601T100000Z\r\n\
+DURATION:PT1H\r\n\
+RRULE:FREQ=WEEKLY\r\n\
+RDATE;VALUE=PERIOD:20260603T100000Z/PT1H,20260605T100000Z/PT2H\r\n\
+SUMMARY:Recurring Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_period = jmap_ical::event::ical_to_event(ics_period).expect("parse period ics");
+    let overrides_period = ev_period.recurrence_overrides.expect("overrides present");
+    // Matching duration PT1H filters to empty patch
+    assert_eq!(
+        overrides_period.get("2026-06-03T10:00:00"),
+        Some(&Value::Object(Default::default()))
+    );
+    // Differing duration PT2H patches duration
+    assert_eq!(
+        overrides_period.get("2026-06-05T10:00:00"),
+        Some(&json!({"duration": "PT2H"}))
+    );
+
+    // 3. EXDATE exclusion ingestion
+    let ics_exdate = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:SERIES_EXDATE\r\n\
+DTSTART:20260601T100000Z\r\n\
+DURATION:PT1H\r\n\
+RRULE:FREQ=WEEKLY\r\n\
+EXDATE:20260608T100000Z\r\n\
+SUMMARY:Recurring Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_exdate = jmap_ical::event::ical_to_event(ics_exdate).expect("parse exdate ics");
+    let overrides_exdate = ev_exdate.recurrence_overrides.expect("overrides present");
+    assert_eq!(
+        overrides_exdate.get("2026-06-08T10:00:00"),
+        Some(&json!({"excluded": true}))
+    );
+
+    // 4. Detached VEVENT with RECURRENCE-ID takes precedence over EXDATE and RDATE
+    let ics_detached = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:SERIES_DETACHED\r\n\
+DTSTART:20260601T100000Z\r\n\
+DURATION:PT1H\r\n\
+RRULE:FREQ=WEEKLY\r\n\
+EXDATE:20260615T100000Z\r\n\
+SUMMARY:Recurring Meeting\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:SERIES_DETACHED\r\n\
+RECURRENCE-ID:20260615T100000Z\r\n\
+DTSTART:20260615T100000Z\r\n\
+DURATION:PT1H30M\r\n\
+SUMMARY:Special Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_detached = jmap_ical::event::ical_to_event(ics_detached).expect("parse detached ics");
+    let overrides_detached = ev_detached.recurrence_overrides.expect("overrides present");
+    let patch = overrides_detached
+        .get("2026-06-15T10:00:00")
+        .expect("patch present");
+    assert_eq!(
+        patch,
+        &json!({
+            "title": "Special Meeting",
+            "duration": "PT1H30M"
+        })
+    );
+
+    // 5. RANGE=THISANDFUTURE refusal: skipped to avoid open-ended recurrence split ambiguity
+    let ics_range = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:SERIES_RANGE\r\n\
+DTSTART:20260601T100000Z\r\n\
+DURATION:PT1H\r\n\
+RRULE:FREQ=WEEKLY\r\n\
+SUMMARY:Recurring Meeting\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:SERIES_RANGE\r\n\
+RECURRENCE-ID;RANGE=THISANDFUTURE:20260622T100000Z\r\n\
+DTSTART:20260622T100000Z\r\n\
+SUMMARY:Future Meeting\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+    let ev_range = jmap_ical::event::ical_to_event(ics_range).expect("parse range ics");
+    // RANGE=THISANDFUTURE component is refused/skipped; no override synthesized
+    assert!(ev_range.recurrence_overrides.is_none());
+
+    // 6. Direct instance_patch calculation: property differences and null removals
+    let master = CalendarEvent {
+        id: Some("M1".into()),
+        title: Some("Weekly Status".into()),
+        description: Some("Project updates".into()),
+        start: Some("2026-06-01T10:00:00".into()),
+        duration: Some("PT1H".into()),
+        priority: Some(5),
+        privacy: Some("public".into()),
+        ..CalendarEvent::default()
+    };
+    let modified = CalendarEvent {
+        id: Some("M1".into()),
+        title: Some("Quarterly Review".into()),
+        description: Some("Project updates".into()), // identical, omitted
+        start: Some("2026-06-08T11:00:00".into()),   // moved time, included in patch
+        duration: Some("PT2H".into()),
+        priority: None, // cleared, emits null
+        privacy: Some("private".into()),
+        ..CalendarEvent::default()
+    };
+    let synthesized_patch =
+        jmap_ical::event::instance_patch(&master, &modified, "2026-06-08T10:00:00");
+    assert_eq!(
+        synthesized_patch,
+        json!({
+            "title": "Quarterly Review",
+            "start": "2026-06-08T11:00:00",
+            "duration": "PT2H",
+            "priority": Value::Null,
+            "privacy": "private"
+        })
+    );
+}
+
+#[test]
+fn differential_oracle_shows_without_time_all_day_gating_preconditions() {
+    // 1. at_midnight and whole_days primitives
+    assert!(jmap_ical::event::at_midnight("20260601T000000"));
+    assert!(jmap_ical::event::at_midnight("20261231T000000"));
+    assert!(!jmap_ical::event::at_midnight("20260601T090000"));
+    assert!(!jmap_ical::event::at_midnight("20260601T000001"));
+
+    assert!(jmap_ical::event::whole_days("P1D"));
+    assert!(jmap_ical::event::whole_days("P2D"));
+    assert!(jmap_ical::event::whole_days("P1W"));
+    assert!(jmap_ical::event::whole_days("p3d"));
+    assert!(!jmap_ical::event::whole_days("PT1H"));
+    assert!(!jmap_ical::event::whole_days("P1DT1H"));
+    assert!(!jmap_ical::event::whole_days("PT0S"));
+    assert!(!jmap_ical::event::whole_days("-P1D"));
+
+    // 2. names_a_time_of_day detection
+    let rule_with_hour = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        by_hour: Some(vec![9]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::names_a_time_of_day(&rule_with_hour));
+
+    let rule_with_minute = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        by_minute: Some(vec![30]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::names_a_time_of_day(&rule_with_minute));
+
+    let rule_with_second = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        by_second: Some(vec![0]),
+        ..RecurrenceRule::default()
+    };
+    assert!(jmap_ical::event::names_a_time_of_day(&rule_with_second));
+
+    let pure_calendar_rule = RecurrenceRule {
+        frequency: "weekly".to_string(),
+        by_day: Some(vec![NDay::new("mo")]),
+        ..RecurrenceRule::default()
+    };
+    assert!(!jmap_ical::event::names_a_time_of_day(&pure_calendar_rule));
+
+    // 3. shows_without_time gating matrix
+    let valid_all_day = CalendarEvent {
+        show_without_time: Some(true),
+        start: Some("2026-06-01T00:00:00".into()),
+        duration: Some("P1D".into()),
+        time_zone: None,
+        ..CalendarEvent::default()
+    };
+    assert!(jmap_ical::event::shows_without_time(
+        &valid_all_day,
+        "20260601T000000"
+    ));
+
+    // Refuses when timeZone is present (RFC 5545 §3.2.19)
+    let zoned_all_day = CalendarEvent {
+        time_zone: Some("Europe/Berlin".into()),
+        ..valid_all_day.clone()
+    };
+    assert!(!jmap_ical::event::shows_without_time(
+        &zoned_all_day,
+        "20260601T000000"
+    ));
+
+    // Refuses when start is not midnight
+    assert!(!jmap_ical::event::shows_without_time(
+        &valid_all_day,
+        "20260601T090000"
+    ));
+
+    // Refuses sub-day duration
+    let subday_all_day = CalendarEvent {
+        duration: Some("PT8H".into()),
+        ..valid_all_day.clone()
+    };
+    assert!(!jmap_ical::event::shows_without_time(
+        &subday_all_day,
+        "20260601T000000"
+    ));
+
+    // Refuses recurrence rule naming time of day
+    let timed_rule_event = CalendarEvent {
+        recurrence_rule: Some(RecurrenceRule {
+            frequency: "daily".to_string(),
+            by_hour: Some(vec![10]),
+            ..RecurrenceRule::default()
+        }),
+        ..valid_all_day.clone()
+    };
+    assert!(!jmap_ical::event::shows_without_time(
+        &timed_rule_event,
+        "20260601T000000"
+    ));
+
+    // Refuses when override instance moves to timed hour
+    let timed_override_event = CalendarEvent {
+        recurrence_overrides: Some(BTreeMap::from([(
+            "2026-06-02T00:00:00".to_string(),
+            json!({ "start": "2026-06-02T14:00:00" }),
+        )])),
+        ..valid_all_day.clone()
+    };
+    assert!(!jmap_ical::event::shows_without_time(
+        &timed_override_event,
+        "20260601T000000"
+    ));
+}
+
+#[test]
+fn differential_oracle_scheduling_ical_itip_methods_and_instance_narrowing() {
+    let series = CalendarEvent {
+        id: Some("SERIES_ITIP_1".into()),
+        uid: Some("jscalendar-uuid-1".into()),
+        title: Some("Architecture Review".into()),
+        start: Some("2026-06-01T14:00:00".into()),
+        duration: Some("PT1H".into()),
+        time_zone: Some("UTC".into()),
+        recurrence_rule: Some(RecurrenceRule {
+            frequency: "weekly".to_string(),
+            count: Some(5),
+            ..RecurrenceRule::default()
+        }),
+        recurrence_overrides: Some(BTreeMap::from([(
+            "2026-06-08T14:00:00".to_string(),
+            json!({ "title": "Architecture Review: Storage Engine" }),
+        )])),
+        ..CalendarEvent::default()
+    };
+
+    // 1. Full-series scheduling message carries METHOD:REQUEST and all components
+    let request_ics = jmap_ical::event::scheduling_ical(&series, "REQUEST", None);
+    assert!(request_ics.contains("METHOD:REQUEST\r\n"));
+    assert!(request_ics.contains("RRULE:FREQ=WEEKLY;COUNT=5\r\n"));
+    assert!(request_ics.contains("Architecture Review: Storage Engine"));
+
+    // 2. Single-occurrence scheduling message narrows to exactly one VEVENT with RECURRENCE-ID
+    let instance = CalendarEvent {
+        id: Some("SERIES_ITIP_1".into()),
+        uid: Some("jscalendar-uuid-1".into()),
+        title: Some("Architecture Review: Storage Engine".into()),
+        start: Some("2026-06-08T14:00:00".into()),
+        duration: Some("PT1H".into()),
+        time_zone: Some("UTC".into()),
+        ..CalendarEvent::default()
+    };
+    let cancel_ics =
+        jmap_ical::event::scheduling_ical(&instance, "CANCEL", Some("2026-06-08T14:00:00"));
+    assert!(cancel_ics.contains("METHOD:CANCEL\r\n"));
+    assert!(cancel_ics.contains("RECURRENCE-ID:20260608T140000Z\r\n"));
+    // Narrows message: series recurrence rule is omitted from the single-instance cancellation
+    assert!(!cancel_ics.contains("RRULE:"));
+    // Aligns UID and client X-JMAP-UID
+    assert!(cancel_ics.contains("UID:SERIES_ITIP_1\r\n"));
+    assert!(cancel_ics.contains("X-JMAP-UID:jscalendar-uuid-1\r\n"));
+    // Carries modified occurrence title
+    assert!(cancel_ics.contains("SUMMARY:Architecture Review: Storage Engine\r\n"));
+
+    // 3. event_calendar and instance_calendar AST structure
+    let event_comp = jmap_ical::event::event_calendar(&series, Some("PUBLISH"));
+    let event_ics = event_comp.to_ics();
+    assert!(event_ics.contains("BEGIN:VCALENDAR\r\n"));
+    assert!(event_ics.contains("METHOD:PUBLISH\r\n"));
+
+    let instance_comp =
+        jmap_ical::event::instance_calendar(&series, "CANCEL", "2026-06-08T14:00:00");
+    let instance_ics = instance_comp.to_ics();
+    assert!(instance_ics.contains("BEGIN:VCALENDAR\r\n"));
+    assert!(instance_ics.contains("METHOD:CANCEL\r\n"));
+    assert!(instance_ics.contains("RECURRENCE-ID:20260608T140000Z\r\n"));
+}

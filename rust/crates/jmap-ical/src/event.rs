@@ -1587,7 +1587,7 @@ pub fn draws_override_field(series: &CalendarEvent, name: &str, value: &Value) -
 /// wrong type. That is the reading that cannot make an appointment disappear:
 /// [`maps_recurrence_override`] refuses the malformed shape separately, so the
 /// mistake cannot be written back to the server either way.
-fn excluded(patch: &Value) -> bool {
+pub fn excluded(patch: &Value) -> bool {
     patch.get("excluded") == Some(&Value::Bool(true))
 }
 
@@ -1637,7 +1637,7 @@ pub fn scheduling_ical(event: &CalendarEvent, method: &str, recurrence_id: Optio
     }
 }
 
-fn event_calendar(event: &CalendarEvent, method: Option<&str>) -> Component {
+pub fn event_calendar(event: &CalendarEvent, method: Option<&str>) -> Component {
     let start = event.start.as_deref().and_then(to_ical_date_time);
     // Whether this event goes out as a date rather than a date-time, which is
     // the whole of `showWithoutTime` on this side. Decided once for the whole
@@ -1694,7 +1694,7 @@ fn event_calendar(event: &CalendarEvent, method: Option<&str>) -> Component {
 /// a `RECURRENCE-ID` rather than the series' own `RRULE`/`EXDATE`/`RDATE`,
 /// since `event` here already stands for the one occurrence the message is
 /// about rather than the whole series.
-fn instance_calendar(event: &CalendarEvent, method: &str, recurrence_id: &str) -> Component {
+pub fn instance_calendar(event: &CalendarEvent, method: &str, recurrence_id: &str) -> Component {
     let start = event.start.as_deref().and_then(to_ical_date_time);
     let as_a_date = start
         .as_deref()
@@ -3848,7 +3848,7 @@ fn read_overrides(
 /// `start` is compared against `id` rather than against the series: an override's
 /// key *is* its instance's start, so a `DTSTART` equal to it says nothing, and
 /// one that differs is an occurrence the user moved.
-fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) -> Value {
+pub fn instance_patch(series: &CalendarEvent, instance: &CalendarEvent, id: &str) -> Value {
     let mut patch = Map::new();
     for (name, was, now) in [
         ("title", &series.title, &instance.title),
