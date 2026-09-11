@@ -39469,3 +39469,283 @@ fn differential_oracle_calendar_envelope_itip_method_and_override_inheritance() 
     assert!(second_vevent.contains("RECURRENCE-ID"));
     assert!(second_vevent.contains("PRIORITY:1\r\n"));
 }
+
+#[test]
+fn differential_oracle_freebusy_envelope_status_mapping_and_refusal() {
+    // 1. free_busy_type: closed draft mapping with safe BUSY fallback
+    assert_eq!(free_busy_type("tentative"), "BUSY-TENTATIVE");
+    assert_eq!(free_busy_type("unavailable"), "BUSY-UNAVAILABLE");
+    assert_eq!(free_busy_type("confirmed"), "BUSY");
+    assert_eq!(free_busy_type("out-of-office"), "BUSY");
+    assert_eq!(free_busy_type("unknown-future-status"), "BUSY");
+
+    // 2. mailto: attendee address normalization with prefix idempotence
+    assert_eq!(
+        jmap_ical::freebusy::mailto("alice@example.com"),
+        "mailto:alice@example.com"
+    );
+    assert_eq!(
+        jmap_ical::freebusy::mailto("mailto:bob@example.com"),
+        "mailto:bob@example.com"
+    );
+    assert_eq!(
+        jmap_ical::freebusy::mailto("MAILTO:carol@example.com"),
+        "mailto:carol@example.com"
+    );
+
+    // 3. instant: RFC 3339 sub-second fraction truncation and UTC validation
+    let valid_integer = UtcDate::from("2026-06-01T10:00:00Z");
+    assert_eq!(
+        jmap_ical::freebusy::instant(&valid_integer),
+        Some("20260601T100000Z".to_string())
+    );
+    let valid_fractional = UtcDate::from("2026-06-01T10:00:00.123Z");
+    assert_eq!(
+        jmap_ical::freebusy::instant(&valid_fractional),
+        Some("20260601T100000Z".to_string())
+    );
+    let missing_z = UtcDate::from("2026-06-01T10:00:00");
+    assert_eq!(jmap_ical::freebusy::instant(&missing_z), None);
+    let non_digit_fraction = UtcDate::from("2026-06-01T10:00:00.xyzZ");
+    assert_eq!(jmap_ical::freebusy::instant(&non_digit_fraction), None);
+
+    // 4. busy_periods_to_vfreebusy: bare VFREEBUSY component and refusal integrity
+    let window_start = UtcDate::from("2026-06-01T08:00:00Z");
+    let window_end = UtcDate::from("2026-06-01T18:00:00Z");
+    let periods = vec![
+        BusyPeriod::new("2026-06-01T09:00:00Z", "2026-06-01T10:00:00Z", "confirmed"),
+        BusyPeriod::new(
+            "2026-06-01T13:00:00.500Z",
+            "2026-06-01T14:30:00.500Z",
+            "tentative",
+        ),
+    ];
+    let vfreebusy =
+        busy_periods_to_vfreebusy("alice@example.com", &window_start, &window_end, &periods)
+            .expect("valid freebusy component");
+    assert!(vfreebusy.starts_with("BEGIN:VFREEBUSY\r\n"));
+    assert!(vfreebusy.ends_with("END:VFREEBUSY\r\n"));
+    assert!(!vfreebusy.contains("BEGIN:VCALENDAR"));
+    assert!(vfreebusy.contains("DTSTART:20260601T080000Z\r\n"));
+    assert!(vfreebusy.contains("DTEND:20260601T180000Z\r\n"));
+    assert!(vfreebusy.contains("ATTENDEE:mailto:alice@example.com\r\n"));
+    assert!(vfreebusy.contains("FREEBUSY;FBTYPE=BUSY:20260601T090000Z/20260601T100000Z\r\n"));
+    assert!(
+        vfreebusy.contains("FREEBUSY;FBTYPE=BUSY-TENTATIVE:20260601T130000Z/20260601T143000Z\r\n")
+    );
+
+    // Empty periods list still produces valid component demarcating the window
+    let empty_periods_res =
+        busy_periods_to_vfreebusy("bob@example.com", &window_start, &window_end, &[]);
+    assert!(empty_periods_res.is_some());
+
+    // Corrupt period timestamp causes whole-component refusal (fail-closed)
+    let corrupt_periods = vec![BusyPeriod::new(
+        "not-a-valid-utc-date",
+        "2026-06-01T10:00:00Z",
+        "busy",
+    )];
+    assert_eq!(
+        busy_periods_to_vfreebusy(
+            "alice@example.com",
+            &window_start,
+            &window_end,
+            &corrupt_periods
+        ),
+        None
+    );
+}
+
+#[test]
+fn differential_oracle_line_folding_utf8_escapes_and_rrule_entry() {
+    // 1. fold_overlong_lines: short lines pass through unchanged
+    let short = "SUMMARY:Short line\r\nDESCRIPTION:Another short line\r\n".to_string();
+    assert_eq!(jmap_ical::event::fold_overlong_lines(short.clone()), short);
+
+    // 2. fold_overlong_lines: long line exceeds 75 octets and folds with CRLF + space
+    let long_line = format!("DESCRIPTION:{}\r\n", "A".repeat(100));
+    let folded = jmap_ical::event::fold_overlong_lines(long_line);
+    for physical_line in folded.split("\r\n") {
+        if !physical_line.is_empty() {
+            assert!(
+                physical_line.len() <= jmap_ical::event::MAX_LINE_OCTETS,
+                "line length {} exceeded MAX_LINE_OCTETS",
+                physical_line.len()
+            );
+        }
+    }
+    assert!(folded.contains("\r\n "));
+
+    // 3. UTF-8 multi-byte code point boundary protection
+    // Construct line where multibyte character spans 75-octet boundary
+    let prefix = "X-COMMENT:";
+    let padding = "x".repeat(75 - prefix.len() - 1); // 74 bytes total so far
+    let euro = "€"; // 3 bytes: e2 82 ac
+    let line_with_euro = format!("{prefix}{padding}{euro}rest of line\r\n");
+    let folded_euro = jmap_ical::event::fold_overlong_lines(line_with_euro.clone());
+    // Ensure all folded lines are valid UTF-8 and do not exceed octet limit
+    for physical_line in folded_euro.split("\r\n") {
+        if !physical_line.is_empty() {
+            assert!(physical_line.len() <= jmap_ical::event::MAX_LINE_OCTETS);
+        }
+    }
+    // Unfolding reconstitutes original content
+    let unfolded_euro = folded_euro.replace("\r\n ", "").replace("\r\n\t", "");
+    assert_eq!(unfolded_euro, line_with_euro);
+
+    // 4. Backslash escape sequence split protection
+    // If an odd backslash precedes boundary, it steps back to keep escape pair together
+    let escape_test = format!("{prefix}{padding}\\,more text\r\n");
+    let folded_escape = jmap_ical::event::fold_overlong_lines(escape_test.clone());
+    for physical_line in folded_escape.split("\r\n") {
+        if !physical_line.is_empty() {
+            assert!(physical_line.len() <= jmap_ical::event::MAX_LINE_OCTETS);
+        }
+    }
+    assert_eq!(
+        folded_escape.replace("\r\n ", "").replace("\r\n\t", ""),
+        escape_test
+    );
+
+    // 5. rrule_entry: parses valid recurrence rules into typed AST entry
+    let rrule = jmap_ical::event::rrule_entry("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE,FR");
+    assert!(rrule.is_some());
+    let entry = rrule.unwrap();
+    assert_eq!(entry.name, calcard::icalendar::ICalendarProperty::Rrule);
+    let raw_val = jmap_ical::event::entry_raw_value(&entry);
+    assert!(raw_val.contains("FREQ=WEEKLY"));
+    assert!(raw_val.contains("INTERVAL=2"));
+    assert!(raw_val.contains("BYDAY=MO,WE,FR"));
+}
+
+#[test]
+fn differential_oracle_event_status_and_transparency_mapping() {
+    // 1. ical_status and known_status: closed vocabulary mapping
+    assert_eq!(
+        jmap_ical::event::ical_status("confirmed"),
+        Some("CONFIRMED")
+    );
+    assert_eq!(
+        jmap_ical::event::ical_status("tentative"),
+        Some("TENTATIVE")
+    );
+    assert_eq!(
+        jmap_ical::event::ical_status("cancelled"),
+        Some("CANCELLED")
+    );
+    // Case-insensitivity
+    assert_eq!(
+        jmap_ical::event::ical_status("Confirmed"),
+        Some("CONFIRMED")
+    );
+    assert_eq!(
+        jmap_ical::event::ical_status("CANCELLED"),
+        Some("CANCELLED")
+    );
+    // Unrecognized or VTODO statuses rejected
+    assert_eq!(jmap_ical::event::ical_status("draft"), None);
+    assert_eq!(jmap_ical::event::ical_status("completed"), None);
+    assert_eq!(jmap_ical::event::ical_status("in-process"), None);
+    assert!(jmap_ical::event::known_status("confirmed"));
+    assert!(jmap_ical::event::known_status("tentative"));
+    assert!(jmap_ical::event::known_status("cancelled"));
+    assert!(!jmap_ical::event::known_status("needs-action"));
+
+    // 2. ical_transparency and known_transparency: closed vocabulary mapping
+    assert_eq!(
+        jmap_ical::event::ical_transparency("free"),
+        Some("TRANSPARENT")
+    );
+    assert_eq!(jmap_ical::event::ical_transparency("busy"), Some("OPAQUE"));
+    // Case-insensitivity
+    assert_eq!(
+        jmap_ical::event::ical_transparency("Free"),
+        Some("TRANSPARENT")
+    );
+    assert_eq!(jmap_ical::event::ical_transparency("BUSY"), Some("OPAQUE"));
+    // Unrecognized values rejected
+    assert_eq!(jmap_ical::event::ical_transparency("tentative"), None);
+    assert_eq!(jmap_ical::event::ical_transparency("out-of-office"), None);
+    assert!(jmap_ical::event::known_transparency("free"));
+    assert!(jmap_ical::event::known_transparency("busy"));
+    assert!(!jmap_ical::event::known_transparency("opaque"));
+
+    // 3. Round-trip in event_to_ical and ical_to_event
+    let mut event = fixture_event();
+    event.status = Some("confirmed".to_string());
+    event.free_busy_status = Some("free".to_string());
+
+    let ics = jmap_ical::event_to_ical(&event);
+    assert!(ics.contains("STATUS:CONFIRMED\r\n"));
+    assert!(ics.contains("TRANSP:TRANSPARENT\r\n"));
+
+    let parsed = jmap_ical::ical_to_event(&ics).expect("parse ics");
+    assert_eq!(parsed.status, Some("confirmed".to_string()));
+    assert_eq!(parsed.free_busy_status, Some("free".to_string()));
+
+    // When status and free_busy_status are None, lines are not emitted
+    event.status = None;
+    event.free_busy_status = None;
+    let ics_omitted = jmap_ical::event_to_ical(&event);
+    assert!(!ics_omitted.contains("STATUS:"));
+    assert!(!ics_omitted.contains("TRANSP:"));
+}
+
+#[test]
+fn differential_oracle_privacy_class_and_priority_bounds() {
+    // 1. ical_privacy and known_privacy: cross-vocabulary alignment
+    assert_eq!(jmap_ical::event::ical_privacy("public"), Some("PUBLIC"));
+    assert_eq!(jmap_ical::event::ical_privacy("private"), Some("PRIVATE"));
+    assert_eq!(
+        jmap_ical::event::ical_privacy("secret"),
+        Some("CONFIDENTIAL")
+    );
+    // Case-insensitivity
+    assert_eq!(jmap_ical::event::ical_privacy("Public"), Some("PUBLIC"));
+    assert_eq!(
+        jmap_ical::event::ical_privacy("Secret"),
+        Some("CONFIDENTIAL")
+    );
+    // RFC 5545 CONFIDENTIAL directly as JSCalendar value is rejected (must be secret)
+    assert_eq!(jmap_ical::event::ical_privacy("confidential"), None);
+    assert_eq!(jmap_ical::event::ical_privacy("unknown"), None);
+    assert!(jmap_ical::event::known_privacy("public"));
+    assert!(jmap_ical::event::known_privacy("private"));
+    assert!(jmap_ical::event::known_privacy("secret"));
+    assert!(!jmap_ical::event::known_privacy("confidential"));
+
+    // 2. known_priority: integer bounds 0..=9
+    assert!(jmap_ical::event::known_priority(0));
+    assert!(jmap_ical::event::known_priority(1));
+    assert!(jmap_ical::event::known_priority(5));
+    assert!(jmap_ical::event::known_priority(9));
+    assert!(!jmap_ical::event::known_priority(-1));
+    assert!(!jmap_ical::event::known_priority(10));
+    assert!(!jmap_ical::event::known_priority(100));
+
+    // 3. Outbound serialization in event_to_ical
+    let mut event = fixture_event();
+    event.privacy = Some("secret".to_string());
+    event.priority = Some(3);
+
+    let ics = jmap_ical::event_to_ical(&event);
+    assert!(ics.contains("CLASS:CONFIDENTIAL\r\n"));
+    assert!(ics.contains("PRIORITY:3\r\n"));
+
+    // Inbound parse of CLASS:CONFIDENTIAL maps to JSCalendar secret
+    let parsed = jmap_ical::ical_to_event(&ics).expect("parse ics");
+    assert_eq!(parsed.privacy, Some("secret".to_string()));
+    assert_eq!(parsed.priority, Some(3));
+
+    // Priority 0 serialization
+    event.priority = Some(0);
+    let ics_p0 = jmap_ical::event_to_ical(&event);
+    assert!(ics_p0.contains("PRIORITY:0\r\n"));
+    let parsed_p0 = jmap_ical::ical_to_event(&ics_p0).expect("parse ics");
+    assert_eq!(parsed_p0.priority, Some(0));
+
+    // Priority outside bounds is not emitted
+    event.priority = Some(15);
+    let ics_invalid = jmap_ical::event_to_ical(&event);
+    assert!(!ics_invalid.contains("PRIORITY:15"));
+}
