@@ -6539,3 +6539,71 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.336 Divergence 336: `rrule_to_rule`, `to_nday`, `RecurrenceRule`, and `NDay`: Recurrence Rule Sub-Object `@type` Annotation Bifurcation: RFC 8984 Mandatory `@type: "RecurrenceRule"` and `@type: "NDay"` vs JSCalendar-bis / Stalwart Contextual `@type` Elision, Deserialization Tolerance, and Structural Equivalence
+
+- **Observed Behavior**:
+  Stalwart v1.0.0 omits the `@type` annotation on inner recurrence objects, serializing `recurrenceRule` as a bare object without `@type: "RecurrenceRule"`, and each element of `byDay` as `{ "day": "..." }` without `@type: "NDay"`. In contrast, `jmap-ical`:
+  1. Strict RFC 8984 typing: `rrule_to_rule` explicitly stamps `@type: "RecurrenceRule"` on the generated rule, and `to_nday` stamps `@type: "NDay"` on each day element per RFC 8984 Section 4.3.1 and Section 4.3.3.
+  2. Deserialization tolerance: In `jmap-proto`, both `RecurrenceRule` and `NDay` mark their respective `@type` fields (`rule_type` and `day_type`) with `#[serde(default, skip_serializing_if = "Option::is_none")]`. When reading server payloads where `@type` has been elided, deserialization succeeds without error and leaves the fields as `None`.
+  3. Structural equivalence: `maps_recurrence_rule` and `rule_to_rrule` evaluate and serialize rules identically whether `@type` is present or absent, ensuring that incoming server objects can be validated and rendered to RFC 5545 `RRULE` strings without requiring artificial type rewriting.
+- **Specification and Architectural Context**:
+  1. RFC 8984 Section 1.4 (`Type Signatures`), Section 4.3.1 (`Recurrence Rules`), and Section 4.3.3 (`RecurrenceRule and NDay`).
+  2. draft-ietf-calext-jscalendar-bis Section 3.3.3 (`RecurrenceRule`).
+  3. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent`).
+- **Adjudication**:
+  Conforming specification adaptation and forward-compatibility design. `jmap-ical` emits conforming RFC 8984 `@type` markers while tolerating server-side `@type` elision conforming to draft JSCalendar-bis extensions.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.337 Divergence 337: `named_by_parts`, `time_of_day_part`, `by_second_part`, `by_minute_part`, `by_hour_part`, and `to_time_of_day`: Recurrence Rule Time-of-Day Parts Ingestion and Serialization Pipeline: Finest-Unit Outward Component Ordering, Exact Value Range Bounding (0..=23, 0..=59, 0..=60 Leap Seconds), Zero as Valid Instant Value vs `u32::MAX` Sentinel Refusal
+
+- **Observed Behavior**:
+  Translating recurrence rules with time-of-day constraints between RFC 5545 `BYHOUR`, `BYMINUTE`, `BYSECOND` and JSCalendar RFC 8984 Section 4.3.3 `byHour`, `byMinute`, `bySecond` requires preserving subpart ordering, enforcing bounds, and distinguishing valid zero values from unparseable input. In `jmap-ical`:
+  1. Outward finest-unit ordering: `named_by_parts` emits time-of-day subparts finest unit outwards (`bySecond`, `byMinute`, `byHour`) ahead of calendar days, matching libical and calcard expectations.
+  2. Leap second tolerance: `time_of_day_part` bounds hours to 0..=23 and minutes to 0..=59, but permits seconds up to 60. RFC 5545 Section 3.3.10 explicitly allows the sixtieth second to represent occasional UTC leap seconds.
+  3. Valid zero value preservation: Unlike calendar days where zero is invalid, 0 is a valid time-of-day value (midnight, zeroth minute, zeroth second). `time_of_day_part` preserves `Some(&[0])` as `BYHOUR=0`, `BYMINUTE=0`, `BYSECOND=0`.
+  4. Sentinel-based parsing failure containment: Inbound `to_time_of_day` maps unparseable tokens to `u32::MAX` rather than 0. When evaluated by `time_of_day_part`, the sentinel exceeds `largest`, returning `None` and causing `maps_recurrence_rule` to return `false`, preventing malformed input from silently altering the recurrence schedule.
+  5. In contrast, differential oracles or liberal parsers may reorder rule parts, reject leap second 60, or collapse unparseable values into 0.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.3 (`RecurrenceRule`).
+- **Adjudication**:
+  Conforming specification boundary and temporal arithmetic fidelity. Enforces strict time-of-day bounds including leap seconds, preserves zero as midnight, and fails closed on invalid tokens.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.338 Divergence 338: `by_month_part`, `month_token`, `by_year_day_part`, `holds_a_year`, `by_week_no_part`, `by_set_position_part`, and `selects_from_a_set`: Recurrence Rule Period and Position Bounding: Gregorian String Month Filtering (`byMonth`, `5L` Refusal), Frequency Gating (`holds_a_year`, `YEARLY` Week Isolation), Signed Day/Week Limits (-366..=366, -53..=53), and `BYSETPOS` Expansion Set Prerequisite Enforcement
+
+- **Observed Behavior**:
+  Applying period limits and set position selections in recurrence rules requires strict frequency compatibility checks, signed range validation, and prerequisite enforcement. In `jmap-ical`:
+  1. Gregorian string month filtering: RFC 8984 defines `byMonth` as `String[]` to accommodate non-Gregorian leap months (`5L` under RFC 7529 `RSCALE`). Because `jmap-ical` does not model non-Gregorian calendar systems, `month_token` accepts only Gregorian months 1..=12 in unpadded decimal strings (`3`, not `03`), refusing `5L` and out-of-range values.
+  2. Year-day frequency gating: RFC 5545 Section 3.3.10 forbids `BYYEARDAY` beside `DAILY`, `WEEKLY`, or `MONTHLY`. `holds_a_year` enforces this gate, while `year_day_token` validates signed day numbers in -366..=-1 and 1..=366 (excluding 0).
+  3. Week-number frequency isolation: RFC 5545 strictly isolates `BYWEEKNO` to `YEARLY` frequency only. `week_no_token` bounds values to -53..=-1 and 1..=53 (excluding 0).
+  4. Expansion set prerequisites for `BYSETPOS`: RFC 5545 Section 3.3.10 mandates that `BYSETPOS` MUST only be used in conjunction with other `BYxxx` parts. `selects_from_a_set` verifies that at least one `BYxxx` rule part actually produced output before emitting `BYSETPOS`.
+  5. In contrast, differential oracles permit `BYYEARDAY` or `BYWEEKNO` on invalid frequencies, accept leading-zero month numbers, or emit standalone `BYSETPOS`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 7529 (`Non-Gregorian Recurrence Rules in iCalendar`).
+  3. RFC 8984 Section 4.3.3 (`RecurrenceRule`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule integrity. Restricts `byMonth` to canonical Gregorian representations, enforces RFC 5545 frequency compatibility gates for year-day and week-number parts, and requires expansion prerequisites for `BYSETPOS`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.339 Divergence 339: `first_day_of_week_part`, `weekday_token`, `WKST`, and `firstDayOfWeek`: Weekday Normalization and Work Week Start Alignment: RFC 5545 `WKST=MO` / RFC 8984 `firstDayOfWeek="mo"` Default Omission Semantics, Libical Round-Trip Stability, Strict Lowercase Token Validation, and Precedence over Frequency Intervals
+
+- **Observed Behavior**:
+  Aligning the start of the work week across RFC 5545 (`WKST`) and RFC 8984 (`firstDayOfWeek`) requires managing default values and case conventions:
+  1. Default Monday omission: RFC 5545 Section 3.3.10 defaults `WKST` to `MO`. RFC 8984 Section 4.3.3 defaults `firstDayOfWeek` to `"mo"`. `first_day_of_week_part` suppresses `WKST=MO` when serializing to iCalendar. Because libical automatically strips `WKST=MO` from ingested components, omitting the explicit default prevents spurious differences from appearing as user edits during EDS round-trips.
+  2. Case sensitivity and token validation: `weekday_token` requires exact lowercase 2-letter tokens (`mo`, `tu`, `we`, `th`, `fr`, `sa`, `su`), refusing uppercase or malformed tokens to prevent round-trip formatting drift. Inbound parsing (`rrule_to_rule`) lowers incoming `WKST` values so they conform to RFC 8984.
+  3. Frequency independence: `WKST` is preserved across all frequencies where specified, correctly governing ISO 8601 week boundaries for interval calculations.
+  4. In contrast, differential oracles emit redundant `WKST=MO` or accept mixed-case values without normalization.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.3 (`RecurrenceRule`).
+- **Adjudication**:
+  Conforming specification boundary and round-trip determinism. Suppresses default `WKST=MO` for libical compatibility, normalizes weekday casing to RFC 8984 lowercase conventions, and guarantees idempotent rule translation.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
