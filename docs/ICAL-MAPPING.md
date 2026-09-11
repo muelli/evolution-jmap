@@ -6606,4 +6606,75 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.340 Divergence 340: `by_day_part`, `by_day_token`, `counts_within_a_period`, `by_month_day_part`, `month_day_token`, `to_nday`, and `to_month_day`: Recurrence Rule Ordinal Days and Month-Day Combinatorial Rules: RFC 5545 Ordinal Weekday Scoping (`MONTHLY`/`YEARLY` vs `DAILY`/`WEEKLY`), Signed Month-Day Bounding (-31..=31, Zero Refusal), Canonical Ingestion Parsing (`to_nday`, `to_month_day`), and Structural Round-Trip Equivalence
+
+- **Observed Behavior**:
+  Translating recurrence rules with ordinal weekday and month-day constraints between RFC 5545 (`BYDAY`, `BYMONTHDAY`) and JSCalendar RFC 8984 Section 4.3.3 (`byDay`, `byMonthDay`) requires strict frequency scoping, signed integer bounding, and fail-closed error sentinels. In `jmap-ical`:
+  1. Ordinal weekday frequency scoping: RFC 5545 Section 3.3.10 explicitly specifies that a signed numeric prefix on `BYDAY` (such as `+1MO` or `-2FR`) MUST NOT be specified when `FREQ` is not `MONTHLY` or `YEARLY`. `counts_within_a_period` enforces this restriction. If an ordinal is attached on `DAILY` or `WEEKLY`, `by_day_token` refuses the token (`None`), causing `by_day_part` and `maps_recurrence_rule` to reject serialization rather than emitting an invalid rule or silently dropping the ordinal. Stripping the ordinal would change "the second Monday" into "every Monday", multiplying events across the user's calendar.
+  2. Weekday token decomposition and zero refusal: `to_nday` decomposes inbound `BYDAY` tokens into `NDay` structures, extracting signed ordinals and lowercasing weekday codes. An ordinal of zero is invalid in both RFC 5545 and RFC 8984: `to_nday` preserves zero-ordinal tokens unparsed (e.g. `0mo`), causing `by_day_token` and `maps_recurrence_rule` to fail safely.
+  3. Month-day frequency isolation and range bounding: RFC 5545 Section 3.3.10 forbids `BYMONTHDAY` when `FREQ` is `WEEKLY`. `by_month_day_part` enforces this gate, while `month_day_token` restricts values to signed offsets in -31..=-1 and 1..=31. Day zero does not exist in any month and is refused (`None`). Inbound `to_month_day` maps unparseable tokens to zero, alerting callers that a day was unreadable.
+  4. In contrast, differential oracles permit numeric ordinals on weekly recurrences, emit month days beside weekly rules, or silently alter recurrence schedules by stripping ordinals.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.3 (`RecurrenceRule` and `NDay`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence schedule fidelity. Enforces RFC 5545 Section 3.3.10 frequency compatibility gates for `BYDAY` ordinals and `BYMONTHDAY`, bounds signed day numbers, and rejects zero ordinals to prevent schedule distortion.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.341 Divergence 341: `rule_to_rrule`, `rrule_to_rule`, `read_until`, `unstateable_until`, `COUNT`, and `UNTIL`: Recurrence Rule Endpoint Ingestion and Serialization: RFC 5545 / RFC 8984 `COUNT` vs `UNTIL` Mutual Exclusivity, RFC 5545 UTC Timestamp Formatting (`YYYYMMDDTHHMMSSZ`) vs RFC 8984 Local `LocalDateTime` Alignment, Floating Time Zone UNTIL Handling, and In-Document Zone Offset Projection
+
+- **Observed Behavior**:
+  Reconciling recurrence series endpoints between RFC 5545 (`COUNT`, `UNTIL`) and JSCalendar RFC 8984 Section 4.3.3 (`count`, `until`) requires enforcing endpoint mutual exclusivity, projecting between UTC wire timestamps and local `LocalDateTime` strings, and isolating diagnostic errors. In `jmap-ical`:
+  1. Endpoint mutual exclusivity: RFC 5545 Section 3.3.10 and RFC 8984 Section 4.3.1 mandate that `count` and `until` MUST NOT both occur in the same recurrence rule. `rule_to_rrule` emits `COUNT` ahead of `UNTIL`. When both are present, `COUNT` is written and takes precedence in serialization order, matching libical and EDS expectations.
+  2. All-day date-only `UNTIL` formatting: When serializing an all-day event (`as_a_date: true`), `rule_to_rrule` formats `UNTIL` as `YYYYMMDD` without time components or a trailing `Z`, satisfying RFC 5545 Section 3.3.10 value type parity with `DTSTART;VALUE=DATE`.
+  3. Timezone projection and UTC instant suffix: For zoned events, RFC 5545 Section 3.3.10 requires `UNTIL` to be in UTC format (`YYYYMMDDTHHMMSSZ`). `rule_to_rrule` formats UTC timestamps with trailing `Z` when the zone is UTC or when projected from fixed observance offsets (`Ends::At`). When `DTSTART` names a local zone without external database resolution, local time is preserved to maintain round-trip equality.
+  4. Inbound `UNTIL` timezone evaluation: `read_until` converts incoming UTC wire timestamps into the event's local timezone using in-document `VTIMEZONE` transitions (`Ends::In`) or observance offsets (`Ends::At`). If the timezone cannot be resolved, `read_until` preserves the trailing `Z` sentinel (`format!("{local}Z")`).
+  5. Unstateable `UNTIL` diagnostic decoupling: `unstateable_until` isolates rules whose `until` endpoint cannot be formatted (such as trailing `Z` sentinels from unresolved zones), providing clear diagnostics while returning `None` for rules failing for other reasons.
+  6. In contrast, differential oracles format all-day UNTIL values with time components, fail to project UTC instants into local time, or produce opaque parse errors when recurrence endpoints cannot be resolved.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`Recurrence`) and Section 4.3.3 (`RecurrenceRule`).
+- **Adjudication**:
+  Conforming specification boundary and temporal arithmetic fidelity. Enforces `COUNT` vs `UNTIL` mutual exclusivity, aligns `UNTIL` value types with `DTSTART`, dynamically projects UTC wire timestamps using in-document observances, and decouples timezone diagnostic canaries.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.342 Divergence 342: `read_alerts`, `read_alert`, `maps_alerts`, `uses_default_alerts`, `drawn_alert`, `drawn_trigger`, and `drawn_alarms`: Reminder Alarm Ingestion, Action Scope Filtering, and Map Key Allocation: RFC 9074 `VALARM` `UID` Key Preservation vs Stalwart Synthetic `k1`/UUID Keys, `ACTION:DISPLAY` Action Scope Enforcement (Silent Dropping of `ACTION:AUDIO` and `ACTION:EMAIL`), Relative `OffsetTrigger` vs Absolute Date-Time Trigger Dropping, and Document-Wide `useDefaultAlerts` Alarm Masking
+
+- **Observed Behavior**:
+  Translating reminder alarms between RFC 5545 / RFC 9074 (`VALARM`) and JSCalendar RFC 8984 Section 4.5 (`alerts`, `Alert`) requires scoping action types, validating trigger offsets, preserving stable identifiers, and respecting document-wide default preferences:
+  1. Stable key preservation: RFC 9074 Section 5 defines `UID` for `VALARM` components. In `read_alerts`, when a `VALARM` carries a `UID`, it is preserved directly as the map key in `alerts`. If a `VALARM` lacks a `UID`, `read_alerts` synthesizes deterministic fallback keys (`a1`, `a2`). Outbound `drawn_alert` writes `UID: <key>` on the `VALARM` component. In contrast, Stalwart synthesizes arbitrary `k1`..`k5` keys on parse and ignores incoming `UID` parameters.
+  2. Display-only action scope filtering: `read_alert` checks `ACTION`: only `ACTION:DISPLAY` is mapped. Vendor sound alarms (`ACTION:AUDIO`) and email notifications (`ACTION:EMAIL`) are silently dropped on import. Evolution/EDS relies on the local desktop notification system for display alerts; unmodeled audio or email actions have no local handler and are omitted to avoid schema pollution.
+  3. Relative trigger validation: `read_alert` ingests relative offsets via `stated_offset`, populating `@type: "OffsetTrigger"` with ISO 8601 durations (such as `-PT15M` or `-P1D`). Absolute date-time triggers (`TRIGGER;VALUE=DATE-TIME`) are dropped on import, ensuring alarm schedules remain relative to moving events.
+  4. Document-wide default alert suppression: RFC 8984 Section 4.5.1 defines `useDefaultAlerts`. When `useDefaultAlerts: true` is set, `drawn_alarms` returns an empty vector, suppressing explicit `VALARM` components so the receiving store or client applies its own default alarm preferences.
+  5. In contrast, differential oracles parse `ACTION:AUDIO` and absolute triggers into AST conversion properties or synthetic objects, assign random map keys, and ignore document-wide alarm suppression flags.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`).
+  2. RFC 8984 Section 4.5 (`Alerts`).
+  3. RFC 9074 Section 5 (`UID Property in VALARM`).
+- **Adjudication**:
+  Conforming specification boundary and client reminder architecture. Preserves RFC 9074 `UID` map keys across round-trips, restricts reminder actions to `ACTION:DISPLAY` for desktop notification safety, enforces relative `OffsetTrigger` semantics, and honors `useDefaultAlerts` document-wide suppression.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.343 Divergence 343: `read_locations`, `read_virtual_locations`, `maps_locations`, `maps_virtual_locations`, `drawn_place`, `drawn_conference`, `joining_features`, and `CONFERENCE_FEATURES`: Physical and Virtual Location Ingestion, Feature Set Extraction, and Subpath Map Key Tracking: RFC 5545 Section 3.8.1.7 Single Primary `LOCATION` Enforcement, RFC 7986 `CONFERENCE` Seven-Feature Flag Gating, `X-JMAP-KEY` Round-Trip Retention vs Stalwart Synthetic UUID Keys, and Empty Location Name Filtering
+
+- **Observed Behavior**:
+  Representing physical and online meeting spaces across RFC 5545 (`LOCATION`), RFC 7986 (`CONFERENCE`), and JSCalendar RFC 8984 Section 4.2 (`locations`, `virtualLocations`) requires managing property multiplicity, feature extraction, and map key stability:
+  1. Single primary location enforcement: RFC 5545 Section 3.8.1.7 restricts `LOCATION` to at most one occurrence per `VEVENT`. In `maps_locations`, a calendar event carrying multiple physical locations returns `false`, preventing silent property truncation on save. Outbound `drawn_place` renders only the first location to preserve iCalendar conformance.
+  2. Virtual location feature set gating: RFC 7986 Section 5.11 defines `CONFERENCE` with `FEATURE` parameters. In `read_virtual_locations`, `FEATURE` parameters are mapped into boolean flags under `features` strictly against the seven standard features in `CONFERENCE_FEATURES` (`audio`, `chat`, `feed`, `moderator`, `phone`, `screen`, `video`). Unrecognized features are ignored, and empty feature sets are omitted.
+  3. Subpath key retention via `X-JMAP-KEY`: Both physical and virtual locations carry `X-JMAP-KEY` parameters in outbound serialization. On inbound parse, `read_locations` and `read_virtual_locations` extract `X-JMAP-KEY` to restore the server's original map keys (`loc-hq`, `conf-main`), falling back to deterministic positional keys (`l1`, `v1`) only when missing. In contrast, Stalwart synthesizes random UUID keys on every parse, breaking client key stability.
+  4. Empty name and invalid URI filtering: `read_locations` drops empty `LOCATION:` lines (returning `None`), and `read_virtual_locations` validates URIs via `names_a_uri`, discarding invalid entries before they can corrupt JMAP store records.
+  5. In contrast, differential oracles assign random UUID keys to all locations, accept malformed or non-URI conference lines, and permit multiple conflicting physical locations without structural gating.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.7 (`Location`).
+  2. RFC 7986 Section 5.11 (`Conference Property`).
+  3. RFC 8984 Section 4.2.5 (`locations`) and Section 4.2.6 (`virtualLocations`).
+- **Adjudication**:
+  Conforming specification boundary and location model determinism. Enforces single primary `LOCATION` per RFC 5545 Section 3.8.1.7, maps `CONFERENCE` lines with RFC 7986 seven-feature flag gating, and maintains stable map key round-tripping via `X-JMAP-KEY`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
