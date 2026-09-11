@@ -308,7 +308,10 @@ fn main() {
         (Some(o), Some(u), Some(p)) => (o, u, p),
         _ => {
             if let Some((u, p)) = read_stalwart_creds() {
-                ("http://10.128.0.2:8080".to_string(), u, p)
+                let default_url = std::env::var("STALWART_URL").unwrap_or_else(|_| {
+                    "http://[2603:8000:4300:ed77:5054:ff:fe3d:2806]:8080".to_string()
+                });
+                (default_url, u, p)
             } else {
                 eprintln!("usage: calendar-parse-probe <origin> <user> <password>");
                 std::process::exit(2);
