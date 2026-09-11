@@ -5713,3 +5713,76 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and calendar map entry ingestion safety. Enforces RFC 8984 Section 1.4.4 ID constraints on map keys, avoids key collisions during positional synthesis, strips un-sharable local file URIs, and trims category keywords.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.292 Divergence 292: `read_alerts`, `read_alert`, `stated_offset`, `INVENTED_ALERT_KEY`, and `DISPLAY_ALERT`: Inbound Reminder Alarm Extraction and Synthesis: `ACTION:DISPLAY` Parameter Case-Insensitive Filtering, `OffsetTrigger` Signed Offset Parsing, `RELATED` (`START` vs `END`) Property Gating, Stable Positional Key Generation (`a1`, `a2`), and Document-Wide Valarm Traversal
+
+- **Observed Behavior**:
+  Ingesting RFC 5545 `VALARM` components into JSCalendar `alerts` maps requires filtering action types, parsing trigger offsets, preserving trigger boundaries, and synthesizing collision-free keys. In `jmap-ical`:
+  1. `ACTION:DISPLAY` filtering (`read_alert`, `DISPLAY_ALERT`): Verifies that `ACTION` matches `DISPLAY` case-insensitively. Alarms specifying `AUDIO`, `EMAIL`, or `PROCEDURE` are rejected and omitted (`None`), as RFC 8984 Section 4.5.3 models user alert notifications through display actions.
+  2. `OffsetTrigger` signed duration parsing (`stated_offset`): Parses and validates `TRIGGER` values as signed ISO 8601 durations (e.g. `-PT15M`, `PT0S`, `PT10M`). Absolute triggers (`VALUE=DATE-TIME`) or malformed duration tokens are safely ignored.
+  3. `RELATED` property gating (`read_alert`): RFC 5545 Section 3.2.14 defaults `RELATED` to `START`. In `read_alert`, `RELATED=START` (or an omitted parameter) omits `relativeTo` to preserve the schema default. When `RELATED=END`, `"relativeTo": "end"` is inserted. Any unrecognized or invalid `RELATED` parameter value causes `read_alert` to reject the alarm (`None`).
+  4. UID map key preservation and positional synthesis (`read_alerts`): If a `VALARM` carries a `UID` conforming to RFC 8984 Section 1.4.4 `Id` syntax via `names_map_entry`, that UID is used as the map key. Nameless alarms receive synthetic positional keys (`a1`, `a2`, ...) that skip any keys already claimed by explicit UIDs to prevent collapsing separate reminders.
+  5. Empty map elimination: If no valid alarms exist in the `VEVENT`, `read_alerts` returns `None` rather than an empty map `{}` to prevent spurious patch mutations during synchronization.
+  6. In contrast, differential oracles or permissive converters admit non-display alarms, fail to parse negative duration triggers, emit explicit `relativeTo: "start"` schema noise, generate colliding keys, or serialize empty `alerts: {}` maps.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`), Section 3.8.6.1 (`Action`), Section 3.8.6.3 (`Trigger`), and Section 3.2.14 (`Alarm Trigger Relationship`).
+  2. RFC 9074 Section 6 (`VALARM` UID).
+  3. RFC 8984 Section 4.5.3 (`Alert`) and Section 4.5.4 (`OffsetTrigger`).
+- **Adjudication**:
+  Conforming specification boundary and reminder alarm ingestion robustness. Filters display actions, validates signed trigger offsets, coordinates default trigger relationship omission, allocates collision-free positional keys, and eliminates empty alert maps.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.293 Divergence 293: `maps_recurrence_rule`, `unstateable_until`, `writable`, and `RecurrenceRule::extra`: Outbound Recurrence Rule Capability Gating and Extension Shielding: Unmodeled Gregorian Extensions (`rscale`, `skip`, `extra`) Rejection, Unbounded Rule Gating, Subpart Completeness Verification, and Unresolvable UTC `UNTIL` Refusal
+
+- **Observed Behavior**:
+  Validating JSCalendar `recurrenceRule` properties prior to serialization into RFC 5545 `RRULE` lines requires checking schema completeness, rejecting unsupported calendar scales, and enforcing component capability constraints. In `jmap-ical`:
+  1. Extension and unmodeled field shielding (`maps_recurrence_rule`): Verifies that `rule.extra.is_empty()`, `rule.rscale.is_none()`, and `rule.skip.is_none()`. Non-Gregorian recurrence scales (RFC 7529 RSCALE) or skip rules cannot be represented in standard RFC 5545 `RRULE` strings and would silently corrupt the recurrence schedule, so they are strictly refused.
+  2. Base writability validation (`writable`): Verifies that `frequency` is non-empty and that `until` (if present) can be parsed as a valid date-time via `to_ical_date_time`. A recurrence rule lacking a frequency or specifying an unparseable end date cannot be safely serialized.
+  3. Subpart round-trip completeness verification: Evaluates every present subpart (`by_day`, `by_month_day`, `by_year_day`, `by_week_no`, `by_month`, `by_second`, `by_minute`, `by_hour`, `by_set_position`, `first_day_of_week`) through its respective serialization formatter. If any subpart fails validation, `maps_recurrence_rule` returns `false`, preventing partial or corrupted rules from being emitted.
+  4. Dependent set position gating: In `maps_recurrence_rule`, `by_set_position` requires accompanying expanding parts (`!named_by_parts(rule).is_empty()`). A rule carrying only `bySetPosition` without other set-generating parts is rejected.
+  5. Actionable error reporting (`unstateable_until`): Distinguishes unresolvable UTC until instants (where timezone context is unresolvable) from structural recurrence syntax failures, allowing callers to surface precise diagnostic feedback to users.
+  6. In contrast, differential oracles or permissive converters silently drop unmodeled fields (e.g. dropping `byDay` while emitting `FREQ=WEEKLY`), alter recurrence schedules without notification, or emit invalid `RRULE` lines.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`RecurrenceRule`).
+  3. RFC 7529 (`Non-Gregorian Recurrence Rules in iCalendar`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence rule capability safety. Shields against unsupported calendar system extensions, enforces atomic subpart completeness, gates dependent set positions, and isolates unresolvable until endpoints.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.294 Divergence 294: `maps_recurrence_override`, `sends_recurrence_override`, `override_maps_by`, `maps_override_field`, and `draws_override_field`: Recurrence Override Modification Field Gating: Restricted Property Whitelist (`OVERRIDE_PROPERTIES`), Isolated vs Coordinated Timezone Definition Resolution, Set-Replacement Semantics (`keywords` and `alerts`), and Exclusion Purity
+
+- **Observed Behavior**:
+  Validating detached recurrence override patches against RFC 5545 single-component capabilities requires whitelisting supported properties, enforcing exclusion constraints, and coordinating timezone definition lifecycles. In `jmap-ical`:
+  1. Strict property whitelisting (`OVERRIDE_PROPERTIES`): Restricts override patch properties to: `title`, `description`, `start`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `priority`, `privacy`, `keywords`, and `alerts`. Properties outside this whitelist (such as `locations`, `virtualLocations`, `links`, or `participants`) are rejected because RFC 5545 detached `VEVENT` components cannot reconcile occurrence-level patch deltas for them.
+  2. Exclusion purity enforcement: If a patch contains `"excluded": true`, `override_maps_by` mandates `fields.len() == 1`. Patches that combine `excluded: true` with modifications (such as `title` or `start`) are rejected, preventing contradictory states where an occurrence is simultaneously canceled and rescheduled.
+  3. Isolated vs coordinated timezone resolution: In `maps_override_field`, custom solidus timezone identifiers (e.g. `/custom/tz`) are rejected for standalone override patches because an override patch cannot define a timezone. In `sends_recurrence_override` and `draws_override_field`, custom timezones are accepted when defined in the master series `time_zones` table (`defines_time_zone`).
+  4. Null removal vs empty collection rejection: Null values are accepted for whitelisted properties to represent property deletion on the instance. Empty maps (`{}`) for `keywords` or `alerts` are rejected because they would serialize identically to null (omitting content lines), obscuring whether the intent was an empty collection or property removal.
+  5. In contrast, differential oracles accept invalid properties in override patches, permit conflicting fields alongside `excluded: true`, or emit dangling custom timezone references.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4 (`Recurrence Component`).
+  2. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence override modification validation. Enforces property whitelisting, validates exclusion purity, coordinates isolated versus coordinated timezone definitions, and prevents ambiguous empty collection serialization.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.295 Divergence 295: `read_overrides`, `instance_patch`, `read_vevent`, `modified_instances`, and `modified_instance`: Detached Occurrence Ingestion and Minimal Delta Generation: RDATE Period Duration Extraction, EXDATE Precedence, Minimal Patch Diffing, and Scheduled Start (`id`) Suppression
+
+- **Observed Behavior**:
+  Ingesting recurring calendar streams with detached instances and generating minimal RFC 8984 Section 4.3.4 `PatchObject` deltas requires coordinating property precedence, extracting period durations, and diffing instance properties against the master series. In `jmap-ical`:
+  1. Three-way occurrence precedence: In `read_overrides`, occurrences are evaluated in order: `RDATE`, then `EXDATE`, and finally detached `VEVENT` components carrying `RECURRENCE-ID`. An `EXDATE` takes precedence over an `RDATE` for the same timestamp, and a detached `VEVENT` takes final precedence over both, accurately reflecting user intent.
+  2. `RDATE` `VALUE=PERIOD` duration extraction: `read_overrides` extracts duration from `RDATE` period strings (e.g. `20260602T100000Z/PT2H`) via `period_length`. If the extracted duration differs from the master series `duration`, a patch `{"duration": "<diff>"}` is synthesized. If it matches the series duration, an empty patch `{}` is emitted.
+  3. Minimal delta diffing (`instance_patch`): Compares each detached component against the series across `OVERRIDE_PROPERTIES`. Unmodified properties matching the series are omitted from the patch. Properties defined on the series but omitted on the detached component are set to `Value::Null` to remove the inherited value.
+  4. Scheduled start (`id`) suppression: `instance_patch` compares `instance.start` against `id` (`RECURRENCE-ID`). If the occurrence was not moved from its scheduled time (`instance.start == id`), `"start"` is omitted from the patch. Only when the instance is rescheduled to a different timestamp is `"start"` included.
+  5. In contrast, differential oracles emit redundant full-event copies for every override, omit `null` deletions (causing instances to unexpectedly retain deleted series properties), or include redundant `start` timestamps matching the recurrence ID.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4 (`Recurrence Component`), Section 3.8.5.1 (`Exception Date-Times`), and Section 3.8.5.2 (`Recurrence Date-Times`).
+  2. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and detached recurrence override delta fidelity. Coordinates three-way recurrence precedence, extracts period durations, diffs instance properties with null deletions, and suppresses redundant scheduled start properties.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+

@@ -38759,3 +38759,213 @@ fn differential_oracle_inbound_map_entry_id_validation_and_invented_keys() {
     assert_eq!(kw.get("project-x"), Some(&json!(true)));
     assert_eq!(kw.get("planning"), Some(&json!(true)));
 }
+
+#[test]
+fn differential_oracle_inbound_alert_valarm_display_and_offset_triggers() {
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-valarm-test\r\n",
+        "DTSTART:20260601T100000Z\r\n",
+        "BEGIN:VALARM\r\n",
+        "UID:custom_alert_1\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Reminder 1\r\n",
+        "TRIGGER:-PT15M\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Reminder 2\r\n",
+        "TRIGGER;RELATED=END:PT10M\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:AUDIO\r\n",
+        "TRIGGER:-PT5M\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Invalid Related\r\n",
+        "TRIGGER;RELATED=UNKNOWN:-PT5M\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event = ical_to_event(ics).expect("parse ics with valarms");
+    let alerts = event.alerts.expect("alerts map present");
+    // custom_alert_1 from explicit UID, a1 synthesized for second display alarm.
+    // Audio alarm and invalid related alarm are omitted.
+    assert_eq!(alerts.len(), 2);
+    assert!(alerts.contains_key("custom_alert_1"));
+    assert!(alerts.contains_key("a1"));
+
+    let alert1 = &alerts["custom_alert_1"];
+    assert_eq!(alert1["@type"], json!("Alert"));
+    assert_eq!(alert1["action"], json!("display"));
+    assert_eq!(alert1["trigger"]["@type"], json!("OffsetTrigger"));
+    assert_eq!(alert1["trigger"]["offset"], json!("-PT15M"));
+    assert!(alert1["trigger"].get("relativeTo").is_none());
+
+    let alert2 = &alerts["a1"];
+    assert_eq!(alert2["@type"], json!("Alert"));
+    assert_eq!(alert2["action"], json!("display"));
+    assert_eq!(alert2["trigger"]["@type"], json!("OffsetTrigger"));
+    assert_eq!(alert2["trigger"]["offset"], json!("PT10M"));
+    assert_eq!(alert2["trigger"]["relativeTo"], json!("end"));
+}
+
+#[test]
+fn differential_oracle_maps_recurrence_rule_gating_and_unstateable_until() {
+    let mut rule = RecurrenceRule {
+        frequency: "weekly".to_owned(),
+        interval: Some(2),
+        first_day_of_week: Some("mo".to_owned()),
+        ..RecurrenceRule::default()
+    };
+    assert!(maps_recurrence_rule(&rule));
+
+    // Non-empty extra rejects rule
+    rule.extra.insert("customField".to_owned(), json!(true));
+    assert!(!maps_recurrence_rule(&rule));
+    rule.extra.clear();
+
+    // rscale or skip rejects rule
+    rule.rscale = Some("islamic".to_owned());
+    assert!(!maps_recurrence_rule(&rule));
+    rule.rscale = None;
+
+    rule.skip = Some("forward".to_owned());
+    assert!(!maps_recurrence_rule(&rule));
+    rule.skip = None;
+
+    // Empty frequency fails writable and maps_recurrence_rule
+    rule.frequency.clear();
+    assert!(!jmap_ical::event::writable(&rule));
+    assert!(!maps_recurrence_rule(&rule));
+    rule.frequency = "daily".to_owned();
+
+    // by_set_position without expanding parts returns false
+    rule.by_set_position = Some(vec![1]);
+    assert!(!maps_recurrence_rule(&rule));
+    rule.by_set_position = None;
+
+    // unstateable_until check
+    rule.until = Some("2026-06-01T10:00:00".to_owned());
+    assert!(unstateable_until(&rule).is_none());
+    rule.until = Some("invalid-date-stamp".to_owned());
+    assert_eq!(unstateable_until(&rule), Some("invalid-date-stamp"));
+}
+
+#[test]
+fn differential_oracle_recurrence_override_field_gating_and_isolation() {
+    let series = fixture_event();
+
+    // 1. Solitary excluded: true succeeds
+    let patch_excluded = json!({ "excluded": true });
+    assert!(maps_recurrence_override(
+        &series,
+        "2026-06-01T10:00:00",
+        &patch_excluded
+    ));
+
+    // 2. Multi-field patch containing excluded: true fails exclusion purity
+    let patch_excluded_impure = json!({
+        "excluded": true,
+        "title": "Rescheduled and Cancelled"
+    });
+    assert!(!maps_recurrence_override(
+        &series,
+        "2026-06-01T10:00:00",
+        &patch_excluded_impure
+    ));
+
+    // 3. Unmodeled property outside OVERRIDE_PROPERTIES fails
+    let patch_invalid_prop = json!({ "location": "New Room" });
+    assert!(!maps_recurrence_override(
+        &series,
+        "2026-06-01T10:00:00",
+        &patch_invalid_prop
+    ));
+
+    // 4. Null property deletions succeed for whitelisted fields
+    let patch_nulls = json!({
+        "title": Value::Null,
+        "priority": Value::Null,
+        "privacy": Value::Null,
+        "status": Value::Null,
+        "freeBusyStatus": Value::Null,
+        "duration": Value::Null
+    });
+    assert!(maps_recurrence_override(
+        &series,
+        "2026-06-01T10:00:00",
+        &patch_nulls
+    ));
+
+    // 5. Empty collections fail (must be non-empty or null)
+    let patch_empty_kw = json!({ "keywords": {} });
+    assert!(!maps_recurrence_override(
+        &series,
+        "2026-06-01T10:00:00",
+        &patch_empty_kw
+    ));
+    let patch_empty_alerts = json!({ "alerts": {} });
+    assert!(!maps_recurrence_override(
+        &series,
+        "2026-06-01T10:00:00",
+        &patch_empty_alerts
+    ));
+
+    // 6. Custom solidus timezone in isolated override vs sends_recurrence_override
+    let patch_custom_tz = json!({ "timeZone": "/custom/tz" });
+    assert!(!maps_recurrence_override(
+        &series,
+        "2026-06-01T10:00:00",
+        &patch_custom_tz
+    ));
+}
+
+#[test]
+fn differential_oracle_read_overrides_period_duration_and_minimal_patch() {
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-overrides-series\r\n",
+        "DTSTART:20260601T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Master Series\r\n",
+        "PRIORITY:3\r\n",
+        "RRULE:FREQ=DAILY;COUNT=5\r\n",
+        "RDATE;VALUE=PERIOD:20260602T100000Z/PT2H\r\n",
+        "EXDATE:20260603T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:ev-overrides-series\r\n",
+        "RECURRENCE-ID:20260604T100000Z\r\n",
+        "DTSTART:20260604T140000Z\r\n",
+        "SUMMARY:Rescheduled Afternoon\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let event = ical_to_event(ics).expect("parse series with overrides");
+    let overrides = event.recurrence_overrides.expect("recurrence overrides");
+
+    // 1. RDATE with differing period duration patches duration
+    assert!(overrides.contains_key("2026-06-02T10:00:00"));
+    assert_eq!(overrides["2026-06-02T10:00:00"]["duration"], json!("PT2H"));
+
+    // 2. EXDATE produces excluded: true patch
+    assert!(overrides.contains_key("2026-06-03T10:00:00"));
+    assert_eq!(overrides["2026-06-03T10:00:00"]["excluded"], json!(true));
+
+    // 3. Detached VEVENT with rescheduled DTSTART records start and title
+    // and emits priority: null because series had PRIORITY:3 while detached component omitted it
+    assert!(overrides.contains_key("2026-06-04T10:00:00"));
+    let patch = &overrides["2026-06-04T10:00:00"];
+    assert_eq!(patch["start"], json!("2026-06-04T14:00:00"));
+    assert_eq!(patch["title"], json!("Rescheduled Afternoon"));
+    assert_eq!(patch["priority"], Value::Null);
+}
