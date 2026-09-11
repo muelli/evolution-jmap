@@ -6676,5 +6676,68 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.344 Divergence 344: `read_start`, `shows_without_time`, `instance_shows_without_time`, `at_midnight`, `whole_days`: Inbound and Outbound Date vs Date-Time Start Evaluation: RFC 5545 `VALUE=DATE` vs `VALUE=DATE-TIME` Disambiguation, RFC 8984 `showWithoutTime` Ingestion, Trailing 'Z' UTC Identification, and Local Midnight / Multi-Day Boundary Enforcement
 
+- **Observed Behavior**:
+  Translating event start representations between RFC 5545 (`DTSTART`) and JSCalendar RFC 8984 Section 4.1.4 (`start`), Section 4.1.5 (`timeZone`), and Section 4.1.6 (`showWithoutTime`) requires unambiguous temporal classification, timezone projection, and boundary checks:
+  1. Inbound date vs date-time classification: `read_start` examines the incoming `DTSTART` entry value. If the string contains no 'T' or 't' separator, it is classified as a date (`showWithoutTime: true`), with `time_zone: None`. If 'T' is present, it is a date-time: a trailing 'Z' identifies UTC, while absence of 'Z' reads the `TZID` parameter through `zone_of`.
+  2. Outbound all-day event gating (`shows_without_time`): For an event to be serialized as `VALUE=DATE` without time or timezone parameters, `shows_without_time` requires `event.show_without_time == Some(true)`. Additionally, `at_midnight` verifies that the start time is "00:00:00", and `whole_days` verifies that any explicit duration spans integer days (`P<n>D`). If an event sets `showWithoutTime: true` but specifies a non-midnight time (such as 14:00:00), `shows_without_time` defensively returns `false`, preventing time truncation.
+  3. Override consistency (`instance_shows_without_time`): Evaluates whether a modified recurrence instance inherits or overrides all-day status, ensuring that individual occurrences do not corrupt the series serialization format.
+  4. In contrast, Stalwart sets `showWithoutTime: true` for any `VALUE=DATE` property, but does not validate whether overridden instances retain valid midnight boundaries or integer-day durations.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.2.4 (`Date-Time Start`).
+  2. RFC 8984 Section 4.1.4 (`start`), Section 4.1.5 (`timeZone`), and Section 4.1.6 (`showWithoutTime`).
+- **Adjudication**:
+  Conforming specification boundary and calendar temporal integrity. Preserves exact date vs date-time classifications, defensively refuses `VALUE=DATE` for non-midnight or non-whole-day events, and maintains round-trip consistency across recurrence series and instances.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.345 Divergence 345: `read_overrides`, `instance_patch`, `modified_instances`, `modified_instance`, `OVERRIDE_PROPERTIES`: Recurrence Override Ingestion, Difference Computation, and Property Masking: RFC 5545 `EXDATE` / `RDATE` Precedence, `RECURRENCE-ID` Detached Instance Ingestion, RFC 8984 Section 4.3.4 PatchObject Difference Resolution, and Range Boundary (`RANGE=THISANDFUTURE` Rejection)
+
+- **Observed Behavior**:
+  Translating recurrence series modifications between RFC 5545 (`EXDATE`, `RDATE`, `RECURRENCE-ID`) and JSCalendar RFC 8984 Section 4.3.4 (`recurrenceOverrides`, PatchObject) requires resolving property precedence, computing minimal differential patches, and gating unsupported range features:
+  1. Multi-tier override precedence: In `read_overrides`, `RDATE` properties (including `VALUE=PERIOD` duration overrides via `period_length`) are processed first. `EXDATE` entries are processed second, overriding `RDATE` entries with `{"excluded": true}`. Finally, detached `VEVENT` components carrying `RECURRENCE-ID` take highest precedence, replacing any prior `EXDATE` or `RDATE` entries for that instant.
+  2. Strict differential patch computation (`instance_patch`): Detached `VEVENT` instances are diffed against the master series strictly across `OVERRIDE_PROPERTIES`. Properties matching the series are omitted; removed properties are explicitly set to `null`; properties outside the allowed set are filtered out, avoiding schema leakage.
+  3. `RANGE=THISANDFUTURE` isolation: RFC 5545 Section 3.2.13 defines `RANGE=THISANDFUTURE` on `RECURRENCE-ID`. Because JSCalendar `recurrenceOverrides` cannot express open-ended recurrence splits in a single instance patch, `read_overrides` explicitly skips components with `RANGE` parameters, avoiding silent split corruption.
+  4. Outbound override serialization: `modified_instances` emits individual `VEVENT` components with rendered `RECURRENCE-ID` lines, while `recurrence_dates` emits `EXDATE` and `RDATE` lines for instances without dedicated components.
+  5. In contrast, Stalwart parses detached instances into full JSCalendar event objects with synthetic IDs, emits empty patch objects, or accepts unsupported `RANGE` properties without structural validation.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.13 (`Recurrence Identifier Range`), Section 3.8.4.4 (`Recurrence ID`), Section 3.8.5.1 (`Exception Date-Times`), and Section 3.8.5.2 (`Recurrence Date-Times`).
+  2. RFC 8984 Section 4.3.4 (`Recurrence Overrides`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence model determinism. Enforces RFC 5545 precedence between `EXDATE`, `RDATE`, and detached components, restricts instance patches to `OVERRIDE_PROPERTIES`, and isolates unsupported `RANGE=THISANDFUTURE` splits.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.346 Divergence 346: `scheduling_ical`, `event_calendar`, `instance_calendar`, `METHOD`: iTIP / iCalendar Scheduling Payload Assembly: RFC 5546 Scheduling Methods (`REQUEST`, `CANCEL`, `REPLY`), Single-Occurrence `instance_calendar` Component Generation, Series-Wide `event_calendar` Assembly, and `RECURRENCE-ID` Instance Isolation
+
+- **Observed Behavior**:
+  Generating RFC 5546 iTIP scheduling messages from JSCalendar `CalendarEvent` models requires tailoring calendar envelope structures, attaching mandatory transaction methods, and isolating targeted occurrences:
+  1. Series-wide scheduling payload (`event_calendar`): When `scheduling_ical` is invoked without a `recurrence_id`, it generates a `VCALENDAR` envelope containing `VERSION:2.0`, `PRODID`, the specified `METHOD` (such as `REQUEST` or `CANCEL`), full series recurrence rules (`RRULE`, `EXDATE`, `RDATE`), and all required `VTIMEZONE` definitions.
+  2. Single-occurrence instance isolation (`instance_calendar`): When `scheduling_ical` is called with `Some(recurrence_id)`, it generates a focused `VCALENDAR` containing the `METHOD` and a single `VEVENT`. Crucially, this component carries `RECURRENCE-ID` matching the specified instant, while series-level recurrence rules (`RRULE`, `EXDATE`, `RDATE`) are completely omitted. Only timezones referenced by the specific occurrence are emitted.
+  3. Standard iTIP transaction methods: `METHOD` lines are formatted in uppercase per RFC 5546 Section 3.2, ensuring compatibility with external mail clients (such as Thunderbird, Outlook, and Apple Calendar).
+  4. In contrast, differential oracles and monolithic serializers often emit the full recurrence series with all occurrences even when responding to or cancelling a single meeting instance, causing attendee confusion or calendar desynchronization.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.7.2 (`Method`).
+  2. RFC 5546 (iTIP) Section 3.2 (`Methods for VEVENT Calendar Components`).
+  3. RFC 8984 Section 4.3.4 (`Recurrence Overrides`).
+- **Adjudication**:
+  Conforming specification boundary and scheduling protocol safety. Distinguishes series-wide messages from single-instance scheduling updates, isolates `RECURRENCE-ID` components, and generates RFC 5546 compliant `VCALENDAR` envelopes.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.347 Divergence 347: `names_time_zone`, `windows_time_zone_to_iana`, `unique_tzid_to_iana`, `resolve_canonical_time_zone`, `read_time_zones`, `prune_time_zones`: Canonical Time Zone Resolution, Windows / Legacy TZID Normalization, and RFC 8984 Section 4.7.2 TimeZone Container Ingestion and Pruning: RFC 5545 `TZID` Translation to Canonical IANA Identifiers, Solidus Custom Zone Identifier Scoping, and Inbound / Outbound TimeZone Table Retention
+
+- **Observed Behavior**:
+  Reconciling timezone identifiers and definitions between RFC 5545 (`TZID`, `VTIMEZONE`) and JSCalendar RFC 8984 Section 4.7.2 (`timeZone`, `timeZones`) requires normalizing vendor-specific and legacy identifiers, ingesting non-standard observance definitions, and pruning redundant entries:
+  1. Canonical IANA resolution and Windows TZID translation: `resolve_canonical_time_zone` maps legacy and proprietary timezone identifiers to standard IANA tz names. `windows_time_zone_to_iana` matches Windows registry timezone names (such as "Pacific Standard Time" to "America/Los_Angeles", "W. Europe Standard Time" to "Europe/Berlin"). `unique_tzid_to_iana` resolves common vendor variants.
+  2. Custom zone solidus identification: For timezone definitions that cannot be mapped to canonical IANA names, RFC 8984 Section 1.4.9 permits custom identifiers prefixed with a solidus (`/`). Inbound `read_time_zones` ingests `VTIMEZONE` components into `event.time_zones` for unresolvable custom zones.
+  3. Unreferenced timezone pruning (`prune_time_zones`): Outbound preparation scans the series and all modified instances via `referred_zones`. Any definitions in `event.time_zones` not actively referenced by the event are pruned, keeping JMAP payloads minimal and preventing dead definition accumulation.
+  4. In contrast, Stalwart preserves raw vendor TZIDs verbatim, creates synthetic UUID TZIDs, or retains unreferenced `VTIMEZONE` blocks indiscriminately.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.19 (`Time Zone Identifier`) and Section 3.6.5 (`Time Zone Component`).
+  2. RFC 8984 Section 1.4.9 (`TimeZoneId`) and Section 4.7.2 (`timeZones`).
+- **Adjudication**:
+  Conforming specification boundary and timezone resolution determinism. Normalizes Windows and legacy TZIDs to IANA names, preserves custom observance definitions with solidus prefix scoping, and prunes unreferenced timezone entries.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.

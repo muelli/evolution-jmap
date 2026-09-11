@@ -42758,3 +42758,204 @@ fn differential_oracle_locations_single_primary_conference_features_and_key_trac
     assert!(unfolded.contains("https://meet.example.com/bridge"));
     assert!(unfolded.contains("CONFERENCE;VALUE=URI;FEATURE=PHONE;X-JMAP-KEY=v1:tel:+1-555-0199"));
 }
+
+#[test]
+fn differential_oracle_start_date_disambiguation_show_without_time_and_boundaries() {
+    // Audit divergence 344: Inbound and outbound date vs date-time start evaluation:
+    // RFC 5545 VALUE=DATE vs VALUE=DATE-TIME disambiguation, RFC 8984 showWithoutTime ingestion,
+    // trailing 'Z' UTC identification, and local midnight / multi-day boundary enforcement.
+
+    let ics_date = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:date-start-ev-1\r\n",
+        "DTSTART;VALUE=DATE:20261015\r\n",
+        "DURATION:P2D\r\n",
+        "SUMMARY:All Day Conference\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev_date = ical_to_event(ics_date).expect("parses date calendar");
+    assert_eq!(ev_date.start.as_deref(), Some("2026-10-15T00:00:00"));
+    assert_eq!(ev_date.show_without_time, Some(true));
+    assert_eq!(ev_date.time_zone, None);
+    assert_eq!(ev_date.duration.as_deref(), Some("P2D"));
+
+    let ics_out = event_to_ical(&ev_date);
+    assert!(ics_out.contains("DTSTART;VALUE=DATE:20261015\r\n"));
+
+    let ics_utc = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:utc-start-ev-1\r\n",
+        "DTSTART:20261015T143000Z\r\n",
+        "SUMMARY:UTC Meeting\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev_utc = ical_to_event(ics_utc).expect("parses utc calendar");
+    assert_eq!(ev_utc.start.as_deref(), Some("2026-10-15T14:30:00"));
+    assert_eq!(ev_utc.show_without_time, None);
+    assert_eq!(ev_utc.time_zone.as_deref(), Some("Etc/UTC"));
+
+    // Defensive check: non-midnight start refuses show_without_time
+    let mut ev_corrupt = ev_date.clone();
+    ev_corrupt.start = Some("2026-10-15T14:30:00".to_string());
+    assert!(!jmap_ical::event::shows_without_time(
+        &ev_corrupt,
+        "20261015T143000"
+    ));
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_exdate_rdate_and_patch_computation() {
+    // Audit divergence 345: Recurrence override ingestion, difference computation, and property masking:
+    // RFC 5545 EXDATE / RDATE precedence, RECURRENCE-ID detached instance ingestion,
+    // RFC 8984 Section 4.3.4 PatchObject difference resolution, and range boundary (RANGE=THISANDFUTURE rejection).
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:series-overrides-1\r\n",
+        "DTSTART:20261001T100000Z\r\n",
+        "RRULE:FREQ=WEEKLY;COUNT=5\r\n",
+        "SUMMARY:Weekly Sync\r\n",
+        "DESCRIPTION:Regular agenda\r\n",
+        "RDATE:20261008T100000Z\r\n",
+        "EXDATE:20261015T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:series-overrides-1\r\n",
+        "RECURRENCE-ID:20261022T100000Z\r\n",
+        "DTSTART:20261022T100000Z\r\n",
+        "SUMMARY:Modified Week 4\r\n",
+        "DESCRIPTION:Regular agenda\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:series-overrides-1\r\n",
+        "RECURRENCE-ID;RANGE=THISANDFUTURE:20261029T100000Z\r\n",
+        "DTSTART:20261029T100000Z\r\n",
+        "SUMMARY:Split Series\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(ics).expect("parses recurrence series");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+
+    // 1. EXDATE maps to excluded: true
+    assert_eq!(overrides["2026-10-15T10:00:00"]["excluded"], true);
+
+    // 2. Detached VEVENT instance produces differential patch naming only changed properties
+    assert_eq!(overrides["2026-10-22T10:00:00"]["title"], "Modified Week 4");
+    assert!(
+        overrides["2026-10-22T10:00:00"]
+            .get("description")
+            .is_none()
+    );
+
+    // 3. RANGE=THISANDFUTURE skipped to prevent series splitting corruption
+    assert!(!overrides.contains_key("2026-10-29T10:00:00"));
+
+    // 4. Outbound serialization renders detached instance with RECURRENCE-ID
+    let ics_out = event_to_ical(&ev);
+    assert!(ics_out.contains("RECURRENCE-ID:20261022T100000Z\r\n"));
+    assert!(ics_out.contains("SUMMARY:Modified Week 4\r\n"));
+    assert!(ics_out.contains("EXDATE:20261015T100000Z\r\n"));
+}
+
+#[test]
+fn differential_oracle_itip_scheduling_payload_series_and_instance_assembly() {
+    // Audit divergence 346: iTIP / iCalendar scheduling payload assembly:
+    // RFC 5546 scheduling methods (REQUEST, CANCEL, REPLY), single-occurrence instance_calendar component generation,
+    // series-wide event_calendar assembly, and RECURRENCE-ID instance isolation.
+
+    let mut event = fixture_event();
+    event.title = Some("Sprint Review".to_string());
+    event.recurrence_rule = Some(RecurrenceRule {
+        frequency: "weekly".to_string(),
+        count: Some(4),
+        ..RecurrenceRule::default()
+    });
+
+    // 1. Series-wide scheduling payload carries METHOD:REQUEST and full recurrence rules
+    let series_ics = jmap_ical::scheduling_ical(&event, "REQUEST", None);
+    assert!(series_ics.contains("METHOD:REQUEST\r\n"));
+    assert!(series_ics.contains("RRULE:FREQ=WEEKLY;COUNT=4\r\n"));
+    assert!(series_ics.contains("SUMMARY:Sprint Review\r\n"));
+
+    // 2. Single-instance scheduling payload carries RECURRENCE-ID and isolates instance
+    let recurrence_id = "2026-10-22T10:00:00";
+    let instance_ics = jmap_ical::scheduling_ical(&event, "CANCEL", Some(recurrence_id));
+    assert!(instance_ics.contains("METHOD:CANCEL\r\n"));
+    assert!(instance_ics.contains("RECURRENCE-ID;TZID=Europe/Berlin:20261022T100000\r\n"));
+    // Isolates instance: series recurrence rule is omitted on single-occurrence update
+    assert!(!instance_ics.contains("RRULE:"));
+}
+
+#[test]
+fn differential_oracle_timezone_canonical_resolution_windows_mapping_and_pruning() {
+    // Audit divergence 347: Canonical time zone resolution, Windows / legacy TZID normalization,
+    // and RFC 8984 Section 4.7.2 TimeZone container ingestion and pruning:
+    // RFC 5545 TZID translation to canonical IANA identifiers, solidus custom zone identifier scoping,
+    // and inbound / outbound timezone table retention.
+
+    // 1. Windows standard timezone translation to canonical IANA
+    assert_eq!(
+        windows_time_zone_to_iana("Pacific Standard Time"),
+        Some("America/Los_Angeles")
+    );
+    assert_eq!(
+        windows_time_zone_to_iana("W. Europe Standard Time"),
+        Some("Europe/Berlin")
+    );
+    assert_eq!(
+        windows_time_zone_to_iana("GMT Standard Time"),
+        Some("Europe/London")
+    );
+
+    // 2. Canonical IANA resolution
+    assert_eq!(
+        resolve_canonical_time_zone("America/New_York"),
+        Some("America/New_York")
+    );
+    assert_eq!(
+        resolve_canonical_time_zone("Pacific Standard Time"),
+        Some("America/Los_Angeles")
+    );
+
+    // 3. TimeZone pruning of unreferenced custom zones
+    let mut ev = CalendarEvent {
+        time_zone: Some("America/New_York".to_string()),
+        time_zones: Some(
+            [
+                (
+                    "America/New_York".to_string(),
+                    json!({"standard": [{"offsetFrom": "-04:00", "offsetTo": "-05:00", "start": "2026-11-01T02:00:00"}]}),
+                ),
+                (
+                    "Europe/Paris".to_string(),
+                    json!({"standard": [{"offsetFrom": "+02:00", "offsetTo": "+01:00", "start": "2026-10-25T03:00:00"}]}),
+                ),
+            ]
+            .into(),
+        ),
+        ..CalendarEvent::default()
+    };
+
+    let referred: Vec<&str> = jmap_ical::event::referred_zones(&ev).collect();
+    assert_eq!(referred, vec!["America/New_York"]);
+
+    prune_time_zones(&mut ev);
+    let pruned = ev.time_zones.as_ref().expect("time_zones present");
+    assert!(pruned.contains_key("America/New_York"));
+    assert!(!pruned.contains_key("Europe/Paris"));
+}
