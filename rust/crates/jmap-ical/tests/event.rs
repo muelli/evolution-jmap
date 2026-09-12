@@ -46278,3 +46278,196 @@ fn differential_oracle_participant_extended_parameters_and_scheduling_isolation(
         "emitted icalendar does not contain SCHEDULE-AGENT"
     );
 }
+
+#[test]
+fn differential_oracle_created_timestamp_store_ownership_and_export_emission() {
+    // Audit divergence 404: created, CREATED, server-store audit timestamp ingestion vs export-only
+    // dual timestamp emission: RFC 5545 Section 3.8.7.1 CREATED vs RFC 8984 Section 4.1.7 created
+    // and JMAP store lifecycle ownership.
+
+    // 1. Inbound parsing: apple calendar export contains CREATED:20260802T083000Z,
+    // google calendar export contains CREATED:20260801T090000Z.
+    // In jmap-ical, read_vevent drops CREATED on import to isolate server store timestamps.
+    let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
+    let ev_apple = ical_to_event(apple_ics).expect("parses apple calendar");
+    assert!(
+        ev_apple.created.is_none(),
+        "created must be None on imported apple event"
+    );
+
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    assert!(
+        ev_google.created.is_none(),
+        "created must be None on imported google event"
+    );
+
+    // 2. Outbound serialization: when created is present, event_to_ical emits CREATED.
+    // When created is None, event_to_ical emits no CREATED line.
+    let out_apple = event_to_ical(&ev_apple);
+    assert!(
+        !out_apple.contains("CREATED:"),
+        "event without created emits no CREATED line"
+    );
+
+    let mut ev_with_created = ev_apple.clone();
+    ev_with_created.created = Some("2026-08-02T08:30:00Z".to_owned());
+    let out_with_created = event_to_ical(&ev_with_created);
+    assert!(
+        out_with_created.contains("CREATED:20260802T083000Z\r\n"),
+        "event with created emits formatted CREATED timestamp"
+    );
+}
+
+#[test]
+fn differential_oracle_sequence_revision_counter_isolation_and_management() {
+    // Audit divergence 405: sequence, SEQUENCE, revision number tracking vs scheduling protocol
+    // state isolation: RFC 5545 Section 3.8.7.4 SEQUENCE vs RFC 8984 / draft-ietf-jmap-calendars sequence.
+
+    // 1. Inbound parsing: google calendar export and outlook m365 export specify SEQUENCE:0.
+    // In jmap-ical, read_vevent ignores SEQUENCE on import; extra remains empty.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    assert!(
+        !ev_google.extra.contains_key("sequence"),
+        "extra must not contain sequence on google export"
+    );
+
+    let outlook_ics = include_str!("fixtures/outlook_m365_export.ics");
+    let ev_outlook = ical_to_event(outlook_ics).expect("parses outlook calendar");
+    assert!(
+        !ev_outlook.extra.contains_key("sequence"),
+        "extra must not contain sequence on outlook export"
+    );
+
+    // 2. Outbound serialization: exported event without managed sequence emits no SEQUENCE line.
+    let out_google = event_to_ical(&ev_google);
+    assert!(
+        !out_google.contains("SEQUENCE:"),
+        "outbound icalendar emits no SEQUENCE line"
+    );
+
+    let out_outlook = event_to_ical(&ev_outlook);
+    assert!(
+        !out_outlook.contains("SEQUENCE:"),
+        "outbound outlook icalendar emits no SEQUENCE line"
+    );
+}
+
+#[test]
+fn differential_oracle_organizer_calendar_address_and_scheduling_boundary_isolation() {
+    // Audit divergence 406: organizerCalendarAddress, ORGANIZER, server origin addressing vs scheduling
+    // protocol boundary isolation: RFC 5545 Section 3.8.4.3 ORGANIZER vs draft-ietf-jmap-calendars Section 5.9.2 organizerCalendarAddress.
+
+    // 1. Inbound parsing: evolution calendar export and thunderbird calendar export carry ORGANIZER.
+    // In jmap-ical, read_vevent drops ORGANIZER lines on import, isolating scheduling state.
+    let evo_ics = include_str!("fixtures/evolution_calendar_export.ics");
+    let ev_evo = ical_to_event(evo_ics).expect("parses evolution calendar");
+    assert!(
+        ev_evo.organizer_calendar_address.is_none(),
+        "organizer_calendar_address must be None on inbound import"
+    );
+    assert!(
+        ev_evo.participants.is_none(),
+        "participants must be None on inbound import"
+    );
+
+    let tb_ics = include_str!("fixtures/thunderbird_calendar_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird calendar");
+    assert!(
+        ev_tb.organizer_calendar_address.is_none(),
+        "organizer_calendar_address must be None on inbound import"
+    );
+    assert!(
+        ev_tb.participants.is_none(),
+        "participants must be None on inbound import"
+    );
+
+    // 2. Outbound serialization: an imported event without participants emits no ORGANIZER line.
+    let out_evo = event_to_ical(&ev_evo);
+    assert!(
+        !out_evo.contains("ORGANIZER"),
+        "event without participants emits no ORGANIZER line"
+    );
+
+    // An event with an owner participant emits ORGANIZER.
+    let mut ev_with_owner = ev_evo.clone();
+    let mut participants = std::collections::BTreeMap::new();
+    participants.insert(
+        "p1".to_owned(),
+        serde_json::json!({
+            "@type": "Participant",
+            "name": "Jane Doe",
+            "calendarAddress": "mailto:jane.doe@example.com",
+            "roles": { "owner": true }
+        }),
+    );
+    ev_with_owner.participants = Some(participants);
+    let out_owner = event_to_ical(&ev_with_owner);
+    assert!(
+        out_owner.contains("ORGANIZER;CN=\"Jane Doe\":mailto:jane.doe@example.com\r\n"),
+        "event with owner participant emits formatted ORGANIZER line"
+    );
+}
+
+#[test]
+fn differential_oracle_image_link_display_badge_and_scalar_representation() {
+    // Audit divergence 407: links, IMAGE, DISPLAY, display: badge, scalar string display vs boolean
+    // map/set representation: RFC 7986 Section 5.10 IMAGE / DISPLAY vs RFC 8984 Section 4.2.7 Link.display.
+
+    // 1. Inbound parsing: cyrus caldav export and evolution calendar export contain
+    // IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png:...
+    let cyrus_ics = include_str!("fixtures/cyrus_caldav_export.ics");
+    let ev_cyrus = ical_to_event(cyrus_ics).expect("parses cyrus caldav");
+    let links_cyrus = ev_cyrus.links.as_ref().expect("cyrus links");
+    let image_link = links_cyrus
+        .values()
+        .find(|link| link.get("rel") == Some(&serde_json::json!("icon")))
+        .expect("finds icon image link");
+    assert_eq!(
+        image_link.get("display"),
+        Some(&serde_json::json!("badge")),
+        "display must be scalar string badge conforming to RFC 8984 Section 4.2.7"
+    );
+    assert_eq!(
+        image_link.get("contentType"),
+        Some(&serde_json::json!("image/png")),
+        "contentType must be image/png"
+    );
+    assert_eq!(
+        image_link.get("href"),
+        Some(&serde_json::json!(
+            "https://cal.fastmail.example/img/ietf-badge.png"
+        )),
+        "href matches badge image URI"
+    );
+
+    let evo_ics = include_str!("fixtures/evolution_calendar_export.ics");
+    let ev_evo = ical_to_event(evo_ics).expect("parses evolution calendar");
+    let links_evo = ev_evo.links.as_ref().expect("evo links");
+    let evo_image = links_evo
+        .values()
+        .find(|link| link.get("rel") == Some(&serde_json::json!("icon")))
+        .expect("finds evo icon link");
+    assert_eq!(
+        evo_image.get("display"),
+        Some(&serde_json::json!("badge")),
+        "evo image display must be scalar string badge"
+    );
+
+    // 2. Outbound serialization: serializing an event with rel: icon and display: badge
+    // renders IMAGE;VALUE=URI;DISPLAY=BADGE with invented or preserved map key.
+    let out_cyrus = event_to_ical(&ev_cyrus);
+    assert_eq!(
+        content_line(&out_cyrus, "IMAGE"),
+        "IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=k2:https://cal.fastmail.example/img/ietf-badge.png",
+        "cyrus outbound icalendar emits correctly formatted IMAGE line"
+    );
+
+    let out_evo = event_to_ical(&ev_evo);
+    assert_eq!(
+        content_line(&out_evo, "IMAGE"),
+        "IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=l2:https://foundation.gnome.org/assets/logo.png",
+        "evo outbound icalendar preserves X-JMAP-KEY=l2"
+    );
+}

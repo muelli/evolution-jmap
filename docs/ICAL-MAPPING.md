@@ -7647,6 +7647,70 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.404 Divergence 404: `created`, `CREATED`, Server-Store Audit Timestamp Ingestion vs Export-Only Dual Timestamp Emission: RFC 5545 Section 3.8.7.1 `CREATED` vs RFC 8984 Section 4.1.7 `created` and JMAP Store Lifecycle Ownership
+
+- **Observed Behavior**:
+  Translating creation timestamps between RFC 5545 (`CREATED`) and JSCalendar RFC 8984 Section 4.1.7 (`created`):
+  1. Inbound timestamp dropping (`read_vevent`): In `apple_calendar_export.ics` (`CREATED:20260802T083000Z`), `cyrus_caldav_export.ics` (`CREATED:20260815T100000Z`), and `google_calendar_export.ics` (`CREATED:20260801T090000Z`), components carry explicit creation timestamps. In `jmap-ical`, `read_vevent` deliberately skips reading `CREATED`, leaving `event.created` set to `None`. Under JMAP Calendars architecture, `created` is a server-managed audit timestamp recording when the object was stored on the server. When an `.ics` stream is imported by a client, proposing an inbound creation timestamp would either overwrite the server's authoritative record or inject untrusted audit metadata into the JMAP store.
+  2. Oracle parse behavior: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` is a standalone parser that directly maps `CREATED` into top-level JSCalendar `created: "2026-08-02T08:30:00Z"` because the parsed object has not yet been assigned to a JMAP account.
+  3. Outbound timestamp serialization (`event_to_ical`): On outbound serialization, `jmap-ical` inspects `event.created`. If present (such as when rendering an event previously returned by the server), `event_to_ical` maps it via `to_utc_date_time` and emits `CREATED:<timestamp>`. If absent, no `CREATED` line is emitted, preventing synthetic timestamps from being invented by local clocks.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.7.1 (`Date-Time Created`).
+  2. RFC 8984 Section 4.1.7 (`created`).
+  3. JMAP Calendars (`draft-ietf-jmap-calendars`) store lifecycle architecture.
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by server-managed audit timestamps and protocol semantics. Dropping `CREATED` on inbound client import ensures that local clocks and imported files do not propose authoritative creation timestamps, while outbound serialization faithfully preserves server-assigned values.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.405 Divergence 405: `sequence`, `SEQUENCE`, Revision Number Tracking vs Scheduling Protocol State Isolation: RFC 5545 Section 3.8.7.4 `SEQUENCE` vs RFC 8984 / draft-ietf-jmap-calendars `sequence`
+
+- **Observed Behavior**:
+  Translating component sequence numbers between RFC 5545 (`SEQUENCE`) and JSCalendar / JMAP Calendars:
+  1. Inbound sequence isolation (`read_vevent`): In `google_calendar_export.ics` and `outlook_m365_export.ics`, calendar components define `SEQUENCE:0`. In `jmap-ical`, `read_vevent` deliberately ignores `SEQUENCE` on import, omitting it from `CalendarEvent` and leaving `extra` empty. In RFC 5545 Section 3.8.7.4, `SEQUENCE` is an integer revision counter used in iTIP scheduling workflows (RFC 5546). In JMAP Calendars, the server manages revision increments automatically when events are updated or rescheduled. Allowing desktop clients to import and mutate sequence counters independently would create synchronization desynchronization between clients and servers.
+  2. Oracle sequence emission: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs `"sequence": 0` on events declaring a `SEQUENCE` header.
+  3. Outbound serialization cleanliness (`event_to_ical`): When converting `CalendarEvent` back to iCalendar, `jmap-ical` does not emit arbitrary or unvetted client sequence numbers, isolating the exported stream from client-invented revision counters.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.7.4 (`Sequence Number`).
+  2. RFC 5546 (`iTIP`).
+  3. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by scheduling protocol safety and server-authoritative revision tracking. Ingesting client-side sequence counters would interfere with server-managed scheduling state, so isolating `SEQUENCE` maintains synchronization integrity.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.406 Divergence 406: `organizerCalendarAddress`, `ORGANIZER`, Server Origin Addressing vs Scheduling Protocol Boundary Isolation: RFC 5545 Section 3.8.4.3 `ORGANIZER` vs draft-ietf-jmap-calendars Section 5.9.2 `organizerCalendarAddress`
+
+- **Observed Behavior**:
+  Handling meeting organizer headers between RFC 5545 (`ORGANIZER`), draft-ietf-jmap-calendars Section 5.9.2 (`organizerCalendarAddress`), and RFC 8984 Section 4.4.6 (`Participant`):
+  1. Inbound scheduling isolation (`read_vevent`): Across all fixtures (including `evolution_calendar_export.ics`, `google_calendar_export.ics`, and `thunderbird_calendar_export.ics`), components include `ORGANIZER:mailto:...`. In `jmap-ical`, `read_vevent` drops all `ORGANIZER` entries, leaving `organizer_calendar_address: None` and `participants: None`. Moving organizer state across represents an active iTIP scheduling transaction (RFC 5546). Evolution Data Server is a desktop client, not an autonomous scheduling agent or MTA; importing organizer records into mutable client event state risks clients claiming ownership or proposing uncoordinated invitation changes.
+  2. Oracle origin parsing: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` ingests `ORGANIZER` into both `organizerCalendarAddress: "mailto:..."` and a synthetic `Participant` entry with `roles: { "owner": true, ... }`.
+  3. Outbound organizer serialization (`drawn_participants`): Outbound serialization maps participant records: when a participant holds the `owner` role, `drawn_participants` emits `ORGANIZER;CN=...:mailto:...`. When an imported event carries no participants, no `ORGANIZER` line is emitted.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.3 (`Organizer`).
+  2. RFC 5546 (`iTIP`).
+  3. draft-ietf-jmap-calendars Section 5.9.2 (`organizerCalendarAddress`).
+  4. RFC 8984 Section 4.4.6 (`Participant`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by scheduling protocol boundaries and participant role integrity. Suppressing organizer ingestion prevents client-side synchronization tools from inadvertently mutating server-orchestrated scheduling metadata.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.407 Divergence 407: `links`, `IMAGE`, `DISPLAY`, `display: "badge"`, Scalar String Display vs Boolean Map/Set Representation: RFC 7986 Section 5.10 `IMAGE` / `DISPLAY` vs RFC 8984 Section 4.2.7 `Link.display`
+
+- **Observed Behavior**:
+  Translating event image display parameters between RFC 7986 Section 5.10 (`IMAGE;DISPLAY=...`) and JSCalendar RFC 8984 Section 4.2.7 (`Link.display`):
+  1. Inbound image link parsing (`read_links`): In `cyrus_caldav_export.ics` and `evolution_calendar_export.ics`, events carry `IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png:...`. In `jmap-ical`, `read_links` maps the `IMAGE` component to a `Link` object with `rel: "icon"` and parses `DISPLAY=BADGE` into `display: "badge"` as a scalar string value, strictly matching RFC 8984 Section 4.2.7 vocabulary (`"badge"`, `"graphic"`, `"full"`, `"thumbnail"`).
+  2. Oracle display representation: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs `"display": { "badge": true }`, representing the display parameter as a boolean set/map rather than an RFC 8984 scalar string.
+  3. Outbound image link serialization (`drawn_links`): When serializing to iCalendar format, `drawn_links` detects links with `rel: "icon"`, maps `display: "badge"` back via `LINK_DISPLAYS` to `DISPLAY=BADGE`, and renders `IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=...`, ensuring lossless round-trip formatting.
+- **Specification and Architectural Context**:
+  1. RFC 7986 Section 5.10 (`Image Property`).
+  2. RFC 8984 Section 4.2.7 (`links` and `display`).
+- **Adjudication**:
+  Conforming specification adaptation and RFC 8984 schema compliance. Storing `display` as a scalar string conforms directly to RFC 8984 Section 4.2.7, while outbound serialization accurately reconstructs RFC 7986 `DISPLAY` parameters.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
 
 
 
