@@ -45483,3 +45483,270 @@ fn differential_oracle_alert_description_stripping_and_wire_synthesis() {
     assert!(out_tb.contains("UID:a1\r\n"));
     assert!(out_tb.contains("END:VALARM\r\n"));
 }
+
+#[test]
+fn differential_oracle_email_alarm_rejection_and_action_scope_isolation() {
+    // Audit divergence 392: alerts, VALARM, ACTION:EMAIL, attendee notification
+    // parameters (ATTENDEE), and desktop client action scope isolation:
+    // RFC 5545 Section 3.6.6 VALARM (Email Alarm) vs RFC 8984 Section 4.5 Alert (action).
+
+    // 1. Inbound parsing drops ACTION:EMAIL alarms because desktop clients lack
+    // autonomous background mail transmission agents (MTAs) to dispatch email
+    // reminders independently of server scheduling infrastructure.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    let alerts = ev_google.alerts.as_ref().expect("alerts present");
+    // google_calendar_export.ics contains 4 VALARMs:
+    // 1. ACTION:DISPLAY, TRIGGER:-P1D -> parsed as a1
+    // 2. ACTION:DISPLAY, TRIGGER:-PT15M -> parsed as a2
+    // 3. ACTION:EMAIL, TRIGGER:-P1D -> dropped
+    // 4. ACTION:DISPLAY, TRIGGER;VALUE=DATE-TIME:... -> dropped
+    assert_eq!(alerts.len(), 2);
+    assert!(alerts.contains_key("a1"));
+    assert!(alerts.contains_key("a2"));
+    for (key, alert) in alerts {
+        assert_eq!(
+            alert.get("action").and_then(Value::as_str),
+            Some("display"),
+            "alert {key} must have action: display"
+        );
+        assert!(
+            alert.get("attendee").is_none(),
+            "alert {key} must not retain email attendee parameter"
+        );
+    }
+    assert!(
+        !ev_google.extra.contains_key("valarm"),
+        "extra must not store unmodeled email alarm properties"
+    );
+
+    // 2. Outbound capability gating: maps_alerts strictly refuses events with
+    // action: "email", guaranteeing whole-property replacement safety.
+    let mut email_alerts = BTreeMap::new();
+    email_alerts.insert(
+        "m1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "email",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-P1D"
+            }
+        }),
+    );
+    let ev_email = CalendarEvent {
+        title: Some("Staff Meeting".to_owned()),
+        start: Some("2026-11-10T09:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        alerts: Some(email_alerts),
+        ..Default::default()
+    };
+    assert!(
+        !maps_alerts(&ev_email),
+        "maps_alerts must refuse email action alerts"
+    );
+}
+
+#[test]
+fn differential_oracle_audio_alarm_rejection_and_sound_attachment_filtering() {
+    // Audit divergence 393: alerts, VALARM, ACTION:AUDIO, ATTACH, sound files,
+    // and legacy audible alarm filtering: RFC 5545 Section 3.6.6 VALARM (Audio Alarm)
+    // vs RFC 8984 Section 4.5 Alert.
+
+    // 1. Inbound parsing safely discards ACTION:AUDIO alarms and sound attachments
+    // (such as "Basso" in apple_calendar_export.ics) because RFC 8984 Section 4.5
+    // only specifies visual display and email actions.
+    let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
+    let ev_apple = ical_to_event(apple_ics).expect("parses apple calendar");
+    let alerts = ev_apple.alerts.as_ref().expect("alerts present");
+    // apple_calendar_export.ics has 5 VALARMs:
+    // 1. DISPLAY -P1D (E451D045-FA1B-475D-85B6-06F6F505A321)
+    // 2. DISPLAY -PT2H (F82C4A10-91DE-4A99-8D77-38C1B79E1A55)
+    // 3. DISPLAY -PT15M (apple-alarm-offset-15m)
+    // 4. AUDIO -PT15M ATTACH:Basso -> dropped
+    // 5. DISPLAY absolute trigger -> dropped
+    assert_eq!(alerts.len(), 3);
+    for (key, alert) in alerts {
+        assert_eq!(
+            alert.get("action").and_then(Value::as_str),
+            Some("display"),
+            "alert {key} must have action: display"
+        );
+        assert!(
+            alert.get("attach").is_none(),
+            "alert {key} must not retain sound attachment URI"
+        );
+    }
+    assert!(ev_apple.extra.is_empty(), "extra must remain clean");
+
+    // 2. Outbound capability gating: maps_alerts strictly refuses events with
+    // action: "audio" or sound attachments.
+    let mut audio_alerts = BTreeMap::new();
+    audio_alerts.insert(
+        "s1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "audio",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            }
+        }),
+    );
+    let ev_audio = CalendarEvent {
+        title: Some("Alarm Sound Test".to_owned()),
+        start: Some("2026-11-10T09:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        alerts: Some(audio_alerts),
+        ..Default::default()
+    };
+    assert!(
+        !maps_alerts(&ev_audio),
+        "maps_alerts must refuse audio action alerts"
+    );
+}
+
+#[test]
+fn differential_oracle_absolute_alarm_trigger_filtering_and_rescheduling_stability() {
+    // Audit divergence 394: alerts, VALARM, TRIGGER;VALUE=DATE-TIME, absolute alarms
+    // (AbsoluteTrigger), and rescheduling clock decoupling: RFC 5545 Section 3.8.6.3
+    // TRIGGER vs RFC 8984 Section 4.5.2 OffsetTrigger vs Section 4.5.3 AbsoluteTrigger.
+
+    // 1. Inbound parsing drops absolute date-time triggers to prevent stale alarm
+    // timestamps from firing prematurely or post-event when events are rescheduled.
+    let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
+    let ev_apple = ical_to_event(apple_ics).expect("parses apple calendar");
+    let alerts = ev_apple.alerts.as_ref().expect("alerts present");
+    for (key, alert) in alerts {
+        let trigger = alert
+            .get("trigger")
+            .and_then(Value::as_object)
+            .expect("trigger object");
+        assert_eq!(
+            trigger.get("@type").and_then(Value::as_str),
+            Some("OffsetTrigger"),
+            "alert {key} trigger must be an OffsetTrigger"
+        );
+        assert!(
+            trigger.get("offset").is_some(),
+            "alert {key} must have duration offset"
+        );
+        assert!(
+            trigger.get("when").is_none(),
+            "alert {key} must not have absolute when timestamp"
+        );
+    }
+
+    // 2. Outbound capability gating: maps_alerts strictly refuses AbsoluteTrigger
+    // instances to guarantee all exported alarms shift dynamically with start/end.
+    let mut abs_alerts = BTreeMap::new();
+    abs_alerts.insert(
+        "abs1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "AbsoluteTrigger",
+                "when": "2026-09-25T08:00:00Z"
+            }
+        }),
+    );
+    let ev_abs = CalendarEvent {
+        title: Some("Keynote".to_owned()),
+        start: Some("2026-09-25T09:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        alerts: Some(abs_alerts),
+        ..Default::default()
+    };
+    assert!(
+        !maps_alerts(&ev_abs),
+        "maps_alerts must refuse AbsoluteTrigger"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_sub_entity_map_inheritance_and_patch_scoping() {
+    // Audit divergence 395: recurrence overrides (RECURRENCE-ID), multi-valued sub-entity
+    // map inheritance (locations, virtualLocations, links, participants), and minimal
+    // patch scoping: RFC 5545 Section 3.8.4.4 RECURRENCE-ID vs RFC 8984 Section 4.3.4
+    // PatchObject and OVERRIDE_PROPERTIES.
+
+    // 1. Inbound parsing computes minimal patch deltas restricted strictly to the
+    // 11 fields in OVERRIDE_PROPERTIES, omitting multi-valued sub-entity maps.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    let overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("recurrenceOverrides present");
+    let patch = overrides
+        .get("2026-10-20T10:00:00")
+        .expect("detached override patch present");
+    let patch_obj = patch.as_object().expect("patch object");
+
+    // OVERRIDE_PROPERTIES fields present in patch:
+    assert_eq!(
+        patch_obj.get("start").and_then(Value::as_str),
+        Some("2026-10-20T10:30:00")
+    );
+    assert_eq!(
+        patch_obj.get("title").and_then(Value::as_str),
+        Some("Q3 Product Architecture Sync (Performance Deep Dive)")
+    );
+    assert!(patch_obj.get("description").is_some());
+    // Cleared master properties explicitly nullified:
+    assert_eq!(patch_obj.get("alerts"), Some(&Value::Null));
+    assert_eq!(patch_obj.get("keywords"), Some(&Value::Null));
+
+    // Sub-entity maps deliberately excluded from OVERRIDE_PROPERTIES:
+    assert!(
+        patch_obj.get("locations").is_none(),
+        "patch must not restate locations map"
+    );
+    assert!(
+        patch_obj.get("virtualLocations").is_none(),
+        "patch must not restate virtualLocations map"
+    );
+    assert!(
+        patch_obj.get("links").is_none(),
+        "patch must not restate links map"
+    );
+    assert!(
+        patch_obj.get("participants").is_none(),
+        "patch must not restate participants map"
+    );
+
+    // 2. Outbound serialization inherits the master series sub-entities so that
+    // the detached occurrence retains the agenda document and video conference bridge,
+    // while omitting nullified categories and alarms.
+    let out_google = event_to_ical(&ev_google);
+    assert!(
+        out_google.contains("RECURRENCE-ID;TZID=America/New_York:20261020T100000\r\n"),
+        "must emit detached occurrence with RECURRENCE-ID"
+    );
+    // Emits CONFERENCE line inherited from master:
+    assert!(
+        out_google.contains(
+            "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=\"Google Meet\";X-JMAP-KEY=v1:"
+        ),
+        "detached occurrence must inherit master conference bridge"
+    );
+    // Emits ATTACH line inherited from master:
+    assert!(
+        out_google.contains("ATTACH;FMTTYPE=application/pdf;SIZE=102400;X-JMAP-KEY=k1:"),
+        "detached occurrence must inherit master document attachment"
+    );
+    // Verifies nullified properties are cleanly omitted from detached instance:
+    let detached_chunk = out_google
+        .split("RECURRENCE-ID")
+        .nth(1)
+        .expect("detached component present");
+    assert!(
+        !detached_chunk.contains("CATEGORIES:"),
+        "nullified categories must be omitted from detached occurrence"
+    );
+    assert!(
+        !detached_chunk.contains("BEGIN:VALARM"),
+        "nullified alarms must be omitted from detached occurrence"
+    );
+}
