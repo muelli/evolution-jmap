@@ -47297,3 +47297,263 @@ fn differential_oracle_recurrence_overrides_privacy_unchanged_elision() {
         "detached occurrence inherits and emits master CLASS:PUBLIC"
     );
 }
+
+#[test]
+fn differential_oracle_recurrence_overrides_status_modification_and_elision() {
+    // Audit divergence 424: Recurrence overrides status STATUS modification, confirmation restatement elision, and cancellation vs standalone component duplication:
+    // RFC 5545 Section 3.8.1.11 STATUS vs RFC 8984 Section 4.1.4 status and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: in google_calendar_export.ics, master and detached occurrence both specify STATUS:CONFIRMED.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar fixture");
+    assert_eq!(
+        ev_google.status.as_deref(),
+        Some("confirmed"),
+        "master series has status: confirmed"
+    );
+
+    let google_overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("google recurrence overrides present");
+    let google_patch = google_overrides
+        .get("2026-10-20T10:00:00")
+        .expect("finds detached occurrence patch");
+    assert!(
+        google_patch.get("status").is_none(),
+        "unaltered status confirmed must be elided from patch delta"
+    );
+
+    // In thunderbird_detached_export.ics, occurrence 2026-10-19 matches master (confirmed) so status is elided,
+    // while occurrence 2026-11-16 specifies STATUS:CANCELLED so status: cancelled is recorded.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let tb_overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("thunderbird recurrence overrides present");
+    let tb_rescheduled = tb_overrides
+        .get("2026-10-19T10:00:00")
+        .expect("finds rescheduled occurrence patch");
+    assert!(
+        tb_rescheduled.get("status").is_none(),
+        "unaltered status confirmed must be elided from patch delta on rescheduled occurrence"
+    );
+
+    let tb_cancelled = tb_overrides
+        .get("2026-11-16T10:00:00")
+        .expect("finds cancelled occurrence patch");
+    assert_eq!(
+        tb_cancelled.get("status"),
+        Some(&Value::String("cancelled".to_owned())),
+        "STATUS:CANCELLED must be recorded in patch delta"
+    );
+
+    // 2. Outbound serialization: vevent_of on detached occurrences emits inherited or overridden STATUS.
+    let out_google = event_to_ical(&ev_google);
+    let child_google = vevent(&out_google, 1);
+    assert!(
+        child_google.contains("STATUS:CONFIRMED\r\n"),
+        "detached occurrence inherits and emits master STATUS:CONFIRMED"
+    );
+
+    let out_tb = event_to_ical(&ev_tb);
+    let child_tb_cancelled = vevent(&out_tb, 2);
+    assert!(
+        child_tb_cancelled.contains("STATUS:CANCELLED\r\n"),
+        "cancelled occurrence renders STATUS:CANCELLED on detached VEVENT"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_keyword_modification_and_nullification() {
+    // Audit divergence 425: Recurrence overrides keywords CATEGORIES modification, category map inheritance, and explicit category nullification vs standalone component dropping:
+    // RFC 5545 Section 3.8.1.2 CATEGORIES vs RFC 8984 Section 4.1.8 keywords and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: in thunderbird_detached_export.ics, master has categories Mozilla,Engineering.
+    // Occurrence 2026-10-19 modifies categories to Mozilla,Engineering,Benchmark.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let tb_overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("thunderbird recurrence overrides present");
+    let tb_rescheduled = tb_overrides
+        .get("2026-10-19T10:00:00")
+        .expect("finds rescheduled occurrence patch");
+
+    let keywords_rescheduled = tb_rescheduled
+        .get("keywords")
+        .and_then(Value::as_object)
+        .expect("rescheduled occurrence has modified keywords object");
+    assert!(keywords_rescheduled.contains_key("Benchmark"));
+    assert!(keywords_rescheduled.contains_key("Engineering"));
+    assert!(keywords_rescheduled.contains_key("Mozilla"));
+
+    // In contrast, occurrence 2026-11-16 omits CATEGORIES while master has them:
+    // instance_patch writes keywords: null to cancel category inheritance.
+    let tb_cancelled = tb_overrides
+        .get("2026-11-16T10:00:00")
+        .expect("finds cancelled occurrence patch");
+    assert_eq!(
+        tb_cancelled.get("keywords"),
+        Some(&Value::Null),
+        "omitted CATEGORIES on occurrence must produce explicit null in patch delta"
+    );
+
+    // In google_calendar_export.ics, master has Architecture,Planning,Engineering, but detached occurrence omits CATEGORIES:
+    // instance_patch writes keywords: null.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar fixture");
+    let google_overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("google recurrence overrides present");
+    let google_patch = google_overrides
+        .get("2026-10-20T10:00:00")
+        .expect("finds detached occurrence patch");
+    assert_eq!(
+        google_patch.get("keywords"),
+        Some(&Value::Null),
+        "omitted CATEGORIES on google occurrence must produce explicit null in patch delta"
+    );
+
+    // 2. Outbound serialization: nullified keywords emit no CATEGORIES line on detached occurrence.
+    let out_google = event_to_ical(&ev_google);
+    let child_google = vevent(&out_google, 1);
+    assert!(
+        !child_google.contains("CATEGORIES:"),
+        "nullified keywords must omit CATEGORIES on detached VEVENT"
+    );
+
+    let out_tb = event_to_ical(&ev_tb);
+    let child_tb_rescheduled = vevent(&out_tb, 1);
+    assert!(
+        child_tb_rescheduled.contains("CATEGORIES:"),
+        "modified keywords must emit CATEGORIES on detached VEVENT"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_excluded_vs_cancelled_status() {
+    // Audit divergence 426: Recurrence overrides excluded: true EXDATE vs STATUS:CANCELLED complete instance removal vs explicit meeting cancellation modeling:
+    // RFC 5545 Section 3.8.5.1 EXDATE, Section 3.8.1.11 STATUS:CANCELLED, Section 3.8.4.4 RECURRENCE-ID vs RFC 8984 Section 4.3.4 recurrenceOverrides and excluded.
+
+    // 1. Inbound parsing: EXDATE is mapped to {"excluded": true}, whereas detached VEVENT with STATUS:CANCELLED produces patch delta with status: cancelled.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let tb_overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("thunderbird recurrence overrides present");
+
+    // EXDATE 20261102T100000 becomes excluded: true
+    let exdate_patch = tb_overrides
+        .get("2026-11-02T10:00:00")
+        .expect("finds EXDATE occurrence patch");
+    assert_eq!(
+        exdate_patch.get("excluded"),
+        Some(&Value::Bool(true)),
+        "EXDATE must produce excluded: true"
+    );
+    assert_eq!(
+        exdate_patch.as_object().map(|m| m.len()),
+        Some(1),
+        "excluded occurrence carries only excluded: true and no other properties"
+    );
+
+    // In contrast, cancelled occurrence 2026-11-16 has status: cancelled and is NOT marked excluded: true
+    let cancelled_patch = tb_overrides
+        .get("2026-11-16T10:00:00")
+        .expect("finds cancelled occurrence patch");
+    assert_eq!(
+        cancelled_patch.get("status"),
+        Some(&Value::String("cancelled".to_owned())),
+        "detached VEVENT with STATUS:CANCELLED must carry status: cancelled"
+    );
+    assert!(
+        cancelled_patch.get("excluded").is_none(),
+        "cancelled occurrence must not be marked excluded: true"
+    );
+
+    // 2. Outbound serialization: excluded: true renders as EXDATE, whereas status: cancelled renders as detached VEVENT.
+    let out_tb = event_to_ical(&ev_tb);
+    assert!(
+        out_tb.contains("EXDATE;TZID=Europe/London:20261102T100000\r\n"),
+        "excluded: true must serialize to EXDATE line"
+    );
+    assert!(
+        out_tb.contains("RECURRENCE-ID;TZID=Europe/London:20261116T100000\r\n"),
+        "status: cancelled must serialize to separate VEVENT with RECURRENCE-ID"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_range_thisandfuture_isolation() {
+    // Audit divergence 427: Recurrence overrides RECURRENCE-ID RANGE=THISANDFUTURE single-occurrence scope isolation vs series truncation skipping:
+    // RFC 5545 Section 3.2.13 RANGE and Section 3.8.4.4 RECURRENCE-ID vs RFC 8984 Section 4.3.4 recurrenceOverrides Instant-Based Keying.
+
+    // Inbound parsing: when a detached VEVENT carries RECURRENCE-ID;RANGE=THISANDFUTURE, read_overrides skips it
+    // because JSCalendar recurrenceOverrides cannot express open-ended series truncation or future ranges.
+    let range_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:split-series-test\r\n",
+        "DTSTART:20261001T090000Z\r\n",
+        "RRULE:FREQ=DAILY;COUNT=10\r\n",
+        "SUMMARY:Original Daily Standup\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:split-series-test\r\n",
+        "RECURRENCE-ID;RANGE=THISANDFUTURE:20261005T090000Z\r\n",
+        "DTSTART:20261005T100000Z\r\n",
+        "SUMMARY:Moved Later For Remaining Occurrences\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+
+    let parsed = ical_to_event(range_ics).expect("parses calendar with RANGE=THISANDFUTURE");
+    assert!(
+        parsed.recurrence_overrides.is_none(),
+        "RANGE=THISANDFUTURE override must be skipped rather than corrupting recurrence series"
+    );
+
+    // If another valid single-instance override is present, it is parsed while RANGE=THISANDFUTURE is skipped.
+    let mixed_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:split-series-test-2\r\n",
+        "DTSTART:20261001T090000Z\r\n",
+        "RRULE:FREQ=DAILY;COUNT=10\r\n",
+        "SUMMARY:Original Daily Standup\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:split-series-test-2\r\n",
+        "RECURRENCE-ID:20261003T090000Z\r\n",
+        "SUMMARY:Single Occurrence Title Change\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:split-series-test-2\r\n",
+        "RECURRENCE-ID;RANGE=THISANDFUTURE:20261005T090000Z\r\n",
+        "SUMMARY:Future Altered\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n",
+    );
+
+    let parsed_mixed = ical_to_event(mixed_ics).expect("parses calendar with mixed overrides");
+    let overrides = parsed_mixed
+        .recurrence_overrides
+        .as_ref()
+        .expect("single recurrence override must be retained");
+    assert_eq!(
+        overrides.len(),
+        1,
+        "only single-instance override is retained"
+    );
+    assert!(overrides.contains_key("2026-10-03T09:00:00"));
+    assert!(!overrides.contains_key("2026-10-05T09:00:00"));
+}
