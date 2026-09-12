@@ -7462,6 +7462,70 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.392 Divergence 392: `alerts`, `VALARM`, `ACTION:EMAIL`, Attendee Notification Parameters (`ATTENDEE`), and Desktop Client Action Scope Isolation: RFC 5545 Section 3.6.6 `VALARM` (Email Alarm) vs RFC 8984 Section 4.5 `Alert` (`action`)
+
+- **Observed Behavior**:
+  Translating email reminder alarms between RFC 5545 (`VALARM;ACTION=EMAIL`) and JSCalendar RFC 8984 Section 4.5 (`Alert`):
+  1. Inbound email alarm filtering (`read_alerts`, `read_alert`): In `google_calendar_export.ics`, an email reminder is specified via `ACTION:EMAIL` with `SUMMARY:Alarm notification`, `DESCRIPTION:Event reminder`, `ATTENDEE:mailto:jane.doe@example.com`, and `TRIGGER:-P1D`. In `jmap-ical`, `read_alert` strictly checks `ACTION:DISPLAY` (`DISPLAY_ALERT`) and drops `ACTION:EMAIL` alarms on import, ensuring that `alerts` only contains visual display reminders.
+  2. Oracle email alarm ingestion: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` ingests the component into an `Alert` object with `"action": "email"`, preserving the recipient email address, summary, and description within its `iCalendar.properties` table.
+  3. Outbound whole-property replacement safety (`maps_alerts`, `drawn_alert`): On outbound serialization, `drawn_alert` returns `None` for any alert whose action is not `"display"`. As a result, `maps_alerts` returns `false` if an event carries an email alert, preventing whole-property replacement from unintentionally clearing or corrupting server-side email reminder jobs.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`).
+  2. RFC 8984 Section 4.5 (`Alert`).
+  3. Evolution Data Server (EDS) desktop reminder architecture.
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by desktop client capabilities and notification execution scope. Evolution Data Server is a desktop environment service without an autonomous mail transfer agent (MTA) or SMTP daemon to dispatch scheduling notification emails independently of a server. Ingesting email reminders into the local client cache would mislead users by presenting reminders that the local system cannot execute. Outbound whole-property replacement safety is guaranteed by `maps_alerts` rejecting non-display actions.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.393 Divergence 393: `alerts`, `VALARM`, `ACTION:AUDIO`, `ATTACH`, Sound Files, and Legacy Audible Alarm Filtering: RFC 5545 Section 3.6.6 `VALARM` (Audio Alarm) vs RFC 8984 Section 4.5 `Alert`
+
+- **Observed Behavior**:
+  Translating audio alarms and sound attachments between RFC 5545 (`VALARM;ACTION=AUDIO`) and JSCalendar RFC 8984 Section 4.5 (`Alert`):
+  1. Inbound audio alarm filtering (`read_alerts`, `read_alert`): In `apple_calendar_export.ics`, a `VALARM` component specifies `ACTION:AUDIO`, `TRIGGER:-PT15M`, and `ATTACH;VALUE=URI:Basso`. In `jmap-ical`, `read_alert` strictly requires `ACTION:DISPLAY` and drops `ACTION:AUDIO` components on import without polluting `extra` or creating invalid `Alert` instances.
+  2. Oracle audio alarm ingestion: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` creates an `Alert` object with the `-PT15M` trigger but omits `action` (since `audio` is not recognized by RFC 8984), storing the raw `ACTION:AUDIO` and `ATTACH;VALUE=URI:Basso` in its `iCalendar.properties` table.
+  3. Outbound capability gating (`maps_alerts`, `drawn_alert`): Outbound serialization refuses audio alerts: `drawn_alert` returns `None` for any non-display action, and `maps_alerts` prevents whole-property replacement of events containing audio alerts.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`).
+  2. RFC 8984 Section 4.5 (`Alert`).
+- **Adjudication**:
+  Conforming specification adaptation and clean domain modeling. JSCalendar RFC 8984 Section 4.5 does not specify audio alarms or sound attachment URIs (`action` only defines visual display or email). Modern desktop environments delegate notification sounds to system sound themes rather than playing legacy embedded sound attachments. Discarding audio alarms avoids injecting unsupported sound attachments into the clean JSCalendar model.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.394 Divergence 394: `alerts`, `VALARM`, `TRIGGER;VALUE=DATE-TIME`, Absolute Alarms (`AbsoluteTrigger`), and Rescheduling Clock Decoupling: RFC 5545 Section 3.8.6.3 `TRIGGER` vs RFC 8984 Section 4.5.2 `OffsetTrigger` vs Section 4.5.3 `AbsoluteTrigger`
+
+- **Observed Behavior**:
+  Translating absolute reminder triggers between RFC 5545 (`TRIGGER;VALUE=DATE-TIME`) and JSCalendar RFC 8984 Section 4.5.3 (`AbsoluteTrigger`):
+  1. Inbound absolute trigger filtering (`read_alerts`, `read_alert`): In `apple_calendar_export.ics` and `google_calendar_export.ics`, `VALARM` components specify absolute UTC triggers (`TRIGGER;VALUE=DATE-TIME:20260925T080000Z` and `20260915T094500Z`). In `jmap-ical`, `read_alert` only parses relative duration offsets via `stated_offset` into `OffsetTrigger`, returning `None` for absolute date-time triggers.
+  2. Oracle absolute trigger ingestion: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` maps `TRIGGER;VALUE=DATE-TIME` directly into `trigger: { "@type": "AbsoluteTrigger", "when": "..." }`.
+  3. Outbound relative trigger enforcement (`drawn_trigger`, `maps_alerts`): In `jmap-ical`, `drawn_trigger` only supports `OffsetTrigger` durations, returning `None` for `AbsoluteTrigger`. `maps_alerts` requires all alerts to be printable, refusing whole-property replacement if an absolute trigger is present.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.6.3 (`Trigger`).
+  2. RFC 8984 Section 4.5.2 (`OffsetTrigger`) and Section 4.5.3 (`AbsoluteTrigger`).
+  3. Evolution Data Server (EDS) alarm scheduling daemon.
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by reminder resilience under event rescheduling and EDS notification requirements. Absolute triggers decouple alarm firing times from the parent event's schedule: if the event is rescheduled (such as postponed by 2 days), an absolute alarm remains pinned to the historical timestamp, resulting in stale notifications that fire either days before the meeting or long after it has concluded. Evolution/EDS reminder management and notification daemons operate predominantly on relative offsets before or after start or end (`RELATED=START` or `RELATED=END`) so that reminders adjust dynamically whenever an event's schedule changes.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.395 Divergence 395: Recurrence Overrides (`RECURRENCE-ID`), Multi-Valued Sub-Entity Map Inheritance (`locations`, `virtualLocations`, `links`, `participants`), and Minimal Patch Scoping: RFC 5545 Section 3.8.4.4 `RECURRENCE-ID` vs RFC 8984 Section 4.3.4 `PatchObject` and `OVERRIDE_PROPERTIES`
+
+- **Observed Behavior**:
+  Managing recurrence overrides and sub-entity map inheritance across detached occurrences (`RECURRENCE-ID`):
+  1. Inbound minimal patch scoping (`instance_patch`, `read_overrides`): In `google_calendar_export.ics` and `thunderbird_detached_export.ics`, detached `VEVENT` components represent modified recurrence instances with overridden fields (such as updated summary, new start time, or detached location) while omitting other master sub-entities (such as `CATEGORIES`, `ATTACH`, `CONFERENCE`, or `VALARM`). In `jmap-ical`, `instance_patch` computes a minimal RFC 8984 Section 4.3.4 `PatchObject` comparing the detached component against the master series, restricted strictly to the 11 scalar/simple fields defined in `OVERRIDE_PROPERTIES` (`title`, `description`, `start`, `timeZone`, `duration`, `status`, `freeBusyStatus`, `priority`, `privacy`, `keywords`, `alerts`). Sub-entity maps (`locations`, `virtual_locations`, `links`, `participants`) are intentionally excluded from `OVERRIDE_PROPERTIES`.
+  2. Outbound sub-entity inheritance (`vevent_of`, `modified_instance`): On outbound serialization (`vevent_of`), every occurrence automatically inherits the master series' `locations`, `virtual_locations`, `links`, and `participants`. The exported detached `VEVENT` emits the inherited `CONFERENCE` and `ATTACH` lines alongside the detached properties.
+  3. Oracle full duplicate serialization: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` returns full duplicate standalone event snapshots for every detached occurrence, duplicating the entire `locations`, `participants`, `virtualLocations`, and `links` sub-entity maps on each recurrence instance.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.4 (`Recurrence ID`).
+  2. RFC 8984 Section 4.3.3 (`recurrenceOverrides`) and Section 4.3.4 (`PatchObject`).
+  3. `OVERRIDE_PROPERTIES` defined in `jmap-ical/src/event.rs`.
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by EDS recurrence architecture and multi-valued entity synchronization safety. In JSCalendar RFC 8984 Section 4.3.4, sub-entity maps are collections of records. Permitting partial overrides on detached occurrences would risk wiping out complex location data, meeting agendas, or attendee lists during synchronization. Restricting override restatements to `OVERRIDE_PROPERTIES` guarantees that occurrence updates only patch intended scalar fields while keeping the attendee roster, video bridge, and attachments synchronized with the master meeting series.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
