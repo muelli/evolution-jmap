@@ -46026,3 +46026,255 @@ fn differential_oracle_recurrence_overrides_start_rescheduling_and_duration_alte
         "tb detached instance renders overridden duration PT2H"
     );
 }
+
+#[test]
+fn differential_oracle_recurrence_overrides_alerts_nullification_and_roster_clearing() {
+    // Audit divergence 400: recurrenceOverrides, alerts: null, alert roster clearing,
+    // and patch nullification vs implicit child object alarm suppression:
+    // RFC 5545 Section 3.6.6 VALARM vs RFC 8984 Section 4.5 alerts and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: when a detached recurrence instance has no VALARM while the master series has alarms,
+    // instance_patch writes "alerts": null into the PatchObject to cancel inherited alarms.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    assert!(ev_google.alerts.is_some(), "master series has alarms");
+    assert_eq!(ev_google.alerts.as_ref().unwrap().len(), 2);
+
+    let g_patch = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides")
+        .get("2026-10-20T10:00:00")
+        .and_then(Value::as_object)
+        .expect("g_patch");
+    assert_eq!(
+        g_patch.get("alerts"),
+        Some(&Value::Null),
+        "detached instance with no alarms must have alerts nullified in patch"
+    );
+
+    // In contrast, when a detached instance has modified alarms (like -PT30M in thunderbird),
+    // instance_patch records the updated alerts map.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached export");
+    let patch_oct19 = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides")
+        .get("2026-10-19T10:00:00")
+        .and_then(Value::as_object)
+        .expect("patch_oct19");
+    let oct19_alerts = patch_oct19
+        .get("alerts")
+        .and_then(Value::as_object)
+        .expect("alerts object");
+    assert!(oct19_alerts.contains_key("a1"));
+    let a1_offset = oct19_alerts["a1"]["trigger"]["offset"].as_str();
+    assert_eq!(
+        a1_offset,
+        Some("-PT30M"),
+        "oct19 overrides alarm offset to -PT30M"
+    );
+
+    // When an instance has identical alarms to master, alerts is omitted from the patch delta.
+    let patch_nov16 = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides")
+        .get("2026-11-16T10:00:00")
+        .and_then(Value::as_object)
+        .expect("patch_nov16");
+    assert!(
+        patch_nov16.get("alerts").is_none(),
+        "identical alarms omitted from patch"
+    );
+
+    // 2. Outbound serialization: nullified alerts emit no VALARM on the detached component.
+    let out_google = event_to_ical(&ev_google);
+    let g_parts: Vec<&str> = out_google.split("RECURRENCE-ID").collect();
+    assert_eq!(g_parts.len(), 2);
+    assert!(g_parts[0].contains("BEGIN:VALARM"), "master has VALARM");
+    assert!(
+        !g_parts[1].contains("BEGIN:VALARM"),
+        "detached occurrence with nullified alerts must not emit VALARM"
+    );
+
+    // Outbound serialization for modified alarms: oct19 emits -PT30M, nov16 inherits master -PT15M.
+    let out_tb = event_to_ical(&ev_tb);
+    let tb_parts: Vec<&str> = out_tb.split("RECURRENCE-ID").collect();
+    assert_eq!(tb_parts.len(), 3);
+    assert!(
+        tb_parts[1].contains("TRIGGER:-PT30M\r\n"),
+        "oct19 renders overridden trigger -PT30M"
+    );
+    assert!(
+        tb_parts[2].contains("TRIGGER:-PT15M\r\n"),
+        "nov16 inherits master trigger -PT15M"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_priority_alteration_and_nullification() {
+    // Audit divergence 401: recurrenceOverrides, priority, PRIORITY, and explicit priority nullification
+    // vs implicit series omission in recurrence overrides:
+    // RFC 5545 Section 3.8.1.9 PRIORITY vs RFC 8984 Section 4.1.4 priority and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: in thunderbird detached export, master has PRIORITY:1.
+    // Occurrence 2026-10-19 has PRIORITY:2; occurrence 2026-11-16 has no PRIORITY line.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached export");
+    assert_eq!(ev_tb.priority, Some(1), "master priority is 1");
+
+    let patch_oct19 = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides")
+        .get("2026-10-19T10:00:00")
+        .and_then(Value::as_object)
+        .expect("patch_oct19");
+    assert_eq!(
+        patch_oct19.get("priority").and_then(Value::as_i64),
+        Some(2),
+        "oct19 patch must record altered priority 2"
+    );
+
+    let patch_nov16 = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides")
+        .get("2026-11-16T10:00:00")
+        .and_then(Value::as_object)
+        .expect("patch_nov16");
+    assert_eq!(
+        patch_nov16.get("priority"),
+        Some(&Value::Null),
+        "nov16 patch must nullify priority when detached component carries no PRIORITY line"
+    );
+
+    // In google calendar export, both master and detached occurrence specify PRIORITY:1.
+    // Since priority did not change, it is omitted from the patch delta.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    assert_eq!(ev_google.priority, Some(1));
+    let g_patch = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides")
+        .get("2026-10-20T10:00:00")
+        .and_then(Value::as_object)
+        .expect("g_patch");
+    assert!(
+        g_patch.get("priority").is_none(),
+        "unchanged priority omitted from patch"
+    );
+
+    // 2. Outbound serialization: altered priority renders new value, nullified priority renders no line,
+    // and omitted priority inherits master priority.
+    let out_tb = event_to_ical(&ev_tb);
+    let tb_parts: Vec<&str> = out_tb.split("RECURRENCE-ID").collect();
+    assert!(
+        tb_parts[1].contains("PRIORITY:2\r\n"),
+        "oct19 renders PRIORITY:2"
+    );
+    assert!(
+        !tb_parts[2].contains("PRIORITY:"),
+        "nov16 omits PRIORITY line"
+    );
+
+    let out_google = event_to_ical(&ev_google);
+    let g_parts: Vec<&str> = out_google.split("RECURRENCE-ID").collect();
+    assert!(
+        g_parts[1].contains("PRIORITY:1\r\n"),
+        "google detached instance inherits PRIORITY:1"
+    );
+}
+
+#[test]
+fn differential_oracle_vendor_snooze_and_notification_metadata_isolation() {
+    // Audit divergence 402: vendor extension snooze and notification tracking properties
+    // (X-MOZ-LASTACK, X-MOZ-SNOOZE-TIME, X-MOZ-GENERATION, X-MOZ-SEND-INVITATIONS) vs component
+    // ingestion boundary isolation: RFC 5545 Section 3.8.8.2 vendor extensions vs RFC 8984 domain cleanliness.
+
+    // 1. Inbound parsing: thunderbird calendar export contains X-MOZ-GENERATION, X-MOZ-LASTACK,
+    // and X-MOZ-SNOOZE-TIME. These vendor-proprietary properties must be dropped cleanly without
+    // polluting event.extra.
+    let tb_ics = include_str!("fixtures/thunderbird_calendar_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird calendar");
+    assert!(
+        ev_tb.extra.is_empty(),
+        "extra must be empty, vendor x-moz properties dropped"
+    );
+
+    let tb_detached_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_detached = ical_to_event(tb_detached_ics).expect("parses thunderbird detached export");
+    assert!(
+        ev_detached.extra.is_empty(),
+        "extra must be empty on detached export"
+    );
+
+    // 2. Outbound serialization: emitted iCalendar stream must not leak any X-MOZ properties.
+    let out_tb = event_to_ical(&ev_tb);
+    assert!(
+        !out_tb.contains("X-MOZ-"),
+        "outbound icalendar must not contain X-MOZ properties"
+    );
+
+    let out_detached = event_to_ical(&ev_detached);
+    assert!(
+        !out_detached.contains("X-MOZ-"),
+        "outbound detached icalendar must not contain X-MOZ properties"
+    );
+}
+
+#[test]
+fn differential_oracle_participant_extended_parameters_and_scheduling_isolation() {
+    // Audit divergence 403: participant extended scheduling parameters (X-NUM-GUESTS, SCHEDULE-AGENT,
+    // SCHEDULE-STATUS) and AST parameter table vs scheduling protocol isolation:
+    // RFC 5545 Section 3.8.4.1 ATTENDEE parameters, RFC 6638 CalDAV scheduling vs RFC 8984 Section 4.4.6 Participant.
+
+    // 1. Inbound parsing: google calendar has ATTENDEE lines with X-NUM-GUESTS=0;
+    // cyrus caldav has ATTENDEE lines with SCHEDULE-AGENT=SERVER and SCHEDULE-STATUS=2.0.
+    // In jmap-ical, participant rosters are dropped on inbound import to isolate scheduling state.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    assert!(
+        ev_google.participants.is_none(),
+        "participants dropped on inbound import"
+    );
+    assert!(
+        ev_google.extra.is_empty(),
+        "extra does not retain attendee parameters"
+    );
+
+    let cyrus_ics = include_str!("fixtures/cyrus_caldav_export.ics");
+    let ev_cyrus = ical_to_event(cyrus_ics).expect("parses cyrus caldav");
+    assert!(
+        ev_cyrus.participants.is_none(),
+        "participants dropped on inbound import"
+    );
+    assert!(
+        ev_cyrus.extra.is_empty(),
+        "extra does not retain scheduling parameters"
+    );
+
+    // 2. Outbound serialization: an event imported without participants renders no ATTENDEE lines.
+    let out_google = event_to_ical(&ev_google);
+    assert!(
+        !out_google.contains("ATTENDEE"),
+        "event without participants emits no ATTENDEE lines"
+    );
+    assert!(
+        !out_google.contains("X-NUM-GUESTS"),
+        "emitted icalendar does not contain X-NUM-GUESTS"
+    );
+
+    let out_cyrus = event_to_ical(&ev_cyrus);
+    assert!(
+        !out_cyrus.contains("ATTENDEE"),
+        "cyrus event emits no ATTENDEE lines"
+    );
+    assert!(
+        !out_cyrus.contains("SCHEDULE-AGENT"),
+        "emitted icalendar does not contain SCHEDULE-AGENT"
+    );
+}
