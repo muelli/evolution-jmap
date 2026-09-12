@@ -6811,3 +6811,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.352 Divergence 352: `status`, `STATUS`, and Recurrence Instance Cancellation Semantics: RFC 5545 Section 3.8.1.11 `STATUS` vs RFC 8984 Section 4.4.1 `status`, `STATUSES` Closed Enumeration (`confirmed`, `cancelled`, `tentative`), Case-Insensitive Ingestion, and Detached Recurrence Override Instance Cancellation
+
+- **Observed Behavior**:
+  Reconciling event lifecycle state between RFC 5545 (`STATUS`) and JSCalendar RFC 8984 Section 4.4.1 (`status`) requires enforcing closed enumeration sets, case insensitivity, and instance cancellation fidelity:
+  1. Closed vocabulary gating (`STATUSES` and `read_vevent`): RFC 5545 Section 3.8.1.11 defines `STATUS` for `VEVENT` as `CONFIRMED`, `CANCELLED`, or `TENTATIVE`. In `jmap-ical`, `read_vevent` matches incoming tokens case-insensitively against `STATUSES`, mapping them to `"confirmed"`, `"cancelled"`, and `"tentative"`. Non-standard tokens, draft statuses, or extension values return `None`, preventing unrecognized values from corrupting JMAP event state.
+  2. Detached recurrence override cancellation (`instance_patch`): In RFC 5545, cancelling an individual occurrence within a recurrence series is represented by a detached `VEVENT` carrying `RECURRENCE-ID` and `STATUS:CANCELLED`. In `jmap-ical`, `instance_patch` detects this and produces a minimal differential patch object with `"status": "cancelled"`. This preserves the occurrence's metadata, title, and scheduling context, clearly distinguishing a cancelled instance from an unplaced instance (`excluded: true` via `EXDATE`).
+  3. Outbound serialization (`vevent_of`): Renders `STATUS` lines only for valid enumerated values, outputting `STATUS:CANCELLED` on detached override components where the patch specifies cancellation.
+  4. In contrast, Stalwart's `CalendarEvent/parse` endpoint extracts `STATUS:CANCELLED` on detached instances, but reproduces redundant full copies of all master event properties within the parsed JSON rather than computing a minimal RFC 8984 Section 4.3.4 patch delta.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.11 (`Status`).
+  2. RFC 5546 (iTIP) Section 3.2.5 (`CANCEL` Method for VEVENT).
+  3. RFC 8984 Section 4.4.1 (`status`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence schedule accuracy. Distinguishes `status: "cancelled"` from `excluded: true`, enforces case-insensitive closed vocabulary matching, and computes minimal instance patch objects.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.353 Divergence 353: `free_busy_status`, `TRANSP`, and Shared Implicit Default Agreement: RFC 5545 Section 3.8.2.7 `TRANSP` (`OPAQUE`, `TRANSPARENT`) vs RFC 8984 Section 4.4.2 `freeBusyStatus` (`busy`, `free`), Shared Implicit Default Agreement (`OPAQUE` ↔ `busy`), Wire Payload Omission on Default Values, and Override Instance Patch Nullification
+
+- **Observed Behavior**:
+  Translating time transparency between RFC 5545 (`TRANSP`) and JSCalendar RFC 8984 Section 4.4.2 (`freeBusyStatus`) relies on the shared implicit default agreement between the two standards:
+  1. Shared implicit default agreement: RFC 5545 Section 3.8.2.7 defines `OPAQUE` as the default transparency state when `TRANSP` is omitted. RFC 8984 Section 4.4.2 defines `busy` as the default value when `freeBusyStatus` is omitted. Because `OPAQUE` maps directly to `busy`, both specifications share the identical default state.
+  2. Inbound parsing (`read_transparency`): Maps `TRANSP:TRANSPARENT` to `"free"` and `TRANSP:OPAQUE` to `"busy"`. When `TRANSP` is omitted from a `VEVENT`, `read_transparency` returns `None`, allowing the JSCalendar event to inherit the default `"busy"` without synthesizing explicit overrides or inflating JSON size.
+  3. Outbound serialization (`vevent_of`): Omits the `TRANSP` line when `free_busy_status` is `None` (or maps to `busy`), ensuring clean and minimal iCalendar serialization. When set to `"free"`, `TRANSP:TRANSPARENT` is rendered.
+  4. Recurrence override instance nullification (`instance_patch`): When a master series specifies `free_busy_status: Some("free")` and a detached occurrence component omits `TRANSP`, `instance_patch` records `"freeBusyStatus": null` in the patch object, explicitly resetting the occurrence back to the series default.
+  5. In contrast, Stalwart frequently emits explicit `"freeBusyStatus": "busy"` on every parsed event regardless of whether `TRANSP` was present in the input `.ics` stream.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.2.7 (`Time Transparency`).
+  2. RFC 8984 Section 4.4.2 (`freeBusyStatus`).
+  3. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and wire payload optimization. Exploits RFC default agreement to omit redundant `TRANSP` lines, preserves `None` on absent inbound properties, and correctly computes patch nullification for overridden occurrences.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.354 Divergence 354: `priority`, `PRIORITY`, and Shared Integer Scale Alignment: RFC 5545 Section 3.8.1.9 `PRIORITY` vs RFC 8984 Section 4.4.1 `priority`, Shared Integer Scale `0..=9` (0 Undefined, 1 Highest, 9 Lowest), Strict Lexical Parsing, and JMAP `"priority": null` vs `0` Semantic Equivalence
+
+- **Observed Behavior**:
+  Aligning importance rankings between RFC 5545 (`PRIORITY`) and JSCalendar RFC 8984 Section 4.4.1 (`priority`) requires managing integer value bounds and strict lexical formatting:
+  1. Shared integer scale: RFC 5545 Section 3.8.1.9 and RFC 8984 Section 4.4.1 specify identical integer semantics: a scale from 0 to 9, where 0 represents undefined priority, 1 represents highest priority, and 9 represents lowest priority.
+  2. Strict lexical parsing (`read_priority`): Parses incoming values strictly as integers within `0..=9` (`known_priority`). Any non-conforming tokens, such as values outside `0..=9`, floating-point numbers, comma-separated lists, or leading whitespace, are rejected, returning `None`.
+  3. Semantic equivalence of 0 and null: In JMAP, clearing an event's priority is performed by setting `"priority": null`, which carries the same semantic meaning as priority 0 ("undefined"). Outbound `vevent_of` renders `PRIORITY:0` when `priority` is `Some(0)` to preserve exact round-trip identity, while omitting `PRIORITY` when `None`.
+  4. Recurrence override instance nullification (`instance_patch`): When a recurrence series specifies a priority (such as 1) and a detached instance component omits `PRIORITY`, `instance_patch` emits `"priority": null`, clearing the series priority for that occurrence.
+  5. In contrast, Stalwart parses valid `PRIORITY` lines into `"priority"`, but may accept out-of-range integer values or preserve unparsed raw tokens in AST extension structures.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.9 (`Priority`).
+  2. RFC 8984 Section 4.4.1 (`priority`).
+  3. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and numeric data integrity. Enforces strict integer lexical parsing, bounds values strictly to `0..=9`, aligns 0 and null undefined semantics, and handles override patch clearing cleanly.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.355 Divergence 355: `privacy`, `CLASS`, and Classification Mapping: RFC 5545 Section 3.8.1.3 `CLASS` (`PUBLIC`, `PRIVATE`, `CONFIDENTIAL`) vs RFC 8984 Section 4.4.3 `privacy` (`public`, `private`, `secret`), Vocabulary Cross-Mapping, Non-Standard Token Dropping, and Evolution UI Classification Menu Stability
+
+- **Observed Behavior**:
+  Translating access classification between RFC 5545 (`CLASS`) and JSCalendar RFC 8984 Section 4.4.3 (`privacy`) requires cross-vocabulary alignment and desktop client compatibility:
+  1. Vocabulary cross-mapping (`PRIVACIES`): Translates `CLASS:PUBLIC` to `"public"`, `CLASS:PRIVATE` to `"private"`, and `CLASS:CONFIDENTIAL` to `"secret"`. RFC 8984 uses `"secret"` for the most restricted classification level, whereas RFC 5545 uses `"CONFIDENTIAL"`. Non-standard tokens (such as `CLASS:secret` or custom x-names) are rejected as unrecognized rather than assumed to match RFC 8984 tokens.
+  2. Asymmetric outbound serialization (`vevent_of`): Both specifications agree that public is the default classification. However, Evolution's desktop appointment editor inspects `CLASS` on every load and populates its Classification dropdown selector, explicitly saving `CLASS:PUBLIC`. To prevent spurious differences on every save in Evolution/EDS, `vevent_of` explicitly serializes `CLASS:PUBLIC` when `event.privacy` is set to `"public"`.
+  3. Recurrence override instance nullification (`instance_patch`): If the master series specifies privacy (such as `"private"`) and a detached instance component omits `CLASS`, `instance_patch` emits `"privacy": null`, allowing the occurrence to revert to the default.
+  4. In contrast, Stalwart maps `CLASS:PUBLIC` to `"privacy": "public"`, but in outbound serialization omits the default, causing potential UI state oscillations in EDS.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.3 (`Classification`).
+  2. RFC 8984 Section 4.4.3 (`privacy`).
+  3. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and desktop client UI stability. Translates `CONFIDENTIAL` to `"secret"` while strictly rejecting unmapped tokens, and serializes explicit `CLASS:PUBLIC` to maintain round-trip stability with Evolution's classification controls.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
