@@ -7898,6 +7898,69 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.420 Divergence 420: `recurrenceOverrides`, `participants`, `ATTENDEE`, Attendee Roster Inheritance vs Per-Occurrence Stateless Attendee Dropping: RFC 5545 Section 3.8.4.1 `ATTENDEE` vs RFC 8984 Section 4.4.6 `Participant`, Section 4.3.4 `PatchObject`, and `OVERRIDE_PROPERTIES`
+
+- **Observed Behavior**:
+  Translating attendee lists and meeting participation across recurrence overrides (`RECURRENCE-ID`):
+  1. Inbound patch scoping and multi-valued map protection (`instance_patch`): In `google_calendar_export.ics`, the master recurring series specifies three attendees (`ATTENDEE;...:mailto:jane.doe@example.com`, `mailto:bob.smith@example.com`, and `mailto:carol.danvers@example.com`). The detached recurrence instance `2026-10-20T10:00:00` specifies only Jane Doe (`ATTENDEE;...:mailto:jane.doe@example.com`), omitting Bob Smith and Carol Danvers. In `jmap-ical`, `instance_patch` strictly confines patch computation to scalar fields and alert triggers in `OVERRIDE_PROPERTIES`, deliberately excluding `participants`. As a result, the computed patch delta never contains a `participants` property.
+  2. Oracle stateless attendee dropping: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` treats each component as an independent standalone event. Because the detached `VEVENT` does not repeat Bob Smith or Carol Danvers, Stalwart outputs a child event whose `participants` map contains only Jane Doe, dropping the remaining invitees from the occurrence.
+  3. Outbound participant inheritance (`modified_instance`, `vevent_of`): On outbound export, `modified_instance` copies `event.participants` into the detached instance. When serializing to iCalendar, `vevent_of` calls `drawn_participants`, emitting `ATTENDEE` lines for all series participants on the detached `VEVENT`. Meeting attendees who did not submit instance-specific exceptions remain invited to rescheduled sessions.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.1 (`Attendee`).
+  2. RFC 8984 Section 4.4.6 (`Participant`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and attendee roster persistence. Excluding `participants` from `OVERRIDE_PROPERTIES` ensures that detached occurrences inherit the complete meeting attendee roster, preventing accidental participant loss during recurrence instance rescheduling.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.421 Divergence 421: `recurrenceOverrides`, `organizerCalendarAddress`, `ORGANIZER`, Meeting Organizer Scheduling Isolation across Recurrence Instances: RFC 5545 Section 3.8.4.3 `ORGANIZER` vs draft-ietf-jmap-calendars Section 5.9.2 `organizerCalendarAddress`, Section 4.3.4 `PatchObject`, and `OVERRIDE_PROPERTIES`
+
+- **Observed Behavior**:
+  Translating meeting organizer metadata across recurrence overrides (`RECURRENCE-ID`):
+  1. Inbound scheduling isolation (`read_vevent`, `instance_patch`): In `google_calendar_export.ics`, both the master series and the detached recurrence instance `2026-10-20T10:00:00` declare `ORGANIZER;CN=Jane Doe:mailto:jane.doe@example.com`. In `jmap-ical`, `read_vevent` isolates component entity data from scheduling protocol state: `organizer_calendar_address` is left unset (`None`) on both master and detached components, and `OVERRIDE_PROPERTIES` excludes organizer metadata. The patch delta for `2026-10-20T10:00:00` never includes organizer properties.
+  2. Oracle redundant organizer extraction: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` redundantly ingests `ORGANIZER` on both the master event and the detached occurrence into `organizerCalendarAddress: "mailto:jane.doe@example.com"` and creates synthetic owner participant records on both.
+  3. Outbound organizer isolation (`vevent_of`): On outbound export, `vevent_of` emits `ORGANIZER` only when a participant holds the owner role. When an event carries no participants, no `ORGANIZER` line is emitted on either the master or detached component, isolating the calendar store from client-invented organizer state.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.3 (`Organizer`).
+  2. RFC 5546 (iTIP).
+  3. draft-ietf-jmap-calendars Section 5.9.2 (`organizerCalendarAddress`).
+  4. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by scheduling protocol boundaries and server authority. Suppressing organizer ingestion prevents client-side recurrence modifications from altering authoritative meeting ownership.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.422 Divergence 422: `recurrenceOverrides`, `freeBusyStatus`, `TRANSP`, Unchanged Transparency Restatement Elision vs Full Component Duplication: RFC 5545 Section 3.8.2.7 `TRANSP` vs RFC 8984 Section 4.1.4 `freeBusyStatus` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Handling time transparency across recurrence overrides when unchanged from the master series:
+  1. Inbound transparency elision (`instance_patch`): In `google_calendar_export.ics`, the master recurring series defines `TRANSP:OPAQUE` (`freeBusyStatus: "busy"`). The detached recurrence instance `2026-10-20T10:00:00` also specifies `TRANSP:OPAQUE`. In `jmap-ical`, `instance_patch` compares `("freeBusyStatus", &series.free_busy_status, &instance.free_busy_status)`. Because `was == now` (`Some("busy") == Some("busy")`), `instance_patch` elides `freeBusyStatus` from the computed patch delta. In contrast, when an occurrence omits `TRANSP` while the master series defines it (as in `thunderbird_detached_export.ics`), `was != now` and `instance_patch` writes `"freeBusyStatus": null` to cancel inheritance.
+  2. Oracle full component duplication: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs duplicate standalone component objects for each occurrence, redundantly emitting `"freeBusyStatus": "busy"` on the child event without computing a minimal delta.
+  3. Outbound transparency restoration (`modified_instance`, `vevent_of`): On outbound serialization, `modified_instance` sets `instance.free_busy_status = event.free_busy_status.clone()` when `freeBusyStatus` is omitted from the patch. `vevent_of` renders the inherited `TRANSP:OPAQUE` line on the detached `VEVENT`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.2.7 (`Time Transparency`).
+  2. RFC 8984 Section 4.1.4 (`freeBusyStatus`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and minimal delta computation. Eliding unaltered time transparency from occurrence patch deltas conforms to RFC 8984 Section 4.3.4 inheritance while accurately restoring `TRANSP:OPAQUE` on outbound serialization.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.423 Divergence 423: `recurrenceOverrides`, `privacy`, `CLASS`, Unchanged Classification Restatement Elision vs Full Component Duplication: RFC 5545 Section 3.8.1.3 `CLASS` vs RFC 8984 Section 4.1.4 `privacy` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Handling access classification across recurrence overrides when unchanged from the master series:
+  1. Inbound classification elision (`instance_patch`): In `google_calendar_export.ics`, the master recurring series defines `CLASS:PUBLIC` (`privacy: "public"`). The detached recurrence instance `2026-10-20T10:00:00` also specifies `CLASS:PUBLIC`. In `jmap-ical`, `instance_patch` compares `("privacy", &series.privacy, &instance.privacy)`. Because `was == now` (`Some("public") == Some("public")`), `instance_patch` elides `privacy` from the computed patch delta. In contrast, when an occurrence omits `CLASS` while the master series defines it (as in `thunderbird_detached_export.ics`), `was != now` and `instance_patch` writes `"privacy": null` to cancel inheritance.
+  2. Oracle full component duplication: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs duplicate standalone component objects for each occurrence, redundantly emitting `"privacy": "public"` on the child event without computing a minimal delta.
+  3. Outbound classification restoration (`modified_instance`, `vevent_of`): On outbound serialization, `modified_instance` sets `instance.privacy = event.privacy.clone()` when `privacy` is omitted from the patch. `vevent_of` renders the inherited `CLASS:PUBLIC` line on the detached `VEVENT`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.3 (`Classification`).
+  2. RFC 8984 Section 4.1.4 (`privacy`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and minimal delta computation. Eliding unaltered classification from occurrence patch deltas conforms to RFC 8984 Section 4.3.4 inheritance while preserving exact privacy boundaries across desktop clients.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
