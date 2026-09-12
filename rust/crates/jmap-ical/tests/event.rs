@@ -43625,3 +43625,295 @@ fn differential_oracle_check_structure_depth_bounding_and_nesting_integrity() {
     let valid = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:valid-ev\r\nDTSTART:20261015T100000Z\r\nSUMMARY:Valid\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
     assert!(jmap_ical::event::parse_ical(valid).is_ok());
 }
+
+#[test]
+fn differential_oracle_keywords_categories_whitespace_normalization_and_override_nullification() {
+    // Audit divergence 360: Category keywords delimiter parsing, whitespace normalization,
+    // and override instance patch nullification: RFC 5545 Section 3.8.1.2 CATEGORIES vs
+    // RFC 8984 Section 4.1.8 keywords, lexicographical map key ordering, carriage return
+    // injection protection, and empty set filtering.
+
+    // 1. Inbound parsing splits multiple CATEGORIES lines across commas and trims whitespace
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:kw-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "CATEGORIES: Project , Sprint \r\n",
+        "CATEGORIES:Planning, \r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let kw = ev.keywords.expect("keywords present");
+    assert_eq!(kw.len(), 3);
+    assert_eq!(kw.get("Planning"), Some(&serde_json::Value::Bool(true)));
+    assert_eq!(kw.get("Project"), Some(&serde_json::Value::Bool(true)));
+    assert_eq!(kw.get("Sprint"), Some(&serde_json::Value::Bool(true)));
+
+    // 2. Empty or all-whitespace CATEGORIES lines yield None
+    let empty_kw_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:kw-test-2\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "CATEGORIES: ,   ,\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let empty_ev = ical_to_event(empty_kw_ics).expect("parses calendar");
+    assert_eq!(empty_ev.keywords, None);
+
+    // 3. Outbound serialization sorts tags lexicographically and ignores CR characters
+    let mut tags = std::collections::BTreeMap::new();
+    tags.insert("Sprint".to_string(), serde_json::Value::Bool(true));
+    tags.insert("Planning".to_string(), serde_json::Value::Bool(true));
+    tags.insert("Bad\rTag".to_string(), serde_json::Value::Bool(true));
+    let tag_ev = CalendarEvent {
+        id: Some("kw-sort-ev".into()),
+        keywords: Some(tags),
+        ..CalendarEvent::default()
+    };
+    let out = event_to_ical(&tag_ev);
+    assert!(out.contains("CATEGORIES:Planning,Sprint\r\n"));
+    assert!(!out.contains("Bad"));
+
+    // 4. Override instance patch nullification when keywords cleared
+    let series = CalendarEvent {
+        id: Some("kw-series".into()),
+        keywords: Some([("Team".to_string(), serde_json::Value::Bool(true))].into()),
+        ..CalendarEvent::default()
+    };
+    let instance = CalendarEvent {
+        id: Some("kw-series".into()),
+        keywords: None,
+        ..CalendarEvent::default()
+    };
+    let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
+    assert_eq!(patch["keywords"], serde_json::Value::Null);
+}
+
+#[test]
+fn differential_oracle_uid_id_namespace_disambiguation_and_round_trip_stability() {
+    // Audit divergence 361: Global entity identifier vs server-assigned JMAP store ID
+    // namespace disambiguation: RFC 5545 Section 3.8.4.7 UID vs RFC 8984 Section 4.1.1 uid
+    // and draft-ietf-jmap-calendars Section 1.4 id, EDS cache key stability, and synthetic UUID mitigation.
+
+    // 1. Inbound parsing maps iCalendar UID to CalendarEvent.id
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:canonical-uid-123\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    assert_eq!(
+        ev.id.as_ref().map(|id| id.as_str()),
+        Some("canonical-uid-123")
+    );
+    assert_eq!(ev.uid, None);
+
+    // 2. Inbound parsing maps X-JMAP-UID to CalendarEvent.uid
+    let ics_with_xuid = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:server-id-456\r\n",
+        "X-JMAP-UID:jscalendar-uuid-789\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_xuid = ical_to_event(ics_with_xuid).expect("parses calendar");
+    assert_eq!(
+        ev_xuid.id.as_ref().map(|id| id.as_str()),
+        Some("server-id-456")
+    );
+    assert_eq!(ev_xuid.uid.as_deref(), Some("jscalendar-uuid-789"));
+
+    // 3. Outbound serialization renders id as UID, and uid as X-JMAP-UID
+    let both_ev = CalendarEvent {
+        id: Some("store-id-99".into()),
+        uid: Some("jscal-uuid-88".to_string()),
+        ..CalendarEvent::default()
+    };
+    let out_both = event_to_ical(&both_ev);
+    assert!(out_both.contains("UID:store-id-99\r\n"));
+    assert!(out_both.contains("X-JMAP-UID:jscal-uuid-88\r\n"));
+
+    // 4. Outbound serialization with only uid (uncreated event) stands in for UID
+    let uid_only_ev = CalendarEvent {
+        uid: Some("fresh-local-uuid-11".to_string()),
+        ..CalendarEvent::default()
+    };
+    let out_uid = event_to_ical(&uid_only_ev);
+    assert!(out_uid.contains("UID:fresh-local-uuid-11\r\n"));
+    assert!(out_uid.contains("X-JMAP-UID:fresh-local-uuid-11\r\n"));
+}
+
+#[test]
+fn differential_oracle_locations_and_virtual_locations_features_and_key_determinism() {
+    // Audit divergence 362: Physical and virtual location parsing, URI protocol schemes,
+    // feature flag extraction, and stable map key synthesis: RFC 5545 Section 3.8.1.7 LOCATION,
+    // RFC 7986 Section 5.11 CONFERENCE vs RFC 8984 Section 4.2.5 locations and Section 4.2.6 virtualLocations,
+    // deterministic map key allocation (v1, l1), and synthetic UUID mitigation.
+
+    // 1. Inbound physical LOCATION maps to Location object with l1 key
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:loc-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "LOCATION:Conference Room 402\r\n",
+        "CONFERENCE;FEATURE=AUDIO,VIDEO:https://meet.example.com/daily\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let locs = ev.locations.expect("locations present");
+    assert_eq!(locs["l1"]["name"], "Conference Room 402");
+    assert_eq!(locs["l1"]["@type"], "Location");
+
+    // 2. Inbound CONFERENCE maps to VirtualLocation with v1 key and boolean features
+    let vlocs = ev.virtual_locations.expect("virtual locations present");
+    assert_eq!(vlocs["v1"]["uri"], "https://meet.example.com/daily");
+    assert_eq!(vlocs["v1"]["@type"], "VirtualLocation");
+    assert_eq!(vlocs["v1"]["features"]["audio"], true);
+    assert_eq!(vlocs["v1"]["features"]["video"], true);
+
+    // 3. Preserves X-JMAP-KEY parameter when present
+    let ics_custom_keys = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:loc-test-2\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "LOCATION;X-JMAP-KEY=loc-hq:HQ Main Hall\r\n",
+        "CONFERENCE;FEATURE=AUDIO;X-JMAP-KEY=conf-bridge:tel:+123456789\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_custom = ical_to_event(ics_custom_keys).expect("parses calendar");
+    assert!(ev_custom.locations.unwrap().contains_key("loc-hq"));
+    assert!(
+        ev_custom
+            .virtual_locations
+            .unwrap()
+            .contains_key("conf-bridge")
+    );
+
+    // 4. Empty LOCATION is filtered to None
+    let ics_empty = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:loc-test-3\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "LOCATION:\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_empty = ical_to_event(ics_empty).expect("parses calendar");
+    assert_eq!(ev_empty.locations, None);
+}
+
+#[test]
+fn differential_oracle_alerts_valarm_display_action_acknowledged_and_override_replacement() {
+    // Audit divergence 363: Reminder alarm notification ingestion, action scope gating,
+    // acknowledged timestamp mapping, and identifier preservation: RFC 5545 Section 3.6.6 VALARM,
+    // RFC 9074 UID / ACKNOWLEDGED vs RFC 8984 Section 4.5 Alert, non-display action filtering,
+    // and override instance alert replacement.
+
+    // 1. Inbound VALARM with ACTION:DISPLAY, TRIGGER, ACKNOWLEDGED, and UID
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:alarm-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Standup reminder\r\n",
+        "TRIGGER:-PT15M\r\n",
+        "UID:alarm-uid-42\r\n",
+        "ACKNOWLEDGED:20260824T120000Z\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let alerts = ev.alerts.as_ref().expect("alerts present");
+    assert!(alerts.contains_key("alarm-uid-42"));
+    let alert = &alerts["alarm-uid-42"];
+    assert_eq!(alert["action"], "display");
+    assert_eq!(alert.get("acknowledged"), None);
+    assert_eq!(alert["trigger"]["offset"], "-PT15M");
+    // Since acknowledged is dropped on import, the parsed event passes maps_alerts
+    assert!(maps_alerts(&ev));
+
+    // 2. Non-display actions (ACTION:AUDIO, ACTION:EMAIL) are filtered out
+    let ics_audio = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:alarm-test-2\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:AUDIO\r\n",
+        "TRIGGER:-PT5M\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_audio = ical_to_event(ics_audio).expect("parses calendar");
+    assert_eq!(ev_audio.alerts, None);
+
+    // 3. Nameless VALARM receives positional key a1
+    let ics_nameless = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:alarm-test-3\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Default alarm\r\n",
+        "TRIGGER:-PT10M\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_nameless = ical_to_event(ics_nameless).expect("parses calendar");
+    let alerts_nameless = ev_nameless.alerts.expect("alerts present");
+    assert!(alerts_nameless.contains_key("a1"));
+
+    // 4. Override instance patch nullification when alerts cleared
+    let series = CalendarEvent {
+        id: Some("alarm-series".into()),
+        alerts: Some([("a1".to_string(), serde_json::json!({"action": "display"}))].into()),
+        ..CalendarEvent::default()
+    };
+    let instance = CalendarEvent {
+        id: Some("alarm-series".into()),
+        alerts: None,
+        ..CalendarEvent::default()
+    };
+    let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
+    assert_eq!(patch["alerts"], serde_json::Value::Null);
+}

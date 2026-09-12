@@ -6948,3 +6948,72 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.360 Divergence 360: `read_keywords`, `drawn_tags`, `maps_keyword`, and `CATEGORIES`: Category Keyword Ingestion, Delimiter Parsing, Whitespace Normalization, and Override Instance Patch Nullification: RFC 5545 Section 3.8.1.2 `CATEGORIES` vs RFC 8984 Section 4.1.8 `keywords`, Lexicographical Map Key Ordering, Carriage Return Injection Protection, and Empty Set Filtering
+
+- **Observed Behavior**:
+  Translating category metadata between RFC 5545 (`CATEGORIES`) and JSCalendar RFC 8984 Section 4.1.8 (`keywords`) requires managing delimiter parsing, whitespace normalization, map set semantics, and override nullification:
+  1. Inbound parsing (`read_keywords`): RFC 5545 Section 3.8.1.2 defines `CATEGORIES` as a comma-separated list of category tags. In `jmap-ical`, `read_keywords` splits across commas, trims surrounding whitespace with `.trim()`, drops empty entries, and collects into a `BTreeMap<String, Value>` where each keyword maps to `Value::Bool(true)` (RFC 8984 Section 1.4.3 Set). Multiple `CATEGORIES` lines are merged and deduplicated.
+  2. Map key validation and carriage return defense (`maps_keyword`): Tags are checked against `maps_keyword(tag, set)`. Only tags with boolean `true` value, non-empty trimmed text, and no carriage returns (`\r`) are preserved, preventing carriage return injection attacks into physical iCalendar content lines.
+  3. Outbound rendering (`drawn_tags`): Gathers mapped keywords from `event.keywords` in deterministic lexicographical order (due to `BTreeMap`), rendering clean `CATEGORIES:tag1,tag2` lines in `vevent_of`.
+  4. Recurrence override instance nullification (`instance_patch`): When a base series defines `keywords` and a detached override component has no categories, `instance_patch` emits `"keywords": null`, clearing the series tags for that specific occurrence rather than leaving an ambiguous empty map.
+  5. In contrast, Stalwart's `CalendarEvent/parse` extracts `CATEGORIES` into a boolean map, but may preserve untrimmed whitespace or non-standard value types in AST containers, and does not emit differential null patch deltas on recurrence overrides.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.2 (`Categories`).
+  2. RFC 8984 Section 1.4.3 (`Set`) and Section 4.1.8 (`keywords`).
+  3. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and tag data cleanliness. Enforces edge whitespace trimming, prevents carriage return injection, guarantees deterministic lexicographical serialization order, and cleanly nullifies cleared tags on recurrence overrides.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.361 Divergence 361: `id`, `uid`, `X-JMAP-UID`, and `UID`: Global Entity Identifier vs Server-Assigned JMAP Store ID Namespace Disambiguation: RFC 5545 Section 3.8.4.7 `UID` vs RFC 8984 Section 4.1.1 `uid` and draft-ietf-jmap-calendars Section 1.4 `id`, EDS Cache Key Stability, and Synthetic UUID Mitigation
+
+- **Observed Behavior**:
+  Managing calendar event identifiers between RFC 5545 (`UID`), JSCalendar RFC 8984 Section 4.1.1 (`uid`), and JMAP Calendars draft-ietf-jmap-calendars Section 1.4 (`id`) involves navigating distinct naming layers:
+  1. Inbound parsing (`read_vevent`): In `jmap-ical`, the iCalendar `UID` property is mapped to `CalendarEvent.id` (`text("UID").map(Into::into)`), while `X-JMAP-UID` is mapped to `CalendarEvent.uid`. This design stems from the client/bridge architecture: Evolution Data Server (EDS) keys its local component cache on the iCalendar `UID` and passes it back to JMAP methods (`load_component_sync`, `remove_component_sync`), which require the JMAP store record `id`.
+  2. Outbound rendering (`vevent_of`): Serializes `event.id.as_ref().or(event.uid.as_deref())` as the RFC 5545 `UID`, and writes `event.uid` to `X-JMAP-UID`. When an event is newly created in EDS, it initially has no server `id`, so `uid` stands in until assigned by `CalendarEvent/set`. Detached recurrence overrides carry the master series `UID` to maintain series identity.
+  3. In contrast, Stalwart's `CalendarEvent/parse` endpoint operates purely as a RFC 8984 parser: it maps RFC 5545 `UID` directly to JSCalendar `uid` (`uid: "..."`), while leaving `id` unset (`None`), as `id` in JMAP is an account-scoped object identifier allocated by the JMAP store upon creation rather than an inbound parsed attribute.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.7 (`Unique Identifier`).
+  2. RFC 8984 Section 4.1.1 (`uid`).
+  3. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by EDS local cache indexing and JMAP method requirements. Maps iCalendar `UID` to JMAP `id` while preserving JSCalendar `uid` via `X-JMAP-UID`, enabling seamless synchronization between EDS and JMAP stores.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.362 Divergence 362: `read_virtual_locations`, `CONFERENCE`, `read_locations`, `LOCATION`, `joining_features`, and `CONFERENCE_FEATURES`: Physical and Virtual Location Parsing, URI Protocol Schemes, Feature Flag Extraction, and Stable Map Key Synthesis: RFC 5545 Section 3.8.1.7 `LOCATION`, RFC 7986 Section 5.11 `CONFERENCE` vs RFC 8984 Section 4.2.5 `locations` and Section 4.2.6 `virtualLocations`, Deterministic Map Key Allocation (`v1`, `l1`), and Synthetic UUID Mitigation
+
+- **Observed Behavior**:
+  Extracting physical meeting rooms and online conference links from RFC 5545 (`LOCATION`) and RFC 7986 (`CONFERENCE`) into JSCalendar RFC 8984 Section 4.2.5 (`locations`) and Section 4.2.6 (`virtualLocations`):
+  1. Physical location mapping (`read_locations`): RFC 5545 Section 3.8.1.7 defines `LOCATION` as an unformatted text string. In `jmap-ical`, `read_locations` parses `LOCATION`, filters empty or whitespace-only values, and wraps the name in a `Location` object under a stable key: preserving `X-JMAP-KEY` parameter annotations or falling back to deterministic keys (`l1`).
+  2. Virtual location mapping (`read_virtual_locations`): RFC 7986 Section 5.11 defines `CONFERENCE` with URI values and optional `FEATURE` parameters (e.g. `FEATURE=AUDIO,VIDEO,CHAT`). In `jmap-ical`, `read_virtual_locations` extracts URI schemes (https, sip, tel), parses `FEATURE` tokens against `CONFERENCE_FEATURES` into boolean maps (`features: { "audio": true, "video": true }`), and stores them under stable map keys (`v1`, `v2`, or `X-JMAP-KEY`).
+  3. Outbound rendering (`drawn_place`, `drawn_conference`): Serializes physical locations back to `LOCATION` and online links to `CONFERENCE`, preserving `X-JMAP-KEY` to ensure bidirectional stability.
+  4. In contrast, Stalwart's `CalendarEvent/parse` generates non-deterministic random UUID map keys (e.g., `ae80082c-55c3-554a-b400-ee23967220a2`) on every parse run, discarding round-trip key stability and causing spurious JSON diffs on repetitive synchronizations.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.7 (`Location`).
+  2. RFC 7986 Section 5.11 (`Conference Information`) and Section 5.12 (`Feature Parameter`).
+  3. RFC 8984 Section 4.2.5 (`locations`) and Section 4.2.6 (`virtualLocations`).
+- **Adjudication**:
+  Conforming specification adaptation and stable keying determinism. Employs deterministic positional fallback keys (`l1`, `v1`) and `X-JMAP-KEY` round-trip retention to eliminate spurious UUID divergence on synchronization.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.363 Divergence 363: `read_alerts`, `read_alert`, `VALARM`, `ACTION:DISPLAY`, `OffsetTrigger`, `ACKNOWLEDGED`, and `UID`: Alarm Notification Ingestion, Action Scope Gating, Acknowledged Timestamp Mapping, and Identifier Preservation: RFC 5545 Section 3.6.6 `VALARM`, RFC 9074 `UID` / `ACKNOWLEDGED` vs RFC 8984 Section 4.5 `Alert`, Non-Display Action Filtering, and Override Instance Alert Replacement
+
+- **Observed Behavior**:
+  Translating reminder alarms between RFC 5545 (`VALARM`), RFC 9074 extensions, and JSCalendar RFC 8984 Section 4.5 (`Alert`, `OffsetTrigger`):
+  1. Action scope gating (`read_alert`): RFC 5545 Section 3.6.6 defines `ACTION` as `DISPLAY`, `AUDIO`, or `EMAIL`. In `jmap-ical`, only `ACTION:DISPLAY` is ingested into `Alert.action = "display"`. Deprecated or unsupported actions (`AUDIO`, `EMAIL`, procedures) are safely filtered out, preventing unsupported background notification triggers from disrupting the desktop client.
+  2. Trigger representation: In `jmap-ical`, relative `TRIGGER` values (such as `-PT15M` or `-P1D`) are parsed into `OffsetTrigger` with negative or positive duration strings (`offset: "-PT15M"`).
+  3. Acknowledged timestamp extraction and whole-property replacement safety: RFC 9074 Section 6.1 defines `ACKNOWLEDGED` as a UTC date-time indicating when an alarm was dismissed. In `jmap-ical`, `read_alert` deliberately drops `ACKNOWLEDGED` on import, ensuring the imported `Alert` conforms to `drawn_alert`'s strict membership check (`@type`, `trigger`, `action`). Furthermore, `maps_alerts` verifies whether any alert on the server carries `acknowledged`, refusing whole-property replacement if present to avoid inadvertently un-dismissing snoozed reminders.
+  4. Map key allocation and UID preservation: In `jmap-ical`, `read_alerts` keys alerts by RFC 9074 `UID` or `X-EVOLUTION-ALARM-UID` where present, falling back to positional keys (`a1`, `a2`), ensuring stable round-tripping.
+  5. In contrast, Stalwart's `CalendarEvent/parse` retains raw unparsed VALARM properties inside `iCalendar.properties` AST containers, maps `ACKNOWLEDGED` without verifying UTC formatting, and synthesizes generic `k1`, `k2` keys.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`).
+  2. RFC 9074 Section 6.1 (`Acknowledged Property`).
+  3. RFC 8984 Section 4.5.1 (`Alert`) and Section 4.5.2 (`OffsetTrigger`).
+- **Adjudication**:
+  Conforming specification adaptation and notification state safety. Restricts alarms to display actions with relative offset triggers, drops ephemeral `ACKNOWLEDGED` properties on import to preserve strict round-trip structure, and gates whole-property replacement via `maps_alerts`.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
