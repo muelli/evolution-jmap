@@ -7525,6 +7525,66 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
 
+### 13.396 Divergence 396: `recurrenceOverrides`, `RECURRENCE-ID`, `STATUS`, and Status Lifecycle Progression vs Default Repetition: RFC 5545 Section 3.8.3.8 `STATUS` vs RFC 8984 Section 4.1.3 `status` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Translating event instance status modifications and cancellation in recurrence overrides:
+  1. Inbound status difference detection (`instance_patch`): In `thunderbird_detached_export.ics`, the master series specifies `STATUS:CONFIRMED`. Occurrence `2026-11-16T10:00:00` specifies `STATUS:CANCELLED`. In `jmap-ical`, `instance_patch` compares the instance status against the master series (`was != now`) and records `"status": "cancelled"` in the `PatchObject`. For occurrence `2026-10-19T10:00:00`, the instance specifies `STATUS:CONFIRMED` (identical to the master series); `instance_patch` detects `was == now` and suppresses `status` from the patch delta, adhering to RFC 8984 Section 4.3.4 property inheritance.
+  2. Oracle whole-component status re-emission: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` returns a complete duplicate event snapshot for each override, re-emitting `"status": "confirmed"` on `2026-10-19T10:00:00` and `"status": "cancelled"` on `2026-11-16T10:00:00`.
+  3. Outbound override serialization (`vevent_of`, `modified_instance`): On outbound export, `modified_instance` expands the patch against master: the cancelled occurrence renders `STATUS:CANCELLED`, while the confirmed occurrence inherits the master's status and renders `STATUS:CONFIRMED`, preserving exact semantic fidelity.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.3.8 (`Status`).
+  2. RFC 8984 Section 4.1.3 (`status`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and minimal patch scoping. Emitting `status` in the `PatchObject` only when the occurrence alters its confirmation or cancellation lifecycle state respects RFC 8984 inheritance and prevents redundant delta bloat.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.397 Divergence 397: `recurrenceOverrides`, `freeBusyStatus`, `privacy`, `TRANSP`, `CLASS`, and Explicit Property Nullification vs Implicit Server Fallback: RFC 5545 Section 3.8.1.3 `CLASS`, Section 3.8.2.7 `TRANSP` vs RFC 8984 Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Translating cleared transparency and classification properties on detached recurrence instances:
+  1. Inbound explicit nullification (`instance_patch`): In `thunderbird_detached_export.ics`, the master series defines `CLASS:PUBLIC` (`privacy: "public"`) and `TRANSP:OPAQUE` (`freeBusyStatus: "busy"`). On both detached occurrences (`2026-10-19T10:00:00` and `2026-11-16T10:00:00`), neither `CLASS` nor `TRANSP` is specified. Under RFC 8984 Section 4.3.4 semantics, an omitted property in a patch delta inherits the master property value. To indicate that the detached occurrence does not carry the master series' transparency and classification, `instance_patch` explicitly writes `"freeBusyStatus": null` and `"privacy": null` into the patch delta.
+  2. Oracle whole-component property omission: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` returns standalone component objects and simply omits `freeBusyStatus` and `privacy` without computing a patch delta.
+  3. Outbound property clearing (`vevent_of`, `modified_instance`): Outbound serialization expands the patch delta against the master event: seeing `Value::Null` for `freeBusyStatus` and `privacy`, `modified_instance` sets them to `None`, and `vevent_of` suppresses `TRANSP` and `CLASS` on the emitted detached `VEVENT`, matching the original producer's formatting.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.3 (`Classification`) and Section 3.8.2.7 (`Time Transparency`).
+  2. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and override delta semantics. Explicit `null` insertion is mandatory under RFC 8984 Section 4.3.4 to prevent detached instances from inadvertently inheriting cleared parent transparency and privacy settings.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.398 Divergence 398: `recurrenceOverrides`, `keywords`, `CATEGORIES`, Roster Replacement, and Set-Level Master Property Nullification: RFC 5545 Section 3.8.1.2 `CATEGORIES` vs RFC 8984 Section 4.2.4 `keywords` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Translating category and keyword modifications between RFC 5545 (`CATEGORIES`) and JSCalendar RFC 8984 Section 4.2.4 (`keywords`) across recurrence overrides:
+  1. Inbound replacement and nullification (`instance_patch`): In `thunderbird_detached_export.ics`, master specifies `CATEGORIES:Mozilla,Engineering,Rust`. Occurrence `2026-10-19T10:00:00` replaces these with `CATEGORIES:Mozilla,Engineering,Benchmark`. In `jmap-ical`, `instance_patch` emits the complete updated set `{"Benchmark": true, "Engineering": true, "Mozilla": true}` into the patch object. Stalwart v1.0.0's `CalendarEvent/parse` produces the identical keywords map, demonstrating complete semantic consensus. In contrast, on occurrence `2026-11-16T10:00:00` (where `CATEGORIES` is absent), and in `google_calendar_export.ics` occurrence `2026-10-20T10:00:00`, `instance_patch` writes `"keywords": null` to cancel inheritance of the master categories.
+  2. Oracle full-object snapshot: Stalwart returns standalone event objects: on `2026-10-19T10:00:00` it produces the matching keywords set, while on occurrences lacking `CATEGORIES` it omits `keywords`.
+  3. Outbound category rendering (`vevent_of`, `modified_instance`): Outbound serialization expands the patch: the modified occurrence renders `CATEGORIES:Benchmark,Engineering,Mozilla`, while occurrences with nullified keywords emit no `CATEGORIES` line.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.2 (`Categories`).
+  2. RFC 8984 Section 4.2.4 (`keywords`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and tag set integrity. RFC 8984 keywords is a set property replaced as a unit; emitting an updated set or explicit `null` prevents category leakage across detached recurrence instances.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.399 Divergence 399: `recurrenceOverrides`, `DTSTART`, `DTEND`, `duration`, Rescheduled Instance Shift, and Independent Duration Alteration: RFC 5545 Section 3.8.2.4 `DTSTART`, Section 3.8.2.2 `DTEND`, Section 3.8.2.5 `DURATION` vs RFC 8984 Section 4.1.2 `start`, Section 4.2.2 `duration`, and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Translating recurrence override start time shifts and duration changes:
+  1. Inbound start shift without duration change (`instance_patch`): In `google_calendar_export.ics`, the master duration is `PT1H30M`. Detached occurrence `2026-10-20T10:00:00` has `DTSTART:20261020T103000` and `DTEND:20261020T120000`. The start time shifted by 30 minutes, but the duration remains `PT1H30M`. In `jmap-ical`, `instance_patch` detects `start != id` and records `"start": "2026-10-20T10:30:00"`, but omits `duration` because `series.duration == instance.duration`. Stalwart v1.0.0's `CalendarEvent/parse` re-emits `"duration": "PT1H30M"` on the child event.
+  2. Inbound simultaneous start shift and duration alteration: In `thunderbird_detached_export.ics` (`2026-10-19T10:00:00`), `DTSTART` is `140000` and `DTEND` is `160000`. Here, the start shifted from 10:00 to 14:00 and the duration lengthened from `PT1H30M` to `PT2H`. In `jmap-ical`, `instance_patch` emits both `"start": "2026-10-19T14:00:00"` and `"duration": "PT2H"`. Stalwart also produces `"duration": "PT2H"` and `"start": "2026-10-19T14:00:00"`, achieving full consensus on the lengthened duration.
+  3. Outbound duration emission (`vevent_of`, `modified_instance`): Outbound serialization expands the patch against master start and duration: for `google_calendar_export.ics`, it emits `DTSTART:20261020T103000` and inherits `DURATION:PT1H30M`; for `thunderbird_detached_export.ics`, it emits `DTSTART:20261019T140000` and overridden `DURATION:PT2H`, matching the original component meeting lengths exactly.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.2.4 (`Date-Time Start`), Section 3.8.2.2 (`Date-Time End`), Section 3.8.2.5 (`Duration`).
+  2. RFC 8984 Section 4.1.2 (`start`), Section 4.2.2 (`duration`), Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and minimal delta computation. Omitting `duration` when only `start` shifts prevents redundant patch data, while recording updated `duration` when the instance meeting length changes preserves schedule integrity.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
 
 
 
