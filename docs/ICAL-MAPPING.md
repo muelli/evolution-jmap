@@ -7711,6 +7711,72 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.408 Divergence 408: `version: "2.0"`, Standalone Object Requirement, and Embedded Override Elision: draft-ietf-calext-jscalendarbis Section 3.1.2 vs Stateless Oracle Parser Version Omission
+
+- **Observed Behavior**:
+  Translating document version stamping between draft-ietf-calext-jscalendarbis Section 3.1.2 and JMAP Calendars:
+  1. Inbound root standalone stamping (`ical_to_event`): In `jmap-ical`, `ical_to_event` explicitly stamps `event.version = Some("2.0".to_owned())` on the parsed standalone `CalendarEvent`. draft-ietf-calext-jscalendarbis Section 3.1.2 explicitly mandates that the version property MUST be present in a standalone object and its value MUST be 2.0. Conforming JMAP servers (including Fastmail and Stalwart during `CalendarEvent/set` create) reject version-less event creations with `invalidProperties: ["version"]`.
+  2. Embedded override version suppression (`read_overrides`): In contrast, draft-ietf-calext-jscalendarbis Section 3.1.2 forbids version on embedded objects. In `jmap-ical`, `read_vevent` leaves `version: None`, ensuring patch deltas in `event.recurrence_overrides` never contain a `version` property.
+  3. Oracle parse behavior: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` is an unvalidating parser utility that omits `version` entirely from its output objects.
+  4. Outbound serialization (`event_to_ical`): On outbound export, `event_to_ical` wraps the event in a `VCALENDAR` envelope containing `VERSION:2.0`, while neither child `VEVENT` component emits a `VERSION` line (RFC 5545 Section 3.7.4 restricts `VERSION` to the calendar stream envelope).
+- **Specification and Architectural Context**:
+  1. draft-ietf-calext-jscalendarbis Section 3.1.2 (`version`).
+  2. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent`).
+  3. RFC 5545 Section 3.7.4 (`Version`).
+- **Adjudication**:
+  Conforming specification adaptation and JMAP creation wire compatibility. Stamping `version: "2.0"` on root standalone events satisfies strict JMAP creation validation, while suppressing it on embedded recurrence overrides complies with patch semantics.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.409 Divergence 409: `method: "publish"`, `METHOD`, Transport Protocol Envelope Header Ingestion vs Calendar Event Entity Isolation: RFC 5545 Section 3.7.2 `METHOD:PUBLISH` vs RFC 8984 Section 4.4.5 `method`
+
+- **Observed Behavior**:
+  Handling calendar stream envelope transaction verbs between RFC 5545 (`METHOD`) and JSCalendar RFC 8984 Section 4.4.5 (`method`):
+  1. Inbound transport envelope filtering (`read_vevent`): In `google_calendar_export.ics` and `outlook_m365_export.ics`, the outer `VCALENDAR` envelope specifies `METHOD:PUBLISH`. In `jmap-ical`, `read_vevent` isolates component entity data from outer transport headers: `event.method` is omitted and `extra` does not contain `method`. RFC 5545 Section 3.7.2 defines `METHOD` as an envelope property that governs distribution workflows (such as broadcast publishing vs interactive scheduling invitations), not an inherent property of the meeting record.
+  2. Oracle method hoisting: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` hoists outer `METHOD:PUBLISH` directly onto the child `CalendarEvent` as `"method": "publish"`.
+  3. Outbound serialization and scheduling synthesis: On outbound export, `event_to_ical` does not emit `METHOD` on the component, preserving clean entity boundaries. During active iTIP scheduling operations, `scheduling_ical` formats explicit uppercase RFC 5546 `METHOD` lines (`REQUEST`, `REPLY`, `CANCEL`) at the `VCALENDAR` container envelope.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.7.2 (`Method`).
+  2. RFC 5546 (`iTIP`).
+  3. RFC 8984 Section 4.4.5 (`method`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by transport envelope isolation and persistent store cleanliness. Discarding `METHOD:PUBLISH` on component import protects database records from stale transport state while allowing scheduling methods to generate transaction-appropriate headers.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.410 Divergence 410: `sequence`, `SEQUENCE`, Recurrence Overrides Revision Increment Tracking vs Series Revision Isolation: RFC 5545 Section 3.8.7.4 `SEQUENCE` in Recurrence Overrides (`RECURRENCE-ID`) vs RFC 8984 / draft-ietf-jmap-calendars `sequence`
+
+- **Observed Behavior**:
+  Translating revision counters on detached recurrence instances (`RECURRENCE-ID`):
+  1. Inbound sequence isolation (`read_vevent` and `instance_patch`): In `google_calendar_export.ics`, the master series defines `SEQUENCE:0` while the detached occurrence defines `SEQUENCE:1`. In `jmap-ical`, `read_vevent` ignores `SEQUENCE` on both master and detached occurrences, and `instance_patch` omits `sequence` from the computed `PatchObject`. In JMAP Calendars, sequence incrementation during scheduling and instance detachment is managed by the server. Storing or proposing client-side sequence numbers inside instance patch deltas would conflict with server revision tracking.
+  2. Oracle sequence emission: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs duplicate standalone event snapshots for each occurrence, emitting `"sequence": 0` on the master event and `"sequence": 1` on the detached child event.
+  3. Outbound serialization cleanliness (`event_to_ical`): When converting `CalendarEvent` back to iCalendar, `jmap-ical` does not emit client sequence numbers, isolating the exported stream from uncoordinated client revision churn.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.7.4 (`Sequence Number`).
+  2. RFC 5546 (`iTIP`) Section 3.2.
+  3. RFC 8984 Section 4.3.4 (`PatchObject`).
+  4. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by scheduling protocol safety and server revision ownership. Omitting `sequence` from instance patch deltas prevents desktop clients from desynchronizing recurrence revision counters from the authoritative JMAP calendar server.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.411 Divergence 411: Multi-Valued Sub-Entity Map Primary Location and Virtual Location Ordering across Detached Recurrence Instances: RFC 5545 Section 3.8.1.7 `LOCATION`, RFC 7986 Section 5.11 `CONFERENCE` vs RFC 8984 Section 4.2.5 `locations`, Section 4.2.6 `virtualLocations`, and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Handling modified physical and virtual locations across detached recurrence instances (`RECURRENCE-ID`):
+  1. Inbound override patch scoping (`instance_patch`): In `google_calendar_export.ics`, the master series defines `LOCATION:Conference Room 4B / Google Meet` and `CONFERENCE;...:https://meet.google.com/abc-defg-hij`. The detached occurrence (2026-10-20T10:00:00) specifies a different physical room `LOCATION:Main Auditorium / Google Meet` but does not restate `CONFERENCE`. In `jmap-ical`, `instance_patch` limits delta computation strictly to the 11 scalar fields in `OVERRIDE_PROPERTIES`. Sub-entity collections (`locations` and `virtual_locations`) are omitted from instance patch deltas so that the detached occurrence cleanly inherits the master meeting's physical and virtual location maps during client synchronization.
+  2. Oracle separate occurrence snapshots: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` produces separate standalone event snapshots for each occurrence: the master event receives a `Location` with name `"Conference Room 4B / Google Meet"` and `VirtualLocation` for Google Meet, whereas the child event receives a `Location` with name `"Main Auditorium / Google Meet"` and no `VirtualLocation` entry.
+  3. Outbound recurrence override inheritance (`modified_instance`, `event_to_ical`): On outbound serialization, `modified_instance` applies patch deltas while preserving master series sub-entity maps. The emitted detached `VEVENT` retains the master conference bridge URI (`CONFERENCE;VALUE=URI;...`) and primary location, ensuring meeting attendees do not lose video conferencing access.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.7 (`Location`) and Section 3.8.4.4 (`Recurrence ID`).
+  2. RFC 7986 Section 5.11 (`Conference`).
+  3. RFC 8984 Section 4.2.5 (`locations`), Section 4.2.6 (`virtualLocations`), and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by EDS recurrence architecture and multi-valued entity synchronization safety. Limiting override deltas to `OVERRIDE_PROPERTIES` ensures that complex sub-entity collections remain unified across recurring meeting instances, avoiding inadvertent loss of conference bridges and dial-in details when an instance is moved to a different room.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
 
 
 
