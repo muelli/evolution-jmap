@@ -7272,6 +7272,69 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.380 Divergence 380: `byDay`, `NDay`, `nthOfPeriod`, and Ordinal Weekday Alignment across Recurrence Frequencies: RFC 5545 Section 3.3.10 `BYDAY` vs RFC 8984 Section 4.3.2 `NDay`
+
+- **Observed Behavior**:
+  Reconciling ordinal weekday positions between RFC 5545 (`BYDAY`) and JSCalendar RFC 8984 Section 4.3.2 (`NDay`, `byDay`):
+  1. Inbound ordinal weekday parsing (`to_rule`, `read_byday`): RFC 5545 allows a signed integer prefix on weekday tokens in monthly or yearly recurrence rules (such as `3SU` in `outlook_m365_export.ics` for the 3rd Sunday, `1TH` in `sogo_calendar_export.ics` for the 1st Thursday, and `-1MO` in `evolution_calendar_export.ics` for the last Monday). In `jmap-ical`, `read_byday` parses both positive and negative numeric prefixes into `nth_of_period` (`Some(3)`, `Some(1)`, and `Some(-1)`) while explicitly stamping `day_type: Some("NDay".to_owned())` (`@type: "NDay"`), conforming strictly to RFC 8984 Section 4.3.2.
+  2. Mutual oracle agreement: Stalwart v1.0.0's `CalendarEvent/parse` parses the identical `nthOfPeriod` integer values across all fixtures (`{"day": "su", "nthOfPeriod": 3}`, `{"day": "th", "nthOfPeriod": 1}`, `{"day": "mo", "nthOfPeriod": -1}`). However, Stalwart omits `@type: "NDay"` on elements of `byDay`.
+  3. Outbound serialization (`rule_to_rrule`): On outbound rendering, `rule_to_rrule` formats `NDay` entries with their signed `nth_of_period` prefixes (`BYDAY=3SU`, `BYDAY=1TH`, `BYDAY=-1MO`), maintaining exact round-trip fidelity.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.2 (`NDay`).
+- **Adjudication**:
+  Conforming specification boundary and ordinal recurrence rule fidelity. Both implementations achieve full semantic consensus on positive and negative monthly ordinal weekdays, while `jmap-ical` strictly conforms to RFC 8984 Section 4.3.2 schema type stamping.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.381 Divergence 381: `alerts`, `VALARM`, RFC 9074 `UID` Key Retention (`UID:...`), and Positional Key Inventing (`a1`, `a2`) vs Random / Opaque Key Allocation (`k1`, `k2`, `k3`): RFC 5545 Section 3.6.6 `VALARM` and RFC 9074 Section 6 `UID` vs RFC 8984 Section 4.5 `alerts`
+
+- **Observed Behavior**:
+  Preserving alarm identifiers and map key stability between RFC 5545 (`VALARM`), RFC 9074 (`UID`), and JSCalendar RFC 8984 Section 4.5 (`alerts`):
+  1. Inbound key retention (`read_alerts`): In `jmap-ical`, `read_alerts` preserves explicit RFC 9074 `UID` values as map keys (`UID:04000...-alarm-1` in `outlook_m365_export.ics`, `UID:apple-alarm-offset-15m` in `apple_calendar_export.ics`). For nameless alarms (such as standard alarms lacking `UID`), `read_alerts` generates deterministic positional fallback keys (`"a1"`, `"a2"`), carefully skipping any keys already taken by explicit UIDs.
+  2. Outbound wire preservation (`drawn_alert`): `drawn_alert` emits `UID:<key>` for every `VALARM` component, ensuring lossless round-trip identifier preservation for both producer UIDs and synthesized keys.
+  3. Oracle key allocation divergence: Stalwart's `CalendarEvent/parse` strips or disregards producer `UID` lines from the map keys, allocating synthetic sequential keys (`"k1"`, `"k2"`, `"k3"`), and moves the original `uid` into its `iCalendar.properties` AST table.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`).
+  2. RFC 9074 Section 6 (`VALARM UID Property`).
+  3. RFC 8984 Section 4.5 (`Alert`).
+- **Adjudication**:
+  Conforming specification adaptation and key stability. Retaining producer RFC 9074 `UID` keys and allocating deterministic positional fallback keys (`a1`, `a2`) prevents map key churn and ensures reliable round-trip synchronization with desktop clients.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.382 Divergence 382: Detached Recurrence Overrides (`RECURRENCE-ID`), Property Deletion Nullification (`null`), and Series Inheritance vs Full Component Duplication: RFC 5545 Section 3.8.4.4 `RECURRENCE-ID` vs RFC 8984 Section 4.3.3 `recurrenceOverrides` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Translating detached recurrence instances (`RECURRENCE-ID`) between RFC 5545 and JSCalendar `recurrenceOverrides`:
+  1. Inbound delta computation (`instance_patch`): In `jmap-ical`, `instance_patch` computes a minimal RFC 8984 Section 4.3.4 `PatchObject` delta comparing the detached component against the master series. When a property present on the master is cleared or absent on the detached component (such as `alerts` and `keywords` in `google_calendar_export.ics`, or `privacy`, `freeBusyStatus`, `keywords`, `priority` in `thunderbird_detached_export.ics`), `instance_patch` explicitly writes `"alerts": null`, `"keywords": null`, etc. This explicit nullification is essential under RFC 8984 Section 4.3.4 semantics: an omitted property inherits the master value, so an explicit `null` is required to instruct the client and store that the override does not carry the master's alerts or tags.
+  2. Oracle component duplication: In contrast, Stalwart's `CalendarEvent/parse` returns a complete duplicate component snapshot on each override instance (duplicating `status`, `privacy`, `freeBusyStatus`, `priority`, `duration`), while omitting properties that were absent on the override rather than emitting null patch deltas.
+  3. Outbound override expansion (`vevent_of`, `modified_instances`): When reconstructing detached `VEVENT` components, `jmap-ical` expands minimal patch deltas against master properties, ensuring that nullified properties are cleanly omitted from the exported child `VEVENT`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.4 (`Recurrence ID`).
+  2. RFC 8984 Section 4.3.3 (`recurrenceOverrides`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence schedule accuracy. Minimal patch delta generation with explicit nullification adheres strictly to RFC 8984 Section 4.3.4 semantics and prevents detached instances from erroneously inheriting cleared master properties.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.383 Divergence 383: CalDAV & Sync Extension Properties (`X-CALDAV-SYNC-TOKEN`, `X-CALDAV-CTAG`, `X-CALDAV-ACCESS-RESTRICTION`, `X-FASTMAIL-CLIENT-ID`) and Component Ingestion Boundary Isolation: RFC 4791 / RFC 6578 CalDAV Extensions vs RFC 8984 Domain Cleanliness
+
+- **Observed Behavior**:
+  Handling foreign transport and synchronization extension headers (`X-CALDAV-...`, `X-FASTMAIL-...`, `X-SOGO-...`, `X-RADICALE-...`) between CalDAV/WebDAV synchronization protocols and JSCalendar `CalendarEvent`:
+  1. Inbound synchronization token isolation (`read_vevent`): In `jmap-ical`, `read_vevent` intentionally discards synchronization tokens (`X-CALDAV-SYNC-TOKEN`, `X-CALDAV-CTAG`), access restrictions (`X-CALDAV-ACCESS-RESTRICTION`), client tags (`X-FASTMAIL-CLIENT-ID`), and exporter modification timestamps (`X-SOGO-COMPONENT-CREATED`, `X-RADICALE-MODIFIED`) on component import (found in `cyrus_caldav_export.ics` and `sogo_calendar_export.ics`). These tokens represent ephemeral sync checkpoints between a CalDAV client and collection; injecting them into persistent JSCalendar entity state or `CalendarEvent.extra` would freeze stale synchronization metadata into the database and create conflict hazards across synchronization passes.
+  2. Outbound clean emission: Outbound serialization renders canonical RFC 5545 components without stale sync headers.
+  3. Oracle AST preservation: In contrast, Stalwart's `CalendarEvent/parse` stores all unknown `X-` properties in an `iCalendar.properties` AST table.
+- **Specification and Architectural Context**:
+  1. RFC 4791 (`CalDAV`).
+  2. RFC 6578 (`Collection Synchronization for WebDAV`).
+  3. RFC 8984 Section 1.4 (`Type Signatures`) and Section 4 (`Properties of Calendar Objects`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by synchronization integrity and domain model isolation. Discarding ephemeral CalDAV synchronization tokens on import prevents stale transport metadata from corrupting JMAP calendar storage.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
