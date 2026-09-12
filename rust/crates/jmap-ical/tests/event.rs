@@ -43917,3 +43917,308 @@ fn differential_oracle_alerts_valarm_display_action_acknowledged_and_override_re
     let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
     assert_eq!(patch["alerts"], serde_json::Value::Null);
 }
+
+#[test]
+fn differential_oracle_timestamps_created_updated_dtstamp_and_lifecycle_ownership() {
+    // Audit divergence 364: Creation and update instant ingestion vs server-store lifecycle ownership:
+    // RFC 5545 Section 3.8.7.1 CREATED, Section 3.8.7.2 DTSTAMP, Section 3.8.7.3 LAST-MODIFIED vs
+    // RFC 8984 Section 4.1.4 created and Section 4.1.5 updated, UTC Zulu timestamp formatting,
+    // and sub-second fraction truncation.
+
+    // 1. Inbound parsing drops CREATED, DTSTAMP, and LAST-MODIFIED because lifecycle timestamps
+    // are owned by the JMAP store rather than imported from external files.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:timestamp-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "CREATED:20260801T090000Z\r\n",
+        "DTSTAMP:20260824T120000Z\r\n",
+        "LAST-MODIFIED:20260824T120000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    assert_eq!(ev.created, None);
+    assert_eq!(ev.updated, None);
+
+    // 2. Outbound serialization renders CREATED from created, and renders both LAST-MODIFIED
+    // and DTSTAMP from updated when provided by the store.
+    let ev_stamped = CalendarEvent {
+        id: Some("ts-test-2".into()),
+        created: Some("2026-08-01T09:00:00Z".to_string()),
+        updated: Some("2026-08-24T12:00:00Z".to_string()),
+        start: Some("2026-10-15T10:00:00Z".to_string()),
+        ..CalendarEvent::default()
+    };
+    let out = event_to_ical(&ev_stamped);
+    assert!(out.contains("CREATED:20260801T090000Z\r\n"));
+    assert!(out.contains("LAST-MODIFIED:20260824T120000Z\r\n"));
+    assert!(out.contains("DTSTAMP:20260824T120000Z\r\n"));
+
+    // 3. Timestamps missing Zulu 'Z' suffix are omitted from serialization
+    let ev_no_z = CalendarEvent {
+        id: Some("ts-test-3".into()),
+        created: Some("2026-08-01T09:00:00".to_string()),
+        updated: Some("2026-08-24T12:00:00".to_string()),
+        start: Some("2026-10-15T10:00:00Z".to_string()),
+        ..CalendarEvent::default()
+    };
+    let out_no_z = event_to_ical(&ev_no_z);
+    assert!(!out_no_z.contains("CREATED:"));
+    assert!(!out_no_z.contains("LAST-MODIFIED:"));
+
+    // 4. Timestamps with fractional seconds are omitted from serialization
+    let ev_frac = CalendarEvent {
+        id: Some("ts-test-4".into()),
+        created: Some("2026-08-01T09:00:00.123Z".to_string()),
+        updated: Some("2026-08-24T12:00:00.456Z".to_string()),
+        start: Some("2026-10-15T10:00:00Z".to_string()),
+        ..CalendarEvent::default()
+    };
+    let out_frac = event_to_ical(&ev_frac);
+    assert!(!out_frac.contains("CREATED:"));
+    assert!(!out_frac.contains("LAST-MODIFIED:"));
+}
+
+#[test]
+fn differential_oracle_participants_roster_organizer_attendee_and_scheduling_isolation() {
+    // Audit divergence 365: Participant roster and organizer mapping vs scheduling boundary isolation:
+    // RFC 5545 Section 3.8.4.1 ATTENDEE and Section 3.8.4.3 ORGANIZER vs RFC 8984 Section 4.4.6 participants
+    // and draft-ietf-jmap-calendars organizerCalendarAddress, single primary organizer selection (RFC 5545
+    // Section 3.6.1), dual owner/attendee role serialization, and inbound scheduling masking.
+
+    // 1. Inbound parsing treats ORGANIZER and ATTENDEE as iTIP transport and scheduling framing,
+    // leaving participants as None to prevent spurious invitations on import.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:part-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "ORGANIZER;CN=\"Prof. Alicia Vance\":mailto:alicia.vance@example.com\r\n",
+        "ATTENDEE;CN=\"Bob Smith\";ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:bob@example.com\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    assert_eq!(ev.participants, None);
+
+    // 2. Outbound serialization maps owner role to ORGANIZER and non-owner attendee to ATTENDEE
+    let mut parts = BTreeMap::new();
+    parts.insert(
+        "p1".to_string(),
+        json!({
+            "@type": "Participant",
+            "name": "Prof. Alicia Vance",
+            "calendarAddress": "mailto:alicia.vance@example.com",
+            "roles": { "owner": true }
+        }),
+    );
+    parts.insert(
+        "p2".to_string(),
+        json!({
+            "@type": "Participant",
+            "name": "Bob Smith",
+            "calendarAddress": "mailto:bob@example.com",
+            "roles": { "attendee": true },
+            "participationStatus": "accepted"
+        }),
+    );
+    let ev_parts = CalendarEvent {
+        id: Some("part-test-2".into()),
+        start: Some("2026-10-15T10:00:00Z".to_string()),
+        participants: Some(parts),
+        ..CalendarEvent::default()
+    };
+    let out = event_to_ical(&ev_parts);
+    assert!(
+        out.contains("ORGANIZER;CN=\"Prof. Alicia Vance\":mailto:alicia.vance@example.com\r\n")
+            || out.contains("ORGANIZER;CN=Prof. Alicia Vance:mailto:alicia.vance@example.com\r\n")
+    );
+    let att_line = content_line(&out, "ATTENDEE;");
+    assert!(att_line.contains("mailto:bob@example.com"));
+    assert!(att_line.contains("ROLE=REQ-PARTICIPANT"));
+    assert!(att_line.contains("PARTSTAT=ACCEPTED"));
+
+    // 3. Single primary organizer selection: multiple owners emit only one ORGANIZER line (RFC 5545 Section 3.6.1)
+    let mut multi_owners = BTreeMap::new();
+    multi_owners.insert(
+        "p1".to_string(),
+        json!({
+            "@type": "Participant",
+            "name": "First Owner",
+            "calendarAddress": "mailto:owner1@example.com",
+            "roles": { "owner": true }
+        }),
+    );
+    multi_owners.insert(
+        "p2".to_string(),
+        json!({
+            "@type": "Participant",
+            "name": "Second Owner",
+            "calendarAddress": "mailto:owner2@example.com",
+            "roles": { "owner": true }
+        }),
+    );
+    let ev_multi = CalendarEvent {
+        id: Some("part-test-3".into()),
+        start: Some("2026-10-15T10:00:00Z".to_string()),
+        participants: Some(multi_owners),
+        ..CalendarEvent::default()
+    };
+    let out_multi = event_to_ical(&ev_multi);
+    assert_eq!(out_multi.matches("ORGANIZER").count(), 1);
+}
+
+#[test]
+fn differential_oracle_recurrence_rules_plurality_type_stamping_and_nday_offsets() {
+    // Audit divergence 366: Recurrence rule plurality, type stamping, and frequency token alignment:
+    // RFC 5545 Section 3.8.5.3 RRULE vs RFC 8984 Section 4.3.1 recurrenceRules (plural array) vs
+    // Stalwart recurrenceRule (singular object), RFC 8984 @type: "RecurrenceRule" and @type: "NDay"
+    // enforcement, and signed ordinal day offset representation.
+
+    // 1. Inbound parsing parses RRULE into recurrence_rule with rule_type Some("RecurrenceRule")
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:rrule-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2;COUNT=6;BYDAY=MO\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let rule = ev.recurrence_rule.expect("recurrence rule present");
+    assert_eq!(rule.rule_type.as_deref(), Some("RecurrenceRule"));
+    assert_eq!(rule.frequency, "weekly");
+    assert_eq!(rule.interval, Some(2));
+    assert_eq!(rule.count, Some(6));
+    let by_day = rule.by_day.expect("byDay present");
+    assert_eq!(by_day.len(), 1);
+    assert_eq!(by_day[0].day, "mo");
+    assert_eq!(by_day[0].day_type.as_deref(), Some("NDay"));
+
+    // 2. Signed ordinal weekday offsets in BYDAY (e.g. 2MO, -1FR) parse into nth_of_period
+    let ics_ord = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:rrule-test-2\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "RRULE:FREQ=MONTHLY;BYDAY=2MO,-1FR\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_ord = ical_to_event(ics_ord).expect("parses calendar");
+    let rule_ord = ev_ord.recurrence_rule.expect("recurrence rule present");
+    let days = rule_ord.by_day.expect("byDay present");
+    assert_eq!(days.len(), 2);
+    assert_eq!(days[0].day, "mo");
+    assert_eq!(days[0].nth_of_period, Some(2));
+    assert_eq!(days[1].day, "fr");
+    assert_eq!(days[1].nth_of_period, Some(-1));
+
+    // 3. Outbound serialization renders RRULE with uppercase frequency and parameters
+    let ev_out = CalendarEvent {
+        id: Some("rrule-test-3".into()),
+        start: Some("2026-10-15T10:00:00Z".to_string()),
+        recurrence_rule: Some(RecurrenceRule {
+            frequency: "weekly".to_string(),
+            interval: Some(2),
+            count: Some(6),
+            by_day: Some(vec![NDay::new("mo")]),
+            ..RecurrenceRule::default()
+        }),
+        ..CalendarEvent::default()
+    };
+    let out = event_to_ical(&ev_out);
+    let rrule_line = content_line(&out, "RRULE:");
+    assert!(rrule_line.contains("FREQ=WEEKLY"));
+    assert!(rrule_line.contains("INTERVAL=2"));
+    assert!(rrule_line.contains("COUNT=6"));
+    assert!(rrule_line.contains("BYDAY=MO"));
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_minimal_patch_and_override_nullification() {
+    // Audit divergence 367: Recurrence overrides, exclusions, and minimal differential patching vs
+    // full component duplication: RFC 5545 Section 3.8.5.1 EXDATE, Section 3.8.5.2 RDATE,
+    // Section 3.8.4.4 RECURRENCE-ID vs RFC 8984 Section 4.3.3 recurrenceOverrides and
+    // Section 4.3.4 PatchObject, null delta suppression of series properties, and recurrence expansion boundary.
+
+    // 1. Inbound EXDATE parses into recurrenceOverrides with excluded: true
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:override-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "RRULE:FREQ=WEEKLY;COUNT=5\r\n",
+        "EXDATE:20261022T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let overrides = ev
+        .recurrence_overrides
+        .expect("recurrence overrides present");
+    assert_eq!(overrides["2026-10-22T10:00:00"]["excluded"], true);
+
+    // 2. Inbound detached VEVENT with RECURRENCE-ID produces a minimal PatchObject delta,
+    // omitting unchanged properties (unlike Stalwart which duplicates full event copies).
+    let ics_detached = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:override-test-2\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "SUMMARY:Weekly Standup\r\n",
+        "DESCRIPTION:Regular agenda\r\n",
+        "RRULE:FREQ=WEEKLY;COUNT=3\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:override-test-2\r\n",
+        "RECURRENCE-ID:20261022T100000Z\r\n",
+        "DTSTART:20261022T100000Z\r\n",
+        "SUMMARY:Special Retrospective\r\n",
+        "DESCRIPTION:Regular agenda\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_detached = ical_to_event(ics_detached).expect("parses calendar");
+    let detached_overrides = ev_detached.recurrence_overrides.expect("overrides present");
+    let patch = &detached_overrides["2026-10-22T10:00:00"];
+    // Title is changed, so it is present in the patch object
+    assert_eq!(patch["title"], "Special Retrospective");
+    // Description is unchanged between master and instance, so it is omitted from the minimal patch
+    assert_eq!(patch.get("description"), None);
+
+    // 3. Override instance patch nullification when series defines property and instance clears it
+    let master = CalendarEvent {
+        id: Some("override-test-3".into()),
+        priority: Some(2),
+        privacy: Some("private".to_string()),
+        free_busy_status: Some("busy".to_string()),
+        ..CalendarEvent::default()
+    };
+    let cleared_instance = CalendarEvent {
+        id: Some("override-test-3".into()),
+        priority: None,
+        privacy: None,
+        free_busy_status: None,
+        ..CalendarEvent::default()
+    };
+    let delta = jmap_ical::event::instance_patch(&master, &cleared_instance, "2026-10-22T10:00:00");
+    assert_eq!(delta["priority"], Value::Null);
+    assert_eq!(delta["privacy"], Value::Null);
+    assert_eq!(delta["freeBusyStatus"], Value::Null);
+}
