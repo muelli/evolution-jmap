@@ -7585,6 +7585,68 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.400 Divergence 400: `recurrenceOverrides`, `alerts: null`, Alert Roster Clearing, and Patch Nullification vs Implicit Child Object Alarm Suppression: RFC 5545 Section 3.6.6 `VALARM` vs RFC 8984 Section 4.5 `alerts` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Translating reminder alarm suppression and modification across recurrence overrides:
+  1. Inbound explicit nullification (`instance_patch`): In `google_calendar_export.ics`, the master recurring series specifies multiple display `VALARM` components (`-P1D` and `-PT15M`). The detached recurrence instance `2026-10-20T10:00:00` carries no `VALARM` component. In `jmap-ical`, `instance_patch` compares the occurrence against the master series: seeing that the master series defines `alerts` while the detached occurrence defines none, `instance_patch` writes `"alerts": null` into the `PatchObject` delta. Under RFC 8984 Section 4.3.4, setting a property to `null` removes it from the patched object, canceling inheritance of the series alarms. In contrast, when an occurrence specifies modified alarms (such as `thunderbird_detached_export.ics` `2026-10-19T10:00:00` with `-PT30M`), `instance_patch` emits the updated `alerts` map; when an occurrence defines identical alarms to master (`2026-11-16T10:00:00`), `instance_patch` suppresses `alerts` from the patch.
+  2. Oracle full-object snapshot: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` returns standalone event objects for each occurrence. On `google_calendar_export.ics` occurrence `2026-10-20T10:00:00`, Stalwart simply omits the `alerts` field without computing a patch delta.
+  3. Outbound alarm serialization (`vevent_of`, `modified_instance`): Outbound serialization expands the patch delta against the master event: seeing `Value::Null` for `alerts`, `modified_instance` sets `instance.alerts = None`, and `vevent_of` emits no `VALARM` child component for the detached occurrence. For modified alarms, the detached component emits the overridden trigger (`TRIGGER:-PT30M`), while unchanged alarms inherit the master's trigger (`TRIGGER:-PT15M`), preserving exact scheduling fidelity.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`).
+  2. RFC 8984 Section 4.5 (`alerts`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and override delta semantics. Explicit `null` insertion is required by RFC 8984 Section 4.3.4 to prevent detached recurrence instances from inadvertently inheriting parent alarm schedules when the detached occurrence has dismissed or removed its reminders.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.401 Divergence 401: `recurrenceOverrides`, `priority`, `PRIORITY`, and Explicit Priority Nullification vs Implicit Series Omission in Recurrence Overrides: RFC 5545 Section 3.8.1.9 `PRIORITY` vs RFC 8984 Section 4.1.4 `priority` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Translating meeting priority alterations and priority suppression across recurrence overrides:
+  1. Inbound priority alteration and nullification (`instance_patch`): In `thunderbird_detached_export.ics`, the master series defines `PRIORITY:1`. Occurrence `2026-10-19T10:00:00` alters priority to `PRIORITY:2`; `instance_patch` records `"priority": 2` in the patch object. Occurrence `2026-11-16T10:00:00` carries no `PRIORITY` property; `instance_patch` writes `"priority": null` to cancel inheritance of the master series priority. In `google_calendar_export.ics`, both master and detached occurrence specify `PRIORITY:1`; `instance_patch` omits `priority` from the patch delta because the value is identical to master.
+  2. Oracle standalone object emission: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs complete standalone component objects: on `2026-10-19T10:00:00` it produces `"priority": 2`, on `google_calendar_export.ics` it re-emits `"priority": 1`, and on `2026-11-16T10:00:00` it omits `priority` without generating a null patch.
+  3. Outbound priority rendering (`vevent_of`, `modified_instance`): Outbound serialization expands the patch against master: the altered occurrence renders `PRIORITY:2`, the nullified occurrence omits `PRIORITY`, and the unchanged occurrence inherits and renders `PRIORITY:1`, matching the producer's exact intent.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.9 (`Priority`).
+  2. RFC 8984 Section 4.1.4 (`priority`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and minimal patch scoping. Explicit nullification prevents unwanted priority inheritance on instances where priority was intentionally removed, while value omission prevents redundant delta churn on unchanged instances.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.402 Divergence 402: Vendor Extension Snooze and Notification Tracking Properties (`X-MOZ-LASTACK`, `X-MOZ-SNOOZE-TIME`, `X-MOZ-GENERATION`, `X-MOZ-SEND-INVITATIONS`) vs Component Ingestion Boundary Isolation: RFC 5545 Section 3.8.8.2 Vendor Extensions vs RFC 8984 Domain Cleanliness
+
+- **Observed Behavior**:
+  Managing vendor-specific desktop notification snooze timestamps and sync generation tokens:
+  1. Inbound vendor property isolation (`read_vevent`): In `thunderbird_calendar_export.ics` and `thunderbird_detached_export.ics`, components carry Mozilla-specific extension properties: `X-MOZ-GENERATION`, `X-MOZ-LASTACK`, `X-MOZ-SNOOZE-TIME`, and `X-MOZ-SEND-INVITATIONS`. In `jmap-ical`, `read_vevent` filters out these vendor properties on import, leaving `CalendarEvent.extra` completely empty. These properties represent client-local desktop notification state for Thunderbird's alarm daemon; importing them into JSCalendar would pollute client event models with ephemeral client-private state.
+  2. Oracle AST table preservation: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` ingests all `x-moz-*` properties into its `iCalendar.properties` table alongside their raw string values.
+  3. Outbound serialization cleanliness (`event_to_ical`): When converting `CalendarEvent` back to iCalendar, `jmap-ical` emits standard RFC 5545 properties and avoids serializing synthetic or foreign vendor headers, ensuring that exported calendar streams remain clean, interoperable, and free of vendor-specific artifacts.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.8.2 (`Non-Standard Properties`).
+  2. RFC 8984 Section 1.4 (`JSCalendar Data Model`) and Section 4.5 (`Alert`).
+  3. Evolution Data Server (`evolution-alarm-notify`) client notification architecture.
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by domain cleanliness and notification isolation. Snooze timestamps and generation counters are ephemeral to a specific client runtime; discarding them on import protects shared calendars from client-private notification churn and synchronization conflicts.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.403 Divergence 403: Participant Extended Scheduling Parameters (`X-NUM-GUESTS`, `SCHEDULE-AGENT`, `SCHEDULE-STATUS`) and AST Parameter Table vs Scheduling Protocol Isolation: RFC 5545 Section 3.8.4.1 `ATTENDEE` parameters, RFC 6638 CalDAV Scheduling vs RFC 8984 Section 4.4.6 `Participant`
+
+- **Observed Behavior**:
+  Handling participant extended parameters and scheduling metadata between RFC 5545 (`ATTENDEE`), RFC 6638 CalDAV Scheduling, and JSCalendar RFC 8984 Section 4.4.6 (`Participant`):
+  1. Inbound scheduling isolation (`read_vevent`): In `google_calendar_export.ics`, attendee entries include `X-NUM-GUESTS=0`; in `cyrus_caldav_export.ics`, attendee entries include `SCHEDULE-AGENT=SERVER` and `SCHEDULE-STATUS=2.0`. In `jmap-ical`, `read_vevent` drops all `ORGANIZER` and `ATTENDEE` lines on inbound import, leaving `participants: None` and `extra` empty. In JMAP and Evolution Data Server architecture, attendee rosters and scheduling states represent active iTIP/CalDAV scheduling transactions that cannot be mutated through simple component property saves.
+  2. Oracle AST parameter table preservation: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` ingests attendee entries into synthetic `Participant` objects with random UUID keys and records scheduling parameters (`x-num-guests`, `schedule-agent`, `schedule-status`) inside its `iCalendar.convertedProperties` parameter map.
+  3. Outbound participant serialization (`drawn_participants`): Outbound serialization maps explicit `Participant` records to standard RFC 5545 `ORGANIZER` and `ATTENDEE` lines, emitting standard parameters (`CUTYPE`, `ROLE`, `PARTSTAT`, `CN`) while isolating the output from unvetted vendor scheduling extensions.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.1 (`Attendee`) and Section 3.8.4.3 (`Organizer`).
+  2. RFC 6638 (`CalDAV Scheduling Extensions to WebDAV`).
+  3. RFC 8984 Section 4.4.6 (`Participant`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by scheduling protocol safety and architectural boundaries. Participant scheduling is governed by dedicated protocol mechanisms (iTIP, JMAP scheduling); suppressing inbound attendee parameters prevents desktop clients from inadvertently modifying server-managed scheduling metadata.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
 
 
 
