@@ -6741,3 +6741,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification boundary and timezone resolution determinism. Normalizes Windows and legacy TZIDs to IANA names, preserves custom observance definitions with solidus prefix scoping, and prunes unreferenced timezone entries.
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.348 Divergence 348: `version`, `Event.version = "2.0"`, and Standalone vs Embedded JSCalendar Object Scoping: RFC 8984 Section 4.1.2 Version Property, draft-ietf-calext-jscalendarbis Section 3.1.2, draft-ietf-jmap-calendars Section 1.4 Standalone Event Requirement, and Embedded Override Elision
+
+- **Observed Behavior**:
+  Reconciling the `version` property across RFC 8984 Section 4.1.2, draft-ietf-calext-jscalendarbis Section 3.1.2, and JMAP Calendars requires distinguishing between standalone entities and embedded override patch objects:
+  1. Mandatory standalone event versioning (`ical_to_event`): RFC 8984 Section 4.1.2 and jscalendarbis Section 3.1.2 state that a standalone `Event` object MUST specify its JSCalendar version. In JMAP, draft-ietf-jmap-calendars Section 1.4 defines `CalendarEvent` as a jscalendarbis Event requiring version "2.0". Wire traces against production servers (such as Fastmail) verify that `CalendarEvent/set` create requests without `version` or stating "1.0" are rejected with `invalidProperties: ["version"]`. Therefore, `ical_to_event` explicitly stamps `event.version = Some("2.0".to_owned())`.
+  2. Embedded object version elision: In contrast to top-level events, jscalendarbis Section 3.1.2 explicitly forbids the `version` property on embedded objects. In `jmap-ical`, `read_overrides` ensures that recurrence override patch objects in `event.recurrence_overrides` never carry a `version` property.
+  3. Outbound iCalendar serialization (`event_to_ical`): When writing out to RFC 5545, `event_to_ical` renders `VERSION:2.0` on the outer `VCALENDAR` container.
+  4. In contrast, Stalwart's `CalendarEvent/parse` endpoint operates purely in an in-memory parsing context and omits `version` from its JSON output, treating version information as implicit to the JMAP session.
+- **Specification and Architectural Context**:
+  1. RFC 8984 Section 4.1.2 (`version`).
+  2. draft-ietf-calext-jscalendarbis Section 3.1.2 (`version`).
+  3. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent`).
+- **Adjudication**:
+  Conforming specification boundary and client/bridge interoperability requirement. Emits `version: "2.0"` for standalone event creations to satisfy strict JMAP servers, strictly elides `version` on embedded recurrence override objects, and tolerates server-omitted `version` on inbound responses.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.349 Divergence 349: `sequence`, `SEQUENCE`, and Revision Counter Management across Recurrence Series and Overrides: RFC 5545 Section 3.8.7.4 `SEQUENCE` vs RFC 8984 Section 4.4.4 `sequence`, JMAP Stateful Store Revision Ownership, and Omission of Unmanaged Sequence Counters on Import and Export
+
+- **Observed Behavior**:
+  Managing entity revision counters between RFC 5545 (`SEQUENCE`) and JSCalendar RFC 8984 Section 4.4.4 (`sequence`) requires separating transport revision counts from server-managed store state:
+  1. Store-owned revision lifecycle: RFC 5545 Section 3.8.7.4 defines `SEQUENCE` as an integer revision counter incremented by calendar organizers upon modification. In modern JMAP architecture, state transitions and revision tracking are governed by server-owned state tokens, record identifiers, and differential patch resolution rather than client-manipulated integer sequences.
+  2. Inbound sequence omission (`read_vevent` and `read_overrides`): In `jmap-ical`, incoming `SEQUENCE` properties on both master `VEVENT` components and detached override instances are omitted from `CalendarEvent` and patch objects. Preserving an unmanaged scalar sequence counter in client memory would cause false update conflicts or desynchronization when collaborating across multi-device accounts.
+  3. Outbound clean serialization: `event_to_ical` does not synthesize arbitrary `SEQUENCE` lines when serializing stored events, ensuring that serialization remains pure, idempotent, and free of artificial sequence increments.
+  4. In contrast, Stalwart's `CalendarEvent/parse` extracts `SEQUENCE:0` into `"sequence": 0` on the master event and `SEQUENCE:1` into `"sequence": 1` on detached override components.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.7.4 (`Sequence Number`).
+  2. RFC 5546 (iTIP) Section 2.1.4 (`Sequence Number`).
+  3. RFC 8984 Section 4.4.4 (`sequence`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by JMAP stateful store revision ownership. Omits unmanaged sequence counters on import and export to prevent version desynchronization and spurious scheduling conflicts across synchronized devices.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.350 Divergence 350: `method`, `METHOD:PUBLISH`, and Transport Envelope Scheduling Semantics vs Stored Calendar State: RFC 5545 Section 3.7.2 `METHOD:PUBLISH` vs RFC 8984 Section 4.4.5 `method`, Envelope Metadata Isolation from Persistent Event Entities, and RFC 5546 Scheduling Payload Generation
+
+- **Observed Behavior**:
+  Reconciling transaction methods between RFC 5545 (`METHOD`), RFC 5546 (iTIP), and JSCalendar RFC 8984 Section 4.4.5 (`method`) requires isolating ephemeral transport envelope headers from persistent calendar store records:
+  1. Inbound transport envelope filtering: RFC 5545 Section 3.7.2 defines `METHOD` as a calendar envelope property indicating the transaction type (such as `PUBLISH` for broadcasts or `REQUEST` for meeting invitations). When importing an iCalendar file (such as Google or Outlook exports), `METHOD:PUBLISH` describes how the file was distributed rather than an inherent property of the event itself. In `jmap-ical`, `ical_to_event` treats `METHOD:PUBLISH` as transport framing and omits it from persistent `CalendarEvent` properties, preventing ephemeral delivery metadata from polluting database caches.
+  2. Asymmetric outbound scheduling payload generation (`scheduling_ical`): When actively generating RFC 5546 iTIP scheduling messages, `scheduling_ical` formats explicit uppercase `METHOD` lines (such as `METHOD:REQUEST`, `METHOD:CANCEL`, `METHOD:REPLY`) at the `VCALENDAR` root. For single-instance updates, `scheduling_ical` isolates the targeted occurrence with `RECURRENCE-ID` while preserving proper transaction method semantics.
+  3. In contrast, Stalwart maps `METHOD:PUBLISH` from the outer calendar envelope directly into the parsed event object as `"method": "publish"`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.7.2 (`Method`).
+  2. RFC 5546 (iTIP) Section 1.4 (`Methods`) and Section 3.1 (`Methods for VEVENT Calendar Components`).
+  3. RFC 8984 Section 4.4.5 (`method`).
+- **Adjudication**:
+  Conforming specification boundary and storage cleanliness. Discards ephemeral `METHOD:PUBLISH` transport metadata on import to maintain pristine store records, while generating full RFC 5546 compliant `METHOD` headers during active scheduling operations.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.351 Divergence 351: `links`, `ATTACH`, `IMAGE`, `rel: "enclosure"`, `display`, and Attachment Parameter Mapping vs Calcard AST Preservation: RFC 5545 Section 3.8.1.1 `ATTACH`, RFC 7986 Section 5.10 `IMAGE`, RFC 8984 Section 1.4.11 / Section 4.2.7 `Link`, Default `rel: "enclosure"` Omission Semantics, Scalar Display Tokens, and Stable Map Key Preservation
+
+- **Observed Behavior**:
+  Translating external resource pointers between RFC 5545 (`ATTACH`), RFC 7986 (`IMAGE`), and JSCalendar RFC 8984 Section 4.2.7 (`links`) requires managing relationship defaults, display representations, and identifier stability:
+  1. Default relation omission (`read_links`): RFC 8984 Section 1.4.11 defines `rel` with a default value of `"enclosure"`. In `jmap-ical`, `read_links` processes `ATTACH` properties without emitting `rel: "enclosure"`, relying on standard default elision to minimize JSON payload sizes and avoid redundant property serialization. For `IMAGE` properties, `read_links` sets `rel: "icon"` to distinguish graphics from attachments.
+  2. Scalar display token mapping: RFC 7986 Section 5.10 introduces the `DISPLAY` parameter on `IMAGE` (such as `DISPLAY=BADGE` or `DISPLAY=GRAPHIC`). In `jmap-ical`, `read_links` maps this parameter to a scalar string (`display: "badge"`), matching RFC 8984 Section 1.4.11 and desktop UI requirements.
+  3. Stable map key preservation and size parameterization: `read_links` extracts RFC 8607 `SIZE` parameters into integer `size` fields, respects `X-JMAP-KEY` parameter annotations to preserve client map keys across round-trips, and provides deterministic fallback key numbering (`k1`, `l1`). Outbound `drawn_links` renders `ATTACH` and `IMAGE` components with their respective parameters faithfully.
+  4. In contrast, Stalwart explicitly serializes `"rel": "enclosure"` on `ATTACH` links, represents `display` as a boolean set (such as `"display": {"badge": true}`), synthesizes random UUID map keys on every parse, and stores raw attachment lines inside the `iCalendar.convertedProperties` AST container.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.1 (`Attachment`).
+  2. RFC 7986 Section 5.10 (`Image Property`) and Section 9.1 (`Display Parameter`).
+  3. RFC 8607 Section 4.1 (`SIZE Parameter for ATTACH`).
+  4. RFC 8984 Section 1.4.11 (`Link`) and Section 4.2.7 (`links`).
+  5. draft-ietf-calext-jscalendarbis Section 2.1.11 (`Link`).
+- **Adjudication**:
+  Conforming specification adaptation and representation determinism. Leverages RFC 8984 default semantics (`rel: "enclosure"`), preserves scalar display tokens for desktop UI rendering, maintains stable map key round-tripping via `X-JMAP-KEY`, and prevents memory overhead from unparsed AST containers.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+

@@ -42959,3 +42959,208 @@ fn differential_oracle_timezone_canonical_resolution_windows_mapping_and_pruning
     assert!(pruned.contains_key("America/New_York"));
     assert!(!pruned.contains_key("Europe/Paris"));
 }
+
+#[test]
+fn differential_oracle_standalone_version_stamping_and_embedded_elision() {
+    // Audit divergence 348: Event version annotation and standalone vs embedded scoping:
+    // RFC 8984 Section 4.1.2 version property, draft-ietf-calext-jscalendarbis Section 3.1.2,
+    // draft-ietf-jmap-calendars Section 1.4 standalone Event requirement, and embedded override elision.
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:version-test-ev-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "RRULE:FREQ=WEEKLY;COUNT=3\r\n",
+        "SUMMARY:Version Test\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:version-test-ev-1\r\n",
+        "RECURRENCE-ID:20261022T100000Z\r\n",
+        "DTSTART:20261022T100000Z\r\n",
+        "SUMMARY:Version Test Override\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(ics).expect("parses calendar");
+
+    // 1. Standalone Event stamps version: "2.0"
+    assert_eq!(ev.version.as_deref(), Some("2.0"));
+
+    // 2. Embedded recurrence-override objects elide version (prohibited on embedded objects)
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+    assert!(overrides.contains_key("2026-10-22T10:00:00"));
+    let override_patch = &overrides["2026-10-22T10:00:00"];
+    assert!(override_patch.get("version").is_none());
+
+    // 3. Outbound serialization renders VERSION:2.0 on VCALENDAR
+    let ics_out = event_to_ical(&ev);
+    assert!(ics_out.contains("VERSION:2.0\r\n"));
+}
+
+#[test]
+fn differential_oracle_sequence_revision_counter_handling_and_store_ownership() {
+    // Audit divergence 349: Sequence revision counter management across recurrence series and overrides:
+    // RFC 5545 Section 3.8.7.4 SEQUENCE vs RFC 8984 Section 4.4.4 sequence, JMAP stateful store revision
+    // ownership, and omission of unmanaged sequence counters on import and export.
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:seq-test-ev-1\r\n",
+        "SEQUENCE:0\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "RRULE:FREQ=WEEKLY;COUNT=3\r\n",
+        "SUMMARY:Sequence Test Master\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:seq-test-ev-1\r\n",
+        "RECURRENCE-ID:20261022T100000Z\r\n",
+        "SEQUENCE:3\r\n",
+        "DTSTART:20261022T100000Z\r\n",
+        "SUMMARY:Sequence Test Override\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(ics).expect("parses calendar");
+
+    // 1. Inbound import ignores SEQUENCE on master (managed by JMAP store, not event properties)
+    assert!(!ev.extra.contains_key("sequence"));
+
+    // 2. Inbound import ignores SEQUENCE on recurrence overrides
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+    let patch = &overrides["2026-10-22T10:00:00"];
+    assert_eq!(patch["title"], "Sequence Test Override");
+    assert!(patch.get("sequence").is_none());
+
+    // 3. Outbound serialization does not synthesize unmanaged SEQUENCE lines
+    let ics_out = event_to_ical(&ev);
+    assert!(!ics_out.contains("SEQUENCE:"));
+}
+
+#[test]
+fn differential_oracle_itip_method_transport_envelope_isolation_and_scheduling() {
+    // Audit divergence 350: Transport envelope scheduling semantics vs stored calendar state:
+    // RFC 5545 Section 3.7.2 METHOD:PUBLISH vs RFC 8984 Section 4.4.5 method, envelope metadata
+    // isolation from persistent event entities, and RFC 5546 scheduling payload generation.
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "METHOD:PUBLISH\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:method-test-ev-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "SUMMARY:Method Test Event\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(ics).expect("parses calendar");
+
+    // 1. Inbound import does not retain ephemeral METHOD:PUBLISH inside stored event properties
+    assert!(!ev.extra.contains_key("method"));
+
+    // 2. Outbound scheduling assembly generates METHOD:REQUEST on VCALENDAR envelope
+    let request_ics = jmap_ical::scheduling_ical(&ev, "REQUEST", None);
+    assert!(request_ics.contains("METHOD:REQUEST\r\n"));
+
+    // 3. Outbound scheduling assembly generates METHOD:REPLY on VCALENDAR envelope
+    let reply_ics = jmap_ical::scheduling_ical(&ev, "REPLY", None);
+    assert!(reply_ics.contains("METHOD:REPLY\r\n"));
+
+    // 4. Single-instance cancellation isolates instance with RECURRENCE-ID
+    let cancel_ics = jmap_ical::scheduling_ical(&ev, "CANCEL", Some("2026-10-15T10:00:00"));
+    assert!(cancel_ics.contains("METHOD:CANCEL\r\n"));
+    assert!(cancel_ics.contains("RECURRENCE-ID:20261015T100000Z\r\n"));
+}
+
+#[test]
+fn differential_oracle_links_attachment_image_parameters_and_default_elision() {
+    // Audit divergence 351: External link and attachment ingestion and serialization pipeline:
+    // RFC 5545 Section 3.8.1.1 ATTACH, RFC 7986 Section 5.10 IMAGE, RFC 8984 Section 1.4.11 / Section 4.2.7 Link,
+    // rel: "enclosure" default omission semantics, scalar display tokens, and stable map key preservation.
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:links-test-ev-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "SUMMARY:Links Test Event\r\n",
+        "ATTACH;FMTTYPE=application/pdf;SIZE=102400:https://example.com/spec.pdf\r\n",
+        "IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=brand-logo:https://example.com/badge.png\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let cal = jmap_ical::event::parse_ical(ics).expect("parse ics");
+    let vevent = cal
+        .components
+        .iter()
+        .find(|c| c.component_type.as_str().eq_ignore_ascii_case("VEVENT"))
+        .expect("vevent");
+
+    let links = jmap_ical::event::read_links(vevent).expect("links present");
+
+    // 1. ATTACH elides default rel: "enclosure" per RFC 8984 Section 1.4.11
+    let attach_link = links
+        .values()
+        .find(|l| l["href"] == "https://example.com/spec.pdf")
+        .expect("attach link found");
+    assert_eq!(attach_link["@type"], "Link");
+    assert_eq!(attach_link["contentType"], "application/pdf");
+    assert_eq!(attach_link["size"], 102400);
+    assert!(attach_link.get("rel").is_none());
+
+    // 2. IMAGE maps to rel: "icon", preserves DISPLAY=BADGE, and respects X-JMAP-KEY
+    assert!(links.contains_key("brand-logo"));
+    let image_link = &links["brand-logo"];
+    assert_eq!(image_link["href"], "https://example.com/badge.png");
+    assert_eq!(image_link["rel"], "icon");
+    assert_eq!(image_link["display"], "badge");
+    assert_eq!(image_link["contentType"], "image/png");
+
+    // 3. Outbound serialization renders ATTACH and IMAGE with X-JMAP-KEY
+    let ev = CalendarEvent {
+        links: Some(links),
+        ..CalendarEvent::default()
+    };
+    let drawn = jmap_ical::event::drawn_links(&ev);
+
+    assert_eq!(drawn.len(), 2);
+
+    let drawn_attach = drawn
+        .iter()
+        .find(|e| e.name.as_str() == "ATTACH")
+        .expect("drawn attach");
+    assert_eq!(
+        jmap_ical::event::entry_param(drawn_attach, "FMTTYPE").as_deref(),
+        Some("application/pdf")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(drawn_attach, "SIZE").as_deref(),
+        Some("102400")
+    );
+
+    let drawn_image = drawn
+        .iter()
+        .find(|e| e.name.as_str() == "IMAGE")
+        .expect("drawn image");
+    assert_eq!(
+        jmap_ical::event::entry_param(drawn_image, "DISPLAY").as_deref(),
+        Some("BADGE")
+    );
+    assert_eq!(
+        jmap_ical::event::entry_param(drawn_image, "X-JMAP-KEY").as_deref(),
+        Some("brand-logo")
+    );
+}
