@@ -44853,3 +44853,242 @@ fn differential_oracle_conference_features_and_label_mapping() {
     assert!(conf_line.contains("LABEL=\"Google Meet\""));
     assert!(conf_line.contains("https://meet.google.com/abc-defg-hij"));
 }
+
+#[test]
+fn differential_oracle_recurrence_byday_ordinal_weekday_alignment() {
+    // Audit divergence 380: byDay, NDay, nthOfPeriod, and ordinal weekday
+    // alignment across recurrence frequencies: RFC 5545 Section 3.3.10 BYDAY vs
+    // RFC 8984 Section 4.3.2 NDay.
+
+    // 1. Positive ordinal weekday (3SU, 3rd Sunday) from outlook_m365_export.ics
+    let ics_m365 = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:byday-test-m365\r\n",
+        "DTSTART:20260920T143000Z\r\n",
+        "DURATION:PT1H30M\r\n",
+        "RRULE:FREQ=MONTHLY;INTERVAL=1;BYDAY=3SU;COUNT=6\r\n",
+        "SUMMARY:Executive Leadership\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_m365 = ical_to_event(ics_m365).expect("parses calendar");
+    let rule_m365 = ev_m365.recurrence_rule.as_ref().expect("rule present");
+    let by_day_m365 = rule_m365.by_day.as_ref().expect("byDay present");
+    assert_eq!(by_day_m365.len(), 1);
+    assert_eq!(by_day_m365[0].day.as_str(), "su");
+    assert_eq!(by_day_m365[0].nth_of_period, Some(3));
+    assert_eq!(by_day_m365[0].day_type.as_deref(), Some("NDay"));
+
+    let out_m365 = event_to_ical(&ev_m365);
+    let rrule_m365_line = content_line(&out_m365, "RRULE");
+    assert!(rrule_m365_line.contains("BYDAY=3SU"));
+
+    // 2. Negative ordinal weekday (-1MO, last Monday) from evolution_calendar_export.ics
+    let ics_evo = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:byday-test-evo\r\n",
+        "DTSTART:20260928T160000Z\r\n",
+        "DURATION:PT2H\r\n",
+        "RRULE:FREQ=MONTHLY;INTERVAL=1;BYDAY=-1MO;COUNT=12\r\n",
+        "SUMMARY:Board Meeting\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_evo = ical_to_event(ics_evo).expect("parses calendar");
+    let rule_evo = ev_evo.recurrence_rule.as_ref().expect("rule present");
+    let by_day_evo = rule_evo.by_day.as_ref().expect("byDay present");
+    assert_eq!(by_day_evo.len(), 1);
+    assert_eq!(by_day_evo[0].day.as_str(), "mo");
+    assert_eq!(by_day_evo[0].nth_of_period, Some(-1));
+    assert_eq!(by_day_evo[0].day_type.as_deref(), Some("NDay"));
+
+    let out_evo = event_to_ical(&ev_evo);
+    let rrule_evo_line = content_line(&out_evo, "RRULE");
+    assert!(rrule_evo_line.contains("BYDAY=-1MO"));
+}
+
+#[test]
+fn differential_oracle_valarm_uid_retention_and_positional_keying() {
+    // Audit divergence 381: alerts, VALARM, RFC 9074 UID key retention (UID:...),
+    // and positional key inventing (a1, a2) vs random or opaque key allocation:
+    // RFC 5545 Section 3.6.6 VALARM and RFC 9074 Section 6 UID vs RFC 8984
+    // Section 4.5 alerts.
+
+    // 1. Ingestion with explicit RFC 9074 UID and nameless VALARM
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:alert-uid-keying-test\r\n",
+        "DTSTART:20260920T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Keying Test\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Explicit UID\r\n",
+        "TRIGGER:-PT15M\r\n",
+        "UID:custom-uid-alarm-123\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Nameless Alert\r\n",
+        "TRIGGER:-PT30M\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let alerts = ev.alerts.as_ref().expect("alerts present");
+    assert_eq!(alerts.len(), 2);
+    assert!(alerts.contains_key("custom-uid-alarm-123"));
+    assert!(alerts.contains_key("a1"));
+
+    // 2. Positional keying collision avoidance: explicit UID is a1
+    let ics_collision = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:alert-collision-test\r\n",
+        "DTSTART:20260920T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Collision Test\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Pre-existing a1\r\n",
+        "TRIGGER:-PT15M\r\n",
+        "UID:a1\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Nameless Alert\r\n",
+        "TRIGGER:-PT30M\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_collision = ical_to_event(ics_collision).expect("parses calendar");
+    let alerts_collision = ev_collision.alerts.as_ref().expect("alerts present");
+    assert_eq!(alerts_collision.len(), 2);
+    assert!(alerts_collision.contains_key("a1"));
+    assert!(alerts_collision.contains_key("a2"));
+
+    // 3. Outbound serialization renders UID:key on each VALARM block
+    let out = event_to_ical(&ev);
+    assert!(out.contains("UID:custom-uid-alarm-123\r\n"));
+    assert!(out.contains("UID:a1\r\n"));
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_patch_nullification_and_inheritance() {
+    // Audit divergence 382: detached recurrence overrides (RECURRENCE-ID),
+    // property deletion nullification (null), and series inheritance vs
+    // full component duplication: RFC 5545 Section 3.8.4.4 RECURRENCE-ID vs
+    // RFC 8984 Section 4.3.3 recurrenceOverrides and Section 4.3.4 PatchObject.
+
+    // 1. Master series with alerts, keywords, and priority; detached instance
+    // that modifies start and title but omits alerts, keywords, and priority
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:patch-nullification-test-series\r\n",
+        "DTSTART:20261005T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "RRULE:FREQ=WEEKLY;COUNT=3\r\n",
+        "SUMMARY:Master Series\r\n",
+        "CATEGORIES:Engineering,Planning\r\n",
+        "PRIORITY:1\r\n",
+        "CLASS:CONFIDENTIAL\r\n",
+        "TRANSP:OPAQUE\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "DESCRIPTION:Series Alarm\r\n",
+        "TRIGGER:-PT15M\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:patch-nullification-test-series\r\n",
+        "RECURRENCE-ID:20261012T100000Z\r\n",
+        "DTSTART:20261012T140000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Detached Shifted Instance\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+    let patch = overrides
+        .get("2026-10-12T10:00:00")
+        .expect("patch for instance present");
+
+    // PatchObject must explicitly nullify omitted master properties
+    assert_eq!(patch.get("alerts"), Some(&Value::Null));
+    assert_eq!(patch.get("keywords"), Some(&Value::Null));
+    assert_eq!(patch.get("priority"), Some(&Value::Null));
+    assert_eq!(patch.get("privacy"), Some(&Value::Null));
+    assert_eq!(patch.get("freeBusyStatus"), Some(&Value::Null));
+    assert_eq!(
+        patch.get("title").and_then(Value::as_str),
+        Some("Detached Shifted Instance")
+    );
+    assert_eq!(
+        patch.get("start").and_then(Value::as_str),
+        Some("2026-10-12T14:00:00")
+    );
+
+    // 2. Outbound serialization reconstructs detached VEVENT without master alerts or categories
+    let out = event_to_ical(&ev);
+    assert_eq!(vevents(&out), 2);
+    let detached_comp = vevent(&out, 1);
+    assert!(content_line(detached_comp, "SUMMARY").contains("Detached Shifted Instance"));
+    assert!(!detached_comp.contains("BEGIN:VALARM"));
+    assert!(!detached_comp.contains("CATEGORIES:"));
+}
+
+#[test]
+fn differential_oracle_caldav_sync_extension_properties_isolation() {
+    // Audit divergence 383: CalDAV and sync extension properties
+    // (X-CALDAV-SYNC-TOKEN, X-CALDAV-CTAG, X-CALDAV-ACCESS-RESTRICTION,
+    // X-FASTMAIL-CLIENT-ID, X-SOGO-COMPONENT-CREATED, X-RADICALE-MODIFIED)
+    // and component ingestion boundary isolation: RFC 4791 / RFC 6578 CalDAV
+    // extensions vs RFC 8984 domain cleanliness.
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:caldav-sync-tokens-test-1\r\n",
+        "DTSTART:20261110T090000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:CalDAV Sync Isolation\r\n",
+        "X-CALDAV-ACCESS-RESTRICTION:NONE\r\n",
+        "X-CALDAV-SYNC-TOKEN:data:,sync-token-20260901-789\r\n",
+        "X-CALDAV-CTAG:data:,ctag-42\r\n",
+        "X-FASTMAIL-CLIENT-ID:web-client-v1\r\n",
+        "X-SOGO-COMPONENT-CREATED:20260901T120000Z\r\n",
+        "X-RADICALE-MODIFIED:20260901T120000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(ics).expect("parses calendar");
+    // Transient sync tokens and vendor timestamps must not leak into extra
+    assert!(ev.extra.is_empty());
+
+    // Outbound serialization emits clean standard RFC 5545 without leaking sync headers
+    let out = event_to_ical(&ev);
+    assert!(!out.contains("X-CALDAV-"));
+    assert!(!out.contains("X-FASTMAIL-"));
+    assert!(!out.contains("X-SOGO-"));
+    assert!(!out.contains("X-RADICALE-"));
+}
