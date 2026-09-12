@@ -7960,12 +7960,63 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.424 Divergence 424: `recurrenceOverrides`, `status`, `STATUS`, Status Modification, Confirmation Restatement Elision, and Cancellation vs Standalone Component Duplication: RFC 5545 Section 3.8.1.11 `STATUS` vs RFC 8984 Section 4.1.4 `status` and Section 4.3.4 `PatchObject`
 
+- **Observed Behavior**:
+  Translating meeting status across recurrence overrides (`RECURRENCE-ID`):
+  1. Inbound status elision and cancellation (`instance_patch`): In `google_calendar_export.ics` and `thunderbird_detached_export.ics`, the master recurring series specifies `STATUS:CONFIRMED` (`status: "confirmed"`). Detached occurrences `2026-10-20T10:00:00` (Google) and `2026-10-19T10:00:00` (Thunderbird) also declare `STATUS:CONFIRMED`. In `jmap-ical`, `instance_patch` compares `("status", &series.status, &instance.status)`. Because `was == now` (`Some("confirmed") == Some("confirmed")`), `instance_patch` elides `status` from the computed patch delta. In contrast, occurrence `2026-11-16T10:00:00` in `thunderbird_detached_export.ics` sets `STATUS:CANCELLED` (`status: "cancelled"`). Because `was != now` (`Some("confirmed") != Some("cancelled")`), `instance_patch` writes `"status": "cancelled"` to the patch delta. If an occurrence omits `STATUS` while the master series specifies it, `was != now` and `instance_patch` writes `"status": null` to cancel inheritance.
+  2. Oracle full component duplication: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs duplicate standalone component objects for each occurrence: on `2026-10-20T10:00:00` and `2026-10-19T10:00:00` it redundantly emits `"status": "confirmed"`, and on `2026-11-16T10:00:00` it emits `"status": "cancelled"` without computing minimal patch deltas.
+  3. Outbound status rendering (`modified_instance`, `vevent_of`): On outbound export, `modified_instance` sets `instance.status = event.status.clone()` when `status` is omitted from the patch delta. `vevent_of` renders the inherited `STATUS:CONFIRMED` on unchanged occurrences, while rendering `STATUS:CANCELLED` on cancelled occurrences.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.11 (`Status`).
+  2. RFC 8984 Section 4.1.4 (`status`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and minimal patch scoping. Eliding unaltered status from recurrence override patch deltas conforms to RFC 8984 Section 4.3.4 inheritance while preserving exact meeting confirmation and cancellation semantics across desktop calendar clients.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.425 Divergence 425: `recurrenceOverrides`, `keywords`, `CATEGORIES`, Keyword Modification, Category Map Inheritance, and Explicit Category Nullification vs Standalone Component Dropping: RFC 5545 Section 3.8.1.2 `CATEGORIES` vs RFC 8984 Section 4.1.8 `keywords` and Section 4.3.4 `PatchObject`
 
+- **Observed Behavior**:
+  Translating category keywords across recurrence overrides (`RECURRENCE-ID`):
+  1. Inbound keyword modification and nullification (`instance_patch`): In `thunderbird_detached_export.ics`, the master series defines `CATEGORIES:Mozilla,Engineering` (`keywords: {"Engineering": true, "Mozilla": true}`). Occurrence `2026-10-19T10:00:00` modifies categories to `CATEGORIES:Mozilla,Engineering,Benchmark`. In `jmap-ical`, `instance_patch` compares `("keywords", &series.keywords, &instance.keywords)`. Because `was != now`, `instance_patch` records `"keywords": {"Benchmark": true, "Engineering": true, "Mozilla": true}` in the patch delta. In `google_calendar_export.ics`, the master series defines `CATEGORIES:Architecture,Planning,Engineering`, but detached occurrence `2026-10-20T10:00:00` omits `CATEGORIES`. In `thunderbird_detached_export.ics`, detached occurrence `2026-11-16T10:00:00` also omits `CATEGORIES`. In `jmap-ical`, `instance_patch` detects `was != now` (`Some(...)` vs `None`) and writes `"keywords": null` into the patch delta to cancel inheritance of the master series categories per RFC 8984 Section 4.3.4.
+  2. Oracle standalone component dropping: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` parses each occurrence component in isolation: on `2026-10-19T10:00:00` it produces `"keywords": {"Benchmark": true, "Engineering": true, "Mozilla": true}`, but on `2026-10-20T10:00:00` and `2026-11-16T10:00:00` it simply omits `keywords`. Under RFC 8984 Section 4.3.4 PatchObject inheritance rules, omitting `keywords` in a patch delta would cause the occurrence to inherit the series categories. `jmap-ical`'s explicit `"keywords": null` correctly clears categories on occurrences where the organizer removed them.
+  3. Outbound category serialization (`modified_instance`, `vevent_of`): On outbound serialization, `modified_instance` sets `instance.keywords = None` when `keywords` is null in the patch delta, so `vevent_of` emits no `CATEGORIES` property on the detached `VEVENT`. When `keywords` is omitted from the patch, `instance.keywords = event.keywords.clone()`, so `vevent_of` renders the inherited `CATEGORIES`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.2 (`Categories`).
+  2. RFC 8984 Section 4.1.8 (`keywords`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and patch nullification semantics. Explicit nullification prevents unwanted category inheritance on instances where categories were removed, while keyword modifications are scoped cleanly to individual occurrences.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.426 Divergence 426: `recurrenceOverrides`, `excluded: true`, `EXDATE`, `STATUS:CANCELLED`, Complete Instance Removal vs Explicit Meeting Cancellation Modeling: RFC 5545 Section 3.8.5.1 `EXDATE`, Section 3.8.1.11 `STATUS:CANCELLED`, Section 3.8.4.4 `RECURRENCE-ID` vs RFC 8984 Section 4.3.4 `recurrenceOverrides` and `excluded`
 
+- **Observed Behavior**:
+  Distinguishing between complete recurrence instance excision (`EXDATE`) and explicit meeting occurrence cancellation (`RECURRENCE-ID` with `STATUS:CANCELLED`):
+  1. Inbound exclusion vs cancellation mapping (`read_overrides`, `instance_patch`): In `google_calendar_export.ics` (`EXDATE;TZID=America/Los_Angeles:20261015T100000`) and `thunderbird_detached_export.ics` (`EXDATE;TZID=Europe/London:20261102T100000`), exceptions are recorded as `EXDATE`. In `jmap-ical`, `read_overrides` maps each `EXDATE` entry to `{"excluded": true}` in `event.recurrence_overrides`. Stalwart v1.0.0's `CalendarEvent/parse` also maps `EXDATE` to `{"excluded": true}`. In contrast, when an occurrence is cancelled via an explicit detached component with `STATUS:CANCELLED` (such as `2026-11-16T10:00:00` in `thunderbird_detached_export.ics`), `jmap-ical` computes a patch delta containing `"status": "cancelled"`, deliberately refraining from setting `{"excluded": true}`. Setting `excluded: true` would completely remove the occurrence from the recurrence set, destroying attendee invitation state, meeting title, agenda descriptions, and rescheduling context.
+  2. Oracle component preservation: Stalwart v1.0.0's `CalendarEvent/parse` also preserves the occurrence as an active component with `"status": "cancelled"` rather than collapsing it to `excluded: true`.
+  3. Outbound serialization fidelity (`recurrence_dates`, `modified_instances`, `vevent_of`): On outbound serialization, `recurrence_dates` renders `excluded: true` entries as `EXDATE` lines in the primary `VEVENT`, while `modified_instances` renders `status: "cancelled"` occurrences as separate `VEVENT` components with `RECURRENCE-ID` and `STATUS:CANCELLED`, conforming to iTIP meeting cancellation workflows.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.5.1 (`Exception Date-Times`), Section 3.8.1.11 (`Status`), and Section 3.8.4.4 (`Recurrence ID`).
+  2. RFC 5546 (iTIP) Section 3.2.5.
+  3. RFC 8984 Section 4.3.4 (`PatchObject` and `excluded`).
+- **Adjudication**:
+  Conforming specification adaptation and scheduling protocol fidelity. Preserving the structural difference between `excluded: true` (`EXDATE`) and `status: "cancelled"` (`RECURRENCE-ID`) maintains complete meeting history and ensures accurate iTIP cancellation notifications.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.427 Divergence 427: `recurrenceOverrides`, `RECURRENCE-ID;RANGE=THISANDFUTURE`, Single-Occurrence Scope Isolation vs Series Truncation Skipping: RFC 5545 Section 3.2.13 `RANGE`, Section 3.8.4.4 `RECURRENCE-ID` vs RFC 8984 Section 4.3.4 `recurrenceOverrides` Instant-Based Keying
 
-
-
+- **Observed Behavior**:
+  Handling recurrence overrides carrying the `RANGE=THISANDFUTURE` parameter:
+  1. Inbound series truncation isolation (`read_overrides`): RFC 5545 Section 3.2.13 defines `RANGE=THISANDFUTURE` to indicate that a modification applies not only to the occurrence identified by `RECURRENCE-ID`, but to all subsequent occurrences in the recurrence set. In JSCalendar RFC 8984 Section 4.3.4, `recurrenceOverrides` is a map whose keys are individual `LocalDateTime` instances, each mapping to a `PatchObject` that alters only that specific occurrence. JSCalendar provides no mechanism to specify open-ended future ranges or series truncation inside `recurrenceOverrides`. In `jmap-ical`, `read_overrides` inspects `entry_param(property, "RANGE")`: if present, the component is deliberately skipped (`continue`), returning `recurrence_overrides: None` when no other valid single-instance overrides exist. Applying a `RANGE=THISANDFUTURE` patch to only the single matching `RECURRENCE-ID` key would misrepresent the organizer's intent by leaving all future occurrences in their unpatched state, corrupting the calendar series.
+  2. Oracle standalone parsing: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` treats every detached `VEVENT` as an independent standalone event, ignoring the `RANGE` parameter and failing to propagate future series alterations.
+  3. Outbound serialization cleanliness (`event_to_ical`): On outbound serialization, `jmap-ical` never emits `RANGE=THISANDFUTURE` on detached occurrences, confining recurrence overrides strictly to discrete single-occurrence modifications.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2.13 (`Recurrence Identifier Range`) and Section 3.8.4.4 (`Recurrence ID`).
+  2. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by JSCalendar data model boundaries and series integrity protection. Skipping `RANGE=THISANDFUTURE` prevents partial series modifications that would desynchronize subsequent recurring meeting sessions.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
