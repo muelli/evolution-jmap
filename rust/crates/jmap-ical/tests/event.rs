@@ -44222,3 +44222,211 @@ fn differential_oracle_recurrence_overrides_minimal_patch_and_override_nullifica
     assert_eq!(delta["privacy"], Value::Null);
     assert_eq!(delta["freeBusyStatus"], Value::Null);
 }
+
+#[test]
+fn differential_oracle_icalendar_ast_container_and_vendor_extension_isolation() {
+    // Audit divergence 368: iCalendar extension object, convertedProperties, and vendor
+    // extension AST isolation vs clean typed domain model: RFC 8984, draft-ietf-calext-jscalendar-icalendar
+    // Section 4 vs CalendarEvent strongly-typed fields.
+
+    // 1. Inbound parsing drops unmapped vendor X- properties and does not synthesize
+    // an iCalendar AST container object or pollute extra.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:vendor-ast-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Vendor Extension Test\r\n",
+        "X-MOZ-GENERATION:3\r\n",
+        "X-MOZ-LASTACK:20260901T100000Z\r\n",
+        "X-APPLE-TRAVEL-ADVISORY-BEHAVIOR:AUTOMATIC\r\n",
+        "X-MICROSOFT-CDO-BUSYSTATUS:BUSY\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    assert_eq!(
+        ev.id.as_ref().map(|id| id.as_str()),
+        Some("vendor-ast-test-1")
+    );
+    assert_eq!(ev.title.as_deref(), Some("Vendor Extension Test"));
+    // jmap-ical does not synthesize an iCalendar extension object on import
+    assert_eq!(ev.extra.get("iCalendar"), None);
+    assert!(!ev.extra.contains_key("x-moz-generation"));
+    assert!(!ev.extra.contains_key("x-apple-travel-advisory-behavior"));
+    assert!(!ev.extra.contains_key("x-microsoft-cdo-busystatus"));
+
+    // 2. Outbound serialization does not emit raw unvetted vendor AST lines
+    let out = event_to_ical(&ev);
+    assert!(without(&out, "X-MOZ-GENERATION"));
+    assert!(without(&out, "X-APPLE-TRAVEL-ADVISORY-BEHAVIOR"));
+    assert!(without(&out, "X-MICROSOFT-CDO-BUSYSTATUS"));
+    assert!(without(&out, "iCalendar"));
+}
+
+#[test]
+fn differential_oracle_alerts_action_gating_audio_email_and_absolute_trigger() {
+    // Audit divergence 369: Alarm action scope gating and relative vs absolute trigger semantics:
+    // RFC 5545 Section 3.6.6 VALARM (ACTION:AUDIO, ACTION:EMAIL, ACTION:DISPLAY),
+    // Section 3.8.6.3 TRIGGER (VALUE=DATE-TIME) vs RFC 8984 Section 4.5 Alert,
+    // Section 4.5.2 OffsetTrigger, Section 4.5.3 AbsoluteTrigger.
+
+    // 1. Inbound parsing safely drops ACTION:AUDIO, ACTION:EMAIL, and AbsoluteTrigger (VALUE=DATE-TIME),
+    // while preserving ACTION:DISPLAY with relative OffsetTrigger.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:alert-scope-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Alarm Scope Test\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "TRIGGER:-PT15M\r\n",
+        "DESCRIPTION:Valid Display Alert\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:AUDIO\r\n",
+        "TRIGGER:-PT15M\r\n",
+        "ATTACH;VALUE=URI:Basso\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:EMAIL\r\n",
+        "TRIGGER:-P1D\r\n",
+        "ATTENDEE:mailto:user@example.com\r\n",
+        "SUMMARY:Email Reminder\r\n",
+        "DESCRIPTION:Email Alert\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "TRIGGER;VALUE=DATE-TIME:20261015T094500Z\r\n",
+        "DESCRIPTION:Absolute Trigger\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let alerts = ev.alerts.as_ref().expect("alerts present");
+    // Only the relative DISPLAY alarm is ingested
+    assert_eq!(alerts.len(), 1);
+    let alert = alerts.values().next().expect("one alert");
+    assert_eq!(alert["action"], "display");
+    assert_eq!(alert["trigger"]["@type"], "OffsetTrigger");
+    assert_eq!(alert["trigger"]["offset"], "-PT15M");
+
+    // 2. Outbound serialization renders only conforming DISPLAY VALARM
+    let out = event_to_ical(&ev);
+    assert!(out.contains("BEGIN:VALARM"));
+    assert!(out.contains("ACTION:DISPLAY"));
+    assert!(out.contains("TRIGGER:-PT15M"));
+    assert!(without(&out, "ACTION:AUDIO"));
+    assert!(without(&out, "ACTION:EMAIL"));
+    assert!(without(&out, "VALUE=DATE-TIME"));
+}
+
+#[test]
+fn differential_oracle_links_display_scalar_token_and_defensive_set_deserialization() {
+    // Audit divergence 370: Image link display token mapping, scalar string fidelity vs boolean
+    // set representation, and defensive parameter serialization: RFC 7986 Section 5.10 IMAGE,
+    // Section 9.1 DISPLAY parameter vs RFC 8984 Section 1.4.11 / Section 4.2.7 Link display.
+
+    // 1. Inbound IMAGE parses DISPLAY parameter into scalar String token
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:link-display-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Link Display Test\r\n",
+        "IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png:https://example.com/badge.png\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let links = ev.links.as_ref().expect("links present");
+    let link = links.values().next().expect("link present");
+    assert_eq!(link["rel"], "icon");
+    assert_eq!(link["display"], "badge");
+    assert_eq!(link["contentType"], "image/png");
+
+    // 2. Outbound serialization renders DISPLAY=BADGE from scalar String
+    let out_scalar = event_to_ical(&ev);
+    assert!(out_scalar.contains("IMAGE;"));
+    assert!(out_scalar.contains("DISPLAY=BADGE"));
+
+    // 3. Outbound serialization also defensively tolerates Stalwart boolean Set format
+    let mut links_set = BTreeMap::new();
+    links_set.insert(
+        "k1".to_string(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/badge.png",
+            "rel": "icon",
+            "display": { "badge": true },
+            "contentType": "image/png"
+        }),
+    );
+    let ev_set = CalendarEvent {
+        id: Some("link-display-test-2".into()),
+        start: Some("2026-10-15T10:00:00Z".to_string()),
+        links: Some(links_set),
+        ..CalendarEvent::default()
+    };
+    let out_set = event_to_ical(&ev_set);
+    assert!(out_set.contains("IMAGE;"));
+    assert!(out_set.contains("DISPLAY=BADGE"));
+}
+
+#[test]
+fn differential_oracle_links_rel_enclosure_omission_and_default_semantics() {
+    // Audit divergence 371: Link relation default omission on wire payload vs explicit rel: "enclosure":
+    // RFC 5545 Section 3.8.1.1 ATTACH vs RFC 8984 Section 1.4.11 / Section 4.2.7 Link rel.
+
+    // 1. Inbound ATTACH parses without explicit rel: "enclosure", exploiting RFC 8984 default value omission
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:link-rel-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Link Rel Test\r\n",
+        "ATTACH;FMTTYPE=application/pdf;SIZE=102400:https://example.com/doc.pdf\r\n",
+        "IMAGE;VALUE=URI;FMTTYPE=image/png:https://example.com/logo.png\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let links = ev.links.as_ref().expect("links present");
+    assert_eq!(links.len(), 2);
+
+    let attach_link = links
+        .values()
+        .find(|l| l["href"] == "https://example.com/doc.pdf")
+        .expect("attach link found");
+    // Default rel: "enclosure" is omitted from the JSON map
+    assert_eq!(attach_link.get("rel"), None);
+    assert_eq!(attach_link["size"], 102400);
+
+    let image_link = links
+        .values()
+        .find(|l| l["href"] == "https://example.com/logo.png")
+        .expect("image link found");
+    assert_eq!(image_link["rel"], "icon");
+
+    // 2. Outbound serialization renders link without rel (or with rel: "enclosure") as ATTACH
+    let out = event_to_ical(&ev);
+    let attach_line = content_line(&out, "ATTACH");
+    assert!(attach_line.contains("https://example.com/doc.pdf"));
+    assert!(attach_line.contains("FMTTYPE=application/pdf"));
+    assert!(attach_line.contains("SIZE=102400"));
+    assert!(without(&out, "ATTACH;VALUE=URI"));
+}
