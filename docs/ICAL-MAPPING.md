@@ -7088,4 +7088,68 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.368 Divergence 368: `iCalendar`, `properties`, `convertedProperties`, and Vendor Extension AST Isolation vs Clean Domain Boundary: RFC 8984 and draft-ietf-calext-jscalendar-icalendar Section 4 vs Typed `CalendarEvent` Fields and JMAP Client Domain Isolation
+
+- **Observed Behavior**:
+  Preserving unmapped properties and conversion metadata between RFC 5545 vendor extensions (`X-` properties) and JSCalendar RFC 8984 / draft-ietf-calext-jscalendar-icalendar Section 4:
+  1. Stalwart AST container synthesis: In Stalwart's `CalendarEvent/parse` implementation, every parsed event with unmapped properties (such as `x-moz-generation`, `x-moz-lastack`, `x-apple-travel-advisory-behavior`, `x-microsoft-cdo-busystatus`, or `x-sogo-component-created`) or converted structures (such as `duration` derived from `DTEND`, or `links/.../href` from `ATTACH`) synthesizes an `iCalendar` object containing raw AST entries (`name: "vevent"`, `properties: [...]`, `convertedProperties: {...}`).
+  2. Clean typed domain model (`jmap-ical`): In `jmap-ical`, `read_vevent` maps standard calendar properties into strongly typed `CalendarEvent` fields. Unmapped vendor `X-` properties are intentionally dropped on import rather than synthesized into an unvetted AST container.
+  3. Serialization purity (`event_to_ical`): Outbound serialization renders canonical RFC 5545 lines and Evolution-specific round-trip annotations (`X-EVOLUTION-...`, `X-JMAP-...`) without echoing unverified vendor AST blobs. Deserialized unknown properties from JMAP JSON are safely held in `CalendarEvent.extra` without leaking into standard properties.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.8.2 (`Non-standard Properties`).
+  2. RFC 8984 Section 1.4 (`Type Signatures`) and Section 4 (`Properties of Calendar Objects`).
+  3. draft-ietf-calext-jscalendar-icalendar Section 4 (`iCalendar Property`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by clean typed domain modeling, storage efficiency, and isolation from arbitrary vendor metadata. Drops unmapped vendor AST lines on component import to prevent cache bloat and unexpected side effects in Evolution Data Server.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.369 Divergence 369: `read_alert`, `ACTION:AUDIO`, `ACTION:EMAIL`, and `AbsoluteTrigger`: Alarm Action Scope Gating and Relative vs Absolute Trigger Semantics: RFC 5545 Section 3.6.6 `VALARM` (`ACTION:AUDIO`, `ACTION:EMAIL`, `ACTION:DISPLAY`), Section 3.8.6.3 `TRIGGER` (`VALUE=DATE-TIME`) vs RFC 8984 Section 4.5 `Alert`, Section 4.5.2 `OffsetTrigger`, and Section 4.5.3 `AbsoluteTrigger`
+
+- **Observed Behavior**:
+  Translating reminder alarms between RFC 5545 (`VALARM`) and JSCalendar RFC 8984 Section 4.5 (`Alert`, `OffsetTrigger`, `AbsoluteTrigger`):
+  1. Inbound action gating (`read_alert`): RFC 5545 Section 3.6.6 defines `ACTION` as `DISPLAY`, `AUDIO`, or `EMAIL`. In `jmap-ical`, `read_alert` strictly requires `ACTION:DISPLAY`. Audio and email alerts are safely dropped on import, preventing unexpected audio playback or unintended email transmission cascades in desktop clients.
+  2. Relative vs absolute trigger gating: In `jmap-ical`, `read_alert` accepts only relative duration offsets (`OffsetTrigger`), resolving `TRIGGER` via `stated_offset`. Absolute date-time triggers (`TRIGGER;VALUE=DATE-TIME`) are dropped because absolute moments cannot adapt when events are rescheduled or moved across timezones, and Evolution Data Server (libecal) models alarms as relative offsets from start or end.
+  3. Outbound rendering (`drawn_alert`): Only renders `ACTION:DISPLAY` components with relative offset triggers, ensuring full round-trip consistency with desktop notification engines.
+  4. In contrast, Stalwart's `CalendarEvent/parse` ingests audio and email alarms, and converts `VALUE=DATE-TIME` triggers into `AbsoluteTrigger` objects (`{ "@type": "AbsoluteTrigger", "when": "..." }`).
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`), Section 3.8.6.1 (`Action`), and Section 3.8.6.3 (`Trigger`).
+  2. RFC 8984 Section 4.5.1 (`Alert`), Section 4.5.2 (`OffsetTrigger`), and Section 4.5.3 (`AbsoluteTrigger`).
+- **Adjudication**:
+  Conforming specification adaptation and desktop client execution safety. Restricts alarms to display actions with relative offset triggers to match EDS alarm capabilities and eliminate audio/email notification hazards.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.370 Divergence 370: `IMAGE`, `display`, String Scalar vs Boolean Set Representation, and Defensive Parameter Serialization: RFC 7986 Section 5.10 `IMAGE`, Section 9.1 `DISPLAY` Parameter vs RFC 8984 Section 1.4.11 / Section 4.2.7 `Link` `display`
+
+- **Observed Behavior**:
+  Translating image link display styling between RFC 7986 (`IMAGE;DISPLAY=...`) and JSCalendar RFC 8984 Section 4.2.7 (`display`):
+  1. Scalar display token mapping (`read_links`): RFC 7986 Section 5.10 defines the `DISPLAY` parameter on `IMAGE` (`BADGE`, `GRAPHIC`, `FULLSIZE`, `THUMBNAIL`). In `jmap-ical`, `read_links` maps these parameters to scalar strings (`display: "badge"`), strictly conforming to RFC 8984 Section 1.4.11 and desktop UI requirements.
+  2. Defensive outbound serialization (`drawn_link` and `spelled`): In outbound rendering, `drawn_link` formats `IMAGE` parameters using `spelled(&LINK_DISPLAYS, link.get("display"))`. The `spelled` helper defensively accepts both scalar `Value::String` and boolean Set representations (`Value::Object` with `{ "<token>": true }`), ensuring seamless interoperability even if a server provides the Set format.
+  3. In contrast, Stalwart's `CalendarEvent/parse` emits a boolean Set (`"display": { "badge": true }`), diverging from the scalar String specification in RFC 8984 Section 1.4.11.
+- **Specification and Architectural Context**:
+  1. RFC 7986 Section 5.10 (`Image Property`) and Section 9.1 (`Display Parameter`).
+  2. RFC 8984 Section 1.4.11 (`Link`) and Section 4.2.7 (`links`).
+  3. draft-ietf-calext-jscalendarbis Section 2.1.11 (`Link`).
+- **Adjudication**:
+  Conforming specification boundary and defensive parameter serialization. Strictly conforms to RFC 8984 Section 1.4.11 scalar string specification on import, while defensively tolerating Stalwart's boolean set format during outbound serialization.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.371 Divergence 371: `rel: "enclosure"`, `ATTACH`, Link Relation Defaults, and Default Value Wire Payload Omission: RFC 5545 Section 3.8.1.1 `ATTACH` vs RFC 8984 Section 1.4.11 / Section 4.2.7 `Link` `rel`
+
+- **Observed Behavior**:
+  Managing relation metadata on external resource links between RFC 5545 (`ATTACH`) and JSCalendar RFC 8984 Section 4.2.7 (`Link.rel`):
+  1. Default relation omission (`read_links`): RFC 8984 Section 1.4.11 specifies that the default value for `Link.rel` is `"enclosure"`. In `jmap-ical`, `read_links` omits `rel` when mapping standard `ATTACH` lines, leveraging default value omission to produce compact payloads and minimize diff churn during synchronization. For `IMAGE` properties, `read_links` explicitly sets `rel: "icon"` to distinguish graphics from generic enclosures.
+  2. Outbound serialization (`drawn_link`): Treats any link without an explicit `rel`, or carrying `rel: "enclosure"`, as an `ATTACH` component, ensuring full round-trip preservation.
+  3. In contrast, Stalwart's `CalendarEvent/parse` explicitly writes `"rel": "enclosure"` on every parsed `ATTACH` entry.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.1 (`Attachment`).
+  2. RFC 8984 Section 1.4.11 (`Link`) and Section 4.2.7 (`links`).
+- **Adjudication**:
+  Conforming specification adaptation and wire payload optimization. Exploits RFC default value omission to produce compact representations while preserving round-trip attachment fidelity.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
