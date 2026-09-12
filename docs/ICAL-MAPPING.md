@@ -7400,6 +7400,69 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.388 Divergence 388: `participants`, `ORGANIZER`, `ATTENDEE`, `ROLE`, `CUTYPE`, and `PARTSTAT`: Participant Roster Mapping, Owner / Attendee Duality, and Outbound Scheduling Wire Format vs Inbound AST Isolation: RFC 5545 Section 3.8.4.1 `ATTENDEE`, Section 3.8.4.3 `ORGANIZER` vs RFC 8984 Section 4.4.6 `participants`
+
+- **Observed Behavior**:
+  Translating participant rosters and meeting organizers between RFC 5545 (`ORGANIZER`, `ATTENDEE`) and JSCalendar RFC 8984 Section 4.4.6 (`participants`):
+  1. Inbound scheduling boundary isolation (`read_vevent`): In `jmap-ical`, `read_vevent` drops `ORGANIZER` and `ATTENDEE` lines on component import, leaving `participants` set to `None`. Modifying participant attendance or responses represents an iTIP transaction (RFC 5546 `REQUEST`, `REPLY`), which the client bridge does not orchestrate. Suppressing `participants` on import ensures that client-side updates do not patch `/participants` or rewrite the server-managed invitation state without notifying participants.
+  2. Oracle participant synthesis: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` parses both `ORGANIZER` and `ATTENDEE` into a synthetic `participants` map with generated random UUID keys (such as `"50175018-99c4-5691-b0e3-bdb7d3a3e7ee"` in `evolution_calendar_export.ics`). Stalwart also populates `organizerCalendarAddress` and assigns vendor role flags (`"required": true` instead of RFC 8984 `"attendee": true`).
+  3. Outbound dual owner and attendee serialization (`drawn_participants`): On outbound rendering, `drawn_participants` maps `Participant` records to RFC 5545 components. An owner with no additional attendee role emits only an `ORGANIZER` line. When an owner is also an attendee (holding `roles: { "owner": true, "attendee": true }`), `drawn_participants` emits both `ORGANIZER` and `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=...` lines, strictly honoring RFC 5545 Section 3.6.1 organizer and attendee separation.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.1 (`Attendee`) and Section 3.8.4.3 (`Organizer`).
+  2. RFC 5546 (`iTIP - iCalendar Transport-Independent Interoperability Protocol`).
+  3. RFC 8984 Section 4.4.6 (`participants`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by scheduling protocol safety and RFC 8984 role compliance. Dropping participant rosters on inbound import protects calendar servers from unsolicited guest list mutations, while outbound rendering correctly serializes dual owner and attendee roles.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.389 Divergence 389: `recurrenceRule`, `RecurrenceRule`, `NDay`, `@type` Annotation, and Case-Insensitive Frequency Tokens: RFC 5545 Section 3.8.5.3 `RRULE` vs RFC 8984 Section 4.3.1 `recurrenceRules` / Section 4.3.2 `NDay` vs draft-ietf-calext-jscalendarbis Contextual `@type` Elision
+
+- **Observed Behavior**:
+  Managing recurrence rule typing and component formatting between RFC 5545 (`RRULE`) and JSCalendar RFC 8984 (`RecurrenceRule`, `NDay`):
+  1. Inbound schema type stamping (`rrule_to_rule`, `to_nday`): In `jmap-ical`, `rrule_to_rule` sets `rule_type: Some("RecurrenceRule".to_owned())` on the parsed `RecurrenceRule`, and `to_nday` sets `day_type: Some("NDay".to_owned())` on every `byDay` element. This adheres strictly to RFC 8984 Section 4.3.1 and Section 4.3.2 schema definitions.
+  2. Oracle contextual type elision: In contrast, Stalwart v1.0.0 omits `@type` from `recurrenceRule` and from `byDay` objects across all parsed fixtures, relying on contextual type deduction allowed in draft-ietf-calext-jscalendarbis.
+  3. Outbound tolerant deserialization and canonical ordering (`rule_to_rrule`): On outbound serialization, `rule_to_rrule` deserializes both typed and untyped representations without error. It emits canonical uppercase frequency tokens (`FREQ=WEEKLY`, `FREQ=MONTHLY`) and orders recurrence parts according to libical conventions (`COUNT` before `INTERVAL`), ensuring seamless compatibility with Evolution Data Server.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.5.3 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`recurrenceRules`) and Section 4.3.2 (`NDay`).
+  3. draft-ietf-calext-jscalendarbis Section 3.3.3 (`RecurrenceRule`).
+- **Adjudication**:
+  Conforming specification boundary and tolerant deserialization. Explicit schema type stamping maintains strict compliance with RFC 8984, while outbound parsing tolerates server-side contextual type elision.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.390 Divergence 390: `virtualLocations`, `CONFERENCE`, `LABEL`, `FEATURE`, Lexicographical Parameter Ordering, and `VALUE=URI` Enforcement: RFC 7986 Section 5.11 `CONFERENCE` vs RFC 8984 Section 4.2.6 `virtualLocations`
+
+- **Observed Behavior**:
+  Ingesting and rendering virtual meeting endpoints between RFC 7986 Section 5.11 (`CONFERENCE`) and JSCalendar RFC 8984 Section 4.2.6 (`virtualLocations`):
+  1. Inbound feature extraction and key determinism (`read_virtual_locations`): In `jmap-ical`, `read_virtual_locations` parses `CONFERENCE`, `X-CONFERENCE`, and Teams meeting properties. It extracts `FEATURE` parameter tokens into a normalized boolean map (`features: {"audio": true, "video": true, "chat": true}`) and extracts `LABEL` into `VirtualLocation.name`. Fallback keys are allocated deterministically (`v1`, `v2`), and explicit keys (`X-JMAP-KEY`) are retained.
+  2. Mutual semantic consensus with oracle: Stalwart v1.0.0 and `jmap-ical` achieve identical semantic consensus on `uri`, `name`, and boolean feature flags across all fixtures. Stalwart differs only in allocating random UUID keys instead of deterministic keys.
+  3. Outbound wire parameter enforcement (`drawn_conference`): Outbound rendering enforces RFC 7986 Section 5.11 grammar by always writing `VALUE=URI`. It sorts feature tokens in stable lexicographical order (`AUDIO,CHAT,VIDEO`) per `CONFERENCE_FEATURES`, emits `LABEL` when present, and preserves `X-JMAP-KEY` for lossless client round-trips.
+- **Specification and Architectural Context**:
+  1. RFC 7986 Section 5.11 (`Conference Information`) and Section 5.12 (`Feature Parameter`).
+  2. RFC 8984 Section 4.2.6 (`virtualLocations`).
+- **Adjudication**:
+  Conforming specification adaptation and grammar compliance. Mutual consensus on meeting URIs and features ensures complete interoperability, while mandatory `VALUE=URI` stamping and deterministic key retention satisfy RFC 7986 and EDS cache requirements.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.391 Divergence 391: `alerts`, `VALARM`, `DESCRIPTION` Stripping, Notification Action Scope Gating, and Reminder Title Inheritance: RFC 5545 Section 3.6.6 `VALARM` and Section 3.8.1.5 `DESCRIPTION` vs RFC 8984 Section 4.5 `Alert`
+
+- **Observed Behavior**:
+  Translating reminder alarms and associated text descriptions between RFC 5545 (`VALARM`) and JSCalendar RFC 8984 Section 4.5 (`Alert`):
+  1. Inbound description stripping (`read_alerts`): In RFC 5545 Section 3.6.6, a `VALARM` component with `ACTION:DISPLAY` requires a `DESCRIPTION` property. In JSCalendar RFC 8984 Section 4.5, an `Alert` object has no description property because the alert displays the parent event's title by default. In `jmap-ical`, `read_alerts` strips the redundant RFC 5545 `DESCRIPTION` property on import instead of polluting `extra` or creating unmodeled fields.
+  2. Oracle AST preservation: In contrast, Stalwart v1.0.0 parses `VALARM` into an `Alert` object and stores the raw `DESCRIPTION` property inside an `iCalendar.properties` AST table.
+  3. Outbound description synthesis (`drawn_alert`): When serializing to RFC 5545 wire format, `drawn_alert` synthesizes the mandatory `DESCRIPTION` property using the event's title (or fallback text). This ensures the emitted `VALARM` strictly complies with RFC 5545 Section 3.6.6 while keeping the internal JSCalendar data model minimal and clean.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`) and Section 3.8.1.5 (`Description`).
+  2. RFC 8984 Section 4.5 (`Alert`) and Section 4.5.2 (`OffsetTrigger`).
+- **Adjudication**:
+  Conforming specification adaptation and schema boundary cleanliness. Stripping redundant `VALARM` descriptions on import adheres to RFC 8984 domain cleanliness, while synthesizing `DESCRIPTION` on export satisfies RFC 5545 mandatory alarm grammar.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
