@@ -6881,3 +6881,70 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.356 Divergence 356: `duration`, `read_duration`, `stated_duration`, `period_length`, `DTEND`, and `DURATION`: Duration Ingestion, Wall-Clock DTEND Fallback, ISO 8601 Relaxed Unit Ordering, and Period Length Evaluation: RFC 5545 Section 3.8.2.5 `DURATION` and Section 3.8.2.2 `DTEND` vs RFC 8984 Section 4.1.7 `duration`, Positive Non-Zero Span Enforcement, Leading Sign Normalization, and Outbound `DTEND` Omission
+
+- **Observed Behavior**:
+  Translating event durations between RFC 5545 (`DURATION`, `DTEND`) and JSCalendar RFC 8984 Section 4.1.7 (`duration`) requires handling explicit duration values, wall-clock fallback calculations, and strict unit ordering:
+  1. Priority of explicit duration (`read_duration`): When a `VEVENT` contains an explicit `DURATION` line, `read_duration` evaluates it via `stated_duration`. It supports standard ISO 8601 durations across weeks, days, hours, minutes, and seconds (`W D H M S`), with leading plus signs (`+`) stripped as redundant.
+  2. Wall-clock end fallback (`period_length`): When `DURATION` is omitted and `DTEND` is provided, `read_duration` falls back to calculating the wall-clock difference between `DTSTART` and `DTEND`. Durations that evaluate to zero or negative spans are suppressed, returning `None`.
+  3. Outbound serialization (`vevent_of`): Renders `DURATION` lines directly from `event.duration`. In accordance with JSCalendar's duration-centric model, `DTEND` is omitted from outbound iCalendar streams, as the end instant is mathematically derived from start and duration.
+  4. In contrast, Stalwart's `CalendarEvent/parse` maps `DTEND` and `DURATION` by synthesizing conversion metadata in `iCalendar.convertedProperties.duration = { "name": "dtend" }` and emits full duration strings even on multi-day all-day events where desktop clients expect `VALUE=DATE` end boundaries.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.2.2 (`Date-Time End`) and Section 3.8.2.5 (`Duration`).
+  2. RFC 8984 Section 1.4.6 (`Duration`) and Section 4.1.7 (`duration`).
+  3. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and temporal duration integrity. Prioritizes explicit `DURATION`, falls back cleanly to wall-clock calculation for `DTEND`, suppresses non-positive durations, and emits clean `DURATION` lines without redundant `DTEND` properties.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.357 Divergence 357: `description`, `title`, `SUMMARY`, and `DESCRIPTION`: Text Property Ingestion, Multi-Line Formatting, Backslash Escaping, and Empty String Suppression: RFC 5545 Section 3.8.1.5 `DESCRIPTION` and Section 3.8.1.12 `SUMMARY` vs RFC 8984 Section 4.1.3 `title` and Section 4.1.4 `description`, Empty String Filtering (`None` vs `""`), Round-Trip Escaping Fidelity, and Override Instance Patch Nullification
+
+- **Observed Behavior**:
+  Mapping textual metadata between RFC 5545 (`SUMMARY`, `DESCRIPTION`) and JSCalendar RFC 8984 (`title`, `description`) requires managing delimiter escaping, multi-line formatting, and empty string handling:
+  1. Inbound text mapping (`read_vevent`): Maps `SUMMARY` to `event.title` and `DESCRIPTION` to `event.description`. Empty strings (`""`) are filtered out, returning `None` instead of blank string values. This ensures that unstated or whitespace-cleared fields do not inflate JSON objects or trigger spurious field diffs.
+  2. Delimiter and newline escaping: Standard iCalendar escaping rules for commas, semicolons, backslashes, and newlines (`\n`, `\,`, `\;`, `\\`) are parsed into native UTF-8 strings on import and restored during outbound serialization.
+  3. Outbound text rendering (`vevent_of`): Emits `SUMMARY` and `DESCRIPTION` lines only when the respective property is populated and non-empty, preventing blank lines in exported calendars.
+  4. Recurrence override instance nullification (`instance_patch`): When a recurrence series specifies a title or description and a detached instance clears the property, `instance_patch` emits `"title": null` or `"description": null`, explicitly resetting the occurrence rather than inserting empty strings.
+  5. In contrast, Stalwart's `CalendarEvent/parse` frequently preserves empty string properties (`""`), leaves raw unescaped newlines in intermediate AST structures, or omits override nullification deltas.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.5 (`Description`) and Section 3.8.1.12 (`Summary`).
+  2. RFC 8984 Section 4.1.3 (`title`) and Section 4.1.4 (`description`).
+  3. RFC 8984 Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and text data cleanliness. Filters empty strings to `None`, preserves escaped delimiters across round-trips, and enforces override patch nullification.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.358 Divergence 358: `fold_overlong_lines`, `MAX_LINE_OCTETS = 75`, CRLF Formatting, and Line Folding / Unfolding Round-Trip Invariance: RFC 5545 Section 3.1 Content Lines (75 Octets Maximum Line Length, CRLF Termination, Space Continuation) vs RFC 8984 Unbounded JSON Strings, Odd Backslash Escape Preservation, and Multi-Byte UTF-8 Code Point Integrity
+
+- **Observed Behavior**:
+  Serializing text across the boundary between RFC 5545 content lines and RFC 8984 JSON objects requires enforcing strict octet budgets and line folding discipline:
+  1. Strict 75-octet boundary (`fold_overlong_lines`): RFC 5545 Section 3.1 mandates that content lines SHOULD NOT exceed 75 octets excluding line separators, folding longer lines by inserting CRLF followed by a single whitespace character. In `jmap-ical`, lines exceeding `MAX_LINE_OCTETS = 75` are folded with `\r\n `, with continuation lines budgeted at 74 octets to account for the leading continuation space.
+  2. Multi-byte UTF-8 character protection: Line folding checks `is_char_boundary` before cutting, ensuring that multi-byte code points (such as international scripts and emoji) are never fragmented mid-character across fold boundaries.
+  3. Escape sequence protection: When a cut point lands inside an odd run of backslashes, the cut steps backward to keep the escape pair intact on the same physical line.
+  4. In contrast, external calendar emitters and differential oracles frequently produce overlong lines (>75 octets) or break multi-byte characters when folding.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.1 (`Content Lines`).
+  2. RFC 8984 Section 1.3 (`Format and MIME Type`).
+- **Adjudication**:
+  Conforming specification boundary and physical line transport robustness. Enforces 75-octet line folding, preserves multi-byte UTF-8 character boundaries, and prevents escape sequence truncation.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.359 Divergence 359: `check_structure`, `parse_ical`, Stream Depth Bounding, and Component Nesting Integrity: RFC 5545 Section 3.4 / Section 3.6 Component Nesting Invariants, Delimiter Matching (`BEGIN`/`END`), `MAX_DEPTH = 32` Recursion Defense, and Trailing Content Rejection
+
+- **Observed Behavior**:
+  Enforcing structural integrity during iCalendar parsing requires validating component nesting hierarchies, defending against stack overflow attacks, and isolating trailing garbage:
+  1. Delimiter pair verification (`check_structure`): Verifies that every `BEGIN:<component>` line is closed by a strictly matching `END:<component>` line. Mismatched delimiters return `Err(ICalError::Mismatched { expected, found })`, and unclosed components return `Err(ICalError::Unterminated)`.
+  2. Component nesting depth bounding (`MAX_DEPTH = 32`): Component trees deeper than 32 levels fail closed with `Err(ICalError::TooDeep)`. Because calendar component trees are dropped recursively, depth limits protect the host application from stack exhaustion caused by maliciously nested inputs.
+  3. Trailing content rejection: Extra data appearing after the terminating `END:VCALENDAR` line returns `Err(ICalError::Trailing)`. This prevents partial parse corruption when multiple calendar objects are concatenated or corrupted streams are supplied.
+  4. In contrast, Stalwart's `CalendarEvent/parse` returns generic `notParsable` status without structural error discrimination or accepts deeply nested components into raw AST containers.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.4 (`iCalendar Object`) and Section 3.6 (`Calendar Components`).
+  2. CWE-674 (`Uncontrolled Recursion`).
+- **Adjudication**:
+  Conforming specification boundary and defensive parser hardening. Enforces strict delimiter matching, bounds component nesting depth to prevent stack exhaustion, and rejects trailing stream corruption.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
