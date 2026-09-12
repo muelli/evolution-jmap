@@ -45267,3 +45267,219 @@ fn differential_oracle_apple_structured_location_vendor_extension_isolation() {
     assert!(!out.contains("X-APPLE-STRUCTURED-LOCATION"));
     assert!(!out.contains("X-APPLE-TRAVEL-ADVISORY-BEHAVIOR"));
 }
+
+#[test]
+fn differential_oracle_participant_roster_and_organizer_dual_role_serialization() {
+    // Audit divergence 388: participants, ORGANIZER, ATTENDEE, ROLE, CUTYPE,
+    // and PARTSTAT: participant roster mapping, owner / attendee duality,
+    // and outbound scheduling wire format vs inbound AST isolation:
+    // RFC 5545 Section 3.8.4.1 ATTENDEE, Section 3.8.4.3 ORGANIZER vs
+    // RFC 8984 Section 4.4.6 participants.
+
+    // 1. Inbound parsing drops ORGANIZER and ATTENDEE (participants is None)
+    // to isolate iTIP scheduling state (RFC 5546) and prevent unsolicited
+    // invitations from being sent by client bridge saves.
+    let sogo_ics = include_str!("fixtures/sogo_calendar_export.ics");
+    let ev_sogo = ical_to_event(sogo_ics).expect("parses sogo calendar");
+    assert!(ev_sogo.participants.is_none());
+
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird calendar");
+    assert!(ev_tb.participants.is_none());
+
+    // 2. Outbound serialization: an owner with no other role gets only ORGANIZER
+    let mut parts_owner_only = BTreeMap::new();
+    parts_owner_only.insert(
+        "p1".to_string(),
+        json!({
+            "@type": "Participant",
+            "name": "Alicia Vance",
+            "calendarAddress": "mailto:alicia.vance@example.com",
+            "roles": { "owner": true }
+        }),
+    );
+    let ev_owner_only = CalendarEvent {
+        participants: Some(parts_owner_only),
+        start: Some("2026-11-10T09:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        title: Some("Organizer Only Meeting".to_owned()),
+        ..Default::default()
+    };
+    let out_owner_only = event_to_ical(&ev_owner_only);
+    assert!(
+        out_owner_only
+            .contains("ORGANIZER;CN=\"Alicia Vance\":mailto:alicia.vance@example.com\r\n")
+    );
+    assert!(!out_owner_only.contains("ATTENDEE;CN=\"Alicia Vance\""));
+
+    // 3. Outbound serialization: an owner with required attendee role gets BOTH
+    // ORGANIZER and ATTENDEE lines, conforming to RFC 5545 Section 3.6.1.
+    let mut parts_dual = BTreeMap::new();
+    parts_dual.insert(
+        "p1".to_string(),
+        json!({
+            "@type": "Participant",
+            "name": "Arthur Dent",
+            "calendarAddress": "mailto:arthur.dent@earth.example",
+            "kind": "individual",
+            "participationStatus": "accepted",
+            "roles": { "owner": true, "attendee": true }
+        }),
+    );
+    parts_dual.insert(
+        "p2".to_string(),
+        json!({
+            "@type": "Participant",
+            "name": "Trillian Astra",
+            "calendarAddress": "mailto:trillian@galaxy.example",
+            "kind": "individual",
+            "participationStatus": "accepted",
+            "roles": { "attendee": true }
+        }),
+    );
+    let ev_dual = CalendarEvent {
+        participants: Some(parts_dual),
+        start: Some("2026-11-10T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        title: Some("Dual Role Planning Session".to_owned()),
+        ..Default::default()
+    };
+    let out_dual = event_to_ical(&ev_dual);
+    let org_line = content_line(&out_dual, "ORGANIZER;CN=\"Arthur Dent\"");
+    assert_eq!(
+        org_line,
+        "ORGANIZER;CN=\"Arthur Dent\":mailto:arthur.dent@earth.example"
+    );
+    let att_arthur = content_line(&out_dual, "ATTENDEE;CN=\"Arthur Dent\"");
+    assert_eq!(
+        att_arthur,
+        "ATTENDEE;CN=\"Arthur Dent\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:arthur.dent@earth.example"
+    );
+    let att_trillian = content_line(&out_dual, "ATTENDEE;CN=\"Trillian Astra\"");
+    assert_eq!(
+        att_trillian,
+        "ATTENDEE;CN=\"Trillian Astra\";CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED:mailto:trillian@galaxy.example"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_rule_and_nday_schema_typing() {
+    // Audit divergence 389: recurrenceRule, RecurrenceRule, NDay, @type
+    // annotation, and case-insensitive frequency tokens: RFC 5545 Section 3.8.5.3
+    // RRULE vs RFC 8984 Section 4.3.1 recurrenceRules / Section 4.3.2 NDay
+    // vs draft-ietf-calext-jscalendarbis contextual @type elision.
+
+    // 1. Inbound parsing explicitly sets @type: "RecurrenceRule" and @type: "NDay"
+    // conforming strictly to RFC 8984 Sections 4.3.1 and 4.3.2.
+    let outlook_ics = include_str!("fixtures/outlook_m365_export.ics");
+    let ev_outlook = ical_to_event(outlook_ics).expect("parses outlook calendar");
+    let rule = ev_outlook
+        .recurrence_rule
+        .as_ref()
+        .expect("recurrence rule present");
+    assert_eq!(rule.rule_type.as_deref(), Some("RecurrenceRule"));
+    assert_eq!(rule.frequency, "monthly");
+    assert_eq!(rule.interval, Some(1));
+    let by_day = rule.by_day.as_ref().expect("by_day present");
+    assert_eq!(by_day.len(), 1);
+    assert_eq!(by_day[0].day_type.as_deref(), Some("NDay"));
+    assert_eq!(by_day[0].day, "su");
+    assert_eq!(by_day[0].nth_of_period, Some(3));
+
+    // 2. Outbound serialization deserializes both typed and untyped representations
+    // tolerating Stalwart's contextual @type omission while producing canonical
+    // uppercase RFC 5545 RRULE lines with libical component ordering (COUNT before INTERVAL).
+    let untyped_json = json!({
+        "frequency": "weekly",
+        "interval": 2,
+        "count": 6,
+        "byDay": [
+            { "day": "mo" }
+        ]
+    });
+    let parsed_rule: RecurrenceRule = serde_json::from_value(untyped_json)
+        .expect("deserializes untyped RecurrenceRule from server");
+    assert_eq!(parsed_rule.rule_type, None);
+
+    let ev_recur = CalendarEvent {
+        start: Some("2026-11-10T09:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        title: Some("Biweekly Standup".to_owned()),
+        recurrence_rule: Some(parsed_rule),
+        ..Default::default()
+    };
+    let out_recur = event_to_ical(&ev_recur);
+    assert!(out_recur.contains("RRULE:FREQ=WEEKLY;COUNT=6;INTERVAL=2;BYDAY=MO\r\n"));
+}
+
+#[test]
+fn differential_oracle_conference_virtual_locations_value_uri_and_feature_sorting() {
+    // Audit divergence 390: virtualLocations, CONFERENCE, LABEL, FEATURE,
+    // lexicographical parameter ordering, and VALUE=URI enforcement:
+    // RFC 7986 Section 5.11 CONFERENCE vs RFC 8984 Section 4.2.6 virtualLocations.
+
+    // 1. Inbound parsing extracts CONFERENCE into typed VirtualLocation with
+    // boolean feature map.
+    let sogo_ics = include_str!("fixtures/sogo_calendar_export.ics");
+    let ev_sogo = ical_to_event(sogo_ics).expect("parses sogo calendar");
+    let vlocs = ev_sogo
+        .virtual_locations
+        .as_ref()
+        .expect("virtualLocations present");
+    assert_eq!(vlocs.len(), 1);
+    let vloc = &vlocs["v1"];
+    assert_eq!(
+        vloc.get("@type").and_then(Value::as_str),
+        Some("VirtualLocation")
+    );
+    assert_eq!(
+        vloc.get("uri").and_then(Value::as_str),
+        Some("https://visio.sorbonne-universite.fr/jmap-colloquium")
+    );
+    let features = vloc
+        .get("features")
+        .and_then(Value::as_object)
+        .expect("features object");
+    assert_eq!(features.get("audio").and_then(Value::as_bool), Some(true));
+    assert_eq!(features.get("video").and_then(Value::as_bool), Some(true));
+    assert_eq!(features.get("chat").and_then(Value::as_bool), Some(true));
+
+    // 2. Outbound serialization enforces RFC 7986 Section 5.11 VALUE=URI parameter,
+    // sorts feature tokens lexicographically (AUDIO,CHAT,VIDEO), and preserves X-JMAP-KEY.
+    let out_sogo = event_to_ical(&ev_sogo);
+    let conf_line = content_line(&out_sogo, "CONFERENCE;");
+    assert_eq!(
+        conf_line,
+        "CONFERENCE;VALUE=URI;FEATURE=AUDIO,CHAT,VIDEO;X-JMAP-KEY=v1:https://visio.sorbonne-universite.fr/jmap-colloquium"
+    );
+}
+
+#[test]
+fn differential_oracle_alert_description_stripping_and_wire_synthesis() {
+    // Audit divergence 391: alerts, VALARM, DESCRIPTION stripping,
+    // notification action scope gating, and reminder title inheritance:
+    // RFC 5545 Section 3.6.6 VALARM and Section 3.8.1.5 DESCRIPTION vs
+    // RFC 8984 Section 4.5 Alert.
+
+    // 1. Inbound parsing drops VALARM DESCRIPTION text because JSCalendar Alert
+    // (RFC 8984 Section 4.5) has no description property (it displays the event title).
+    let tb_ics = include_str!("fixtures/thunderbird_calendar_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird calendar");
+    let alerts = ev_tb.alerts.as_ref().expect("alerts present");
+    assert_eq!(alerts.len(), 1);
+    let alert = &alerts["a1"];
+    assert_eq!(alert.get("@type").and_then(Value::as_str), Some("Alert"));
+    assert_eq!(alert.get("action").and_then(Value::as_str), Some("display"));
+    assert!(alert.get("description").is_none());
+    assert!(ev_tb.extra.is_empty());
+
+    // 2. Outbound serialization synthesizes the mandatory RFC 5545 Section 3.6.6
+    // DESCRIPTION property from the event title.
+    let out_tb = event_to_ical(&ev_tb);
+    assert!(out_tb.contains("BEGIN:VALARM\r\n"));
+    assert!(out_tb.contains("ACTION:DISPLAY\r\n"));
+    assert!(out_tb.contains("TRIGGER:-PT15M\r\n"));
+    assert!(out_tb.contains("DESCRIPTION:Thunderbird Release & Quality Sync\r\n"));
+    assert!(out_tb.contains("UID:a1\r\n"));
+    assert!(out_tb.contains("END:VALARM\r\n"));
+}
