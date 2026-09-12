@@ -7838,6 +7838,66 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.416 Divergence 416: `recurrenceOverrides`, `alerts`, Identical Alarm Roster Restatement Elision vs Full Component Duplication: RFC 5545 Section 3.6.6 `VALARM` vs RFC 8984 Section 4.5 `alerts` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Translating reminder alarm restatements on detached recurrence instances (`RECURRENCE-ID`):
+  1. Inbound alarm elision (`instance_patch`): In `thunderbird_detached_export.ics`, occurrence `2026-11-16T10:00:00` restates a `VALARM` component (`TRIGGER;VALUE=DURATION:-PT15M`, `ACTION:DISPLAY`), identical to the master recurring series. In `jmap-ical`, `instance_patch` compares `series.alerts` against `instance.alerts`. Because the alarm rosters are identical (`series.alerts == instance.alerts`), `instance_patch` elides `alerts` from the patch delta. In contrast, occurrence `2026-10-19T10:00:00` modifies the trigger to `-PT30M`, so `instance_patch` records the updated `alerts` map. Under RFC 8984 Section 4.3.4, properties omitted from an occurrence patch inherit their values from the master series.
+  2. Oracle standalone snapshots: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs duplicate standalone component objects for each occurrence, redundantly producing `"alerts": { "k1": { "@type": "Alert", ... } }` on occurrence `2026-11-16T10:00:00` without computing a minimal delta.
+  3. Outbound serialization inheritance (`modified_instance`, `vevent_of`): On outbound export, `modified_instance` applies the patch: with `alerts` omitted from the patch delta, it inherits `event.alerts` from the master series, and `vevent_of` renders `BEGIN:VALARM ... TRIGGER:-PT15M ... END:VALARM` on the detached `VEVENT`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`).
+  2. RFC 8984 Section 4.5 (`alerts`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and minimal patch scoping. Eliding unaltered alarm rosters conforms directly to RFC 8984 Section 4.3.4 property inheritance, reducing wire payload size and preventing redundant alarm trigger recalculations.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.417 Divergence 417: `recurrenceOverrides`, `duration`, Unchanged Occurrence Duration Restatement Elision vs Full Component Duplication: RFC 5545 Section 3.8.2.5 `DURATION`, Section 3.8.2.2 `DTEND` vs RFC 8984 Section 4.2.2 `duration` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Handling event duration across detached recurrence instances (`RECURRENCE-ID`):
+  1. Inbound duration elision (`instance_patch`): In `thunderbird_detached_export.ics`, the master series duration is `PT1H30M` (`10:00` to `11:30`). Detached occurrence `2026-11-16T10:00:00` defines `DTSTART:20261116T100000` and `DTEND:20261116T113000`, yielding an identical duration of `PT1H30M`. In `jmap-ical`, `instance_patch` compares `("duration", &series.duration, &instance.duration)`. Because `was == now`, `duration` is elided from the computed patch delta. In contrast, occurrence `2026-10-19T10:00:00` runs from `14:00` to `16:00` (`PT2H`); here `was != now`, so `instance_patch` records `"duration": "PT2H"`.
+  2. Oracle full-object duplication: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs duplicate standalone component objects for each occurrence, redundantly emitting `"duration": "PT1H30M"` on occurrence `2026-11-16T10:00:00`.
+  3. Outbound duration inheritance (`modified_instance`, `vevent_of`): On outbound serialization, `modified_instance` sets `instance.duration = event.duration` when `duration` is omitted from the patch. `vevent_of` renders the inherited duration boundary (`DTEND` or `DURATION:PT1H30M`) on the detached occurrence, while rendering the overridden length (`PT2H`) on modified sessions.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.2.5 (`Duration`) and Section 3.8.2.2 (`Date-Time End`).
+  2. RFC 8984 Section 4.2.2 (`duration`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and minimal delta computation. Eliding unaltered duration from occurrence patch deltas conforms to RFC 8984 Section 4.3.4 inheritance while preserving exact meeting lengths across desktop clients.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.418 Divergence 418: `recurrenceOverrides`, `start`, Scheduled Start Time Inheritance vs Redundant Start Time Restatement: RFC 5545 Section 3.8.2.4 `DTSTART`, Section 3.8.4.4 `RECURRENCE-ID` vs RFC 8984 Section 4.1.2 `start` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Managing occurrence start times across recurrence overrides (`RECURRENCE-ID`):
+  1. Inbound start time elision (`instance_patch`): In JSCalendar RFC 8984 Section 4.3.4, `recurrenceOverrides` is keyed by the occurrence's recurrence identifier (the scheduled start instant). In `thunderbird_detached_export.ics`, occurrence `2026-11-16T10:00:00` carries `RECURRENCE-ID:20261116T100000` and starts at `20261116T100000`. In `jmap-ical`, `instance_patch` checks `instance.start.filter(|start| *start != id)`. Because the start time equals the recurrence key (`*start == id`), `start` is elided from the patch delta. In contrast, occurrence `2026-10-19T10:00:00` reschedules the meeting from `10:00` to `14:00` (`DTSTART:20261019T140000`); because `*start != id`, `instance_patch` records `"start": "2026-10-19T14:00:00"`.
+  2. Oracle full-object duplication: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` emits standalone event snapshots, redundantly outputting `"start": "2026-11-16T10:00:00"` on the child event.
+  3. Outbound start time restoration (`modified_instance`, `vevent_of`): On outbound serialization, `modified_instance` defaults `start: Some(id.to_owned())`. If `patch` contains a rescheduled `start`, it overrides the initial value; if absent, the occurrence key provides the scheduled start time, and `vevent_of` emits the exact `DTSTART` line.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.2.4 (`Date-Time Start`) and Section 3.8.4.4 (`Recurrence ID`).
+  2. RFC 8984 Section 4.1.2 (`start`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and key-relative inheritance. Using the recurrence override map key as the default occurrence start time avoids redundant property serialization on non-rescheduled overrides while supporting arbitrary rescheduled instances.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.419 Divergence 419: `recurrenceOverrides`, `links`, `ATTACH`, Document Enclosure Inheritance vs Stateless Child Event Attachment Dropping: RFC 5545 Section 3.8.1.1 `ATTACH` vs RFC 8984 Section 4.2.7 `links`, Section 4.3.4 `PatchObject`, and `OVERRIDE_PROPERTIES`
+
+- **Observed Behavior**:
+  Translating document attachments and file enclosures across recurrence overrides (`RECURRENCE-ID`):
+  1. Inbound patch scoping and multi-valued map protection (`instance_patch`): In `thunderbird_detached_export.ics`, the master series defines `ATTACH;FMTTYPE=application/pdf;SIZE=153600:https://www.thunderbird.net/docs/rust-sync.pdf`. Detached occurrence components `2026-10-19T10:00:00` and `2026-11-16T10:00:00` omit `ATTACH`. In `jmap-ical`, `instance_patch` strictly confines patch computation to scalar fields and alert triggers in `OVERRIDE_PROPERTIES`, deliberately excluding `links`. As a result, the patch delta never contains a `links` property, ensuring that detached occurrences cleanly inherit the master series attachments.
+  2. Oracle stateless attachment dropping: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` parses detached components as independent standalone events. Because the detached `VEVENT` components do not repeat `ATTACH`, Stalwart's child event objects completely omit `links`. A client reading Stalwart's parsed override objects in isolation would observe missing meeting agendas and attachments.
+  3. Outbound attachment inheritance (`modified_instance`, `vevent_of`): On outbound export, `modified_instance` copies `event.links` into the detached instance. `vevent_of` calls `drawn_links`, serializing `ATTACH;FMTTYPE=application/pdf;SIZE=153600;X-JMAP-KEY=k1:...` onto every detached `VEVENT` component. Meeting participants opening rescheduled or cancelled sessions retain access to attached documents.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.1 (`Attachment`).
+  2. RFC 8984 Section 4.2.7 (`links`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and multi-valued entity synchronization safety. Excluding `links` from `OVERRIDE_PROPERTIES` ensures that document attachments remain accessible across all recurring meeting instances, avoiding attachment loss during recurrence instance edits.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
 
 
 

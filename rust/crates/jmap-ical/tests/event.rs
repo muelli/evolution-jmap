@@ -46859,3 +46859,201 @@ fn differential_oracle_recurrence_overrides_timezone_floating_detection_and_null
         "altered timezone must be present in patch delta"
     );
 }
+
+#[test]
+fn differential_oracle_recurrence_overrides_alerts_identical_restatement_elision() {
+    // Audit divergence 416: Recurrence overrides alerts identical alarm roster restatement elision vs full component duplication:
+    // RFC 5545 Section 3.6.6 VALARM vs RFC 8984 Section 4.5 alerts and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: thunderbird detached export has master and two detached occurrences.
+    // Occurrence 2026-11-16T10:00:00 restates identical VALARM (-PT15M) to master series.
+    // Occurrence 2026-10-19T10:00:00 modifies VALARM to -PT30M.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("thunderbird recurrence overrides");
+
+    // Identical alarm restatement is elided from the patch delta per RFC 8984 Section 4.3.4 inheritance.
+    let patch_cancelled = overrides
+        .get("2026-11-16T10:00:00")
+        .expect("finds cancelled occurrence patch");
+    assert!(
+        patch_cancelled.get("alerts").is_none(),
+        "unaltered alerts must be elided from patch delta"
+    );
+
+    // Altered alert trigger (-PT30M) is present in the patch delta.
+    let patch_extended = overrides
+        .get("2026-10-19T10:00:00")
+        .expect("finds extended occurrence patch");
+    let alerts_extended = patch_extended
+        .get("alerts")
+        .and_then(Value::as_object)
+        .expect("extended occurrence has alerts map");
+    assert_eq!(alerts_extended.len(), 1);
+    let trigger_offset = alerts_extended
+        .values()
+        .next()
+        .and_then(|a| a.get("trigger"))
+        .and_then(|t| t.get("offset"))
+        .and_then(Value::as_str);
+    assert_eq!(trigger_offset, Some("-PT30M"));
+
+    // 2. Outbound serialization: vevent_of on cancelled occurrence inherits master alarm.
+    let out_tb = event_to_ical(&ev_tb);
+    let child_cancelled = vevent(&out_tb, 2);
+    assert!(
+        child_cancelled.contains("BEGIN:VALARM\r\n"),
+        "detached cancelled occurrence emits inherited VALARM"
+    );
+    assert!(
+        child_cancelled.contains("TRIGGER;VALUE=DURATION:-PT15M\r\n")
+            || child_cancelled.contains("TRIGGER:-PT15M\r\n"),
+        "detached cancelled occurrence carries master trigger offset"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_duration_unchanged_restatement_elision() {
+    // Audit divergence 417: Recurrence overrides duration unchanged occurrence duration restatement elision vs full component duplication:
+    // RFC 5545 Section 3.8.2.5 DURATION, Section 3.8.2.2 DTEND vs RFC 8984 Section 4.2.2 duration and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: thunderbird detached export master has duration PT1H30M (10:00 to 11:30).
+    // Occurrence 2026-11-16T10:00:00 has DTSTART 10:00:00 and DTEND 11:30:00 (duration PT1H30M).
+    // Occurrence 2026-10-19T10:00:00 has DTSTART 14:00:00 and DTEND 16:00:00 (duration PT2H).
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("thunderbird recurrence overrides");
+
+    // Unchanged duration is elided from the patch delta per RFC 8984 Section 4.3.4 inheritance.
+    let patch_cancelled = overrides
+        .get("2026-11-16T10:00:00")
+        .expect("finds cancelled occurrence patch");
+    assert!(
+        patch_cancelled.get("duration").is_none(),
+        "unaltered duration must be elided from patch delta"
+    );
+
+    // Altered duration (PT2H) is captured in the patch delta.
+    let patch_extended = overrides
+        .get("2026-10-19T10:00:00")
+        .expect("finds extended occurrence patch");
+    assert_eq!(
+        patch_extended.get("duration").and_then(Value::as_str),
+        Some("PT2H"),
+        "altered duration must be present in patch delta"
+    );
+
+    // 2. Outbound serialization: vevent_of on cancelled occurrence renders inherited duration.
+    let out_tb = event_to_ical(&ev_tb);
+    let child_cancelled = vevent(&out_tb, 2);
+    assert!(
+        child_cancelled.contains("DTEND;TZID=Europe/London:20261116T113000\r\n")
+            || child_cancelled.contains("DURATION:PT1H30M\r\n"),
+        "detached cancelled occurrence inherits series duration boundary"
+    );
+    let child_extended = vevent(&out_tb, 1);
+    assert!(
+        child_extended.contains("DTEND;TZID=Europe/London:20261019T160000\r\n")
+            || child_extended.contains("DURATION:PT2H\r\n"),
+        "detached extended occurrence renders overridden 2-hour duration"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_start_scheduled_inheritance_and_elision() {
+    // Audit divergence 418: Recurrence overrides start scheduled start time inheritance vs redundant start time restatement:
+    // RFC 5545 Section 3.8.2.4 DTSTART, Section 3.8.4.4 RECURRENCE-ID vs RFC 8984 Section 4.1.2 start and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: thunderbird detached export occurrence 2026-11-16T10:00:00 retains its scheduled start.
+    // Occurrence 2026-10-19T10:00:00 is rescheduled to 14:00:00.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("thunderbird recurrence overrides");
+
+    // Unaltered scheduled start is elided from the patch delta because the override map key equals the start time.
+    let patch_cancelled = overrides
+        .get("2026-11-16T10:00:00")
+        .expect("finds cancelled occurrence patch");
+    assert!(
+        patch_cancelled.get("start").is_none(),
+        "unrescheduled occurrence start must be elided from patch delta"
+    );
+
+    // Rescheduled occurrence start (14:00:00) differs from occurrence key (10:00:00) and is captured in patch.
+    let patch_extended = overrides
+        .get("2026-10-19T10:00:00")
+        .expect("finds extended occurrence patch");
+    assert_eq!(
+        patch_extended.get("start").and_then(Value::as_str),
+        Some("2026-10-19T14:00:00"),
+        "rescheduled start time must be present in patch delta"
+    );
+
+    // 2. Outbound serialization: modified_instance defaults start from occurrence key when patch has no start.
+    let out_tb = event_to_ical(&ev_tb);
+    let child_cancelled = vevent(&out_tb, 2);
+    assert!(
+        child_cancelled.contains("DTSTART;TZID=Europe/London:20261116T100000\r\n"),
+        "detached cancelled occurrence renders start from recurrence key"
+    );
+    let child_extended = vevent(&out_tb, 1);
+    assert!(
+        child_extended.contains("DTSTART;TZID=Europe/London:20261019T140000\r\n"),
+        "detached extended occurrence renders rescheduled start time"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_attachment_links_inheritance() {
+    // Audit divergence 419: Recurrence overrides attachment links document enclosure inheritance vs stateless child event attachment dropping:
+    // RFC 5545 Section 3.8.1.1 ATTACH vs RFC 8984 Section 4.2.7 links, Section 4.3.4 PatchObject, and OVERRIDE_PROPERTIES.
+
+    // 1. OVERRIDE_PROPERTIES excludes links to ensure multi-valued sub-entities inherit master state.
+    assert!(
+        !OVERRIDE_PROPERTIES.contains(&"links"),
+        "links is excluded from OVERRIDE_PROPERTIES to preserve document attachments across series"
+    );
+
+    // 2. Inbound parsing: thunderbird detached export master defines ATTACH;FMTTYPE=application/pdf...
+    // Neither detached VEVENT component restates ATTACH.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let series_links = ev_tb.links.as_ref().expect("master series has links");
+    assert_eq!(
+        series_links.len(),
+        1,
+        "master series has one attachment link"
+    );
+
+    // Overrides delta must not contain links property.
+    let overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("recurrence overrides");
+    for (id, patch) in overrides {
+        assert!(
+            patch.get("links").is_none(),
+            "occurrence {id} patch must not contain links"
+        );
+    }
+
+    // 3. Outbound serialization: modified_instance preserves master links, and vevent_of emits ATTACH on detached VEVENTs.
+    let out_tb = event_to_ical(&ev_tb);
+    for idx in 1..3 {
+        let child = vevent(&out_tb, idx);
+        let unfolded = child.replace("\r\n ", "").replace("\r\n\t", "");
+        assert!(
+            unfolded.contains("ATTACH;FMTTYPE=application/pdf;SIZE=153600;X-JMAP-KEY=k1:https://www.thunderbird.net/docs/rust-sync.pdf"),
+            "detached occurrence {idx} must inherit and emit master attachment enclosure"
+        );
+    }
+}
