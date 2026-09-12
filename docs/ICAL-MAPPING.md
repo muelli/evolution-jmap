@@ -7777,6 +7777,68 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 
+### 13.412 Divergence 412: `recurrenceOverrides`, `SUMMARY`, `DESCRIPTION`, Title and Description Restatement Elision vs Full Component Duplication: RFC 5545 Section 3.8.1.12 `SUMMARY`, Section 3.8.1.5 `DESCRIPTION` vs RFC 8984 Section 4.1.1 `title`, Section 4.1.2 `description`, and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Translating meeting titles and descriptions on detached recurrence instances (`RECURRENCE-ID`):
+  1. Inbound patch delta elision (`instance_patch`): In `thunderbird_detached_export.ics`, occurrence `2026-11-16T10:00:00` restates `SUMMARY:Mozilla Rust Engine Team Bi-Weekly Sync` and `DESCRIPTION:Bi-weekly sync on Rust parser performance...`, identical to the master series. In `jmap-ical`, `instance_patch` compares each property against the series (`was != now`). Because the instance summary and description match the master series (`was == now`), `instance_patch` elides `title` and `description` from the instance patch delta. In contrast, occurrence `2026-10-19T10:00:00` modifies both properties, so `instance_patch` records `"title": "Mozilla Rust Engine Team Extended Deep-Dive"` and the updated `"description"`.
+  2. Oracle complete component duplication: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs complete standalone component objects for each occurrence: on `2026-11-16T10:00:00`, it redundantly outputs the master title and description strings without computing a patch delta.
+  3. Outbound inheritance expansion (`modified_instance`, `event_to_ical`): On outbound serialization, `modified_instance` applies the patch delta against the master series. When `title` and `description` are omitted from the patch, the instance inherits the master series values, and `vevent_of` emits identical `SUMMARY` and `DESCRIPTION` lines on the detached `VEVENT` with `RECURRENCE-ID:20261116T100000`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.12 (`Summary`) and Section 3.8.1.5 (`Description`).
+  2. RFC 8984 Section 4.1.1 (`title`), Section 4.1.2 (`description`), and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and minimal patch scoping. Eliding unaltered titles and descriptions conforms directly to RFC 8984 Section 4.3.4 property inheritance, reducing wire payload size and preventing redundant synchronizer delta updates.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.413 Divergence 413: `recurrenceOverrides`, `DTSTAMP`, `LAST-MODIFIED`, `updated`, Server Store Timestamp Isolation vs Patch Delta Pollution: RFC 5545 Section 3.8.7.2 `DTSTAMP`, Section 3.8.7.3 `LAST-MODIFIED` vs RFC 8984 Section 4.1.8 `updated`, Section 4.3.4 `PatchObject`, and `OVERRIDE_PROPERTIES`
+
+- **Observed Behavior**:
+  Translating recurrence override audit timestamps between RFC 5545 (`DTSTAMP`, `LAST-MODIFIED`) and JSCalendar RFC 8984 Section 4.1.8 (`updated`):
+  1. Inbound timestamp isolation (`read_vevent` and `instance_patch`): In `thunderbird_detached_export.ics` and `google_calendar_export.ics`, detached occurrences carry `DTSTAMP` lines (`DTSTAMP:20260901T100000Z` and `DTSTAMP:20260824T120000Z`). In `jmap-ical`, `read_vevent` isolates component data from store audit metadata, and `instance_patch` strictly enforces the closed allowlist `OVERRIDE_PROPERTIES`, which excludes `updated`. In JMAP Calendars, `updated` is server-managed metadata reflecting when the calendar object or occurrence was recorded in the database. Proposing client-side `updated` timestamps within occurrence patch deltas would conflict with server revision tracking.
+  2. Oracle timestamp synthesis: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs duplicate standalone event snapshots, mapping `DTSTAMP` on each detached component into top-level `"updated": "..."` on the child event.
+  3. Outbound serialization cleanliness (`event_to_ical`): When serializing recurrence overrides back to iCalendar, `event_to_ical` does not emit client-invented `LAST-MODIFIED` lines on child `VEVENT` components, preserving store-owned audit isolation.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.7.2 (`Date-Time Stamp`) and Section 3.8.7.3 (`Last-Modified`).
+  2. RFC 8984 Section 4.1.8 (`updated`) and Section 4.3.4 (`PatchObject`).
+  3. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by server-managed audit timestamps and protocol boundaries. Excluding `updated` from instance patch deltas ensures that desktop synchronization tools do not corrupt authoritative server modification records.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.414 Divergence 414: `recurrenceOverrides`, `showWithoutTime`, Document-Wide All-Day Invariance vs Per-Instance Override Exclusion: RFC 5545 Section 3.8.2.4 `DTSTART;VALUE=DATE` vs RFC 8984 Section 4.1.5 `showWithoutTime`, Section 4.3.4 `PatchObject`, and `OVERRIDE_PROPERTIES`
+
+- **Observed Behavior**:
+  Managing date-only (all-day) vs date-time event representation across recurrence overrides:
+  1. Inbound document-wide scoping (`shows_without_time` and `instance_patch`): In `jmap-ical`, `shows_without_time` is evaluated once for the entire event stream. `showWithoutTime` is intentionally excluded from `OVERRIDE_PROPERTIES`, and `maps_recurrence_override` rejects any patch delta attempting to alter `showWithoutTime`. Mixing all-day and timed occurrences within a single recurring series creates severe calendar grid rendering ambiguities and invalid duration calculations in desktop clients. RFC 8984 Section 4.3.4 explicitly cautions against altering `showWithoutTime` in recurrence overrides.
+  2. Oracle property omission: Stalwart v1.0.0's `CalendarEvent/parse` omits `showWithoutTime` from its parsed override objects, treating time presentation as document-level.
+  3. Outbound serialization uniformity (`vevent_of`): On outbound serialization, `vevent_of` renders detached occurrence start and end times conforming to the master series' temporal mode (`VALUE=DATE` for all-day series or zoned `DATE-TIME` for timed meetings), ensuring consistent recurrence grid alignment in Evolution Data Server.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.2.4 (`Date-Time Start`).
+  2. RFC 8984 Section 4.1.5 (`showWithoutTime`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and calendar presentation consistency. Restricting `showWithoutTime` to document-level scoping prevents invalid mixed-mode recurrence instances and ensures predictable calendar grid behavior.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.415 Divergence 415: `recurrenceOverrides`, `timeZone`, Floating Time Detection, and Explicit Timezone Nullification vs Implicit Zone Inheritance: RFC 5545 Section 3.8.2.4 `DTSTART;TZID=...` vs RFC 8984 Section 4.1.6 `timeZone` and Section 4.3.4 `PatchObject`
+
+- **Observed Behavior**:
+  Translating timezone shifts and transitions to floating local time on detached recurrence instances:
+  1. Inbound floating time detection (`instance_patch`): In iCalendar, timezone binding is property-local: RFC 5545 Section 3.8.2.4 specifies that a `DTSTART` lacking `TZID` represents floating local time. In `jmap-ical`, `instance_patch` compares `("timeZone", &series.time_zone, &instance.time_zone)`. When a master series specifies a timezone (`time_zone: Some(...)`) but a detached occurrence's `DTSTART` omits `TZID` (`time_zone: None`), `instance_patch` detects `was != now` and writes `"timeZone": null` into the `PatchObject` delta. Under RFC 8984 Section 4.3.4, setting a property to `null` deletes it from the patched object, canceling timezone inheritance and making the detached occurrence floating. When an instance specifies the identical timezone, `timeZone` is omitted from the patch (inheriting master); when an instance specifies a different timezone, `timeZone` is updated in the patch.
+  2. Oracle standalone snapshots: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` outputs duplicate standalone component objects without computing minimal patch deltas.
+  3. Outbound serialization precision (`modified_instance`, `vevent_of`): On outbound export, `modified_instance` applies the patch: seeing `Value::Null` for `timeZone`, `modified_instance` sets `instance.time_zone = None`, and `vevent_of` emits floating `DTSTART:20261019T140000` without a `TZID` parameter, preserving exact temporal semantics.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.2.4 (`Date-Time Start`).
+  2. RFC 8984 Section 4.1.6 (`timeZone`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification adaptation and RFC 8984 patch semantics. Explicit timezone nullification correctly models transitions from a zoned series to a floating detached instance, preventing inadvertent timezone inheritance.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+
 
 
 

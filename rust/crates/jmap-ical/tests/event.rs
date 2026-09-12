@@ -46657,3 +46657,205 @@ fn differential_oracle_recurrence_overrides_sub_entity_location_and_conference_i
         "detached occurrence inherits master primary location"
     );
 }
+
+#[test]
+fn differential_oracle_recurrence_overrides_title_and_description_restatement_elision() {
+    // Audit divergence 412: Recurrence overrides title and description restatement elision vs full component duplication:
+    // RFC 5545 Section 3.8.1.12 SUMMARY, Section 3.8.1.5 DESCRIPTION vs RFC 8984 Section 4.1.1 title, Section 4.1.2 description, Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: thunderbird detached export has master and two detached occurrences.
+    // Occurrence 2026-11-16T10:00:00 restates identical SUMMARY and DESCRIPTION to master.
+    // Occurrence 2026-10-19T10:00:00 alters SUMMARY and DESCRIPTION.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("thunderbird recurrence overrides");
+
+    // Identical restatement is elided from the patch delta per RFC 8984 Section 4.3.4 inheritance.
+    let patch_cancelled = overrides
+        .get("2026-11-16T10:00:00")
+        .expect("finds cancelled occurrence patch");
+    assert!(
+        patch_cancelled.get("title").is_none(),
+        "unaltered title must be elided from patch delta"
+    );
+    assert!(
+        patch_cancelled.get("description").is_none(),
+        "unaltered description must be elided from patch delta"
+    );
+
+    // Altered title and description are captured in the patch delta.
+    let patch_extended = overrides
+        .get("2026-10-19T10:00:00")
+        .expect("finds extended occurrence patch");
+    assert_eq!(
+        patch_extended.get("title").and_then(Value::as_str),
+        Some("Mozilla Rust Engine Team Extended Deep-Dive")
+    );
+    assert_eq!(
+        patch_extended.get("description").and_then(Value::as_str),
+        Some("Special extended session focusing on memory allocator benchmarking.")
+    );
+
+    // 2. Outbound serialization: vevent_of on cancelled occurrence inherits master title and description.
+    let out_tb = event_to_ical(&ev_tb);
+    assert_eq!(vevents(&out_tb), 3, "renders master and two overrides");
+    let child_cancelled = vevent(&out_tb, 2);
+    assert!(
+        child_cancelled.contains("RECURRENCE-ID;TZID=Europe/London:20261116T100000\r\n"),
+        "third VEVENT carries cancelled recurrence id"
+    );
+    assert!(
+        child_cancelled.contains("SUMMARY:Mozilla Rust Engine Team Bi-Weekly Sync\r\n"),
+        "detached occurrence inherits master summary"
+    );
+    assert!(
+        child_cancelled.contains("STATUS:CANCELLED\r\n"),
+        "detached occurrence emits cancelled status"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_updated_timestamp_isolation() {
+    // Audit divergence 413: Recurrence overrides updated audit timestamp isolation vs patch delta injection:
+    // RFC 5545 Section 3.8.7.2 DTSTAMP, Section 3.8.7.3 LAST-MODIFIED vs RFC 8984 Section 4.1.8 updated, Section 4.3.4 PatchObject, and OVERRIDE_PROPERTIES.
+
+    // 1. OVERRIDE_PROPERTIES strictly excludes updated to protect server store audit metadata.
+    assert!(
+        !OVERRIDE_PROPERTIES.contains(&"updated"),
+        "updated must not be an allowed override property"
+    );
+
+    // 2. Inbound parsing: thunderbird detached occurrences define DTSTAMP lines.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("thunderbird recurrence overrides");
+    for (id, patch) in overrides {
+        assert!(
+            patch.get("updated").is_none(),
+            "patch delta for {id} must not contain updated property"
+        );
+    }
+
+    // Google detached occurrence defines DTSTAMP line as well.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google fixture");
+    let google_overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("google recurrence overrides");
+    let patch_google = google_overrides
+        .get("2026-10-20T10:00:00")
+        .expect("finds google override");
+    assert!(
+        patch_google.get("updated").is_none(),
+        "google patch delta must not contain updated property"
+    );
+
+    // 3. Outbound serialization: event_to_ical does not emit LAST-MODIFIED on detached occurrences.
+    let out_tb = event_to_ical(&ev_tb);
+    for idx in 1..3 {
+        let child = vevent(&out_tb, idx);
+        assert!(
+            without(child, "LAST-MODIFIED:"),
+            "detached occurrence {idx} must not emit LAST-MODIFIED"
+        );
+    }
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_show_without_time_document_wide_invariance() {
+    // Audit divergence 414: Recurrence overrides showWithoutTime document-wide all-day invariance vs per-instance override exclusion:
+    // RFC 5545 Section 3.8.2.4 DTSTART;VALUE=DATE vs RFC 8984 Section 4.1.5 showWithoutTime, Section 4.3.4 PatchObject, and OVERRIDE_PROPERTIES.
+
+    // 1. OVERRIDE_PROPERTIES strictly excludes showWithoutTime.
+    assert!(
+        !OVERRIDE_PROPERTIES.contains(&"showWithoutTime"),
+        "showWithoutTime is document-wide and excluded from OVERRIDE_PROPERTIES"
+    );
+
+    // 2. An override attempting to patch showWithoutTime is rejected by maps_recurrence_override.
+    let series_dummy = CalendarEvent::default();
+    let invalid_patch = serde_json::json!({
+        "showWithoutTime": true
+    });
+    assert!(
+        !jmap_ical::event::maps_recurrence_override(
+            &series_dummy,
+            "2026-10-15T10:00:00",
+            &invalid_patch
+        ),
+        "patch containing showWithoutTime must be rejected"
+    );
+
+    // 3. Document-wide all-day series in cyrus_caldav_export.ics has show_without_time set on the root event.
+    let cyrus_ics = include_str!("fixtures/cyrus_caldav_export.ics");
+    let ev_cyrus = ical_to_event(cyrus_ics).expect("parses cyrus fixture");
+    assert_eq!(
+        ev_cyrus.show_without_time,
+        Some(true),
+        "cyrus event is flagged as show_without_time"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_timezone_floating_detection_and_nullification() {
+    // Audit divergence 415: Recurrence overrides timeZone floating time detection and explicit timezone nullification vs implicit zone inheritance:
+    // RFC 5545 Section 3.8.2.4 DTSTART;TZID=... vs RFC 8984 Section 4.1.6 timeZone and Section 4.3.4 PatchObject.
+
+    // 1. When a master event specifies a timezone and an instance omits TZID (floating time),
+    // instance_patch explicitly writes "timeZone": null to strip the master timezone.
+    let series = CalendarEvent {
+        time_zone: Some("America/New_York".to_owned()),
+        start: Some("2026-10-01T10:00:00".to_owned()),
+        ..Default::default()
+    };
+
+    let instance_floating = CalendarEvent {
+        time_zone: None,
+        start: Some("2026-10-15T10:00:00".to_owned()),
+        ..Default::default()
+    };
+
+    let patch =
+        jmap_ical::event::instance_patch(&series, &instance_floating, "2026-10-15T10:00:00");
+    assert_eq!(
+        patch.get("timeZone"),
+        Some(&Value::Null),
+        "floating instance must explicitly nullify master timezone"
+    );
+
+    // 2. When an instance specifies the identical timezone, timeZone is elided from the patch delta.
+    let instance_same_tz = CalendarEvent {
+        time_zone: Some("America/New_York".to_owned()),
+        start: Some("2026-10-15T10:00:00".to_owned()),
+        ..Default::default()
+    };
+
+    let patch_same =
+        jmap_ical::event::instance_patch(&series, &instance_same_tz, "2026-10-15T10:00:00");
+    assert!(
+        patch_same.get("timeZone").is_none(),
+        "identical timezone must be elided from patch delta"
+    );
+
+    // 3. When an instance specifies a different timezone, timeZone is updated in the patch delta.
+    let instance_diff_tz = CalendarEvent {
+        time_zone: Some("Europe/London".to_owned()),
+        start: Some("2026-10-15T10:00:00".to_owned()),
+        ..Default::default()
+    };
+
+    let patch_diff =
+        jmap_ical::event::instance_patch(&series, &instance_diff_tz, "2026-10-15T10:00:00");
+    assert_eq!(
+        patch_diff.get("timeZone"),
+        Some(&Value::String("Europe/London".to_owned())),
+        "altered timezone must be present in patch delta"
+    );
+}
