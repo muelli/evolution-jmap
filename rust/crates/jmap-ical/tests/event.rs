@@ -43164,3 +43164,252 @@ fn differential_oracle_links_attachment_image_parameters_and_default_elision() {
         Some("brand-logo")
     );
 }
+
+#[test]
+fn differential_oracle_status_cancellation_semantics_and_override_patching() {
+    // Audit divergence 352: Status vocabulary mapping and recurrence instance cancellation semantics:
+    // RFC 5545 Section 3.8.1.11 STATUS vs RFC 8984 Section 4.4.1 status, STATUSES closed enumeration
+    // (confirmed, cancelled, tentative), case-insensitive ingestion, and detached recurrence override
+    // instance cancellation (status: "cancelled" vs excluded: true vs Stalwart full event reproduction).
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:status-test-ev-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "RRULE:FREQ=WEEKLY;COUNT=4\r\n",
+        "SUMMARY:Status Test Master\r\n",
+        "STATUS:CONFIRMED\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:status-test-ev-1\r\n",
+        "RECURRENCE-ID:20261022T100000Z\r\n",
+        "DTSTART:20261022T100000Z\r\n",
+        "SUMMARY:Status Test Master\r\n",
+        "STATUS:CANCELLED\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(ics).expect("parses calendar");
+
+    // 1. Inbound master status maps CONFIRMED to "confirmed"
+    assert_eq!(ev.status.as_deref(), Some("confirmed"));
+
+    // 2. Inbound detached instance with STATUS:CANCELLED emits minimal patch with status: "cancelled"
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+    let patch = &overrides["2026-10-22T10:00:00"];
+    assert_eq!(patch["status"], "cancelled");
+
+    // 3. Outbound serialization renders STATUS:CANCELLED on detached component
+    let ics_out = event_to_ical(&ev);
+    assert!(ics_out.contains("STATUS:CANCELLED\r\n"));
+
+    // 4. Case-insensitivity and invalid status filtering
+    let tentative_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:status-test-ev-2\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "STATUS:tentative\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let tentative_ev = ical_to_event(tentative_ics).expect("parses calendar");
+    assert_eq!(tentative_ev.status.as_deref(), Some("tentative"));
+
+    let draft_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:status-test-ev-3\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "STATUS:DRAFT\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let draft_ev = ical_to_event(draft_ics).expect("parses calendar");
+    assert_eq!(draft_ev.status, None);
+}
+
+#[test]
+fn differential_oracle_free_busy_status_transp_default_agreement_and_nullification() {
+    // Audit divergence 353: Free/busy status transparency and shared default agreement:
+    // RFC 5545 Section 3.8.2.7 TRANSP (OPAQUE, TRANSPARENT) vs RFC 8984 Section 4.4.2 freeBusyStatus
+    // (busy, free), shared implicit default agreement (OPAQUE <-> busy), wire payload omission on
+    // default values, and override instance patch nullification.
+
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:transp-test-ev-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "RRULE:FREQ=WEEKLY;COUNT=3\r\n",
+        "SUMMARY:Free Busy Master\r\n",
+        "TRANSP:TRANSPARENT\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:transp-test-ev-1\r\n",
+        "RECURRENCE-ID:20261022T100000Z\r\n",
+        "DTSTART:20261022T100000Z\r\n",
+        "SUMMARY:Free Busy Override\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+
+    let ev = ical_to_event(ics).expect("parses calendar");
+
+    // 1. Inbound TRANSP:TRANSPARENT maps to freeBusyStatus: "free"
+    assert_eq!(ev.free_busy_status.as_deref(), Some("free"));
+
+    // 2. Detached instance omitting TRANSP nullifies series transparency back to default busy
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+    let patch = &overrides["2026-10-22T10:00:00"];
+    assert_eq!(patch["freeBusyStatus"], serde_json::Value::Null);
+
+    // 3. Outbound serialization omits TRANSP when freeBusyStatus is None (default busy)
+    let default_ev = CalendarEvent {
+        id: Some("transp-default".into()),
+        start: Some("2026-10-15T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let default_ics = event_to_ical(&default_ev);
+    assert!(!default_ics.contains("TRANSP:"));
+
+    // 4. Outbound serialization emits TRANSP:TRANSPARENT for "free"
+    let free_ev = CalendarEvent {
+        id: Some("transp-free".into()),
+        start: Some("2026-10-15T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        free_busy_status: Some("free".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let free_ics = event_to_ical(&free_ev);
+    assert!(free_ics.contains("TRANSP:TRANSPARENT\r\n"));
+}
+
+#[test]
+fn differential_oracle_priority_integer_scale_strict_parsing_and_zero_equivalence() {
+    // Audit divergence 354: Priority integer scale alignment and strict parsing:
+    // RFC 5545 Section 3.8.1.9 PRIORITY vs RFC 8984 Section 4.4.1 priority, shared integer scale
+    // 0..=9 (0 undefined, 1 highest, 9 lowest), strict lexical parsing (refusal of leading whitespace,
+    // fractions, commas), and JMAP "priority": null vs 0 semantic equivalence.
+
+    // 1. Valid priorities 0..=9 parse correctly
+    for (p_str, expected) in [("0", 0), ("1", 1), ("5", 5), ("9", 9)] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:prio-{p_str}\r\nDTSTART:20261015T100000Z\r\nPRIORITY:{p_str}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let ev = ical_to_event(&ics).expect("parses calendar");
+        assert_eq!(ev.priority, Some(expected));
+    }
+
+    // 2. Invalid syntax and out-of-bounds integers are rejected (yielding None)
+    for invalid in ["10", "-1", "2.5", "1,2", " 1", "HIGH", ""] {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:prio-inv\r\nDTSTART:20261015T100000Z\r\nPRIORITY:{invalid}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        let ev = ical_to_event(&ics).expect("parses calendar");
+        assert_eq!(ev.priority, None, "expected None for PRIORITY:{invalid}");
+    }
+
+    // 3. Outbound serialization renders PRIORITY:0 for priority: Some(0)
+    let zero_ev = CalendarEvent {
+        id: Some("prio-zero".into()),
+        start: Some("2026-10-15T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        priority: Some(0),
+        ..CalendarEvent::default()
+    };
+    let zero_ics = event_to_ical(&zero_ev);
+    assert!(zero_ics.contains("PRIORITY:0\r\n"));
+
+    // 4. Override instance nullification when priority omitted on detached component
+    let series = CalendarEvent {
+        id: Some("prio-series".into()),
+        priority: Some(2),
+        ..CalendarEvent::default()
+    };
+    let instance = CalendarEvent {
+        id: Some("prio-series".into()),
+        priority: None,
+        ..CalendarEvent::default()
+    };
+    let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
+    assert_eq!(patch["priority"], serde_json::Value::Null);
+}
+
+#[test]
+fn differential_oracle_privacy_class_cross_vocabulary_and_evolution_classification_stability() {
+    // Audit divergence 355: Privacy classification mapping and Evolution UI stability:
+    // RFC 5545 Section 3.8.1.3 CLASS (PUBLIC, PRIVATE, CONFIDENTIAL) vs RFC 8984 Section 4.4.3 privacy
+    // (public, private, secret), vocabulary cross-mapping (public <-> PUBLIC, private <-> PRIVATE,
+    // secret <-> CONFIDENTIAL), non-standard token dropping, and Evolution UI classification menu
+    // stability via explicit default CLASS:PUBLIC serialization.
+
+    // 1. Cross-vocabulary translation: CONFIDENTIAL <-> secret
+    let secret_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:class-confidential\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "CLASS:CONFIDENTIAL\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let secret_ev = ical_to_event(secret_ics).expect("parses calendar");
+    assert_eq!(secret_ev.privacy.as_deref(), Some("secret"));
+
+    let out_secret_ics = event_to_ical(&secret_ev);
+    assert!(out_secret_ics.contains("CLASS:CONFIDENTIAL\r\n"));
+
+    // 2. Explicit CLASS:PUBLIC serialized for public events for Evolution UI stability
+    let public_ev = CalendarEvent {
+        id: Some("class-public".into()),
+        start: Some("2026-10-15T10:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        privacy: Some("public".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let public_ics = event_to_ical(&public_ev);
+    assert!(public_ics.contains("CLASS:PUBLIC\r\n"));
+
+    // 3. Dropping of non-standard tokens (such as CLASS:secret or CLASS:CUSTOM)
+    let nonstandard_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:class-nonstandard\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "CLASS:secret\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let nonstandard_ev = ical_to_event(nonstandard_ics).expect("parses calendar");
+    assert_eq!(nonstandard_ev.privacy, None);
+
+    // 4. Override instance nullification when privacy omitted on detached component
+    let series = CalendarEvent {
+        id: Some("privacy-series".into()),
+        privacy: Some("private".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let instance = CalendarEvent {
+        id: Some("privacy-series".into()),
+        privacy: None,
+        ..CalendarEvent::default()
+    };
+    let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
+    assert_eq!(patch["privacy"], serde_json::Value::Null);
+}
