@@ -7334,6 +7334,73 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
 
+### 13.384 Divergence 384: `locations`, `LOCATION`, `X-JMAP-KEY`, Positional Key Inventing (`l1`), and Single Primary Location Mapping vs Non-Deterministic UUID Key Allocation: RFC 5545 Section 3.8.1.7 `LOCATION` vs RFC 8984 Section 4.2.5 `locations`
+
+- **Observed Behavior**:
+  Mapping physical meeting locations between RFC 5545 (`LOCATION`) and JSCalendar RFC 8984 Section 4.2.5 (`locations`):
+  1. Inbound location parsing and key stability (`read_locations`): In `jmap-ical`, `read_locations` parses the RFC 5545 `LOCATION` property into a single-entry `locations` map containing `@type: "Location"` and the location string in `name`. If the incoming `LOCATION` line carries `X-JMAP-KEY` (such as `LOCATION;X-JMAP-KEY=loc1:...` in `evolution_calendar_export.ics`), `read_locations` preserves that explicit identifier. When absent (as in standard exports from Apple, Cyrus, Google, Nextcloud, Outlook, SOGo, and Thunderbird), it assigns the deterministic positional fallback key `"l1"`.
+  2. Oracle random UUID allocation: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` allocates a non-deterministic random UUID for each location entry (such as `"1ee57cd0-4035-521e-bc2e-b60fa224d179"` in `apple_calendar_export.ics` and `"dee623ee-2a79-5942-ba20-1b4094aca870"` in `cyrus_caldav_export.ics`). Both implementations agree identically on the parsed `name` text and `@type: "Location"`.
+  3. Outbound serialization and patch alignment (`vevent_of`, `drawn_place`): On outbound rendering, `vevent_of` enforces RFC 5545 Section 3.8.1.7 single primary location semantics (`maps_locations`), serializing `LOCATION: <name>` with `X-JMAP-KEY=<key>`. This ensures that local edits in Evolution Data Server patch the existing location entry in place instead of creating duplicate entries or churning map keys.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.7 (`Location`).
+  2. RFC 8984 Section 4.2.5 (`locations`).
+- **Adjudication**:
+  Conforming specification adaptation and key determinism. Deterministic key allocation (`l1`) and round-trip key retention (`X-JMAP-KEY`) prevent client-side map key churn and avoid unnecessary patch mutations during synchronization passes.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.385 Divergence 385: `links`, `ATTACH`, `FMTTYPE`, `SIZE`, `INVENTED_LINK_KEY` (`k1`, `k2`), and MIME Metadata Extraction vs Non-Deterministic UUID Allocation: RFC 5545 Section 3.8.1.1 `ATTACH`, RFC 8607 Section 4 `SIZE` vs RFC 8984 Section 4.2.7 `links`
+
+- **Observed Behavior**:
+  Translating external document attachments between RFC 5545 (`ATTACH`), RFC 8607 (`SIZE`), and JSCalendar RFC 8984 Section 4.2.7 (`links`):
+  1. Inbound attachment ingestion (`read_links`): In `jmap-ical`, `read_links` extracts URI attachments into `Link` objects, parsing `FMTTYPE` into `contentType` (such as `application/pdf`, `image/png`, and OpenXML formats) and `SIZE` into integer `size` (such as `512000` in `apple_calendar_export.ics`, `1048576` in `cyrus_caldav_export.ics`, and `204800` in `nextcloud_calendar_export.ics`).
+  2. Security and local URI defense (`fetched_locally`): `read_links` actively filters out local `file:` URIs on component import, protecting users against unintended exposure of local system files.
+  3. Map key allocation: When `X-JMAP-KEY` is present (such as `l1`, `l2` in `evolution_calendar_export.ics`), it is preserved. When absent, deterministic sequential keys with stem `"k"` (`"k1"`, `"k2"`) are allocated, skipping existing keys.
+  4. Oracle comparison: Stalwart v1.0.0's `CalendarEvent/parse` produces identical `href`, `contentType`, and `size` fields across all fixtures, achieving full mutual consensus on attachment metadata. However, Stalwart assigns random UUID map keys and explicitly writes `rel: "enclosure"`.
+  5. Outbound serialization (`drawn_links`): Renders standard `ATTACH` components with `FMTTYPE`, `SIZE`, and `X-JMAP-KEY`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.1 (`Attachment`).
+  2. RFC 8607 Section 4 (`SIZE Parameter`).
+  3. RFC 8984 Section 4.2.7 (`links`).
+- **Adjudication**:
+  Conforming specification boundary and attachment metadata fidelity. Achieves full semantic consensus on attachment URI, content type, and size, while avoiding non-deterministic UUID map key churn.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.386 Divergence 386: `uid` vs `id`, `X-JMAP-UID`, Global Entity Identifier vs Server-Assigned JMAP Store ID, and Unassigned Record State Isolation: RFC 5545 Section 3.8.4.7 `UID` vs RFC 8984 Section 4.1.1 `uid` and draft-ietf-jmap-calendars Section 1.4 `id`
+
+- **Observed Behavior**:
+  Reconciling global calendar object identity with server store record addressing across imported, cached, and unassigned event states:
+  1. Inbound parsing and EDS cache indexing (`read_vevent`): In `jmap-ical`, the iCalendar `UID` property is mapped to `CalendarEvent.id` (`text("UID").map(Into::into)`), while `X-JMAP-UID` is mapped to `CalendarEvent.uid`. Evolution Data Server (EDS) keys its local component cache on the iCalendar `UID` and passes it back to JMAP synchronization methods, which require the JMAP store record `id`. When a distinct client JSCalendar UUID exists, it is retained via `X-JMAP-UID` (as seen in `evolution_calendar_export.ics`).
+  2. Oracle unassigned parse behavior: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` parses an uploaded blob before it is stored in any JMAP account; therefore, Stalwart leaves `id` unassigned (omitted) and maps iCalendar `UID` directly into JSCalendar `uid` (such as `uid: "B1C94D3A-4F7E-4C11-9A6D-5E8B7F30A123"` in `apple_calendar_export.ics`).
+  3. Outbound serialization (`vevent_of`): Serializes `event.id.as_ref().or(event.uid.as_deref())` as the RFC 5545 `UID`, and writes `event.uid` to `X-JMAP-UID`. When an unpersisted event is exported prior to its initial `CalendarEvent/set` create call, `event.uid` serves as `UID`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.4.7 (`Unique Identifier`).
+  2. RFC 8984 Section 4.1.1 (`uid`).
+  3. draft-ietf-jmap-calendars Section 1.4 (`CalendarEvent` object).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by EDS local cache architecture and JMAP record addressing. Preserving the distinction between server-assigned store ID and client-side JSCalendar UID via `X-JMAP-UID` ensures seamless EDS cache coherence and round-trip fidelity.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.387 Divergence 387: Geographic Coordinates, Apple Structured Location (`X-APPLE-STRUCTURED-LOCATION`), `geo:` URI Representation vs AST Vendor Property Preservation: RFC 5545 Section 3.8.1.6 `GEO`, RFC 5870 `geo:` URI vs RFC 8984 Section 4.2.5 `Location.coordinates`
+
+- **Observed Behavior**:
+  Handling spatial coordinates and vendor structured location extensions between RFC 5545 (`GEO`), RFC 5870 (`geo:` URI), Apple extensions (`X-APPLE-STRUCTURED-LOCATION`), and JSCalendar RFC 8984 Section 4.2.5 (`Location.coordinates`):
+  1. Proprietary vendor extension in exports: Exporters such as Apple Calendar emit proprietary structured location properties (such as `X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-ADDRESS="...";X-TITLE="...":geo:48.8462,2.3449` and `X-APPLE-TRAVEL-ADVISORY-BEHAVIOR:AUTOMATIC` in `apple_calendar_export.ics`) alongside standard `LOCATION` text lines.
+  2. Oracle AST preservation: Stalwart v1.0.0's `CalendarEvent/parse` ingests `x-apple-structured-location` and its parameter map into its `iCalendar.properties` AST table, leaving the typed `Location` object containing only `name`.
+  3. Inbound domain isolation (`read_locations`): In `jmap-ical`, `read_locations` extracts the standard `LOCATION` text into `Location.name`. Vendor-specific structured location properties without standard representation are safely dropped on component import rather than polluting `event.extra` or injecting unvetted parameters into the typed model.
+  4. Outbound clean serialization: `vevent_of` serializes canonical RFC 5545 properties without leaking vendor-proprietary syntax into outgoing payloads.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.6 (`Geographic Position`).
+  2. RFC 5870 (`A Uniform Resource Identifier for Geographic Locations ('geo' URI)`).
+  3. RFC 8984 Section 4.2.5 (`locations`).
+- **Adjudication**:
+  Conforming specification adaptation and clean domain modeling. Focuses on canonical RFC 5545 location representation while isolating the domain model from proprietary vendor structured location extensions.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+
 
 
 
