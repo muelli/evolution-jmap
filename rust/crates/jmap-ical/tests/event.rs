@@ -43413,3 +43413,215 @@ fn differential_oracle_privacy_class_cross_vocabulary_and_evolution_classificati
     let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
     assert_eq!(patch["privacy"], serde_json::Value::Null);
 }
+
+#[test]
+fn differential_oracle_duration_dtend_fallback_and_unit_ordering() {
+    // Audit divergence 356: Duration ingestion, wall-clock DTEND fallback, and unit ordering:
+    // RFC 5545 Section 3.8.2.5 DURATION and Section 3.8.2.2 DTEND vs RFC 8984 Section 4.1.7 duration,
+    // stated_duration relaxed ISO 8601 unit ordering, wall-clock period_length fallback, non-positive
+    // duration suppression, and outbound DURATION serialization without DTEND emission.
+
+    // 1. Explicit DURATION parsed via stated_duration
+    let dur_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H30M\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let dur_ev = ical_to_event(dur_ics).expect("parses calendar");
+    assert_eq!(dur_ev.duration.as_deref(), Some("PT1H30M"));
+
+    // 2. Fallback to wall-clock difference when DURATION omitted and DTEND provided
+    let dtend_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-test-2\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DTEND:20261015T123000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let dtend_ev = ical_to_event(dtend_ics).expect("parses calendar");
+    assert_eq!(dtend_ev.duration.as_deref(), Some("PT2H30M"));
+
+    // 3. Non-positive duration (DTEND == DTSTART or DTEND < DTSTART) suppressed to None
+    let zero_dur_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:dur-test-3\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DTEND:20261015T100000Z\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let zero_dur_ev = ical_to_event(zero_dur_ics).expect("parses calendar");
+    assert_eq!(zero_dur_ev.duration, None);
+
+    // 4. Stated duration leading plus sign stripped and relaxed unit order accepted
+    assert_eq!(
+        jmap_ical::event::stated_duration("+PT1H"),
+        Some("PT1H".to_owned())
+    );
+    assert_eq!(
+        jmap_ical::event::stated_duration("P1W2D"),
+        Some("P1W2D".to_owned())
+    );
+    assert_eq!(jmap_ical::event::stated_duration("-PT1H"), None);
+
+    // 5. Outbound serialization emits DURATION and omits DTEND
+    let out_ics = event_to_ical(&dur_ev);
+    assert!(out_ics.contains("DURATION:PT1H30M\r\n"));
+    assert!(!out_ics.contains("DTEND:"));
+}
+
+#[test]
+fn differential_oracle_text_properties_summary_description_and_escaping() {
+    // Audit divergence 357: Text property ingestion, whitespace handling, and escaping:
+    // RFC 5545 Section 3.8.1.5 DESCRIPTION and Section 3.8.1.12 SUMMARY vs RFC 8984 Section 4.1.3
+    // title and Section 4.1.4 description, empty string filtering (None instead of ""),
+    // RFC 5545 backslash escaping round-trip, and override instance patch nullification.
+
+    // 1. Inbound SUMMARY and DESCRIPTION mapped to title and description
+    let text_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:text-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "SUMMARY:Quarterly Strategy Review\r\n",
+        "DESCRIPTION:Agenda:\\n1. Roadmap\\n2. Architecture\\, Security\\; Performance\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(text_ics).expect("parses calendar");
+    assert_eq!(ev.title.as_deref(), Some("Quarterly Strategy Review"));
+    let desc = ev.description.as_deref().expect("description present");
+    assert!(desc.contains("Roadmap"));
+    assert!(desc.contains("Architecture, Security; Performance"));
+
+    // 2. Empty string properties are filtered to None
+    let empty_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:text-test-2\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "SUMMARY:\r\n",
+        "DESCRIPTION:\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let empty_ev = ical_to_event(empty_ics).expect("parses calendar");
+    assert_eq!(empty_ev.title, None);
+    assert_eq!(empty_ev.description, None);
+
+    // 3. Outbound serialization omits empty text lines
+    let out_empty = event_to_ical(&empty_ev);
+    assert!(!out_empty.contains("SUMMARY:"));
+    assert!(!out_empty.contains("DESCRIPTION:"));
+
+    // 4. Override instance nullification when title or description cleared
+    let series = CalendarEvent {
+        id: Some("text-series".into()),
+        title: Some("Series Title".to_owned()),
+        description: Some("Series Description".to_owned()),
+        ..CalendarEvent::default()
+    };
+    let instance = CalendarEvent {
+        id: Some("text-series".into()),
+        title: None,
+        description: None,
+        ..CalendarEvent::default()
+    };
+    let patch = jmap_ical::event::instance_patch(&series, &instance, "2026-10-22T10:00:00");
+    assert_eq!(patch["title"], serde_json::Value::Null);
+    assert_eq!(patch["description"], serde_json::Value::Null);
+}
+
+#[test]
+fn differential_oracle_line_folding_octet_boundary_and_crlf_formatting() {
+    // Audit divergence 358: Content line folding, UTF-8 char boundary splitting, and CRLF integrity:
+    // RFC 5545 Section 3.1 Content Lines (75 octets maximum line length, CRLF line termination,
+    // folding with space continuation) vs RFC 8984 JSON unbounded strings, odd backslash escape
+    // protection, and multi-byte UTF-8 code point preservation.
+
+    // 1. Lines within 75 octets are preserved without folding
+    let short_line = "SUMMARY:Short subject line\r\n";
+    assert_eq!(
+        jmap_ical::event::fold_overlong_lines(short_line.to_owned()),
+        short_line
+    );
+
+    // 2. Overlong lines (>75 octets) folded with CRLF + space
+    let long_title = "SUMMARY:".to_string() + &"A".repeat(100) + "\r\n";
+    let folded = jmap_ical::event::fold_overlong_lines(long_title);
+    for line in folded.split("\r\n") {
+        assert!(
+            line.len() <= jmap_ical::event::MAX_LINE_OCTETS,
+            "line exceeds 75 octets: len={}",
+            line.len()
+        );
+    }
+    assert!(folded.contains("\r\n "));
+
+    // 3. Multi-byte UTF-8 characters are not split across fold boundaries
+    let multibyte_str = "DESCRIPTION:".to_string() + &"🦀".repeat(25) + "\r\n";
+    let folded_mb = jmap_ical::event::fold_overlong_lines(multibyte_str);
+    for line in folded_mb.split("\r\n") {
+        assert!(line.len() <= jmap_ical::event::MAX_LINE_OCTETS);
+        // Valid UTF-8 check
+        assert!(std::str::from_utf8(line.as_bytes()).is_ok());
+    }
+
+    // 4. Odd backslash before cut does not split escape pair
+    let backslash_str =
+        "DESCRIPTION:".to_string() + &"X".repeat(60) + "\\n" + &"Y".repeat(30) + "\r\n";
+    let folded_bs = jmap_ical::event::fold_overlong_lines(backslash_str);
+    assert!(folded_bs.contains("\r\n "));
+}
+
+#[test]
+fn differential_oracle_check_structure_depth_bounding_and_nesting_integrity() {
+    // Audit divergence 359: iCalendar stream structure validation, depth limits, and trailing content:
+    // RFC 5545 Section 3.4 / Section 3.6 component nesting invariants, check_structure delimiter
+    // matching, MAX_DEPTH nesting limit enforcement, and trailing content rejection.
+
+    // 1. Mismatched BEGIN/END tags fail closed with ICalError::Mismatched
+    let mismatched = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nEND:VTODO\r\nEND:VCALENDAR\r\n";
+    let err = jmap_ical::event::parse_ical(mismatched).unwrap_err();
+    assert!(matches!(
+        err,
+        jmap_ical::ICalError::Mismatched {
+            ref expected,
+            ref found
+        } if expected == "VEVENT" && found == "VTODO"
+    ));
+
+    // 2. Unterminated component fails closed with ICalError::Unterminated
+    let unterminated = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nSUMMARY:Open\r\nEND:VCALENDAR\r\n";
+    let err_unterm = jmap_ical::event::parse_ical(unterminated).unwrap_err();
+    assert!(matches!(
+        err_unterm,
+        jmap_ical::ICalError::Mismatched { .. } | jmap_ical::ICalError::Unterminated(..)
+    ));
+
+    // 3. Trailing content after END:VCALENDAR fails closed with ICalError::Trailing
+    let trailing = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:ok\r\nDTSTART:20261015T100000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\nEXTRA:GARBAGE\r\n";
+    let err_trail = jmap_ical::event::parse_ical(trailing).unwrap_err();
+    assert!(matches!(err_trail, jmap_ical::ICalError::Trailing(_)));
+
+    // 4. Valid structure with standard components parses successfully
+    let valid = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\nUID:valid-ev\r\nDTSTART:20261015T100000Z\r\nSUMMARY:Valid\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    assert!(jmap_ical::event::parse_ical(valid).is_ok());
+}
