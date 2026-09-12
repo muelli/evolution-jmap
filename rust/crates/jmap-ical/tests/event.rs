@@ -47057,3 +47057,243 @@ fn differential_oracle_recurrence_overrides_attachment_links_inheritance() {
         );
     }
 }
+
+#[test]
+fn differential_oracle_recurrence_overrides_participant_roster_inheritance() {
+    // Audit divergence 420: Recurrence overrides participant roster inheritance vs per-occurrence stateless attendee dropping:
+    // RFC 5545 Section 3.8.4.1 ATTENDEE vs RFC 8984 Section 4.4.6 Participant, Section 4.3.4 PatchObject, and OVERRIDE_PROPERTIES.
+
+    // 1. OVERRIDE_PROPERTIES excludes participants to preserve series attendee rosters.
+    assert!(
+        !OVERRIDE_PROPERTIES.contains(&"participants"),
+        "participants is excluded from OVERRIDE_PROPERTIES to prevent attendee loss across series"
+    );
+
+    // 2. Inbound parsing: google_calendar_export.ics master defines 3 attendees.
+    // Detached occurrence 2026-10-20T10:00:00 specifies only 1 attendee (Jane Doe).
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar fixture");
+    let overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("google recurrence overrides present");
+    let patch = overrides
+        .get("2026-10-20T10:00:00")
+        .expect("finds detached occurrence patch");
+    assert!(
+        patch.get("participants").is_none(),
+        "patch delta must not contain participants property"
+    );
+
+    // 3. Outbound serialization: modified_instance inherits series participants, and vevent_of emits ATTENDEE lines.
+    let mut participants = BTreeMap::new();
+    participants.insert(
+        "p1".to_owned(),
+        json!({
+            "name": "Jane Doe",
+            "sendTo": { "imip": "mailto:jane.doe@example.com" },
+            "roles": { "attendee": true },
+            "kind": "individual",
+            "participationStatus": "accepted"
+        }),
+    );
+    participants.insert(
+        "p2".to_owned(),
+        json!({
+            "name": "Bob Smith",
+            "sendTo": { "imip": "mailto:bob.smith@example.com" },
+            "roles": { "attendee": true },
+            "kind": "individual",
+            "participationStatus": "tentative"
+        }),
+    );
+    let mut ev_with_parts = ev_google.clone();
+    ev_with_parts.participants = Some(participants);
+
+    let out = event_to_ical(&ev_with_parts);
+    let child = vevent(&out, 1);
+    let unfolded = child.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(
+        unfolded.contains("mailto:jane.doe@example.com"),
+        "detached occurrence must inherit series attendee p1"
+    );
+    assert!(
+        unfolded.contains("mailto:bob.smith@example.com"),
+        "detached occurrence must inherit series attendee p2"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_organizer_scheduling_isolation() {
+    // Audit divergence 421: Recurrence overrides organizer scheduling isolation across recurrence instances:
+    // RFC 5545 Section 3.8.4.3 ORGANIZER vs draft-ietf-jmap-calendars Section 5.9.2 organizerCalendarAddress, Section 4.3.4 PatchObject, and OVERRIDE_PROPERTIES.
+
+    // 1. OVERRIDE_PROPERTIES excludes organizerCalendarAddress to prevent client mutation of meeting ownership.
+    assert!(
+        !OVERRIDE_PROPERTIES.contains(&"organizerCalendarAddress"),
+        "organizerCalendarAddress is excluded from OVERRIDE_PROPERTIES"
+    );
+    assert!(
+        !OVERRIDE_PROPERTIES.contains(&"organizer"),
+        "organizer is excluded from OVERRIDE_PROPERTIES"
+    );
+
+    // 2. Inbound parsing: google_calendar_export.ics declares ORGANIZER on both master and detached occurrence.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar fixture");
+    assert!(
+        ev_google.organizer_calendar_address.is_none(),
+        "read_vevent leaves organizer_calendar_address None to isolate store from scheduling metadata"
+    );
+    let overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("google recurrence overrides present");
+    let patch = overrides
+        .get("2026-10-20T10:00:00")
+        .expect("finds detached occurrence patch");
+    assert!(
+        patch.get("organizerCalendarAddress").is_none(),
+        "patch delta must not contain organizerCalendarAddress"
+    );
+    assert!(
+        patch.get("organizer").is_none(),
+        "patch delta must not contain organizer"
+    );
+
+    // 3. Outbound serialization: when no participant has owner role, no ORGANIZER line is emitted.
+    let out_google = event_to_ical(&ev_google);
+    assert!(
+        !out_google.contains("ORGANIZER"),
+        "events without owner participant do not emit ORGANIZER line"
+    );
+
+    // When an owner participant is present, vevent_of emits ORGANIZER on both master and detached occurrence.
+    let mut participants = BTreeMap::new();
+    participants.insert(
+        "p_owner".to_owned(),
+        json!({
+            "name": "Jane Doe",
+            "sendTo": { "imip": "mailto:jane.doe@example.com" },
+            "roles": { "owner": true }
+        }),
+    );
+    let mut ev_with_owner = ev_google.clone();
+    ev_with_owner.participants = Some(participants);
+
+    let out_owner = event_to_ical(&ev_with_owner);
+    let master = vevent(&out_owner, 0);
+    let child = vevent(&out_owner, 1);
+    assert!(
+        master.contains("ORGANIZER;CN=\"Jane Doe\":mailto:jane.doe@example.com"),
+        "master component emits owner ORGANIZER"
+    );
+    assert!(
+        child.contains("ORGANIZER;CN=\"Jane Doe\":mailto:jane.doe@example.com"),
+        "detached child component inherits and emits owner ORGANIZER"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_transparency_unchanged_elision() {
+    // Audit divergence 422: Recurrence overrides freeBusyStatus TRANSP unchanged transparency restatement elision vs full component duplication:
+    // RFC 5545 Section 3.8.2.7 TRANSP vs RFC 8984 Section 4.1.4 freeBusyStatus and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: in google_calendar_export.ics, master and detached occurrence both specify TRANSP:OPAQUE (freeBusyStatus: busy).
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar fixture");
+    assert_eq!(
+        ev_google.free_busy_status.as_deref(),
+        Some("busy"),
+        "master series has freeBusyStatus: busy"
+    );
+
+    let overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("google recurrence overrides present");
+    let patch = overrides
+        .get("2026-10-20T10:00:00")
+        .expect("finds detached occurrence patch");
+    assert!(
+        patch.get("freeBusyStatus").is_none(),
+        "unaltered freeBusyStatus must be elided from patch delta"
+    );
+
+    // In contrast, in thunderbird_detached_export.ics, occurrences omit TRANSP while master has TRANSP:OPAQUE.
+    // instance_patch writes freeBusyStatus: null to cancel inheritance.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let tb_overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("thunderbird recurrence overrides present");
+    let tb_patch = tb_overrides
+        .get("2026-11-16T10:00:00")
+        .expect("finds cancelled occurrence patch");
+    assert_eq!(
+        tb_patch.get("freeBusyStatus"),
+        Some(&Value::Null),
+        "omitted TRANSP on occurrence must produce explicit null in patch delta"
+    );
+
+    // 2. Outbound serialization: vevent_of on detached occurrence inherits series transparency when elided from patch.
+    let out_google = event_to_ical(&ev_google);
+    let child_google = vevent(&out_google, 1);
+    assert!(
+        child_google.contains("TRANSP:OPAQUE\r\n"),
+        "detached occurrence inherits and emits master TRANSP:OPAQUE"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_privacy_unchanged_elision() {
+    // Audit divergence 423: Recurrence overrides privacy CLASS unchanged classification restatement elision vs full component duplication:
+    // RFC 5545 Section 3.8.1.3 CLASS vs RFC 8984 Section 4.1.4 privacy and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: in google_calendar_export.ics, master and detached occurrence both specify CLASS:PUBLIC (privacy: public).
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar fixture");
+    assert_eq!(
+        ev_google.privacy.as_deref(),
+        Some("public"),
+        "master series has privacy: public"
+    );
+
+    let overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("google recurrence overrides present");
+    let patch = overrides
+        .get("2026-10-20T10:00:00")
+        .expect("finds detached occurrence patch");
+    assert!(
+        patch.get("privacy").is_none(),
+        "unaltered privacy must be elided from patch delta"
+    );
+
+    // In contrast, in thunderbird_detached_export.ics, occurrences omit CLASS while master has CLASS:PUBLIC.
+    // instance_patch writes privacy: null to cancel inheritance.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let tb_overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("thunderbird recurrence overrides present");
+    let tb_patch = tb_overrides
+        .get("2026-11-16T10:00:00")
+        .expect("finds cancelled occurrence patch");
+    assert_eq!(
+        tb_patch.get("privacy"),
+        Some(&Value::Null),
+        "omitted CLASS on occurrence must produce explicit null in patch delta"
+    );
+
+    // 2. Outbound serialization: vevent_of on detached occurrence inherits series privacy when elided from patch.
+    let out_google = event_to_ical(&ev_google);
+    let child_google = vevent(&out_google, 1);
+    assert!(
+        child_google.contains("CLASS:PUBLIC\r\n"),
+        "detached occurrence inherits and emits master CLASS:PUBLIC"
+    );
+}
