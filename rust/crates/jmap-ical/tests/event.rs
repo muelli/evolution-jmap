@@ -45750,3 +45750,279 @@ fn differential_oracle_recurrence_overrides_sub_entity_map_inheritance_and_patch
         "nullified alarms must be omitted from detached occurrence"
     );
 }
+
+#[test]
+fn differential_oracle_recurrence_overrides_status_lifecycle_and_confirmation() {
+    // Audit divergence 396: recurrenceOverrides, RECURRENCE-ID, STATUS, and status lifecycle
+    // progression vs default repetition: RFC 5545 Section 3.8.3.8 STATUS vs RFC 8984 Section 4.1.3
+    // status and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing detects status differences against the series master.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached export");
+    let overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("recurrenceOverrides present");
+
+    // Occurrence 2026-10-19T10:00:00 has STATUS:CONFIRMED, matching master.
+    // In jmap-ical, instance_patch suppresses status from the patch delta.
+    let patch_confirmed = overrides
+        .get("2026-10-19T10:00:00")
+        .and_then(Value::as_object)
+        .expect("patch object");
+    assert!(
+        patch_confirmed.get("status").is_none(),
+        "unmodified status confirmed must be omitted from patch delta"
+    );
+
+    // Occurrence 2026-11-16T10:00:00 has STATUS:CANCELLED, diverging from master.
+    // In jmap-ical, instance_patch records status: cancelled in the patch delta.
+    let patch_cancelled = overrides
+        .get("2026-11-16T10:00:00")
+        .and_then(Value::as_object)
+        .expect("patch object");
+    assert_eq!(
+        patch_cancelled.get("status").and_then(Value::as_str),
+        Some("cancelled"),
+        "divergent status cancelled must be recorded in patch delta"
+    );
+
+    // 2. Outbound serialization applies the patch delta against master series:
+    // the cancelled instance renders STATUS:CANCELLED, while the confirmed instance
+    // inherits STATUS:CONFIRMED and renders STATUS:CONFIRMED.
+    let out_tb = event_to_ical(&ev_tb);
+    let parts: Vec<&str> = out_tb.split("RECURRENCE-ID").collect();
+    assert_eq!(
+        parts.len(),
+        3,
+        "must have master and two detached instances"
+    );
+
+    let chunk_oct19 = parts[1];
+    assert!(
+        chunk_oct19.contains("STATUS:CONFIRMED\r\n"),
+        "confirmed override must emit STATUS:CONFIRMED"
+    );
+
+    let chunk_nov16 = parts[2];
+    assert!(
+        chunk_nov16.contains("STATUS:CANCELLED\r\n"),
+        "cancelled override must emit STATUS:CANCELLED"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_transparency_and_privacy_nullification() {
+    // Audit divergence 397: recurrenceOverrides, freeBusyStatus, privacy, TRANSP, CLASS, and
+    // explicit property nullification vs implicit server fallback: RFC 5545 Section 3.8.1.3 CLASS,
+    // Section 3.8.2.7 TRANSP vs RFC 8984 Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing writes explicit null for omitted TRANSP and CLASS properties
+    // so that detached occurrences do not inherit the master series settings.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached export");
+    assert_eq!(ev_tb.free_busy_status.as_deref(), Some("busy"));
+    assert_eq!(ev_tb.privacy.as_deref(), Some("public"));
+
+    let overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("recurrenceOverrides present");
+
+    for key in ["2026-10-19T10:00:00", "2026-11-16T10:00:00"] {
+        let patch = overrides
+            .get(key)
+            .and_then(Value::as_object)
+            .expect("patch");
+        assert_eq!(
+            patch.get("freeBusyStatus"),
+            Some(&Value::Null),
+            "patch {key} must explicitly nullify freeBusyStatus"
+        );
+        assert_eq!(
+            patch.get("privacy"),
+            Some(&Value::Null),
+            "patch {key} must explicitly nullify privacy"
+        );
+    }
+
+    // 2. Outbound serialization clears transparency and classification on detached components,
+    // omitting TRANSP and CLASS from the emitted child VEVENTs.
+    let out_tb = event_to_ical(&ev_tb);
+    let parts: Vec<&str> = out_tb.split("RECURRENCE-ID").collect();
+    assert_eq!(parts.len(), 3);
+
+    // Master carries TRANSP and CLASS:
+    assert!(parts[0].contains("TRANSP:OPAQUE\r\n"));
+    assert!(parts[0].contains("CLASS:PUBLIC\r\n"));
+
+    // Detached instances omit TRANSP and CLASS:
+    assert!(
+        !parts[1].contains("TRANSP:"),
+        "detached instance 1 must omit TRANSP"
+    );
+    assert!(
+        !parts[1].contains("CLASS:"),
+        "detached instance 1 must omit CLASS"
+    );
+    assert!(
+        !parts[2].contains("TRANSP:"),
+        "detached instance 2 must omit TRANSP"
+    );
+    assert!(
+        !parts[2].contains("CLASS:"),
+        "detached instance 2 must omit CLASS"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_keywords_roster_update_and_nullification() {
+    // Audit divergence 398: recurrenceOverrides, keywords, CATEGORIES, roster replacement, and
+    // set-level master property nullification: RFC 5545 Section 3.8.1.2 CATEGORIES vs RFC 8984
+    // Section 4.2.4 keywords and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing replaces categories as a complete set or nullifies when absent.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached export");
+    let overrides = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("recurrenceOverrides present");
+
+    // Oct 19 replaces categories with Benchmark, Engineering, Mozilla:
+    let patch_oct19 = overrides
+        .get("2026-10-19T10:00:00")
+        .and_then(Value::as_object)
+        .expect("patch");
+    let kw = patch_oct19
+        .get("keywords")
+        .and_then(Value::as_object)
+        .expect("keywords object");
+    assert_eq!(kw.len(), 3);
+    assert_eq!(kw.get("Benchmark"), Some(&Value::Bool(true)));
+    assert_eq!(kw.get("Engineering"), Some(&Value::Bool(true)));
+    assert_eq!(kw.get("Mozilla"), Some(&Value::Bool(true)));
+
+    // Nov 16 has no categories: explicitly nullified:
+    let patch_nov16 = overrides
+        .get("2026-11-16T10:00:00")
+        .and_then(Value::as_object)
+        .expect("patch");
+    assert_eq!(
+        patch_nov16.get("keywords"),
+        Some(&Value::Null),
+        "patch nov16 must nullify keywords"
+    );
+
+    // Google calendar detached occurrence has no categories: explicitly nullified:
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    let g_patch = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides")
+        .get("2026-10-20T10:00:00")
+        .and_then(Value::as_object)
+        .expect("g_patch");
+    assert_eq!(
+        g_patch.get("keywords"),
+        Some(&Value::Null),
+        "google patch must nullify keywords"
+    );
+
+    // 2. Outbound serialization renders updated categories or omits when nullified.
+    let out_tb = event_to_ical(&ev_tb);
+    let parts: Vec<&str> = out_tb.split("RECURRENCE-ID").collect();
+    assert!(
+        parts[1].contains("CATEGORIES:Benchmark,Engineering,Mozilla\r\n"),
+        "oct19 must render updated categories in alphabetical order"
+    );
+    assert!(
+        !parts[2].contains("CATEGORIES:"),
+        "nov16 must omit categories"
+    );
+
+    let out_google = event_to_ical(&ev_google);
+    let g_parts: Vec<&str> = out_google.split("RECURRENCE-ID").collect();
+    assert!(
+        !g_parts[1].contains("CATEGORIES:"),
+        "google detached instance must omit categories"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_start_rescheduling_and_duration_alteration() {
+    // Audit divergence 399: recurrenceOverrides, DTSTART, DTEND, duration, rescheduled instance
+    // shift, and independent duration alteration: RFC 5545 Section 3.8.2.4 DTSTART, Section 3.8.2.2
+    // DTEND, Section 3.8.2.5 DURATION vs RFC 8984 Section 4.1.2 start, Section 4.2.2 duration,
+    // and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: start time shift without duration change omits duration from patch.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    assert_eq!(ev_google.duration.as_deref(), Some("PT1H30M"));
+
+    let g_patch = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides")
+        .get("2026-10-20T10:00:00")
+        .and_then(Value::as_object)
+        .expect("g_patch");
+    assert_eq!(
+        g_patch.get("start").and_then(Value::as_str),
+        Some("2026-10-20T10:30:00"),
+        "shifted start time must be in patch"
+    );
+    assert!(
+        g_patch.get("duration").is_none(),
+        "unaltered duration must be omitted from patch delta"
+    );
+
+    // Inbound parsing: start time shift AND duration lengthening records both in patch.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached export");
+    assert_eq!(ev_tb.duration.as_deref(), Some("PT1H30M"));
+
+    let patch_oct19 = ev_tb
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides")
+        .get("2026-10-19T10:00:00")
+        .and_then(Value::as_object)
+        .expect("patch");
+    assert_eq!(
+        patch_oct19.get("start").and_then(Value::as_str),
+        Some("2026-10-19T14:00:00"),
+        "shifted start time must be in patch"
+    );
+    assert_eq!(
+        patch_oct19.get("duration").and_then(Value::as_str),
+        Some("PT2H"),
+        "lengthened duration must be in patch"
+    );
+
+    // 2. Outbound serialization emits DURATION from resolved start and duration.
+    let out_google = event_to_ical(&ev_google);
+    let g_chunk = out_google.split("RECURRENCE-ID").nth(1).expect("chunk");
+    assert!(
+        g_chunk.contains("DTSTART;TZID=America/New_York:20261020T103000\r\n"),
+        "google detached start must be 10:30"
+    );
+    assert!(
+        g_chunk.contains("DURATION:PT1H30M\r\n"),
+        "google detached instance inherits master duration PT1H30M"
+    );
+
+    let out_tb = event_to_ical(&ev_tb);
+    let tb_chunk = out_tb.split("RECURRENCE-ID").nth(1).expect("chunk");
+    assert!(
+        tb_chunk.contains("DTSTART;TZID=Europe/London:20261019T140000\r\n"),
+        "tb detached start must be 14:00"
+    );
+    assert!(
+        tb_chunk.contains("DURATION:PT2H\r\n"),
+        "tb detached instance renders overridden duration PT2H"
+    );
+}
