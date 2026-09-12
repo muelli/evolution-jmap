@@ -7151,5 +7151,67 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.372 Divergence 372: `sequence: 0`, `SEQUENCE`, and Revision Number Ingestion vs Default Value Wire Payload Omission and Server-Store Lifecycle Ownership: RFC 5545 Section 3.8.7.4 `SEQUENCE` vs RFC 8984 Section 4.1.6 `sequence`
+
+- **Observed Behavior**:
+  Translating revision sequence numbers between RFC 5545 (`SEQUENCE`) and JSCalendar RFC 8984 Section 4.1.6 (`sequence`):
+  1. Inbound sequence handling (`read_vevent`): In `jmap-ical`, `read_vevent` drops `SEQUENCE` lines on import, leaving `sequence` unset (`None`). In JMAP Calendars, sequence numbers are stateful revision counters owned and incremented by the server store during update operations. RFC 8984 Section 4.1.6 explicitly defines 0 as the default value when omitted. Dropping unmanaged sequence numbers on import conforms to RFC default value omission rules and avoids injecting unsynchronized client revision state into the JMAP store.
+  2. Outbound serialization (`vevent_of`): Serializes `SEQUENCE` only when explicitly populated with a non-zero value, suppressing default or unmanaged sequence values to keep exported lines minimal.
+  3. In contrast, Stalwart's `CalendarEvent/parse` ingests `SEQUENCE:0` directly into `"sequence": 0`, serializing explicit default integer values.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.7.4 (`Sequence Number`).
+  2. RFC 8984 Section 4.1.6 (`sequence`).
+- **Adjudication**:
+  Conforming specification adaptation and server-store lifecycle ownership. Discards foreign revision counters on import to conform with RFC default value elision (default 0) and preserve server store conflict detection integrity.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.373 Divergence 373: `method: "publish"`, `METHOD`, Calendar-Level iTIP Method Header Ingestion vs Stored Component Entity State Isolation: RFC 5545 Section 3.7.2 `METHOD` vs RFC 8984 Section 4.4.4 / Section 4.4.5 `method` and RFC 5546 iTIP
+
+- **Observed Behavior**:
+  Handling calendar transaction method headers between RFC 5545 (`METHOD`), RFC 5546 (iTIP), and JSCalendar RFC 8984 Section 4.4.4 (`method`):
+  1. Inbound method isolation (`read_vevent`): RFC 5545 Section 3.7.2 defines `METHOD` as an envelope-level property that identifies the iTIP scheduling transaction (e.g., `PUBLISH`, `REQUEST`, `REPLY`, `CANCEL`). In `jmap-ical`, inbound parsing isolates persistent event entities from ephemeral transport envelope headers: `read_vevent` does not attach `method` to the imported `CalendarEvent` (`ev.extra.contains_key("method") == false`). Storing transaction verbs on persistent records would freeze stale transport state into the database.
+  2. Outbound scheduling payload assembly (`scheduling_ical`, `event_calendar`, `instance_calendar`): In `jmap-ical`, outbound scheduling methods dynamically synthesize top-level `METHOD:REQUEST`, `METHOD:REPLY`, or `METHOD:CANCEL` headers on the `VCALENDAR` envelope as required by the scheduling protocol, preserving clean separation between transport headers and component data.
+  3. In contrast, Stalwart's `CalendarEvent/parse` extracts outer `METHOD:PUBLISH` lines directly into every child `CalendarEvent` object as `"method": "publish"`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.7.2 (`Method`).
+  2. RFC 5546 (iTIP) Section 1.4 (`Methods`).
+  3. RFC 8984 Section 4.4.4 (`method`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by transport envelope vs entity state separation. Isolates ephemeral envelope scheduling directives from persistent event storage to prevent stale transport metadata from corrupting calendar record synchronization.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.374 Divergence 374: `version: "2.0"` Top-Level Schema Stamping vs Contextual Elision in Differential Parsers: RFC 8984 / draft-ietf-calext-jscalendarbis Section 3.1.2 `version` vs Stalwart Parser Omission
+
+- **Observed Behavior**:
+  Managing JSCalendar schema version declarations between RFC 8984 / draft-ietf-calext-jscalendarbis Section 3.1.2 (`version`) and server parser responses:
+  1. Standalone root event stamping (`ical_to_event`): In `jmap-ical`, `ical_to_event` explicitly stamps `event.version = Some("2.0".to_owned())` on standalone root events. draft-ietf-calext-jscalendarbis Section 3.1.2 mandates that standalone Event objects MUST state their JSCalendar version (`"2.0"`), guaranteeing unambiguous interpretation when events are serialized as independent JSON documents.
+  2. Embedded recurrence override version prohibition: draft-ietf-calext-jscalendarbis Section 3.1.2 forbids `version` on embedded objects. In `jmap-ical`, `read_overrides` strictly strips `version` from `recurrenceOverrides` patch objects, maintaining clean schema compliance.
+  3. In contrast, Stalwart's `CalendarEvent/parse` endpoint omits `"version"` on all returned event objects across all fixtures, treating the version as contextual or implicit within the JMAP endpoint.
+- **Specification and Architectural Context**:
+  1. draft-ietf-calext-jscalendarbis Section 3.1.2 (`version`).
+  2. RFC 8984 Section 4.1.2 (`@type`).
+- **Adjudication**:
+  Conforming specification boundary and schema version integrity. Strictly adheres to draft-ietf-calext-jscalendarbis Section 3.1.2 by requiring explicit `version: "2.0"` on standalone root entities, preventing ambiguous schema interpretation across different JSCalendar revisions, while preventing version pollution inside recurrence override patches.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.375 Divergence 375: `showWithoutTime`, `VALUE=DATE`, All-Day Event Semantic Agreement, and Whole-Day Duration Bounds: RFC 5545 Section 3.3.4 / Section 3.3.5 `VALUE=DATE`, Section 3.8.2.2 `DTEND`, Section 3.8.2.5 `DURATION` vs RFC 8984 Section 4.1.5 `showWithoutTime`, `at_midnight`, and `whole_days`
+
+- **Observed Behavior**:
+  Harmonizing all-day event modeling and date vs date-time formatting between RFC 5545 (`VALUE=DATE`) and JSCalendar RFC 8984 Section 4.1.5 (`showWithoutTime`):
+  1. Inbound semantic agreement (`read_vevent`): In `cyrus_caldav_export.ics`, both Stalwart's `CalendarEvent/parse` and `jmap-ical`'s `read_vevent` parse `DTSTART;VALUE=DATE:20261109` and `DTEND;VALUE=DATE:20261114` into `showWithoutTime: true`, local midnight start `"2026-11-09T00:00:00"`, and duration `"P5D"`, confirming complete mutual agreement on inbound all-day semantics.
+  2. Outbound serialization gating (`shows_without_time`): In `jmap-ical`, outbound serialization checks four strict preconditions before emitting `VALUE=DATE`: (1) `event.show_without_time == Some(true)`, (2) `at_midnight(start)`, (3) `whole_days(duration)`, and (4) absence of sub-day recurrence rules (`names_a_time_of_day`). It further verifies that all recurrence overrides satisfy `instance_shows_without_time`. If any condition fails (such as a timed recurrence override), the entire series is elevated to `VALUE=DATE-TIME`, protecting downstream calendar systems from mixed date types.
+  3. Outbound rendering (`vevent_of`): When all invariants hold, `vevent_of` emits `DTSTART;VALUE=DATE:YYYYMMDD` and `DURATION:P<n>D` without timezone parameters.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.4 (`Date`), Section 3.3.5 (`Date-Time`), and Section 3.8.2.5 (`Duration`).
+  2. RFC 8984 Section 4.1.5 (`showWithoutTime`) and Section 4.1.7 (`duration`).
+- **Adjudication**:
+  Conforming specification boundary and temporal data integrity. Achieves full interoperability with Stalwart on inbound all-day events, while rigorously gating outbound `VALUE=DATE` serialization against time-of-day or fractional-day recurrence corruption.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
 
 

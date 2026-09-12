@@ -44430,3 +44430,195 @@ fn differential_oracle_links_rel_enclosure_omission_and_default_semantics() {
     assert!(attach_line.contains("SIZE=102400"));
     assert!(without(&out, "ATTACH;VALUE=URI"));
 }
+
+#[test]
+fn differential_oracle_sequence_default_value_omission_and_store_ownership() {
+    // Audit divergence 372: Sequence revision number ingestion vs default value omission
+    // and server-store lifecycle ownership: RFC 5545 Section 3.8.7.4 SEQUENCE vs RFC 8984
+    // Section 4.1.6 sequence.
+
+    // 1. Inbound parsing drops SEQUENCE lines (default value is 0 per RFC 8984 Section 4.1.6)
+    // to preserve server store revision ownership.
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:sequence-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Sequence Test\r\n",
+        "SEQUENCE:0\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    assert_eq!(
+        ev.id.as_ref().map(|id| id.as_str()),
+        Some("sequence-test-1")
+    );
+    // jmap-ical drops SEQUENCE on import; extra does not contain sequence
+    assert!(!ev.extra.contains_key("sequence"));
+
+    // 2. Non-zero sequence is also safely dropped on component import
+    let ics_seq3 = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:sequence-test-2\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Sequence Test 2\r\n",
+        "SEQUENCE:3\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_seq3 = ical_to_event(ics_seq3).expect("parses calendar");
+    assert!(!ev_seq3.extra.contains_key("sequence"));
+
+    // 3. Outbound serialization does not emit SEQUENCE when unmanaged
+    let out = event_to_ical(&ev);
+    assert!(without(&out, "SEQUENCE"));
+}
+
+#[test]
+fn differential_oracle_itip_method_transport_isolation_and_envelope_synthesis() {
+    // Audit divergence 373: Transport envelope method isolation vs persistent calendar
+    // component entity state: RFC 5545 Section 3.7.2 METHOD vs RFC 8984 Section 4.4.4
+    // and RFC 5546 iTIP transport envelopes.
+
+    // 1. Inbound import ignores VCALENDAR METHOD:PUBLISH and isolates the persistent event entity
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "METHOD:PUBLISH\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:method-isolation-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Method Isolation Test\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    assert!(!ev.extra.contains_key("method"));
+
+    // 2. Outbound scheduling assembly generates METHOD:REQUEST dynamically on VCALENDAR envelope
+    let request_ics = jmap_ical::scheduling_ical(&ev, "REQUEST", None);
+    assert!(request_ics.contains("METHOD:REQUEST\r\n"));
+
+    // 3. Outbound scheduling assembly generates METHOD:REPLY dynamically on VCALENDAR envelope
+    let reply_ics = jmap_ical::scheduling_ical(&ev, "REPLY", None);
+    assert!(reply_ics.contains("METHOD:REPLY\r\n"));
+
+    // 4. Outbound scheduling assembly generates METHOD:CANCEL for detached instance
+    let cancel_ics = jmap_ical::scheduling_ical(&ev, "CANCEL", Some("2026-10-15T10:00:00"));
+    assert!(cancel_ics.contains("METHOD:CANCEL\r\n"));
+    assert!(cancel_ics.contains("RECURRENCE-ID:20261015T100000Z\r\n"));
+}
+
+#[test]
+fn differential_oracle_version_stamping_root_vs_override_elision() {
+    // Audit divergence 374: Top-level schema version stamping vs contextual elision:
+    // RFC 8984 / draft-ietf-calext-jscalendarbis Section 3.1.2 version vs Stalwart omission.
+
+    // 1. Root standalone Event is stamped with version: "2.0" per jscalendarbis Section 3.1.2
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:version-stamping-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Version Stamping Master\r\n",
+        "RRULE:FREQ=DAILY;COUNT=3\r\n",
+        "END:VEVENT\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:version-stamping-test-1\r\n",
+        "RECURRENCE-ID:20261016T100000Z\r\n",
+        "DTSTART:20261016T110000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Version Stamping Detached\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    assert_eq!(ev.version.as_deref(), Some("2.0"));
+
+    // 2. Embedded recurrence override patch does NOT carry version
+    let overrides = ev.recurrence_overrides.as_ref().expect("overrides present");
+    let patch = overrides.get("2026-10-16T10:00:00").expect("patch exists");
+    assert!(
+        patch.get("version").is_none(),
+        "recurrence override patch must not state version"
+    );
+
+    // 3. Outbound serialization and re-import preserves root version: "2.0"
+    let out = event_to_ical(&ev);
+    let reparsed = ical_to_event(&out).expect("reparses calendar");
+    assert_eq!(reparsed.version.as_deref(), Some("2.0"));
+    let rep_overrides = reparsed
+        .recurrence_overrides
+        .as_ref()
+        .expect("reparsed overrides");
+    assert!(
+        rep_overrides
+            .get("2026-10-16T10:00:00")
+            .unwrap()
+            .get("version")
+            .is_none()
+    );
+}
+
+#[test]
+fn differential_oracle_all_day_show_without_time_agreement_and_gating() {
+    // Audit divergence 375: showWithoutTime semantic agreement, DATE vs DATE-TIME gating,
+    // and whole-day duration bounds: RFC 5545 Section 3.3.4 / 3.3.5 VALUE=DATE vs RFC 8984
+    // Section 4.1.5 showWithoutTime, at_midnight, and whole_days.
+
+    // 1. Inbound DATE start and end (from cyrus_caldav_export.ics) parses to showWithoutTime: true
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:all-day-test-1\r\n",
+        "DTSTART;VALUE=DATE:20261109\r\n",
+        "DTEND;VALUE=DATE:20261114\r\n",
+        "SUMMARY:All-Day Symposium\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    assert_eq!(ev.show_without_time, Some(true));
+    assert_eq!(ev.start.as_deref(), Some("2026-11-09T00:00:00"));
+    assert_eq!(ev.duration.as_deref(), Some("P5D"));
+
+    // 2. Outbound serialization renders DTSTART;VALUE=DATE when invariants hold
+    let out = event_to_ical(&ev);
+    let dtstart_line = content_line(&out, "DTSTART");
+    assert!(dtstart_line.contains("VALUE=DATE:20261109"));
+    let duration_line = content_line(&out, "DURATION");
+    assert_eq!(duration_line, "DURATION:P5D");
+
+    // 3. shows_without_time validates midnight start, whole-day duration, and recurrence rules
+    assert!(jmap_ical::event::shows_without_time(&ev, "20261109T000000"));
+
+    // 4. Non-midnight start or fractional duration safely prevents DATE serialization
+    let mut ev_timed = ev.clone();
+    ev_timed.start = Some("2026-11-09T09:00:00".to_string());
+    assert!(!jmap_ical::event::shows_without_time(
+        &ev_timed,
+        "20261109T090000"
+    ));
+
+    let mut ev_frac = ev.clone();
+    ev_frac.duration = Some("P5DT2H".to_string());
+    assert!(!jmap_ical::event::shows_without_time(
+        &ev_frac,
+        "20261109T000000"
+    ));
+}
