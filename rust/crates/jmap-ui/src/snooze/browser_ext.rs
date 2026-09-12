@@ -12,14 +12,14 @@
 use std::ffi::CStr;
 
 use eds_sys::{EExtension, EExtensionClass, e_extension_get_extensible, e_extension_get_type};
-use evo_sys::{EMailBrowser, e_mail_browser_get_type};
+#[cfg(evolution_eui_manager)]
+use evo_sys::e_mail_reader_get_ui_manager;
 #[cfg(not(evolution_eui_manager))]
 use evo_sys::{
     E_MAIL_READER_ACTION_GROUP_STANDARD, e_mail_browser_get_ui_manager,
     e_mail_reader_get_action_group,
 };
-#[cfg(evolution_eui_manager)]
-use evo_sys::e_mail_reader_get_ui_manager;
+use evo_sys::{EMailBrowser, e_mail_browser_get_type};
 use glib_sys::{GType, gpointer};
 use gobject_sys::{GObject, GObjectClass, g_signal_connect_data};
 use jmap_backend_core::subclass::{self, ObjectSubclass};

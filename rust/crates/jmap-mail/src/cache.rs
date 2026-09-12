@@ -479,8 +479,9 @@ impl MessageCache {
         // SAFETY: a live cache, two NUL-terminated strings alive across the
         // call. The pointer this hands back is a fresh `g_malloc`'d string
         // this call owns.
-        let raw =
-            unsafe { camel_data_cache_get_filename(cache.as_ptr(), MESSAGES.as_ptr(), key.as_ptr()) };
+        let raw = unsafe {
+            camel_data_cache_get_filename(cache.as_ptr(), MESSAGES.as_ptr(), key.as_ptr())
+        };
         // SAFETY: `raw` is NULL or the fresh allocation above, read before the
         // one free below; `read_string` copies rather than borrowing past it.
         let path = unsafe { read_string(raw) };

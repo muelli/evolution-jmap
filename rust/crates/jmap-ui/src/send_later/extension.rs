@@ -46,27 +46,26 @@ use eds_sys::{
 use evo_sys::{
     E_COMPOSER_HEADER_FROM, EHTMLEditor, EMsgComposer, GTK_BUTTONS_CLOSE,
     GTK_DIALOG_DESTROY_WITH_PARENT, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_RESPONSE_CANCEL,
-    GTK_RESPONSE_OK, GtkWindow,
-    e_composer_header_get_registry, e_composer_header_table_dup_identity_uid,
-    e_composer_header_table_get_header, e_date_edit_get_time, e_date_edit_new,
-    e_date_edit_set_show_time, e_date_edit_set_time, e_html_editor_get_ui_manager,
-    e_msg_composer_get_editor, e_msg_composer_get_header_table, e_msg_composer_get_message,
-    e_msg_composer_get_message_finish, e_msg_composer_get_type, gtk_container_add,
-    gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new, gtk_dialog_run,
-    gtk_message_dialog_new, gtk_widget_destroy, gtk_widget_show_all, gtk_window_set_title,
-    gtk_window_set_transient_for,
-};
-#[cfg(not(evolution_eui_manager))]
-use evo_sys::{
-    GtkAction, GtkActionGroup, e_html_editor_get_action_group, gtk_action_get_name,
-    gtk_action_group_add_action, gtk_action_group_get_action, gtk_action_new,
-    gtk_action_set_sensitive, gtk_ui_manager_add_ui_from_string, gtk_ui_manager_ensure_update,
+    GTK_RESPONSE_OK, GtkWindow, e_composer_header_get_registry,
+    e_composer_header_table_dup_identity_uid, e_composer_header_table_get_header,
+    e_date_edit_get_time, e_date_edit_new, e_date_edit_set_show_time, e_date_edit_set_time,
+    e_html_editor_get_ui_manager, e_msg_composer_get_editor, e_msg_composer_get_header_table,
+    e_msg_composer_get_message, e_msg_composer_get_message_finish, e_msg_composer_get_type,
+    gtk_container_add, gtk_dialog_add_button, gtk_dialog_get_content_area, gtk_dialog_new,
+    gtk_dialog_run, gtk_message_dialog_new, gtk_widget_destroy, gtk_widget_show_all,
+    gtk_window_set_title, gtk_window_set_transient_for,
 };
 #[cfg(evolution_eui_manager)]
 use evo_sys::{
     EUIAction, EUIActionEntry, EUIActionGroup, GVariant, e_ui_action_group_get_action,
     e_ui_action_set_label, e_ui_action_set_sensitive, e_ui_action_set_tooltip,
     e_ui_manager_add_actions_with_eui_data, e_ui_manager_get_action_group, g_action_get_name,
+};
+#[cfg(not(evolution_eui_manager))]
+use evo_sys::{
+    GtkAction, GtkActionGroup, e_html_editor_get_action_group, gtk_action_get_name,
+    gtk_action_group_add_action, gtk_action_group_get_action, gtk_action_new,
+    gtk_action_set_sensitive, gtk_ui_manager_add_ui_from_string, gtk_ui_manager_ensure_update,
 };
 use gio_sys::GAsyncResult;
 use glib_sys::{GError, GFALSE, GTRUE, GType, g_error_free, g_free, gpointer};
@@ -951,7 +950,11 @@ unsafe extern "C" fn on_activate(action: *mut GtkAction, composer: gpointer) {
     });
 }
 #[cfg(evolution_eui_manager)]
-unsafe extern "C" fn on_activate(action: *mut EUIAction, _value: *mut GVariant, composer: gpointer) {
+unsafe extern "C" fn on_activate(
+    action: *mut EUIAction,
+    _value: *mut GVariant,
+    composer: gpointer,
+) {
     guard("JmapSendLaterExtension::activate", (), || {
         // SAFETY: a live action GLib is emitting on; `EUIAction` implements
         // `GAction`, whose own API is where a name comes from (the type's own

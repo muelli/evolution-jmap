@@ -30,6 +30,8 @@
 use std::ffi::CStr;
 
 use eds_sys::{EExtension, EExtensionClass, e_extension_get_extensible, e_extension_get_type};
+#[cfg(evolution_eui_manager)]
+use evo_sys::e_shell_view_get_ui_manager;
 use evo_sys::{
     EShellView, e_shell_view_get_name, e_shell_view_get_shell_content, e_shell_view_get_type,
 };
@@ -37,8 +39,6 @@ use evo_sys::{
 use evo_sys::{
     e_shell_view_get_shell_window, e_shell_window_get_action_group, e_shell_window_get_ui_manager,
 };
-#[cfg(evolution_eui_manager)]
-use evo_sys::e_shell_view_get_ui_manager;
 use glib_sys::{GType, gpointer};
 use gobject_sys::{GObject, GObjectClass, g_signal_connect_data};
 use jmap_backend_core::marshal::read_string;
