@@ -7212,6 +7212,66 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.376 Divergence 376: `recurrenceOverrides`, `excluded: true`, `EXDATE`, `VALUE=DATE` Alignment, and Multi-Format Exception Dates: RFC 5545 Section 3.8.5.1 `EXDATE` vs RFC 8984 Section 4.3.3 `recurrenceOverrides`
+
+- **Observed Behavior**:
+  Harmonizing recurrence exclusion dates between RFC 5545 (`EXDATE`) and JSCalendar RFC 8984 Section 4.3.3 (`recurrenceOverrides`):
+  1. Inbound exception date mapping (`read_overrides`): In `jmap-ical`, `read_overrides` maps `EXDATE` entries into `recurrenceOverrides` patch objects with `{"excluded": true}` keyed by ISO 8601 local date-time strings (`LocalDateTime`). For all-day events (`cyrus_caldav_export.ics`), `EXDATE;VALUE=DATE:20281110` is evaluated to local midnight `"2028-11-10T00:00:00"`, strictly aligning with the series' `showWithoutTime: true` semantic. For timed events (`thunderbird_calendar_export.ics`), `EXDATE;TZID=Europe/London:20261109T093000` is evaluated to the local wall-clock recurrence instant `"2026-11-09T09:30:00"`.
+  2. Mutual oracle agreement: Stalwart v1.0.0's `CalendarEvent/parse` endpoint produces exact byte-for-byte identical `recurrenceOverrides` structures for exception dates across both all-day and timed fixtures (`{"2028-11-10T00:00:00": {"excluded": true}}` and `{"2026-11-09T09:30:00": {"excluded": true}}`).
+  3. Outbound serialization (`dated`, `recurrence_dates`): In `jmap-ical`, `recurrence_dates` collects excluded instances, and `dated` renders them: emitting `EXDATE;VALUE=DATE:YYYYMMDD` when `as_a_date` is true, `EXDATE:YYYYMMDDTHHMMSSZ` when UTC, or `EXDATE;TZID=...:YYYYMMDDTHHMMSS` for zoned series, preserving full round-trip fidelity across all date representations.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.5.1 (`Exception Date-Times`).
+  2. RFC 8984 Section 4.3.3 (`recurrenceOverrides`).
+- **Adjudication**:
+  Conforming specification boundary and temporal recurrence integrity. Both implementations achieve complete semantic consensus on inbound `EXDATE` parsing across `VALUE=DATE` and zoned date-time values, while `jmap-ical`'s outbound serialization precisely preserves date-type discrimination.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.377 Divergence 377: `OffsetTrigger`, `TRIGGER;VALUE=DURATION`, Explicit Parameter Tolerance, and Wire Omission on Outbound Serialization: RFC 5545 Section 3.8.6.3 `TRIGGER` vs RFC 8984 Section 4.5.2 `OffsetTrigger`
+
+- **Observed Behavior**:
+  Translating relative alarm triggers between RFC 5545 (`TRIGGER`) and JSCalendar RFC 8984 Section 4.5.2 (`OffsetTrigger`):
+  1. Inbound parameter tolerance (`read_alert`, `stated_offset`): RFC 5545 Section 3.8.6.3 defines `DURATION` as the default value type for `TRIGGER`. Real-world producers vary: Thunderbird (`thunderbird_calendar_export.ics`) and Cyrus (`cyrus_caldav_export.ics`) explicitly serialize `TRIGGER;VALUE=DURATION:-PT15M` and `TRIGGER;VALUE=DURATION:-P1D`, whereas Apple and Google omit the redundant parameter (`TRIGGER:-PT15M`). In `jmap-ical`, `read_alert` cleanly strips parameters and parses the signed ISO 8601 duration into an `OffsetTrigger` (`offset: "-PT15M"`), seamlessly tolerating both explicit `VALUE=DURATION` and implicit default syntax.
+  2. Mutual oracle agreement: Stalwart v1.0.0's `CalendarEvent/parse` also ingests both parameter forms into `OffsetTrigger`.
+  3. Outbound wire omission (`drawn_alert`): On outbound serialization, `drawn_alert` renders canonical `TRIGGER:-PT15M`, eliding the redundant `VALUE=DURATION` parameter per RFC 5545 default value omission rules to minimize wire payload size and avoid downstream parser divergence.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.6.3 (`Trigger`).
+  2. RFC 8984 Section 4.5.2 (`OffsetTrigger`).
+- **Adjudication**:
+  Conforming specification boundary and defensive parameter parsing. Tolerates redundant `VALUE=DURATION` parameters on import while suppressing them on export to produce compact, standard-compliant RFC 5545 payloads.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.378 Divergence 378: `until`, `UNTIL`, Recurrence End Ingestion and Projection: RFC 5545 Section 3.3.10 UTC Mandate vs RFC 8984 Section 4.3.1 Local Date-Time Representation
+
+- **Observed Behavior**:
+  Reconciling recurrence end boundaries between RFC 5545 Section 3.3.10 (`UNTIL`) and JSCalendar RFC 8984 Section 4.3.1 (`until`):
+  1. Inbound projection (`read_until`): RFC 5545 Section 3.3.10 mandates that when `DTSTART` specifies a local time with `TZID`, `UNTIL` MUST be formatted in UTC Zulu (`YYYYMMDDTHHMMSSZ`). Conversely, RFC 8984 Section 4.3.1 requires `until` to be a `LocalDateTime` without timezone offset, specified in the event's local time zone. In `jmap-ical`, `read_until` uses `Ends::In(zone)` and `zone.offset_at` to project UTC `UNTIL` values (such as `UNTIL=20261120T150000Z` in `America/New_York` from `google_calendar_export.ics`) to local time (`"until": "2026-11-20T10:00:00"`). Stalwart v1.0.0's `CalendarEvent/parse` performs the identical projection.
+  2. Outbound serialization design (`rule_to_rrule`): Converting local `until` back to UTC for arbitrary future dates would require an external timezone database to look up historical and future daylight saving transitions. To maintain a pure, zero-dependency crate architecture, `jmap-ical` intentionally writes `UNTIL=YYYYMMDDTHHMMSS` in local time for zoned events, which libical and Evolution Data Server read reliably in the component's timezone. For UTC events, `rule_to_rrule` appends `Z`.
+  3. In contrast, Stalwart relies on an embedded zone database to re-project `until` back to UTC.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`recurrenceRules`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by zero-dependency architecture and libical consumer compatibility. Safely projects UTC `UNTIL` to local `LocalDateTime` on import using in-document `VTIMEZONE` transitions, while serializing local date-times on export to eliminate external tzdata coupling.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.379 Divergence 379: `virtualLocations`, `CONFERENCE`, `FEATURE`, `LABEL`, and Online Meeting Metadata Extraction vs Non-Deterministic Key Generation: RFC 7986 Section 5.11 `CONFERENCE` vs RFC 8984 Section 4.2.6 `virtualLocations`
+
+- **Observed Behavior**:
+  Translating online video bridge and conference properties between RFC 7986 Section 5.11 (`CONFERENCE`) and JSCalendar RFC 8984 Section 4.2.6 (`virtualLocations`):
+  1. Inbound feature and label parsing (`read_virtual_locations`): RFC 7986 defines `FEATURE` (comma-delimited tokens: `AUDIO`, `VIDEO`, `CHAT`, `SCREEN`) and `LABEL` parameters on `CONFERENCE`. In `jmap-ical`, `read_virtual_locations` parses `FEATURE=AUDIO,VIDEO` into a boolean map (`{"audio": true, "video": true}`) and maps `LABEL="..."` to `name: "..."` (seen in `google_calendar_export.ics` and `evolution_calendar_export.ics`). Stalwart v1.0.0's `CalendarEvent/parse` extracts the exact same `features` map and `name` string.
+  2. Key allocation divergence: Stalwart synthesizes non-deterministic random UUID map keys (`c3559c83-1c2a-5a9d-bd5f-e1b1e6b90b60`), introducing spurious diff churn across repeated parse calls. In `jmap-ical`, deterministic fallback keys (`v1`, `v2`) or explicit round-trip keys (`X-JMAP-KEY`) are preserved, ensuring reproducible JSON serialization.
+  3. Outbound rendering (`drawn_conference`): `jmap-ical` converts `virtualLocations` back to RFC 7986 `CONFERENCE` lines with `VALUE=URI`, `FEATURE=...`, `LABEL="..."`, and `X-JMAP-KEY=...`.
+- **Specification and Architectural Context**:
+  1. RFC 7986 Section 5.11 (`Conference Information`) and Section 5.12 (`Feature Parameter`).
+  2. RFC 8984 Section 4.2.6 (`virtualLocations`).
+- **Adjudication**:
+  Conforming specification adaptation and key determinism. Achieves complete mutual feature and label parsing parity with Stalwart while preventing non-deterministic UUID map key churn.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
 
 
 

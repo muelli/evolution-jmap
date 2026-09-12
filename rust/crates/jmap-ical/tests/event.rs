@@ -44622,3 +44622,234 @@ fn differential_oracle_all_day_show_without_time_agreement_and_gating() {
         "20261109T000000"
     ));
 }
+
+#[test]
+fn differential_oracle_exdate_all_day_and_timed_alignment() {
+    // Audit divergence 376: recurrenceOverrides excluded: true, EXDATE, and
+    // multi-format exception dates: RFC 5545 Section 3.8.5.1 EXDATE vs RFC 8984
+    // Section 4.3.3 recurrenceOverrides.
+
+    // 1. All-day series with EXDATE;VALUE=DATE (from cyrus_caldav_export.ics)
+    let ics_all_day = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:exdate-all-day-test-1\r\n",
+        "DTSTART;VALUE=DATE:20261110\r\n",
+        "DTEND;VALUE=DATE:20261113\r\n",
+        "RRULE:FREQ=YEARLY;COUNT=5\r\n",
+        "EXDATE;VALUE=DATE:20281110\r\n",
+        "SUMMARY:All-Day Series with Exclusion\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_all_day = ical_to_event(ics_all_day).expect("parses calendar");
+    assert_eq!(ev_all_day.show_without_time, Some(true));
+    let overrides = ev_all_day
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides present");
+    let ex_patch = overrides
+        .get("2028-11-10T00:00:00")
+        .expect("exclusion present");
+    assert_eq!(ex_patch.get("excluded"), Some(&Value::Bool(true)));
+
+    // 2. Outbound serialization renders EXDATE;VALUE=DATE:YYYYMMDD
+    let out_all_day = event_to_ical(&ev_all_day);
+    let exdate_line = content_line(&out_all_day, "EXDATE");
+    assert!(exdate_line.contains("VALUE=DATE:20281110"));
+
+    // 3. Timed series with EXDATE;TZID=... (from thunderbird_calendar_export.ics)
+    let ics_timed = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:Europe/London\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19701025T020000\r\n",
+        "TZOFFSETFROM:+0100\r\n",
+        "TZOFFSETTO:+0000\r\n",
+        "TZNAME:GMT\r\n",
+        "END:STANDARD\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:exdate-timed-test-1\r\n",
+        "DTSTART;TZID=Europe/London:20261012T093000\r\n",
+        "DURATION:PT1H30M\r\n",
+        "RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=MO\r\n",
+        "EXDATE;TZID=Europe/London:20261109T093000\r\n",
+        "SUMMARY:Timed Series with Exclusion\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_timed = ical_to_event(ics_timed).expect("parses calendar");
+    let timed_overrides = ev_timed
+        .recurrence_overrides
+        .as_ref()
+        .expect("overrides present");
+    let timed_ex_patch = timed_overrides
+        .get("2026-11-09T09:30:00")
+        .expect("exclusion present");
+    assert_eq!(timed_ex_patch.get("excluded"), Some(&Value::Bool(true)));
+
+    // 4. Outbound serialization renders EXDATE;TZID=Europe/London:20261109T093000
+    let out_timed = event_to_ical(&ev_timed);
+    let timed_exdate_line = content_line(&out_timed, "EXDATE");
+    assert!(timed_exdate_line.contains("TZID=Europe/London:20261109T093000"));
+}
+
+#[test]
+fn differential_oracle_trigger_value_duration_parameter_tolerance() {
+    // Audit divergence 377: OffsetTrigger, TRIGGER;VALUE=DURATION, explicit parameter
+    // tolerance, and wire elision: RFC 5545 Section 3.8.6.3 TRIGGER vs RFC 8984
+    // Section 4.5.2 OffsetTrigger.
+
+    // 1. Explicit VALUE=DURATION parameter from thunderbird_calendar_export.ics
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:trigger-value-duration-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Alarm Value Duration Test\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "TRIGGER;VALUE=DURATION:-PT15M\r\n",
+        "DESCRIPTION:Reminder\r\n",
+        "END:VALARM\r\n",
+        "BEGIN:VALARM\r\n",
+        "ACTION:DISPLAY\r\n",
+        "TRIGGER;VALUE=DURATION:-P1D\r\n",
+        "DESCRIPTION:One day reminder\r\n",
+        "END:VALARM\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let alerts = ev.alerts.as_ref().expect("alerts present");
+    assert_eq!(alerts.len(), 2);
+
+    let offsets: Vec<_> = alerts
+        .values()
+        .filter_map(|alert| alert.get("trigger"))
+        .filter_map(|trig| trig.get("offset"))
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(offsets.contains(&"-PT15M"));
+    assert!(offsets.contains(&"-P1D"));
+
+    // 2. Outbound serialization renders TRIGGER without redundant VALUE=DURATION
+    let out = event_to_ical(&ev);
+    assert!(out.contains("TRIGGER:-PT15M\r\n"));
+    assert!(out.contains("TRIGGER:-P1D\r\n"));
+    assert!(!out.contains("TRIGGER;VALUE=DURATION"));
+}
+
+#[test]
+fn differential_oracle_recurrence_until_utc_to_local_projection() {
+    // Audit divergence 378: until, UNTIL, UTC Zulu specification mandate (RFC 5545
+    // Section 3.3.10) vs local date-time representation (RFC 8984 Section 4.3.1),
+    // and zone offset projection.
+
+    // 1. UNTIL in UTC projected to local time in America/New_York (google_calendar_export.ics)
+    let ics_google = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VTIMEZONE\r\n",
+        "TZID:America/New_York\r\n",
+        "BEGIN:STANDARD\r\n",
+        "DTSTART:19701101T020000\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=11;BYDAY=1SU\r\n",
+        "TZOFFSETFROM:-0400\r\n",
+        "TZOFFSETTO:-0500\r\n",
+        "TZNAME:EST\r\n",
+        "END:STANDARD\r\n",
+        "BEGIN:DAYLIGHT\r\n",
+        "DTSTART:19700308T020000\r\n",
+        "RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=2SU\r\n",
+        "TZOFFSETFROM:-0500\r\n",
+        "TZOFFSETTO:-0400\r\n",
+        "TZNAME:EDT\r\n",
+        "END:DAYLIGHT\r\n",
+        "END:VTIMEZONE\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:until-projection-test-1\r\n",
+        "DTSTART;TZID=America/New_York:20260915T100000\r\n",
+        "DURATION:PT1H30M\r\n",
+        "RRULE:FREQ=WEEKLY;UNTIL=20261120T150000Z;INTERVAL=1;BYDAY=TU,TH\r\n",
+        "SUMMARY:Architecture Sync\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_google = ical_to_event(ics_google).expect("parses calendar");
+    let rule = ev_google.recurrence_rule.as_ref().expect("rule present");
+    // In America/New_York on 2026-11-20 (EST, UTC-5), 15:00:00Z is 10:00:00 local
+    assert_eq!(rule.until.as_deref(), Some("2026-11-20T10:00:00"));
+
+    // 2. Outbound serialization for zoned event retains local date-time without Z
+    // (libical reads it in the event's zone, avoiding timezone database dependency)
+    let out = event_to_ical(&ev_google);
+    let rrule_line = content_line(&out, "RRULE");
+    assert!(rrule_line.contains("UNTIL=20261120T100000"));
+
+    // 3. Outbound serialization for UTC event emits trailing Z
+    let mut ev_utc = ev_google.clone();
+    ev_utc.time_zone = Some("Etc/UTC".to_string());
+    let out_utc = event_to_ical(&ev_utc);
+    let rrule_utc_line = content_line(&out_utc, "RRULE");
+    assert!(rrule_utc_line.contains("UNTIL=20261120T100000Z"));
+}
+
+#[test]
+fn differential_oracle_conference_features_and_label_mapping() {
+    // Audit divergence 379: virtualLocations, CONFERENCE, FEATURE, LABEL, and
+    // multi-feature flag parsing: RFC 7986 Section 5.11 CONFERENCE vs RFC 8984
+    // Section 4.2.6 virtualLocations.
+
+    // 1. Parsing CONFERENCE with FEATURE=AUDIO,VIDEO and LABEL="Google Meet"
+    let ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:conf-features-test-1\r\n",
+        "DTSTART:20261015T100000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Virtual Bridge Meeting\r\n",
+        "CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=\"Google Meet\":https://meet.google.com/abc-defg-hij\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev = ical_to_event(ics).expect("parses calendar");
+    let vlocations = ev
+        .virtual_locations
+        .as_ref()
+        .expect("virtualLocations present");
+    assert_eq!(vlocations.len(), 1);
+
+    let vloc = vlocations.values().next().expect("entry present");
+    assert_eq!(
+        vloc.get("name").and_then(Value::as_str),
+        Some("Google Meet")
+    );
+    assert_eq!(
+        vloc.get("uri").and_then(Value::as_str),
+        Some("https://meet.google.com/abc-defg-hij")
+    );
+    let features = vloc.get("features").expect("features present");
+    assert_eq!(features.get("audio"), Some(&Value::Bool(true)));
+    assert_eq!(features.get("video"), Some(&Value::Bool(true)));
+
+    // 2. Outbound serialization renders CONFERENCE with FEATURE and LABEL
+    let out = event_to_ical(&ev);
+    let conf_line = content_line(&out, "CONFERENCE");
+    assert!(conf_line.contains("VALUE=URI"));
+    assert!(conf_line.contains("FEATURE=AUDIO,VIDEO"));
+    assert!(conf_line.contains("LABEL=\"Google Meet\""));
+    assert!(conf_line.contains("https://meet.google.com/abc-defg-hij"));
+}
