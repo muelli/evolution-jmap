@@ -814,10 +814,7 @@ fn main() {
         .as_deref()
         .map(version_major_minor)
         .is_some_and(|version| version >= MIN_EVO_EUI_MANAGER);
-    clang_args.push(format!(
-        "-DJMAP_EVO_EUI_MANAGER={}",
-        u8::from(eui_manager)
-    ));
+    clang_args.push(format!("-DJMAP_EVO_EUI_MANAGER={}", u8::from(eui_manager)));
     if eui_manager {
         println!("cargo:rustc-cfg=evolution_eui_manager");
     }

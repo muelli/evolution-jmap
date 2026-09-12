@@ -32,14 +32,9 @@ use eds_sys::{
     camel_service_get_uid, e_source_get_parent, e_source_registry_ref_source,
 };
 use evo_sys::{
-    EMailReader, EShellContent, GTK_BUTTONS_CLOSE, GTK_MESSAGE_ERROR, e_mail_reader_get_selected_uids,
-    e_mail_reader_ref_folder, e_shell_get_default, e_shell_get_registry, gtk_dialog_run,
-    gtk_message_dialog_new, gtk_widget_destroy,
-};
-#[cfg(not(evolution_eui_manager))]
-use evo_sys::{
-    GtkAction, GtkActionGroup, GtkUIManager, gtk_action_group_add_action, gtk_action_new,
-    gtk_action_set_sensitive, gtk_ui_manager_add_ui_from_string, gtk_ui_manager_ensure_update,
+    EMailReader, EShellContent, GTK_BUTTONS_CLOSE, GTK_MESSAGE_ERROR,
+    e_mail_reader_get_selected_uids, e_mail_reader_ref_folder, e_shell_get_default,
+    e_shell_get_registry, gtk_dialog_run, gtk_message_dialog_new, gtk_widget_destroy,
 };
 #[cfg(evolution_eui_manager)]
 use evo_sys::{
@@ -48,11 +43,18 @@ use evo_sys::{
     e_ui_manager_get_action_group,
 };
 #[cfg(not(evolution_eui_manager))]
+use evo_sys::{
+    GtkAction, GtkActionGroup, GtkUIManager, gtk_action_group_add_action, gtk_action_new,
+    gtk_action_set_sensitive, gtk_ui_manager_add_ui_from_string, gtk_ui_manager_ensure_update,
+};
+#[cfg(not(evolution_eui_manager))]
 use glib_sys::{GError, g_error_free};
 use glib_sys::{GFALSE, GTRUE, gpointer};
+use gobject_sys::{
+    GObject, g_object_get, g_object_get_data, g_object_set_data_full, g_object_unref,
+};
 #[cfg(not(evolution_eui_manager))]
 use gobject_sys::{g_object_set, g_signal_connect_data};
-use gobject_sys::{GObject, g_object_get, g_object_get_data, g_object_set_data_full, g_object_unref};
 use jmap_backend_core::i18n::{N_, translate, translate_static, translate_with};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::trampoline::guard;
@@ -583,7 +585,11 @@ unsafe extern "C" fn activate_hour(_action: *mut GtkAction, owner: gpointer) {
     });
 }
 #[cfg(evolution_eui_manager)]
-unsafe extern "C" fn activate_hour(_action: *mut EUIAction, _value: *mut GVariant, owner: gpointer) {
+unsafe extern "C" fn activate_hour(
+    _action: *mut EUIAction,
+    _value: *mut GVariant,
+    owner: gpointer,
+) {
     guard("snooze::hour", (), || unsafe {
         // SAFETY: as the 3.52 trampoline of the same name.
         activate(owner.cast(), Preset::InOneHour);
