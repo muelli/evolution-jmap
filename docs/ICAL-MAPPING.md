@@ -7017,3 +7017,75 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
 - **Status**:
   Conforming specification boundary. Documented and pinned in `tests/event.rs`.
 
+### 13.364 Divergence 364: `created`, `updated`, `CREATED`, `LAST-MODIFIED`, and `DTSTAMP`: Creation and Update Instant Ingestion vs Server-Store Lifecycle Ownership: RFC 5545 Section 3.8.7.1 `CREATED`, Section 3.8.7.2 `DTSTAMP`, Section 3.8.7.3 `LAST-MODIFIED` vs RFC 8984 Section 4.1.4 `created` and Section 4.1.5 `updated`, UTC Zulu Timestamp Formatting, and Millisecond Truncation
+
+- **Observed Behavior**:
+  Reconciling lifecycle timestamps between RFC 5545 (`CREATED`, `LAST-MODIFIED`, `DTSTAMP`) and JSCalendar RFC 8984 Section 4.1.4 (`created`) and Section 4.1.5 (`updated`) requires separating store-managed record state from foreign calendar payload import:
+  1. Inbound parsing (`read_vevent`): In `jmap-ical`, `ical_to_event` deliberately drops `CREATED`, `LAST-MODIFIED`, and `DTSTAMP`, returning `created: None` and `updated: None`. In the JMAP architecture, `created` and `updated` are store-owned timestamps tracking when the record was created or modified in the JMAP account store. If foreign import stamped arbitrary `created` or `updated` timestamps, client cache invalidation and change tracking in EDS/JMAP would miscalculate local modifications or treat stale imports as freshly updated.
+  2. Outbound rendering (`vevent_of`): Serializes `created` as `CREATED`, and serializes `updated` as both `LAST-MODIFIED` and `DTSTAMP` (with RFC 5545 UTC Zulu format `YYYYMMDDTHHMMSSZ`, stripping millisecond fractions, and requiring 'Z' suffix). If `created` or `updated` are `None`, `CREATED` and `LAST-MODIFIED` are omitted cleanly without synthesizing arbitrary timestamps.
+  3. Strict timestamp validation: Timestamps lacking the trailing 'Z' suffix or containing fractional seconds are safely omitted from outbound serialization, conforming strictly to RFC 5545 Section 3.3.5.
+  4. In contrast, Stalwart's `CalendarEvent/parse` maps `CREATED` directly into `created` and `LAST-MODIFIED`/`DTSTAMP` into `updated`, treating them as document properties rather than server store state.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.7.1 (`Date-Time Created`), Section 3.8.7.2 (`Date-Time Stamp`), and Section 3.8.7.3 (`Last Modified`).
+  2. RFC 5545 Section 3.3.5 (`Date-Time`).
+  3. RFC 8984 Section 4.1.4 (`created`) and Section 4.1.5 (`updated`).
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by JMAP stateful store revision ownership. Discards foreign timestamps on import to maintain cache integrity, while formatting strict UTC Zulu timestamps on export when populated by the server store.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.365 Divergence 365: `participants`, `organizerCalendarAddress`, `ORGANIZER`, and `ATTENDEE`: Participant Roster and Organizer Mapping vs Scheduling Boundary Isolation: RFC 5545 Section 3.8.4.1 `ATTENDEE` and Section 3.8.4.3 `ORGANIZER` vs RFC 8984 Section 4.4.6 `participants` and draft-ietf-jmap-calendars `organizerCalendarAddress`, Single Primary Organizer Selection (RFC 5545 Section 3.6.1), Dual Owner/Attendee Role Serialization, and Inbound Scheduling Masking
+
+- **Observed Behavior**:
+  Translating attendee lists and meeting organizers between RFC 5545 (`ORGANIZER`, `ATTENDEE`) and JSCalendar RFC 8984 Section 4.4.6 (`participants`) requires isolating scheduling cascades from component storage:
+  1. Inbound scheduling masking (`read_vevent`): In `jmap-ical`, `read_vevent` leaves `participants` unpopulated (`None`) on component import. In Evolution Data Server (EDS), the participant roster and RSVP status for local calendar accounts are governed by iTIP transport workflows rather than static event data. Importing raw participants on calendar components could trigger unintentional scheduling messages or confuse local identity roles.
+  2. Outbound rendering (`drawn_participants`): When `participants` are present in `CalendarEvent`, `jmap-ical` maps participants with `roles.owner == true` to `ORGANIZER;CN=...:mailto:...` and attendees to `ATTENDEE;CN=...;ROLE=...;PARTSTAT=...:mailto:...`.
+  3. Single primary organizer rule: RFC 5545 Section 3.6.1 strictly limits a `VEVENT` to at most one `ORGANIZER` property. When multiple participants carry the `owner` role, `drawn_participants` selects the first owner as `ORGANIZER`, preventing RFC 5545 syntax violations.
+  4. Dual owner and attendee roles: If a participant holds both `owner` and `attendee` roles, `drawn_participants` emits both an `ORGANIZER` line and an `ATTENDEE` line for that participant, preserving attendance tracking for the organizer.
+  5. In contrast, Stalwart's `CalendarEvent/parse` generates a full `participants` map with random UUID keys for both `ORGANIZER` and `ATTENDEE`, sets `organizerCalendarAddress`, and synthesizes owner and participation status flags.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.1 (`Event Component`).
+  2. RFC 5545 Section 3.8.4.1 (`Attendee`) and Section 3.8.4.3 (`Organizer`).
+  3. RFC 8984 Section 4.4.6 (`participants`).
+  4. draft-ietf-jmap-calendars Section 5.9.2 (`organizerCalendarAddress`).
+- **Adjudication**:
+  Conforming specification adaptation and scheduling boundary isolation. Omits participants on component import to protect local client scheduling state, enforces single primary organizer serialization on export, and accommodates dual-role participants.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.366 Divergence 366: `recurrenceRules`, `recurrenceRule`, `rrule`, `byDay`, `NDay`, and `@type`: Recurrence Rule Plurality, Type Stamping, and Frequency Token Alignment: RFC 5545 Section 3.8.5.3 `RRULE` vs RFC 8984 Section 4.3.1 `recurrenceRules` (Plural Array) vs Stalwart `recurrenceRule` (Singular Object), RFC 8984 `@type: "RecurrenceRule"` and `@type: "NDay"` Enforcement, and Signed Ordinal Day Offset Representation
+
+- **Observed Behavior**:
+  Translating recurrence rules between RFC 5545 (`RRULE`), RFC 8984 Section 4.3.1 (`recurrenceRules`), and draft-ietf-calext-jscalendarbis Section 3.3.3 (`recurrenceRule`):
+  1. Singular vs plural rule modeling: RFC 8984 Section 4.3.1 defined `recurrenceRules` as an array of recurrence rule objects. The updated base specification (draft-ietf-calext-jscalendarbis Section 3.3.3) restructured this to a singular `recurrenceRule` object, which Stalwart emits and `jmap-proto` models as `pub recurrence_rule: Option<RecurrenceRule>`.
+  2. Strict type annotation: In `jmap-ical`, `to_rule` explicitly stamps `rule.rule_type = Some("RecurrenceRule".to_owned())` (`@type: "RecurrenceRule"`), and `NDay::new` stamps `day_type: Some("NDay".to_owned())` (`@type: "NDay"`). When serialized to JSON, both objects carry their full `@type` qualifiers.
+  3. Ordinal day parsing (`to_nday`): Handles signed ordinal day offsets (e.g. `2MO`, `-1FR`), parsing the numeric prefix into `nth_of_period` while preserving the lowercase two-letter day token (`"mo"`, `"fr"`).
+  4. Outbound serialization (`rule_to_rrule`): Emits uppercase `FREQ`, `INTERVAL`, `COUNT`, `UNTIL`, and `BYDAY` parameter lists conforming to RFC 5545 Section 3.3.10.
+  5. In contrast, Stalwart's `CalendarEvent/parse` emits `recurrenceRule` without `@type: "RecurrenceRule"` and strips `@type: "NDay"` from `byDay` items.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.5.3 (`Recurrence Rule`) and Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 4.3.1 (`recurrenceRules`) and Section 4.3.2 (`NDay`).
+  3. draft-ietf-calext-jscalendarbis Section 3.3.3 (`recurrenceRule`).
+- **Adjudication**:
+  Conforming specification boundary and type fidelity. Strictly stamps `@type` on `RecurrenceRule` and `NDay`, accurately parses ordinal day offsets into `nth_of_period`, and serializes standard RFC 5545 `RRULE` lines.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+### 13.367 Divergence 367: `recurrenceOverrides`, `EXDATE`, `RDATE`, `RECURRENCE-ID`, and `PatchObject`: Recurrence Overrides, Exclusions, and Minimal Differential Patching vs Full Component Duplication: RFC 5545 Section 3.8.5.1 `EXDATE`, Section 3.8.5.2 `RDATE`, Section 3.8.4.4 `RECURRENCE-ID` vs RFC 8984 Section 4.3.3 `recurrenceOverrides` and Section 4.3.4 `PatchObject`, Null Delta Suppression of Series Properties, and Recurrence Expansion Boundary
+
+- **Observed Behavior**:
+  Modeling recurrence exceptions and detached instances between RFC 5545 (`EXDATE`, `RECURRENCE-ID`) and JSCalendar RFC 8984 Section 4.3.3 (`recurrenceOverrides`):
+  1. Exclusions (`EXDATE`): In `jmap-ical`, `read_overrides` maps `EXDATE` entries into `recurrenceOverrides` keyed by local date-time with `{ "excluded": true }`, accurately representing cancelled occurrences.
+  2. Minimal differential patching (`instance_patch`): When parsing detached components carrying `RECURRENCE-ID`, `jmap-ical` computes a minimal RFC 8984 Section 4.3.4 `PatchObject` against the master series. Only properties that actually differ from the series are included in the override object, keeping payloads compact and preventing synchronization churn.
+  3. Override property nullification: When a property is defined on the master series (such as `title`, `description`, `keywords`, `alerts`, `priority`, `privacy`, or `freeBusyStatus`) and cleared on the detached instance, `instance_patch` emits an explicit `null` delta (e.g. `"priority": null`). This instructs the recurrence expansion engine that the property has been intentionally removed for that occurrence.
+  4. Outbound serialization (`modified_instances`): When serializing back to RFC 5545, `jmap-ical` expands each override patch against the master series to construct a complete detached `VEVENT` carrying `RECURRENCE-ID:<datetime>`.
+  5. In contrast, Stalwart's `CalendarEvent/parse` emits full duplicate copies of master properties for detached instances rather than computing a minimal patch delta.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.5.1 (`Exception Date-Times`) and Section 3.8.4.4 (`Recurrence ID`).
+  2. RFC 8984 Section 4.3.3 (`recurrenceOverrides`) and Section 4.3.4 (`PatchObject`).
+- **Adjudication**:
+  Conforming specification boundary and recurrence schedule accuracy. Computes minimal RFC 8984 patch deltas for detached instances, explicitly nullifies cleared series properties, and reconstructs valid `RECURRENCE-ID` components on export.
+- **Status**:
+  Conforming specification boundary. Documented and pinned in `tests/event.rs`.
+
+
