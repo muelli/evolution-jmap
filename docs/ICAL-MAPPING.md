@@ -8020,3 +8020,64 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Deliberate client/bridge design deviation justified by JSCalendar data model boundaries and series integrity protection. Skipping `RANGE=THISANDFUTURE` prevents partial series modifications that would desynchronize subsequent recurring meeting sessions.
 - **Status**:
   Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.428 Divergence 428: `recurrenceRule`, `@type: "RecurrenceRule"`, `byDay`, `@type: "NDay"`, Explicit Type Tagging vs Default Omission: RFC 8984 Section 4.3.1 `RecurrenceRule`, Section 4.3.3 `NDay`, Section 1.4.3 `@type` vs Stateless Oracle Type Omission
+
+- **Observed Behavior**:
+  Type tagging and serialization within recurrence rule objects and weekday ordinal structures:
+  1. Inbound typed serialization (`rrule_to_rule`, `to_nday`): In `jmap-ical`, `rrule_to_rule` populates `rule_type: Some("RecurrenceRule".to_owned())` on `RecurrenceRule`, and `to_nday` populates `day_type: Some("NDay".to_owned())` on `NDay`. Serializing these structures to JSON produces explicit `"@type": "RecurrenceRule"` and `"@type": "NDay"` entries. Explicit type metadata facilitates disambiguation in poly-typed deserializers and conforms to RFC 8984 Section 1.4.3.
+  2. Oracle untyped omission: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` omits `@type` from `recurrenceRule` and omits `@type` from elements of `byDay`. Under RFC 8984 Section 1.4.3, `@type` defaults to `"RecurrenceRule"` on `recurrenceRule` (Section 4.3.1) and to `"NDay"` on `byDay` elements (Section 4.3.3), so omitting `@type` represents a valid canonical abbreviation permitted by the specification.
+  3. Outbound compatibility (`rrule_to_rule`, `by_day_part`): On outbound serialization, `rrule_to_rule` accepts both explicitly typed and untyped recurrence rules, serializing both into canonical RFC 5545 `RRULE` lines (`RRULE:FREQ=WEEKLY;COUNT=6;INTERVAL=2;BYDAY=MO`).
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.3.10 (`Recurrence Rule`).
+  2. RFC 8984 Section 1.4.3 (`Type Signatures`), Section 4.3.1 (`RecurrenceRule`), and Section 4.3.3 (`NDay`).
+- **Adjudication**:
+  Conforming specification adaptation. Explicit `@type` annotations provide schema clarity for strongly-typed Rust data structures, while Stalwart's default omission is also permitted by RFC 8984 Section 1.4.3.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.429 Divergence 429: `links`, `ATTACH`, `rel: "enclosure"`, Default Relation Emission vs Canonical Default Omission: RFC 5545 Section 3.8.1.1 `ATTACH` vs RFC 8984 Section 4.2.7 `Link.rel`
+
+- **Observed Behavior**:
+  Translating resource relations on file attachments (`ATTACH`) into JSCalendar `Link` objects:
+  1. Inbound default relation omission (`read_links`): In `jmap-ical`, `read_links` extracts `ATTACH` entries into `Link` objects with `@type: "Link"`, `href`, `size`, and `contentType`, omitting `rel`. RFC 8984 Section 4.2.7 defines the default value of `rel` as `"enclosure"` (`rel: String (default: "enclosure")`), so omitting `rel` on attachments avoids redundant JSON payload bloat. In contrast, when parsing `IMAGE` properties, `read_links` explicitly populates `rel: "icon"` to distinguish event graphics from document attachments.
+  2. Oracle explicit default emission: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` explicitly includes `"rel": "enclosure"` on every parsed `ATTACH` property.
+  3. Outbound serialization resilience (`drawn_links`, `drawn_link`): On outbound serialization, `drawn_link` checks `rel`: if `rel == "icon"`, it renders an RFC 7986 `IMAGE` property; otherwise, it renders an RFC 5545 `ATTACH` property whether `rel` is omitted (`None`) or explicitly set to `"enclosure"`.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.8.1.1 (`Attachment`).
+  2. RFC 7986 Section 5.10 (`Image`).
+  3. RFC 8984 Section 4.2.7 (`Link.rel`).
+- **Adjudication**:
+  Conforming specification adaptation and payload economy. Omitting default `"enclosure"` conforms directly to RFC 8984 Section 4.2.7 property default rules, and outbound serialization handles both omitted and explicit `"enclosure"` uniformly.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 13.430 Divergence 430: `locations`, `virtualLocations`, `links`, Inbound `X-JMAP-KEY` Preservation vs Random UUID Key Synthesis: RFC 8984 Section 1.4.4 `Id` vs Stateless Oracle UUID Keying
+
+- **Observed Behavior**:
+  Dictionary key naming and identity tracking in multi-valued sub-entity maps (`locations`, `virtualLocations`, `links`):
+  1. Inbound parameter key recovery (`read_locations`, `read_virtual_locations`, `read_links`): In `evolution_calendar_export.ics`, properties carry explicit round-trip tracking parameters: `LOCATION;X-JMAP-KEY=loc1:...`, `CONFERENCE;...;X-JMAP-KEY=v1:...`, `ATTACH;...;X-JMAP-KEY=l1:...`, and `IMAGE;...;X-JMAP-KEY=l2:...`. In `jmap-ical`, inbound parsers inspect `X-JMAP-KEY`. If the parameter contains a valid RFC 8984 `Id` (`names_map_entry`), it is preserved directly as the map key. If missing, deterministic positional keys (`"l1"`, `"v1"`, `"k1"`) are allocated.
+  2. Oracle random UUID synthesis: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` discards `X-JMAP-KEY` for map dictionary keying, generating synthetic random UUIDs for map keys and storing the original `x-jmap-key` inside its `iCalendar.convertedProperties` parameter map.
+  3. Outbound patch stability (`event_to_ical`, `jmap-cal-sync`): Generating random UUIDs on each parse breaks patch-in-place synchronization in desktop clients, forcing full collection replacements. `jmap-ical` preserves `X-JMAP-KEY` on export (`LOCATION;X-JMAP-KEY=loc1:...`), ensuring stable JSON pointer paths (`locations/loc1/name`) and zero dictionary churn during sync.
+- **Specification and Architectural Context**:
+  1. RFC 8984 Section 1.4.4 (`Id`), Section 4.2.5 (`locations`), Section 4.2.6 (`virtualLocations`), and Section 4.2.7 (`links`).
+  2. Evolution Data Server (`evolution-data-server`) JMAP synchronization architecture.
+- **Adjudication**:
+  Deliberate client/bridge design deviation justified by synchronization patch stability. Preserving `X-JMAP-KEY` as the dictionary key enables granular in-place patching without dictionary churn, whereas synthetic UUID generation forces full-map replacement.
+- **Status**:
+  Deliberate client/bridge design deviation. Documented and pinned in `tests/event.rs`.
+
+### 13.431 Divergence 431: `VALARM` `DESCRIPTION`, Alert Object Model Isolation vs Oracle AST Preservation and Outbound Title Derivation: RFC 5545 Section 3.6.6 `VALARM` Mandatory `DESCRIPTION` vs RFC 8984 Section 4.5 `Alert`
+
+- **Observed Behavior**:
+  Reconciling the mandatory `DESCRIPTION` property of RFC 5545 display alarms with JSCalendar's Alert data model:
+  1. Inbound description dropping (`read_alerts`, `read_alert`): RFC 5545 Section 3.6.6 dictates that a `VALARM` with `ACTION:DISPLAY` MUST include a `DESCRIPTION` property. In JSCalendar RFC 8984 Section 4.5, the `Alert` object defines only `@type`, `action`, `trigger`, `acknowledged`, and `relatedTo`; it carries no description or title field. In `jmap-ical`, `read_alert` extracts the display action and trigger, intentionally dropping `DESCRIPTION` to maintain a clean typed domain model.
+  2. Oracle AST preservation: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` preserves the alarm description by storing it inside an auxiliary AST table: `alert.iCalendar.properties: [["description", {}, "unknown", "..."]]`.
+  3. Outbound mandatory title derivation (`drawn_alert`): On outbound serialization, `drawn_alert` receives the parent event's summary (title). If present and non-empty, `drawn_alert` emits `DESCRIPTION:<summary>` on the `VALARM` component, satisfying RFC 5545 Section 3.6.6's mandatory description requirement without polluting client data stores with duplicate description text.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.6 (`Alarm Component`).
+  2. RFC 8984 Section 4.5 (`Alert`).
+- **Adjudication**:
+  Conforming specification adaptation and protocol requirement synthesis. Dropping `DESCRIPTION` on import keeps `Alert` aligned with RFC 8984, while deriving `DESCRIPTION` from the parent event title on export satisfies RFC 5545 Section 3.6.6 mandatory property rules.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.

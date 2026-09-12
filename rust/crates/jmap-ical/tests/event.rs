@@ -47557,3 +47557,295 @@ fn differential_oracle_recurrence_overrides_range_thisandfuture_isolation() {
     assert!(overrides.contains_key("2026-10-03T09:00:00"));
     assert!(!overrides.contains_key("2026-10-05T09:00:00"));
 }
+
+#[test]
+fn differential_oracle_recurrence_rule_type_tagging_and_nday_serialization() {
+    // Audit divergence 428: recurrenceRule @type: "RecurrenceRule", byDay @type: "NDay",
+    // explicit type tagging vs default omission: RFC 8984 Section 4.3.1 RecurrenceRule,
+    // Section 4.3.3 NDay, Section 1.4.3 @type vs stateless oracle type omission.
+
+    // 1. Inbound parsing: jmap-ical produces explicit @type tags on RecurrenceRule and NDay.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let rule = ev_tb
+        .recurrence_rule
+        .as_ref()
+        .expect("recurrence rule present");
+    assert_eq!(
+        rule.rule_type.as_deref(),
+        Some("RecurrenceRule"),
+        "rule_type must be explicitly tagged as RecurrenceRule"
+    );
+    let by_day = rule.by_day.as_ref().expect("by_day present");
+    assert_eq!(by_day.len(), 1);
+    assert_eq!(
+        by_day[0].day_type.as_deref(),
+        Some("NDay"),
+        "NDay must be explicitly tagged with @type: NDay"
+    );
+    assert_eq!(by_day[0].day, "mo");
+
+    // 2. Serializing to JSON confirms @type fields are present on the wire.
+    let rule_json = serde_json::to_value(rule).expect("serializes rule to json");
+    assert_eq!(
+        rule_json.get("@type").and_then(Value::as_str),
+        Some("RecurrenceRule")
+    );
+    let by_day_json = rule_json
+        .get("byDay")
+        .and_then(Value::as_array)
+        .expect("byDay array present");
+    assert_eq!(
+        by_day_json[0].get("@type").and_then(Value::as_str),
+        Some("NDay")
+    );
+
+    // 3. Outbound serialization accepts both typed and untyped rules (such as Stalwart oracle emissions).
+    let untyped_json = json!({
+        "frequency": "weekly",
+        "interval": 2,
+        "count": 6,
+        "byDay": [
+            {
+                "day": "mo"
+            }
+        ]
+    });
+    let untyped_rule: RecurrenceRule =
+        serde_json::from_value(untyped_json).expect("deserializes untyped rule");
+    assert!(untyped_rule.rule_type.is_none());
+    assert!(untyped_rule.by_day.as_ref().unwrap()[0].day_type.is_none());
+
+    let mut ev_untyped = ev_tb.clone();
+    ev_untyped.recurrence_rule = Some(untyped_rule);
+    let out = event_to_ical(&ev_untyped);
+    let unfolded = out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(
+        unfolded.contains("RRULE:FREQ=WEEKLY;COUNT=6;INTERVAL=2;BYDAY=MO\r\n"),
+        "untyped rule must serialize identically to typed rule"
+    );
+}
+
+#[test]
+fn differential_oracle_links_attach_default_relation_omission_and_outbound_handling() {
+    // Audit divergence 429: links ATTACH rel: "enclosure" default relation emission
+    // vs canonical default omission: RFC 5545 Section 3.8.1.1 ATTACH vs RFC 8984 Section 4.2.7 Link.rel.
+
+    // 1. Inbound parsing: ATTACH omits default rel: "enclosure", while IMAGE explicitly sets rel: "icon".
+    let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
+    let ev_apple = ical_to_event(apple_ics).expect("parses apple calendar fixture");
+    let links_apple = ev_apple
+        .links
+        .as_ref()
+        .expect("links present on apple fixture");
+    let link_attach = links_apple
+        .values()
+        .next()
+        .expect("attachment link present");
+    assert!(
+        link_attach.get("rel").is_none(),
+        "ATTACH must omit rel property because enclosure is RFC 8984 default"
+    );
+    assert_eq!(
+        link_attach.get("href").and_then(Value::as_str),
+        Some("https://icloud.com/shared/design_tokens.pdf")
+    );
+
+    let evo_ics = include_str!("fixtures/evolution_calendar_export.ics");
+    let ev_evo = ical_to_event(evo_ics).expect("parses evolution calendar fixture");
+    let links_evo = ev_evo
+        .links
+        .as_ref()
+        .expect("links present on evolution fixture");
+    let link_l1 = links_evo.get("l1").expect("l1 attachment present");
+    assert!(link_l1.get("rel").is_none(), "ATTACH l1 must omit rel");
+    let link_l2 = links_evo.get("l2").expect("l2 image present");
+    assert_eq!(
+        link_l2.get("rel").and_then(Value::as_str),
+        Some("icon"),
+        "IMAGE l2 must explicitly set rel: icon"
+    );
+
+    // 2. Outbound serialization: both omitted rel and explicit rel: "enclosure" (Stalwart emission) render as ATTACH.
+    let mut links_custom = BTreeMap::new();
+    links_custom.insert(
+        "att1".to_owned(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/spec.pdf",
+            "contentType": "application/pdf"
+        }),
+    );
+    links_custom.insert(
+        "att2".to_owned(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/archive.zip",
+            "rel": "enclosure",
+            "contentType": "application/zip"
+        }),
+    );
+    links_custom.insert(
+        "img1".to_owned(),
+        json!({
+            "@type": "Link",
+            "href": "https://example.com/logo.png",
+            "rel": "icon",
+            "contentType": "image/png"
+        }),
+    );
+    let ev_custom = CalendarEvent {
+        id: Some("link-test-event".into()),
+        start: Some("2026-10-01T10:00:00".into()),
+        duration: Some("PT1H".into()),
+        title: Some("Link Test".into()),
+        links: Some(links_custom),
+        ..Default::default()
+    };
+    let out = event_to_ical(&ev_custom);
+    let unfolded = out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(
+        unfolded.contains(
+            "ATTACH;FMTTYPE=application/pdf;X-JMAP-KEY=att1:https://example.com/spec.pdf\r\n"
+        ),
+        "omitted rel must serialize as ATTACH"
+    );
+    assert!(
+        unfolded.contains(
+            "ATTACH;FMTTYPE=application/zip;X-JMAP-KEY=att2:https://example.com/archive.zip\r\n"
+        ),
+        "explicit rel: enclosure must serialize as ATTACH"
+    );
+    assert!(
+        unfolded.contains(
+            "IMAGE;VALUE=URI;FMTTYPE=image/png;X-JMAP-KEY=img1:https://example.com/logo.png\r\n"
+        ),
+        "rel: icon must serialize as IMAGE"
+    );
+}
+
+#[test]
+fn differential_oracle_sub_entity_keys_x_jmap_key_preservation_vs_uuid_synthesis() {
+    // Audit divergence 430: locations, virtualLocations, links inbound X-JMAP-KEY preservation
+    // vs random UUID key synthesis: RFC 8984 Section 1.4.4 Id vs stateless oracle UUID keying.
+
+    // 1. Inbound parsing of evolution_calendar_export.ics preserves X-JMAP-KEY across sub-entity maps.
+    let evo_ics = include_str!("fixtures/evolution_calendar_export.ics");
+    let ev_evo = ical_to_event(evo_ics).expect("parses evolution calendar fixture");
+
+    let locations = ev_evo.locations.as_ref().expect("locations present");
+    assert!(
+        locations.contains_key("loc1"),
+        "locations map must preserve X-JMAP-KEY=loc1"
+    );
+    assert_eq!(
+        locations["loc1"].get("name").and_then(Value::as_str),
+        Some("Linux Foundation Virtual Bridge")
+    );
+
+    let virtual_locations = ev_evo
+        .virtual_locations
+        .as_ref()
+        .expect("virtual_locations present");
+    assert!(
+        virtual_locations.contains_key("v1"),
+        "virtual_locations map must preserve X-JMAP-KEY=v1"
+    );
+    assert_eq!(
+        virtual_locations["v1"].get("uri").and_then(Value::as_str),
+        Some("https://meet.gnome.org/board-room")
+    );
+
+    let links = ev_evo.links.as_ref().expect("links present");
+    assert!(
+        links.contains_key("l1"),
+        "links map must preserve X-JMAP-KEY=l1"
+    );
+    assert!(
+        links.contains_key("l2"),
+        "links map must preserve X-JMAP-KEY=l2"
+    );
+
+    // 2. Outbound serialization retains X-JMAP-KEY on all properties for lossless round-trip stability.
+    let out = event_to_ical(&ev_evo);
+    let unfolded = out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(
+        unfolded.contains("LOCATION;X-JMAP-KEY=loc1:Linux Foundation Virtual Bridge\r\n"),
+        "emitted LOCATION must retain X-JMAP-KEY=loc1"
+    );
+    assert!(
+        unfolded.contains("X-JMAP-KEY=v1:https://meet.gnome.org/board-room\r\n"),
+        "emitted CONFERENCE must retain X-JMAP-KEY=v1"
+    );
+    assert!(
+        unfolded.contains("ATTACH;FMTTYPE=application/pdf;SIZE=409600;X-JMAP-KEY=l1:https://foundation.gnome.org/minutes/2026-09.pdf\r\n"),
+        "emitted ATTACH must retain X-JMAP-KEY=l1"
+    );
+    assert!(
+        unfolded.contains("IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=l2:https://foundation.gnome.org/assets/logo.png\r\n"),
+        "emitted IMAGE must retain X-JMAP-KEY=l2"
+    );
+}
+
+#[test]
+fn differential_oracle_valarm_description_isolation_and_outbound_title_derivation() {
+    // Audit divergence 431: VALARM DESCRIPTION alert object model isolation
+    // vs oracle AST preservation and outbound title derivation:
+    // RFC 5545 Section 3.6.6 VALARM mandatory DESCRIPTION vs RFC 8984 Section 4.5 Alert.
+
+    // 1. Inbound parsing: VALARM DESCRIPTION is dropped from JSCalendar Alert object
+    // because RFC 8984 Section 4.5 Alert defines no description or title field.
+    let tb_ics = include_str!("fixtures/thunderbird_detached_export.ics");
+    let ev_tb = ical_to_event(tb_ics).expect("parses thunderbird detached fixture");
+    let alerts = ev_tb.alerts.as_ref().expect("alerts present");
+    for alert in alerts.values() {
+        assert!(
+            alert.get("description").is_none(),
+            "Alert object must not contain description property"
+        );
+        assert_eq!(alert.get("@type").and_then(Value::as_str), Some("Alert"));
+        assert_eq!(alert.get("action").and_then(Value::as_str), Some("display"));
+        assert!(alert.get("trigger").is_some());
+    }
+
+    // 2. Outbound serialization: drawn_alert derives VALARM DESCRIPTION from parent event title
+    // to satisfy RFC 5545 Section 3.6.6 mandatory property requirement.
+    let mut custom_alerts = BTreeMap::new();
+    custom_alerts.insert(
+        "a1".to_owned(),
+        json!({
+            "@type": "Alert",
+            "action": "display",
+            "trigger": {
+                "@type": "OffsetTrigger",
+                "offset": "-PT15M"
+            }
+        }),
+    );
+    let ev_custom = CalendarEvent {
+        id: Some("alert-title-test".into()),
+        start: Some("2026-10-01T09:00:00".into()),
+        duration: Some("PT30M".into()),
+        title: Some("Weekly Status Review".into()),
+        alerts: Some(custom_alerts),
+        ..Default::default()
+    };
+    let out = event_to_ical(&ev_custom);
+    assert!(
+        out.contains("BEGIN:VALARM\r\n"),
+        "VALARM component must be emitted"
+    );
+    assert!(
+        out.contains("DESCRIPTION:Weekly Status Review\r\n"),
+        "VALARM DESCRIPTION must be populated from event title"
+    );
+    assert!(
+        out.contains("ACTION:DISPLAY\r\n"),
+        "VALARM ACTION:DISPLAY must be emitted"
+    );
+    assert!(
+        out.contains("TRIGGER:-PT15M\r\n"),
+        "VALARM TRIGGER must be emitted"
+    );
+    assert!(out.contains("UID:a1\r\n"), "VALARM UID must be emitted");
+}
