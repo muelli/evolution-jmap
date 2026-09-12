@@ -46471,3 +46471,189 @@ fn differential_oracle_image_link_display_badge_and_scalar_representation() {
         "evo outbound icalendar preserves X-JMAP-KEY=l2"
     );
 }
+
+#[test]
+fn differential_oracle_standalone_version_stamping_and_override_suppression() {
+    // Audit divergence 408: Top-level version: "2.0" specification requirement: draft-ietf-calext-jscalendarbis
+    // Section 3.1.2 mandate and JMAP calendar event creation validation vs stateless oracle parser version omission.
+
+    // 1. Inbound parsing: across fixtures, root standalone CalendarEvent must carry version: "2.0".
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    assert_eq!(
+        ev_google.version,
+        Some("2.0".to_owned()),
+        "root standalone event must carry version: 2.0"
+    );
+
+    let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
+    let ev_apple = ical_to_event(apple_ics).expect("parses apple calendar");
+    assert_eq!(
+        ev_apple.version,
+        Some("2.0".to_owned()),
+        "apple root event must carry version: 2.0"
+    );
+
+    // 2. Embedded override patch objects must NOT carry version (jscalendarbis Section 3.1.2).
+    let overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("google recurrence overrides");
+    for (recurrence_id, patch) in overrides {
+        assert!(
+            patch.get("version").is_none(),
+            "recurrence override for {recurrence_id} must not carry version"
+        );
+    }
+
+    // 3. Outbound serialization: event_to_ical emits VERSION on the VCALENDAR envelope,
+    // but neither child VEVENT carries a VERSION line.
+    let out_google = event_to_ical(&ev_google);
+    assert_eq!(
+        line(&out_google, "VERSION:"),
+        "VERSION:2.0",
+        "VCALENDAR container envelope specifies VERSION:2.0"
+    );
+    assert!(
+        without(vevent(&out_google, 0), "VERSION:"),
+        "master VEVENT component must not carry VERSION line"
+    );
+    assert!(
+        without(vevent(&out_google, 1), "VERSION:"),
+        "detached VEVENT component must not carry VERSION line"
+    );
+}
+
+#[test]
+fn differential_oracle_method_publish_envelope_isolation_and_scheduling_synthesis() {
+    // Audit divergence 409: method: "publish" transport protocol header vs calendar event entity isolation:
+    // RFC 5545 Section 3.7.2 METHOD:PUBLISH vs RFC 8984 Section 4.4.5 method and JMAP store record cleanliness.
+
+    // 1. Inbound parsing: VCALENDAR envelope specifies METHOD:PUBLISH in google and outlook fixtures.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    assert!(
+        !ev_google.extra.contains_key("method"),
+        "method must not be retained in extra"
+    );
+    let serialized_json = serde_json::to_value(&ev_google).expect("serializes to json");
+    assert!(
+        serialized_json.get("method").is_none(),
+        "parsed CalendarEvent entity must not carry method property"
+    );
+
+    let outlook_ics = include_str!("fixtures/outlook_m365_export.ics");
+    let ev_outlook = ical_to_event(outlook_ics).expect("parses outlook calendar");
+    assert!(
+        !ev_outlook.extra.contains_key("method"),
+        "outlook method must not be retained in extra"
+    );
+
+    // 2. Outbound serialization: event_to_ical does not emit METHOD.
+    let out_google = event_to_ical(&ev_google);
+    assert!(
+        without(&out_google, "METHOD:"),
+        "event_to_ical must not emit METHOD line"
+    );
+
+    // 3. Active scheduling synthesis: scheduling_ical emits explicit RFC 5546 uppercase METHOD at envelope.
+    let req_ics = jmap_ical::scheduling_ical(&ev_google, "REQUEST", None);
+    assert_eq!(
+        line(&req_ics, "METHOD:"),
+        "METHOD:REQUEST",
+        "scheduling_ical emits requested METHOD header"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_sequence_increment_isolation() {
+    // Audit divergence 410: Recurrence overrides sequence number increment tracking vs series revision
+    // isolation: RFC 5545 Section 3.8.7.4 SEQUENCE in recurrence overrides (RECURRENCE-ID) vs RFC 8984 sequence.
+
+    // 1. Inbound parsing: google calendar has master SEQUENCE:0 and detached occurrence SEQUENCE:1.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+    let overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("google recurrence overrides");
+    let patch = overrides
+        .get("2026-10-20T10:00:00")
+        .expect("finds detached override patch");
+    assert!(
+        patch.get("sequence").is_none(),
+        "instance patch delta must not carry sequence property"
+    );
+    assert!(
+        !ev_google.extra.contains_key("sequence"),
+        "master event extra must not carry sequence"
+    );
+
+    // 2. Outbound serialization: event_to_ical emits neither master nor override SEQUENCE lines.
+    let out_google = event_to_ical(&ev_google);
+    assert!(
+        without(&out_google, "SEQUENCE:"),
+        "outbound icalendar must not emit SEQUENCE revision counters"
+    );
+}
+
+#[test]
+fn differential_oracle_recurrence_overrides_sub_entity_location_and_conference_inheritance() {
+    // Audit divergence 411: Multi-valued sub-entity map primary location and virtual location ordering
+    // across detached recurrence instances: RFC 5545 Section 3.8.1.7 LOCATION, RFC 7986 Section 5.11
+    // CONFERENCE vs RFC 8984 Section 4.2.5 locations, Section 4.2.6 virtualLocations, and Section 4.3.4 PatchObject.
+
+    // 1. Inbound parsing: google calendar master defines LOCATION and CONFERENCE, while detached
+    // occurrence 2026-10-20T10:00:00 defines a modified LOCATION but no CONFERENCE line.
+    let google_ics = include_str!("fixtures/google_calendar_export.ics");
+    let ev_google = ical_to_event(google_ics).expect("parses google calendar");
+
+    // Master has locations and virtual_locations populated.
+    assert!(
+        ev_google.locations.is_some(),
+        "master event defines primary location"
+    );
+    assert!(
+        ev_google.virtual_locations.is_some(),
+        "master event defines conference virtual location"
+    );
+
+    // Detached override patch delta: sub-entity maps are excluded from OVERRIDE_PROPERTIES.
+    let overrides = ev_google
+        .recurrence_overrides
+        .as_ref()
+        .expect("google recurrence overrides");
+    let patch = overrides
+        .get("2026-10-20T10:00:00")
+        .expect("detached override patch");
+    assert!(
+        patch.get("locations").is_none(),
+        "locations map is excluded from instance patch delta"
+    );
+    assert!(
+        patch.get("virtualLocations").is_none(),
+        "virtualLocations map is excluded from instance patch delta"
+    );
+
+    // 2. Outbound serialization: detached occurrence inherits master series CONFERENCE URI and location.
+    let out_google = event_to_ical(&ev_google);
+    assert_eq!(
+        vevents(&out_google),
+        2,
+        "outbound serialization contains master and detached VEVENT"
+    );
+    let child_vevent = vevent(&out_google, 1);
+    assert!(
+        child_vevent.contains("RECURRENCE-ID;TZID=America/New_York:20261020T100000\r\n"),
+        "second VEVENT carries RECURRENCE-ID"
+    );
+    let unfolded = child_vevent.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(
+        unfolded.contains("CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=\"Google Meet\";X-JMAP-KEY=v1:https://meet.google.com/abc-defg-hij"),
+        "detached occurrence inherits master conference bridge"
+    );
+    assert!(
+        unfolded.contains("LOCATION;X-JMAP-KEY=l1:Conference Room 4B / Google Meet"),
+        "detached occurrence inherits master primary location"
+    );
+}
