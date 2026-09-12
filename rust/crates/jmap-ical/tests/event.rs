@@ -45092,3 +45092,178 @@ fn differential_oracle_caldav_sync_extension_properties_isolation() {
     assert!(!out.contains("X-SOGO-"));
     assert!(!out.contains("X-RADICALE-"));
 }
+
+#[test]
+fn differential_oracle_locations_single_primary_key_inventing_and_roundtrip_retention() {
+    // Audit divergence 384: locations, LOCATION, X-JMAP-KEY, positional key
+    // inventing (l1), and single primary location mapping vs non-deterministic
+    // UUID key allocation: RFC 5545 Section 3.8.1.7 LOCATION vs RFC 8984
+    // Section 4.2.5 locations.
+
+    // 1. Standard export without X-JMAP-KEY (apple_calendar_export.ics)
+    let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
+    let ev_apple = ical_to_event(apple_ics).expect("parses apple calendar");
+    let locs_apple = ev_apple.locations.as_ref().expect("locations present");
+    assert_eq!(locs_apple.len(), 1);
+    let (key, loc) = locs_apple.iter().next().expect("first location");
+    assert_eq!(key, "l1");
+    assert_eq!(loc.get("@type").and_then(Value::as_str), Some("Location"));
+    assert_eq!(
+        loc.get("name").and_then(Value::as_str),
+        Some("Paris Design Lab, Amphithéâtre Marie Curie")
+    );
+
+    // 2. Export with explicit X-JMAP-KEY (evolution_calendar_export.ics)
+    let evo_ics = include_str!("fixtures/evolution_calendar_export.ics");
+    let ev_evo = ical_to_event(evo_ics).expect("parses evolution calendar");
+    let locs_evo = ev_evo.locations.as_ref().expect("locations present");
+    assert_eq!(locs_evo.len(), 1);
+    assert!(locs_evo.contains_key("loc1"));
+    assert_eq!(
+        locs_evo["loc1"].get("name").and_then(Value::as_str),
+        Some("Linux Foundation Virtual Bridge")
+    );
+
+    // 3. Outbound round-trip serialization preserves X-JMAP-KEY parameter
+    let out_evo = event_to_ical(&ev_evo);
+    assert!(out_evo.contains("LOCATION;X-JMAP-KEY=loc1:Linux Foundation Virtual Bridge\r\n"));
+
+    let out_apple = event_to_ical(&ev_apple);
+    assert!(
+        out_apple
+            .contains("LOCATION;X-JMAP-KEY=l1:Paris Design Lab\\, Amphithéâtre Marie Curie\r\n")
+    );
+}
+
+#[test]
+fn differential_oracle_links_attachment_mime_size_and_positional_key_synthesis() {
+    // Audit divergence 385: links, ATTACH, FMTTYPE, SIZE, INVENTED_LINK_KEY
+    // (k1, k2), and MIME metadata extraction vs non-deterministic UUID
+    // allocation: RFC 5545 Section 3.8.1.1 ATTACH, RFC 8607 Section 4 SIZE
+    // vs RFC 8984 Section 4.2.7 links.
+
+    // 1. Apple export contains single ATTACH with FMTTYPE and SIZE
+    let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
+    let ev_apple = ical_to_event(apple_ics).expect("parses apple calendar");
+    let links_apple = ev_apple.links.as_ref().expect("links present");
+    assert_eq!(links_apple.len(), 1);
+    assert!(links_apple.contains_key("k1"));
+    let link = &links_apple["k1"];
+    assert_eq!(link.get("@type").and_then(Value::as_str), Some("Link"));
+    assert_eq!(
+        link.get("href").and_then(Value::as_str),
+        Some("https://icloud.com/shared/design_tokens.pdf")
+    );
+    assert_eq!(
+        link.get("contentType").and_then(Value::as_str),
+        Some("application/pdf")
+    );
+    assert_eq!(link.get("size").and_then(Value::as_u64), Some(512000));
+
+    // 2. Cyrus export contains ATTACH and IMAGE: sequential keys k1 and k2
+    let cyrus_ics = include_str!("fixtures/cyrus_caldav_export.ics");
+    let ev_cyrus = ical_to_event(cyrus_ics).expect("parses cyrus calendar");
+    let links_cyrus = ev_cyrus.links.as_ref().expect("links present");
+    assert_eq!(links_cyrus.len(), 2);
+    assert!(links_cyrus.contains_key("k1"));
+    assert!(links_cyrus.contains_key("k2"));
+
+    // 3. Security defense: local file: schemes must be filtered out
+    let malicious_ics = concat!(
+        "BEGIN:VCALENDAR\r\n",
+        "VERSION:2.0\r\n",
+        "PRODID:-//Test//EN\r\n",
+        "BEGIN:VEVENT\r\n",
+        "UID:file-uri-security-test\r\n",
+        "DTSTART:20261110T090000Z\r\n",
+        "DURATION:PT1H\r\n",
+        "SUMMARY:Security Test\r\n",
+        "ATTACH:file:///etc/shadow\r\n",
+        "ATTACH:https://public.example/document.pdf\r\n",
+        "END:VEVENT\r\n",
+        "END:VCALENDAR\r\n"
+    );
+    let ev_malicious = ical_to_event(malicious_ics).expect("parses calendar");
+    let links_sec = ev_malicious.links.as_ref().expect("links present");
+    assert_eq!(links_sec.len(), 1);
+    assert_eq!(
+        links_sec["k1"].get("href").and_then(Value::as_str),
+        Some("https://public.example/document.pdf")
+    );
+}
+
+#[test]
+fn differential_oracle_uid_and_id_dual_namespace_and_unassigned_state_isolation() {
+    // Audit divergence 386: uid vs id, X-JMAP-UID, global entity identifier
+    // vs server-assigned JMAP store ID, and unassigned record state isolation:
+    // RFC 5545 Section 3.8.4.7 UID vs RFC 8984 Section 4.1.1 uid and
+    // draft-ietf-jmap-calendars Section 1.4 id.
+
+    // 1. Standard export with only UID maps to JMAP id for EDS cache keying
+    let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
+    let ev_apple = ical_to_event(apple_ics).expect("parses apple calendar");
+    assert_eq!(
+        ev_apple.id.as_ref().map(|id| id.as_ref()),
+        Some("B1C94D3A-4F7E-4C11-9A6D-5E8B7F30A123")
+    );
+    assert!(ev_apple.uid.is_none());
+
+    // 2. Dual identifier export with both UID and X-JMAP-UID
+    let evo_ics = include_str!("fixtures/evolution_calendar_export.ics");
+    let ev_evo = ical_to_event(evo_ics).expect("parses evolution calendar");
+    assert_eq!(
+        ev_evo.id.as_ref().map(|id| id.as_ref()),
+        Some("evolution-native-event-456789")
+    );
+    assert_eq!(
+        ev_evo.uid.as_deref(),
+        Some("urn:uuid:8f2b1c94-0d3a-4f7e-9c11-2a6d5e8b7f30")
+    );
+
+    // 3. Outbound serialization renders server id as UID and client UUID as X-JMAP-UID
+    let out_evo = event_to_ical(&ev_evo);
+    assert!(out_evo.contains("UID:evolution-native-event-456789\r\n"));
+    assert!(out_evo.contains("X-JMAP-UID:urn:uuid:8f2b1c94-0d3a-4f7e-9c11-2a6d5e8b7f30\r\n"));
+
+    // 4. Unassigned new event (only uid populated, prior to initial create)
+    let unassigned = CalendarEvent {
+        uid: Some("urn:uuid:client-new-event-999".to_owned()),
+        start: Some("2026-11-15T09:00:00".to_owned()),
+        duration: Some("PT1H".to_owned()),
+        title: Some("New Client Event".to_owned()),
+        ..Default::default()
+    };
+    let out_unassigned = event_to_ical(&unassigned);
+    assert!(out_unassigned.contains("UID:urn:uuid:client-new-event-999\r\n"));
+    assert!(out_unassigned.contains("X-JMAP-UID:urn:uuid:client-new-event-999\r\n"));
+}
+
+#[test]
+fn differential_oracle_apple_structured_location_vendor_extension_isolation() {
+    // Audit divergence 387: geographic coordinates, Apple structured location
+    // (X-APPLE-STRUCTURED-LOCATION), geo: URI representation vs AST vendor
+    // property preservation: RFC 5545 Section 3.8.1.6 GEO, RFC 5870 geo: URI
+    // vs RFC 8984 Section 4.2.5 Location.coordinates.
+
+    // 1. Apple export carries X-APPLE-STRUCTURED-LOCATION and X-APPLE-TRAVEL-ADVISORY-BEHAVIOR
+    let apple_ics = include_str!("fixtures/apple_calendar_export.ics");
+    let ev_apple = ical_to_event(apple_ics).expect("parses apple calendar");
+
+    // Standard LOCATION text is extracted into typed Location.name
+    let locs = ev_apple.locations.as_ref().expect("locations present");
+    assert_eq!(
+        locs["l1"].get("name").and_then(Value::as_str),
+        Some("Paris Design Lab, Amphithéâtre Marie Curie")
+    );
+
+    // Proprietary vendor extensions do not leak into extra map
+    assert!(ev_apple.extra.is_empty());
+
+    // 2. Outbound serialization renders canonical standard RFC 5545 without Apple X- parameters
+    let out = event_to_ical(&ev_apple);
+    assert!(
+        out.contains("LOCATION;X-JMAP-KEY=l1:Paris Design Lab\\, Amphithéâtre Marie Curie\r\n")
+    );
+    assert!(!out.contains("X-APPLE-STRUCTURED-LOCATION"));
+    assert!(!out.contains("X-APPLE-TRAVEL-ADVISORY-BEHAVIOR"));
+}
