@@ -59,8 +59,10 @@
 //! exactly this test.
 
 use std::env;
+use std::time::{Duration, Instant};
 
-use jmap_client::{Client, Credentials};
+use jmap_client::eventsource::{SharedHeaders, expand_url};
+use jmap_client::{CancelFlag, Client, Credentials, EventSourceSubscription};
 use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter, RecurrenceRule};
 use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
 use jmap_proto::mail::{
@@ -1361,4 +1363,87 @@ fn sieve_script_create_activate_deactivate_then_destroy_round_trips_through_the_
         !still_present,
         "the destroyed script still shows up in SieveScript/get afterwards"
     );
+}
+
+/// JMAP Push (RFC 8620 §7) against a real server. Opens an `EventSource`
+/// subscription for the write-test account via
+/// [`jmap_client::eventsource::EventSourceSubscription`], creates a mailbox,
+/// and confirms a `StateChange` naming `Mailbox` for this account arrives
+/// over the wire. Every other exercise of this module was against either a
+/// hand-rolled test TCP server (`eventsource.rs`'s own `#[cfg(test)]`
+/// module) or `jmap-mockd`'s fixed push loop
+/// (`jmap-backend-core/src/push.rs`'s tests) — chunked-transfer framing,
+/// TLS negotiation, and the exact `event: state`/`data:` shape a real
+/// server sends had no live coverage until now.
+///
+/// Sleeps briefly after connecting before triggering the mutation: an SSE
+/// stream carries no backlog, so a change made before the subscription's
+/// `GET` is actually accepted by the server would never be seen, unlike a
+/// `/changes` poll which always catches up from a state token.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn push_notifies_a_subscribed_eventsource_of_a_real_mailbox_change() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the push test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    let template = client.session().event_source_url.clone();
+    assert!(
+        !template.trim().is_empty(),
+        "the server advertises no eventSourceUrl"
+    );
+
+    let url = expand_url(&template, &["Mailbox"], false, 300);
+    let headers = client
+        .authorization_header()
+        .map(|value| vec![("Authorization".to_owned(), value)])
+        .unwrap_or_default();
+    let subscription =
+        EventSourceSubscription::start(url, SharedHeaders::new(headers), CancelFlag::new());
+
+    // Give the connection a moment to be accepted before the mutation below,
+    // for the reason this test's doc comment gives.
+    std::thread::sleep(Duration::from_millis(500));
+
+    let name = format!("agent-livewrite-push-{}", unique_suffix());
+    let mailbox = Mailbox {
+        name: name.clone(),
+        ..Mailbox::default()
+    };
+    let created = client
+        .mailbox_create(&account_id, &mailbox)
+        .expect("Mailbox/set create failed against the real server");
+    let id = created
+        .id
+        .clone()
+        .expect("the server named the new mailbox");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut saw_it = false;
+    while Instant::now() < deadline {
+        let Some(change) = subscription.recv_timeout(Duration::from_secs(1)) else {
+            continue;
+        };
+        if change
+            .changed
+            .get(&account_id)
+            .is_some_and(|type_state| type_state.contains_key("Mailbox"))
+        {
+            saw_it = true;
+            break;
+        }
+    }
+    assert!(
+        saw_it,
+        "no StateChange naming Mailbox for this account arrived over the \
+         EventSource within 20s of creating the mailbox"
+    );
+
+    client
+        .mailbox_destroy(&account_id, &id)
+        .expect("Mailbox/set destroy failed against the real server");
 }
