@@ -8,9 +8,11 @@
 //! children. This is what happens before that, and whether or not it ever
 //! happens: `ECollectionBackendClass::populate` is the vfunc
 //! `evolution-source-registry` schedules on an idle as soon as an account is
-//! added, on every reconnect, and whenever the account changes. It returns
-//! `void`, is handed nothing, and has no `GError` — so it cannot fan out and it
-//! cannot report. What it can do is the two things that need no server:
+//! added, when one of its three parts is switched on or off, and on going
+//! online — and that [`crate::source_changed`] runs again after an edit of
+//! the account itself, which EDS does not. It returns `void`, is handed
+//! nothing, and has no `GError` — so it cannot fan out and it cannot report.
+//! What it can do is the two things that need no server:
 //!
 //! 1. **Export the children of previous sessions.** EDS loads a collection's
 //!    cached `.source` files into an unclaimed table at construction time and

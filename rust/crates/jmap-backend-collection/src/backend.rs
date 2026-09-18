@@ -36,7 +36,10 @@ use eds_sys::{
     e_source_registry_server_add_source,
 };
 use gio_sys::{GCancellable, GTlsCertificateFlags};
-use glib_sys::{GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar, guint16};
+use glib_sys::{
+    GError, GFALSE, GList, GTRUE, GType, g_list_free, gboolean, gchar, gpointer, guint16,
+};
+use gobject_sys::{G_CONNECT_DEFAULT, g_signal_connect_object};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, fail_bool, fail_invalid};
 #[cfg(feature = "testing")]
@@ -63,6 +66,7 @@ use crate::fan_out::{Collection, Populated, fan_out};
 use crate::populate::Populating;
 use crate::removal::remove_source;
 use crate::resource_id::resource_id_of;
+use crate::source_changed::AccountWatch;
 
 /// The JMAP collection backend.
 #[repr(C)]
@@ -70,6 +74,9 @@ pub struct JmapCollectionBackend {
     /// GObject's; never read by this code, only handed back to EDS as the
     /// instance pointer it gave us.
     parent: ECollectionBackend,
+    /// The account's `"changed"` connection and whether its settings have
+    /// been proven to work; see [`crate::source_changed`].
+    watch: AccountWatch,
 }
 
 /// The class struct. Nothing of ours lives in it; it exists because GObject
@@ -100,9 +107,20 @@ impl JmapCollectionBackend {
     /// it is installed and is not the one it replaced.
     #[cfg(feature = "testing")]
     pub fn detached() -> Box<Self> {
-        // SAFETY: every field of the parent is a pointer or an integer, for
-        // which all-zero is a valid value.
+        // SAFETY: every field of the parent is a pointer or an integer, and
+        // every field of the watch an `AtomicBool`, for all of which all-zero
+        // is a valid value — an empty `AccountWatch`, in the watch's case.
         unsafe { zeroed_box() }
+    }
+
+    /// This instance's [`AccountWatch`].
+    ///
+    /// Reads one field of our own half of the instance struct and touches
+    /// none of the parent bytes, which is what makes it the one thing besides
+    /// `dup_resource_id` that a [`detached`](Self::detached) instance can be
+    /// asked.
+    pub fn watch(&self) -> &AccountWatch {
+        &self.watch
     }
 }
 
@@ -197,7 +215,9 @@ unsafe extern "C" fn dup_resource_id(
 }
 
 /// What EDS calls when it wants a collection's children — on an idle as soon as
-/// the account is added, on every reconnect, and whenever the account changes.
+/// the account is added, when one of its parts is switched on or off, and on
+/// going online — and what [`on_account_changed`] calls again after an edit of
+/// the account, which EDS itself does not reschedule for.
 ///
 /// The decisions are [`crate::populate::populate`]'s; what is here is the account
 /// read that a populate is not handed, and the report it has nowhere else to go
@@ -236,6 +256,20 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
             (parts, user, uses_oauth2, account_id)
         };
 
+        // Before the body and in this order, as `ews_backend_populate`'s own
+        // two opening steps are: unproven until a fan-out gets through, and
+        // the handler connected once, by the first populate only.
+        // SAFETY: EDS dispatched this vfunc on an instance of our own type.
+        if let Some(watch) = unsafe { watch_of(backend) } {
+            watch.populating();
+            if !source.is_null() && watch.claim_connection() {
+                // SAFETY: the account source EDS owns, alive for at least as
+                // long as the backend that references it, and the backend this
+                // vfunc was dispatched on.
+                unsafe { connect_account_changed(source, backend) };
+            }
+        }
+
         let collection = Live(backend);
         // SAFETY: `Live`'s methods are the EDS calls `Populating` documents, made
         // on a backend that is valid for the length of the vfunc.
@@ -267,6 +301,85 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
             Some(account_id) => debug_print_for_account(account_id, &message),
             None => debug_print(&message),
         }
+    });
+}
+
+/// The [`AccountWatch`] of the instance EDS dispatched a vfunc on, or `None`
+/// for a NULL backend.
+///
+/// # Safety
+///
+/// `backend` must be NULL or a live `ECollectionBackendJmap` — what EDS
+/// dispatches this crate's vfuncs on.
+unsafe fn watch_of(backend: *mut ECollectionBackend) -> Option<&'static AccountWatch> {
+    // SAFETY: the contract above, and `JmapCollectionBackend` is `#[repr(C)]`
+    // leading with the `ECollectionBackend` the pointer names.
+    unsafe { backend.cast::<JmapCollectionBackend>().as_ref() }.map(JmapCollectionBackend::watch)
+}
+
+/// Connects [`on_account_changed`] to the account source's own `"changed"`,
+/// against `backend`.
+///
+/// `g_signal_connect_object` rather than `g_signal_connect_data`, and so no
+/// handler id kept and no `dispose` override: [`crate::source_changed`] has
+/// the reasoning.
+///
+/// # Safety
+///
+/// `source` must be a live `ESource` and `backend` a live
+/// `ECollectionBackendJmap`. The connection outlives this call, so `source`
+/// has to stay alive at least as long as `backend` does — which it does, being
+/// the source `EBackend` holds a reference to for the backend's whole life.
+unsafe fn connect_account_changed(source: *mut ESource, backend: *mut ECollectionBackend) {
+    // SAFETY: the contract above, and `on_account_changed`'s signature is what
+    // a handler for a parameterless signal is really called with (the emitting
+    // instance, then the connection's own data) — the transmute to the erased
+    // `GCallback` is the one every GObject binding spells this with, and
+    // `tests/source_changed.rs` holds the arity against the linked library.
+    unsafe {
+        g_signal_connect_object(
+            source.cast(),
+            c"changed".as_ptr(),
+            Some(std::mem::transmute::<
+                unsafe extern "C" fn(*mut ESource, gpointer),
+                unsafe extern "C" fn(),
+            >(on_account_changed)),
+            backend.cast(),
+            G_CONNECT_DEFAULT,
+        );
+    }
+}
+
+/// What GLib calls when any setting of the account changes — which EDS does
+/// not reschedule a populate for, and so the only chance a corrected host or
+/// port has of being tried before the account is next re-enabled.
+///
+/// Runs a populate again, unless a fan-out has already succeeded with the
+/// account as it stood: [`crate::source_changed`] on both halves of that.
+///
+/// # Safety
+///
+/// Called by GLib's signal-emission machinery with what a handler for
+/// `ESource::changed` is invoked with: the emitting source (unused — this
+/// answers for the account the backend already holds), and the backend the
+/// connection was made against, which `g_object_watch_closure`'s marshal
+/// guards keep referenced for the length of this call.
+unsafe extern "C" fn on_account_changed(source: *mut ESource, backend: gpointer) {
+    let _ = source;
+    guard("on_account_changed", (), || {
+        let backend = backend.cast::<ECollectionBackend>();
+        // SAFETY: the backend this was connected against, by the contract
+        // above.
+        let Some(watch) = (unsafe { watch_of(backend) }) else {
+            return;
+        };
+        if !watch.wants_repopulate() {
+            return;
+        }
+
+        // SAFETY: as above, and a repopulate is what the vfunc slot holds
+        // anyway — EWS's own handler calls its populate directly too.
+        unsafe { populate(backend) };
     });
 }
 
@@ -396,6 +509,11 @@ unsafe extern "C" fn authenticate_sync(
                 error,
                 |login| {
                     let report = fan_out(&collection, &login)?;
+                    // SAFETY: EDS dispatched this vfunc on an instance of our
+                    // own type. (Already inside the outer `unsafe` block.)
+                    if let Some(watch) = watch_of(backend.cast()) {
+                        watch.proven();
+                    }
                     // SAFETY: `authenticate_with` only calls this closure once
                     // `source` is confirmed non-NULL; the uid comes back
                     // `(transfer none)`. (Already inside the outer `unsafe`

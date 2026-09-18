@@ -149,3 +149,4 @@ pub mod populate;
 pub mod prepare_mail;
 pub mod removal;
 pub mod resource_id;
+pub mod source_changed;
