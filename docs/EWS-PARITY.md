@@ -122,7 +122,7 @@ to cross-reference.
 |---|---|---|---|
 | `CAMEL_PROVIDER_IS_REMOTE`/`IS_SOURCE`/`IS_STORAGE` | Same three, `provider.rs:76-79` | MATCH | |
 | `CAMEL_PROVIDER_SUPPORTS_SSL` | We set it; EWS doesn't | DIVERGENCE — justified | EWS tunnels over HTTPS by convention with no user-facing toggle; JMAP's account UI exposes the choice explicitly (`provider.rs:71-75`). |
-| `CAMEL_PROVIDER_IS_EXTERNAL` (means: appears in the folder tree but is not created by the mail component) | Absent from `FLAGS` | uncertain, worth a second look | `provider.rs:152-154` already documents that JMAP accounts are configured through `ESource` extensions rather than the classic conf-entry wizard — the same circumstance this flag exists for — yet it's unset. Not confirmed as a functional bug (the actual folder-tree/wizard consequence wasn't verified against EDS 3.52+ behavior in this pass), but flagged because the code's own stated architecture and EWS's use of this exact flag point the same direction. |
+| `CAMEL_PROVIDER_IS_EXTERNAL` (means: appears in the folder tree but is not created by the mail component) | **FIXED 2026-09-18** — now set in `FLAGS` (`provider.rs`) | MATCH | `camel-enums.h`'s own doc comment for the flag ("appears in the folder tree but is not created by the mail component") is exactly the circumstance `provider.rs` already documented as true of every JMAP mail store: it is always spawned from a collection account's `ESource` extensions, never from the mail component's own New Mail Account wizard. No live-Evolution session was needed to confirm this reading; the header's own definition of the flag settles it. |
 | `CamelProviderConfEntry` array | `extra_conf: null` | DIVERGENCE — justified | `provider.rs:152-154`: EDS 3.52 configures JMAP via `ESource` extensions, not legacy per-provider conf-entry widgets. Whether the underlying *features* (junk-on-fetch, folder-check-all, HTTP/1-only, etc.) exist elsewhere in jmap-mail is a separate feature-parity question, out of scope for this provider-registration-level surface. |
 | `.url_flags` (EWS: `ALLOW_USER\|ALLOW_AUTH\|HIDDEN_HOST`) | `NEED_HOST\|ALLOW_PORT\|ALLOW_PATH\|ALLOW_USER\|ALLOW_AUTH\|ALLOW_PASSWORD` (`provider.rs:89-94`) | DIVERGENCE — justified | EWS hides the host (resolved via Autodiscover); JMAP requires an explicit host and allows a path (`/.well-known/jmap`), documented at `provider.rs:82-88`. |
 | `authtypes` (NTLM/PLAIN/GSSAPI `CamelServiceAuthType` list) + `CAMEL_TYPE_SASL_XOAUTH2_OFFICE365` GType | `authtypes: null`, no `CamelSasl` subclass | DIVERGENCE — justified | JMAP authenticates as Basic or Bearer over plain HTTPS with no SASL handshake (`provider.rs:167-171`); OAuth2 is wired via `CamelNetworkSettings:auth-mechanism` + `camel_session_get_oauth2_access_token_sync` instead (`jmap-mail/src/oauth2.rs`), a complete substitute for what the SASL GType does for EWS. |
@@ -130,10 +130,7 @@ to cross-reference.
 
 **Verdict:** no unjustified provider-registration gap found; every divergence
 traces to a real JMAP-vs-EWS protocol difference and is already documented in
-`provider.rs`'s own comments. `CAMEL_PROVIDER_IS_EXTERNAL` is the one item
-worth a follow-up look (verify against live Evolution's folder-tree/account-
-wizard behavior whether its absence has any visible effect), not a confirmed
-bug.
+`provider.rs`'s own comments.
 
 ## Surface 5 — Collection backend vfuncs (`e-ews-backend.c` vs `jmap-backend-collection/src/backend.rs`)
 

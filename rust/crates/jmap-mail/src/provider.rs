@@ -20,11 +20,11 @@ use std::ptr;
 use std::sync::OnceLock;
 
 use eds_sys::{
-    CAMEL_PROVIDER_IS_REMOTE, CAMEL_PROVIDER_IS_SOURCE, CAMEL_PROVIDER_IS_STORAGE,
-    CAMEL_PROVIDER_STORE, CAMEL_PROVIDER_SUPPORTS_SSL, CAMEL_PROVIDER_TRANSPORT,
-    CAMEL_URL_ALLOW_AUTH, CAMEL_URL_ALLOW_PASSWORD, CAMEL_URL_ALLOW_PATH, CAMEL_URL_ALLOW_PORT,
-    CAMEL_URL_ALLOW_USER, CAMEL_URL_NEED_HOST, CamelProvider, CamelProviderFlags,
-    CamelProviderURLFlags, camel_provider_register,
+    CAMEL_PROVIDER_IS_EXTERNAL, CAMEL_PROVIDER_IS_REMOTE, CAMEL_PROVIDER_IS_SOURCE,
+    CAMEL_PROVIDER_IS_STORAGE, CAMEL_PROVIDER_STORE, CAMEL_PROVIDER_SUPPORTS_SSL,
+    CAMEL_PROVIDER_TRANSPORT, CAMEL_URL_ALLOW_AUTH, CAMEL_URL_ALLOW_PASSWORD, CAMEL_URL_ALLOW_PATH,
+    CAMEL_URL_ALLOW_PORT, CAMEL_URL_ALLOW_USER, CAMEL_URL_NEED_HOST, CamelProvider,
+    CamelProviderFlags, CamelProviderURLFlags, camel_provider_register,
 };
 use glib_sys::g_list_append;
 use gobject_sys::G_TYPE_INVALID;
@@ -75,7 +75,16 @@ const DESCRIPTION: &CStr = N_(c"For reading and storing mail on JMAP servers.");
 /// encrypted one, which is what puts the security options in the account
 /// dialog. Refusing plaintext to anywhere but localhost stays where it can
 /// actually be enforced, in the client.
+///
+/// `IS_EXTERNAL` (`camel-enums.h`: "Provider appears in the folder tree but is
+/// not created by the mail component") is set for the same reason EWS sets it
+/// on its own provider: this store never comes from the mail component's own
+/// New Mail Account wizard, which is what that flag distinguishes. The mail
+/// child here always originates from a collection account's `ESource`
+/// extensions ([`crate::server`], via the collection backend), the same
+/// circumstance `extra_conf` below already documents.
 const FLAGS: CamelProviderFlags = (CAMEL_PROVIDER_IS_REMOTE
+    | CAMEL_PROVIDER_IS_EXTERNAL
     | CAMEL_PROVIDER_IS_SOURCE
     | CAMEL_PROVIDER_IS_STORAGE
     | CAMEL_PROVIDER_SUPPORTS_SSL) as CamelProviderFlags;

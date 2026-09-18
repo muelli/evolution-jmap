@@ -26,11 +26,11 @@ use std::ffi::CStr;
 use std::ptr;
 
 use eds_sys::{
-    CAMEL_NUM_PROVIDER_TYPES, CAMEL_PROVIDER_IS_REMOTE, CAMEL_PROVIDER_IS_SOURCE,
-    CAMEL_PROVIDER_IS_STORAGE, CAMEL_PROVIDER_STORE, CAMEL_PROVIDER_SUPPORTS_SSL,
-    CAMEL_PROVIDER_TRANSPORT, CAMEL_URL_NEED_HOST, CamelProvider, CamelProviderFlags,
-    CamelProviderURLFlags, CamelTransportClass, GError, camel_offline_store_get_type,
-    camel_provider_get, camel_provider_init, camel_store_get_type,
+    CAMEL_NUM_PROVIDER_TYPES, CAMEL_PROVIDER_IS_EXTERNAL, CAMEL_PROVIDER_IS_REMOTE,
+    CAMEL_PROVIDER_IS_SOURCE, CAMEL_PROVIDER_IS_STORAGE, CAMEL_PROVIDER_STORE,
+    CAMEL_PROVIDER_SUPPORTS_SSL, CAMEL_PROVIDER_TRANSPORT, CAMEL_URL_NEED_HOST, CamelProvider,
+    CamelProviderFlags, CamelProviderURLFlags, CamelTransportClass, GError,
+    camel_offline_store_get_type, camel_provider_get, camel_provider_init, camel_store_get_type,
 };
 use glib_sys::GType;
 use gobject_sys::{
@@ -102,12 +102,16 @@ fn the_provider_is_in_the_mail_domain_evolution_lists() {
 
 /// The flags decide what Evolution will let a JMAP account be. Missing
 /// `IS_SOURCE` is an account that cannot receive mail; missing `IS_STORAGE` is
-/// one whose folders never appear in the tree.
+/// one whose folders never appear in the tree; missing `IS_EXTERNAL` is a
+/// store that misrepresents itself as one the mail component's own New Mail
+/// Account wizard created, when every JMAP mail store in fact comes from a
+/// collection account's `ESource` extensions.
 #[test]
 fn the_provider_is_a_remote_mail_source_with_folders() {
     let provider = registered();
     for (flag, name) in [
         (CAMEL_PROVIDER_IS_REMOTE, "IS_REMOTE"),
+        (CAMEL_PROVIDER_IS_EXTERNAL, "IS_EXTERNAL"),
         (CAMEL_PROVIDER_IS_SOURCE, "IS_SOURCE"),
         (CAMEL_PROVIDER_IS_STORAGE, "IS_STORAGE"),
         (CAMEL_PROVIDER_SUPPORTS_SSL, "SUPPORTS_SSL"),
