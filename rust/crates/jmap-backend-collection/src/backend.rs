@@ -22,18 +22,19 @@ use std::ptr;
 use std::ffi::CString;
 
 use eds_sys::{
-    E_SOURCE_AUTHENTICATION_ERROR, E_SOURCE_CREDENTIALS_REASON_REQUIRED, EBackend,
-    ECollectionBackend, ECollectionBackendClass, ENamedParameters, ESource,
-    ESourceAuthenticationResult, ESourceRegistryServer, e_backend_get_source,
-    e_backend_schedule_authenticate, e_backend_schedule_credentials_required,
-    e_collection_backend_authenticate_children, e_collection_backend_claim_all_resources,
-    e_collection_backend_freeze_populate, e_collection_backend_get_cache_dir,
-    e_collection_backend_get_type, e_collection_backend_is_new_source,
-    e_collection_backend_list_calendar_sources, e_collection_backend_list_contacts_sources,
-    e_collection_backend_new_child, e_collection_backend_ref_server,
-    e_collection_backend_thaw_populate, e_server_side_source_set_remote_creatable,
-    e_server_side_source_set_remote_deletable, e_source_get_uid, e_source_registry_debug_print,
-    e_source_registry_server_add_source,
+    E_SOURCE_AUTHENTICATION_ERROR, E_SOURCE_CREDENTIALS_REASON_REQUIRED,
+    E_SOURCE_EXTENSION_COLLECTION, EBackend, ECollectionBackend, ECollectionBackendClass,
+    ENamedParameters, ESource, ESourceAuthenticationResult, ESourceCollection,
+    ESourceRegistryServer, e_backend_get_source, e_backend_schedule_authenticate,
+    e_backend_schedule_credentials_required, e_collection_backend_authenticate_children,
+    e_collection_backend_claim_all_resources, e_collection_backend_freeze_populate,
+    e_collection_backend_get_cache_dir, e_collection_backend_get_type,
+    e_collection_backend_is_new_source, e_collection_backend_list_calendar_sources,
+    e_collection_backend_list_contacts_sources, e_collection_backend_new_child,
+    e_collection_backend_ref_server, e_collection_backend_thaw_populate,
+    e_server_side_source_set_remote_creatable, e_server_side_source_set_remote_deletable,
+    e_source_collection_set_allow_sources_rename, e_source_get_extension, e_source_get_uid,
+    e_source_registry_debug_print, e_source_registry_server_add_source,
 };
 use gio_sys::{GCancellable, GTlsCertificateFlags};
 use glib_sys::{
@@ -1131,6 +1132,23 @@ unsafe impl Populating for Live {
                 source.cast(),
                 if offer { GTRUE } else { GFALSE },
             );
+        }
+    }
+
+    fn allow_rename(&self) {
+        // SAFETY: as `offer_creation`'s: a valid backend, `e_backend_get_source`
+        // is `(transfer none)`, and NULL is answered by doing nothing.
+        // `e_source_get_extension` creates the `Collection` extension if the
+        // account source somehow lacks one rather than returning NULL, so the
+        // cast below is always into a live `ESourceCollection`.
+        unsafe {
+            let source = e_backend_get_source(self.0.cast());
+            if source.is_null() {
+                return;
+            }
+            let collection: *mut ESourceCollection =
+                e_source_get_extension(source, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast();
+            e_source_collection_set_allow_sources_rename(collection, GTRUE);
         }
     }
 }

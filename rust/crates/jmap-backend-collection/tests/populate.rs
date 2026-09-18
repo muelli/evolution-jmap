@@ -206,6 +206,10 @@ unsafe impl Populating for Collection {
         self.calls.borrow_mut().push("offer_creation");
         self.offered.borrow_mut().push(offer);
     }
+
+    fn allow_rename(&self) {
+        self.calls.borrow_mut().push("allow_rename");
+    }
 }
 
 /// The populate under test, with the account's two answers spelled out.
@@ -307,6 +311,7 @@ fn the_cache_is_claimed_after_the_chain_up_and_before_any_password_is_asked_for(
                 "claim_all_resources",
                 "publish",
                 "offer_creation",
+                "allow_rename",
                 "request_credentials",
                 "thaw",
             ]
@@ -457,6 +462,7 @@ fn an_account_with_only_mail_switched_on_is_not_asked_for_a_password() {
                 "chain_up",
                 "claim_all_resources",
                 "offer_creation",
+                "allow_rename",
                 "thaw"
             ]
         );
@@ -581,6 +587,7 @@ fn an_account_that_names_no_user_is_authenticated_without_a_password() {
                 "chain_up",
                 "claim_all_resources",
                 "offer_creation",
+                "allow_rename",
                 "authenticate_anonymously",
                 "thaw",
             ]

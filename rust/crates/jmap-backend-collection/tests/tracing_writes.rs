@@ -370,6 +370,8 @@ unsafe impl Populating for MockPopulating {
     fn offer_creation(&self, creatable: bool) {
         *self.creatable.borrow_mut() = Some(creatable);
     }
+
+    fn allow_rename(&self) {}
 }
 
 #[test]

@@ -177,6 +177,15 @@ pub unsafe trait Populating {
     /// *now*, in both directions — see [`populate`] on why it is not a
     /// once-at-construction fact.
     fn offer_creation(&self, offer: bool);
+
+    /// `e_source_collection_set_allow_sources_rename (collection_extension,
+    /// TRUE)`: tells Evolution's account editor this account's child address
+    /// books and calendars may be renamed. evolution-ews's own `constructed`
+    /// sets this once, unconditionally; called from populate instead for the
+    /// same reason [`offer_creation`](Populating::offer_creation) is — this
+    /// backend has no `constructed` override. Unlike `offer_creation`, the
+    /// value never varies, so [`populate`] calls it unconditionally too.
+    fn allow_rename(&self);
 }
 
 /// How this populate asked to be authenticated — which is what turns a populate
@@ -313,6 +322,7 @@ pub unsafe fn populate<P: Populating + ?Sized>(
     // unchanged, so the repetition costs nothing.
     report.creatable = parts.wants(ChildKind::AddressBook) || parts.wants(ChildKind::Calendar);
     collection.offer_creation(report.creatable);
+    collection.allow_rename();
 
     // Last, because the cached children have to be in the sidebar before a login
     // that may never succeed — see the module comment on the order.
