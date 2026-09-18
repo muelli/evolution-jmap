@@ -113,17 +113,8 @@ to cross-reference.
 | `servers` param: tries every entry in order | Tries only the first entry (`config_lookup.rs:164-168`) | DIVERGENCE — justified | Documented at lines 138-144: a JMAP deployment names exactly one issuer, unlike EWS/CalDAV where different servers may host different services. |
 | Autodiscovery: authenticated Exchange Autodiscover (needs a password) | Unauthenticated RFC 8620 §2.2 SRV + RFC 8414/7591 discovery/registration | DIVERGENCE — justified | Correct per-protocol; JMAP discovery genuinely needs no credentials. |
 | Seeds discovery from the existing collection's prior `hosturl` (`e_config_lookup_get_source`) | `run()` never reads any prior source, only `params` | DIVERGENCE — minor | Matters for re-running lookup on an edited account; low-impact since JMAP discovery is idempotent from email+servers alone. |
-| Missing password → `E_CONFIG_LOOKUP_WORKER_ERROR_REQUIRES_PASSWORD`, assistant prompts and retries | Every failure (no match, DNS failure, TLS failure, no RFC 7591 support) is silent; `_error` is never touched (leading underscore) | **GAP** | EWS distinguishes "not a match" from "is a match but blocked," and reports the latter actionably. Our worker collapses all of these into identical silence — a JMAP host that exists but lacks OAuth support looks the same as a non-JMAP domain. |
-| Bad-certificate TLS error → extracts cert PEM/host into `*out_restart_params`, reports `E_CONFIG_LOOKUP_WORKER_ERROR_CERTIFICATE`, assistant offers trust-and-retry | No TLS-error path anywhere; `Error::Transport(String)` collapses TLS/DNS/I/O into one opaque string; `_out_restart_params` is never written project-wide | DIVERGENCE — justified, but consequential | Explicitly documented security stance across three backends ("a certificate this code cannot see is one it must not invite anyone to accept"). Deliberate, not an oversight — but it means a self-hosted JMAP deployment with a self-signed/private-CA certificate cannot be onboarded via "Look Up Account Details" at all, with zero feedback to the user, where EWS offers a trust-and-retry path. |
-
-**Follow-up candidates (not fixed this session — each is its own increment):**
-better failure differentiation in `JmapConfigLookup::run` (at minimum,
-surfacing *some* reason when discovery finds a JMAP-shaped host that then
-fails, rather than uniform silence), and — a genuinely separate, larger design
-question flagged for visibility, not action — whether a certificate-trust
-retry path is wanted at all for a security-conscious project like this one
-(the current silent-refusal stance is deliberate and documented; changing it
-is a product decision, not a bug fix).
+| Missing password → `E_CONFIG_LOOKUP_WORKER_ERROR_REQUIRES_PASSWORD`, assistant prompts and retries | **FIXED 2026-09-18** — `run()` now reports every discovery/registration failure once a host has actually been probed through its `error` out-parameter (`oauth2_setup::Error::to_gerror`, `G_IO_ERROR_CANCELLED`/`G_IO_ERROR_FAILED`); only the true non-match case (no email, empty domain) stays silent | MATCH (partial: reports a reason, does not retry) | EWS distinguishes "not a match" from "is a match but blocked," and reports the latter actionably. Our worker no longer collapses a plausible-but-blocked host into the same silence as a non-match; it does not implement `REQUIRES_PASSWORD`'s retry-with-credentials flow, since RFC 8414 discovery itself needs none. |
+| Bad-certificate TLS error → extracts cert PEM/host into `*out_restart_params`, reports `E_CONFIG_LOOKUP_WORKER_ERROR_CERTIFICATE`, assistant offers trust-and-retry | No TLS-error path anywhere; `Error::Transport(String)` collapses TLS/DNS/I/O into one opaque string (now at least surfaced as a `G_IO_ERROR_FAILED` message, not swallowed); `_out_restart_params` is never written project-wide | DIVERGENCE — justified, but consequential | Explicitly documented security stance across three backends ("a certificate this code cannot see is one it must not invite anyone to accept"). Deliberate, not an oversight — but it means a self-hosted JMAP deployment with a self-signed/private-CA certificate cannot be onboarded via "Look Up Account Details" at all beyond a generic failure message, where EWS offers a trust-and-retry path. Explicitly out of scope (a product decision, not a bug fix). |
 
 ## Surface 4 — Camel provider registration (`camel-ews-provider.c` vs `jmap-mail/src/provider.rs`)
 
@@ -205,7 +196,7 @@ collection authentication (**fixed 2026-08-24, session N+58**), and no
 `get_destination_address` override for host-specific reachability
 monitoring (**fixed 2026-08-24, session N+57**). Both were filed as
 follow-up items rather than fixed in the audit itself. The config-lookup
-surface has one more, still open: failure-mode differentiation
-(a JMAP-shaped host that fails discovery for a real reason vs. a plain
-non-match) is uniformly silent today, where EWS's worker reports the
-distinction back to the assistant.
+surface's failure-mode differentiation gap (a JMAP-shaped host that fails
+discovery for a real reason vs. a plain non-match) is **fixed 2026-09-18**:
+`JmapConfigLookup::run` now reports a `GError` once a host has actually been
+probed and discovery/registration then fails, rather than staying silent.
