@@ -73,6 +73,35 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+impl Error {
+    /// Allocates a `GError` describing this failure, for
+    /// [`crate::config_lookup`]'s `run()` to hand back through its `error`
+    /// out-parameter instead of staying silent. Ownership passes to the
+    /// caller, who must `g_error_free` it or hand it to a C caller that will.
+    ///
+    /// Neither of `EConfigLookupWorkerError`'s two variants (a missing
+    /// password, a certificate to trust) fits any of these failures, so this
+    /// reports through `G_IO_ERROR` instead: `G_IO_ERROR_CANCELLED` for
+    /// [`Error::Client`] wrapping [`jmap_client::Error::Cancelled`], the one
+    /// code every EDS layer already agrees on for "the user pressed Stop"
+    /// (`jmap_mail::connect::ConnectError::to_gerror` reports cancellation
+    /// the same way), and `G_IO_ERROR_FAILED` with this error's own message
+    /// otherwise.
+    pub fn to_gerror(&self) -> *mut glib_sys::GError {
+        let message = jmap_backend_core::error::cstring_lossy(&self.to_string());
+        let code = if matches!(self, Self::Client(jmap_client::Error::Cancelled)) {
+            gio_sys::G_IO_ERROR_CANCELLED
+        } else {
+            gio_sys::G_IO_ERROR_FAILED
+        };
+        // SAFETY: the quark function takes no arguments, and `message` is a
+        // live, NUL-terminated `CString` for the call, which copies it.
+        unsafe {
+            glib_sys::g_error_new_literal(gio_sys::g_io_error_quark(), code, message.as_ptr())
+        }
+    }
+}
+
 /// Discover `host`'s OAuth 2.0 endpoints (RFC 8414) and register this client
 /// with it (RFC 7591), producing the [`Config`] [`crate::oauth2::apply`]
 /// stores.
@@ -242,4 +271,47 @@ fn probe_resource(
         "protected-resource indicator probe finished"
     );
     matched.then_some(response.final_url)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    #[test]
+    fn cancellation_reads_back_as_g_io_error_cancelled() {
+        let error = Error::Client(jmap_client::Error::Cancelled).to_gerror();
+        assert!(!error.is_null());
+        // SAFETY: a freshly allocated GError this test owns.
+        unsafe {
+            assert_eq!((*error).domain, gio_sys::g_io_error_quark());
+            assert_eq!((*error).code, gio_sys::G_IO_ERROR_CANCELLED);
+            glib_sys::g_error_free(error);
+        }
+    }
+
+    #[test]
+    fn every_other_failure_reads_back_as_g_io_error_failed_with_its_message() {
+        let cases = [
+            Error::UnsupportedGrant,
+            Error::NoRegistration,
+            Error::Client(jmap_client::Error::Transport("no route to host".into())),
+        ];
+        for err in cases {
+            let message = err.to_string();
+            let error = err.to_gerror();
+            assert!(!error.is_null());
+            // SAFETY: a freshly allocated GError this test owns.
+            unsafe {
+                assert_eq!((*error).domain, gio_sys::g_io_error_quark());
+                assert_eq!((*error).code, gio_sys::G_IO_ERROR_FAILED);
+                assert_eq!(
+                    std::ffi::CStr::from_ptr((*error).message)
+                        .to_str()
+                        .unwrap(),
+                    message
+                );
+                glib_sys::g_error_free(error);
+            }
+        }
+    }
 }

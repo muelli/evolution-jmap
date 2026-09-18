@@ -533,23 +533,30 @@ unsafe fn add_result(
 
 /// Probes `params`' email address (or `servers`) for OAuth 2.0 discovery and
 /// registration, adding one complete-account [`EConfigLookupResult`] on
-/// success. Silent on any failure — a network error, a non-JMAP host, or a
-/// deployment with no RFC 7591 registration endpoint — the same way
-/// `e-webdav-config-lookup.c` stays silent for a host that turns out not to
-/// speak CalDAV/CardDAV: several lookup workers run in parallel against
-/// whatever the user typed, and most of them will not match.
+/// success. Silent when there is nothing to probe at all — no email address,
+/// or an empty domain — the same way `e-webdav-config-lookup.c` stays silent
+/// for a host that turns out not to speak CalDAV/CardDAV: several lookup
+/// workers run in parallel against whatever the user typed, and most of them
+/// will not match.
 ///
-/// Leaves `*out_restart_params` untouched: nothing this worker can hit needs
-/// a restart (no password, no certificate trust decision — RFC 8414
-/// discovery needs no credentials at all), and `e-config-lookup.c`'s own
-/// caller already initialises it to `NULL` before the call.
+/// Once a specific host actually gets probed, though, a failure there (a
+/// network error, a non-JMAP host, a deployment with no RFC 7591
+/// registration endpoint) is no longer "not a match" but "a JMAP-shaped host
+/// that is blocked", and is reported through `error` rather than swallowed —
+/// see [`crate::oauth2_setup::Error::to_gerror`].
+///
+/// Leaves `*out_restart_params` untouched: `to_gerror` never reports either
+/// of `EConfigLookupWorkerError`'s two variants (a missing password, a
+/// certificate to trust), so nothing this worker can hit needs a restart,
+/// and `e-config-lookup.c`'s own caller already initialises it to `NULL`
+/// before the call.
 unsafe extern "C" fn run(
     _lookup_worker: *mut EConfigLookupWorker,
     config_lookup: *mut EConfigLookup,
     params: *const ENamedParameters,
     _out_restart_params: *mut *mut ENamedParameters,
     cancellable: *mut GCancellable,
-    _error: *mut *mut glib_sys::GError,
+    error: *mut *mut glib_sys::GError,
 ) {
     guard("JmapConfigLookup::run", (), || unsafe {
         let Some(email) = param(params, E_CONFIG_LOOKUP_PARAM_EMAIL_ADDRESS) else {
@@ -584,19 +591,24 @@ unsafe extern "C" fn run(
         let cancel_flag = bridge.flag().clone();
         let transport = UreqTransport::default();
 
-        let Ok(config) = discover_and_register(
+        let config = match discover_and_register(
             &transport,
             &target.host,
             target.port,
             target.secure,
             REDIRECT_URI,
             Some(&cancel_flag),
-        ) else {
-            tracing::debug!(
-                target_host = target.host,
-                "JMAP config lookup worker: discovery and registration yielded no configuration"
-            );
-            return;
+        ) {
+            Ok(config) => config,
+            Err(discover_error) => {
+                tracing::debug!(
+                    target_host = target.host,
+                    %discover_error,
+                    "JMAP config lookup worker: discovery and registration failed"
+                );
+                jmap_backend_core::error::set_raw_gerror(error, discover_error.to_gerror());
+                return;
+            }
         };
 
         tracing::debug!(
