@@ -199,13 +199,13 @@ backend.rs`'s `commit_changes` doc described the transport-source-has-no-
 server problem as still open, when `jmap_backend_collection::mail_child::
 follow_server` had already closed it in an earlier, uncoordinated commit.
 
-The collection-backend surface had two genuine, non-EWS-specific gaps: no
-credential push to already-running child backends on a fresh collection
-authentication (**still open**), and no `get_destination_address` override
-for host-specific reachability monitoring (**fixed 2026-08-24, session
-N+57**). Both were filed as follow-up items rather than fixed in the audit
-itself. The config-lookup surface has one more: failure-mode
-differentiation
+The collection-backend surface had two genuine, non-EWS-specific gaps, both
+now fixed: no credential push to already-running child backends on a fresh
+collection authentication (**fixed 2026-08-24, session N+58**), and no
+`get_destination_address` override for host-specific reachability
+monitoring (**fixed 2026-08-24, session N+57**). Both were filed as
+follow-up items rather than fixed in the audit itself. The config-lookup
+surface has one more, still open: failure-mode differentiation
 (a JMAP-shaped host that fails discovery for a real reason vs. a plain
 non-match) is uniformly silent today, where EWS's worker reports the
 distinction back to the assistant.
