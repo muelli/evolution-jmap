@@ -305,9 +305,7 @@ mod tests {
                 assert_eq!((*error).domain, gio_sys::g_io_error_quark());
                 assert_eq!((*error).code, gio_sys::G_IO_ERROR_FAILED);
                 assert_eq!(
-                    std::ffi::CStr::from_ptr((*error).message)
-                        .to_str()
-                        .unwrap(),
+                    std::ffi::CStr::from_ptr((*error).message).to_str().unwrap(),
                     message
                 );
                 glib_sys::g_error_free(error);
