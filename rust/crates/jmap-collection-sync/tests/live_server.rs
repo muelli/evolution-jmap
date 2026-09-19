@@ -68,8 +68,15 @@ fn connect_for_write() -> Option<Client> {
 }
 
 /// Creates an address book and a calendar via `create_collection`, confirms
-/// each is listed by a fresh `Fanout::discover`, then destroys both via
-/// `delete_collection` and confirms neither is listed anymore.
+/// each is listed by a fresh `Fanout::discover` under the requested name,
+/// then destroys both via `delete_collection` and confirms neither is
+/// listed anymore.
+///
+/// The name check exercises `create.rs`'s `created_resource` name fallback:
+/// RFC 8620 section 5.3 lets a `created` response omit any property the
+/// server itself did not set, and a real server's create response for this
+/// call has never been asserted on for `name` here before, only inferred
+/// from a single hand-tested Fastmail session (`create.rs`'s doc comment).
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn creating_then_deleting_a_collection_round_trips_through_the_real_server() {
@@ -95,6 +102,11 @@ fn creating_then_deleting_a_collection_round_trips_through_the_real_server() {
         let created = create_collection(&client, &requested).unwrap_or_else(|error| {
             panic!("{kind:?}/set create failed against the real server: {error}")
         });
+        assert_eq!(
+            created.display_name, display_name,
+            "the created {kind:?}'s display name should be the requested one, \
+             whether the server echoed it back or left it out of the response"
+        );
 
         let fanout = Fanout::discover(&client, Parts::ALL).expect("discovery failed after create");
         let listed = match kind {
