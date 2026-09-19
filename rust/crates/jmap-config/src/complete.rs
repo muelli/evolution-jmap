@@ -159,9 +159,12 @@ impl std::error::Error for Incomplete {
 /// than [`Incomplete`]'s own `Display`, per the roadmap's standing directive
 /// that account-setup text is user-facing from the moment it is shown: the
 /// two identity messages are this crate's own wording and are marked here;
-/// [`SourceError`]'s own text is not, because it is shared with every other
-/// backend's connection failures (M3–M6), already shipped untranslated, and
-/// not this increment's to reopen.
+/// [`SourceError`]'s own [`Display`](fmt::Display) is relied on unwrapped
+/// for the `Server` case, and is translated too: `SourceError` carries its
+/// own `translate`/`translate_with` calls (`jmap-backend-core/src/source.rs`),
+/// shared with every other backend's connection failures, so calling
+/// `to_string()` on it here already returns the user-facing text without a
+/// second wrapper, which would double-translate it.
 pub fn status_message(account: &Account) -> String {
     match check(account) {
         Ok(()) => String::new(),
