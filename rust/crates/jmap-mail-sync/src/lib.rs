@@ -295,10 +295,28 @@ impl MailSync {
         let mut absent = changes.destroyed;
         let mut present = Vec::new();
         for email in self.fetch(&touched, &filing_properties())? {
-            let filed = email
+            // RFC 8621 §4.6 gives every present `mailboxIds` value as `true`;
+            // a `false` entry for the very mailbox being asked about is the
+            // same violation `message_mailboxes` refuses rather than guess
+            // at, so it is refused here too instead of being read as absence.
+            let filed = match email
                 .mailbox_ids
                 .as_ref()
-                .is_some_and(|mailboxes| mailboxes.get(mailbox).copied().unwrap_or(false));
+                .and_then(|mailboxes| mailboxes.get(mailbox).copied())
+            {
+                Some(false) => {
+                    return Err(SyncError::protocol(format!(
+                        "Email/get returned {} with a false-valued mailboxIds entry for {mailbox}",
+                        email
+                            .id
+                            .as_ref()
+                            .map(Id::to_string)
+                            .unwrap_or_else(|| "<no id>".to_string())
+                    )));
+                }
+                Some(true) => true,
+                None => false,
+            };
             let summary = MessageSummary::from_email(&email)?;
             match filed {
                 true => present.push(summary),

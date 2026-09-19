@@ -20,9 +20,12 @@
 //! are the whole surface, and they are one query apart from each other on the
 //! wire.
 
+use std::collections::BTreeMap;
+
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{
     Filing, KeywordChange, Keywords, MailSync, MessageFlags, MessageSummary, MessageUpdate,
+    SyncError,
 };
 use jmap_mock::{EmailSeed, MockServer, MockServerBuilder};
 use jmap_proto::mail::role;
@@ -79,6 +82,20 @@ impl Fixture {
             .iter()
             .map(|message| message.subject.as_deref().unwrap_or_default())
             .collect()
+    }
+
+    /// Overwrites a message's `mailboxIds` directly in the store, as an
+    /// update another client made — to reach a state a conforming server
+    /// never sends (RFC 8621 §4.6 gives every present value as `true`), while
+    /// still logging the change `Email/changes` is asked to report on.
+    fn set_mailbox_ids(&self, uid: &Id, mailbox_ids: BTreeMap<Id, bool>) {
+        self.edit(|account| {
+            account.emails.transaction(|txn| {
+                let mut email = txn.get(uid).expect("the seeded message").clone();
+                email.mailbox_ids = Some(mailbox_ids);
+                txn.update(uid, email);
+            })
+        });
     }
 }
 
@@ -210,6 +227,35 @@ fn a_message_moved_out_of_the_mailbox_is_reported_absent() {
         "the message that left was listed as still here: {:?}",
         Fixture::subjects(&present)
     );
+}
+
+/// A server that spells non-membership with a `false` entry instead of
+/// omitting the key is violating RFC 8621 §4.6, the same way the malformed
+/// input `message_mailboxes` refuses covers. Counting the entry as absence
+/// would be a guess this crate has no basis for, so it must be refused
+/// rather than silently reported as the message having left the mailbox.
+#[test]
+fn a_false_valued_mailbox_entry_is_refused_rather_than_guessed_at() {
+    let fixture = Fixture::start();
+    let inbox = fixture.edit(|account| account.seed_mailbox("Inbox", Some(role::INBOX)));
+    let flagged = fixture.seed(&inbox, "Still here, allegedly not", 9);
+    let sync = fixture.sync();
+    let (state, held) = sync.messages(&inbox).unwrap();
+
+    fixture.set_mailbox_ids(&flagged, BTreeMap::from([(inbox.clone(), false)]));
+
+    let error = sync
+        .messages_since(&inbox, &state, held.len())
+        .expect_err("a false-valued mailboxIds entry must not be guessed at");
+    match error {
+        SyncError::Client(jmap_client::Error::Protocol(message)) => {
+            assert!(
+                message.contains("false-valued"),
+                "expected a message naming the false-valued entry, got: {message}"
+            );
+        }
+        other => panic!("expected a protocol error, got {other:?}"),
+    }
 }
 
 /// And the same event from the destination's point of view. The message is not
