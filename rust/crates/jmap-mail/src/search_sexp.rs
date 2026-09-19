@@ -503,6 +503,18 @@ mod tests {
     }
 
     #[test]
+    fn unquoted_leaf_args_are_untranslatable() {
+        // `parse_token` accepts any unquoted run of characters as an
+        // `Ident`, which `as_str` refuses: Evolution's search bar exposes a
+        // free-form expression mode where this text is user-typed, so an
+        // unquoted arg here is reachable, not just a malformed fixture.
+        assert_eq!(translate(r#"(header-contains From "x")"#), None);
+        assert_eq!(translate(r#"(header-contains "From" x)"#), None);
+        assert_eq!(translate(r#"(body-contains foo)"#), None);
+        assert_eq!(translate(r#"(system-flag Seen)"#), None);
+    }
+
+    #[test]
     fn one_untranslatable_child_fails_the_whole_and() {
         assert_eq!(
             translate(r#"(and (header-contains "From" "x") (header-starts-with "Subject" "y"))"#),
