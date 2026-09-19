@@ -71,10 +71,11 @@ use jmap_proto::mail::{
     keyword, role,
 };
 use jmap_proto::methods::{BlobCopyRequest, Comparator};
+use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
-    CAPABILITY_QUOTA,
+    CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA,
 };
 use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
 use serde_json::json;
@@ -1689,4 +1690,114 @@ fn quota_used_reflects_a_real_email_import() {
         after.used,
         before.used
     );
+}
+
+/// `AddressBook shareWith` (RFC 9610 §2) against a real server: the mock
+/// enforces the full grant/widen/revoke lifecycle
+/// (`jmap-client/tests/contacts.rs`,
+/// `address_book_shared_with_a_principal_is_visible_only_to_them` and
+/// `address_book_share_can_be_widened_then_revoked`), built from what
+/// `examples/sharing-capability-probe.rs` recorded probing a live Stalwart's
+/// wire shape, but nothing here has exercised the same enforcement between
+/// two real accounts. This creates an address book on the write-test
+/// account, confirms the recipient account gets `forbidden` on it before
+/// any grant, shares it, confirms the recipient now sees it with `myRights`
+/// computed from the grant, then revokes the grant and confirms `forbidden`
+/// returns.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn address_book_shared_with_a_second_real_account_is_visible_only_after_the_grant() {
+    let Some(owner) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the ACL-sharing test");
+        return;
+    };
+    let Some(recipient) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the ACL-sharing test"
+        );
+        return;
+    };
+    if !owner
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_PRINCIPALS)
+    {
+        eprintln!(
+            "server does not advertise {CAPABILITY_PRINCIPALS}; skipping the ACL-sharing test"
+        );
+        return;
+    }
+
+    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+    let owner_account_id = owner
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+
+    let recipient_principal_id = owner
+        .principal_query(
+            &owner_account_id,
+            PrincipalQueryFilter::email(&recipient_email),
+        )
+        .expect("Principal/query failed against the real server")
+        .into_iter()
+        .next()
+        .expect("the owner account cannot resolve the recipient's principal id by email");
+
+    let name = format!("agent-livewrite-acl-{}", unique_suffix());
+    let book = owner
+        .address_book_create(&owner_account_id, &AddressBook::new(name))
+        .expect("AddressBook/set create failed against the real server");
+    let book_id = book
+        .id
+        .clone()
+        .expect("the server named the new address book");
+
+    match recipient.address_books(&owner_account_id) {
+        Err(jmap_client::Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, "forbidden");
+        }
+        other => {
+            panic!("expected forbidden on the owner's account before any grant, got {other:?}")
+        }
+    }
+
+    owner
+        .address_book_update(
+            &owner_account_id,
+            &book_id,
+            json!({"shareWith": {recipient_principal_id.as_str(): {"mayRead": true}}}),
+        )
+        .expect("AddressBook/set shareWith failed against the real server");
+
+    let shared_books = recipient
+        .address_books(&owner_account_id)
+        .expect("AddressBook/get failed for the recipient after the grant");
+    let shared = shared_books
+        .iter()
+        .find(|book| book.id.as_ref() == Some(&book_id))
+        .expect("the recipient does not see the shared address book");
+    let rights = shared
+        .my_rights
+        .as_ref()
+        .expect("myRights is computed from the grant");
+    assert_eq!(rights.may_read, Some(true));
+
+    owner
+        .address_book_update(
+            &owner_account_id,
+            &book_id,
+            json!({format!("shareWith/{}", recipient_principal_id.as_str()): null}),
+        )
+        .expect("AddressBook/set revoke failed against the real server");
+
+    match recipient.address_books(&owner_account_id) {
+        Err(jmap_client::Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, "forbidden");
+        }
+        other => panic!("expected forbidden after the grant is revoked, got {other:?}"),
+    }
+
+    owner
+        .address_book_destroy(&owner_account_id, &book_id)
+        .expect("AddressBook/set destroy failed against the real server (cleanup)");
 }
