@@ -33,7 +33,7 @@ fn quota_round_trips_through_camel_case_json() {
     assert_eq!(val["used"], 512_000);
     assert_eq!(val["hardLimit"], 1_000_000);
     assert_eq!(val["scope"], "account");
-    assert_eq!(val["types"], json!(["Mail", "Contacts"]));
+    assert_eq!(val["types"], json!(["Email", "ContactCard"]));
     assert_eq!(val["warnLimit"], 800_000);
     assert_eq!(val["softLimit"], 900_000);
     assert_eq!(val["description"], "Primary account storage limit");
@@ -82,7 +82,7 @@ fn quota_query_filter_round_trips_and_builders() {
     assert_eq!(val["name"], "Storage");
     assert_eq!(val["resourceType"], "octets");
     assert_eq!(val["scope"], "account");
-    assert_eq!(val["type"], "Mail");
+    assert_eq!(val["type"], "Email");
 
     let round: QuotaQueryFilter = serde_json::from_value(val).expect("from_value");
     assert_eq!(round, filter);
@@ -95,9 +95,9 @@ fn quota_capability_and_constants_coverage() {
     assert_eq!(quota_scope::ACCOUNT, "account");
     assert_eq!(quota_scope::DOMAIN, "domain");
     assert_eq!(quota_scope::GLOBAL, "global");
-    assert_eq!(quota_data_type::MAIL, "Mail");
-    assert_eq!(quota_data_type::CONTACTS, "Contacts");
-    assert_eq!(quota_data_type::CALENDARS, "Calendars");
+    assert_eq!(quota_data_type::MAIL, "Email");
+    assert_eq!(quota_data_type::CONTACTS, "ContactCard");
+    assert_eq!(quota_data_type::CALENDARS, "CalendarEvent");
     assert_eq!(quota_set_error::OVER_QUOTA, "overQuota");
 
     let cap = QuotaCapability::new();

@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::id::Id;
 
-/// A Quota object (RFC 9425 §2).
+/// A Quota object (RFC 9425 §4.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Quota {
@@ -137,7 +137,7 @@ impl QuotaQueryFilter {
     }
 }
 
-/// Quota capability properties (RFC 9425 §1.1).
+/// Quota capability properties (RFC 9425 §2.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaCapability {
@@ -156,24 +156,32 @@ impl QuotaCapability {
     }
 }
 
-/// Standard RFC 9425 quota resource types (§2.1).
+/// Standard RFC 9425 quota resource types (§3.2).
 pub mod quota_resource_type {
     pub const OCTETS: &str = "octets";
     pub const COUNT: &str = "count";
 }
 
-/// Standard RFC 9425 quota scopes (§2.2).
+/// Standard RFC 9425 quota scopes (§3.1).
 pub mod quota_scope {
     pub const ACCOUNT: &str = "account";
     pub const DOMAIN: &str = "domain";
     pub const GLOBAL: &str = "global";
 }
 
-/// Standard RFC 9425 quota data types (§2.3).
+/// Common `types` entries a `Quota` names (RFC 9425 §4.1): values come from
+/// the JMAP Types Names registry, not a closed set specific to quotas — the
+/// RFC gives "Email" and "Calendar" only as examples. These three are the
+/// ones this codebase checks quotas against, confirmed against a real
+/// Stalwart server's own `Quota/get` response (an account-wide disk quota
+/// named `types: ["Email", "SieveScript", "FileNode", "CalendarEvent",
+/// "ContactCard"]`), not assumed: earlier values ("Mail", "Contacts",
+/// "Calendars") were never emitted by any real server and never matched
+/// anything.
 pub mod quota_data_type {
-    pub const MAIL: &str = "Mail";
-    pub const CONTACTS: &str = "Contacts";
-    pub const CALENDARS: &str = "Calendars";
+    pub const MAIL: &str = "Email";
+    pub const CONTACTS: &str = "ContactCard";
+    pub const CALENDARS: &str = "CalendarEvent";
 }
 
 /// The `SetError` types added for quotas (RFC 9425 §5).

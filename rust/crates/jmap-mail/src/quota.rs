@@ -10,7 +10,7 @@
 //! looks. `CamelFolderClass::get_quota_info_sync` is per-folder in Camel's own
 //! vocabulary — IMAPX answers it with the IMAP quota root a mailbox happens to
 //! sit under — but RFC 9425 scopes a `Quota` to the account, not to a mailbox
-//! (§2.2's `scope` is `account`, `domain` or `global`, never one folder), so
+//! (§3.1's `scope` is `account`, `domain` or `global`, never one folder), so
 //! every folder of a JMAP account answers this vfunc from the same list:
 //! [`crate::store::JmapStore::quotas`].
 //!
@@ -20,12 +20,21 @@
 //! Contacts and Calendars among them, on a server that also hosts CardDAV and
 //! CalDAV data for the same user — and a folder-properties dialog asking about
 //! a mailbox has no use for a quota that says nothing about Mail. RFC 9425
-//! §2.3 gives the rule for which is which: a `types` naming `"Mail"`
+//! §4.1 gives the rule for which is which: a `types` naming `"Email"`
 //! applies, and so — this is the part easy to miss — does one that is absent
 //! or empty, because an empty `types` means "every data type this account
 //! has", not "none". [`applies_to_mail`] is that rule, kept as a plain
 //! function over [`Quota`] so it can be tested without a `CamelFolder` to call
 //! the vfunc on.
+//!
+//! `types` names come from the JMAP Types Names registry (RFC 9425 §4.1
+//! calls out `"Email"` and `"Calendar"` as examples), not from a
+//! quota-specific enum — confirmed against a real Stalwart server, whose own
+//! account-wide disk quota named `types: ["Email", "SieveScript", "FileNode",
+//! "CalendarEvent", "ContactCard"]`. [`quota_data_type::MAIL`] used to hold
+//! `"Mail"`, a string no real server has ever sent, which meant this check
+//! only ever fired through the "absent or empty" branch; fixed to `"Email"`
+//! by the same session that ran that probe.
 //!
 //! ## The chain, and the empty case
 //!
@@ -104,7 +113,7 @@ unsafe extern "C" fn get_quota_info_sync(
     }
 }
 
-/// Whether a `Quota` describes Mail usage, per RFC 9425 §2.3: an absent or
+/// Whether a `Quota` describes Mail usage, per RFC 9425 §4.1: an absent or
 /// empty `types` applies to every data type the account has, not to none
 /// of them, so it is a match here as much as one that names `"Mail"` is.
 fn applies_to_mail(quota: &Quota) -> bool {
@@ -168,6 +177,27 @@ mod tests {
     #[test]
     fn a_quota_with_no_data_types_applies_to_everything_including_mail() {
         assert!(applies_to_mail(&octets("Storage", [])));
+    }
+
+    #[test]
+    fn a_quota_naming_the_types_a_real_stalwart_server_sends_applies_to_mail() {
+        // Literal strings, not `quota_data_type::MAIL`/`CONTACTS`/
+        // `CALENDARS`: this pins the exact wire shape a real Stalwart
+        // server's own account-wide disk quota sent (confirmed live,
+        // 2026-09-19), so the test cannot pass merely by agreeing with
+        // whatever `quota_data_type::MAIL` happens to hold — it would have
+        // failed against the pre-fix `"Mail"` value, which no real server
+        // ever sends.
+        assert!(applies_to_mail(&octets(
+            "Storage",
+            [
+                "Email",
+                "SieveScript",
+                "FileNode",
+                "CalendarEvent",
+                "ContactCard"
+            ]
+        )));
     }
 
     #[test]

@@ -1529,9 +1529,9 @@ fn rfc8620_standard_error_and_enum_constants_exact_values() {
     assert_eq!(quota_scope::ACCOUNT, "account");
     assert_eq!(quota_scope::DOMAIN, "domain");
     assert_eq!(quota_scope::GLOBAL, "global");
-    assert_eq!(quota_data_type::MAIL, "Mail");
-    assert_eq!(quota_data_type::CONTACTS, "Contacts");
-    assert_eq!(quota_data_type::CALENDARS, "Calendars");
+    assert_eq!(quota_data_type::MAIL, "Email");
+    assert_eq!(quota_data_type::CONTACTS, "ContactCard");
+    assert_eq!(quota_data_type::CALENDARS, "CalendarEvent");
     assert_eq!(quota_set_error::OVER_QUOTA, "overQuota");
 }
 
