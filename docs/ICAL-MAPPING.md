@@ -8081,3 +8081,70 @@ While "do whatever Stalwart does" is the working rule of thumb, it does not outr
   Conforming specification adaptation and protocol requirement synthesis. Dropping `DESCRIPTION` on import keeps `Alert` aligned with RFC 8984, while deriving `DESCRIPTION` from the parent event title on export satisfies RFC 5545 Section 3.6.6 mandatory property rules.
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+## 14. Outbound CalDAV Differential Fidelity Oracle Adjudications (Stalwart CalDAV)
+
+Differential oracle verification for the outbound serialization direction (JSCalendar Event to RFC 5545 iCalendar stream), exercised against Stalwart v1.0.0's live CalDAV endpoint. Serialized `.ics` payloads are uploaded via HTTP PUT to user calendar collections and retrieved via HTTP GET to verify server acceptance, component normalization, and property preservation across real-world exporter fixtures.
+
+### 14.432 Divergence 432: `CONFERENCE`, `VALUE=URI` Placement and Parameter Ordering: RFC 7986 Section 5.11 `CONFERENCE` vs RFC 5545 Section 3.2 Parameter Order Insignificance
+
+- **Observed Behavior**:
+  Parameter placement and ordering on RFC 7986 `CONFERENCE` properties during outbound CalDAV serialization and retrieval:
+  1. Outbound insertion order (`drawn_conferences`, `drawn_conference`): In `jmap-ical`, `drawn_conference` constructs `CONFERENCE` entries with `VALUE=URI` explicitly declared as the first parameter: `CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL="Design Bridge";X-JMAP-KEY=v1:https://meet.apple.com/lab-42`. Declaring `VALUE=URI` immediately after property name provides explicit type annotation conforming to RFC 7986 Section 5.11.
+  2. Oracle alphabetical parameter normalization: In contrast, Stalwart v1.0.0's CalDAV engine parses the incoming `CONFERENCE` line on CalDAV PUT and reorganizes property parameters in alphabetical order on subsequent CalDAV GET: `CONFERENCE;FEATURE=AUDIO,VIDEO;LABEL="Design Bridge";X-JMAP-KEY=v1;VALUE=URI:https://meet.apple.com/lab-42`. In all cases, parameter values and non-standard round-trip keys (`X-JMAP-KEY=v1`) are preserved intact.
+  3. Inbound parse resilience (`read_virtual_locations`): On inbound parsing, `jmap-ical` reads property parameters into unordered parameter lookup tables, extracting `FEATURE`, `LABEL`, and `X-JMAP-KEY` irrespective of relative parameter position.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2 (`Property Parameters`): "Property parameter names are case-insensitive. The order of property parameters is not significant."
+  2. RFC 7986 Section 5.11 (`Conference Information`).
+  3. RFC 8984 Section 4.2.6 (`VirtualLocation`).
+- **Adjudication**:
+  Conforming specification adaptation. RFC 5545 Section 3.2 explicitly affirms that parameter ordering is semantically insignificant. Both `jmap-ical`'s initial type parameter placement and Stalwart's sorted normalization represent fully compliant iCalendar representations, with identical AST properties and lossless round-trip stability.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 14.433 Divergence 433: `IMAGE`, `VALUE=URI` Placement and Property Parameter Ordering: RFC 7986 Section 5.10 `IMAGE` vs RFC 5545 Section 3.2 Parameter Order Insignificance
+
+- **Observed Behavior**:
+  Parameter sequence and type parameter placement on RFC 7986 `IMAGE` properties during outbound CalDAV export and retrieval:
+  1. Outbound type parameter prefixing (`drawn_links`, `drawn_link`): In `jmap-ical`, `drawn_link` serializes icon links (`rel == "icon"`) as RFC 7986 `IMAGE` properties, emitting `VALUE=URI` as the initial parameter: `IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=k2:https://lip6.sorbonne-universite.fr/logo.png`.
+  2. Oracle alphabetical parameter reordering: In contrast, Stalwart v1.0.0's CalDAV endpoint accepts the property on CalDAV PUT and normalizes parameters into alphabetical order on GET: `IMAGE;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=k2;VALUE=URI:https://lip6.sorbonne-universite.fr/logo.png`. The property name, parameter values, display context, MIME format type, and round-trip key (`X-JMAP-KEY=k2`) remain identical.
+  3. Inbound parsing compatibility (`read_links`): In `jmap-ical`, `read_links` extracts `DISPLAY` and `FMTTYPE` via named parameter search, producing equivalent JSCalendar `Link` objects regardless of parameter serialization order.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.2 (`Property Parameters`).
+  2. RFC 7986 Section 5.10 (`Image`).
+  3. RFC 8984 Section 4.2.7 (`Link`).
+- **Adjudication**:
+  Conforming specification adaptation. Parameter ordering on `IMAGE` properties carries no semantic distinction under RFC 5545 Section 3.2. Both serializations decode to identical `Link` models on inbound ingest.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 14.434 Divergence 434: `DTSTAMP`, Missing Store-Timestamp Omission on Export vs Server Non-Synthesis on CalDAV PUT: RFC 5545 Section 3.6.1 Mandatory `DTSTAMP` vs RFC 4791 Section 5.3.2 CalDAV PUT
+
+- **Observed Behavior**:
+  Handling of the mandatory `DTSTAMP` property on outbound CalDAV upload when an event lacks store lifecycle timestamps:
+  1. Outbound timestamp omission without updated instant (`write_timestamps`, `vevent_of`): RFC 5545 Section 3.6.1 specifies `DTSTAMP` as mandatory on `VEVENT`. In `jmap-ical`, `ical_to_event` deliberately drops `DTSTAMP` on inbound import as store-managed lifecycle metadata (Section 9.1, Section 13.2). On outbound export, `write_timestamps` derives `DTSTAMP` from `event.updated`. When `updated` is absent, `jmap-ical` deliberately omits `DTSTAMP` rather than synthesizing an arbitrary client clock timestamp that would cause non-deterministic file differences and synchronization churn.
+  2. Oracle non-synthesis and acceptance: In contrast to expectations that a CalDAV server might reject an event lacking mandatory `DTSTAMP` under RFC 4791 Section 5.3.2.1 (`CALDAV:valid-calendar-data`), Stalwart v1.0.0 accepts the PUT with HTTP 201 Created and serves the stored event on HTTP GET without injecting a synthetic `DTSTAMP` line.
+  3. Re-ingest tolerance (`read_vevent`): In `jmap-ical`, inbound parsing succeeds whether `DTSTAMP` is present or absent, maintaining full offline and differential compatibility across calendar stores.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.1 (`Event Component`) and Section 3.8.7.2 (`Date-Time Stamp`).
+  2. RFC 4791 Section 5.3.2 (`PUT`) and Section 5.3.2.1 (`CALDAV:valid-calendar-data`).
+  3. RFC 8984 Section 4.1.8 (`updated`).
+- **Adjudication**:
+  Conforming specification adaptation and storage fidelity. Stalwart's acceptance without server timestamp injection confirms that omitting `DTSTAMP` in the absence of `updated` does not impede CalDAV server interoperability, preserving deterministic byte stability across client sync passes.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 14.435 Divergence 435: `PRODID` and Top-Level Container Properties, Client Identity Preservation vs Server Banner Substitution: RFC 5545 Section 3.7.3 `PRODID` vs RFC 4791 CalDAV Resource Normalization
+
+- **Observed Behavior**:
+  Treatment of top-level `VCALENDAR` container metadata (`PRODID`, `VERSION`) during CalDAV resource storage and retrieval:
+  1. Outbound client identity emission (`event_to_ical`): In `jmap-ical`, outbound serialization wraps components in `BEGIN:VCALENDAR` with `VERSION:2.0` and client product identifier `PRODID:-//evolution-jmap//JMAP calendar backend//EN`.
+  2. Oracle identity preservation: When stored via CalDAV PUT, Stalwart v1.0.0 preserves the client's `PRODID:-//evolution-jmap//JMAP calendar backend//EN` and `VERSION:2.0` verbatim on subsequent CalDAV GET responses, refraining from overwriting the client generator banner with server software banners.
+  3. Container round-trip stability: Preserving the client's original product identifier prevents spurious property divergence and ensures that client calendar engines can detect their own exported artifacts during multi-device synchronization.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.7.3 (`Product Identifier`) and Section 3.7.4 (`Version`).
+  2. RFC 4791 Section 5.3.2 (`PUT Processing`).
+- **Adjudication**:
+  Conforming specification adaptation and client identity preservation. Verbatim retention of `PRODID` confirms that Stalwart CalDAV respects client envelope metadata without destructive rewriting.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.

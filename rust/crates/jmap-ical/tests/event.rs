@@ -47849,3 +47849,209 @@ fn differential_oracle_valarm_description_isolation_and_outbound_title_derivatio
     );
     assert!(out.contains("UID:a1\r\n"), "VALARM UID must be emitted");
 }
+
+#[test]
+fn differential_oracle_caldav_conference_parameter_ordering_and_value_uri() {
+    // Audit divergence 432: CONFERENCE VALUE=URI placement and parameter ordering:
+    // RFC 7986 Section 5.11 CONFERENCE vs RFC 5545 Section 3.2 parameter order insignificance.
+
+    // 1. Outbound serialization emits CONFERENCE with VALUE=URI as first parameter
+    let mut virtual_locations = BTreeMap::new();
+    virtual_locations.insert(
+        "v1".to_owned(),
+        json!({
+            "@type": "VirtualLocation",
+            "name": "Design Bridge",
+            "uri": "https://meet.apple.com/lab-42",
+            "features": {
+                "audio": true,
+                "video": true
+            }
+        }),
+    );
+    let event = CalendarEvent {
+        id: Some("conf-order-test".into()),
+        start: Some("2026-10-01T10:00:00".into()),
+        duration: Some("PT1H".into()),
+        title: Some("Design Review".into()),
+        virtual_locations: Some(virtual_locations),
+        ..Default::default()
+    };
+
+    let out = event_to_ical(&event);
+    let unfolded = out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(
+        unfolded.contains("CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO;LABEL=\"Design Bridge\";X-JMAP-KEY=v1:https://meet.apple.com/lab-42\r\n"),
+        "outbound serialization emits VALUE=URI first followed by features and label: {unfolded}"
+    );
+
+    // 2. Stalwart CalDAV returns sorted parameters: FEATURE before VALUE=URI.
+    // Inbound parse must parse Stalwart's normalized line into the identical VirtualLocation.
+    let stalwart_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Stalwart//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:conf-order-test\r\n\
+DTSTART:20261001T100000\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Design Review\r\n\
+CONFERENCE;FEATURE=AUDIO,VIDEO;LABEL=\"Design Bridge\";X-JMAP-KEY=v1;VALUE=URI:https://meet.apple.com/lab-42\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_stalwart = ical_to_event(stalwart_ics).expect("parses stalwart normalized conference");
+    let vl_stalwart = ev_stalwart
+        .virtual_locations
+        .as_ref()
+        .expect("virtual_locations present");
+    let loc = &vl_stalwart["v1"];
+    assert_eq!(
+        loc.get("uri").and_then(Value::as_str),
+        Some("https://meet.apple.com/lab-42")
+    );
+    assert_eq!(
+        loc.get("name").and_then(Value::as_str),
+        Some("Design Bridge")
+    );
+    let feat = loc.get("features").expect("features present");
+    assert_eq!(feat.get("audio"), Some(&Value::Bool(true)));
+    assert_eq!(feat.get("video"), Some(&Value::Bool(true)));
+}
+
+#[test]
+fn differential_oracle_caldav_image_parameter_ordering_and_roundtrip() {
+    // Audit divergence 433: IMAGE VALUE=URI placement and property parameter ordering:
+    // RFC 7986 Section 5.10 IMAGE vs RFC 5545 Section 3.2 parameter order insignificance.
+
+    // 1. Outbound serialization emits IMAGE with VALUE=URI as first parameter
+    let mut links = BTreeMap::new();
+    links.insert(
+        "k2".to_owned(),
+        json!({
+            "@type": "Link",
+            "href": "https://lip6.sorbonne-universite.fr/logo.png",
+            "rel": "icon",
+            "contentType": "image/png",
+            "display": "badge"
+        }),
+    );
+    let event = CalendarEvent {
+        id: Some("image-order-test".into()),
+        start: Some("2026-10-01T14:00:00".into()),
+        duration: Some("PT1H".into()),
+        title: Some("Colloquium".into()),
+        links: Some(links),
+        ..Default::default()
+    };
+
+    let out = event_to_ical(&event);
+    let unfolded = out.replace("\r\n ", "").replace("\r\n\t", "");
+    assert!(
+        unfolded.contains("IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=k2:https://lip6.sorbonne-universite.fr/logo.png\r\n"),
+        "outbound serialization emits VALUE=URI first: {unfolded}"
+    );
+
+    // 2. Stalwart CalDAV returns sorted parameters: DISPLAY and FMTTYPE before VALUE=URI.
+    // Inbound parse must reconstruct the identical Link.
+    let stalwart_ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Stalwart//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:image-order-test\r\n\
+DTSTART:20261001T140000\r\n\
+DURATION:PT1H\r\n\
+SUMMARY:Colloquium\r\n\
+IMAGE;DISPLAY=BADGE;FMTTYPE=image/png;X-JMAP-KEY=k2;VALUE=URI:https://lip6.sorbonne-universite.fr/logo.png\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let ev_stalwart = ical_to_event(stalwart_ics).expect("parses stalwart normalized image");
+    let links_stalwart = ev_stalwart.links.as_ref().expect("links present");
+    let link = &links_stalwart["k2"];
+    assert_eq!(
+        link.get("href").and_then(Value::as_str),
+        Some("https://lip6.sorbonne-universite.fr/logo.png")
+    );
+    assert_eq!(link.get("rel").and_then(Value::as_str), Some("icon"));
+    assert_eq!(
+        link.get("contentType").and_then(Value::as_str),
+        Some("image/png")
+    );
+    assert_eq!(link.get("display").and_then(Value::as_str), Some("badge"));
+}
+
+#[test]
+fn differential_oracle_caldav_dtstamp_omission_without_updated_timestamp() {
+    // Audit divergence 434: DTSTAMP missing store-timestamp omission on export vs server non-synthesis:
+    // RFC 5545 Section 3.6.1 mandatory DTSTAMP vs RFC 4791 Section 5.3.2 CalDAV PUT.
+
+    // 1. When updated is None, outbound serialization omits DTSTAMP to prevent clock fabrication
+    let ev_no_updated = CalendarEvent {
+        id: Some("dtstamp-test".into()),
+        start: Some("2026-10-01T09:00:00".into()),
+        duration: Some("PT30M".into()),
+        title: Some("Morning Standup".into()),
+        updated: None,
+        ..Default::default()
+    };
+    let out = event_to_ical(&ev_no_updated);
+    assert!(
+        !out.contains("DTSTAMP:"),
+        "DTSTAMP must be omitted when updated is absent"
+    );
+
+    // 2. When updated is present, outbound serialization emits DTSTAMP formatted as UTC Zulu
+    let ev_with_updated = CalendarEvent {
+        id: Some("dtstamp-test".into()),
+        start: Some("2026-10-01T09:00:00".into()),
+        duration: Some("PT30M".into()),
+        title: Some("Morning Standup".into()),
+        updated: Some("2026-09-19T10:00:00Z".into()),
+        ..Default::default()
+    };
+    let out_updated = event_to_ical(&ev_with_updated);
+    assert!(
+        out_updated.contains("DTSTAMP:20260919T100000Z\r\n"),
+        "DTSTAMP must be emitted when updated is present"
+    );
+
+    // 3. Inbound parse accepts ics with or without DTSTAMP
+    let parsed_without = ical_to_event(&out).expect("parses without DTSTAMP");
+    assert_eq!(parsed_without.title.as_deref(), Some("Morning Standup"));
+    let parsed_with = ical_to_event(&out_updated).expect("parses with DTSTAMP");
+    assert_eq!(parsed_with.title.as_deref(), Some("Morning Standup"));
+}
+
+#[test]
+fn differential_oracle_caldav_prodid_and_container_roundtrip_stability() {
+    // Audit divergence 435: PRODID and top-level container properties, client identity preservation
+    // vs server banner substitution: RFC 5545 Section 3.7.3 PRODID vs RFC 4791 CalDAV resource normalization.
+
+    let ev = CalendarEvent {
+        id: Some("prodid-test".into()),
+        start: Some("2026-10-01T11:00:00".into()),
+        duration: Some("PT45M".into()),
+        title: Some("Product Sync".into()),
+        ..Default::default()
+    };
+
+    // 1. Outbound serialization emits Evolution JMAP product identifier and version
+    let out = event_to_ical(&ev);
+    assert!(
+        out.contains("PRODID:-//evolution-jmap//JMAP calendar backend//EN\r\n"),
+        "emits Evolution JMAP product identifier"
+    );
+    assert!(out.contains("VERSION:2.0\r\n"), "emits VERSION:2.0");
+
+    // 2. Inbound parse preserves event properties regardless of PRODID
+    let custom_server_ics = out.replace(
+        "PRODID:-//evolution-jmap//JMAP calendar backend//EN",
+        "PRODID:-//Stalwart//NONSGML Stalwart Mail Server//EN",
+    );
+    let parsed = ical_to_event(&custom_server_ics).expect("parses server-substituted PRODID");
+    assert_eq!(parsed.title.as_deref(), Some("Product Sync"));
+    assert_eq!(
+        parsed.id.as_ref().map(|id| id.as_str()),
+        Some("prodid-test")
+    );
+}

@@ -702,25 +702,23 @@ pub fn probe_fixtures(
                                 raw_equal
                             );
                             if !raw_equal {
-                                for (i, (b1, b2)) in
-                                    body.chars().zip(local_sent_ics.chars()).enumerate()
+                                let body_lines: Vec<&str> = body.lines().collect();
+                                let local_lines: Vec<&str> = local_sent_ics.lines().collect();
+                                for (idx, (bl, ll)) in
+                                    body_lines.iter().zip(local_lines.iter()).enumerate()
                                 {
-                                    if b1 != b2 {
-                                        let b_ctx: String = body
-                                            .chars()
-                                            .skip(i.saturating_sub(10))
-                                            .take(30)
-                                            .collect();
-                                        let l_ctx: String = local_sent_ics
-                                            .chars()
-                                            .skip(i.saturating_sub(10))
-                                            .take(30)
-                                            .collect();
-                                        println!(
-                                            "     [diag] diff at {i}: server={b_ctx:?} vs local={l_ctx:?}"
-                                        );
-                                        break;
+                                    if bl != ll {
+                                        println!("     [line diff {idx}]:");
+                                        println!("       server: {bl}");
+                                        println!("       local:  {ll}");
                                     }
+                                }
+                                if body_lines.len() != local_lines.len() {
+                                    println!(
+                                        "     [line count diff]: server={} vs local={}",
+                                        body_lines.len(),
+                                        local_lines.len()
+                                    );
                                 }
                             }
                             body
