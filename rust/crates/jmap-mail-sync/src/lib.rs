@@ -932,13 +932,19 @@ impl MailSync {
     /// what the request needs and the path is what the answer needs, and only
     /// the caller's tree has both.
     ///
-    /// **What the answer is built from is what was *sent*, not what came
-    /// back.** RFC 8620 §5.3 lets a server return, for a created record, only
-    /// the properties it set itself — so `name` and `parentId` may legitimately
-    /// be absent from the object in the response, and reading the path out of
-    /// it would give an empty one against a perfectly correct server. The id is
-    /// the property a create exists to learn, and it is the one the RFC
-    /// guarantees.
+    /// **The name is the server's when it stated one, the requested name
+    /// otherwise.** RFC 8620 §5.3 lets a server return, for a created record,
+    /// only the properties it set itself, so an unchanged `name` may
+    /// legitimately be absent (blank, since [`Mailbox::name`] has no `Option`
+    /// to be absent in) from the response — and reading that blank as "the
+    /// server named it nothing" would build an empty path against a perfectly
+    /// correct server. But a *non-blank* answer is the server stating a real
+    /// normalisation (whitespace trimmed, Unicode-normalized, and so on, the
+    /// same shape `jmap-collection-sync`'s `created_resource` already handles
+    /// for address books and calendars), and ignoring that would cache a path
+    /// the server does not recognise until the next full listing corrects it.
+    /// [`created_folder_name`] makes the choice; the id is the one property
+    /// the RFC guarantees regardless.
     ///
     /// The counts are zero and there are no children, which is not optimism: a
     /// mailbox that did not exist a moment ago has had nowhere for mail to
@@ -980,6 +986,7 @@ impl MailSync {
         let id = created
             .id
             .ok_or_else(|| SyncError::protocol("Mailbox/set created a mailbox without an id"))?;
+        let name = created_folder_name(&created.name, name);
 
         Ok(FolderInfo {
             id,
@@ -1205,6 +1212,22 @@ fn filing_properties() -> Vec<&'static str> {
     properties
 }
 
+/// The name a just-created folder's answer is built from: `server_name` when
+/// it is not blank (the server stated a real normalisation), `requested_name`
+/// otherwise (the server said nothing, RFC 8620 §5.3's "accepted as asked").
+///
+/// Mirrors `jmap-collection-sync`'s `created_resource`, which makes the same
+/// blank-vs-non-blank call for address books and calendars after a real
+/// Fastmail server was found leaving `name` out of a create response entirely
+/// rather than echoing back the name it was given.
+fn created_folder_name<'a>(server_name: &'a str, requested_name: &'a str) -> &'a str {
+    if server_name.trim().is_empty() {
+        requested_name
+    } else {
+        server_name
+    }
+}
+
 /// The one refusal a write to a mailbox has to be told apart from the rest:
 /// the mailbox is not there any more.
 ///
@@ -1263,3 +1286,23 @@ const FALLBACK_OBJECTS_IN_GET: usize = 50;
 /// The most this client asks for in one `Email/get`, however much the server
 /// allows.
 const MAX_OBJECTS_PER_GET: usize = 500;
+
+#[cfg(test)]
+mod tests {
+    use super::created_folder_name;
+
+    /// The mock server this crate tests against always echoes a create's
+    /// requested name back unchanged, so no live round trip can produce the
+    /// blank-vs-normalised distinction a real server does; the choice is
+    /// tested directly instead.
+    #[test]
+    fn a_blank_server_name_falls_back_to_the_requested_one() {
+        assert_eq!(created_folder_name("", "Projects"), "Projects");
+        assert_eq!(created_folder_name("   ", "Projects"), "Projects");
+    }
+
+    #[test]
+    fn a_non_blank_server_name_overrides_the_requested_one() {
+        assert_eq!(created_folder_name("Projets", "Projects"), "Projets");
+    }
+}
