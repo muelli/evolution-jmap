@@ -59,6 +59,25 @@ fn connect_for_write() -> Option<Client> {
     Some(client)
 }
 
+/// Mirrors `jmap-book-sync/tests/live_server_changes.rs::connect_recipient`
+/// exactly.
+fn connect_recipient() -> Option<Client> {
+    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
+    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
+        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
+    );
+    let origin = env::var("JMAP_LIVE_SERVER_URL")
+        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
+    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+
+    Some(
+        Client::builder()
+            .rebase_urls_to_origin(rebase)
+            .connect(&origin, Credentials::basic(user, password))
+            .expect("could not fetch the session document for the recipient account"),
+    )
+}
+
 /// Creates an event, then confirms `get_changes` reports it as changed from
 /// the state captured just before the create; edits it and confirms the edit
 /// shows up from the post-create state; removes it and confirms the removal
@@ -162,5 +181,67 @@ fn get_changes_reports_a_create_an_edit_and_a_removal_against_the_real_server() 
     assert!(
         !after_remove.changed.iter().any(|c| c.uid == saved.uid),
         "a removed event must not also be reported as changed"
+    );
+}
+
+/// Mirrors `jmap-book-sync/tests/live_server_changes.rs`'s test of the same
+/// name: a state is opaque per RFC 8620, but not free-form, and a
+/// syntactically well-formed state from a *different* account is the
+/// reliable way to reach `cannotCalculateChanges` on the real server (a
+/// hand-written bogus string fails Stalwart's own state-syntax validation
+/// first, `invalidArguments`, unlike `jmap-mockd`'s simulation, which accepts
+/// anything unparseable as this error instead). `jmap-cal-sync::get_changes`
+/// shares `jmap-book-sync::get_changes`'s exact
+/// `SyncError::is_cannot_calculate_changes` shape, so the same trick
+/// confirms it here too.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
+    let Some(owner) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let Some(other) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the write-path test"
+        );
+        return;
+    };
+
+    let owner_account_id = owner
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let owner_calendar_id = owner
+        .calendars(&owner_account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+    let owner_sync = CalSync::new(owner, owner_account_id, owner_calendar_id);
+    let (owner_state, _) = owner_sync
+        .list_existing()
+        .expect("listing the owner's calendar failed against the real server");
+
+    let other_account_id = other
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the recipient account needs the calendars capability");
+    let other_calendar_id = other
+        .calendars(&other_account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the recipient account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+    let other_sync = CalSync::new(other, other_account_id, other_calendar_id);
+
+    let error = other_sync
+        .get_changes(&owner_state)
+        .expect_err("a state from a different account must not be answered as if it were valid");
+    assert!(
+        error.is_cannot_calculate_changes(),
+        "expected cannotCalculateChanges for another account's state, got: {error:?}"
     );
 }
