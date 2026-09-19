@@ -328,6 +328,31 @@ exactly, the same bar the mock-based tests hold to — not merely "some busy
 period exists"), then destroys the event. Skipped, not failed, when
 `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are unset.
 
+`rust/crates/jmap-cal-sync/tests/live_server_shared_freebusy.rs` covers the
+scenario that file cannot: a real meeting scheduler always asks about
+*someone else's* calendar, and every account can see its own regardless of
+sharing, so the self-lookup test never exercises the permission check at
+all. Needs both the write-test account (step 3, the one asked about) and
+the recipient account (step 3a, the one asking) — no new credentials beyond
+those two. Run it the same way:
+
+```console
+$ cargo test -p evolution-jmap-cal-sync --test live_server_shared_freebusy -- --ignored
+```
+
+`free_busy_of_another_account_reflects_only_what_was_shared` creates a
+calendar and a one-hour event on the write-test account, then calls the
+recipient's own `CalSync::free_busy` about the write-test account's address
+three times: before any grant (the address is still reported, per RFC
+9670's own empty-list-not-error answer for a principal you cannot read, but
+with no `FREEBUSY` line at all — indistinguishable from a genuinely empty
+diary, which is the one behaviour `harness/stalwart/
+seed-freebusy-fixture.py` flags as the most important thing to know about
+this call), after a `mayReadFreeBusy`-only `Calendar/set shareWith` grant
+(the created event's exact window appears), and after revoking that grant
+(back to no `FREEBUSY` line). Destroys the event and calendar at the end.
+Skipped, not failed, when either account's credentials are unset.
+
 ## `jmap-book-sync`'s save/remove test
 
 `rust/crates/jmap-book-sync/tests/live_server.rs` is the address-book
