@@ -17,6 +17,7 @@ use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{MailSync, SyncError};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
+use jmap_proto::mail::Identity;
 
 struct Fixture {
     server: MockServer,
@@ -40,6 +41,24 @@ impl Fixture {
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&self.account_id).unwrap();
         account.seed_identity(name, email)
+    }
+
+    /// A server that violates RFC 8620 §5.1 by answering `Identity/get` with
+    /// a matched record that carries no `id` at all.
+    fn seed_identity_without_id(&self, email: &str) -> Id {
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&self.account_id).unwrap();
+        let id = account.identities.alloc_id();
+        account.identities.seed_with_id(
+            id.clone(),
+            Identity {
+                id: None,
+                email: email.to_owned(),
+                ..Identity::default()
+            },
+        );
+        id
     }
 }
 
@@ -194,4 +213,22 @@ fn an_address_that_differs_only_in_case_is_the_same_address() {
         alice
     );
     assert_eq!(fixture.sync().identity_for("BOB@example.com").unwrap(), any);
+}
+
+#[test]
+fn a_matched_identity_with_no_id_is_a_protocol_violation() {
+    let fixture = Fixture::start();
+    fixture.seed_identity_without_id("alice@example.com");
+
+    let error = fixture
+        .sync()
+        .identity_for("alice@example.com")
+        .expect_err("an identity with no id cannot be named in a submission");
+
+    match error {
+        SyncError::Client(jmap_client::Error::Protocol(message)) => {
+            assert!(message.contains("without an id"), "{message}");
+        }
+        other => panic!("expected a protocol failure, got {other:?}"),
+    }
 }
