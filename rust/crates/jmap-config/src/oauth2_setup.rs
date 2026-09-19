@@ -278,7 +278,54 @@ fn probe_resource(
 
 #[cfg(test)]
 mod tests {
-    use super::Error;
+    use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError};
+
+    use super::{Error, probe_resource};
+
+    /// A [`Transport`] that always answers the same way, for driving
+    /// `probe_resource` into branches `jmap-mock` cannot: a transport failure,
+    /// or a status outside the 200/401/403 set it treats as a match.
+    enum Fixed {
+        Fails,
+        Answers {
+            status: u16,
+            final_url: &'static str,
+        },
+    }
+
+    impl Transport for Fixed {
+        fn execute(&self, _request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+            match self {
+                Self::Fails => Err(TransportError::Failed("simulated failure".into())),
+                Self::Answers { status, final_url } => Ok(HttpResponse {
+                    status: *status,
+                    content_type: None,
+                    body: Vec::new(),
+                    final_url: (*final_url).to_owned(),
+                }),
+            }
+        }
+    }
+
+    #[test]
+    fn a_transport_failure_omits_the_resource_indicator() {
+        assert_eq!(
+            probe_resource(&Fixed::Fails, "https://jmap.example.com", None),
+            None
+        );
+    }
+
+    #[test]
+    fn a_status_outside_200_401_403_omits_the_resource_indicator() {
+        let transport = Fixed::Answers {
+            status: 500,
+            final_url: "https://jmap.example.com/.well-known/jmap",
+        };
+        assert_eq!(
+            probe_resource(&transport, "https://jmap.example.com", None),
+            None
+        );
+    }
 
     #[test]
     fn cancellation_reads_back_as_g_io_error_cancelled() {
