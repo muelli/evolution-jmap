@@ -71,8 +71,10 @@ use jmap_proto::mail::{
     keyword, role,
 };
 use jmap_proto::methods::{BlobCopyRequest, Comparator};
+use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
+    CAPABILITY_QUOTA,
 };
 use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
 use serde_json::json;
@@ -1570,4 +1572,121 @@ fn blob_copy_into_an_account_you_do_not_own_is_forbidden() {
         }
         other => panic!("expected a forbidden Method error, got {other:?}"),
     }
+}
+
+/// RFC 9425 Quota against real, computed numbers: `jmap-client/tests/
+/// quota.rs` only ever checks that `Client::quotas` deserialises whatever
+/// `jmap-mockd`'s fixture was told to answer, never that a quota's `used`
+/// figure actually tracks real storage. This imports a message into the
+/// write-test account's Inbox and confirms the account's `octets` quota
+/// grows afterwards, proof the number Stalwart reports is live rather than
+/// static.
+///
+/// Polls for a few seconds after the import rather than asserting on the
+/// very next `Quota/get`: RFC 9425 does not require `used` to be updated
+/// synchronously within the same request that changed storage, only that it
+/// eventually reflects reality, the same tolerance
+/// `push_notifies_a_subscribed_eventsource_of_a_real_mailbox_change` applies
+/// to its own asynchronous state.
+///
+/// Skipped, not failed, when the account advertises the quota capability but
+/// `Quota/get` names no per-account `octets` row: confirmed against real
+/// Stalwart that this is a legitimate shape, not a bug to work around.
+/// Stalwart only materialises a `Quota` object for a scope it actually
+/// enforces (RFC 9425 does not require advertising one that never applies),
+/// and a freshly seeded account with no configured `maxDiskQuota` enforces
+/// none at all — the capability being advertised only promises the *method*
+/// works, not that any particular scope is populated. `stw seed` does not
+/// set a disk quota by default, so this is the normal state for a throwaway
+/// write-test account unless one is configured (see
+/// `docs/manual-test-live-server.md`'s write-test account setup).
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn quota_used_reflects_a_real_email_import() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    if !client
+        .session()
+        .accounts
+        .get(&account_id)
+        .is_some_and(|account| account.has_capability(CAPABILITY_QUOTA))
+    {
+        eprintln!("the write-test account does not advertise {CAPABILITY_QUOTA}; skipping");
+        return;
+    }
+
+    let account_octets_quota = |client: &Client| -> Option<Quota> {
+        client
+            .quotas(&account_id)
+            .expect("Quota/get failed against the real server")
+            .into_iter()
+            .find(|quota| {
+                quota.resource_type == quota_resource_type::OCTETS
+                    && quota.scope == quota_scope::ACCOUNT
+            })
+    };
+
+    let Some(before) = account_octets_quota(&client) else {
+        eprintln!(
+            "the write-test account has no per-account octets quota configured \
+             (no maxDiskQuota set); skipping"
+        );
+        return;
+    };
+
+    let inbox_id = client
+        .mailbox_get(&account_id)
+        .unwrap()
+        .list
+        .into_iter()
+        .find(|mailbox| mailbox.role.as_deref() == Some(role::INBOX))
+        .expect("the write-test account needs an Inbox")
+        .id
+        .expect("the server named the Inbox");
+
+    let message = format!(
+        "From: agent-livewrite@example.invalid\r\n\
+         To: agent-livewrite@example.invalid\r\n\
+         Subject: agent-quota-{}\r\n\
+         MIME-Version: 1.0\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\
+         \r\n\
+         Enough bytes to move a quota's used figure. {}\r\n",
+        unique_suffix(),
+        "padding ".repeat(64)
+    );
+
+    let upload = client
+        .upload_blob(&account_id, "message/rfc822", message.into_bytes())
+        .expect("blob upload failed against the real server");
+    let imported = client
+        .email_import(&account_id, &EmailImport::new(upload.blob_id, inbox_id))
+        .expect("Email/import failed against the real server");
+    let id = imported.id.clone().expect("the server named the new email");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut after = account_octets_quota(&client)
+        .expect("the per-account octets quota disappeared after the import");
+    while after.used <= before.used && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+        after = account_octets_quota(&client)
+            .expect("the per-account octets quota disappeared after the import");
+    }
+
+    client
+        .email_destroy(&account_id, &id)
+        .expect("Email/set destroy failed against the real server");
+
+    assert!(
+        after.used > before.used,
+        "quota used ({}) did not grow after importing a message (before: {})",
+        after.used,
+        before.used
+    );
 }

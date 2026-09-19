@@ -130,6 +130,26 @@ $ export JMAP_LIVE_SERVER_RECIPIENT_PASSWORD='<that password>'
 
 Skipped, not failed, when unset — same shape as step 3.
 
+## 3b. (optional) Enable the quota test
+
+`quota_used_reflects_a_real_email_import` needs the write-test account (step
+3) to have a per-account disk quota configured. Confirmed against real
+Stalwart: advertising `urn:ietf:params:jmap:quota` (which every account does)
+is not enough by itself — `Quota/get` only names a `Quota` object for a scope
+the server actually enforces, and `stw seed` sets no disk quota, so a
+freshly seeded account reports none at all. Give it one with `stalwart-cli` directly (`stw` has no wrapper for this;
+`Account`'s id is an internal short id, not the local part, so look it up
+first):
+
+```console
+$ stalwart-cli query Account --where "name=agent1" --fields id --json
+{"id":"d"}
+$ stalwart-cli update Account d --field "quotas/maxDiskQuota=104857600"
+```
+
+Skipped, not failed, when the write-test account still has no per-account
+`octets` quota — same tolerance as every other optional test here.
+
 ## 4. Run it
 
 ```console
