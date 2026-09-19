@@ -677,6 +677,7 @@ fn truncate_octets(text: &str, max_octets: usize) -> String {
 pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, MethodError> {
     let request: QueryRequest<Filter<EmailQueryFilter>> = parse_arguments(arguments)?;
     let page_size = state.query_page_size;
+    let query_never_terminates = state.query_never_terminates;
     let account = account_mut(state, &request.account_id)?;
 
     let filter = request
@@ -723,13 +724,25 @@ pub fn email_query(state: &mut ServerState, arguments: Value) -> Result<Value, M
     // this server imposed is reported back as `limit`: the client already knows
     // about its own.
     let asked = request.limit.unwrap_or(u64::MAX);
-    let ids: Vec<Id> = matches
-        .into_iter()
-        .map(|(id, _)| id.clone())
-        .skip(position)
-        .take(asked.min(page_size.unwrap_or(u64::MAX)) as usize)
-        .collect();
-    let capped = page_size.is_some_and(|page_size| page_size < asked);
+    let never_terminates = query_never_terminates && !matches.is_empty();
+    let ids: Vec<Id> = if never_terminates {
+        // A broken server that always claims more: the same non-empty page
+        // however far `position` has already moved past the real result set.
+        matches
+            .iter()
+            .map(|(id, _)| (*id).clone())
+            .cycle()
+            .take(asked.min(page_size.unwrap_or(1)) as usize)
+            .collect()
+    } else {
+        matches
+            .into_iter()
+            .map(|(id, _)| id.clone())
+            .skip(position)
+            .take(asked.min(page_size.unwrap_or(u64::MAX)) as usize)
+            .collect()
+    };
+    let capped = never_terminates || page_size.is_some_and(|page_size| page_size < asked);
 
     to_result(&QueryResponse {
         account_id: request.account_id,

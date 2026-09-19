@@ -96,6 +96,7 @@ pub struct MockServerBuilder {
     changes_page_size: Option<u64>,
     objects_in_get: Option<u64>,
     query_page_size: Option<u64>,
+    query_never_terminates: bool,
     size_request: Option<u64>,
     size_upload: Option<u64>,
     session_via_redirect: bool,
@@ -220,6 +221,19 @@ impl MockServerBuilder {
     /// hides a client stopping at the first page.
     pub fn query_page_size(mut self, ids: u64) -> Self {
         self.query_page_size = Some(ids);
+        self
+    }
+
+    /// Answer every `Email/query` with a capped, non-empty page, forever,
+    /// no matter how far the client's `position` has already moved past the
+    /// account's actual messages: a broken or hostile server that never
+    /// admits it has run out.
+    ///
+    /// RFC 8620 §5.5 does not allow this, but a client still has to survive
+    /// it rather than loop forever; this exists to drive
+    /// `jmap-mail-sync`'s runaway-pagination guard.
+    pub fn query_never_terminates(mut self) -> Self {
+        self.query_never_terminates = true;
         self
     }
 
@@ -483,6 +497,7 @@ impl MockServerBuilder {
         state.changes_page_size = self.changes_page_size;
         state.objects_in_get = self.objects_in_get;
         state.query_page_size = self.query_page_size;
+        state.query_never_terminates = self.query_never_terminates;
         state.size_request = self.size_request;
         state.size_upload = self.size_upload;
         state.session_via_redirect = self.session_via_redirect;
@@ -556,6 +571,7 @@ impl MockServer {
             changes_page_size: None,
             objects_in_get: None,
             query_page_size: None,
+            query_never_terminates: false,
             size_request: Some(DEFAULT_SIZE_REQUEST),
             size_upload: Some(DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,

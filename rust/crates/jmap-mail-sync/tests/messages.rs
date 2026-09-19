@@ -199,3 +199,28 @@ fn a_server_that_pages_its_query_answer_is_read_to_the_end() {
         "a page boundary must not reorder or duplicate anything"
     );
 }
+
+#[test]
+fn a_server_that_never_stops_paging_is_given_up_on_rather_than_looped_forever() {
+    // A server that keeps claiming a capped, non-empty answer no matter how
+    // far `position` has moved is out of spec (RFC 8620 §5.5), but the client
+    // still has to stop rather than hang, and say why.
+    let fixture = Fixture::started_with(
+        MockServer::builder()
+            .query_page_size(2)
+            .query_never_terminates(),
+    );
+    let inbox = fixture.seed_mailbox_with("Inbox", Some(role::INBOX), 5);
+
+    let error = fixture.sync().messages(&inbox).unwrap_err();
+
+    match error {
+        jmap_mail_sync::SyncError::Client(jmap_client::Error::Protocol(message)) => {
+            assert!(
+                message.contains("never stopped"),
+                "unexpected protocol error: {message}"
+            );
+        }
+        other => panic!("expected a protocol error, got {other:?}"),
+    }
+}

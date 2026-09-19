@@ -91,6 +91,11 @@ pub struct ServerState {
     /// [`crate::MockServerBuilder::query_page_size`] asked. `None` answers the
     /// whole result at once.
     pub query_page_size: Option<u64>,
+    /// Whether `Email/query` should keep answering a capped, non-empty page
+    /// forever instead of ever running out of ids, as
+    /// [`crate::MockServerBuilder::query_never_terminates`] asked — the
+    /// broken/hostile server a client's runaway-pagination guard exists for.
+    pub query_never_terminates: bool,
     /// The largest request this server takes at the API endpoint, in octets, as
     /// [`crate::MockServerBuilder::size_request`] asked — advertised as
     /// `maxSizeRequest` in the session document and enforced on the body before
@@ -224,6 +229,7 @@ impl ServerState {
             changes_page_size: None,
             objects_in_get: None,
             query_page_size: None,
+            query_never_terminates: false,
             size_request: Some(crate::DEFAULT_SIZE_REQUEST),
             size_upload: Some(crate::DEFAULT_SIZE_UPLOAD),
             session_via_redirect: false,
