@@ -112,6 +112,34 @@ fn load_component_reports_an_unknown_identifier_as_not_found() {
 }
 
 #[test]
+fn load_component_reports_a_matched_event_without_an_id_as_a_protocol_violation() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.strip_id(&id);
+
+    let error = fixture.sync().load_component(id.as_str()).unwrap_err();
+
+    assert!(
+        matches!(&error, jmap_cal_sync::SyncError::Client(jmap_client::Error::Protocol(message)) if message.contains("without an id")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn list_existing_reports_a_matched_event_without_an_id_as_a_protocol_violation() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Standup", "2026-01-15T09:00:00");
+    fixture.strip_id(&id);
+
+    let error = fixture.sync().list_existing().unwrap_err();
+
+    assert!(
+        matches!(&error, jmap_cal_sync::SyncError::Client(jmap_client::Error::Protocol(message)) if message.contains("without an id")),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn get_changes_reports_creations_updates_and_destructions() {
     let fixture = Fixture::start();
     // Present before the window: an event created *and* destroyed inside one
