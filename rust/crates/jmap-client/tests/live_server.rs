@@ -63,6 +63,7 @@ use std::time::{Duration, Instant};
 
 use jmap_client::eventsource::{SharedHeaders, expand_url};
 use jmap_client::{CancelFlag, Client, Credentials, EventSourceSubscription};
+use jmap_proto::Id;
 use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter, RecurrenceRule};
 use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
@@ -1692,6 +1693,57 @@ fn quota_used_reflects_a_real_email_import() {
     );
 }
 
+/// Checks that `book_id` is not visible to `recipient` on `owner_account_id`,
+/// tolerating either an outright `forbidden` (the recipient has no shared
+/// books at all on that account) or a successful list that simply omits
+/// `book_id` (another shared book, from a concurrently running test against
+/// the same real account pair, keeps the account visible). Asserting only
+/// "not present" rather than "forbidden" is what makes this safe under
+/// `cargo test`'s default parallelism.
+fn assert_recipient_cannot_see_address_book(
+    recipient: &Client,
+    owner_account_id: &Id,
+    book_id: &Id,
+    when: &str,
+) {
+    match recipient.address_books(owner_account_id) {
+        Err(jmap_client::Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, "forbidden", "{when}");
+        }
+        Ok(books) => {
+            assert!(
+                books.iter().all(|book| book.id.as_ref() != Some(book_id)),
+                "the recipient can still see the address book {when}"
+            );
+        }
+        other => panic!("unexpected AddressBook/get result {when}: {other:?}"),
+    }
+}
+
+/// Mailbox equivalent of [`assert_recipient_cannot_see_address_book`].
+fn assert_recipient_cannot_see_mailbox(
+    recipient: &Client,
+    owner_account_id: &Id,
+    mailbox_id: &Id,
+    when: &str,
+) {
+    match recipient.mailbox_get(owner_account_id) {
+        Err(jmap_client::Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, "forbidden", "{when}");
+        }
+        Ok(response) => {
+            assert!(
+                response
+                    .list
+                    .iter()
+                    .all(|mailbox| mailbox.id.as_ref() != Some(mailbox_id)),
+                "the recipient can still see the mailbox {when}"
+            );
+        }
+        other => panic!("unexpected Mailbox/get result {when}: {other:?}"),
+    }
+}
+
 /// `AddressBook shareWith` (RFC 9610 §2) against a real server: the mock
 /// enforces the full grant/widen/revoke lifecycle
 /// (`jmap-client/tests/contacts.rs`,
@@ -1752,14 +1804,12 @@ fn address_book_shared_with_a_second_real_account_is_visible_only_after_the_gran
         .clone()
         .expect("the server named the new address book");
 
-    match recipient.address_books(&owner_account_id) {
-        Err(jmap_client::Error::Method(method_error)) => {
-            assert_eq!(method_error.error_type, "forbidden");
-        }
-        other => {
-            panic!("expected forbidden on the owner's account before any grant, got {other:?}")
-        }
-    }
+    assert_recipient_cannot_see_address_book(
+        &recipient,
+        &owner_account_id,
+        &book_id,
+        "before any grant",
+    );
 
     owner
         .address_book_update(
@@ -1790,12 +1840,12 @@ fn address_book_shared_with_a_second_real_account_is_visible_only_after_the_gran
         )
         .expect("AddressBook/set revoke failed against the real server");
 
-    match recipient.address_books(&owner_account_id) {
-        Err(jmap_client::Error::Method(method_error)) => {
-            assert_eq!(method_error.error_type, "forbidden");
-        }
-        other => panic!("expected forbidden after the grant is revoked, got {other:?}"),
-    }
+    assert_recipient_cannot_see_address_book(
+        &recipient,
+        &owner_account_id,
+        &book_id,
+        "after the grant is revoked",
+    );
 
     owner
         .address_book_destroy(&owner_account_id, &book_id)
@@ -1863,14 +1913,12 @@ fn mailbox_shared_with_a_second_real_account_is_visible_only_after_the_grant() {
         .clone()
         .expect("the server named the new mailbox");
 
-    match recipient.mailbox_get(&owner_account_id) {
-        Err(jmap_client::Error::Method(method_error)) => {
-            assert_eq!(method_error.error_type, "forbidden");
-        }
-        other => {
-            panic!("expected forbidden on the owner's account before any grant, got {other:?}")
-        }
-    }
+    assert_recipient_cannot_see_mailbox(
+        &recipient,
+        &owner_account_id,
+        &mailbox_id,
+        "before any grant",
+    );
 
     owner
         .mailbox_update(
@@ -1903,12 +1951,12 @@ fn mailbox_shared_with_a_second_real_account_is_visible_only_after_the_grant() {
         )
         .expect("Mailbox/set revoke failed against the real server");
 
-    match recipient.mailbox_get(&owner_account_id) {
-        Err(jmap_client::Error::Method(method_error)) => {
-            assert_eq!(method_error.error_type, "forbidden");
-        }
-        other => panic!("expected forbidden after the grant is revoked, got {other:?}"),
-    }
+    assert_recipient_cannot_see_mailbox(
+        &recipient,
+        &owner_account_id,
+        &mailbox_id,
+        "after the grant is revoked",
+    );
 
     owner
         .mailbox_destroy(&owner_account_id, &mailbox_id)
