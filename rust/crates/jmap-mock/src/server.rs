@@ -642,6 +642,16 @@ impl MockServer {
             .replace_bearer(token);
     }
 
+    /// Honour the bearer token currently configured for only `remaining`
+    /// more requests, then refuse it as though it had just expired. See
+    /// [`crate::auth::AuthConfig::expire_after`] for what this is for.
+    pub fn expire_bearer_token_after(&self, remaining: usize) {
+        self.auth
+            .lock()
+            .expect("mock auth lock")
+            .expire_after(remaining);
+    }
+
     /// The names of the method calls this server has answered so far, in
     /// order — see [`ServerState::method_calls`].
     ///
@@ -874,7 +884,7 @@ fn handle_request(
         .iter()
         .find(|header| header.field.equiv("Authorization"))
         .map(|header| header.value.as_str().to_owned());
-    let auth_guard = auth.lock().expect("mock auth lock");
+    let mut auth_guard = auth.lock().expect("mock auth lock");
     let authorized = auth_guard.authorized(authorization.as_deref());
     let caller = auth_guard.identity_for(authorization.as_deref());
     drop(auth_guard);

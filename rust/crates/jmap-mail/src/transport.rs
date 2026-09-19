@@ -199,29 +199,47 @@ impl JmapTransport {
                 return Err(failure.into());
             }
         };
-        // `retry_once_after`'s `attempt` must be safe to run twice, so the
-        // upload bytes are cloned into the closure rather than moved: a retry
-        // after a refreshed token sends the same message again, not whatever
-        // `source` was left as by a first, unauthorized attempt.
+        let outgoing = Outgoing {
+            source,
+            identity,
+            envelope: Some(envelope),
+            staging: mailboxes.staging.clone(),
+            destination: mailboxes.destination.clone(),
+        };
+
+        // Staging and submitting are retried separately, not as one
+        // composite attempt: `sync.stage_outgoing_message` already commits a
+        // real, visible draft on success, and a retry that reran both
+        // requests after a 401 on the *submit* half alone would import that
+        // same message a second time, leaving an orphaned duplicate draft
+        // behind once the retried submission succeeds. See
+        // `MailSync::stage_outgoing_message`'s doc.
+        //
+        // Both take `outgoing` by reference, so `retry_once_after` running
+        // either `attempt` twice stages, or submits, the same message again
+        // rather than whatever a first, unauthorized attempt left behind.
         let uid = match retry_once_after(
-            || {
-                sync.send_message(Outgoing {
-                    source: source.clone(),
-                    identity: identity.clone(),
-                    envelope: Some(envelope.clone()),
-                    staging: mailboxes.staging.clone(),
-                    destination: mailboxes.destination.clone(),
-                })
-            },
+            || sync.stage_outgoing_message(&outgoing),
             SyncError::is_unauthorized,
             || self.refresh_credentials(sync),
         ) {
             Ok(uid) => uid,
             Err(failure) => {
-                tracing::debug!(?failure, "sending message failed");
+                tracing::debug!(?failure, "staging outgoing message failed");
                 return Err(failure.into());
             }
         };
+        match retry_once_after(
+            || sync.submit_staged_message(&uid, &outgoing),
+            SyncError::is_unauthorized,
+            || self.refresh_credentials(sync),
+        ) {
+            Ok(()) => {}
+            Err(failure) => {
+                tracing::debug!(?failure, "submitting staged message failed");
+                return Err(failure.into());
+            }
+        }
 
         let sent = Sent {
             uid,

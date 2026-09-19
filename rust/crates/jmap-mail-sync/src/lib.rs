@@ -759,33 +759,59 @@ impl MailSync {
     /// the two calls refused — an identity the account does not have, a message
     /// whose `From` does not agree with it, a message over the upload limit.
     /// See [`Outgoing`] for what a refused submission leaves behind.
+    ///
+    /// A convenience over [`MailSync::stage_outgoing_message`] and
+    /// [`MailSync::submit_staged_message`] run in sequence; a caller that
+    /// retries a mid-send failure by credential should call those two
+    /// separately instead, so that only the request that actually failed is
+    /// repeated. See `stage_outgoing_message`'s doc for why that matters.
     pub fn send_message(&self, outgoing: Outgoing) -> Result<Id, SyncError> {
+        let uid = self.stage_outgoing_message(&outgoing)?;
+        self.submit_staged_message(&uid, &outgoing)?;
+        Ok(uid)
+    }
+
+    /// The first of [`MailSync::send_message`]'s two requests: imports
+    /// `outgoing`'s bytes into its staging mailbox, marked a draft.
+    ///
+    /// Split out as its own call so a caller retrying after a mid-send
+    /// credential refresh (`jmap-mail`'s transport, [`crate::MailSync::send_message`]'s
+    /// only caller today, does exactly this) can retry
+    /// *only* the request that actually failed. A retry that reran the whole
+    /// of `send_message` after [`MailSync::submit_staged_message`] failed
+    /// with a 401 would import the message a second time: the first import
+    /// already succeeded and is not undone by the second request's failure,
+    /// so nothing tells this crate the account already holds it.
+    pub fn stage_outgoing_message(&self, outgoing: &Outgoing) -> Result<Id, SyncError> {
         let keywords = Outgoing::staged_keywords();
-        let accepted = outgoing.accepted_patch();
-        let Outgoing {
-            source,
-            identity,
-            envelope,
-            staging,
-            ..
-        } = outgoing;
-
-        let account_id = self.account_id().to_string();
-        let identity_id = identity.to_string();
-        tracing::debug!(account_id, identity_id, "sending message");
-
         // No `receivedAt`: the message is arriving now, and the server's clock
         // is the one every other client of the account will read it by.
         // `import_message`'s own trace already covers this half of the send.
-        let uid = self.import_message(&staging, source, &keywords, None)?;
+        self.import_message(&outgoing.staging, outgoing.source.clone(), &keywords, None)
+    }
+
+    /// The second of [`MailSync::send_message`]'s two requests: hands `uid`,
+    /// already imported by [`MailSync::stage_outgoing_message`], to the
+    /// server's submission machinery.
+    pub fn submit_staged_message(&self, uid: &Id, outgoing: &Outgoing) -> Result<(), SyncError> {
+        let account_id = self.account_id().to_string();
+        let identity_id = outgoing.identity.to_string();
         let message_uid = uid.to_string();
+        tracing::debug!(account_id, identity_id, message_uid, "submitting message");
+
         self.client
-            .submit_email(&self.account_id, &uid, &identity, envelope, accepted)
+            .submit_email(
+                &self.account_id,
+                uid,
+                &outgoing.identity,
+                outgoing.envelope.clone(),
+                outgoing.accepted_patch(),
+            )
             .map_err(|error| {
                 tracing::warn!(account_id, identity_id, uid = message_uid, %error, "message submission failed");
                 error
             })?;
-        Ok(uid)
+        Ok(())
     }
 
     /// The identity a message sent from `address` goes out through — the
