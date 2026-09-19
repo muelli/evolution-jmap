@@ -79,4 +79,14 @@ impl Fixture {
             .next()
             .expect("card exists")
     }
+
+    /// Null out a stored card's own `id`, simulating a server that violates
+    /// RFC 8620 §5.1 by answering `ContactCard/get` with a matched record
+    /// carrying no id.
+    pub fn strip_id(&self, id: &Id) {
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&self.account_id).unwrap();
+        account.contact_cards.get_mut(id).expect("card exists").id = None;
+    }
 }
