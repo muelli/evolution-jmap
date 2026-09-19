@@ -138,6 +138,26 @@ msgstr ""
 msgid "the OAuth 2.0 service returned an empty access token"
 msgstr ""
 
+#. TRANSLATORS: shown when an account's Authentication
+#. extension names no host to connect to.
+#: rust/crates/jmap-backend-core/src/source.rs:139
+msgid "the account does not name a JMAP server"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the host name the account named.
+#: rust/crates/jmap-backend-core/src/source.rs:143
+#, c-format
+msgid "\"%1$s\" is not a valid server host name"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the host name the account named.
+#: rust/crates/jmap-backend-core/src/source.rs:148
+#, c-format
+msgid ""
+"refusing to contact %1$s without TLS: credentials and contacts would go "
+"over the network in the clear"
+msgstr ""
+
 #. TRANSLATORS: shown when Evolution asks a JMAP account to
 #. create a collection whose kind the request does not state.
 #: rust/crates/jmap-backend-collection/src/create_resource.rs:172
@@ -264,6 +284,20 @@ msgstr ""
 #. TRANSLATORS: this client's name, shown on the consent page a real identity provider renders.
 #: rust/crates/jmap-config/src/oauth2_setup.rs:160
 msgid "Evolution"
+msgstr ""
+
+#. TRANSLATORS: shown when a JMAP server's OAuth 2.0 metadata
+#. does not list the authorization-code grant.
+#: rust/crates/jmap-config/src/oauth2_setup.rs:63
+msgid "this server does not offer the OAuth 2.0 authorization-code grant"
+msgstr ""
+
+#. TRANSLATORS: shown when a JMAP server offers no RFC 7591
+#. dynamic client registration endpoint.
+#: rust/crates/jmap-config/src/oauth2_setup.rs:68
+msgid ""
+"this server offers no OAuth 2.0 client registration; an OAuth 2.0 account "
+"against it needs a client id from elsewhere"
 msgstr ""
 
 #. TRANSLATORS: shown when Camel asks a JMAP store to do

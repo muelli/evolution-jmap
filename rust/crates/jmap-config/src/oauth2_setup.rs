@@ -60,13 +60,16 @@ impl std::fmt::Display for Error {
         match self {
             Self::Host(error) => error.fmt(f),
             Self::Client(error) => error.fmt(f),
-            Self::UnsupportedGrant => {
-                f.write_str("this server does not offer the OAuth 2.0 authorization-code grant")
-            }
-            Self::NoRegistration => f.write_str(
-                "this server offers no OAuth 2.0 client registration; an OAuth 2.0 account \
-                 against it needs a client id from elsewhere",
-            ),
+            Self::UnsupportedGrant => f.write_str(&translate(
+                // TRANSLATORS: shown when a JMAP server's OAuth 2.0 metadata
+                // does not list the authorization-code grant.
+                c"this server does not offer the OAuth 2.0 authorization-code grant",
+            )),
+            Self::NoRegistration => f.write_str(&translate(
+                // TRANSLATORS: shown when a JMAP server offers no RFC 7591
+                // dynamic client registration endpoint.
+                c"this server offers no OAuth 2.0 client registration; an OAuth 2.0 account against it needs a client id from elsewhere",
+            )),
         }
     }
 }

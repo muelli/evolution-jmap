@@ -89,6 +89,7 @@ use eds_sys::{EBackend, e_backend_get_source, e_backend_get_type};
 use glib_sys::GError;
 
 use crate::error::cstring_lossy;
+use crate::i18n::{translate, translate_with};
 use crate::marshal::{extension_if_present, read_string};
 
 /// What a backend needs from its `ESource` in order to build a client.
@@ -132,15 +133,21 @@ pub enum SourceError {
 impl fmt::Display for SourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingHost => f.write_str("the account does not name a JMAP server"),
-            Self::InvalidHost(host) => {
-                write!(f, "\"{host}\" is not a valid server host name")
-            }
-            Self::InsecureTransport(host) => write!(
-                f,
-                "refusing to contact {host} without TLS: credentials and contacts \
-                 would go over the network in the clear"
-            ),
+            Self::MissingHost => f.write_str(&translate(
+                // TRANSLATORS: shown when an account's Authentication
+                // extension names no host to connect to.
+                c"the account does not name a JMAP server",
+            )),
+            Self::InvalidHost(host) => f.write_str(&translate_with(
+                // TRANSLATORS: %1$s is the host name the account named.
+                c"\"%1$s\" is not a valid server host name",
+                &[host.as_str()],
+            )),
+            Self::InsecureTransport(host) => f.write_str(&translate_with(
+                // TRANSLATORS: %1$s is the host name the account named.
+                c"refusing to contact %1$s without TLS: credentials and contacts would go over the network in the clear",
+                &[host.as_str()],
+            )),
         }
     }
 }
