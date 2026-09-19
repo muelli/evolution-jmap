@@ -31,7 +31,9 @@
 //!
 //! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
 //! unset — the same tolerance every write-path test in this repository
-//! gives an unconfigured environment.
+//! gives an unconfigured environment. The cross-account test below also
+//! needs `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` for a second account
+//! in the same domain.
 
 use std::env;
 
@@ -63,6 +65,25 @@ fn connect_for_write() -> Option<Client> {
         .connect(&origin, Credentials::basic(user, password))
         .expect("could not fetch the session document for the write-test account");
     Some(client)
+}
+
+/// Mirrors `jmap-book-sync/tests/live_server_changes.rs::connect_recipient`
+/// exactly.
+fn connect_recipient() -> Option<Client> {
+    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
+    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
+        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
+    );
+    let origin = env::var("JMAP_LIVE_SERVER_URL")
+        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
+    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+
+    Some(
+        Client::builder()
+            .rebase_urls_to_origin(rebase)
+            .connect(&origin, Credentials::basic(user, password))
+            .expect("could not fetch the session document for the recipient account"),
+    )
 }
 
 /// Mirrors `jmap-mail-sync/tests/refresh.rs::rebuilt` exactly.
@@ -140,5 +161,63 @@ fn folder_tree_since_reports_a_create_a_rename_and_a_removal_against_the_real_se
     assert!(
         !tree.iter().any(|folder| folder.id == created.id),
         "the deleted folder should no longer be in the rebuilt tree"
+    );
+}
+
+/// A state is opaque per RFC 8620, but not free-form: Stalwart's own state
+/// strings fail syntax validation (`invalidArguments`) for almost any
+/// hand-written guess, confirmed live in
+/// `jmap-book-sync/tests/live_server_changes.rs`. A syntactically well-formed
+/// state from a *different* account is the reliable way to reach
+/// `cannotCalculateChanges` on the real server. `MailSync::folder_tree_since`
+/// catches that error internally (`SyncError::is_cannot_calculate_changes`)
+/// and rebuilds the tree instead of propagating it, so this confirms the
+/// fallback actually fires on the real error rather than assuming the mock's
+/// shape of it (`jmap-mock/src/setops.rs`) matches.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn folder_tree_since_rebuilds_the_tree_for_another_accounts_state() {
+    let Some(owner) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let Some(other) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the write-path test"
+        );
+        return;
+    };
+
+    let owner_account_id = owner
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+    let owner_sync = MailSync::new(owner, owner_account_id);
+
+    // A brand-new account's mailbox tree has an empty changelog, and the
+    // state naming "no changes yet" turned out (checked live) to be accepted
+    // as trivially valid for any other brand-new account too, since there is
+    // nothing to diff against either way. Creating a folder first gives the
+    // owner a state that is a specific position in its own changelog, which
+    // is what actually reaches cannotCalculateChanges when asked of an
+    // account that never had that position.
+    let name = format!("agent-mailsync-cannotcalc-{}", unique_suffix());
+    owner_sync
+        .create_folder(None, &name)
+        .expect("Mailbox/set create failed against the real server");
+    let (owner_state, _) = owner_sync
+        .folder_tree()
+        .expect("listing the owner's folder tree failed against the real server");
+
+    let other_account_id = other
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the recipient account needs the mail capability");
+    let other_sync = MailSync::new(other, other_account_id);
+
+    let update = other_sync
+        .folder_tree_since(&owner_state)
+        .expect("folder_tree_since should rebuild rather than propagate cannotCalculateChanges");
+    assert!(
+        matches!(update, FolderUpdate::Rebuilt { .. }),
+        "expected the tree rebuilt for another account's state, got: {update:?}"
     );
 }
