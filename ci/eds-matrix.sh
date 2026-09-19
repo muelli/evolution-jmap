@@ -16,7 +16,7 @@ CRATES=(
     -p eds-sys -p evo-sys
     -p jmap-backend-core
     -p jmap-backend-book -p jmap-backend-cal -p jmap-mail
-    -p jmap-backend-collection -p jmap-config
+    -p jmap-backend-collection -p jmap-config -p jmap-ui
 )
 
 if ! cargo clippy --version >/dev/null 2>&1 && command -v rustup >/dev/null 2>&1; then
