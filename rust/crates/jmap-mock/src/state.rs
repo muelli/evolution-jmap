@@ -199,6 +199,17 @@ pub struct ServerState {
     /// here. `false` echoes `name` back, matching every other test and this
     /// project's own prior assumption before that finding.
     pub terse_collection_create: bool,
+    /// Omit `id` from a created `AddressBook`/`Calendar`'s `created` entry,
+    /// as [`crate::MockServerBuilder::id_omitting_collection_create`] asked —
+    /// a server breaking RFC 8620 §5.3, which requires `id` in every
+    /// successful create response. `false` echoes `id` back, matching every
+    /// other test and a spec-following server.
+    pub id_omitting_collection_create: bool,
+    /// Refuse every `AddressBook`/`Calendar` create with a `notCreated`
+    /// `forbidden` `SetError`, as
+    /// [`crate::MockServerBuilder::reject_collection_create`] asked. `false`
+    /// creates the collection as usual, matching every other test.
+    pub reject_collection_create: bool,
     /// `maxDelayedSend` to advertise on the submission account capability, as
     /// [`crate::MockServerBuilder::max_delayed_send`] asked (RFC 8621 §7.1).
     /// `None` advertises an empty submission capability object, matching
@@ -241,6 +252,8 @@ impl ServerState {
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
             terse_collection_create: false,
+            id_omitting_collection_create: false,
+            reject_collection_create: false,
             max_delayed_send: None,
             snooze_extension: false,
             event_source: EventSourceHub::new(),

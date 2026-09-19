@@ -15,7 +15,7 @@
 //! in the sidebar for one server-side address book on the next populate, or a
 //! source whose cache file EDS deletes.
 
-use jmap_client::{Client, Credentials};
+use jmap_client::{Client, Credentials, Error};
 use jmap_collection_sync::{
     Child, ChildKind, CreateFailure, Fanout, Parts, Requested, create_collection,
 };
@@ -219,6 +219,54 @@ fn a_created_collection_is_discoverable_even_when_the_server_defaults_new_collec
             child,
             "a freshly created {kind:?} must be discoverable immediately, \
              not only once some other client subscribes it"
+        );
+    }
+}
+
+/// A server may refuse a create outright (over quota, a read-only account,
+/// …) — RFC 8620 §5.3's `notCreated` map, not a method-level error. This must
+/// reach the caller as `CreateFailure::Client`, not panic on an absent
+/// `created` entry.
+#[test]
+fn a_create_the_server_refuses_is_a_client_failure_not_a_panic() {
+    let server = MockServer::builder().reject_collection_create().start();
+
+    for kind in [ChildKind::AddressBook, ChildKind::Calendar] {
+        let failure = create_collection(&client(&server), &requested(kind, "Work"))
+            .expect_err("the mock is configured to refuse every create");
+
+        assert!(
+            matches!(failure, CreateFailure::Client(Error::Set(_))),
+            "expected a Client(Set(_)) failure for {kind:?}, got {failure:?}"
+        );
+    }
+}
+
+/// The other failure branch of the same function: a `created` response that
+/// carries a resource but leaves out `id` altogether is a server breaking
+/// RFC 8620 §5.3's requirement that a create name the id. `created_resource`
+/// is unit-tested against this directly, but nothing before this test drove
+/// it end to end through `create_collection` and the mock.
+#[test]
+fn a_create_whose_response_omits_the_id_is_a_client_failure_not_a_panic() {
+    let server = MockServer::builder()
+        .id_omitting_collection_create()
+        .start();
+
+    for kind in [ChildKind::AddressBook, ChildKind::Calendar] {
+        let failure = create_collection(&client(&server), &requested(kind, "Work"))
+            .expect_err("the mock omits id from every create response");
+
+        assert!(
+            matches!(failure, CreateFailure::Client(Error::Protocol(_))),
+            "expected a Client(Protocol(_)) failure for {kind:?}, got {failure:?}"
+        );
+        let CreateFailure::Client(error) = failure else {
+            unreachable!()
+        };
+        assert!(
+            error.to_string().contains("reported no id"),
+            "expected the missing-id message, got: {error}"
         );
     }
 }

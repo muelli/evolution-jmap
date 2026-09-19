@@ -113,6 +113,8 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
     let request: SetRequest<AddressBook> = parse_arguments(arguments)?;
     let default_unsubscribed = state.new_collections_default_unsubscribed;
     let terse_collection_create = state.terse_collection_create;
+    let id_omitting_collection_create = state.id_omitting_collection_create;
+    let reject_collection_create = state.reject_collection_create;
     let account_id = request.account_id.clone();
     let account = account_mut(state, &account_id)?;
 
@@ -139,6 +141,10 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
         if book.name.is_empty() {
             return Err(SetError::new(error::set::INVALID_PROPERTIES)
                 .with_description("name must not be empty"));
+        }
+        if reject_collection_create {
+            return Err(SetError::new(error::set::FORBIDDEN)
+                .with_description("this mock is configured to refuse address book creates"));
         }
         book.id = Some(id.clone());
         if default_unsubscribed && book.is_subscribed != Some(true) {
@@ -181,6 +187,19 @@ pub fn address_book_set(state: &mut ServerState, arguments: Value) -> Result<Val
         for object in created.values_mut() {
             if let Some(map) = object.as_object_mut() {
                 map.remove("name");
+            }
+        }
+    }
+
+    // A server breaking RFC 8620 §5.3, which requires `id` in every
+    // successful create response — see
+    // `MockServerBuilder::id_omitting_collection_create`.
+    if id_omitting_collection_create
+        && let Some(created) = result.get_mut("created").and_then(Value::as_object_mut)
+    {
+        for object in created.values_mut() {
+            if let Some(map) = object.as_object_mut() {
+                map.remove("id");
             }
         }
     }

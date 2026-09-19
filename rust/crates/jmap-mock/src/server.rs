@@ -108,6 +108,8 @@ pub struct MockServerBuilder {
     new_collections_default_unsubscribed: bool,
     terse_calendar_event_create: bool,
     terse_collection_create: bool,
+    id_omitting_collection_create: bool,
+    reject_collection_create: bool,
     max_delayed_send: Option<u64>,
     snooze_extension: bool,
 }
@@ -463,6 +465,26 @@ impl MockServerBuilder {
         self
     }
 
+    /// Omit `id` from a created `AddressBook`/`Calendar`'s `created` entry —
+    /// a server breaking RFC 8620 §5.3, which requires every successful
+    /// create response to name the id. Off by default, matching the mock's
+    /// own prior behaviour (echoing `id` back) and every spec-following
+    /// server.
+    pub fn id_omitting_collection_create(mut self) -> Self {
+        self.id_omitting_collection_create = true;
+        self
+    }
+
+    /// Refuse every `AddressBook`/`Calendar` create with a `notCreated`
+    /// `forbidden` `SetError`, simulating a server that will not let this
+    /// login make one (over a quota, a read-only account, …). Off by
+    /// default, matching the mock's own prior behaviour (creating the
+    /// collection as asked) and every other test.
+    pub fn reject_collection_create(mut self) -> Self {
+        self.reject_collection_create = true;
+        self
+    }
+
     /// Advertise `maxDelayedSend` (in seconds) and FUTURERELEASE among the
     /// `submissionExtensions` on the submission account capability (RFC 8621
     /// §7.1), so a client can detect scheduled-send support before offering
@@ -509,6 +531,8 @@ impl MockServerBuilder {
         state.new_collections_default_unsubscribed = self.new_collections_default_unsubscribed;
         state.terse_calendar_event_create = self.terse_calendar_event_create;
         state.terse_collection_create = self.terse_collection_create;
+        state.id_omitting_collection_create = self.id_omitting_collection_create;
+        state.reject_collection_create = self.reject_collection_create;
         state.max_delayed_send = self.max_delayed_send;
         state.snooze_extension = self.snooze_extension;
         let state = Arc::new(Mutex::new(state));
@@ -583,6 +607,8 @@ impl MockServer {
             new_collections_default_unsubscribed: false,
             terse_calendar_event_create: false,
             terse_collection_create: false,
+            id_omitting_collection_create: false,
+            reject_collection_create: false,
             max_delayed_send: None,
             snooze_extension: false,
         }
