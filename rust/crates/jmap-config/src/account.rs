@@ -128,6 +128,8 @@ use jmap_backend_core::oauth2::OAUTH2_METHOD;
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
 
+use crate::oauth2_service;
+
 /// The name the registry looks this account's collection factory up by.
 ///
 /// `[Collection] BackendName` is not a description: the registry files each
@@ -250,7 +252,19 @@ pub unsafe fn apply(source: *mut ESource, account: &Account) {
         // not go on carrying the credential-name a previous OAuth 2.0 commit
         // left behind, which would change the parameter name the credentials
         // engine passes to `authenticate` for what is now a plain password.
-        let credential_name = if account.connection.auth_method.as_deref() == Some(OAUTH2_METHOD) {
+        //
+        // `OAUTH2_METHOD` ("OAuth2") is the generic alias; `oauth2_service::NAME`
+        // ("JMAP") is the one real accounts actually carry, since it is what
+        // `backend.rs`'s setup combo and `config_lookup.rs`'s discovery both
+        // write. Checking only the former left every real OAuth 2.0 account
+        // without a credential-name, silently defeating eds#663.
+        let oauth2_service_name = oauth2_service::NAME
+            .to_str()
+            .expect("oauth2_service::NAME is a fixed ASCII string");
+        let connection_auth_method = account.connection.auth_method.as_deref();
+        let credential_name = if connection_auth_method == Some(OAUTH2_METHOD)
+            || connection_auth_method == Some(oauth2_service_name)
+        {
             e_source_get_uid(source)
         } else {
             ptr::null()
