@@ -331,9 +331,14 @@ fn diff_related_to(
                     }
                 },
                 None => {
-                    if patch.contains_key(&path) && patch[&path].is_object() {
-                        patch.insert(format!("{path}/relation/{kind}"), Value::Bool(true));
-                    } else {
+                    // A prior mapped kind already wrote this entity whole, from
+                    // the same `edited` value this iteration would read — every
+                    // kind it states, including this one, is in there already.
+                    // Reaching into `path`'s own `relation/{kind}` here would be
+                    // a create and a reach into that create's own not-yet-
+                    // existing sub-path in the same patch, which RFC 8620 §5.3
+                    // forbids exactly as the whole-object write above does.
+                    if !patch.contains_key(&path) {
                         patch.insert(path, json_of(relation));
                     }
                 }
@@ -1378,6 +1383,58 @@ mod tests {
     fn free_key_counts_up_past_every_variant_already_taken() {
         let taken: BTreeSet<String> = ["t2".to_owned(), "t2-2".to_owned()].into_iter().collect();
         assert_eq!(free_key("t2", &taken), "t2-3");
+    }
+
+    /// A brand-new relation stating two mapped kinds at once (typing the same
+    /// name into both Evolution's Manager and Assistant fields is the ordinary
+    /// way this happens) must be written as one whole-object create, not a
+    /// create plus a reach into a sub-path of the object the same patch is
+    /// creating: RFC 8620 §5.3 requires every path segment before the last to
+    /// already exist server-side, which `relatedTo/<key>` does not before this
+    /// patch runs.
+    #[test]
+    fn a_new_relation_stating_two_mapped_kinds_at_once_is_written_once() {
+        let current: BTreeMap<String, Relation> = [(
+            "Alex Spouse".to_owned(),
+            Relation {
+                relation: Some([("spouse".to_owned(), json!(true))].into()),
+                extra: BTreeMap::new(),
+            },
+        )]
+        .into();
+        let mut edited = current.clone();
+        edited.insert(
+            "Jordan Multi".to_owned(),
+            Relation {
+                relation: Some(
+                    [
+                        ("manager".to_owned(), json!(true)),
+                        ("assistant".to_owned(), json!(true)),
+                    ]
+                    .into(),
+                ),
+                extra: BTreeMap::new(),
+            },
+        );
+
+        let mut patch = Map::new();
+        diff_related_to(&mut patch, Some(&current), Some(&edited));
+
+        let new_entity_keys: Vec<&String> = patch
+            .keys()
+            .filter(|key| key.contains("Jordan Multi"))
+            .collect();
+        assert_eq!(
+            new_entity_keys,
+            vec!["relatedTo/Jordan Multi"],
+            "a create and a reach into its own not-yet-existing sub-path in \
+             the same patch: {patch:?}"
+        );
+        assert_eq!(
+            patch["relatedTo/Jordan Multi"]["relation"],
+            json!({"manager": true, "assistant": true}),
+            "{patch:?}"
+        );
     }
 
     #[derive(Clone, serde::Serialize)]
