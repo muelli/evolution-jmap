@@ -740,6 +740,54 @@ fn editing_one_org_unit_of_two_keeps_the_one_the_line_left_out() {
 }
 
 #[test]
+fn deleting_a_visible_unit_keeps_its_invisible_neighbour_in_place() {
+    let fixture = Fixture::start();
+    let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");
+    // The unnamed unit sits between the two visible ones, so it tracks
+    // whichever of them survives rather than the raw position it started at.
+    fixture.patch(
+        &id,
+        json!({"organizations": {"o1": {
+            "@type": "Organization",
+            "name": "Acme",
+            "units": [
+                {"@type": "OrgUnit", "name": "Research"},
+                {"@type": "OrgUnit", "name": "", "sortAs": "Legacy"},
+                {"@type": "OrgUnit", "name": "Optics"},
+            ],
+        }}}),
+    );
+    let sync = fixture.sync();
+
+    let vcard = sync.load_contact(id.as_str()).unwrap().vcard;
+    assert!(
+        vcard.contains("ORG;X-JMAP-KEY=o1:Acme;Research;Optics\r\n"),
+        "the unnamed unit has no component on the line: {vcard}"
+    );
+
+    // The user deletes "Research" from the line, leaving "Optics" alone.
+    let edited = vcard.replace(";Research;Optics", ";Optics");
+    sync.save_contact(&edited, Some(id.as_str())).unwrap();
+
+    let stored = fixture.card(&id);
+    let organization = &stored.organizations.as_ref().expect("organizations")["o1"];
+    let units = organization.units.as_ref().expect("units");
+    let by_name: Vec<&str> = units.iter().map(|unit| unit.name.as_str()).collect();
+    assert_eq!(
+        by_name,
+        vec!["", "Optics"],
+        "the unnamed unit was pushed past the one it used to precede"
+    );
+    assert_eq!(
+        units[0]
+            .sort_as
+            .as_deref()
+            .or_else(|| units[0].extra.get("sortAs").and_then(|v| v.as_str())),
+        Some("Legacy")
+    );
+}
+
+#[test]
 fn saving_an_org_back_untouched_does_not_reshuffle_the_unit_the_line_left_out() {
     let fixture = Fixture::start();
     let id = fixture.seed(&fixture.ours, "Vera Oldenburg", "vera@example.com");

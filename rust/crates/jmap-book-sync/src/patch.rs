@@ -1091,30 +1091,84 @@ fn merge_named<T: Clone>(
 /// its own reason: a unit that names nothing has no `ORG` component, so the
 /// edited list cannot mention it and matching by name could never claim it.
 /// Only the units the line stated are the edited ones to have deleted; the
-/// rest are put back where they were, at their index among the server's units,
-/// so that opening a contact and closing it again writes nothing. That is also
-/// why an edited list of *no* units is merged rather than read as the user
-/// having dissolved them all: an organisation whose every unit is unnamed
-/// states none of them, and the line is then the employer's name alone.
+/// rest are put back following whichever surviving visible unit they sat
+/// after originally (or at the front, if none did), so that opening a
+/// contact and closing it again writes nothing. Following a surviving
+/// neighbour rather than reinserting at a raw original index matters once a
+/// unit before it is dissolved: that index no longer names the same slot in
+/// the shorter merged list, and would push the unnamed unit past whatever
+/// used to come after it.
+///
+/// A renamed unit cannot be found by name, so it is paired instead with
+/// whichever visible unit neither side could otherwise place, in order —
+/// the same slot for the purpose of the unnamed units following it, even
+/// though (as above) its `sortAs` does not come along.
+///
+/// That is also why an edited list of *no* units is merged rather than read
+/// as the user having dissolved them all: an organisation whose every unit
+/// is unnamed states none of them, and the line is then the employer's name
+/// alone.
 fn merge_units(current: Option<&[OrgUnit]>, edited: Option<&[OrgUnit]>) -> Option<Vec<OrgUnit>> {
     let current = current.unwrap_or_default();
-    let mut spare: Vec<&OrgUnit> = current
+    let edited = edited.unwrap_or_default();
+
+    let mut spare: Vec<usize> = current
         .iter()
-        .filter(|unit| states_org_unit(unit))
+        .enumerate()
+        .filter(|(_, unit)| states_org_unit(unit))
+        .map(|(index, _)| index)
         .collect();
-    let mut merged: Vec<OrgUnit> = edited
-        .unwrap_or_default()
+    let mut origin_of: Vec<Option<usize>> = Vec::with_capacity(edited.len());
+    for unit in edited {
+        let origin = spare
+            .iter()
+            .position(|&index| current[index].name == unit.name)
+            .map(|position| spare.remove(position));
+        origin_of.push(origin);
+    }
+    let unresolved_edited: Vec<usize> = origin_of
         .iter()
-        .map(
-            |unit| match spare.iter().position(|old| old.name == unit.name) {
-                Some(index) => spare.remove(index).clone(),
-                None => unit.clone(),
-            },
-        )
+        .enumerate()
+        .filter(|(_, origin)| origin.is_none())
+        .map(|(position, _)| position)
         .collect();
+    for (edited_position, original_index) in unresolved_edited.into_iter().zip(spare) {
+        origin_of[edited_position] = Some(original_index);
+    }
+
+    let mut merged: Vec<OrgUnit> = Vec::with_capacity(edited.len());
+    let mut merged_index_of: BTreeMap<usize, usize> = BTreeMap::new();
+    for (unit, origin) in edited.iter().zip(origin_of) {
+        let resolved = match origin {
+            Some(original_index) => {
+                merged_index_of.insert(original_index, merged.len());
+                if current[original_index].name == unit.name {
+                    current[original_index].clone()
+                } else {
+                    unit.clone()
+                }
+            }
+            None => unit.clone(),
+        };
+        merged.push(resolved);
+    }
+
+    let mut anchor: Option<usize> = None;
+    let mut shift = 0;
+    let mut offset = 0;
     for (index, unit) in current.iter().enumerate() {
-        if !states_org_unit(unit) {
-            merged.insert(index.min(merged.len()), unit.clone());
+        if states_org_unit(unit) {
+            if let Some(&position) = merged_index_of.get(&index) {
+                anchor = Some(position + shift);
+                offset = 0;
+            }
+        } else {
+            let insert_at = anchor
+                .map_or(offset, |position| position + 1 + offset)
+                .min(merged.len());
+            merged.insert(insert_at, unit.clone());
+            shift += 1;
+            offset += 1;
         }
     }
     (!merged.is_empty()).then_some(merged)
