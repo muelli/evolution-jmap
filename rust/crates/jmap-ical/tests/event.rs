@@ -4100,6 +4100,41 @@ fn the_weeks_of_the_year_are_written_after_the_days_of_the_year() {
 }
 
 #[test]
+fn calcards_own_writer_folds_a_long_recurrence_rule_unassisted() {
+    // Regression pin for stalwartlabs/calcard#25, fixed upstream in calcard
+    // 0.3.13: bypasses `event_to_ical`'s `fold_overlong_lines` belt-and-braces
+    // pass entirely, going straight through calcard's `Parser` and
+    // `ICalendar::to_string`, to confirm the fold above is calcard's own doing
+    // and not solely this crate's workaround masking a still-broken writer.
+    use calcard::{Entry, Parser};
+
+    let input = concat!(
+        "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//x//EN\r\n",
+        "BEGIN:VEVENT\r\nUID:1\r\n",
+        "RRULE:FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYWEEKNO=20;",
+        "BYMONTH=3;WKST=SU\r\n",
+        "END:VEVENT\r\nEND:VCALENDAR\r\n",
+    );
+    let Entry::ICalendar(ical) = Parser::new(input).entry() else {
+        panic!("expected a parsed VCALENDAR for {input}");
+    };
+    let out = ical.to_string();
+
+    for physical_line in out.split("\r\n") {
+        assert!(
+            physical_line.len() <= 75,
+            "calcard's own writer produced a physical line over 75 octets \
+             (len = {}): {physical_line:?}\nfull output:\n{out}",
+            physical_line.len()
+        );
+    }
+    assert_eq!(
+        content_line(&out, "RRULE:"),
+        "RRULE:FREQ=YEARLY;BYDAY=WE;BYMONTHDAY=15;BYYEARDAY=100;BYWEEKNO=20;BYMONTH=3;WKST=SU"
+    );
+}
+
+#[test]
 fn reads_the_weeks_of_the_year_off_a_rule_written_by_hand() {
     // RFC 5545 §3.3.10's `weeknum` may carry the leading plus JSCalendar has no
     // room for, and counts to 53 — the week a long year has and a short one does
