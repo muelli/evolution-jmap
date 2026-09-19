@@ -77,6 +77,15 @@ fn connect_for_write() -> Option<Client> {
 /// server itself did not set, and a real server's create response for this
 /// call has never been asserted on for `name` here before, only inferred
 /// from a single hand-tested Fastmail session (`create.rs`'s doc comment).
+///
+/// The `read_only`/`remote_deletable`/`is_default`/`color` checks exercise
+/// the same fallback for `myRights`/`isDefault`/`color`: a raw-curl probe
+/// against real Stalwart found its `AddressBook/set`/`Calendar/set` create
+/// responses carry only `id`, none of those three, even though a follow-up
+/// `get` on the same object shows `myRights` fully populated. So the path
+/// actually exercised live is `created_resource`'s fallback for an absent
+/// `myRights` — the freshly created child must come back at the
+/// account-wide permissive default, not silently read-only or undeletable.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn creating_then_deleting_a_collection_round_trips_through_the_real_server() {
@@ -106,6 +115,24 @@ fn creating_then_deleting_a_collection_round_trips_through_the_real_server() {
             created.display_name, display_name,
             "the created {kind:?}'s display name should be the requested one, \
              whether the server echoed it back or left it out of the response"
+        );
+        assert!(
+            !created.read_only,
+            "a {kind:?} freshly created in a writable account should not come back \
+             read-only just because the create response carried no myRights"
+        );
+        assert!(
+            created.remote_deletable,
+            "a {kind:?} freshly created in a writable account should not come back \
+             undeletable just because the create response carried no myRights"
+        );
+        assert!(
+            !created.is_default,
+            "a freshly created {kind:?} should not be flagged the account default"
+        );
+        assert_eq!(
+            created.color, None,
+            "a {kind:?} created without a colour should show none, not a made-up one"
         );
 
         let fanout = Fanout::discover(&client, Parts::ALL).expect("discovery failed after create");
