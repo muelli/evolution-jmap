@@ -63,15 +63,16 @@ use std::time::{Duration, Instant};
 
 use jmap_client::eventsource::{SharedHeaders, expand_url};
 use jmap_client::{CancelFlag, Client, Credentials, EventSourceSubscription};
+use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter, RecurrenceRule};
 use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
     keyword, role,
 };
-use jmap_proto::methods::Comparator;
+use jmap_proto::methods::{BlobCopyRequest, Comparator};
 use jmap_proto::session::{
-    CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
+    CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
 };
 use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
 use serde_json::json;
@@ -1446,4 +1447,127 @@ fn push_notifies_a_subscribed_eventsource_of_a_real_mailbox_change() {
     client
         .mailbox_destroy(&account_id, &id)
         .expect("Mailbox/set destroy failed against the real server");
+}
+
+/// `Blob/copy` (RFC 8620 §5.7) against a real server: uploading a blob and
+/// copying it within the *same* account must produce a distinct blob id that
+/// reads back the same content, with the source untouched. This capability
+/// is modeled and mock-tested (`blob_management.rs`) but, per
+/// `RFC-SUPPORT.md` item 5, was never exercised against a real server at
+/// all. `fromAccountId == accountId` rather than two different accounts:
+/// see [`blob_copy_into_an_account_you_do_not_own_is_forbidden`]'s doc
+/// comment for why a genuine cross-account copy cannot be tested here
+/// without ACL sharing this test does not set up.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn blob_copy_within_the_same_real_account_copies_the_content() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the blob-copy test");
+        return;
+    };
+
+    let account_id = client
+        .primary_account(CAPABILITY_BLOB)
+        .expect("the write-test account needs the blob capability");
+
+    let text = format!("agent-livewrite-blob-{}", unique_suffix());
+    let uploaded = client
+        .blob_upload(
+            &BlobUploadRequest::new(account_id.clone())
+                .create_blob("b0", UploadBlob::from_text(&text, "text/plain")),
+        )
+        .expect("Blob/upload failed against the real server")
+        .created
+        .expect("the server named the new blob");
+    let source_id = uploaded.get("b0").expect("b0 was created").id.clone();
+
+    let response = client
+        .blob_copy(&BlobCopyRequest::new(
+            account_id.clone(),
+            account_id.clone(),
+            [source_id.clone()],
+        ))
+        .expect("Blob/copy failed against the real server");
+    let copied = response.copied.expect("the server copied the blob");
+    let copy_id = copied
+        .get(&source_id)
+        .expect("the source id was copied")
+        .clone();
+    assert!(
+        response
+            .not_copied
+            .is_none_or(|not_copied| not_copied.is_empty()),
+        "the blob copy reported a failure for an id that should have succeeded"
+    );
+
+    let source_get = client
+        .blob_get(
+            &BlobGetRequest::new(account_id.clone(), [source_id]).with_properties(["data:asText"]),
+        )
+        .expect("Blob/get on the source blob failed against the real server");
+    let copy_get = client
+        .blob_get(&BlobGetRequest::new(account_id, [copy_id]).with_properties(["data:asText"]))
+        .expect("Blob/get on the copied blob failed against the real server");
+    assert_eq!(
+        source_get.list[0].data_as_text, copy_get.list[0].data_as_text,
+        "the copy's content diverged from the source's"
+    );
+}
+
+/// A genuine `fromAccountId != accountId` copy was the first shape tried
+/// here, mirroring the two throwaway accounts every other cross-account test
+/// in this file uses. Real Stalwart rejected it outright: `Blob/copy` with a
+/// target account the caller does not own answers a `forbidden` method
+/// error ("You are not an owner of account ..."), even though `jmap-mockd`'s
+/// own implementation allows it unconditionally (`blob_copy_between_two_
+/// accounts_copies_the_content` in `blob_management.rs`) — the mock never
+/// modeled an ownership check at all. Setting up ACL sharing between the two
+/// throwaway accounts so a real cross-account copy could succeed is out of
+/// scope for this increment; what is tractable and worth pinning down is
+/// that this client surfaces the real server's rejection as a clean
+/// [`jmap_client::Error::Method`] rather than a panic or a silently empty
+/// `notCopied`.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn blob_copy_into_an_account_you_do_not_own_is_forbidden() {
+    let Some(from_client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the blob-copy test");
+        return;
+    };
+    let Some(to_client) = connect_recipient() else {
+        eprintln!("JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the blob-copy test");
+        return;
+    };
+
+    let from_account_id = from_client
+        .primary_account(CAPABILITY_BLOB)
+        .expect("the write-test account needs the blob capability");
+    let to_account_id = to_client
+        .primary_account(CAPABILITY_BLOB)
+        .expect("the recipient account needs the blob capability");
+
+    let text = format!("agent-livewrite-blob-{}", unique_suffix());
+    let uploaded = from_client
+        .blob_upload(
+            &BlobUploadRequest::new(from_account_id.clone())
+                .create_blob("b0", UploadBlob::from_text(&text, "text/plain")),
+        )
+        .expect("Blob/upload failed against the real server")
+        .created
+        .expect("the server named the new blob");
+    let source_id = uploaded.get("b0").expect("b0 was created").id.clone();
+
+    let error = from_client
+        .blob_copy(&BlobCopyRequest::new(
+            from_account_id,
+            to_account_id,
+            [source_id],
+        ))
+        .expect_err("copying into an account this session does not own must be rejected");
+    match error {
+        jmap_client::Error::Method(method_error) => {
+            assert_eq!(method_error.error_type, "forbidden");
+        }
+        other => panic!("expected a forbidden Method error, got {other:?}"),
+    }
 }
