@@ -586,6 +586,13 @@ impl MailSync {
     /// An id the answer does not name is [`SyncError::NoSuchMessage`] — RFC
     /// 8620 §5.1 reports it in `notFound` and leaves it out of the list, which
     /// is the shape this reads it in.
+    ///
+    /// RFC 8621 §4.6 gives every present `mailboxIds` value as `true`; a
+    /// server that spells absence out with `false` instead of omitting the
+    /// key is violating that, and there is no safe guess to make about which
+    /// write the caller should choose in response, so it is refused the same
+    /// way `identity_for` refuses an identity without an id, rather than
+    /// silently counted as membership either way.
     fn message_mailboxes(&self, uid: &Id) -> Result<BTreeSet<Id>, SyncError> {
         let found = self.client.email_get(
             &self.account_id,
@@ -596,11 +603,20 @@ impl MailSync {
             .into_iter()
             .find(|email| email.id.as_ref() == Some(uid))
             .ok_or_else(|| SyncError::NoSuchMessage(uid.clone()))?;
-        // Membership is the member being there. RFC 8621 §4.6 gives every value
-        // in the set as `true`, so a `false` from a server that spelled absence
-        // out is still a mailbox naming the message — and counting it is the
-        // reading that cannot turn into a destroy.
-        Ok(email.mailbox_ids.unwrap_or_default().into_keys().collect())
+        email
+            .mailbox_ids
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(id, filed)| {
+                if filed {
+                    Ok(id)
+                } else {
+                    Err(SyncError::protocol(format!(
+                        "Email/get returned {uid} with a false-valued mailboxIds entry for {id}"
+                    )))
+                }
+            })
+            .collect()
     }
 
     /// Puts a message the caller already holds into a mailbox —

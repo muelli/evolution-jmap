@@ -99,6 +99,20 @@ impl Fixture {
             .clone()
             .unwrap_or_default()
     }
+
+    /// Overwrites a seeded message's `mailboxIds` directly in the store, to
+    /// reach states a conforming server never sends (RFC 8621 §4.6 gives
+    /// every present value as `true`).
+    fn set_mailbox_ids(&self, uid: &Id, mailbox_ids: BTreeMap<Id, bool>) {
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&self.account_id).unwrap();
+        account
+            .emails
+            .get_mut(uid)
+            .expect("the seeded message")
+            .mailbox_ids = Some(mailbox_ids);
+    }
 }
 
 #[test]
@@ -214,4 +228,45 @@ fn expunging_the_same_message_twice_reports_the_second_as_gone() {
         SyncError::NoSuchMessage(gone) => assert_eq!(gone, uid),
         other => panic!("expected NoSuchMessage, got {other:?}"),
     }
+}
+
+#[test]
+fn a_false_valued_mailbox_entry_is_refused_rather_than_guessed_at() {
+    // RFC 8621 §4.6 gives every present `mailboxIds` value as `true`; a
+    // server that spells absence out with `false` instead of omitting the
+    // key is violating that. There is no safe guess between the two writes
+    // this crate could make in response: counting the entry as membership
+    // can turn a message truly filed in one mailbox into a request that
+    // fails outright (removing the last `true` entry via `mailboxIds/<id>:
+    // null` leaves a message in no mailbox at all, which a conforming
+    // server refuses), and ignoring it risks destroying a copy the entry
+    // was — however badly — trying to name. So this is refused up front,
+    // the same way `identity_for` refuses an identity without an id.
+    let fixture = Fixture::start();
+    let inbox = fixture.seed_mailbox("Inbox");
+    let archive = fixture.seed_mailbox("Archive");
+    let uid = fixture.seed_message(&inbox);
+    fixture.set_mailbox_ids(
+        &uid,
+        BTreeMap::from([(inbox.clone(), true), (archive, false)]),
+    );
+
+    let error = fixture
+        .sync()
+        .expunge_message(&uid, &inbox)
+        .expect_err("a false-valued mailboxIds entry must not be guessed at");
+
+    match error {
+        SyncError::Client(jmap_client::Error::Protocol(message)) => {
+            assert!(
+                message.contains("false-valued"),
+                "expected a message naming the false-valued entry, got: {message}"
+            );
+        }
+        other => panic!("expected a protocol error, got {other:?}"),
+    }
+    assert!(
+        fixture.holds(&uid),
+        "a refused expunge must leave the message untouched"
+    );
 }
