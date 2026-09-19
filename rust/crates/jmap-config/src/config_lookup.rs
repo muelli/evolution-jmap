@@ -205,7 +205,11 @@ struct Target {
 /// A bare, unbracketed IPv6 literal (more than one colon, no `[...]`) is left
 /// whole rather than split on its last colon — [`jmap_backend_core::source`]
 /// accepts a host in that shape, and splitting one on `:` would cut it apart
-/// as though the last group were a port.
+/// as though the last group were a port. A bracketed literal (RFC 3986,
+/// `[::1]:8443`) is unwrapped back to that same bare shape, with an optional
+/// trailing `:port` read separately, rather than falling through to the
+/// unbracketed case, where the host's own colons would defeat the
+/// `!bare_host.contains(':')` guard below.
 fn parse_target(host: &str) -> Option<Target> {
     let (secure, authority) = match host.strip_prefix("https://") {
         Some(rest) => (true, rest),
@@ -217,9 +221,19 @@ fn parse_target(host: &str) -> Option<Target> {
     if authority.is_empty() {
         return None;
     }
-    let (bare_host, port) = match authority.rsplit_once(':') {
-        Some((bare_host, port)) if !bare_host.contains(':') => (bare_host, port.parse().ok()?),
-        _ => (authority, 0),
+    let (bare_host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        let (bracketed_host, after) = rest.split_once(']')?;
+        let port = match after.strip_prefix(':') {
+            Some(port) => port.parse().ok()?,
+            None if after.is_empty() => 0,
+            None => return None,
+        };
+        (bracketed_host, port)
+    } else {
+        match authority.rsplit_once(':') {
+            Some((bare_host, port)) if !bare_host.contains(':') => (bare_host, port.parse().ok()?),
+            _ => (authority, 0),
+        }
     };
     if bare_host.is_empty() {
         return None;
@@ -780,6 +794,22 @@ mod tests {
         assert_eq!(target.host, "::1");
         assert_eq!(target.port, 0);
         assert!(target.secure);
+    }
+
+    #[test]
+    fn a_bracketed_ipv6_literal_with_a_port_splits_correctly() {
+        let target = parse_target("https://[::1]:8443").expect("bracketed IPv6+port parses");
+        assert_eq!(target.host, "::1");
+        assert_eq!(target.port, 8443);
+        assert!(target.secure);
+    }
+
+    #[test]
+    fn a_bracketed_ipv6_literal_with_no_port_defaults_to_zero() {
+        let target = parse_target("http://[2001:db8::1]").expect("bracketed IPv6 alone parses");
+        assert_eq!(target.host, "2001:db8::1");
+        assert_eq!(target.port, 0);
+        assert!(!target.secure);
     }
 
     #[test]
