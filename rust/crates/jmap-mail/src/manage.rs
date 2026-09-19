@@ -47,10 +47,17 @@
 //!   Reading it as a new name would rename `Bills/2026` to `Bills%2F2026` for
 //!   the crime of being dragged, and there is no decoder to read it back with —
 //!   the folder's name is in the listing, which is where this takes it from.
+//!   This reading only applies when the parent also changed, though: a drag
+//!   is the only call that ever echoes the old component back unaltered, and
+//!   requiring both is what keeps a *typed* name from being misread as one —
+//!   see the next bullet's own name for why a match alone is not enough.
 //! * **Changed, and it is the name the user typed**, verbatim, exactly as a
 //!   create reads `folder_name`. Evolution's rename dialog is prefilled with
 //!   the display name and refuses a `/`, so what arrives is a name and not a
-//!   path component.
+//!   path component — and the dialog never reparents, so every same-parent
+//!   call is this case, even the coincidence where the typed name reads
+//!   exactly like the old encoded component (`Bills/2026` retyped, of all
+//!   things, as `Bills%2F2026`).
 //!
 //! The limit that comes with the second half, stated rather than hidden: a
 //! typed name this crate has to encode — one containing a `%`, or a lone `.` —
@@ -180,19 +187,27 @@ pub fn delete_folder(store: &JmapStore, path: &str) -> Result<FolderInfo, StoreE
 /// it, so nothing is written.
 ///
 /// The last component of `to` is read as the module documents: the folder's own
-/// name when it is the component the folder already has, and otherwise the name
-/// the user typed.
+/// name when it is the component the folder already has *and* the parent
+/// changed, and otherwise the name the user typed.
+///
+/// The parent has to change too, not just the component match, because the
+/// two calls this reading tells apart never overlap: a drag always changes
+/// the parent and never the name, and the rename dialog always keeps the
+/// parent and never moves. Without that check, a folder whose name needs
+/// Camel-path encoding (a `/`, a `%`, or a bare `.`/`..`) renamed through the
+/// dialog to a *typed* name that happens to equal its own old encoding would
+/// be misread as an unchanged drag and silently keep its old name.
 pub fn rename_folder(store: &JmapStore, from: &str, to: &str) -> Result<FolderInfo, StoreError> {
-    let (parent, component) = path::split(to);
+    let (parent_path, component) = path::split(to);
 
     let tree = tree_holding(store, |tree| {
-        tree.find(from).is_some() && parent.is_none_or(|parent| tree.find(parent).is_some())
+        tree.find(from).is_some() && parent_path.is_none_or(|parent| tree.find(parent).is_some())
     })?;
 
     let Some(folder) = tree.find(from) else {
         return Err(StoreError::NoFolder(from.to_owned()));
     };
-    let parent = match parent {
+    let parent = match parent_path {
         Some(path) => match tree.find(path) {
             Some(parent) => Some(parent),
             None => return Err(StoreError::NoFolder(path.to_owned())),
@@ -200,8 +215,9 @@ pub fn rename_folder(store: &JmapStore, from: &str, to: &str) -> Result<FolderIn
         None => None,
     };
 
-    let (_, held) = path::split(&folder.path);
-    let name = if component == held {
+    let (current_parent_path, held) = path::split(&folder.path);
+    let moved = parent_path != current_parent_path;
+    let name = if moved && component == held {
         folder.display_name.as_str()
     } else {
         component

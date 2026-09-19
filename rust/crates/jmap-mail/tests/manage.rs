@@ -543,6 +543,42 @@ fn a_move_leaves_the_name_alone() {
     );
 }
 
+/// The "unchanged" reading above only holds together with an actual parent
+/// change: a drag always moves and never renames, and the rename dialog
+/// always keeps the parent and never moves. So a same-parent call — the
+/// dialog's own shape — is the typed name even on the coincidence that it
+/// reads exactly like the folder's own encoded component, the one case that
+/// would otherwise be silently read as "nothing to do" and drop the user's
+/// rename entirely.
+#[test]
+fn a_same_parent_call_is_always_the_typed_name_even_if_it_matches_the_encoding() {
+    let (server, store) = connected();
+    {
+        let account_id = server.account_id();
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .create_mailbox("Bills/2026", None, None);
+    }
+    store.folders(CACHED).expect("listed");
+
+    let renamed = manage::rename_folder(&store, "Bills%2F2026", "Bills%2F2026").expect("renamed");
+
+    // The typed name itself needs encoding (it has a `%` in it), so the real
+    // path is not the one Camel asked for — the same caveat
+    // `a_new_last_component_is_the_name_the_user_typed` documents.
+    assert_eq!(renamed.path, "Bills%252F2026");
+    assert_eq!(renamed.display_name, "Bills%2F2026");
+    assert_eq!(
+        on_the_server(&server)
+            .find("Bills%252F2026")
+            .map(|folder| folder.display_name.clone()),
+        Some("Bills%2F2026".to_owned())
+    );
+}
+
 /// A component that *did* change is the name the user typed, and it is taken as
 /// one character for character — including a `/`, which Evolution's rename
 /// dialog refuses but nothing here relies on.
