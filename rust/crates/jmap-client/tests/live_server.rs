@@ -1801,3 +1801,158 @@ fn address_book_shared_with_a_second_real_account_is_visible_only_after_the_gran
         .address_book_destroy(&owner_account_id, &book_id)
         .expect("AddressBook/set destroy failed against the real server (cleanup)");
 }
+
+/// `ShareNotification/get` (RFC 9670 section 4) against a real server: the
+/// mock's own coverage (`jmap-client/tests/share_notifications.rs`) proves
+/// the recipient reads back a notification for a grant and another for a
+/// revoke, but does so from a single-account model where the notification
+/// is fetched against the owner's account id. RFC 9670 places the
+/// notification in the *recipient's own* account instead, which is what
+/// `examples/sharing-capability-probe.rs` queried against a live Stalwart
+/// (`bob.single_call(..., "ShareNotification/get", &GetRequest::all(bob_account))`)
+/// but never turned into a repeatable test. This shares an address book
+/// with the recipient, polls the recipient's own account for the resulting
+/// notification, revokes the grant, and polls for the follow-up
+/// notification recording the revoke.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn address_book_share_grant_and_revoke_deliver_a_real_share_notification() {
+    let Some(owner) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the ShareNotification test"
+        );
+        return;
+    };
+    let Some(recipient) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the ShareNotification test"
+        );
+        return;
+    };
+    if !owner
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_PRINCIPALS)
+    {
+        eprintln!(
+            "server does not advertise {CAPABILITY_PRINCIPALS}; skipping the ShareNotification test"
+        );
+        return;
+    }
+
+    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+    let owner_account_id = owner
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+    let recipient_account_id = recipient
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the recipient account needs the contacts capability");
+
+    let recipient_principal_id = owner
+        .principal_query(
+            &owner_account_id,
+            PrincipalQueryFilter::email(&recipient_email),
+        )
+        .expect("Principal/query failed against the real server")
+        .into_iter()
+        .next()
+        .expect("the owner account cannot resolve the recipient's principal id by email");
+
+    let name = format!("agent-livewrite-sharenotif-{}", unique_suffix());
+    let book = owner
+        .address_book_create(&owner_account_id, &AddressBook::new(name))
+        .expect("AddressBook/set create failed against the real server");
+    let book_id = book
+        .id
+        .clone()
+        .expect("the server named the new address book");
+
+    let before_count = recipient
+        .share_notifications(&recipient_account_id)
+        .expect("ShareNotification/get failed for the recipient before any grant")
+        .len();
+
+    owner
+        .address_book_update(
+            &owner_account_id,
+            &book_id,
+            json!({"shareWith": {recipient_principal_id.as_str(): {"mayRead": true}}}),
+        )
+        .expect("AddressBook/set shareWith failed against the real server");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut after_grant = recipient
+        .share_notifications(&recipient_account_id)
+        .expect("ShareNotification/get failed for the recipient after the grant");
+    while after_grant.len() <= before_count && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+        after_grant = recipient
+            .share_notifications(&recipient_account_id)
+            .expect("ShareNotification/get failed for the recipient after the grant");
+    }
+    let granted = after_grant
+        .iter()
+        .find(|notification| notification.object_id == book_id)
+        .expect("the grant produced no ShareNotification for this address book");
+    assert_eq!(granted.object_type, "AddressBook");
+    assert_eq!(granted.object_account_id, owner_account_id);
+    assert_eq!(
+        granted.new_rights.as_ref().and_then(|v| v.get("mayRead")),
+        Some(&json!(true))
+    );
+
+    owner
+        .address_book_update(
+            &owner_account_id,
+            &book_id,
+            json!({format!("shareWith/{}", recipient_principal_id.as_str()): null}),
+        )
+        .expect("AddressBook/set revoke failed against the real server");
+
+    // Diff by id rather than assume an ordering: a real server is free to
+    // return newest-first (Stalwart does) while the mock's fixture-backed
+    // list happens to grow oldest-first, so neither `.next()` nor
+    // `.next_back()` alone is a safe way to name "the revoke's own entry".
+    let granted_ids: std::collections::HashSet<_> =
+        after_grant.iter().filter_map(|n| n.id.clone()).collect();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut after_revoke = recipient
+        .share_notifications(&recipient_account_id)
+        .expect("ShareNotification/get failed for the recipient after the revoke");
+    let revoke_entry = |notifications: &[jmap_proto::principals::ShareNotification]| {
+        notifications
+            .iter()
+            .find(|n| n.object_id == book_id && !granted_ids.contains(n.id.as_ref().unwrap()))
+            .cloned()
+    };
+    let mut revoked = revoke_entry(&after_revoke);
+    while revoked.is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+        after_revoke = recipient
+            .share_notifications(&recipient_account_id)
+            .expect("ShareNotification/get failed for the recipient after the revoke");
+        revoked = revoke_entry(&after_revoke);
+    }
+    let revoked = revoked.expect("the revoke produced no additional ShareNotification");
+
+    // A real server is free to represent "revoked" either by omitting
+    // `newRights` entirely (the mock's own shape) or by naming every right
+    // explicitly `false` (what Stalwart actually sends); either is RFC 9670
+    // compliant, so this checks "no right is granted", not "the field is
+    // absent".
+    let no_right_granted = revoked.new_rights.as_ref().is_none_or(|rights| {
+        rights
+            .as_object()
+            .is_some_and(|obj| obj.values().all(|v| v != &json!(true)))
+    });
+    assert!(
+        no_right_granted,
+        "a right is still granted after a revoke, got {:?}",
+        revoked.new_rights
+    );
+
+    owner
+        .address_book_destroy(&owner_account_id, &book_id)
+        .expect("AddressBook/set destroy failed against the real server (cleanup)");
+}
