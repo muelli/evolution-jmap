@@ -1309,3 +1309,100 @@ fn value_or_null(value: Option<&String>) -> Value {
 fn json_of<T: serde::Serialize>(value: &T) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn free_key_keeps_the_wanted_key_when_nothing_holds_it() {
+        let taken: BTreeSet<String> = ["t1".to_owned()].into_iter().collect();
+        assert_eq!(free_key("t2", &taken), "t2");
+    }
+
+    #[test]
+    fn free_key_counts_up_past_every_variant_already_taken() {
+        let taken: BTreeSet<String> = ["t2".to_owned(), "t2-2".to_owned()].into_iter().collect();
+        assert_eq!(free_key("t2", &taken), "t2-3");
+    }
+
+    #[derive(Clone, serde::Serialize)]
+    struct Entry {
+        visible: bool,
+        text: &'static str,
+    }
+
+    fn is_visible(entry: &Entry) -> bool {
+        entry.visible
+    }
+
+    fn overwrite(patch: &mut Map<String, Value>, path: &str, _current: &Entry, edited: &Entry) {
+        patch.insert(path.to_owned(), json_of(edited));
+    }
+
+    /// The reader that turns an edited vCard back into keyed entries counts
+    /// only what it can see, so a title the user just added can land on the
+    /// key an invisible title already holds server-side (see the module doc
+    /// on [`diff_entries`]). The addition must move off that key rather than
+    /// overwrite the hidden entry.
+    #[test]
+    fn an_addition_that_lands_on_a_hidden_entrys_key_is_moved_off_it() {
+        let current: BTreeMap<String, Entry> = [
+            (
+                "t1".to_owned(),
+                Entry {
+                    visible: true,
+                    text: "CEO",
+                },
+            ),
+            (
+                "t2".to_owned(),
+                Entry {
+                    visible: false,
+                    text: "Secret",
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let edited: BTreeMap<String, Entry> = [
+            (
+                "t1".to_owned(),
+                Entry {
+                    visible: true,
+                    text: "CEO",
+                },
+            ),
+            (
+                "t2".to_owned(),
+                Entry {
+                    visible: true,
+                    text: "New title",
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut patch = Map::new();
+        diff_entries(
+            &mut patch,
+            "titles",
+            Some(&current),
+            Some(&edited),
+            is_visible,
+            overwrite,
+        );
+
+        assert_eq!(
+            patch.get("titles/t2-2"),
+            Some(&json!({"visible": true, "text": "New title"}))
+        );
+        assert_eq!(
+            patch.get("titles/t2"),
+            None,
+            "the hidden entry must not be overwritten"
+        );
+        assert!(patch.contains_key("titles/t1"));
+    }
+}
