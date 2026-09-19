@@ -7,6 +7,8 @@
 // Each test binary compiles this module separately and uses a subset of it.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
+
 use jmap_book_sync::BookSync;
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
@@ -88,5 +90,20 @@ impl Fixture {
         let mut state = state.lock().unwrap();
         let account = state.account_mut(&self.account_id).unwrap();
         account.contact_cards.get_mut(id).expect("card exists").id = None;
+    }
+
+    /// Overwrites a card's `addressBookIds` directly in the store, as an
+    /// update another client made — to reach a state a conforming server
+    /// never sends (RFC 9610 gives every present value as `true`), while
+    /// still logging the change `ContactCard/changes` is asked to report on.
+    pub fn set_address_book_ids(&self, id: &Id, address_book_ids: BTreeMap<Id, bool>) {
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&self.account_id).unwrap();
+        account.contact_cards.transaction(|txn| {
+            let mut card = txn.get(id).expect("the seeded card").clone();
+            card.address_book_ids = Some(address_book_ids);
+            txn.update(id, card);
+        });
     }
 }

@@ -6,6 +6,8 @@
 
 mod common;
 
+use std::collections::BTreeMap;
+
 use common::Fixture;
 use serde_json::json;
 
@@ -168,6 +170,39 @@ fn a_card_moved_to_another_address_book_is_reported_as_removed() {
     let changes = sync.get_changes(&state).unwrap();
     assert!(changes.changed.is_empty(), "{:?}", changes.changed);
     assert_eq!(changes.removed, vec![moved.to_string()]);
+}
+
+/// A server that spells non-membership with a `false` entry instead of
+/// omitting the key is violating RFC 9610's set semantics, the same
+/// malformed shape `jmap-mail-sync`'s `messages_since` refuses rather than
+/// guesses at. Counting the entry as absence would be a guess this crate has
+/// no basis for, so it must be refused rather than silently reported as the
+/// card having left the book.
+#[test]
+fn get_changes_refuses_a_false_valued_address_book_entry() {
+    let fixture = Fixture::start();
+    let flagged = fixture.seed(
+        &fixture.ours,
+        "Still here, allegedly not",
+        "vera@example.com",
+    );
+    let sync = fixture.sync();
+    let (state, _) = sync.list_existing().unwrap();
+
+    fixture.set_address_book_ids(&flagged, BTreeMap::from([(fixture.ours.clone(), false)]));
+
+    let error = sync
+        .get_changes(&state)
+        .expect_err("a false-valued addressBookIds entry must not be guessed at");
+    match error {
+        jmap_book_sync::SyncError::Client(jmap_client::Error::Protocol(message)) => {
+            assert!(
+                message.contains("false-valued"),
+                "expected a message naming the false-valued entry, got: {message}"
+            );
+        }
+        other => panic!("expected a protocol error, got {other:?}"),
+    }
 }
 
 #[test]

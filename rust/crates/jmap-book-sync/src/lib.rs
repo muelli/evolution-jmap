@@ -236,7 +236,7 @@ impl BookSync {
                         "ContactCard/get returned a card without an id",
                     ));
                 };
-                if self.holds(card) {
+                if self.holds(card)? {
                     changed.push(ContactInfo::render(card)?);
                 } else if delta.updated.contains(id) {
                     removed.push(id.to_string());
@@ -261,10 +261,31 @@ impl BookSync {
     }
 
     /// Whether `card` is filed in the address book this instance syncs.
-    fn holds(&self, card: &ContactCard) -> bool {
-        card.address_book_ids
+    ///
+    /// RFC 9610's `addressBookIds` is a set (RFC 8620 §1.5), so a present
+    /// member is always `true`; a server that spells non-membership with a
+    /// `false` entry instead of omitting the key is violating that, the same
+    /// way `jmap-mail-sync`'s `messages_since` refuses the analogous
+    /// `mailboxIds` violation rather than guessing which way it means. There
+    /// is no safe reading to fall back to, so it is refused here too rather
+    /// than silently counted as absence.
+    fn holds(&self, card: &ContactCard) -> Result<bool, SyncError> {
+        match card
+            .address_book_ids
             .as_ref()
-            .is_some_and(|books| books.get(&self.address_book_id).copied().unwrap_or(false))
+            .and_then(|books| books.get(&self.address_book_id).copied())
+        {
+            Some(false) => Err(SyncError::protocol(format!(
+                "ContactCard/get returned {} with a false-valued addressBookIds entry for {}",
+                card.id
+                    .as_ref()
+                    .map(Id::to_string)
+                    .unwrap_or_else(|| "<no id>".to_string()),
+                self.address_book_id
+            ))),
+            Some(true) => Ok(true),
+            None => Ok(false),
+        }
     }
 
     fn fetch(&self, uid: &str) -> Result<ContactCard, SyncError> {
