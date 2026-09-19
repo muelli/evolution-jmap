@@ -55,6 +55,7 @@ use eds_sys::{
 };
 use glib_sys::{GError, GFALSE, g_error_new_literal, gchar};
 use jmap_backend_core::error::cstring_lossy;
+use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::marshal::{checked_borrow_ptr_or, read_string};
 use jmap_proto::mail::{Envelope, EnvelopeAddress};
 
@@ -92,13 +93,37 @@ impl fmt::Display for EnvelopeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotInternet(which) => {
-                write!(f, "the {which} are not internet addresses")
+                // `which` is one of the two literals `internet()`'s callers
+                // pass; translated here rather than at the call site, so a
+                // caller this crate ever adds still gets a translated sentence
+                // even if it forgets to translate its own new word.
+                let which = match *which {
+                    "sender" => translate(c"sender"),
+                    "recipients" => translate(c"recipients"),
+                    other => other.to_owned(),
+                };
+                f.write_str(&translate_with(
+                    // TRANSLATORS: %1$s is "sender" or "recipients", already
+                    // translated.
+                    c"the %1$s are not internet addresses",
+                    &[which.as_str()],
+                ))
             }
-            Self::NoSender => f.write_str("the message has no sender address"),
-            Self::NoRecipients => f.write_str("the message has no recipients"),
+            Self::NoSender => f.write_str(&translate(c"the message has no sender address")),
+            Self::NoRecipients => f.write_str(&translate(c"the message has no recipients")),
             Self::UnusableRecipient { index, name } => match name {
-                Some(name) => write!(f, "no address for the recipient \"{name}\""),
-                None => write!(f, "no address for recipient {}", index + 1),
+                Some(name) => f.write_str(&translate_with(
+                    // TRANSLATORS: %1$s is the recipient's display name.
+                    c"no address for the recipient \"%1$s\"",
+                    &[name.as_str()],
+                )),
+                None => f.write_str(&translate_with(
+                    // TRANSLATORS: %1$s is the recipient's 1-based position in
+                    // the list Camel gave, used because this recipient has no
+                    // display name to show instead.
+                    c"no address for recipient %1$s",
+                    &[(index + 1).to_string().as_str()],
+                )),
             },
         }
     }

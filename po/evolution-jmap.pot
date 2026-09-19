@@ -266,6 +266,79 @@ msgstr ""
 msgid "Evolution"
 msgstr ""
 
+#. TRANSLATORS: shown when Camel asks a JMAP store to do
+#. something that needs a connection it does not currently have.
+#: rust/crates/jmap-mail/src/connect.rs:231
+msgid "not connected to the JMAP server"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the folder path Camel asked for.
+#: rust/crates/jmap-mail/src/connect.rs:235
+#, c-format
+msgid "no such folder: %1$s"
+msgstr ""
+
+#. TRANSLATORS: %1$s is a JMAP mailbox role such as "inbox" or
+#. "trash", not translated: it is a protocol keyword, not prose.
+#: rust/crates/jmap-mail/src/connect.rs:241
+#, c-format
+msgid "no mailbox of this account has the %1$s role"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the message id Camel asked for.
+#: rust/crates/jmap-mail/src/connect.rs:246
+#, c-format
+msgid "no such message: %1$s"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the email address the message was to be
+#. sent from.
+#: rust/crates/jmap-mail/src/connect.rs:252
+#, c-format
+msgid "this account cannot send mail as %1$s"
+msgstr ""
+
+#: rust/crates/jmap-mail/src/connect.rs:256
+msgid "this account has no Drafts or Sent folder to send a message from"
+msgstr ""
+
+#: rust/crates/jmap-mail/src/envelope.rs:101
+msgid "sender"
+msgstr ""
+
+#: rust/crates/jmap-mail/src/envelope.rs:102
+msgid "recipients"
+msgstr ""
+
+#. TRANSLATORS: %1$s is "sender" or "recipients", already
+#. translated.
+#: rust/crates/jmap-mail/src/envelope.rs:108
+#, c-format
+msgid "the %1$s are not internet addresses"
+msgstr ""
+
+#: rust/crates/jmap-mail/src/envelope.rs:112
+msgid "the message has no sender address"
+msgstr ""
+
+#: rust/crates/jmap-mail/src/envelope.rs:113
+msgid "the message has no recipients"
+msgstr ""
+
+#. TRANSLATORS: %1$s is the recipient's display name.
+#: rust/crates/jmap-mail/src/envelope.rs:117
+#, c-format
+msgid "no address for the recipient \"%1$s\""
+msgstr ""
+
+#. TRANSLATORS: %1$s is the recipient's 1-based position in
+#. the list Camel gave, used because this recipient has no
+#. display name to show instead.
+#: rust/crates/jmap-mail/src/envelope.rs:124
+#, c-format
+msgid "no address for recipient %1$s"
+msgstr ""
+
 #. TRANSLATORS: the one-line description of the "JMAP" account type, shown
 #. beneath its name in the list of account types.
 #: rust/crates/jmap-mail/src/provider.rs:67

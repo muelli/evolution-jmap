@@ -53,6 +53,7 @@ use eds_sys::{
 use glib_sys::{GError, GQuark, g_error_new_literal};
 use jmap_backend_core::connect::is_wrong_password;
 use jmap_backend_core::error::cstring_lossy;
+use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::source::{self, SourceError};
 use jmap_client::{Credentials, Error};
 use jmap_mail_sync::{FolderRole, MailSync, SyncError};
@@ -224,22 +225,36 @@ impl fmt::Display for StoreError {
             Self::Config(error) => error.fmt(f),
             Self::Client(error) => error.fmt(f),
             Self::OAuth2(message) => f.write_str(message),
-            Self::Disconnected => f.write_str("not connected to the JMAP server"),
-            Self::NoFolder(path) => write!(f, "no such folder: {path}"),
-            Self::NoRole(role) => {
-                write!(
-                    f,
-                    "no mailbox of this account has the {} role",
-                    role.as_jmap()
-                )
-            }
-            Self::NoMessage(uid) => write!(f, "no such message: {uid}"),
-            Self::NoIdentity(address) => {
-                write!(f, "this account cannot send mail as {address}")
-            }
-            Self::NoOutgoingFolder => {
-                f.write_str("this account has no Drafts or Sent folder to send a message from")
-            }
+            Self::Disconnected => f.write_str(&translate(
+                // TRANSLATORS: shown when Camel asks a JMAP store to do
+                // something that needs a connection it does not currently have.
+                c"not connected to the JMAP server",
+            )),
+            Self::NoFolder(path) => f.write_str(&translate_with(
+                // TRANSLATORS: %1$s is the folder path Camel asked for.
+                c"no such folder: %1$s",
+                &[path.as_str()],
+            )),
+            Self::NoRole(role) => f.write_str(&translate_with(
+                // TRANSLATORS: %1$s is a JMAP mailbox role such as "inbox" or
+                // "trash", not translated: it is a protocol keyword, not prose.
+                c"no mailbox of this account has the %1$s role",
+                &[role.as_jmap()],
+            )),
+            Self::NoMessage(uid) => f.write_str(&translate_with(
+                // TRANSLATORS: %1$s is the message id Camel asked for.
+                c"no such message: %1$s",
+                &[uid.as_str()],
+            )),
+            Self::NoIdentity(address) => f.write_str(&translate_with(
+                // TRANSLATORS: %1$s is the email address the message was to be
+                // sent from.
+                c"this account cannot send mail as %1$s",
+                &[address.as_str()],
+            )),
+            Self::NoOutgoingFolder => f.write_str(&translate(
+                c"this account has no Drafts or Sent folder to send a message from",
+            )),
             Self::NoQuota => f.write_str("no quota information available for this account"),
             Self::NoLocalFile => f.write_str("this message has no local file"),
         }
