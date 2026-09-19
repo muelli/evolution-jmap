@@ -57,15 +57,17 @@ use common::Account;
 use eds_sys::{
     CAMEL_MESSAGE_DELETED, CAMEL_MESSAGE_SEEN, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
     CAMEL_STORE_FOLDER_NONE, CamelFolder, CamelFolderClass, CamelMessageInfo,
-    camel_folder_get_folder_summary, camel_folder_refresh_info_sync, camel_folder_summary_get,
-    camel_folder_synchronize_sync, camel_message_info_get_folder_flagged,
-    camel_message_info_set_flags, camel_service_error_quark, camel_store_get_folder_sync,
+    camel_folder_get_folder_summary, camel_folder_refresh_info_sync, camel_folder_summary_add,
+    camel_folder_summary_get, camel_folder_synchronize_sync, camel_message_info_get_folder_flagged,
+    camel_message_info_set_flags, camel_message_info_set_uid, camel_service_error_quark,
+    camel_store_get_folder_sync,
 };
-use glib_sys::{GError, GFALSE, gboolean};
+use glib_sys::{GError, GFALSE, GTRUE, gboolean};
 use gobject_sys::{g_object_unref, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::folder::folder_type;
-use jmap_mail_sync::MailSync;
+use jmap_mail::message_info::new_message_info;
+use jmap_mail_sync::{MailSync, MessageFlags, MessageSummary};
 use jmap_mock::{EmailSeed, MockServer};
 use jmap_proto::Id;
 use jmap_proto::mail::role;
@@ -558,4 +560,72 @@ fn a_folder_whose_store_has_no_connection_reports_it() {
     // And the change stays queued: a write that never happened is one the next
     // synchronisation has to make.
     assert!(fixture.is_dirty(), "the unsent change was forgotten");
+}
+
+/// A row with nothing set but the one thing a row cannot be without, for a uid
+/// this test overwrites right after — see
+/// [`a_row_whose_uid_is_not_text_stays_queued`].
+fn blank_message(uid: &str) -> MessageSummary {
+    MessageSummary {
+        uid: Id::new(uid),
+        blob_id: None,
+        thread_id: None,
+        flags: MessageFlags::default(),
+        tags: Vec::new(),
+        size: 0,
+        received_at: None,
+        sent_at: None,
+        subject: None,
+        from: Vec::new(),
+        to: Vec::new(),
+        cc: Vec::new(),
+        message_id: None,
+        references: Vec::new(),
+        preview: None,
+    }
+}
+
+/// `push_row`'s own doc says a uid Camel cannot read back as text is "left
+/// queued rather than reported, because the row is not one this provider put
+/// there" — a corrupted or foreign summary database, never one this provider
+/// writes itself, but Camel's own storage does not enforce UTF-8 on a uid. The
+/// generic settling step used to run for it anyway, because an unreadable uid
+/// produced the very same `Ok(())` a nothing-to-send row does: the row was
+/// marked as if the write had happened when no request was ever sent.
+#[test]
+fn a_row_whose_uid_is_not_text_stays_queued() {
+    let fixture = Fixture::start(&[]);
+    // SAFETY: `fixture.folder` is a live folder for the length of the test.
+    let summary = unsafe { camel_folder_get_folder_summary(fixture.folder) };
+
+    let raw_uid = CString::new(vec![0xFF, 0xFE]).expect("no embedded NUL");
+    assert!(
+        raw_uid.to_str().is_err(),
+        "the uid needs to be unreadable as text for this test to mean anything"
+    );
+
+    // SAFETY: `summary` is the live summary above, `raw_uid` outlives every
+    // call it is passed to, and `info` is a fresh row this scope owns until it
+    // hands it to the summary, which takes a reference of its own.
+    let info = unsafe {
+        let info = new_message_info(&blank_message("placeholder"));
+        camel_message_info_set_uid(info, raw_uid.as_ptr());
+        camel_folder_summary_add(summary, info, GTRUE);
+        // The change nothing here can ever send — see the doc comment above.
+        camel_message_info_set_flags(info, CAMEL_MESSAGE_SEEN, CAMEL_MESSAGE_SEEN);
+        info
+    };
+    assert!(
+        unsafe { camel_message_info_get_folder_flagged(info) } != GFALSE,
+        "the row needs to start out queued for this test to mean anything"
+    );
+
+    fixture.synchronize().expect_ok();
+
+    assert!(
+        unsafe { camel_message_info_get_folder_flagged(info) } != GFALSE,
+        "a change nothing could send was dequeued as though it had been"
+    );
+    // SAFETY: the one reference taken above.
+    unsafe { g_object_unref(info.cast()) };
 }

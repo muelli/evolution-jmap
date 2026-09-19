@@ -273,16 +273,19 @@ pub(crate) unsafe fn push_row(
         let after = row_keywords(info.as_ptr());
         let change = KeywordChange::between(&before, &after);
 
-        // A uid Camel stored and we cannot read back as text is not one the
-        // server can be asked about either; it is left queued rather than
-        // reported, because the row is not one this provider put there.
-        let result = match (change.is_empty(), uid.to_str()) {
-            (true, _) => Ok(()),
-            (false, Ok(text)) => match parent_store(folder) {
+        let result = if change.is_empty() {
+            Ok(())
+        } else {
+            let Ok(text) = uid.to_str() else {
+                // A uid Camel stored and we cannot read back as text is not
+                // one the server can be asked about either; leave it queued
+                // rather than settling, below, a row nothing was sent for.
+                return Ok(());
+            };
+            match parent_store(folder) {
                 Some(store) => store.set_keywords(&Id::new(text), &change),
                 None => Err(StoreError::Disconnected),
-            },
-            (false, Err(_)) => Ok(()),
+            }
         };
         match &result {
             Ok(()) => {
