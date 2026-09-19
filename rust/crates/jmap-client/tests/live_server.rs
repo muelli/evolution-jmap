@@ -1802,6 +1802,119 @@ fn address_book_shared_with_a_second_real_account_is_visible_only_after_the_gran
         .expect("AddressBook/set destroy failed against the real server (cleanup)");
 }
 
+/// The same grant/widen/revoke enforcement as
+/// [`address_book_shared_with_a_second_real_account_is_visible_only_after_the_grant`],
+/// checked for `Mailbox` instead of `AddressBook`: mirrors the mock's own
+/// `mailbox_shared_with_a_principal_is_visible_only_to_them`
+/// (`jmap-client/tests/mail_folders.rs`) but between two real accounts on
+/// Stalwart, since `MailboxRights` is a distinct shape
+/// (`mayReadItems`/`mayAddItems`) from `AddressBookRights`.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn mailbox_shared_with_a_second_real_account_is_visible_only_after_the_grant() {
+    let Some(owner) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the ACL-sharing test");
+        return;
+    };
+    let Some(recipient) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the ACL-sharing test"
+        );
+        return;
+    };
+    if !owner
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_PRINCIPALS)
+    {
+        eprintln!(
+            "server does not advertise {CAPABILITY_PRINCIPALS}; skipping the ACL-sharing test"
+        );
+        return;
+    }
+
+    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+    let owner_account_id = owner
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    let recipient_principal_id = owner
+        .principal_query(
+            &owner_account_id,
+            PrincipalQueryFilter::email(&recipient_email),
+        )
+        .expect("Principal/query failed against the real server")
+        .into_iter()
+        .next()
+        .expect("the owner account cannot resolve the recipient's principal id by email");
+
+    let name = format!("agent-livewrite-acl-{}", unique_suffix());
+    let mailbox = owner
+        .mailbox_create(
+            &owner_account_id,
+            &Mailbox {
+                name: name.clone(),
+                ..Mailbox::default()
+            },
+        )
+        .expect("Mailbox/set create failed against the real server");
+    let mailbox_id = mailbox
+        .id
+        .clone()
+        .expect("the server named the new mailbox");
+
+    match recipient.mailbox_get(&owner_account_id) {
+        Err(jmap_client::Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, "forbidden");
+        }
+        other => {
+            panic!("expected forbidden on the owner's account before any grant, got {other:?}")
+        }
+    }
+
+    owner
+        .mailbox_update(
+            &owner_account_id,
+            &mailbox_id,
+            json!({"shareWith": {recipient_principal_id.as_str(): {"mayReadItems": true, "mayAddItems": true}}}),
+        )
+        .expect("Mailbox/set shareWith failed against the real server");
+
+    let shared_mailboxes = recipient
+        .mailbox_get(&owner_account_id)
+        .expect("Mailbox/get failed for the recipient after the grant")
+        .list;
+    let shared = shared_mailboxes
+        .iter()
+        .find(|mailbox| mailbox.id.as_ref() == Some(&mailbox_id))
+        .expect("the recipient does not see the shared mailbox");
+    let rights = shared
+        .my_rights
+        .as_ref()
+        .expect("myRights is computed from the grant");
+    assert_eq!(rights.may_read_items, Some(true));
+    assert_eq!(rights.may_add_items, Some(true));
+
+    owner
+        .mailbox_update(
+            &owner_account_id,
+            &mailbox_id,
+            json!({format!("shareWith/{}", recipient_principal_id.as_str()): null}),
+        )
+        .expect("Mailbox/set revoke failed against the real server");
+
+    match recipient.mailbox_get(&owner_account_id) {
+        Err(jmap_client::Error::Method(method_error)) => {
+            assert_eq!(method_error.error_type, "forbidden");
+        }
+        other => panic!("expected forbidden after the grant is revoked, got {other:?}"),
+    }
+
+    owner
+        .mailbox_destroy(&owner_account_id, &mailbox_id)
+        .expect("Mailbox/set destroy failed against the real server (cleanup)");
+}
+
 /// `ShareNotification/get` (RFC 9670 section 4) against a real server: the
 /// mock's own coverage (`jmap-client/tests/share_notifications.rs`) proves
 /// the recipient reads back a notification for a grant and another for a
