@@ -320,7 +320,7 @@ impl CalSync {
                         "CalendarEvent/get returned an event without an id",
                     ));
                 };
-                if self.holds(event) {
+                if self.holds(event)? {
                     changed.push(ComponentInfo::render(event)?);
                 } else if delta.updated.contains(id) {
                     removed.push(id.to_string());
@@ -345,11 +345,32 @@ impl CalSync {
     }
 
     /// Whether `event` is filed in the calendar this instance syncs.
-    fn holds(&self, event: &CalendarEvent) -> bool {
-        event
+    ///
+    /// `calendarIds` is a set (RFC 8620 §1.5), so a present member is always
+    /// `true`; a server that spells non-membership with a `false` entry
+    /// instead of omitting the key is violating that, the same way
+    /// `jmap-mail-sync`'s `messages_since` refuses the analogous
+    /// `mailboxIds` violation rather than guessing which way it means. There
+    /// is no safe reading to fall back to, so it is refused here too rather
+    /// than silently counted as absence.
+    fn holds(&self, event: &CalendarEvent) -> Result<bool, SyncError> {
+        match event
             .calendar_ids
             .as_ref()
-            .is_some_and(|calendars| calendars.get(&self.calendar_id).copied().unwrap_or(false))
+            .and_then(|calendars| calendars.get(&self.calendar_id).copied())
+        {
+            Some(false) => Err(SyncError::protocol(format!(
+                "CalendarEvent/get returned {} with a false-valued calendarIds entry for {}",
+                event
+                    .id
+                    .as_ref()
+                    .map(Id::to_string)
+                    .unwrap_or_else(|| "<no id>".to_string()),
+                self.calendar_id
+            ))),
+            Some(true) => Ok(true),
+            None => Ok(false),
+        }
     }
 
     fn fetch(&self, uid: &str) -> Result<CalendarEvent, SyncError> {

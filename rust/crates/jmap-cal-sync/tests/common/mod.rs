@@ -7,6 +7,8 @@
 // Each test binary compiles this module separately and uses a subset of it.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
+
 use jmap_cal_sync::CalSync;
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
@@ -92,5 +94,21 @@ impl Fixture {
             .get_mut(id)
             .expect("event exists")
             .id = None;
+    }
+
+    /// Overwrites an event's `calendarIds` directly in the store, as an
+    /// update another client made — to reach a state a conforming server
+    /// never sends (draft-ietf-jmap-calendars gives every present value as
+    /// `true`), while still logging the change `CalendarEvent/changes` is
+    /// asked to report on.
+    pub fn set_calendar_ids(&self, id: &Id, calendar_ids: BTreeMap<Id, bool>) {
+        let state = self.server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&self.account_id).unwrap();
+        account.calendar_events.transaction(|txn| {
+            let mut event = txn.get(id).expect("the seeded event").clone();
+            event.calendar_ids = Some(calendar_ids);
+            txn.update(id, event);
+        });
     }
 }
