@@ -2394,3 +2394,157 @@ fn mailbox_share_grant_and_revoke_deliver_a_real_share_notification() {
         .mailbox_destroy(&owner_account_id, &mailbox_id)
         .expect("Mailbox/set destroy failed against the real server (cleanup)");
 }
+
+/// The same `ShareNotification/get` coverage as
+/// [`address_book_share_grant_and_revoke_deliver_a_real_share_notification`],
+/// but for a Calendar grant. AddressBook, Mailbox and Calendar notifications
+/// go through the same server code path, but this had only been confirmed
+/// live for AddressBook and Mailbox so far; the mock's own equivalent
+/// (`calendar_share_grant_delivers_a_share_notification`,
+/// jmap-client/tests/share_notifications.rs) covers Calendar specifically.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn calendar_share_grant_and_revoke_deliver_a_real_share_notification() {
+    let Some(owner) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the ShareNotification test"
+        );
+        return;
+    };
+    let Some(recipient) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the ShareNotification test"
+        );
+        return;
+    };
+    if !owner
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_PRINCIPALS)
+    {
+        eprintln!(
+            "server does not advertise {CAPABILITY_PRINCIPALS}; skipping the ShareNotification test"
+        );
+        return;
+    }
+
+    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+    let owner_account_id = owner
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let recipient_account_id = recipient
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the recipient account needs the calendars capability");
+
+    let recipient_principal_id = owner
+        .principal_query(
+            &owner_account_id,
+            PrincipalQueryFilter::email(&recipient_email),
+        )
+        .expect("Principal/query failed against the real server")
+        .into_iter()
+        .next()
+        .expect("the owner account cannot resolve the recipient's principal id by email");
+
+    let name = format!("agent-livewrite-sharenotif-{}", unique_suffix());
+    let calendar = Calendar {
+        name: name.clone(),
+        ..Calendar::default()
+    };
+    let calendar = owner
+        .calendar_create(&owner_account_id, &calendar)
+        .expect("Calendar/set create failed against the real server");
+    let calendar_id = calendar
+        .id
+        .clone()
+        .expect("the server named the new calendar");
+
+    let before_count = recipient
+        .share_notifications(&recipient_account_id)
+        .expect("ShareNotification/get failed for the recipient before any grant")
+        .len();
+
+    owner
+        .calendar_update(
+            &owner_account_id,
+            &calendar_id,
+            json!({"shareWith": {recipient_principal_id.as_str(): {"mayReadItems": true}}}),
+        )
+        .expect("Calendar/set shareWith failed against the real server");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut after_grant = recipient
+        .share_notifications(&recipient_account_id)
+        .expect("ShareNotification/get failed for the recipient after the grant");
+    while after_grant.len() <= before_count && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+        after_grant = recipient
+            .share_notifications(&recipient_account_id)
+            .expect("ShareNotification/get failed for the recipient after the grant");
+    }
+    let granted = after_grant
+        .iter()
+        .find(|notification| notification.object_id == calendar_id)
+        .expect("the grant produced no ShareNotification for this calendar");
+    assert_eq!(granted.object_type, "Calendar");
+    assert_eq!(granted.object_account_id, owner_account_id);
+    assert_eq!(
+        granted
+            .new_rights
+            .as_ref()
+            .and_then(|v| v.get("mayReadItems")),
+        Some(&json!(true))
+    );
+
+    owner
+        .calendar_update(
+            &owner_account_id,
+            &calendar_id,
+            json!({format!("shareWith/{}", recipient_principal_id.as_str()): null}),
+        )
+        .expect("Calendar/set revoke failed against the real server");
+
+    // Diff by id rather than assume an ordering, same reasoning as the
+    // AddressBook test above.
+    let granted_ids: std::collections::HashSet<_> =
+        after_grant.iter().filter_map(|n| n.id.clone()).collect();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut after_revoke = recipient
+        .share_notifications(&recipient_account_id)
+        .expect("ShareNotification/get failed for the recipient after the revoke");
+    let revoke_entry = |notifications: &[jmap_proto::principals::ShareNotification]| {
+        notifications
+            .iter()
+            .find(|n| n.object_id == calendar_id && !granted_ids.contains(n.id.as_ref().unwrap()))
+            .cloned()
+    };
+    let mut revoked = revoke_entry(&after_revoke);
+    while revoked.is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(500));
+        after_revoke = recipient
+            .share_notifications(&recipient_account_id)
+            .expect("ShareNotification/get failed for the recipient after the revoke");
+        revoked = revoke_entry(&after_revoke);
+    }
+    let revoked = revoked.expect("the revoke produced no additional ShareNotification");
+
+    // A real server is free to represent "revoked" either by omitting
+    // `newRights` entirely or by naming every right explicitly `false`; this
+    // checks "no right is granted", not "the field is absent" (same
+    // divergence the AddressBook test above documents).
+    let no_right_granted = revoked.new_rights.as_ref().is_none_or(|rights| {
+        rights
+            .as_object()
+            .is_some_and(|obj| obj.values().all(|v| v != &json!(true)))
+    });
+    assert!(
+        no_right_granted,
+        "a right is still granted after a revoke, got {:?}",
+        revoked.new_rights
+    );
+
+    owner
+        .calendar_destroy(&owner_account_id, &calendar_id)
+        .expect("Calendar/set destroy failed against the real server (cleanup)");
+}
