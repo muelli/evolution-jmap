@@ -24,7 +24,9 @@
 //! ```
 //!
 //! Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are
-//! unset.
+//! unset. The cross-account test below also needs
+//! `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` for a second account in the
+//! same domain.
 
 use std::env;
 
@@ -55,6 +57,24 @@ fn connect_for_write() -> Option<Client> {
         .connect(&origin, Credentials::basic(user, password))
         .expect("could not fetch the session document for the write-test account");
     Some(client)
+}
+
+/// Mirrors `live_server.rs::connect_recipient` exactly.
+fn connect_recipient() -> Option<Client> {
+    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
+    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
+        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
+    );
+    let origin = env::var("JMAP_LIVE_SERVER_URL")
+        .expect("set JMAP_LIVE_SERVER_URL alongside JMAP_LIVE_SERVER_RECIPIENT_USER");
+    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+
+    Some(
+        Client::builder()
+            .rebase_urls_to_origin(rebase)
+            .connect(&origin, Credentials::basic(user, password))
+            .expect("could not fetch the session document for the recipient account"),
+    )
 }
 
 /// Creates a contact, then confirms `get_changes` reports it as changed from
@@ -156,5 +176,70 @@ fn get_changes_reports_a_create_an_edit_and_a_removal_against_the_real_server() 
     assert!(
         !after_remove.changed.iter().any(|c| c.uid == saved.uid),
         "a removed card must not also be reported as changed"
+    );
+}
+
+/// A state is opaque per RFC 8620, but not free-form: Stalwart's own state
+/// strings turned out (checked live) to fail syntax validation
+/// (`invalidArguments`) for almost any hand-written guess, unlike
+/// `jmap-mockd`'s simulation (`jmap-mock/src/setops.rs`), which accepts
+/// anything and only rejects a string it cannot parse back into its
+/// internal counter. A syntactically well-formed state from a *different*
+/// account is the reliable way to reach `cannotCalculateChanges` on the real
+/// server: `jmap-mail-sync`/`jmap-book-sync`/`jmap-cal-sync` all catch that
+/// error and answer with a full relist (`SyncError::is_cannot_calculate_changes`),
+/// but nothing here had ever driven a real server into actually returning
+/// it, so this confirms the account-scoping mismatch surfaces as that exact
+/// method error rather than some other error type the caller's check would
+/// not recognise.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
+    let Some(owner) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let Some(other) = connect_recipient() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the write-path test"
+        );
+        return;
+    };
+
+    let owner_account_id = owner
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+    let owner_book_id = owner
+        .address_books(&owner_account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default address book")
+        .id
+        .expect("the server named the address book");
+    let owner_sync = BookSync::new(owner, owner_account_id, owner_book_id);
+    let (owner_state, _) = owner_sync
+        .list_existing()
+        .expect("listing the owner's book failed against the real server");
+
+    let other_account_id = other
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the recipient account needs the contacts capability");
+    let other_book_id = other
+        .address_books(&other_account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the recipient account needs a default address book")
+        .id
+        .expect("the server named the address book");
+    let other_sync = BookSync::new(other, other_account_id, other_book_id);
+
+    let error = other_sync
+        .get_changes(&owner_state)
+        .expect_err("a state from a different account must not be answered as if it were valid");
+    assert!(
+        error.is_cannot_calculate_changes(),
+        "expected cannotCalculateChanges for another account's state, got: {error:?}"
     );
 }
