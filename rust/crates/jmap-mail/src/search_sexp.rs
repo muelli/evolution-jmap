@@ -238,6 +238,9 @@ fn translate_bool(expr: &SExpr) -> Option<Filter<EmailQueryFilter>> {
             translate_bool(inner)
         }
         "and" => {
+            if args.is_empty() {
+                return None;
+            }
             let conditions = args
                 .iter()
                 .map(translate_bool)
@@ -245,6 +248,9 @@ fn translate_bool(expr: &SExpr) -> Option<Filter<EmailQueryFilter>> {
             Some(Filter::and(conditions))
         }
         "or" => {
+            if args.is_empty() {
+                return None;
+            }
             let conditions = args
                 .iter()
                 .map(translate_bool)
@@ -512,6 +518,20 @@ mod tests {
         assert_eq!(translate(r#"(header-contains "From" x)"#), None);
         assert_eq!(translate(r#"(body-contains foo)"#), None);
         assert_eq!(translate(r#"(system-flag Seen)"#), None);
+    }
+
+    #[test]
+    fn empty_and_or_are_untranslatable() {
+        // e-sexp's own `(and)`/`(or)` are valid vacuous-true/false forms a
+        // free-form search expression can contain, but RFC 8620 SS5.5 never
+        // defines FilterOperator behaviour for an empty `conditions` array,
+        // so this must refuse rather than send one to the server.
+        assert_eq!(translate("(and)"), None);
+        assert_eq!(translate("(or)"), None);
+        assert_eq!(
+            translate(r#"(and (header-contains "From" "x") (or))"#),
+            None
+        );
     }
 
     #[test]
