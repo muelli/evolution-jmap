@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+
 # EWS parity audit
 
 A systematic, surface-by-surface diff between this project's
@@ -168,9 +173,34 @@ found them, per this project's own "each its own increment" discipline and
 that session's time budget — each was picked up and closed in its own later
 increment instead.
 
+## Surface 6 - Address-book backend vfuncs (`e-book-backend-ews.c` vs `jmap-backend-book/src/backend.rs`)
+
+Both backends are direct subclasses of EDS's `EBookMetaBackend` (`E_TYPE_BOOK_META_BACKEND`), which provides caching (via SQLite `EBookCache`), offline operation, and view dispatching over a set of core synchronization and contact-manipulation vfuncs. Upstream source references are to `src/EWS/addressbook/e-book-backend-ews.c` and `src/EWS/addressbook/e-book-backend-ews-factory.c` on `master`. References into this repository are relative to `rust/crates/`.
+
+| EWS vfunc/behavior | What it does | Our equivalent | Verdict | Reasoning |
+|---|---|---|---|---|
+| `connect_sync` | Validates credentials, connects push/streaming notifications, sets `writable = !is_gal`, runs cache data version migration (`e-book-backend-ews.c:3792-3903`) | `connect_sync`, `jmap-backend-book/src/backend.rs:280-350` (delegating to `connect::connect`, `start_push`, and `e_book_backend_set_writable`) | MATCH | Same connection lifecycle, credential handling, push initialization, and writable assignment. JMAP has no read-only GAL, so writable is always set TRUE. TLS certificate out-parameters are left untouched on both backends per this project's documented security stance. |
+| `disconnect_sync` | Unsubscribes notifications, unrefs connection, cancels pending view operations (`e-book-backend-ews.c:3905-3920`) | `disconnect_sync`, `jmap-backend-book/src/backend.rs:352-375` (stops push thread, drops connection) | MATCH | Same clean disconnect pattern. |
+| `list_existing_sync` | Absent (NULL in `EBookMetaBackendClass`, `e-book-backend-ews.c:4740-4748`) | `list_existing_sync`, `jmap-backend-book/src/backend.rs:377-394` (delegating to `ops::list_existing`) | DIVERGENCE - justified | Protocol architecture: Exchange's `SyncFolderItems` operation accepts a null sync state to enumerate all existing items, so EWS needs only `get_changes_sync`. JMAP separates `ContactCard/changes` (delta sync) from `ContactCard/query` + `ContactCard/get` (full listing). `jmap-backend-book` implements `list_existing_sync` and chains up to parent `EBookMetaBackendClass::get_changes_sync` when `cannotCalculateChanges` requires a full re-sync. |
+| `get_changes_sync` | For GAL: downloads OAL details/diffs; for address books: calls `e_ews_connection_sync_folder_items_sync`, verifies changes against cache, fetches created/modified items (`e-book-backend-ews.c:3923-4148`) | `get_changes_sync`, `jmap-backend-book/src/backend.rs:397-455` (delegating to `ops::get_changes`, chains up to parent on `ListInstead`) | MATCH (pattern) / justified divergence in sync mechanics | Both implement incremental change synchronization feeding `EBookMetaBackendInfo` lists to EDS. EWS handles Exchange OAB/GAL and `SyncFolderItems`; JMAP uses `ContactCard/changes` and chains up to parent listing when changes cannot be calculated. Both wrap calls in token refresh retry logic. |
+| `load_contact_sync` | Fetches item via `e_ews_connection_get_items_sync`, converts EWS XML to `EContact`, caches original vCard (`e-book-backend-ews.c:4151-4202`) | `load_contact_sync`, `jmap-backend-book/src/backend.rs:457-476` (delegating to `ops::load_contact`) | MATCH | Same single-contact retrieval into `EContact`. |
+| `save_contact_sync` | Creates or updates contact via `CreateItem`/`UpdateItem`, handles distribution lists (`E_CONTACT_IS_LIST`), uploads photo attachment for Exchange 2010 SP2+ (`e-book-backend-ews.c:4205-4349`) | `save_contact_sync`, `jmap-backend-book/src/backend.rs:479-512` (delegating to `ops::save_contact`) | MATCH (pattern) / justified divergence | Both translate `EContact` modifications into protocol create/update calls. EWS handles Exchange distribution lists and custom photo attachment uploads. JMAP maps `EContact` to JSContact Card representations via `ContactCard/set` with last-writer-wins conflict resolution. |
+| `remove_contact_sync` | Deletes contact via `e_ews_connection_delete_items_sync` with `EWS_HARD_DELETE` (`e-book-backend-ews.c:4351-4383`) | `remove_contact_sync`, `jmap-backend-book/src/backend.rs:514-535` (delegating to `ops::remove_contact`) | MATCH | Both issue remote deletion and report outcome cleanly. |
+| `search_sync` and `search_uids_sync` | Overridden to query remote GAL via `e_ews_connection_resolve_names_sync`; for non-GAL, immediately chains up to parent class (`e-book-backend-ews.c:3419-3432, 4385-4455`) | Absent (inherited from `EBookMetaBackendClass`) | DIVERGENCE - justified | EWS overrides these slots solely to support live remote search against the Exchange GAL (`e-book-backend-ews.c:3431`). For standard address books, EWS chains up directly to `EBookMetaBackendClass::search_sync`/`search_uids_sync`, which queries the local SQLite `EBookCache`. JMAP has no GAL; all contacts are synchronized locally, so inheriting the parent class yields exact parity for non-GAL address books. |
+| `impl_get_backend_property` | Returns `CLIENT_BACKEND_PROPERTY_CAPABILITIES` (`net`, `contact-lists`, `do-initial-query`), `REQUIRED_FIELDS` (`file-as`), `SUPPORTED_FIELDS` (`e-book-backend-ews.c:4457-4530`) | Absent (inherited from `EBookBackendClass`) | DIVERGENCE - justified / minor gap | `EBookMetaBackend` provides default capabilities (`net`, `contact-lists` if enabled). EWS explicitly enumerates `SUPPORTED_FIELDS` to restrict the Evolution contact editor to fields supported by its XML schema. JSContact supports standard contact fields natively, but explicit `SUPPORTED_FIELDS` advertising could be added if field gating is desired. |
+| `impl_start_view` and `impl_stop_view` | Overridden to run asynchronous background GAL search when view has `MANUAL_QUERY` flag; otherwise chains up to parent class (`e-book-backend-ews.c:4566-4624`) | Absent (inherited from `EBookBackendClass`) | DIVERGENCE - justified | Exists exclusively for live remote GAL search in EWS (`e-book-backend-ews.c:4574`). Standard address-book views are managed entirely by `EBookMetaBackendClass` against `EBookCache`. |
+| `EBackendClass::get_destination_address` | Extracts host and port from `CamelEwsSettings` hosturl for EDS host-reachability monitoring (`e-book-backend-ews.c:4627-4667`) | Absent in `jmap-backend-book/src/backend.rs` | GAP (minor) | In `evolution-addressbook-factory`, `EBackendClass`'s default implementation reads the backend's "connectable" property, which is never set, so EDS host-reachability monitoring falls back to generic network-up/down rather than watching the specific JMAP host. Identical to the gap found on Surface 5 (Collection backend vfuncs); `jmap_backend_core::source::destination_address` already exists and can be wired into `JmapBookBackendClass` as a follow-up item. |
+| `constructed`, `dispose`, `finalize` | `constructed` creates attachments directory for contact photos; `dispose` unsets connection; `finalize` frees folder id and allocations (`e-book-backend-ews.c:4670-4716`) | `instance_init` initializes session/push slots; `finalize` stops push thread and clears session (`jmap-backend-book/src/backend.rs:238-260`) | MATCH (pattern) / justified divergence | JMAP needs no disk attachments directory for contact photos. Push thread and session teardown occur safely in `finalize`. |
+| Direct Read Access (DRA) configuration | Sets `backend_module_directory`, `backend_module_filename`, and `backend_factory_type_name` (`e-book-backend-ews.c:4737-4739`) | Absent (left NULL in `JmapBookBackendClass`) | DIVERGENCE - justified | DRA allows client processes to open local cache databases directly without IPC. Leaving these NULL is standard in EDS when in-process client loading is not desired, routing all operations cleanly through `evolution-addressbook-factory`. |
+| Subprocess sharing (`share_subprocess`) | Sets `share_subprocess = TRUE` in factory class init (`e-book-backend-ews-factory.c:42`) | Left `FALSE` (default) in `jmap-backend-book/src/factory.rs:112-117` | DIVERGENCE - justified (deliberate improvement) | Setting `share_subprocess = TRUE` puts all accounts into a single factory subprocess. Leaving it `FALSE` isolates each JMAP account source in its own subprocess, providing credential separation and minimizing fault blast radius. |
+
+**One real gap found:**
+
+1. **`EBackendClass::get_destination_address` is not implemented on `JmapBookBackendClass`**, leaving EDS's host-reachability monitor unable to watch this account's actual JMAP host specifically inside `evolution-addressbook-factory`, falling back to generic network-up/down. This is the exact counterpart to the gap found on Surface 5 for `jmap-backend-collection`. The logic already exists in `jmap_backend_core::source::destination_address` (added in session N+57), so wiring it to `JmapBookBackendClass`'s `parent_class` is a scoped follow-up increment.
+
 ## Summary
 
-Four of five named surfaces show close-to-exact parity, with every
+Five of six named surfaces show close-to-exact parity, with every
 divergence traceable to a real, already-documented JMAP-vs-EWS protocol
 difference (unified-account-vs-per-service settings, unauthenticated SRV/RFC
 8414/7591 discovery vs. authenticated Exchange Autodiscover, Bearer/HTTP
@@ -218,3 +248,20 @@ free-busy-range) this project has no protocol analog for, and the one
 role it shares with this project, naming a child resource, is already
 covered by the built-in `ESourceResource` extension this crate uses. No
 gap; nothing left open in this document.
+
+The address-book backend surface (Surface 6) shows comprehensive parity across
+the standard `EBookMetaBackendClass` lifecycle and CRUD vfuncs (`connect_sync`,
+`disconnect_sync`, `get_changes_sync`, `load_contact_sync`, `save_contact_sync`,
+`remove_contact_sync`). The divergences in `search_sync`, `search_uids_sync`,
+`impl_start_view`, and `impl_stop_view` trace entirely to EWS's Exchange Global
+Address List (GAL) support: EWS overrides those slots exclusively to execute
+live remote directory searches against the GAL, while falling back to the
+parent class defaults for standard address books, matching JMAP's direct use
+of the local cache. The `list_existing_sync` divergence is architectural:
+Exchange's `SyncFolderItems` unifies initial and incremental sync, while JMAP
+separates query/get from delta changes, chaining up to parent listing when a
+full sync is needed. One genuine minor gap was identified:
+`EBackendClass::get_destination_address` is not implemented on
+`JmapBookBackendClass`, repeating the exact omission identified in Surface 5
+where host-specific reachability monitoring falls back to generic network state
+in `evolution-addressbook-factory`.
