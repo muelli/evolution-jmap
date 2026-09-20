@@ -67,7 +67,7 @@ use crate::fan_out::{Collection, Populated, fan_out};
 use crate::populate::Populating;
 use crate::removal::remove_source;
 use crate::resource_id::resource_id_of;
-use crate::source_changed::AccountWatch;
+use crate::source_changed::{AccountWatch, login_fingerprint};
 
 /// The JMAP collection backend.
 #[repr(C)]
@@ -240,9 +240,9 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
         // SAFETY: EDS hands us one of its own backends, alive for the call, and
         // `ECollectionBackend` derives from `EBackend`.
         let source = unsafe { e_backend_get_source(backend.cast()) };
-        let (parts, user, uses_oauth2, account_id) = if source.is_null() {
+        let (parts, user, uses_oauth2, account_id, login) = if source.is_null() {
             log_critical("populate: the collection backend has no account source");
-            (Parts::NONE, None, false, None)
+            (Parts::NONE, None, false, None, 0)
         } else {
             // SAFETY: a valid `ESource` owned by the backend, only read from.
             let (parts, user, uses_oauth2) = unsafe {
@@ -254,7 +254,9 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
             };
             // SAFETY: as above; the uid comes back `(transfer none)`.
             let account_id = unsafe { read_string(e_source_get_uid(source)) };
-            (parts, user, uses_oauth2, account_id)
+            // SAFETY: as above.
+            let login = unsafe { login_fingerprint(source) };
+            (parts, user, uses_oauth2, account_id, login)
         };
 
         // Before the body and in this order, as `ews_backend_populate`'s own
@@ -262,7 +264,7 @@ unsafe extern "C" fn populate(backend: *mut ECollectionBackend) {
         // the handler connected once, by the first populate only.
         // SAFETY: EDS dispatched this vfunc on an instance of our own type.
         if let Some(watch) = unsafe { watch_of(backend) } {
-            watch.populating();
+            watch.populating(login);
             if !source.is_null() && watch.claim_connection() {
                 // SAFETY: the account source EDS owns, alive for at least as
                 // long as the backend that references it, and the backend this
@@ -374,7 +376,18 @@ unsafe extern "C" fn on_account_changed(source: *mut ESource, backend: gpointer)
         let Some(watch) = (unsafe { watch_of(backend) }) else {
             return;
         };
-        if !watch.wants_repopulate() {
+        // The backend's own account rather than the emitting source, which is
+        // the same object: the fingerprint the populate below records has to be
+        // of the source that populate itself reads.
+        // SAFETY: EDS hands the backend its source `(transfer none)`, alive for
+        // as long as the backend, and `ECollectionBackend` derives from
+        // `EBackend`.
+        let account = unsafe { e_backend_get_source(backend.cast()) };
+        if account.is_null() {
+            return;
+        }
+        // SAFETY: a valid `ESource` owned by the backend, only read from.
+        if !watch.wants_repopulate(unsafe { login_fingerprint(account) }) {
             return;
         }
 

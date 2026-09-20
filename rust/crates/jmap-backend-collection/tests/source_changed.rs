@@ -22,20 +22,33 @@ use std::ffi::CString;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use eds_sys::{ESource, e_source_get_type, e_source_new_with_uid};
-use glib_sys::gpointer;
+use eds_sys::{
+    E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, ESource,
+    ESourceAuthentication, ESourceCollection, e_source_authentication_get_type,
+    e_source_authentication_set_host, e_source_collection_get_type,
+    e_source_collection_set_allow_sources_rename, e_source_get_extension, e_source_get_type,
+    e_source_new_with_uid,
+};
+use glib_sys::{
+    GFALSE, GMainContext, GTRUE, g_main_context_iteration, g_main_context_new,
+    g_main_context_unref, gpointer,
+};
 use gobject_sys::{
     G_CONNECT_DEFAULT, G_TYPE_NONE, G_TYPE_OBJECT, GSignalQuery, g_object_new_with_properties,
     g_object_unref, g_signal_connect_object, g_signal_emit_by_name, g_signal_lookup,
     g_signal_query, g_type_class_ref, g_type_class_unref,
 };
 use jmap_backend_collection::backend::JmapCollectionBackend;
+use jmap_backend_collection::source_changed::login_fingerprint;
 
 mod common;
 use common::with_timeout;
 
 /// How many times the probe handler below ran.
 static FIRED: AtomicUsize = AtomicUsize::new(0);
+/// The same, for the account-write probe, which runs on its own source in its
+/// own main context and so may not share a counter with tests running beside it.
+static HEARD_OWN_WRITE: AtomicUsize = AtomicUsize::new(0);
 /// The user-data pointer the last run was handed.
 static SAW_DATA: AtomicUsize = AtomicUsize::new(0);
 
@@ -51,13 +64,63 @@ struct Source(*mut ESource);
 
 impl Source {
     fn new(uid: &str) -> Self {
+        Self::in_context(uid, ptr::null_mut())
+    }
+
+    /// The same, emitting into a main context of the caller's own. `ESource`
+    /// coalesces a burst of edits into one idle emission on the context it was
+    /// created with, and a test that has to *run* that idle needs one nothing
+    /// else is iterating.
+    fn in_context(uid: &str, main_context: *mut GMainContext) -> Self {
+        // `e_source_get_extension` finds an extension class by walking the
+        // registered children of `E_TYPE_SOURCE_EXTENSION`, so a type nothing
+        // has referenced yet is one it cannot find.
+        // SAFETY: no arguments, and the type system initialises itself.
+        unsafe {
+            e_source_collection_get_type();
+            e_source_authentication_get_type();
+        }
+
         let uid = CString::new(uid).expect("no NUL in a test uid");
         let mut error = ptr::null_mut();
-        // SAFETY: a NUL-terminated uid, the default main context, and a
-        // pointer to a NULL `GError`.
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
+        // SAFETY: a NUL-terminated uid, a main context or NULL for the
+        // default one, and a pointer to a NULL `GError`.
+        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), main_context, &mut error) };
         assert!(!source.is_null(), "e_source_new_with_uid failed");
         Self(source)
+    }
+
+    /// `[Authentication] Host`: the one account setting a login cannot do
+    /// without, and so the one an owner fixing a broken account edits.
+    fn set_host(&self, host: &str) {
+        let host = CString::new(host).expect("no NUL in a test host");
+        // SAFETY: a live source and a header constant; the extension is
+        // created on demand and owned by the source, and the setter copies the
+        // string.
+        unsafe {
+            let auth: *mut ESourceAuthentication =
+                e_source_get_extension(self.0, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
+            e_source_authentication_set_host(auth, host.as_ptr());
+        }
+    }
+
+    /// `[Collection] AllowSourcesRename`, which is what `populate` writes on
+    /// every account it runs for.
+    fn set_allow_sources_rename(&self, allow: bool) {
+        // SAFETY: as above.
+        unsafe {
+            let collection: *mut ESourceCollection =
+                e_source_get_extension(self.0, E_SOURCE_EXTENSION_COLLECTION.as_ptr()).cast();
+            e_source_collection_set_allow_sources_rename(
+                collection,
+                if allow { GTRUE } else { GFALSE },
+            );
+        }
+    }
+
+    fn login_fingerprint(&self) -> u64 {
+        // SAFETY: a live source, only read from.
+        unsafe { login_fingerprint(self.0) }
     }
 
     fn emit_changed(&self) {
@@ -168,8 +231,104 @@ fn a_fresh_instance_has_connected_nothing_and_proved_nothing() {
             "a second populate must not add a second handler"
         );
         assert!(
-            watch.wants_repopulate(),
+            watch.wants_repopulate(0x5eed),
             "an account whose fan-out has never succeeded is worth another login"
+        );
+    });
+}
+
+/// Shaped like the real handler, counting the `"changed"` emissions caused by
+/// a write `populate` itself makes.
+unsafe extern "C" fn own_write_probe(_source: *mut ESource, _data: gpointer) {
+    HEARD_OWN_WRITE.fetch_add(1, Ordering::SeqCst);
+}
+
+#[test]
+fn the_flag_populate_writes_comes_back_as_an_edit_of_the_account() {
+    with_timeout(|| {
+        HEARD_OWN_WRITE.store(0, Ordering::SeqCst);
+
+        // SAFETY: no arguments; the context is unreferenced at the end.
+        let context = unsafe { g_main_context_new() };
+        let source = Source::in_context("jmap-watch-own-write", context);
+        // SAFETY: no properties, so the count is zero and both arrays NULL.
+        let watched =
+            unsafe { g_object_new_with_properties(G_TYPE_OBJECT, 0, ptr::null_mut(), ptr::null()) };
+        assert!(!watched.is_null(), "a plain GObject could not be created");
+
+        // SAFETY: a live source, `"changed"` on its own type, a handler whose
+        // signature matches the signal's marshaller, and a live `GObject`.
+        unsafe {
+            g_signal_connect_object(
+                source.0.cast(),
+                c"changed".as_ptr(),
+                Some(std::mem::transmute::<
+                    unsafe extern "C" fn(*mut ESource, gpointer),
+                    unsafe extern "C" fn(),
+                >(own_write_probe)),
+                watched,
+                G_CONNECT_DEFAULT,
+            );
+        }
+
+        source.set_allow_sources_rename(true);
+        // The emission is an idle on the source's own context, so it lands
+        // after the write returns -- which under EDS means after the populate
+        // that made it has connected this very handler.
+        for _ in 0..100 {
+            if HEARD_OWN_WRITE.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            // SAFETY: a context this thread created and nothing else iterates.
+            unsafe { g_main_context_iteration(context, GFALSE) };
+        }
+
+        assert_eq!(
+            HEARD_OWN_WRITE.load(Ordering::SeqCst),
+            1,
+            "allow-sources-rename carries E_SOURCE_PARAM_SETTING, so writing it \
+             emits \"changed\" on the account the populate is running for"
+        );
+
+        // SAFETY: the references this test took.
+        unsafe {
+            g_object_unref(watched);
+            g_main_context_unref(context);
+        }
+    });
+}
+
+#[test]
+fn a_setting_the_populate_wrote_leaves_the_login_fingerprint_alone() {
+    with_timeout(|| {
+        let source = Source::new("jmap-watch-fingerprint-own");
+        source.set_host("jmap.example.com");
+
+        let before = source.login_fingerprint();
+        source.set_allow_sources_rename(true);
+
+        assert_eq!(
+            source.login_fingerprint(),
+            before,
+            "nothing about the login changed, so the edit populate caused is \
+             not one worth a second login"
+        );
+    });
+}
+
+#[test]
+fn a_corrected_host_changes_the_login_fingerprint() {
+    with_timeout(|| {
+        let source = Source::new("jmap-watch-fingerprint-edit");
+        source.set_host("jmpa.example.com");
+
+        let mistyped = source.login_fingerprint();
+        source.set_host("jmap.example.com");
+
+        assert_ne!(
+            source.login_fingerprint(),
+            mistyped,
+            "a fixed host is the edit this whole handler exists for"
         );
     });
 }

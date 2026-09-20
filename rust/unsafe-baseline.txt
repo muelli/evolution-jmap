@@ -13,7 +13,7 @@ jmap-backend-book 87
 jmap-backend-book-module 4
 jmap-backend-cal 131
 jmap-backend-cal-module 4
-jmap-backend-collection 253
+jmap-backend-collection 258
 jmap-backend-collection-module 4
 jmap-backend-core 383
 jmap-book-sync 0
