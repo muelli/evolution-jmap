@@ -66,6 +66,20 @@ use crate::subscribe::Subscribable;
 struct Listing {
     state: State,
     tree: Arc<FolderTree>,
+    /// Bumped by every in-place edit ([`JmapStore::set_subscribed`],
+    /// [`JmapStore::create_folder`], [`JmapStore::delete_folder`],
+    /// [`JmapStore::rename_folder`]) — never by [`JmapStore::folders`] itself.
+    ///
+    /// What this guards: `folders(REFRESH)` reads a `(state, tree)` snapshot,
+    /// then makes a `Mailbox/changes` round trip with the `folders` slot
+    /// unlocked, so one of the four edits above can land in between. Its
+    /// answer — truthful for the state it asked from, but by the time it
+    /// arrives possibly stale — must not silently overwrite an edit made
+    /// after that snapshot was taken. `folders` therefore only writes back
+    /// while the generation is still the one it saw; a mismatch means an
+    /// edit already moved the listing on, and that edit is kept instead
+    /// (`jmap-mail/tests/folder_listing_race.rs` pins this).
+    generation: u64,
 }
 
 /// The instance struct. `#[repr(C)]` leading with the parent's instance struct
@@ -459,55 +473,97 @@ impl JmapStore {
 
         tracing::debug!(flags, "fetching folder tree");
 
-        let held = read(folders)
-            .as_ref()
-            .map(|listing| (listing.state.clone(), Arc::clone(&listing.tree)));
+        let held = read(folders).as_ref().map(|listing| {
+            (
+                listing.state.clone(),
+                Arc::clone(&listing.tree),
+                listing.generation,
+            )
+        });
 
+        // `Some(generation)` when a listing already existed: the write below
+        // must not replace it unless it is still on the generation this
+        // request started from. `None` for a first listing, which nothing
+        // can have raced (the four editing methods no-op on an empty slot).
+        let baseline_generation;
         let listing = match held {
-            Some((_, tree)) if flags & CAMEL_STORE_FOLDER_INFO_REFRESH == 0 => return Ok(tree),
-            Some((state, tree)) => match retry_once_after(
-                || sync.folder_tree_since(&state),
-                SyncError::is_unauthorized,
-                || self.refresh_credentials(sync),
-            ) {
-                // The tree is kept, not rebuilt from an equal one: Camel diffs
-                // the forests it is handed to decide which folders to announce
-                // as created or deleted, and every caller above holds the same
-                // `Arc` as before.
-                Ok(FolderUpdate::Unchanged(state)) => Listing { state, tree },
-                Ok(FolderUpdate::Rebuilt { state, tree }) => Listing {
-                    state,
-                    tree: Arc::new(tree),
-                },
-                Err(failure) => {
-                    tracing::debug!(flags, ?failure, "fetching folder tree failed");
-                    return Err(failure.into());
+            Some((_, tree, _)) if flags & CAMEL_STORE_FOLDER_INFO_REFRESH == 0 => return Ok(tree),
+            Some((state, tree, generation)) => {
+                baseline_generation = Some(generation);
+                match retry_once_after(
+                    || sync.folder_tree_since(&state),
+                    SyncError::is_unauthorized,
+                    || self.refresh_credentials(sync),
+                ) {
+                    // The tree is kept, not rebuilt from an equal one: Camel diffs
+                    // the forests it is handed to decide which folders to announce
+                    // as created or deleted, and every caller above holds the same
+                    // `Arc` as before.
+                    Ok(FolderUpdate::Unchanged(state)) => Listing {
+                        state,
+                        tree,
+                        generation,
+                    },
+                    Ok(FolderUpdate::Rebuilt { state, tree }) => Listing {
+                        state,
+                        tree: Arc::new(tree),
+                        generation,
+                    },
+                    Err(failure) => {
+                        tracing::debug!(flags, ?failure, "fetching folder tree failed");
+                        return Err(failure.into());
+                    }
                 }
-            },
-            None => match retry_once_after(
-                || sync.folder_tree(),
-                SyncError::is_unauthorized,
-                || self.refresh_credentials(sync),
-            ) {
-                Ok((state, tree)) => Listing {
-                    state,
-                    tree: Arc::new(tree),
-                },
-                Err(failure) => {
-                    tracing::debug!(flags, ?failure, "fetching folder tree failed");
-                    return Err(failure.into());
+            }
+            None => {
+                baseline_generation = None;
+                match retry_once_after(
+                    || sync.folder_tree(),
+                    SyncError::is_unauthorized,
+                    || self.refresh_credentials(sync),
+                ) {
+                    Ok((state, tree)) => Listing {
+                        state,
+                        tree: Arc::new(tree),
+                        generation: 0,
+                    },
+                    Err(failure) => {
+                        tracing::debug!(flags, ?failure, "fetching folder tree failed");
+                        return Err(failure.into());
+                    }
                 }
-            },
+            }
         };
 
-        let tree = Arc::clone(&listing.tree);
         tracing::debug!(
             flags,
             state = listing.state.as_str(),
             count = listing.tree.len(),
             "fetched folder tree"
         );
-        *write(folders) = Some(listing);
+
+        let mut guard = write(folders);
+        // A concurrent edit (create/delete/rename/subscribe) bumped the
+        // generation while this request's round trip was in flight — its
+        // write already reflects the account better than this answer, which
+        // was truthful when asked but is now stale. Keep it rather than
+        // regress it; the caller gets what the edit left behind instead of
+        // what this fetch found.
+        let stale = matches!(
+            (&*guard, baseline_generation),
+            (Some(current), Some(baseline)) if current.generation != baseline
+        );
+        let tree = if stale {
+            guard
+                .as_ref()
+                .map(|current| Arc::clone(&current.tree))
+                .unwrap_or_else(|| Arc::clone(&listing.tree))
+        } else {
+            let tree = Arc::clone(&listing.tree);
+            *guard = Some(listing);
+            tree
+        };
+        drop(guard);
         drop(connection);
         Ok(tree)
     }
@@ -1002,6 +1058,7 @@ impl JmapStore {
             && let Some(listing) = write(folders).as_mut()
         {
             Arc::make_mut(&mut listing.tree).set_subscribed(mailbox, subscribed);
+            listing.generation = listing.generation.wrapping_add(1);
         }
         tracing::debug!(
             mailbox_id = mailbox.as_str(),
@@ -1063,6 +1120,7 @@ impl JmapStore {
             && let Some(listing) = write(folders).as_mut()
         {
             Arc::make_mut(&mut listing.tree).insert(created.clone());
+            listing.generation = listing.generation.wrapping_add(1);
         }
         tracing::debug!(folder_id = created.id.as_str(), name, "created mail folder");
         Ok(created)
@@ -1100,6 +1158,7 @@ impl JmapStore {
             && let Some(listing) = write(folders).as_mut()
         {
             Arc::make_mut(&mut listing.tree).remove(mailbox);
+            listing.generation = listing.generation.wrapping_add(1);
         }
         tracing::debug!(mailbox_id = mailbox.as_str(), "deleted mail folder");
         Ok(())
@@ -1167,7 +1226,8 @@ impl JmapStore {
             let listing = folders.as_mut()?;
             let tree = Arc::make_mut(&mut listing.tree);
             tree.rename(&folder.id, &path, name);
-            tree.find(&path).cloned()
+            listing.generation = listing.generation.wrapping_add(1);
+            listing.tree.find(&path).cloned()
         });
 
         let result = renamed.unwrap_or_else(|| FolderInfo {
