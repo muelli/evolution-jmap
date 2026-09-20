@@ -55,6 +55,26 @@
 //! per message and there is no transaction over the set — and the rows of those
 //! messages are removed from this folder, so what the user sees matches what the
 //! server holds.
+//!
+//! ## The one folder-mutating vfunc Camel does not lock for us
+//!
+//! `camel_folder_refresh_info_sync`, `_synchronize_sync` and `_expunge_sync`
+//! each take `camel_folder_lock` on the folder for the whole of the vfunc
+//! call — checked directly against evolution-data-server 3.52.3's
+//! `camel-folder.c`, not assumed from the header — so on any one folder, a
+//! refresh, a synchronisation and an expunge are already mutually exclusive.
+//! `camel_folder_transfer_messages_to_sync`'s own wrapper does not: it only
+//! locks the *destination* on the cross-store path this vfunc is never
+//! reached for (that one goes through `append_message_sync` instead), and
+//! takes nothing on the source before dispatching here.
+//!
+//! Without a lock of its own, this vfunc's `camel_folder_summary_remove_uid`
+//! below can land in the same window as an unrelated refresh's own
+//! reconciliation of the *source* folder's summary — a listing the refresh
+//! asked for before this transfer's `Email/set` moved the message away
+//! still, truthfully, named it, and applying that listing after this
+//! function's removal writes the row straight back. [`FolderLock`] closes
+//! that window the way the other three vfuncs' own wrappers already do.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
@@ -62,7 +82,8 @@ use std::ptr;
 
 use eds_sys::{
     CamelFolder, CamelFolderClass, CamelFolderSummary, camel_folder_changed,
-    camel_folder_get_folder_summary, camel_folder_get_full_name, camel_folder_summary_remove_uid,
+    camel_folder_get_folder_summary, camel_folder_get_full_name, camel_folder_lock,
+    camel_folder_summary_remove_uid, camel_folder_unlock,
 };
 use gio_sys::GCancellable;
 use glib_sys::{
@@ -122,6 +143,11 @@ unsafe extern "C" fn transfer_messages_to_sync(
     // uids of the first, and out-parameters that are NULL or writable.
     unsafe {
         guard_bool("transfer_messages_to_sync", error, || {
+            // SAFETY: `source` is a live `CamelFolder`, by this function's
+            // contract — held for the rest of the call, for the reason this
+            // module's docs give.
+            let _lock = FolderLock::acquire(source);
+
             // SAFETY: Camel keeps its cancellable alive for the length of the
             // call, so it outlives this observation — which is what makes
             // every request below here stop when the user presses Stop.
@@ -210,6 +236,39 @@ unsafe extern "C" fn transfer_messages_to_sync(
                 None => GTRUE,
             }
         })
+    }
+}
+
+/// `camel_folder_lock`, released on drop — see this module's docs for why
+/// `transfer_messages_to_sync` has to take it explicitly rather than
+/// inheriting it from Camel's own wrapper the way the other folder-mutating
+/// vfuncs do.
+///
+/// A plain RAII guard rather than a lock taken and dropped by hand: the
+/// function it guards has several early returns (a bad destination, a
+/// missing summary, a move into the mailbox the messages are already in),
+/// and a lock released on only one of those paths is a lock a later bug
+/// leaves held forever.
+struct FolderLock(*mut CamelFolder);
+
+impl FolderLock {
+    /// # Safety
+    ///
+    /// `folder` must be NULL or point at a live `CamelFolder`, kept alive for
+    /// as long as the returned value is.
+    unsafe fn acquire(folder: *mut CamelFolder) -> Self {
+        // SAFETY: the contract above.
+        unsafe { camel_folder_lock(folder) };
+        Self(folder)
+    }
+}
+
+impl Drop for FolderLock {
+    fn drop(&mut self) {
+        // SAFETY: the folder locked in `acquire`, by this type's own
+        // contract, still live — nothing below this vfunc's call frame
+        // released it.
+        unsafe { camel_folder_unlock(self.0) };
     }
 }
 

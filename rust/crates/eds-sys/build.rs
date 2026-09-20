@@ -483,6 +483,15 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // asking any provider. A test that reached past it would be testing a call
     // Evolution cannot make.
     "camel_folder_transfer_messages_to_sync",
+    // What the three wrappers above take around their vfunc dispatch and
+    // `camel_folder_transfer_messages_to_sync`'s own does not (checked
+    // against evolution-data-server 3.52.3's camel-folder.c directly, not
+    // assumed from the header): a per-folder recursive lock. This provider's
+    // `transfer_messages_to_sync` therefore takes it itself, the way any
+    // provider must that touches a summary a concurrent refresh, synchronise
+    // or expunge on the same folder could otherwise reconcile out from under
+    // it.
+    "camel_folder_(lock|unlock)",
     // The wrapper around the vfunc that hands one message over, for the same
     // reason: a test calls it the way Evolution's preview pane does.
     "camel_folder_get_message_sync",
