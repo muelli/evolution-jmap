@@ -235,3 +235,49 @@ file and line it names; `grep -rn 'infra/'` across the whole repository;
 and a read of every `item 33(d)` commit's `--stat` plus a sample of the
 larger diffs. `ci/checks.sh` and `cmake/` had no hits from any grep in this
 pass.
+
+## 2026-09-21 — re-audit, scoped to this lane's turf
+
+By 2026-09-21 the three-lane split (ROADMAP.md's "Home turf" note,
+2026-09-19) means no single session can safely edit comments across all of
+`rust/crates/**` any more, so this round covers only the crates this lane
+owns: `jmap-*-sync`, `jmap-backend-collection`, `jmap-config`, `jmap-mail`.
+Diffed the delta since the 2026-09-01 base commit (`77cb95b9`, 353 commits,
+312 touching `rust/`) rather than re-reading unmoved code the two prior
+passes already cleared.
+
+### Found
+
+Nothing. The same grep list as both prior passes (TODO/FIXME/XXX, "not yet
+implemented/written/done/proven/supported", "unwritten", "once/when M\d+
+lands", "has yet to", "next increment", "placeholder", "currently", "for
+now", "temporary", file:line citations, bare `M\d+` references), run against
+every file this lane touched since the base commit, turned up only known-fine
+patterns: Camel's own summary-dirty "not yet written back" terminology
+(`jmap-mail/src/synchronize.rs`), the keyfile absent-vs-empty "unwritten"
+sense (`jmap-backend-collection/src/lib.rs`, `prepare_mail.rs`), a citation
+of IMAPX's own upstream `/* FIXME: obey other flags */` comment
+(`jmap-mail/src/folders.rs:44`, not this project's TODO), `SAFETY:` comments'
+"writable and currently NULL" (a per-call out-parameter invariant, not a
+project-status claim), and `config_lookup.rs`'s "next increment... since
+landed" (already correctly worded, past tense). `M1`/`M2`/`M1001`/`M2001`
+hits in `jmap-mail/tests/{cache,folders,summary}.rs` are literal test-fixture
+message UIDs, not milestone references. `jmap-backend-collection/src/
+source_changed.rs`'s doc (added this lane, item 66) was read in full against
+the `login_fingerprint`/`allow_rename` fix it describes and is accurate.
+
+No calcard version references were touched or added in this lane's turf in
+the delta (`jmap-vcard`/`jmap-ical`, where calcard version comments do live,
+are outside this lane's turf).
+
+### Method
+
+Same grep list as the 2026-08-19 and 2026-09-01 passes, run with
+`git diff --name-only 77cb95b9..HEAD -- rust/` first to scope every grep to
+this lane's changed files only, rather than the whole tree. No file:line
+citations were added in scope this round, so that sweep had nothing to
+check. Fixed nothing; nothing high- or medium-confidence found. A future
+pass here should keep the same turf scope and re-run from whatever base
+commit this file's git history shows last, rather than re-reading files
+outside this lane's ownership or files this lane's own history already
+cleared.
