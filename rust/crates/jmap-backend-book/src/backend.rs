@@ -38,24 +38,25 @@ use std::ffi::CStr;
 use std::sync::{Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
-    E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBookMetaBackend, EBookMetaBackendClass,
+    E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBackend, EBookMetaBackend, EBookMetaBackendClass,
     EConflictResolution, EContact, ENamedParameters, ESourceAuthenticationResult,
     GTlsCertificateFlags, e_backend_get_source, e_book_backend_set_writable,
     e_book_meta_backend_get_type, e_book_meta_backend_schedule_refresh, e_client_error_create,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar, guint32};
+use glib_sys::{GError, GFALSE, GSList, GTRUE, GType, gboolean, gchar, guint16, guint32};
 use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::{cstring_lossy, set_raw_gerror};
 use jmap_backend_core::instance::Slot;
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
+use jmap_backend_core::marshal::dup_string;
 use jmap_backend_core::oauth2::{access_token, source_uses_oauth2};
 use jmap_backend_core::push::{self, PushRefresh};
 use jmap_backend_core::retry::retry_on_authentication_failure;
-use jmap_backend_core::source::backend_source;
+use jmap_backend_core::source::{backend_source, destination_address};
 use jmap_backend_core::subclass::{self, ObjectSubclass};
-use jmap_backend_core::trampoline::guard_bool;
+use jmap_backend_core::trampoline::{guard, guard_bool};
 use jmap_book_sync::BookSync;
 use jmap_client::Credentials;
 
@@ -233,6 +234,18 @@ unsafe impl ObjectSubclass for JmapBookBackend {
         vfuncs.load_contact_sync = Some(load_contact_sync);
         vfuncs.save_contact_sync = Some(save_contact_sync);
         vfuncs.remove_contact_sync = Some(remove_contact_sync);
+        // Three levels up: `EBookMetaBackendClass` -> `EBookBackendSyncClass`
+        // -> `EBookBackendClass` -> `EBackendClass`. EDS's own default reads
+        // the backend's "connectable" property via `e_backend_ref_connectable`,
+        // which nothing in this crate ever sets, so leaving it inherited means
+        // EDS's host-specific reachability monitor sees only generic
+        // network-up/down for a JMAP account. The override reads the host
+        // directly from `[Authentication]` instead.
+        vfuncs
+            .parent_class
+            .parent_class
+            .parent_class
+            .get_destination_address = Some(get_destination_address);
     }
 
     unsafe fn instance_init(instance: *mut Self::Instance) {
@@ -756,4 +769,56 @@ fn write(session: &RwLock<Option<BookSync>>) -> RwLockWriteGuard<'_, Option<Book
 
 fn lock(push: &Mutex<Option<PushRefresh>>) -> MutexGuard<'_, Option<PushRefresh>> {
     push.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// What EDS calls to learn which host to watch for this account's own
+/// reachability, separately from generic network-up/down. Used by
+/// `e_backend_is_destination_reachable` and by EDS's periodic reachability
+/// monitor, neither of which this crate calls directly.
+///
+/// The decision is [`jmap_backend_core::source::destination_address`]'s; what
+/// is here is the account source the vfunc is not handed and the two
+/// out-parameters, which is EDS's own convention for "answer, or say you
+/// cannot" rather than a `GError`. Mirrors the identical implementation in
+/// `jmap-backend-collection` and the gap noted in Surface 6 of
+/// `docs/EWS-PARITY.md`.
+///
+/// A panic becomes `FALSE` with both out-parameters untouched, which is
+/// [`guard`]'s ordinary "answer nothing" fallback and the same honest
+/// non-answer a backend with no account source gets on the path that does not
+/// panic.
+unsafe extern "C" fn get_destination_address(
+    backend: *mut EBackend,
+    host: *mut *mut gchar,
+    port: *mut guint16,
+) -> gboolean {
+    guard("get_destination_address", GFALSE, || {
+        // `(transfer none)`, and NULL only for a backend EDS did not
+        // construct from a source.
+        // SAFETY: EDS hands us one of its own backends, alive for the call.
+        let source = unsafe { e_backend_get_source(backend) };
+        if source.is_null() {
+            return GFALSE;
+        }
+
+        // SAFETY: a valid account source, only read from, alive for the call.
+        let Some((address_host, address_port)) = (unsafe { destination_address(source) }) else {
+            return GFALSE;
+        };
+
+        tracing::debug!(
+            host = address_host.as_str(),
+            port = address_port,
+            "resolved destination address for address book backend"
+        );
+
+        // SAFETY: `host`/`port` are the vfunc's own out-parameters, written
+        // only on this success path; ownership of the duplicated string
+        // passes to EDS, which frees it with `g_free`.
+        unsafe {
+            *host = dup_string(&address_host);
+            *port = address_port;
+        }
+        GTRUE
+    })
 }

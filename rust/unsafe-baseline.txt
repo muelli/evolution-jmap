@@ -9,7 +9,7 @@
 eds-sys 24
 evo-sys 0
 example-module 64
-jmap-backend-book 87
+jmap-backend-book 91
 jmap-backend-book-module 4
 jmap-backend-cal 131
 jmap-backend-cal-module 4
