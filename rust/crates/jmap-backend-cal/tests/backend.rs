@@ -24,16 +24,18 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use eds_sys::{
-    E_CAL_OPERATION_FLAG_NONE, E_CLIENT_ERROR_REPOSITORY_OFFLINE, ECalBackendSyncClass,
-    ECalMetaBackend, ECalMetaBackendClass, ECalMetaBackendInfo, ICalComponent,
-    e_cal_meta_backend_get_type, e_cal_meta_backend_info_free, e_client_error_quark,
+    E_CAL_OPERATION_FLAG_NONE, E_CLIENT_ERROR_REPOSITORY_OFFLINE, EBackendClass,
+    ECalBackendSyncClass, ECalMetaBackend, ECalMetaBackendClass, ECalMetaBackendInfo,
+    ICalComponent, e_backend_get_type, e_cal_meta_backend_get_type, e_cal_meta_backend_info_free,
+    e_client_error_quark,
 };
 use glib_sys::{
     GError, GFALSE, GSList, GTRUE, g_error_free, g_free, g_slist_free_full, g_slist_length,
     g_slist_nth_data, gchar,
 };
 use gobject_sys::{
-    GTypeQuery, g_type_class_ref, g_type_class_unref, g_type_name, g_type_parent, g_type_query,
+    GTypeQuery, g_type_class_peek, g_type_class_ref, g_type_class_unref, g_type_name,
+    g_type_parent, g_type_query,
 };
 use jmap_backend_cal::backend::{JmapCalBackend, JmapCalBackendClass, parent_class};
 use jmap_backend_cal::marshal;
@@ -71,6 +73,14 @@ impl Class {
     /// in like any other subclass would.
     fn sync_vfuncs(&self) -> &ECalBackendSyncClass {
         &self.vfuncs().parent_class
+    }
+
+    /// The `EBackendClass` half, three levels up:
+    /// `ECalMetaBackendClass` -> `ECalBackendSyncClass` -> `ECalBackendClass`
+    /// -> `EBackendClass`. This is where `get_destination_address` lives, and
+    /// where `class_init` must write it to be reachable by EDS.
+    fn backend_vfuncs(&self) -> &EBackendClass {
+        &self.vfuncs().parent_class.parent_class.parent_class
     }
 }
 
@@ -666,4 +676,51 @@ fn refresh_push_headers_lets_a_stalled_subscription_reconnect() {
     )]);
 
     server.wait_for_event_source_subscriber(Duration::from_secs(5));
+}
+
+// ---------------------------------------------------------------------------
+// get_destination_address
+
+/// The `EBackendClass` EDS installed its own defaults into. `get_destination_address`
+/// is one of them: it reads the backend's "connectable" property via
+/// `e_backend_ref_connectable`, which nothing in this crate ever sets, so the
+/// inherited default always answers `FALSE`. That leaves EDS's host-specific
+/// reachability monitor seeing only generic network-up/down for a JMAP account
+/// rather than this account's actual host.
+fn e_backend_class() -> *mut EBackendClass {
+    // SAFETY: `e_backend_get_type()` is valid to call, and `g_type_class_peek`
+    // is safe for any type whose class is already initialised (which any type
+    // that has a registered subclass guarantees).
+    unsafe { g_type_class_peek(e_backend_get_type()) }.cast()
+}
+
+/// A vfunc that is installed but not overriding the parent's default is the
+/// silent wrong-answer case. `EBackendClass::get_destination_address` is the
+/// one here: left at EDS's own default it always answers `FALSE` because nothing
+/// in this crate ever sets the "connectable" property it reads, so EDS's
+/// host-specific reachability monitor sees only generic network-up/down for a
+/// JMAP account. The fix is overriding the slot. This test verifies that
+/// override is in place; it fails until `class_init` writes it.
+#[test]
+fn class_init_replaces_the_default_get_destination_address_rather_than_leaving_it() {
+    let class = Class::get();
+    let parent = e_backend_class();
+    assert!(
+        !parent.is_null(),
+        "the grandparent class was not referenced"
+    );
+
+    let ours = class
+        .backend_vfuncs()
+        .get_destination_address
+        .expect("class_init installed no get_destination_address");
+    // SAFETY: a live class struct.
+    let inherited = unsafe { (*parent).get_destination_address }
+        .expect("EDS installs a default that reads the connectable property");
+
+    assert!(
+        ours as usize != inherited as usize,
+        "the slot still holds EDS's default, which never sees a host this crate never sets \
+         as the backend's connectable"
+    );
 }
