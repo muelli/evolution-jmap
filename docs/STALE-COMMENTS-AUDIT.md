@@ -238,7 +238,7 @@ pass.
 
 ## 2026-09-21 — re-audit, scoped to this lane's turf
 
-By 2026-09-21 the three-lane split (ROADMAP.md's "Home turf" note,
+By 2026-09-21 the three-lane split (the queue's "Home turf" note,
 2026-09-19) means no single session can safely edit comments across all of
 `rust/crates/**` any more, so this round covers only the crates this lane
 owns: `jmap-*-sync`, `jmap-backend-collection`, `jmap-config`, `jmap-mail`.
