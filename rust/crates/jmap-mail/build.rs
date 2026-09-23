@@ -30,6 +30,9 @@ const FEATURES: &[&str] = &[
     // Whether `CamelFolderSearch` still exists as an object a folder can
     // delegate its search vfuncs to — `crate::folder`.
     "camel_folder_search_object",
+    // Whether `CamelFolderClass` has the 3.58 slot for answering a body term
+    // from the server — `crate::search_body`.
+    "camel_folder_search_body_sync",
     // Whether the summary database's row structs are still called
     // `CamelMIRecord`/`CamelFIRecord`, which also settles the shape of
     // `summary_header_save` — `crate::summary`, `crate::message_info`.

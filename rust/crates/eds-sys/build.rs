@@ -741,6 +741,16 @@ const EDS_FEATURES: &[(&str, &str)] = &[
     // favour of a `CamelStoreSearch` API. Only `camel_folder_search_sync` and
     // its two siblings survive, on `CamelFolder` itself.
     ("camel_folder_search_object", "camel_folder_search_new"),
+    // 3.58 added `CamelFolderClass`'s `search_body_sync` and
+    // `search_header_sync`, the two slots a provider fills to answer a body or
+    // header term from the server instead of leaving `CamelStoreSearch` to
+    // open every message. A probe of its own rather than the negation of the
+    // one above: 3.58 and 3.59 have both, since `CamelFolderSearch` did not go
+    // until 3.60, so neither answer implies the other.
+    (
+        "camel_folder_search_body_sync",
+        "camel_folder_search_body_sync",
+    ),
     // 3.60 made the summary database's row structs private: `CamelMIRecord`
     // (a message) and `CamelFIRecord` (the folder header beside them), which
     // is where a provider keeps the one column Camel reserves for it.

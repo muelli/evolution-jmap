@@ -290,6 +290,18 @@ unsafe impl ObjectSubclass for JmapFolder {
             folder_class.search_by_expression = Some(search_by_expression);
             folder_class.search_by_uids = Some(search_by_uids);
         }
+
+        // The one search slot a newer EDS *adds* rather than takes away, and
+        // the one thing its own `CamelStoreSearch` implementation cannot do
+        // out of the store's database: match a body this provider never
+        // downloaded. See `crate::search_body` for what it costs when it is
+        // left NULL.
+        //
+        // SAFETY: as above.
+        #[cfg(camel_folder_search_body_sync)]
+        unsafe {
+            crate::search_body::install_vfuncs(class.cast::<CamelFolderClass>())
+        };
     }
 
     // No `instance_init`, unlike the store's: there is nothing to fill in yet.
@@ -363,7 +375,7 @@ unsafe extern "C" fn search_by_uids(
             let _cancel = observe(cancellable);
             // SAFETY: `uids` is NULL or a live `GPtrArray` of NUL-terminated
             // strings, by the contract of the vfunc this backs.
-            let restrict = (!uids.is_null()).then(|| uid_strings(uids));
+            let restrict = (!uids.is_null()).then(|| string_array(uids));
             match server_matches(folder, expression, restrict.as_deref()) {
                 Some(Ok(matched)) => pstring_uid_array(&matched),
                 Some(Err(failure)) => fail(error, &failure, StoreError::to_gerror),
@@ -494,13 +506,13 @@ fn narrow(matches: impl Iterator<Item = String>, restrict: &[String]) -> Vec<Str
         .collect()
 }
 
-/// The uids of a `GPtrArray` Camel handed over, copied out as strings.
+/// The strings of a `GPtrArray` Camel handed over, copied out: a uid list for
+/// the search vfuncs below, a word list for [`crate::search_body`].
 ///
 /// # Safety
 ///
 /// `array` must be a live `GPtrArray` of NUL-terminated strings.
-#[cfg(camel_folder_search_object)]
-unsafe fn uid_strings(array: *mut glib_sys::GPtrArray) -> Vec<String> {
+pub(crate) unsafe fn string_array(array: *mut glib_sys::GPtrArray) -> Vec<String> {
     // SAFETY: the contract above; every element lives at least as long as
     // the array, which outlives this call.
     unsafe {

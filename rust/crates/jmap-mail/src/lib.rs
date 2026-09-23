@@ -167,6 +167,7 @@ pub mod push;
 pub mod quota;
 pub mod refresh;
 pub mod sasl;
+pub mod search_body;
 pub mod search_sexp;
 pub mod send;
 pub mod server;
