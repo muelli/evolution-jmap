@@ -30,7 +30,7 @@
 
 mod common;
 
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::ptr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,15 +40,16 @@ use eds_sys::{
     CAMEL_FOLDER_HAS_SUMMARY_CAPABILITY, CAMEL_SERVICE_ERROR_NOT_CONNECTED,
     CAMEL_STORE_ERROR_NO_FOLDER, CAMEL_STORE_FOLDER_INFO_RECURSIVE,
     CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_FOLDER_INFO_SUBSCRIBED,
-    CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST, CAMEL_STORE_FOLDER_NONE, CamelFolder,
-    CamelFolderInfo, CamelStore, CamelStoreClass, camel_folder_get_flags,
-    camel_folder_get_full_name, camel_folder_info_free, camel_offline_store_get_type,
-    camel_service_error_quark, camel_store_can_refresh_folder, camel_store_error_quark,
-    camel_store_get_folder_info_sync, camel_store_get_folder_sync,
-    camel_store_get_inbox_folder_sync, camel_store_get_junk_folder_sync,
-    camel_store_get_trash_folder_sync,
+    CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST, CAMEL_STORE_FOLDER_NONE,
+    CAMEL_STORE_SETUP_DRAFTS_FOLDER, CAMEL_STORE_SETUP_SENT_FOLDER, CamelFolder, CamelFolderInfo,
+    CamelStore, CamelStoreClass, GHashTable, camel_folder_get_flags, camel_folder_get_full_name,
+    camel_folder_info_free, camel_offline_store_get_type, camel_service_error_quark,
+    camel_store_can_refresh_folder, camel_store_error_quark, camel_store_get_folder_info_sync,
+    camel_store_get_folder_sync, camel_store_get_inbox_folder_sync,
+    camel_store_get_junk_folder_sync, camel_store_get_trash_folder_sync,
+    camel_store_initial_setup_sync,
 };
-use glib_sys::{GError, GFALSE};
+use glib_sys::{GError, GFALSE, GTRUE, g_hash_table_destroy, g_hash_table_lookup, gboolean};
 use gobject_sys::{g_object_unref, g_type_class_peek, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
 use jmap_mail::connect::StoreError;
@@ -1728,6 +1729,166 @@ fn the_listing_offers_no_virtual_trash_or_junk_beside_the_accounts_own() {
         ],
         "the listing gained a folder the account does not have"
     );
+}
+
+// ---------------------------------------------------------------------------
+// initial_setup_sync: what the account wizard learns about Sent and Drafts
+
+/// An account whose Sent and Drafts are named and placed the way a real
+/// server is free to: nested, in the user's own language, with decoys
+/// carrying no role at the top level.
+fn with_sent_and_drafts() -> (MockServer, Account, Id, Id) {
+    let server = MockServer::builder().start();
+    let (sent, drafts) = edit(&server, |account| {
+        account.seed_mailbox("Inbox", Some(role::INBOX));
+        account.seed_mailbox("Sent", None);
+        account.seed_mailbox("Drafts", None);
+        let system = account.seed_mailbox("System", None);
+        (
+            account.seed_child_mailbox("Gesendet", Some(role::SENT), &system),
+            account.seed_child_mailbox("Entwuerfe", Some(role::DRAFTS), &system),
+        )
+    });
+    let account = Account::open();
+    account.connect(sync_against(&server));
+    (server, account, sent, drafts)
+}
+
+/// One `initial_setup_sync` call and its answer, owned the way Camel owns it.
+struct Setup {
+    save: *mut GHashTable,
+    error: *mut GError,
+    ok: gboolean,
+}
+
+impl Setup {
+    /// Through the public wrapper, which is how Evolution's account wizard
+    /// asks — and which creates the hash table the vfunc inserts into.
+    fn run(store: *mut CamelStore) -> Self {
+        let mut save: *mut GHashTable = ptr::null_mut();
+        let mut error: *mut GError = ptr::null_mut();
+        // SAFETY: `store` is a live store of ours or NULL, and both
+        // out-parameters are writable and currently NULL.
+        let ok = unsafe {
+            camel_store_initial_setup_sync(store, &mut save, ptr::null_mut(), &mut error)
+        };
+        Self { save, error, ok }
+    }
+
+    fn get(&self, key: &CStr) -> Option<String> {
+        if self.save.is_null() {
+            return None;
+        }
+        // SAFETY: `save` is a live table for the length of this call, and a
+        // non-NULL answer is a NUL-terminated string it owns.
+        unsafe {
+            let value = g_hash_table_lookup(self.save, key.as_ptr().cast());
+            (!value.is_null()).then(|| CStr::from_ptr(value.cast()).to_string_lossy().into_owned())
+        }
+    }
+}
+
+impl Drop for Setup {
+    fn drop(&mut self) {
+        // SAFETY: `save`, if not NULL, is the table the wrapper transferred
+        // ownership of; `error`, if not NULL, is ours to free.
+        unsafe {
+            if !self.save.is_null() {
+                g_hash_table_destroy(self.save);
+            }
+            if !self.error.is_null() {
+                glib_sys::g_error_free(self.error);
+            }
+        }
+    }
+}
+
+/// The account wizard learns both roles' Camel paths, keyed the way
+/// `e_mail_store_save_initial_setup_sync` reads them — a `sent-folder` and a
+/// `drafts-folder` key, each carrying the path rather than the display name.
+#[test]
+fn initial_setup_reports_sent_and_drafts_by_role() {
+    let (_server, account, _, _) = with_sent_and_drafts();
+
+    let setup = Setup::run(account.store);
+
+    assert_eq!(setup.ok, GTRUE, "initial setup failed");
+    assert!(setup.error.is_null(), "initial setup set an error");
+    assert_eq!(
+        setup.get(CAMEL_STORE_SETUP_SENT_FOLDER),
+        Some("System/Gesendet".to_owned())
+    );
+    assert_eq!(
+        setup.get(CAMEL_STORE_SETUP_DRAFTS_FOLDER),
+        Some("System/Entwuerfe".to_owned())
+    );
+}
+
+/// An account whose server assigns neither role — legal, like the role-less
+/// inbox elsewhere in this file — and answered the way the vfunc's own
+/// contract states: succeed, with nothing to save.
+#[test]
+fn initial_setup_reports_nothing_for_roles_nobody_claims() {
+    let server = MockServer::builder().start();
+    edit(&server, |account| {
+        account.seed_mailbox("Inbox", Some(role::INBOX))
+    });
+    let account = Account::open();
+    account.connect(sync_against(&server));
+
+    let setup = Setup::run(account.store);
+
+    assert_eq!(setup.ok, GTRUE, "initial setup failed");
+    assert!(setup.error.is_null(), "initial setup set an error");
+    assert!(
+        setup.save.is_null(),
+        "something saved for roles nobody claims"
+    );
+}
+
+/// The other failure, told apart from the one above by the error: a store
+/// that never connected has no tree to read a role out of at all.
+#[test]
+fn a_disconnected_store_has_nothing_to_set_up() {
+    let account = Account::open();
+
+    let setup = Setup::run(account.store);
+
+    assert_eq!(setup.ok, GFALSE, "a disconnected store set anything up");
+    assert!(!setup.error.is_null(), "no reason given");
+    // SAFETY: the error is the one the vfunc set, checked non-NULL above.
+    unsafe {
+        assert_eq!((*setup.error).domain, camel_service_error_quark());
+        assert_eq!(
+            (*setup.error).code,
+            CAMEL_SERVICE_ERROR_NOT_CONNECTED as i32
+        );
+    }
+}
+
+/// And the same guard as every other vfunc here, reached through the class
+/// because the wrapper asserts `CAMEL_IS_STORE`.
+#[test]
+fn a_null_store_has_nothing_to_set_up_either() {
+    // SAFETY: referencing the class installs the vfunc; NULL is exactly the
+    // instance pointer under test, and `error` is writable and NULL. The
+    // vfunc is called directly, bypassing the wrapper that would otherwise
+    // refuse a NULL store before ever reaching it.
+    unsafe {
+        let class = g_type_class_ref(store_type()).cast::<CamelStoreClass>();
+        let vfunc = (*class).initial_setup_sync.expect("the vfunc");
+        let mut error: *mut GError = ptr::null_mut();
+        let ok = vfunc(
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut error,
+        );
+        assert_eq!(ok, GFALSE);
+        assert!(!error.is_null(), "no reason given");
+        glib_sys::g_error_free(error);
+        g_type_class_unref(class.cast());
+    }
 }
 
 // ---------------------------------------------------------------------------

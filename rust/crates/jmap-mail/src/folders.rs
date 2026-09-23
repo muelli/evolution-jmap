@@ -4,9 +4,11 @@
 //! The `CamelStore` folder vfuncs: `get_folder_info_sync`, which describes the
 //! account's folders, `get_folder_sync`, which opens one of them by path, and
 //! the three — `get_inbox_folder_sync`, `get_trash_folder_sync`,
-//! `get_junk_folder_sync` — that open one by purpose. And `can_refresh_folder`,
+//! `get_junk_folder_sync` — that open one by purpose. `can_refresh_folder`,
 //! which is a question about a folder of that listing rather than one asked of
-//! the listing at all.
+//! the listing at all. And `initial_setup_sync`, which reports two of the same
+//! purposes — Sent and Drafts — back to Evolution's account wizard instead of
+//! opening them.
 //!
 //! The first five are one module because they are one question asked five ways:
 //! all five read the folder listing [`JmapStore::folders`] keeps, and the last
@@ -71,25 +73,45 @@
 //! from a walk over a forest it already has, and a slot documented as
 //! non-blocking that went to the server would turn one Send / Receive into a
 //! round trip per folder.
+//!
+//! ## The seventh vfunc, asked once and answered from the same tree
+//!
+//! [`initial_setup_sync`] is what Evolution's account wizard calls right after
+//! a fresh account's first successful connect, and only then — gated on
+//! `CAMEL_STORE_SUPPORTS_INITIAL_SETUP`, which [`crate::store`]'s
+//! `instance_init` sets alongside the vfunc pointer this module installs for
+//! it. What it hands back is not a folder but two entries of a `GHashTable`
+//! Evolution saves onto the account's own sources: `CAMEL_STORE_SETUP_SENT_FOLDER`
+//! and `CAMEL_STORE_SETUP_DRAFTS_FOLDER`, each a Camel path the wizard turns
+//! into a folder URI. RFC 8621 §2 gives `sent` and `drafts` mailboxes a `role`
+//! the same way it gives one to `inbox`, `trash` and `junk`, and the same tree
+//! [`open_by_role`] reads for those three is what is read here — the
+//! difference is what is done with the role once found, a string handed to
+//! Evolution rather than a folder handed to Camel. An account whose server
+//! assigns neither role saves nothing, which is the documented contract:
+//! "The function should return TRUE even if it didn't populate anything."
 
 use std::borrow::Cow;
+use std::ffi::CStr;
 use std::ptr;
 use std::sync::Arc;
 
 use eds_sys::{
     CAMEL_FOLDER_SUBSCRIBED, CAMEL_FOLDER_TYPE_INBOX, CAMEL_FOLDER_TYPE_MASK,
     CAMEL_STORE_FOLDER_INFO_RECURSIVE, CAMEL_STORE_FOLDER_INFO_REFRESH,
-    CAMEL_STORE_FOLDER_INFO_SUBSCRIBED, CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST, CamelFolder,
-    CamelFolderInfo, CamelFolderInfoFlags, CamelStore, CamelStoreClass, CamelStoreGetFolderFlags,
-    CamelStoreGetFolderInfoFlags, camel_folder_get_folder_summary, camel_store_get_folder_sync,
+    CAMEL_STORE_FOLDER_INFO_SUBSCRIBED, CAMEL_STORE_FOLDER_INFO_SUBSCRIPTION_LIST,
+    CAMEL_STORE_SETUP_DRAFTS_FOLDER, CAMEL_STORE_SETUP_SENT_FOLDER, CamelFolder, CamelFolderInfo,
+    CamelFolderInfoFlags, CamelStore, CamelStoreClass, CamelStoreGetFolderFlags,
+    CamelStoreGetFolderInfoFlags, GHashTable, camel_folder_get_folder_summary,
+    camel_store_get_folder_sync, g_hash_table_insert,
 };
 use gio_sys::GCancellable;
-use glib_sys::{GError, GFALSE, GTRUE, gboolean, gchar};
+use glib_sys::{GError, GFALSE, GTRUE, g_strdup, gboolean, gchar};
 use jmap_backend_core::cancel::observe;
-use jmap_backend_core::error::fail;
+use jmap_backend_core::error::{fail, fail_bool};
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::owned::Owned;
-use jmap_backend_core::trampoline::{guard, guard_ptr};
+use jmap_backend_core::trampoline::{guard, guard_bool, guard_ptr};
 use jmap_mail_sync::{FolderInfo, FolderRole, FolderTree};
 
 use crate::connect::StoreError;
@@ -282,6 +304,7 @@ pub unsafe fn install_vfuncs(class: *mut CamelStoreClass) {
     vfuncs.get_inbox_folder_sync = Some(get_inbox_folder_sync);
     vfuncs.get_trash_folder_sync = Some(get_trash_folder_sync);
     vfuncs.get_junk_folder_sync = Some(get_junk_folder_sync);
+    vfuncs.initial_setup_sync = Some(initial_setup_sync);
 }
 
 /// Whether Evolution should check this folder for new mail of its own accord:
@@ -574,6 +597,83 @@ unsafe extern "C" fn get_junk_folder_sync(
         guard_ptr("get_junk_folder_sync", error, || {
             open_by_role(store, FolderRole::Junk, cancellable, error)
         })
+    }
+}
+
+/// Reports the account's Sent and Drafts mailboxes to the account wizard:
+/// `camel_store_initial_setup_sync`'s vfunc.
+///
+/// Unlike the three above, nothing here is opened: `out_save_setup` is a
+/// `GHashTable` Camel's own wrapper already created (`g_str_hash`/`g_str_equal`
+/// keys, `g_free` as both destroy functions), and this fills it rather than
+/// building anything Camel keeps. `error` is only ever set through
+/// [`guard_bool`]'s catch of a genuine panic; a role nobody claims is not a
+/// failure here the way it is for [`open_by_role`] — the module doc states the
+/// contract this leans on.
+unsafe extern "C" fn initial_setup_sync(
+    store: *mut CamelStore,
+    out_save_setup: *mut GHashTable,
+    cancellable: *mut GCancellable,
+    error: *mut *mut GError,
+) -> gboolean {
+    // SAFETY: Camel's contract for the vfunc: a valid instance of ours, and a
+    // hash table it owns that is safe to insert into for the length of the
+    // call.
+    unsafe {
+        guard_bool("initial_setup_sync", error, || {
+            // SAFETY: as [`get_inbox_folder_sync`].
+            let _cancel = observe(cancellable);
+
+            let Some(instance) = JmapStore::borrow(store) else {
+                return fail_bool(error, &StoreError::Disconnected, StoreError::to_gerror);
+            };
+
+            let tree = match tree_holding(instance, |tree| {
+                tree.role(FolderRole::Sent).is_some() && tree.role(FolderRole::Drafts).is_some()
+            }) {
+                Ok(tree) => tree,
+                Err(failure) => return fail_bool(error, &failure, StoreError::to_gerror),
+            };
+
+            save_role(
+                out_save_setup,
+                &tree,
+                FolderRole::Sent,
+                CAMEL_STORE_SETUP_SENT_FOLDER,
+            );
+            save_role(
+                out_save_setup,
+                &tree,
+                FolderRole::Drafts,
+                CAMEL_STORE_SETUP_DRAFTS_FOLDER,
+            );
+
+            GTRUE
+        })
+    }
+}
+
+/// Inserts `role`'s Camel path into `out` under `key`, or nothing if no
+/// mailbox in `tree` claims that role.
+///
+/// # Safety
+///
+/// `out` must be a live `GHashTable` whose key and value destroy functions are
+/// both `g_free` — true of the table `camel_store_initial_setup_sync`'s own
+/// wrapper creates, which is the only caller.
+unsafe fn save_role(out: *mut GHashTable, tree: &FolderTree, role: FolderRole, key: &CStr) {
+    let Some(folder) = tree.role(role) else {
+        return;
+    };
+    let path = c_string(&folder.path);
+    // SAFETY: the contract above; both strings are freshly allocated for the
+    // table to own.
+    unsafe {
+        g_hash_table_insert(
+            out,
+            g_strdup(key.as_ptr()).cast(),
+            g_strdup(path.as_ptr()).cast(),
+        );
     }
 }
 

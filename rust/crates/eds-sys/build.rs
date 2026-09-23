@@ -669,6 +669,11 @@ const ALLOWED_VARS: &[&str] = &[
     "CAMEL_FOLDER_TYPE_BIT",
     "CAMEL_FOLDER_TYPE_MASK",
     "CAMEL_MAX_PREVIEW_LENGTH",
+    // The keys `initial_setup_sync` files a role's folder under in the
+    // `save_setup` hash table `camel_store_initial_setup_sync` hands the
+    // account wizard; a typo here is a folder the wizard silently never
+    // pre-fills, the same hazard as the libsecret keys above.
+    "CAMEL_STORE_SETUP_.*",
     "CAMEL_MIME_FILTER_LINEWRAP_.*",
     "CAMEL_MIME_FILTER_TOHTML_.*",
     "CAMEL_MIME_FILTER_CANON_.*",

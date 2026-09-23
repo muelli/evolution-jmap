@@ -25,11 +25,11 @@ use std::ptr;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use eds_sys::{
-    CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_VJUNK, CAMEL_STORE_VTRASH, CamelOfflineStore,
-    CamelOfflineStoreClass, CamelService, CamelServiceClass, CamelStore, CamelStoreClass,
-    CamelStoreGetFolderInfoFlags, camel_offline_store_get_type, camel_service_get_type,
-    camel_service_ref_session, camel_service_ref_settings, camel_store_get_flags,
-    camel_store_set_flags,
+    CAMEL_STORE_FOLDER_INFO_REFRESH, CAMEL_STORE_SUPPORTS_INITIAL_SETUP, CAMEL_STORE_VJUNK,
+    CAMEL_STORE_VTRASH, CamelOfflineStore, CamelOfflineStoreClass, CamelService, CamelServiceClass,
+    CamelStore, CamelStoreClass, CamelStoreGetFolderInfoFlags, camel_offline_store_get_type,
+    camel_service_get_type, camel_service_ref_session, camel_service_ref_settings,
+    camel_store_get_flags, camel_store_set_flags,
 };
 use glib_sys::GType;
 use gobject_sys::{GObject, g_type_check_instance_is_a};
@@ -1471,6 +1471,11 @@ unsafe impl ObjectSubclass for JmapStore {
         // shares. Cleared here rather than per account, because it is a fact
         // about the protocol and not a setting: RFC 8621 gives a mailbox a role.
         //
+        // `CAMEL_STORE_SUPPORTS_INITIAL_SETUP` is set alongside them, for the
+        // opposite reason: it advertises the vfunc [`crate::folders`] installs,
+        // and without it Evolution's account wizard never calls
+        // `initial_setup_sync` at all.
+        //
         // Every other bit is left exactly as Camel set it — `CAN_EDIT_FOLDERS`
         // in particular, which [`crate::manage`] earns.
         //
@@ -1479,7 +1484,8 @@ unsafe impl ObjectSubclass for JmapStore {
         // data exists, which is all either call touches.
         unsafe {
             let store = instance.cast::<CamelStore>();
-            let flags = camel_store_get_flags(store) & !(CAMEL_STORE_VTRASH | CAMEL_STORE_VJUNK);
+            let flags = (camel_store_get_flags(store) & !(CAMEL_STORE_VTRASH | CAMEL_STORE_VJUNK))
+                | CAMEL_STORE_SUPPORTS_INITIAL_SETUP;
             camel_store_set_flags(store, flags);
         };
     }

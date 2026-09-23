@@ -30,8 +30,8 @@
 //! word carrying `CAMEL_STORE_CAN_EDIT_FOLDERS`.
 
 use eds_sys::{
-    CAMEL_STORE_CAN_EDIT_FOLDERS, CAMEL_STORE_VJUNK, CAMEL_STORE_VTRASH, CamelStoreClass,
-    camel_offline_store_get_type, camel_store_get_flags,
+    CAMEL_STORE_CAN_EDIT_FOLDERS, CAMEL_STORE_SUPPORTS_INITIAL_SETUP, CAMEL_STORE_VJUNK,
+    CAMEL_STORE_VTRASH, CamelStoreClass, camel_offline_store_get_type, camel_store_get_flags,
 };
 use gobject_sys::{g_type_class_peek, g_type_class_ref, g_type_class_unref};
 use jmap_client::{Client, Credentials};
@@ -394,12 +394,15 @@ fn the_store_fills_the_rename_slot_too() {
 /// On a store Camel constructed, because flags are instance state: a detached
 /// store is not a `CamelStore` to ask.
 ///
-/// `VTRASH` and `VJUNK` are the two bits this provider *does* have a line
-/// about, and it is a line that clears them: `camel_store_init` asks Camel to
-/// build every account a virtual Trash and Junk out of the messages flagged as
-/// such, and a JMAP account's trash and junk are mailboxes its server gave a
-/// role to — see `crate::store`'s `instance_init` for the decision and
-/// `tests/folders.rs` for what the listing looks like either way.
+/// `VTRASH` and `VJUNK` are two of the three bits this provider *does* have a
+/// line about, and it is a line that clears them: `camel_store_init` asks
+/// Camel to build every account a virtual Trash and Junk out of the messages
+/// flagged as such, and a JMAP account's trash and junk are mailboxes its
+/// server gave a role to — see `crate::store`'s `instance_init` for the
+/// decision and `tests/folders.rs` for what the listing looks like either
+/// way. `SUPPORTS_INITIAL_SETUP` is the third, set rather than cleared: it is
+/// what `initial_setup_sync` is advertised behind, and `tests/folders.rs`
+/// covers what that vfunc answers.
 #[test]
 fn the_store_offers_folder_management() {
     let account = common::Account::open();
@@ -417,7 +420,8 @@ fn the_store_offers_folder_management() {
         "the store asks Camel for virtual trash and junk folders: flags {flags:#x}"
     );
     assert_eq!(
-        flags, CAMEL_STORE_CAN_EDIT_FOLDERS,
+        flags,
+        CAMEL_STORE_CAN_EDIT_FOLDERS | CAMEL_STORE_SUPPORTS_INITIAL_SETUP,
         "the store's flags are no longer Camel's defaults minus the virtual folders"
     );
 }
