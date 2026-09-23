@@ -590,6 +590,49 @@ fn refresh_push_headers_lets_a_stalled_subscription_reconnect() {
 }
 
 // ---------------------------------------------------------------------------
+// push subscription ordering on connect
+
+/// Starting push spawns a pump thread that can immediately receive a push
+/// and trigger `schedule_refresh`, reaching `get_changes_sync`. If push starts
+/// before the connection is installed into the session lock, that refresh
+/// finds no connection and reports the account offline for a change that
+/// already arrived. `install_connection` must install the connection into the
+/// session lock before invoking `start_push`.
+#[test]
+fn install_connection_installs_connection_before_starting_push() {
+    let fixture = Fixture::start();
+    let backend = Detached::new();
+    let mut order = Vec::new();
+
+    backend.0.install_connection(fixture.sync(), |_sync| {
+        if backend.0.is_connected() {
+            order.push("connected_before_push");
+        } else {
+            order.push("push_before_connected");
+        }
+        None
+    });
+
+    assert_eq!(order, vec!["connected_before_push"]);
+    assert!(backend.0.is_connected());
+}
+
+/// `install_connection` stores the push subscription returned by `start_push`.
+#[test]
+fn install_connection_stores_push_subscription() {
+    let fixture = Fixture::start();
+    let backend = Detached::new();
+    let sub = subscription(&fixture);
+
+    backend
+        .0
+        .install_connection(fixture.sync(), |_sync| Some(sub));
+
+    assert!(backend.0.is_connected());
+    assert!(backend.0.is_pushing());
+}
+
+// ---------------------------------------------------------------------------
 // get_destination_address
 
 /// The `EBackendClass` EDS installed its own defaults into. `get_destination_address`

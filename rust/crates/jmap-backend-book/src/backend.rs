@@ -112,6 +112,27 @@ impl JmapBookBackend {
         }
     }
 
+    /// Installs `sync` as the live connection and starts the push subscription
+    /// via `start_push`.
+    ///
+    /// The connection is installed before `start_push` runs: starting push
+    /// spawns a thread that can immediately trigger a refresh, and that
+    /// refresh needs to find the connection installed.
+    pub fn install_connection(
+        &self,
+        sync: BookSync,
+        start_push: impl FnOnce(&BookSync) -> Option<PushRefresh>,
+    ) {
+        self.store_connection(sync);
+        let push = self.session().and_then(|session| {
+            let guard = read(session);
+            guard.as_ref().and_then(start_push)
+        });
+        if let Some(push) = push {
+            self.store_push(push);
+        }
+    }
+
     /// Drops the connection, reporting whether there was one.
     pub fn drop_connection(&self) -> bool {
         match self.session() {
@@ -338,11 +359,7 @@ unsafe extern "C" fn connect_sync(
             // order has a window in which a pushed refresh reaches
             // `get_changes_sync` before `store_connection` ran, which reports
             // the account offline for a change that had in fact arrived.
-            let push = start_push(meta_backend, &sync);
-            backend.store_connection(sync);
-            if let Some(push) = push {
-                backend.store_push(push);
-            }
+            backend.install_connection(sync, |sync| start_push(meta_backend, sync));
             // Without this the address book is read-only: every write comes
             // back as "Permission denied" and Evolution greys the book out.
             // JMAP has no per-book "may I write" flag, so the answer is the
