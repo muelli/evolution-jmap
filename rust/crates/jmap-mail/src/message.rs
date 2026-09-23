@@ -66,7 +66,7 @@ use jmap_backend_core::cancel::observe;
 use jmap_backend_core::error::set_raw_gerror;
 use jmap_backend_core::marshal::read_string;
 use jmap_backend_core::owned::Owned;
-use jmap_backend_core::trampoline::guard_ptr;
+use jmap_backend_core::trampoline::{guard, guard_ptr};
 use jmap_proto::Id;
 
 use crate::connect::StoreError;
@@ -83,6 +83,7 @@ pub unsafe fn install_vfuncs(class: *mut CamelFolderClass) {
     // SAFETY: the contract above.
     let vfuncs = unsafe { &mut *class };
     vfuncs.get_message_sync = Some(get_message_sync);
+    vfuncs.get_message_cached = Some(get_message_cached);
 }
 
 /// Fetches one message and parses it.
@@ -117,21 +118,13 @@ unsafe extern "C" fn get_message_sync(
 
             // Before the connection is even looked for: a message already
             // downloaded is one this provider can hand over with the account
-            // offline, which is the whole point of a `CamelOfflineStore`.
-            let cache = JmapFolder::borrow(folder).and_then(JmapFolder::cache);
-            // And read once, for both ends of the cache: what the row says the
-            // message weighs is what tells a complete entry from what a crash
-            // left behind — see [`crate::cache`].
-            let listed = listed_size(folder, message_uid);
-            if let Some(source) = cache.and_then(|cache| cache.load(uid.as_str(), listed)) {
-                // Parsed without an error out-parameter, so a failure is silent
-                // and falls through to the fetch below: an entry Camel's parser
-                // will not read is not a message to report, it is one to
-                // replace.
-                let message = parse(&source, ptr::null_mut());
-                if !message.is_null() {
-                    return message;
-                }
+            // offline, which is the whole point of a `CamelOfflineStore`. The
+            // same lookup `get_message_cached` makes below, so a message this
+            // process already opened once needs neither an error out-param
+            // nor the caller's own cache lookup a second time.
+            let message = cached_message(folder, message_uid);
+            if !message.is_null() {
+                return message;
             }
 
             let Some(store) = parent_store(folder) else {
@@ -147,11 +140,73 @@ unsafe extern "C" fn get_message_sync(
             // the next release of Camel may not — while a failed parse that
             // discarded the download would make every open of that message
             // another two round trips.
-            if let Some(cache) = cache {
-                cache.store(uid.as_str(), &source, listed);
+            if let Some(cache) = JmapFolder::borrow(folder).and_then(JmapFolder::cache) {
+                cache.store(uid.as_str(), &source, listed_size(folder, message_uid));
             }
             parse(&source, error)
         })
+    }
+}
+
+/// Answers a click on a message list row without ever taking
+/// `camel_folder_lock` — Camel's own `camel_folder_get_message_sync` tries
+/// this vfunc first and only falls back to the locked `get_message_sync`
+/// above on a miss, per this slot's own doc comment ("not being blocked by
+/// the folder's lock"). No `cancellable` is observed: everything this does is
+/// a local cache lookup, never a request the JMAP client could stop.
+///
+/// NULL for a miss, which this vfunc's contract explicitly says is not an
+/// error — there is nowhere to report one to, since the slot has no `GError`
+/// out-parameter.
+unsafe extern "C" fn get_message_cached(
+    folder: *mut CamelFolder,
+    message_uid: *const gchar,
+    _cancellable: *mut GCancellable,
+) -> *mut CamelMimeMessage {
+    // SAFETY: Camel's contract for the vfunc: a valid instance of ours and a
+    // NUL-terminated uid.
+    unsafe {
+        guard("get_message_cached", ptr::null_mut(), || {
+            cached_message(folder, message_uid)
+        })
+    }
+}
+
+/// The cached copy of `message_uid` in `folder`, or NULL for a miss —
+/// including "this folder has no cache" and "the entry did not survive
+/// [`MessageCache::load`]'s own checks", which are misses to every caller of
+/// this.
+///
+/// Shared by [`get_message_cached`] and, as its first attempt before it looks
+/// for a connection, [`get_message_sync`]: a message this process already
+/// opened once is served the same way through either vfunc.
+///
+/// [`MessageCache::load`]: crate::cache::MessageCache::load
+///
+/// # Safety
+///
+/// `folder` must point at a live `CamelFolder`, and `message_uid` at a live
+/// NUL-terminated string.
+unsafe fn cached_message(
+    folder: *mut CamelFolder,
+    message_uid: *const gchar,
+) -> *mut CamelMimeMessage {
+    // SAFETY: the contract above.
+    unsafe {
+        let Some(uid) = read_string(message_uid) else {
+            return ptr::null_mut();
+        };
+        let cache = JmapFolder::borrow(folder).and_then(JmapFolder::cache);
+        // What the row says the message weighs is what tells a complete entry
+        // from what a crash left behind — see [`crate::cache`].
+        let listed = listed_size(folder, message_uid);
+        let Some(source) = cache.and_then(|cache| cache.load(uid.as_str(), listed)) else {
+            return ptr::null_mut();
+        };
+        // Parsed without an error out-parameter, so a failure is silent: an
+        // entry Camel's parser will not read is not a message either vfunc
+        // reports, it is a miss the locked path below will replace.
+        parse(&source, ptr::null_mut())
     }
 }
 

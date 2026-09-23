@@ -206,6 +206,94 @@ impl Drop for Opened {
     }
 }
 
+/// Through `get_message_cached` directly — the lock-free slot
+/// `camel_folder_get_message_sync` tries before it ever locks the folder and
+/// falls back to `get_message_sync`. Reached the same way `Opened::straight`
+/// reaches `get_message_sync`: no store, no connection, nothing but the
+/// pointer in the class, since this vfunc's whole point is answering without
+/// either.
+struct Cached {
+    message: *mut CamelMimeMessage,
+}
+
+impl Cached {
+    fn of(folder: *mut CamelFolder, uid: &CStr) -> Self {
+        // SAFETY: referencing the class runs the class_init that installs the
+        // vfunc; `folder` is an instance of that class.
+        let message = unsafe {
+            let class = g_type_class_ref(folder_type()).cast::<CamelFolderClass>();
+            let vfunc = (*class)
+                .get_message_cached
+                .expect("the folder has no lock-free cache path");
+            let message = vfunc(folder, uid.as_ptr(), ptr::null_mut());
+            g_type_class_unref(class.cast());
+            message
+        };
+        Self { message }
+    }
+}
+
+impl Drop for Cached {
+    fn drop(&mut self) {
+        // SAFETY: one reference, taken by the call above.
+        unsafe {
+            if !self.message.is_null() {
+                g_object_unref(self.message.cast());
+            }
+        }
+    }
+}
+
+/// Before any open, there is nothing to answer with — and nowhere to report
+/// that, since the slot has no `GError` out-parameter at all. NULL is the
+/// whole of the miss.
+#[test]
+fn get_message_cached_is_null_before_any_open() {
+    let (_server, _account, folder) = with_one_message();
+    let uid = the_one_uid(folder);
+
+    let cached = Cached::of(folder, &uid);
+
+    assert!(
+        cached.message.is_null(),
+        "an unopened message answered the lock-free path"
+    );
+
+    // SAFETY: the one reference this test took.
+    unsafe { g_object_unref(folder.cast()) };
+}
+
+/// Once a message has been opened — and so cached — the lock-free vfunc
+/// serves it on its own, with no store and no connection: this is what lets
+/// `camel_folder_get_message_sync` skip the folder lock entirely on a repeat
+/// open.
+#[test]
+fn get_message_cached_serves_an_already_opened_message_disconnected() {
+    let (server, _account, folder) = with_one_message();
+    let uid = the_one_uid(folder);
+
+    Opened::of(folder, &uid).expect_message();
+    drop(server);
+
+    let cached = Cached::of(folder, &uid);
+
+    assert!(
+        !cached.message.is_null(),
+        "the lock-free path missed a message already cached"
+    );
+    // SAFETY: a live message; the accessor borrows from it.
+    unsafe {
+        assert_eq!(
+            borrowed(camel_mime_message_get_subject(cached.message)).as_deref(),
+            Some(SUBJECT)
+        );
+    }
+
+    drop(cached);
+    // SAFETY: the one reference this test took.
+    unsafe { g_object_unref(folder.cast()) };
+}
+
 /// A NUL-terminated string Camel owns, as a `String`.
 ///
 /// # Safety
