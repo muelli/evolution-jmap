@@ -231,7 +231,7 @@ unsafe extern "C" fn prepare_authentication_uri_query(
         || unsafe {
             let uid = read_string(e_source_get_uid(source));
             let scope = oauth2::scope(source);
-            let has_scope = !scope.is_null() && *scope != 0;
+            let has_scope = read_string(scope).is_some();
             if has_scope {
                 // The table frees both halves (EDS builds it with g_free
                 // destroyers), so both are handed over as fresh copies.
@@ -324,7 +324,7 @@ unsafe fn add_resource(source: *mut ESource, table: *mut GHashTable) {
     // SAFETY: the caller's contract.
     unsafe {
         let resource = oauth2::resource(source);
-        if !resource.is_null() && *resource != 0 {
+        if read_string(resource).is_some() {
             g_hash_table_replace(
                 table,
                 g_strdup(c"resource".as_ptr()).cast(),
@@ -398,7 +398,7 @@ unsafe extern "C" fn prepare_refresh_token_form(
         || unsafe {
             let uid = read_string(e_source_get_uid(source));
             add_resource(source, form);
-            let has_refresh_token = !refresh_token.is_null() && *refresh_token != 0;
+            let has_refresh_token = read_string(refresh_token).is_some();
             tracing::debug!(
                 account_uid = ?uid,
                 has_refresh_token,

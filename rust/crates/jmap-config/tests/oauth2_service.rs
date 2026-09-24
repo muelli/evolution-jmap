@@ -421,6 +421,64 @@ fn prepare_authentication_uri_query_adds_nothing_without_a_stored_scope() {
     }
 }
 
+/// A stored-but-empty scope is not a scope to send either — same rule as
+/// `None`, and the one the raw-pointer presence check this test pins used to
+/// implement by hand.
+#[test]
+fn prepare_authentication_uri_query_treats_an_empty_stored_scope_as_absent() {
+    let service = service_in(registry());
+    let source = TestSource::new().written(&Config {
+        scope: Some(String::new()),
+        ..config()
+    });
+
+    // SAFETY: as above.
+    let query = unsafe {
+        g_hash_table_new_full(
+            Some(g_str_hash),
+            Some(g_str_equal),
+            Some(g_free),
+            Some(g_free),
+        )
+    };
+    // SAFETY: as above.
+    unsafe {
+        e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
+        assert!(
+            g_hash_table_lookup(query, c"scope".as_ptr().cast()).is_null(),
+            "an empty stored scope must mean no scope parameter at all"
+        );
+        g_hash_table_destroy(query);
+    }
+}
+
+/// Same rule as scope, for the RFC 8707 resource indicator: an empty stored
+/// value is not one worth sending.
+#[test]
+fn prepare_authentication_uri_query_treats_an_empty_stored_resource_as_absent() {
+    let service = service_in(registry());
+    let source = TestSource::new().written(&Config {
+        resource: Some(String::new()),
+        ..config()
+    });
+    let query = empty_table();
+
+    let slot = vtable()
+        .prepare_authentication_uri_query
+        .expect("this crate fills the slot");
+    // SAFETY: the slot's own signature, a live implementer, a live source and
+    // a live table owning both halves of every entry.
+    unsafe { slot(service, source.0, query) };
+
+    assert!(
+        !has_key(query, c"resource"),
+        "an empty stored resource must mean no resource parameter at all"
+    );
+
+    // SAFETY: a live table this test owns.
+    unsafe { g_hash_table_destroy(query) };
+}
+
 #[test]
 fn an_unconfigured_source_answers_null_for_every_borrowed_field_rather_than_creating_the_extension()
 {
