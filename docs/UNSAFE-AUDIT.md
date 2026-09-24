@@ -678,3 +678,59 @@ primitive needed anywhere else in the delta, no INVESTIGATE-tagged gap
 found.** Everything reviewed either already goes through a pattern this
 audit named in August, or is the zero-unsafe case the forbid-lint now proves
 by construction rather than by review.
+
+## Delta inventory, 2026-09-24: this lane's turf since the 2026-09-01 delta
+
+Same containment review as above, scoped to this lane's home turf per the
+three-lane split (`jmap-*-sync`, `jmap-backend-collection`, `jmap-config`,
+`jmap-mail`), against the base commit the 2026-09-01 delta recorded
+(`130f655f`). 105 commits touched these crates since then; every new or
+changed `unsafe fn`/`unsafe extern "C" fn` in that range was checked against
+the six patterns above.
+
+Reviewed: `jmap-backend-collection/backend.rs` and `source_changed.rs`'s
+`"changed"`-signal wiring (item 63/66, its own extensive test suite already
+covers the decision logic; the `g_signal_connect_object` idiom matches
+`jmap-config/backend.rs`'s existing use, each already citing the other in
+its own comments, not a duplication a shared helper would improve given the
+two connect different signals with different callback signatures) —
+`create_resource.rs::classify_lookup_failure` (one new `GError` domain/code
+read, not yet a third copy of anything) — `jmap-mail/oauth2.rs::trace_failure`
+(delegates to the existing `jmap_backend_core::oauth2::classify_failure`,
+does no raw reading of its own) — `jmap-mail/quota.rs` and `search_body.rs`
+(both new files, `get_quota_info_sync`/`search_body_sync`; the one hand-built
+linked-list append and the one `GDestroyNotify` wrapper are each a single
+occurrence, correctly scoped, nothing to extract) — `jmap-mail/folder.rs`'s
+new `string_array` (a shared `GPtrArray`-of-strings-to-`Vec<String>` helper,
+already reused by `search_body.rs` rather than copied) and `server_matches`
+(routes through `read_string`/`JmapFolder::borrow`/`parent_store`, all
+already-shared) — `jmap-mail/transfer.rs`'s `FolderLock` (a `Drop`-based
+lock guard around `camel_folder_lock`/`_unlock`, the same RAII idiom
+`Owned<T>` and `Slot<T>` already model) — `jmap-mail/message_info.rs`'s
+`server_thread_id`/`set_server_thread_id` and `jmap-mail/message.rs`'s
+`get_message_cached`/`cached_message` (items 63/70, both route through
+`JmapMessageInfo::borrow`/`JmapFolder::borrow`, no new idiom). All KEEP.
+
+**One IMPROVE found and fixed:** `jmap-config/oauth2_service.rs` (a new file,
+implementing `EOAuth2Service`) had three sites — the `scope`, `resource` and
+`refresh_token` "is this worth sending" checks — each hand-rolling
+`!ptr.is_null() && *ptr != 0` to decide whether a `*const c_char` is a real
+value or NULL/empty. `jmap_backend_core::marshal::read_string` already
+centralizes exactly this rule ("" reads as absent, same as NULL — its own
+doc comment gives the reason) and the same file already calls it for the
+source's uid, so the three sites were duplicating, with a raw dereference,
+logic a safe call away. Fixed (code repo `2dc32de5`): all three now call
+`read_string(..).is_some()`. No behaviour change — two new tests pin the
+empty-string case for `scope` and `resource` (previously untested; passed
+unmodified before and after the refactor, confirming this was a pure
+idiom cleanup, not a bug fix), and `refresh_token`'s flag only ever fed a
+trace log, so its own behaviour has no external witness either way. Unsafe
+meter unaffected (three raw dereferences dropped, zero unsafe blocks/fns
+added or removed, so `jmap-config`'s baseline count of 220 is unchanged).
+
+Not otherwise re-read: the remaining ~90 unsafe sites already in these files
+before 130f655f, which the August audit and the 2026-09-01 delta already
+gave a verdict to and which this pass had no reason to revisit.
+
+Do not re-run this delta without new evidence; a future pass diffs from
+`2dc32de5` (this section's own base), not `130f655f` again.
