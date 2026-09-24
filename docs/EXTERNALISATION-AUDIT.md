@@ -203,3 +203,61 @@ compiled via `ureq`). Everything else is a defensible KEEP. The codebase is
 already close to the "externalise as much as is sensible" target — the
 remaining hand-rolled code is deliberate design, FFI, or the project's own JMAP
 mapping, none of which a crate should own.
+
+## 2026-09-24 re-survey: `jmap-vcard`
+
+This increment re-surveyed only `rust/crates/jmap-vcard/src`, as required by
+Batch 2. The crate has no recorded base commit of its own, so the comparison
+was against the current checkout and the 2026-08-19 inventory above. The
+crate still delegates vCard tokenization, unfolding, value decoding and
+property typing to `calcard` (`contact.rs:220-225`, `2105-2112`). The code
+left in this crate is semantic mapping and Evolution compatibility behaviour,
+not a second general vCard parser.
+
+### Candidate: `vcard-rs` 0.4.0
+
+`vcard-rs` is a maintained-looking candidate and is materially broader than
+the crates checked on 2026-08-19. Its own module documentation says it reads
+and writes vCard 2.1, 3.0 and 4.0 (`vcard-rs/src/lib.rs:4-14`) and offers an
+optional JSContact conversion (`vcard-rs/src/lib.rs:105-134`). It is therefore
+worth checking, rather than dismissing it as only a parser.
+
+**KEEP.** Its conversion is a standards-level vCard/JSContact projection, but
+this crate's contract is the Evolution-facing vCard 3.0 shape. The mapping
+intentionally emits and consumes `X-JMAP-UID` and `X-JMAP-KEY` metadata
+(`contact.rs:235-238`), preserves unmapped server properties around edits, and
+restores split address and name components after Evolution flattens them
+(`contact.rs:2867-2925`). It also applies narrowly measured EDS rules for
+PHOTO, including URI versus inline data, image-only media types, and base64
+round trips (`contact.rs:2648-2747`). Replacing the conversion would require
+reimplementing those behaviours beside the dependency, while its parser would
+duplicate the already externalised `calcard` layer. That is not a clean,
+low-cost dependency swap.
+
+### Candidate: `jscontact` 0.2.1
+
+`jscontact` is a standalone RFC 9553 typed model. Its documentation describes
+JSON deserialization and serialization of a `Card` (`jscontact/src/lib.rs:1-33`)
+and does not provide a vCard codec. **KEEP.** `jmap-vcard` already receives
+the project's `jmap_proto::contacts::ContactCard` wire model and its work is
+the semantic, lossy projection into the exact vCard 3.0 fields that EDS
+understands. Introducing a second JSContact model would add conversions and a
+new dependency without removing any of the mapping logic.
+
+### Candidate: `vcard` 0.5.0 and other vCard parsers
+
+The current registry has several general vCard parsers, including `vcard`
+0.5.0 and `ical_vcard` 0.5.0. **KEEP.** They overlap only with the text layer
+already owned by `calcard`; none supplies the EDS-specific field selection,
+metadata preservation, date compatibility pass, or patch-safe restoration
+implemented in `contact.rs`. Swapping the parser would either leave the
+semantic code unchanged or lose the behaviour that the existing fixtures and
+round-trip tests protect.
+
+### Result
+
+No genuine low-risk externalisation win was found in `jmap-vcard`. The
+existing `calcard` dependency owns the general format layer, while the
+remaining hand-rolled code is the product-specific mapping and compatibility
+boundary. This increment is therefore a documented **KEEP** audit result;
+no code or dependency change is justified.
