@@ -734,3 +734,84 @@ gave a verdict to and which this pass had no reason to revisit.
 
 Do not re-run this delta without new evidence; a future pass diffs from
 `2dc32de5` (this section's own base), not `130f655f` again.
+
+## 2026-09-24: re-audit, polish lane turf (jmap-client, jmap-ical, jmap-proto, jmap-backend-book, jmap-backend-cal)
+
+Scoped re-audit covering this lane's turf: `jmap-client`, `jmap-ical`,
+`jmap-proto`, `jmap-backend-book`, and `jmap-backend-cal` (plus companion
+module cdylibs `jmap-backend-book-module` and `jmap-backend-cal-module`).
+Evaluates the delta since the 2026-09-01 base commit (`130f655f`, 184 unique
+commits touching these crates) against the six patterns and standards above.
+
+### Summary
+
+- **`evolution-jmap-client`** (51 commits in delta): **KEEP (pure safe code)**.
+  Crate carries `#![forbid(unsafe_code)]` at `src/lib.rs:4`. Meter baseline: 0.
+  All client logic, live-server test suites (ACL sharing, ShareNotification,
+  Quota, Blob/copy, EventSource push), and differential CalDAV probing are
+  implemented in 100% safe Rust.
+- **`evolution-jmap-ical`** (119 commits in delta): **KEEP (pure safe code)**.
+  Crate carries `#![forbid(unsafe_code)]` at `src/lib.rs:4`. Meter baseline: 0.
+  All iCalendar parsing, AST construction, RRULE expansion, timezone mapping,
+  and differential fidelity oracle coverage are implemented in 100% safe Rust.
+- **`evolution-jmap-proto`** (18 commits in delta): **KEEP (pure safe code)**.
+  Crate carries `#![forbid(unsafe_code)]` at `src/lib.rs:4`. Meter baseline: 0.
+  All JMAP data structures (RFC 9404 Blob modeling, SieveScript, Quotas,
+  FilterOperator, ParticipantIdentity, ShareNotification) are pure safe Rust.
+- **`jmap-backend-book`** (3 commits in delta: `f2d84059`, `cfc7a266`,
+  `e36adb1c`): **KEEP throughout**.
+  - `parent_class()`: in commit `f2d84059`, the manual `g_type_class_peek`
+    cast was replaced with `jmap_backend_core::subclass::parent_class::<EBookMetaBackendClass>`,
+    completing Pattern F consolidation.
+  - `get_destination_address`: in commit `cfc7a266`, implemented the
+    `EBackendClass::get_destination_address` override three parent levels up
+    from `EBookMetaBackendClass` to support host-specific reachability
+    monitoring. The implementation is wrapped in `trampoline::guard`, resolves
+    host and port via `jmap_backend_core::source::destination_address`, and
+    writes out-parameters safely using `dup_string`. All three inner unsafe
+    blocks carry detailed `// SAFETY:` comments. Baseline count updated from
+    87 to 91 (+4 sites).
+  - Push connection ordering: in commit `e36adb1c`, connection installation
+    was ordered prior to push subscription start via `install_connection`.
+    Implemented entirely in safe Rust; 0 unsafe sites added or modified.
+  - Crate total: exactly 91 unsafe sites across `module.rs` (3), `factory.rs`
+    (4), `connect.rs` (2), `backend.rs` (45), `ops.rs` (25), and `marshal.rs`
+    (12). All vfunc trampolines are enclosed in `guard_bool` or `guard`, and
+    operations delegate through shared helpers (`read_string`, `set_out_string`,
+    `set_out_list`, `fail_bool`, `fail_invalid`).
+- **`jmap-backend-cal`** (3 commits in delta: `f2d84059`, `d1fbc645`,
+  `e36adb1c`): **KEEP throughout**.
+  - `parent_class()`: in commit `f2d84059`, the manual `g_type_class_peek`
+    cast was replaced with `jmap_backend_core::subclass::parent_class::<ECalMetaBackendClass>`,
+    completing Pattern F consolidation.
+  - `get_destination_address`: in commit `d1fbc645`, implemented the
+    `EBackendClass::get_destination_address` override three parent levels up
+    from `ECalMetaBackendClass` for host-specific reachability monitoring.
+    Wrapped in `trampoline::guard`, resolves host and port via
+    `jmap_backend_core::source::destination_address`, and writes out-parameters
+    safely using `dup_string`. All three inner unsafe blocks carry explicit
+    `// SAFETY:` comments. Baseline count updated from 131 to 135 (+4 sites).
+  - Push connection ordering: in commit `e36adb1c`, connection installation
+    was ordered prior to push subscription start via `install_connection`.
+    Implemented entirely in safe Rust; 0 unsafe sites added or modified.
+  - Crate total: exactly 135 unsafe sites across `module.rs` (3), `factory.rs`
+    (4), `connect.rs` (2), `backend.rs` (48), `ops.rs` (28), and `marshal.rs`
+    (50). Memory management across libical AST representations follows
+    Pattern C (`Owned<ICalComponent>`), and vfunc trampolines route through
+    `guard`, `guard_bool`, or `guard_value`.
+- **`jmap-backend-book-module` and `jmap-backend-cal-module`**: **KEEP**.
+  Each module holds 4 unsafe sites strictly delegating `e_module_load` and
+  `e_module_unload` cdylib entry points to their respective backend crates.
+  Unchanged since initial creation.
+
+### Outcome
+
+All unsafe code written or modified in this lane's crates since the 2026-09-01
+audit delta is either already idiomatic, consolidated onto shared helpers, or
+governed by `#![forbid(unsafe_code)]`. No new shared abstractions or reductions
+are required: every block is minimal, panic-guarded, and documented.
+
+Do not re-run this delta without new evidence; a future pass on this turf diffs from
+`e36adb1c` (this section's own base), not `130f655f` again.
+
+
