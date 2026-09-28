@@ -79,8 +79,7 @@ get_store_from_folder_tree (EShellView *shell_view,
 }
 
 static void
-action_mail_folder_cb (GtkAction *action,
-		       EShellView *shell_view)
+do_action_mail_folder (EShellView *shell_view)
 {
 	gchar *folder_path = NULL;
 	CamelStore *store = NULL;
@@ -97,8 +96,7 @@ action_mail_folder_cb (GtkAction *action,
 }
 
 static void
-action_mail_message_cb (GtkAction *action,
-			EShellView *shell_view)
+do_action_mail_message (EShellView *shell_view)
 {
 	EShellContent *shell_content;
 	EMailView *mail_view = NULL;
@@ -128,6 +126,179 @@ action_mail_message_cb (GtkAction *action,
 	g_clear_object (&folder);
 }
 
+/* folder_node/has_message: the same two gates the pre-3.55 code computed,
+ * shared verbatim by both menu layers' own update-actions handler. */
+static void
+mail_update_state (EShellView *shell_view,
+		   gboolean *folder_node,
+		   gboolean *has_message)
+{
+	EShellSidebar *shell_sidebar;
+	EShellContent *shell_content;
+	EMFolderTree *folder_tree;
+	EMailView *mail_view = NULL;
+	CamelStore *selected_store = NULL;
+	gchar *selected_path = NULL;
+	gboolean account_node = FALSE;
+
+	*folder_node = FALSE;
+	*has_message = FALSE;
+
+	shell_sidebar = e_shell_view_get_shell_sidebar (shell_view);
+	g_object_get (shell_sidebar, "folder-tree", &folder_tree, NULL);
+	if (em_folder_tree_get_selected (folder_tree, &selected_store, &selected_path) ||
+	    em_folder_tree_store_root_selected (folder_tree, &selected_store)) {
+		if (selected_store) {
+			CamelProvider *provider = camel_service_get_provider (CAMEL_SERVICE (selected_store));
+
+			if (provider && g_ascii_strcasecmp (provider->protocol, REQUIRE_SERVICE_PROTOCOL) == 0) {
+				account_node = !selected_path || !*selected_path;
+				*folder_node = !account_node;
+			}
+
+			g_object_unref (selected_store);
+		}
+	}
+	g_object_unref (folder_tree);
+	g_free (selected_path);
+
+	/* To get to messages in the separate window (those when double-cliecked in the message list),
+	   a new extension extending E_TYPE_MAIL_BROWSER is required. The EMailBrowser implements
+	   EMailReader, thus it's easier to get to the message list there. */
+	shell_content = e_shell_view_get_shell_content (shell_view);
+	g_object_get (shell_content, "mail-view", &mail_view, NULL);
+	if (E_IS_MAIL_PANED_VIEW (mail_view)) {
+		GtkWidget *message_list;
+
+		message_list = e_mail_reader_get_message_list (E_MAIL_READER (mail_view));
+		*has_message = message_list_selected_count (MESSAGE_LIST (message_list)) > 0;
+	}
+}
+
+#if JMAP_EVO_EUI_MANAGER
+
+/* This module's own group, not one of Evolution's own (the same choice
+ * jmap-ui's snooze/send_later extensions make): action references inside the
+ * merged <eui> resolve across the whole manager, not just this group, so
+ * nothing about placement depends on the name. */
+#define GROUP_NAME "example-module-mail"
+
+static void
+action_mail_folder_cb (EUIAction *action,
+		       GVariant *value,
+		       gpointer user_data)
+{
+	do_action_mail_folder (E_SHELL_VIEW (user_data));
+}
+
+static void
+action_mail_message_cb (EUIAction *action,
+			GVariant *value,
+			gpointer user_data)
+{
+	do_action_mail_message (E_SHELL_VIEW (user_data));
+}
+
+/* Index 0 is the folder-popup item, gated on folder_node; index 1 is the
+ * message-menu item, gated on has_message — matching the pre-3.55 code's own
+ * two calls in m_mail_ui_update_actions_cb. */
+static const EUIActionEntry mail_entries[] = {
+	{ "my-mail-ui-folder-action",
+	  "folder-new",
+	  N_("M_y Maildir Folder Action..."),
+	  NULL,
+	  N_("My Maildir Folder Action"),
+	  action_mail_folder_cb, NULL, NULL, NULL },
+	{ "my-mail-ui-message-action",
+	  "document-new",
+	  N_("M_y Message Action..."),
+	  NULL,
+	  N_("My Message Action"),
+	  action_mail_message_cb, NULL, NULL, NULL }
+};
+
+static void
+m_mail_ui_update_actions_cb (EShellView *shell_view,
+			     gpointer user_data)
+{
+	EUIManager *ui_manager;
+	EUIActionGroup *action_group;
+	gboolean folder_node, has_message;
+
+	ui_manager = e_shell_view_get_ui_manager (shell_view);
+	action_group = e_ui_manager_get_action_group (ui_manager, GROUP_NAME);
+	if (!action_group)
+		return;
+
+	mail_update_state (shell_view, &folder_node, &has_message);
+
+	m_utils_enable_actions (action_group, &mail_entries[0], 1, folder_node);
+	m_utils_enable_actions (action_group, &mail_entries[1], 1, has_message);
+}
+
+void
+m_mail_ui_init (EUIManager *ui_manager,
+		EShellView *shell_view)
+{
+	/* 3.52 merged the same pair (an item in the shell's own
+	 * 'mail-message-menu' submenu's own 'mail-message-custom-menus'
+	 * placeholder, an item in 'mail-folder-popup's own
+	 * 'mail-folder-popup-actions' placeholder) as a GtkUIManager string;
+	 * the ids and nesting here are unchanged, confirmed against this
+	 * build's own evolution-mail.eui and evolution-mail-reader.eui —
+	 * only the wrapping element and the name/id, menu/submenu,
+	 * menuitem/item spelling differ. */
+	const gchar *ui_def =
+		"<eui>"
+		"<menu id='main-menu'>"
+		"<placeholder id='custom-menus'>"
+		"<submenu action='mail-message-menu'>"
+		"<placeholder id='mail-message-custom-menus'>"
+		"<item action='my-mail-ui-message-action'/>"
+		"</placeholder>"
+		"</submenu>"
+		"</placeholder>"
+		"</menu>"
+		"<menu id='mail-folder-popup'>"
+		"<placeholder id='mail-folder-popup-actions'>"
+		"<item action='my-mail-ui-folder-action'/>"
+		"</placeholder>"
+		"</menu>"
+		"</eui>";
+
+	g_return_if_fail (ui_manager != NULL);
+	g_return_if_fail (shell_view != NULL);
+
+	if (e_ui_manager_get_action_group (ui_manager, GROUP_NAME))
+		return;
+
+	e_ui_manager_add_actions_with_eui_data (
+		ui_manager, GROUP_NAME, GETTEXT_PACKAGE,
+		mail_entries, G_N_ELEMENTS (mail_entries),
+		shell_view, ui_def);
+
+	g_signal_connect (
+		shell_view, "update-actions",
+		G_CALLBACK (m_mail_ui_update_actions_cb),
+		NULL);
+}
+
+#else /* JMAP_EVO_EUI_MANAGER */
+
+static void
+action_mail_folder_cb (GtkAction *action,
+		       EShellView *shell_view)
+{
+	do_action_mail_folder (shell_view);
+}
+
+static void
+action_mail_message_cb (GtkAction *action,
+			EShellView *shell_view)
+{
+	do_action_mail_message (shell_view);
+}
+
 static GtkActionEntry mail_folder_context_entries[] = {
 	{ "my-mail-ui-folder-action",
 	  "folder-new",
@@ -151,45 +322,11 @@ m_mail_ui_update_actions_cb (EShellView *shell_view,
 			     GtkActionEntry *entries)
 {
 	EShellWindow *shell_window;
-	EShellSidebar *shell_sidebar;
-	EShellContent *shell_content;
-	EMFolderTree *folder_tree;
-	EMailView *mail_view = NULL;
-	CamelStore *selected_store = NULL;
 	GtkActionGroup *action_group;
 	GtkUIManager *ui_manager;
-	gchar *selected_path = NULL;
-	gboolean account_node = FALSE, folder_node = FALSE, has_message = FALSE;
+	gboolean folder_node, has_message;
 
-	shell_sidebar = e_shell_view_get_shell_sidebar (shell_view);
-	g_object_get (shell_sidebar, "folder-tree", &folder_tree, NULL);
-	if (em_folder_tree_get_selected (folder_tree, &selected_store, &selected_path) ||
-	    em_folder_tree_store_root_selected (folder_tree, &selected_store)) {
-		if (selected_store) {
-			CamelProvider *provider = camel_service_get_provider (CAMEL_SERVICE (selected_store));
-
-			if (provider && g_ascii_strcasecmp (provider->protocol, REQUIRE_SERVICE_PROTOCOL) == 0) {
-				account_node = !selected_path || !*selected_path;
-				folder_node = !account_node;
-			}
-
-			g_object_unref (selected_store);
-		}
-	}
-	g_object_unref (folder_tree);
-	g_free (selected_path);
-
-	/* To get to messages in the separate window (those when double-cliecked in the message list),
-	   a new extension extending E_TYPE_MAIL_BROWSER is required. The EMailBrowser implements
-	   EMailReader, thus it's easier to get to the message list there. */
-	shell_content = e_shell_view_get_shell_content (shell_view);
-	g_object_get (shell_content, "mail-view", &mail_view, NULL);
-	if (E_IS_MAIL_PANED_VIEW (mail_view)) {
-		GtkWidget *message_list;
-
-		message_list = e_mail_reader_get_message_list (E_MAIL_READER (mail_view));
-		has_message = message_list_selected_count (MESSAGE_LIST (message_list)) > 0;
-	}
+	mail_update_state (shell_view, &folder_node, &has_message);
 
 	shell_window = e_shell_view_get_shell_window (shell_view);
 	ui_manager = e_shell_window_get_ui_manager (shell_window);
@@ -245,3 +382,5 @@ m_mail_ui_init (GtkUIManager *ui_manager,
 		G_CALLBACK (m_mail_ui_update_actions_cb),
 		shell_view);
 }
+
+#endif /* JMAP_EVO_EUI_MANAGER */

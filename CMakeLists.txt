@@ -49,6 +49,16 @@ pkg_check_modules(LIBECAL REQUIRED libecal-2.0>=${REQUIRE_EVOLUTION_VERSION})
 
 pkg_check_variable(EVOLUTION_MODULE_DIR evolution-shell-3.0 moduledir)
 
+# Evolution 3.55.1 replaced GtkUIManager/GtkAction with EUIManager/EUIAction
+# (NEWS); rust/crates/evo-sys/build.rs made the same 3.55 cut for jmap-ui's
+# own menu code, keyed off the same evolution-shell-3.0 modversion pkg-config
+# already resolved above.
+if(EVOLUTION_SHELL_VERSION VERSION_GREATER_EQUAL "3.55")
+	set(JMAP_EVO_EUI_MANAGER 1)
+else()
+	set(JMAP_EVO_EUI_MANAGER 0)
+endif()
+
 option(FORCE_INSTALL_PREFIX "Whether to force install evolution-data-server and evolution files into the install prefix" OFF)
 if(FORCE_INSTALL_PREFIX)
 	pkg_check_variable(evo_prefix evolution-shell-3.0 prefix)

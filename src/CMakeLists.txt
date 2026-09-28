@@ -16,6 +16,7 @@ add_library(example-module MODULE ${SOURCES})
 
 target_compile_definitions(example-module PRIVATE
 	G_LOG_DOMAIN=\"example-module\"
+	JMAP_EVO_EUI_MANAGER=${JMAP_EVO_EUI_MANAGER}
 )
 
 target_compile_options(example-module PUBLIC

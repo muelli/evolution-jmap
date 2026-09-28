@@ -20,11 +20,21 @@
 #include <gtk/gtk.h>
 #include <shell/e-shell-view.h>
 
+#if JMAP_EVO_EUI_MANAGER
+#define __E_UTIL_H_INSIDE__
+#include <e-util/e-ui-manager.h>
+#endif
+
 G_BEGIN_DECLS
 
+#if JMAP_EVO_EUI_MANAGER
+void		m_mail_ui_init		(EUIManager *ui_manager,
+					 EShellView *shell_view);
+#else
 void		m_mail_ui_init		(GtkUIManager *ui_manager,
 					 EShellView *shell_view,
 					 gchar **ui_definition);
+#endif
 
 G_END_DECLS
 

@@ -23,6 +23,11 @@
 
 #include <composer/e-msg-composer.h>
 
+#if JMAP_EVO_EUI_MANAGER
+#define __E_UTIL_H_INSIDE__
+#include <e-util/e-ui-manager.h>
+#endif
+
 #include "m-msg-composer-extension.h"
 
 struct _MMsgComposerExtensionPrivate {
@@ -33,8 +38,7 @@ G_DEFINE_DYNAMIC_TYPE_EXTENDED (MMsgComposerExtension, m_msg_composer_extension,
 	G_ADD_PRIVATE_DYNAMIC (MMsgComposerExtension))
 
 static void
-action_msg_composer_cb (GtkAction *action,
-			MMsgComposerExtension *msg_composer_ext)
+do_action_msg_composer (MMsgComposerExtension *msg_composer_ext)
 {
 	EMsgComposer *composer;
 
@@ -43,6 +47,88 @@ action_msg_composer_cb (GtkAction *action,
 	composer = E_MSG_COMPOSER (e_extension_get_extensible (E_EXTENSION (msg_composer_ext)));
 
 	g_print ("%s: for composer '%s'\n", G_STRFUNC, gtk_window_get_title (GTK_WINDOW (composer)));
+}
+
+#if JMAP_EVO_EUI_MANAGER
+
+/* This extension's own group under EUIManager, not the editor's
+ * pre-existing "core" one — the same choice jmap-ui's send_later extension
+ * makes, matching how the in-tree e-composer-to-meeting.c registers its own
+ * "composer" group for the same extensible rather than joining an existing
+ * one. */
+#define GROUP_NAME "example-module-composer"
+
+static void
+action_msg_composer_cb (EUIAction *action,
+			GVariant *value,
+			gpointer user_data)
+{
+	do_action_msg_composer (M_MSG_COMPOSER_EXTENSION (user_data));
+}
+
+static const EUIActionEntry msg_composer_entries[] = {
+	{ "my-msg-composer-action",
+	  "document-new",
+	  N_("M_y Message Composer Action..."),
+	  NULL,
+	  N_("My Message Composer Action"),
+	  action_msg_composer_cb, NULL, NULL, NULL }
+};
+
+static void
+m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
+				 EMsgComposer *composer)
+{
+	/* 3.52 merged the same item into the composer's own
+	 * <menubar name='main-menu'>'s 'pre-edit-menu'/'external-editor-holder'
+	 * placeholders and its 'main-toolbar'. 3.55+ split that one toolbar
+	 * into two (with/without a headerbar); everything else — the ids and
+	 * nesting — is unchanged, confirmed against this build's own
+	 * evolution-composer.eui. */
+	const gchar *ui_def =
+		"<eui>"
+		"<menu id='main-menu'>"
+		"<placeholder id='pre-edit-menu'>"
+		"<submenu action='file-menu'>"
+		"<placeholder id='external-editor-holder'>"
+		"<item action='my-msg-composer-action'/>"
+		"</placeholder>"
+		"</submenu>"
+		"</placeholder>"
+		"</menu>"
+		"<toolbar id='main-toolbar-with-headerbar'>"
+		"<item action='my-msg-composer-action'/>"
+		"</toolbar>"
+		"<toolbar id='main-toolbar-without-headerbar'>"
+		"<item action='my-msg-composer-action'/>"
+		"</toolbar>"
+		"</eui>";
+
+	EHTMLEditor *html_editor;
+	EUIManager *ui_manager;
+
+	g_return_if_fail (M_IS_MSG_COMPOSER_EXTENSION (msg_composer_ext));
+	g_return_if_fail (E_IS_MSG_COMPOSER (composer));
+
+	html_editor = e_msg_composer_get_editor (composer);
+	ui_manager = e_html_editor_get_ui_manager (html_editor);
+
+	if (e_ui_manager_get_action_group (ui_manager, GROUP_NAME))
+		return;
+
+	e_ui_manager_add_actions_with_eui_data (
+		ui_manager, GROUP_NAME, GETTEXT_PACKAGE,
+		msg_composer_entries, G_N_ELEMENTS (msg_composer_entries),
+		msg_composer_ext, ui_def);
+}
+
+#else /* JMAP_EVO_EUI_MANAGER */
+
+static void
+action_msg_composer_cb (GtkAction *action,
+			MMsgComposerExtension *msg_composer_ext)
+{
+	do_action_msg_composer (msg_composer_ext);
 }
 
 static GtkActionEntry msg_composer_entries[] = {
@@ -99,6 +185,8 @@ m_msg_composer_extension_add_ui (MMsgComposerExtension *msg_composer_ext,
 
 	gtk_ui_manager_ensure_update (ui_manager);
 }
+
+#endif /* JMAP_EVO_EUI_MANAGER */
 
 static void
 m_msg_composer_extension_constructed (GObject *object)

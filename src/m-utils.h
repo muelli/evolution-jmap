@@ -19,12 +19,24 @@
 
 #include <gtk/gtk.h>
 
+#if JMAP_EVO_EUI_MANAGER
+#define __E_UTIL_H_INSIDE__
+#include <e-util/e-ui-action-group.h>
+#endif
+
 G_BEGIN_DECLS
 
+#if JMAP_EVO_EUI_MANAGER
+void		m_utils_enable_actions		(EUIActionGroup *action_group,
+						 const EUIActionEntry *entries,
+						 guint n_entries,
+						 gboolean enable);
+#else
 void		m_utils_enable_actions		(GtkActionGroup *action_group,
 						 const GtkActionEntry *entries,
 						 guint n_entries,
 						 gboolean enable);
+#endif
 
 G_END_DECLS
 

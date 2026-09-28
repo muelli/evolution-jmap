@@ -20,6 +20,34 @@
 
 #include <gtk/gtk.h>
 
+#include "m-utils.h"
+
+#if JMAP_EVO_EUI_MANAGER
+
+void
+m_utils_enable_actions (EUIActionGroup *action_group,
+			const EUIActionEntry *entries,
+			guint n_entries,
+			gboolean enable)
+{
+	gint ii;
+
+	g_return_if_fail (action_group != NULL);
+	g_return_if_fail (entries != NULL);
+
+	for (ii = 0; ii < n_entries; ii++) {
+		EUIAction *action;
+
+		action = e_ui_action_group_get_action (action_group, entries[ii].name);
+		if (!action)
+			continue;
+
+		e_ui_action_set_sensitive (action, enable);
+	}
+}
+
+#else /* JMAP_EVO_EUI_MANAGER */
+
 void
 m_utils_enable_actions (GtkActionGroup *action_group,
 			const GtkActionEntry *entries,
@@ -41,3 +69,5 @@ m_utils_enable_actions (GtkActionGroup *action_group,
 		gtk_action_set_sensitive (action, enable);
 	}
 }
+
+#endif /* JMAP_EVO_EUI_MANAGER */

@@ -35,6 +35,8 @@ struct _MShellViewExtensionPrivate {
 G_DEFINE_DYNAMIC_TYPE_EXTENDED (MShellViewExtension, m_shell_view_extension, E_TYPE_EXTENSION, 0,
 	G_ADD_PRIVATE_DYNAMIC (MShellViewExtension))
 
+#if !JMAP_EVO_EUI_MANAGER
+
 static void
 m_shell_extension_get_ui_definition (EShellView *shell_view,
 				     const gchar *ui_manager_id,
@@ -120,6 +122,8 @@ m_shell_view_extension_shell_view_toggled_cb (EShellView *shell_view,
 		gtk_ui_manager_ensure_update (ui_manager);
 }
 
+#endif /* !JMAP_EVO_EUI_MANAGER */
+
 static void
 m_shell_view_extension_constructed (GObject *object)
 {
@@ -132,7 +136,29 @@ m_shell_view_extension_constructed (GObject *object)
 	extension = E_EXTENSION (object);
 	extensible = e_extension_get_extensible (extension);
 
+#if JMAP_EVO_EUI_MANAGER
+	/* No "toggled" signal exists on EShellView any more (confirmed live:
+	 * connecting it the old way logs a GLib-CRITICAL and never fires, the
+	 * whole GtkToggleAction-based view switcher it belonged to went with
+	 * the rest of the GtkAction era — see jmap-ui's snooze extension for
+	 * the same finding). e-rss-shell-view-extension.c proves merging the
+	 * menu in constructed() itself is safe here: unlike jmap-ui's own
+	 * snooze extension, this module needs nothing off the view beyond its
+	 * name and its own EUIManager, both available the moment EExtension
+	 * constructs, so there is no "not populated yet" case to retry on
+	 * update-actions for. */
+	{
+		EShellView *shell_view = E_SHELL_VIEW (extensible);
+		const gchar *name = e_shell_view_get_name (shell_view);
+
+		if (g_strcmp0 (name, "mail") == 0)
+			m_mail_ui_init (e_shell_view_get_ui_manager (shell_view), shell_view);
+		else if (g_strcmp0 (name, "calendar") == 0)
+			m_calendar_ui_init (e_shell_view_get_ui_manager (shell_view), shell_view);
+	}
+#else
 	g_signal_connect (E_SHELL_VIEW (extensible), "toggled", G_CALLBACK (m_shell_view_extension_shell_view_toggled_cb), extension);
+#endif
 }
 
 static void
