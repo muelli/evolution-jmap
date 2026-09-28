@@ -8148,3 +8148,180 @@ Differential oracle verification for the outbound serialization direction (JSCal
   Conforming specification adaptation and client identity preservation. Verbatim retention of `PRODID` confirms that Stalwart CalDAV respects client envelope metadata without destructive rewriting.
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+## 15. Differential Harness Fixture Coverage Checklist and Real-Server Gap Analysis
+
+This section establishes an evidence-based coverage checklist evaluating the nine real-client calendar export fixtures in `rust/crates/jmap-ical/tests/fixtures/` against the RFC 5545 (iCalendar) and RFC 8984 (JSCalendar) shapes mapped by `jmap-ical/src`. Each mapped shape is evaluated directly against the checked-in fixture corpus using file-by-file property searches.
+
+### 15.1 Coverage Checklist of Mapped Calendar Shapes
+
+The nine existing client export fixtures are:
+1. `apple_calendar_export.ics` (Apple Calendar / macOS export)
+2. `cyrus_caldav_export.ics` (Cyrus IMAP CalDAV export)
+3. `evolution_calendar_export.ics` (GNOME Evolution calendar export)
+4. `google_calendar_export.ics` (Google Calendar export)
+5. `nextcloud_calendar_export.ics` (Nextcloud Calendar / SabreDAV export)
+6. `outlook_m365_export.ics` (Microsoft Outlook / Microsoft 365 export)
+7. `sogo_calendar_export.ics` (SOGo Groupware / CalDAV export)
+8. `thunderbird_calendar_export.ics` (Mozilla Thunderbird / Lightning export)
+9. `thunderbird_detached_export.ics` (Mozilla Thunderbird recurrence overrides export)
+
+#### 1. Series Identity and UIDs (`UID`, `X-JMAP-UID`)
+- **Specification**: RFC 5545 Section 3.8.4.7 (`UID`), RFC 8984 Section 4.1.1 (`uid`), Section 1.4.4 (`id`).
+- **Code Reference**: `event.rs:3384,3394`, `event.rs:2050-2060`.
+- **Corpus Coverage**: Present across all 9 fixtures. Every fixture carries an RFC 5545 `UID`. In addition, `evolution_calendar_export.ics` carries `X-JMAP-UID` for server-side ID disambiguation.
+- **Status**: COVERED.
+
+#### 2. Summary and Description (`SUMMARY`, `DESCRIPTION`)
+- **Specification**: RFC 5545 Section 3.8.1.12 (`SUMMARY`), Section 3.8.1.5 (`DESCRIPTION`), RFC 8984 Section 4.1.1 (`title`), Section 4.1.2 (`description`).
+- **Code Reference**: `event.rs:3402-3403`, `event.rs:2089-2096`.
+- **Corpus Coverage**: Present across all 9 fixtures. All fixtures include text titles and multi-line descriptions with escaped newlines and punctuation.
+- **Status**: COVERED.
+
+#### 3. Timed Event Start with Timezone (`DTSTART;TZID=...`)
+- **Specification**: RFC 5545 Section 3.8.2.4 (`DTSTART`), RFC 8984 Section 4.1.2 (`start`), Section 4.1.6 (`timeZone`).
+- **Code Reference**: `event.rs:3346,3722-3778`, `event.rs:2098-2105`.
+- **Corpus Coverage**: Present in 8 fixtures (`apple`, `evolution`, `google`, `nextcloud`, `outlook_m365`, `sogo`, `thunderbird`, `thunderbird_detached`). All timed events carry valid `TZID` parameters referencing standard IANA timezone identifiers.
+- **Status**: COVERED.
+
+#### 4. Date-Only / All-Day Events (`DTSTART;VALUE=DATE`, `DTEND;VALUE=DATE`)
+- **Specification**: RFC 5545 Section 3.8.2.4 (`DTSTART;VALUE=DATE`), RFC 8984 Section 4.1.5 (`showWithoutTime: true`).
+- **Code Reference**: `event.rs:3346,3722-3778`, `event.rs:1643-1650,2098-2105`.
+- **Corpus Coverage**: Present in `cyrus_caldav_export.ics` (`DTSTART;VALUE=DATE:20261110`, `DTEND;VALUE=DATE:20261113`).
+- **Status**: COVERED.
+
+#### 5. Multi-Day All-Day Events
+- **Specification**: RFC 5545 Section 3.8.2.4, Section 3.8.2.2, RFC 8984 Section 4.1.5 (`showWithoutTime: true`), Section 4.2.2 (`duration`).
+- **Code Reference**: `event.rs:3954,4094-4120`.
+- **Corpus Coverage**: Present in `cyrus_caldav_export.ics` (`DTSTART;VALUE=DATE:20261110`, `DTEND;VALUE=DATE:20261113`, spanning 3 full days with duration `P3D`).
+- **Status**: COVERED (Candidate 1 evaluated; already verified in existing corpus).
+
+#### 6. Duration vs End Time (`DURATION` vs `DTEND`)
+- **Specification**: RFC 5545 Section 3.8.2.5 (`DURATION`), Section 3.8.2.2 (`DTEND`), RFC 8984 Section 4.2.2 (`duration`).
+- **Code Reference**: `event.rs:3406,3946-3980`, `event.rs:2107-2114`.
+- **Corpus Coverage**: `DTEND` is present in 7 fixtures (`apple`, `cyrus`, `google`, `outlook_m365`, `sogo`, `thunderbird`, `thunderbird_detached`). Explicit `DURATION` is present in 2 fixtures (`evolution` with `DURATION:PT2H`, `nextcloud` with `DURATION:PT8H`).
+- **Status**: COVERED.
+
+#### 7. Recurrence Rules (`RRULE`)
+- **Specification**: RFC 5545 Section 3.8.5.3 (`RRULE`), RFC 8984 Section 4.3.1 (`recurrenceRule`).
+- **Code Reference**: `event.rs:3379-3381,4750-4910`, `event.rs:1654-1660,4912-5100`.
+- **Corpus Coverage**: Present in all 9 fixtures, exercising `FREQ=WEEKLY` (`apple`, `google`, `thunderbird`, `thunderbird_detached`), `FREQ=MONTHLY` (`evolution`, `nextcloud`, `outlook_m365`, `sogo`), `FREQ=YEARLY` (`cyrus`), ordinal day rules (`4MO`, `1MO`, `3SU`, `1TH`), `INTERVAL` values (1, 2), `COUNT` limits, and `UNTIL` limits.
+- **Status**: COVERED.
+
+#### 8. Recurrence Exceptions (`EXDATE`)
+- **Specification**: RFC 5545 Section 3.8.5.1 (`EXDATE`), RFC 8984 Section 4.3.4 (`recurrenceOverrides` with `excluded: true`).
+- **Code Reference**: `event.rs:3780-3850`, `event.rs:1664-1669,2230-2245`.
+- **Corpus Coverage**: Present in 5 fixtures (`apple`, `cyrus`, `google`, `thunderbird`, `thunderbird_detached`).
+- **Status**: COVERED.
+
+#### 9. Recurrence Overrides (`RECURRENCE-ID` and Detached `VEVENT`)
+- **Specification**: RFC 5545 Section 3.8.4.4 (`RECURRENCE-ID`), RFC 8984 Section 4.3.4 (`recurrenceOverrides` patch objects).
+- **Code Reference**: `event.rs:3780-3940`, `event.rs:1674,2202-2245`.
+- **Corpus Coverage**: Present in 2 fixtures (`google_calendar_export.ics` and `thunderbird_detached_export.ics`). Exercises rescheduled start times, updated titles, descriptions, locations, custom durations, category updates, priority changes, and per-instance cancellations (`STATUS:CANCELLED`).
+- **Status**: COVERED.
+
+#### 10. Alarms and Reminders (`VALARM`)
+- **Specification**: RFC 5545 Section 3.6.6 (`VALARM`), RFC 8984 Section 4.5 (`alerts`).
+- **Code Reference**: `event.rs:1215-1262,3424`, `event.rs:785-880,2191-2198`.
+- **Corpus Coverage**: Present in all 9 fixtures. Exercises `ACTION:DISPLAY`, relative negative triggers (`-PT15M`, `-PT30M`, `-PT2H`, `-P1D`), multiple alarms per component, and acknowledged alarms (`ACKNOWLEDGED`, `X-MOZ-LASTACK`).
+- **Status**: COVERED.
+
+#### 11. File Attachments (`ATTACH`)
+- **Specification**: RFC 5545 Section 3.8.1.1 (`ATTACH`), RFC 8984 Section 4.2.7 (`links` with default `rel: "enclosure"`).
+- **Code Reference**: `event.rs:3439,3594-3688`, `event.rs:1005-1070,2161-2166`.
+- **Corpus Coverage**: Present in all 9 fixtures. Covers URI attachments with MIME types (`FMTTYPE=application/pdf`) and file sizes (`SIZE=...`).
+- **Status**: COVERED.
+
+#### 12. Graphic Icons and Images (`IMAGE`)
+- **Specification**: RFC 7986 Section 5.10 (`IMAGE`), RFC 8984 Section 4.2.7 (`links` with `rel: "icon"` and `display: "badge"`).
+- **Code Reference**: `event.rs:3594-3688`, `event.rs:1005-1070`.
+- **Corpus Coverage**: Present in 5 fixtures (`cyrus`, `evolution`, `nextcloud`, `outlook_m365`, `sogo`).
+- **Status**: COVERED.
+
+#### 13. Virtual Teleconference Locations (`CONFERENCE`)
+- **Specification**: RFC 7986 Section 5.11 (`CONFERENCE`), RFC 8984 Section 4.2.6 (`virtualLocations`).
+- **Code Reference**: `event.rs:3422,3511-3593`, `event.rs:941-1004,2154-2159`.
+- **Corpus Coverage**: Present in all 9 fixtures, covering diverse conferencing systems (Apple Meet, Meetecho, BigBlueButton, Google Meet, Jitsi, Teams, Visio, Mozilla).
+- **Status**: COVERED.
+
+#### 14. Physical Locations (`LOCATION`)
+- **Specification**: RFC 5545 Section 3.8.1.7 (`LOCATION`), RFC 8984 Section 4.2.5 (`locations`).
+- **Code Reference**: `event.rs:3417,3472-3510`, `event.rs:655-710,2147-2153`.
+- **Corpus Coverage**: Present in all 9 fixtures, including structured locations, escaped commas, and round-trip `X-JMAP-KEY` preservation.
+- **Status**: COVERED.
+
+#### 15. Free/Busy Transparency (`TRANSP`)
+- **Specification**: RFC 5545 Section 3.8.2.7 (`TRANSP`), RFC 8984 Section 4.1.4 (`freeBusyStatus`).
+- **Code Reference**: `event.rs:2529-2540,3414`, `event.rs:2120-2129`.
+- **Corpus Coverage**: `TRANSP:OPAQUE` (`busy`) present in all 9 fixtures. `TRANSP:TRANSPARENT` (`free`) present in `cyrus_caldav_export.ics` and `nextcloud_calendar_export.ics`.
+- **Status**: COVERED.
+
+#### 16. Classification and Privacy (`CLASS`)
+- **Specification**: RFC 5545 Section 3.8.1.3 (`CLASS`), RFC 8984 Section 4.1.4 (`privacy`).
+- **Code Reference**: `event.rs:2497-2517,3416`, `event.rs:2140-2146`.
+- **Corpus Coverage**: Present in all 9 fixtures, exercising `PUBLIC` (`public`), `PRIVATE` (`private`), and `CONFIDENTIAL` (`secret`).
+- **Status**: COVERED.
+
+#### 17. Event Priority (`PRIORITY`)
+- **Specification**: RFC 5545 Section 3.8.1.9 (`PRIORITY`), RFC 8984 Section 4.1.4 (`priority`).
+- **Code Reference**: `event.rs:2518-2528,3415`, `event.rs:2131-2139`.
+- **Corpus Coverage**: Present in all 9 fixtures (values 1, 2, 3).
+- **Status**: COVERED.
+
+#### 18. Categories and Keywords (`CATEGORIES`)
+- **Specification**: RFC 5545 Section 3.8.1.2 (`CATEGORIES`), RFC 8984 Section 4.1.8 (`keywords`).
+- **Code Reference**: `event.rs:3423,3689-3721`, `event.rs:711-784,2168-2180`.
+- **Corpus Coverage**: Present in all 9 fixtures. Covers multi-tag comma-separated category lists mapped to boolean dictionary entries.
+- **Status**: COVERED.
+
+#### 19. Participants and Meeting Roles (`ORGANIZER`, `ATTENDEE`)
+- **Specification**: RFC 5545 Section 3.8.4.1 (`ATTENDEE`), Section 3.8.4.3 (`ORGANIZER`), RFC 8984 Section 4.4.6 (`Participant`), draft-ietf-jmap-calendars Section 5.9.2 (`organizerCalendarAddress`).
+- **Code Reference**: `event.rs:894-940,2182-2190`.
+- **Corpus Coverage**: Present in all 9 fixtures, covering `ROLE=REQ-PARTICIPANT`, `ROLE=OPT-PARTICIPANT`, `PARTSTAT=ACCEPTED`, `PARTSTAT=TENTATIVE`, `PARTSTAT=DECLINED`, `CUTYPE=INDIVIDUAL`, and `RSVP=TRUE`.
+- **Status**: COVERED.
+
+#### 20. Standard IANA/Olson Timezone Components (`VTIMEZONE`)
+- **Specification**: RFC 5545 Section 3.6.5 (`VTIMEZONE`).
+- **Code Reference**: `event.rs:2793,3127-3158`, `zone.rs:1-400`.
+- **Corpus Coverage**: Present in 8 fixtures (`Europe/Paris`, `Europe/Berlin`, `America/New_York`, `Europe/London`).
+- **Status**: COVERED.
+
+#### 21. Custom / Non-Olson Timezone Definitions (`VTIMEZONE` with solidus-prefixed ID)
+- **Specification**: RFC 8984 Section 1.4.9 (`TimeZoneId`), Section 4.7.2 (`timeZones`).
+- **Code Reference**: `event.rs:2838-2845,3127-3255` (`read_time_zones`, `read_definition`, `read_observance`), `event.rs:1756-1890` (`drawn_time_zones`, `vtimezone_of`).
+- **Corpus Coverage**: None of the 9 fixtures uses a custom solidus-prefixed `TZID` or custom `VTIMEZONE` definition. All 8 zoned fixtures use standard IANA Olson identifiers, which `read_time_zones` skips as globally resolvable.
+- **Status**: UNCOVERED (REAL HOLE).
+
+#### 22. Zero-Duration / Point-in-Time Events
+- **Specification**: RFC 5545 Section 3.6.1 (`VEVENT` with `DTSTART` and neither `DTEND` nor `DURATION`), RFC 8984 Section 4.2.2 (`duration` default: `"PT0S"`).
+- **Code Reference**: `event.rs:3406,3946-3956` (`read_duration` falling back to `DTEND - DTSTART`, returning `None` when neither is specified), `event.rs:2107-2114` (`vevent_of` omitting `DURATION` and `DTEND` when `duration` is `None`).
+- **Corpus Coverage**: Across all 9 existing fixtures, every single event specifies either an explicit `DTEND` (with duration between 1h30m and 3 days) or an explicit non-zero `DURATION` (`PT2H`, `PT8H`). No fixture contains a zero-duration or point-in-time milestone event.
+- **Status**: UNCOVERED (REAL HOLE).
+
+#### 23. DST-Transition-Spanning Timed Events
+- **Specification**: RFC 5545 Section 3.8.2.4, RFC 8984 Section 4.1.2.
+- **Code Reference**: `event.rs:3953-3956,4084-4120`.
+- **Corpus Coverage**: None of the 9 fixtures contains an event whose scheduled window crosses the civil clock shift of a daylight saving transition (such as 02:00 to 03:00 or 03:00 to 02:00).
+- **Status**: UNCOVERED (REAL HOLE).
+
+### 15.2 Differential Oracle Adjudications for Point-in-Time Zero-Duration Milestone Events
+
+To close the real coverage hole identified in Section 15.1 Item 22 (RFC 5545 Section 3.6.1 point-in-time zero-duration events), fixture `point_in_time_milestone_export.ics` was added and probed through both differential fidelity harnesses (`calendar-parse-probe.rs` and `caldav-put-probe.rs`).
+
+### 15.436 Divergence 436: Zero-Duration / Point-in-Time Event Duration Omission vs Default Synthesis: RFC 5545 Section 3.6.1 Point-in-Time Event vs RFC 8984 Section 4.2.2 Duration Default Omission and CalDAV Normalization
+
+- **Observed Behavior**:
+  Representation and lifecycle round-tripping of zero-duration and point-in-time milestone events across JMAP JSCalendar and CalDAV protocol boundaries:
+  1. Inbound ingest and duration omission (`read_duration`): RFC 5545 Section 3.6.1 specifies that when a `VEVENT` defines `DTSTART` with a date-time value type but neither `DTEND` nor `DURATION`, the event ends at the exact instant specified by `DTSTART`, constituting a point-in-time event of zero duration. In `jmap-ical`, `read_duration` checks for an explicit `DURATION` property, falling back to computing `DTEND - DTSTART`. When neither property is present on the component, `read_duration` yields `None`. In JSCalendar (RFC 8984 Section 4.2.2), `duration` defaults to `"PT0S"` ("duration: String (default: 'PT0S')"). Therefore, serializing the event to JSON leaves `duration` omitted, leaning on RFC 8984's canonical default rule rather than injecting an explicit `"duration": "PT0S"` payload.
+  2. Oracle inbound parse alignment: When probed via `CalendarEvent/parse` against Stalwart v1.0.0, the server parses `point_in_time_milestone_export.ics` and returns a JSCalendar event with `duration` omitted from the JSON document as well. Both `jmap-ical` and Stalwart agree that omitting `duration` represents the canonical JSCalendar serialization for a point-in-time event.
+  3. Outbound iCalendar export and CalDAV stability (`vevent_of`, CalDAV PUT): On outbound serialization, `vevent_of` inspects `event.duration`. Because `duration` is `None`, neither `DURATION` nor `DTEND` is emitted, reproducing the exact RFC 5545 Section 3.6.1 point-in-time structure (`DTSTART` alone). When uploaded via CalDAV PUT to Stalwart v1.0.0, the server accepts the component with HTTP 201 Created and serves it back on HTTP GET without synthesizing an artificial `DTEND` or `DURATION:PT0S` line. The normalized CalDAV resource matches local serialization across all properties.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.1 (`Event Component`): "For cases where a 'VEVENT' specifies a 'DTSTART' property with a DATE-TIME value type but no 'DTEND' property, the event ends on the same calendar date and time of day specified by the 'DTSTART' property."
+  2. RFC 5545 Section 3.8.2.5 (`Duration`): "A duration of zero is specified by the value 'PT0S'."
+  3. RFC 8984 Section 1.4.3 (`Type Signatures`) and Section 4.2.2 (`duration`).
+  4. RFC 4791 Section 5.3.2 (`PUT Processing`).
+- **Adjudication**:
+  Conforming specification adaptation and lossless round-trip stability. Both `jmap-ical` and Stalwart treat the omission of duration on inbound ingest and outbound export as the canonical representation of a zero-duration point-in-time event under RFC 5545 Section 3.6.1 and RFC 8984 Section 4.2.2.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+

@@ -48090,3 +48090,60 @@ fn differential_oracle_caldav_prodid_and_container_roundtrip_stability() {
         Some("prodid-test")
     );
 }
+
+#[test]
+fn differential_oracle_zero_duration_point_in_time_event_roundtrip_stability() {
+    // Audit divergence 436: Zero-duration point-in-time event duration omission vs default synthesis:
+    // RFC 5545 Section 3.6.1 point-in-time event vs RFC 8984 Section 4.2.2 duration default omission.
+
+    let fixture = include_str!("fixtures/point_in_time_milestone_export.ics");
+
+    // 1. Inbound parsing of point-in-time event without DTEND or DURATION yields None for duration
+    let parsed = ical_to_event(fixture).expect("parses zero-duration fixture");
+    assert_eq!(parsed.start.as_deref(), Some("2026-10-15T14:00:00"));
+    assert_eq!(parsed.time_zone.as_deref(), Some("Europe/Berlin"));
+    assert_eq!(
+        parsed.duration, None,
+        "duration is None when neither DTEND nor DURATION is present"
+    );
+    assert_eq!(
+        parsed.title.as_deref(),
+        Some("Milestone Release Git Tag Cut")
+    );
+    assert_eq!(parsed.status.as_deref(), Some("confirmed"));
+    assert_eq!(parsed.priority, Some(1));
+
+    // 2. JSCalendar JSON serialization omits duration, relying on RFC 8984 Section 4.2.2 default (PT0S)
+    let json_val = serde_json::to_value(&parsed).expect("serializes to JSON Value");
+    assert!(
+        json_val.get("duration").is_none(),
+        "duration property must be omitted from JSCalendar JSON object"
+    );
+
+    // 3. Outbound serialization emits DTSTART without DTEND or DURATION lines
+    let out = event_to_ical(&parsed);
+    assert!(
+        out.contains("DTSTART;TZID=Europe/Berlin:20261015T140000\r\n"),
+        "emits DTSTART with timezone"
+    );
+    assert!(
+        !out.lines().any(|l| l.starts_with("DURATION")),
+        "must not synthesize DURATION line for zero-duration event"
+    );
+    assert!(
+        !out.lines().any(|l| l.starts_with("DTEND")),
+        "must not synthesize DTEND line for zero-duration event"
+    );
+    assert!(
+        out.contains("SUMMARY:Milestone Release Git Tag Cut\r\n"),
+        "preserves summary"
+    );
+
+    // 4. Lossless round-trip: parsing serialized output recovers identical start and omitted duration
+    let roundtrip = ical_to_event(&out).expect("parses serialized point-in-time output");
+    assert_eq!(roundtrip.duration, None);
+    assert_eq!(roundtrip.start, parsed.start);
+    assert_eq!(roundtrip.time_zone, parsed.time_zone);
+    assert_eq!(roundtrip.title, parsed.title);
+    assert_eq!(roundtrip.status, parsed.status);
+}
