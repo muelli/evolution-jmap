@@ -439,6 +439,6 @@ mod tests {
             .filter_map(Result::ok)
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "ics"))
             .count();
-        assert_eq!(count, 10);
+        assert_eq!(count, 11);
     }
 }

@@ -8289,19 +8289,19 @@ The nine existing client export fixtures are:
 #### 21. Custom / Non-Olson Timezone Definitions (`VTIMEZONE` with solidus-prefixed ID)
 - **Specification**: RFC 8984 Section 1.4.9 (`TimeZoneId`), Section 4.7.2 (`timeZones`).
 - **Code Reference**: `event.rs:2838-2845,3127-3255` (`read_time_zones`, `read_definition`, `read_observance`), `event.rs:1756-1890` (`drawn_time_zones`, `vtimezone_of`).
-- **Corpus Coverage**: None of the 9 fixtures uses a custom solidus-prefixed `TZID` or custom `VTIMEZONE` definition. All 8 zoned fixtures use standard IANA Olson identifiers, which `read_time_zones` skips as globally resolvable.
-- **Status**: UNCOVERED (REAL HOLE).
+- **Corpus Coverage**: Present in `custom_vtimezone_export.ics` (`TZID:/example.org/Custom_Eastern`), defining both STANDARD and DAYLIGHT observances with yearly recurrence rules.
+- **Status**: COVERED.
 
 #### 22. Zero-Duration / Point-in-Time Events
 - **Specification**: RFC 5545 Section 3.6.1 (`VEVENT` with `DTSTART` and neither `DTEND` nor `DURATION`), RFC 8984 Section 4.2.2 (`duration` default: `"PT0S"`).
 - **Code Reference**: `event.rs:3406,3946-3956` (`read_duration` falling back to `DTEND - DTSTART`, returning `None` when neither is specified), `event.rs:2107-2114` (`vevent_of` omitting `DURATION` and `DTEND` when `duration` is `None`).
-- **Corpus Coverage**: Across all 9 existing fixtures, every single event specifies either an explicit `DTEND` (with duration between 1h30m and 3 days) or an explicit non-zero `DURATION` (`PT2H`, `PT8H`). No fixture contains a zero-duration or point-in-time milestone event.
-- **Status**: UNCOVERED (REAL HOLE).
+- **Corpus Coverage**: Present in `point_in_time_milestone_export.ics` (`DTSTART;TZID=Europe/Berlin:20261015T140000` without DTEND or DURATION).
+- **Status**: COVERED.
 
 #### 23. DST-Transition-Spanning Timed Events
 - **Specification**: RFC 5545 Section 3.8.2.4, RFC 8984 Section 4.1.2.
 - **Code Reference**: `event.rs:3953-3956,4084-4120`.
-- **Corpus Coverage**: None of the 9 fixtures contains an event whose scheduled window crosses the civil clock shift of a daylight saving transition (such as 02:00 to 03:00 or 03:00 to 02:00).
+- **Corpus Coverage**: None of the 11 fixtures contains an event whose scheduled window crosses the civil clock shift of a daylight saving transition (such as 02:00 to 03:00 or 03:00 to 02:00).
 - **Status**: UNCOVERED (REAL HOLE).
 
 ### 15.2 Differential Oracle Adjudications for Point-in-Time Zero-Duration Milestone Events
@@ -8322,6 +8322,26 @@ To close the real coverage hole identified in Section 15.1 Item 22 (RFC 5545 Sec
   4. RFC 4791 Section 5.3.2 (`PUT Processing`).
 - **Adjudication**:
   Conforming specification adaptation and lossless round-trip stability. Both `jmap-ical` and Stalwart treat the omission of duration on inbound ingest and outbound export as the canonical representation of a zero-duration point-in-time event under RFC 5545 Section 3.6.1 and RFC 8984 Section 4.2.2.
+- **Status**:
+  Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 15.3 Differential Oracle Adjudications for Custom Non-Olson VTIMEZONE Definitions
+
+To close the real coverage hole identified in Section 15.1 Item 21 (RFC 8984 Section 1.4.9 custom timezone definitions with solidus-prefixed ID), fixture `custom_vtimezone_export.ics` was added and probed through both differential fidelity harnesses (`calendar-parse-probe.rs` and `caldav-put-probe.rs`).
+
+### 15.437 Divergence 437: Custom Non-Olson VTIMEZONE Definitions with Solidus-Prefixed ID (`/prefix/name`): RFC 8984 Section 1.4.9 / Section 4.7.2 timeZones Ingestion vs Server convertedProperties Parameter Shelving and CalDAV Round-Trip Fidelity
+
+- **Observed Behavior**:
+  Representation and storage fidelity of custom non-Olson `VTIMEZONE` definitions with solidus-prefixed identifiers across JMAP JSCalendar and CalDAV protocol boundaries:
+  1. Inbound ingest and `timeZones` elevation (`read_time_zones`, `read_definition`, `read_observance`): RFC 5545 Section 3.6.5 and Section 3.8.3.1 define custom timezone definitions identified by a solidus prefix (`/prefix/name`), referencing a top-level `VTIMEZONE` component in the iCalendar stream. In RFC 8984 Section 1.4.9 and Section 4.7.2, custom timezones are supported via the `timeZones` map on `CalendarEvent`, where keys are `TimeZoneId` strings and values are `TimeZone` objects describing standard and daylight observances. In `jmap-ical`, `read_vevent` extracts `TZID=/example.org/Custom_Eastern` into `event.time_zone`. Then `read_time_zones` resolves the referenced solidus-prefixed zone against the container's `VTIMEZONE` components, parses `STANDARD` and `DAYLIGHT` subcomponents with `read_definition` and `read_observance`, validates redrawability via `vtimezone_of`, and inserts the structured definition into `event.time_zones`.
+  2. Oracle inbound parse behavior (`CalendarEvent/parse`): When probed via `CalendarEvent/parse` against Stalwart v1.0.0, the server parses `custom_vtimezone_export.ics` but omits `timeZone` and `timeZones` from the resulting JSCalendar event root, leaving the event start time floating. Instead of populating `timeZones`, Stalwart shelves the custom timezone identifier into vendor extension metadata under `iCalendar.convertedProperties.start.parameters.tzid = "/example.org/Custom_Eastern"`.
+  3. Outbound iCalendar export and CalDAV storage fidelity (`drawn_time_zones`, CalDAV PUT): On outbound serialization, `drawn_time_zones` inspects `event.time_zones`. Because `/example.org/Custom_Eastern` is defined in `time_zones`, `drawn_time_zones` re-emits the complete `VTIMEZONE` component with both `STANDARD` and `DAYLIGHT` subcomponents preceding the `VEVENT`. When uploaded via CalDAV PUT to Stalwart v1.0.0, the server accepts the custom `VTIMEZONE` and event (HTTP 201 Created). On CalDAV GET, the server returns the normalized resource with all 30 component properties intact, matching local serialization across every timezone observance and event property with zero divergences.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.5 (`Time Zone Component`) and Section 3.8.3.1 (`Time Zone Identifier`).
+  2. RFC 8984 Section 1.4.9 (`TimeZoneId`) and Section 4.7.2 (`timeZones`).
+  3. RFC 4791 Section 5.3.2 (`PUT Processing`).
+- **Adjudication**:
+  Conforming specification adaptation and rich client fidelity. `jmap-ical`'s inbound ingestion conforms to RFC 8984 Section 1.4.9 and Section 4.7.2 by elevating custom solidus-prefixed `VTIMEZONE` definitions to first-class `timeZones` dictionary entries and referencing them from `event.time_zone`. Stalwart's `CalendarEvent/parse` shelving of custom `TZID` parameters in `convertedProperties` represents a conservative server-side fallback to floating local time when the server does not evaluate custom transition rules. On CalDAV PUT and GET, both implementations demonstrate complete preservation of custom `VTIMEZONE` components without property loss.
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
 

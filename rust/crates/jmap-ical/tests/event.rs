@@ -48147,3 +48147,88 @@ fn differential_oracle_zero_duration_point_in_time_event_roundtrip_stability() {
     assert_eq!(roundtrip.title, parsed.title);
     assert_eq!(roundtrip.status, parsed.status);
 }
+
+#[test]
+fn differential_oracle_custom_vtimezone_definition_and_roundtrip_stability() {
+    // Audit divergence 437: Custom non-Olson VTIMEZONE definitions with solidus-prefixed ID:
+    // RFC 8984 Section 1.4.9 and Section 4.7.2 timeZones ingestion vs server convertedProperties shelving.
+
+    let fixture = include_str!("fixtures/custom_vtimezone_export.ics");
+
+    // 1. Inbound parsing ingests custom solidus-prefixed timezone into timeZone and timeZones map
+    let parsed = ical_to_event(fixture).expect("parses custom timezone fixture");
+    assert_eq!(parsed.start.as_deref(), Some("2026-10-15T14:00:00"));
+    assert_eq!(
+        parsed.time_zone.as_deref(),
+        Some("/example.org/Custom_Eastern")
+    );
+    assert_eq!(parsed.duration.as_deref(), Some("PT1H30M"));
+    assert_eq!(
+        parsed.title.as_deref(),
+        Some("Technical Sync in Custom Timezone")
+    );
+
+    let time_zones = parsed
+        .time_zones
+        .as_ref()
+        .expect("time_zones map must be present for custom timezone");
+    assert!(
+        time_zones.contains_key("/example.org/Custom_Eastern"),
+        "time_zones must contain definition for /example.org/Custom_Eastern"
+    );
+
+    let def = &time_zones["/example.org/Custom_Eastern"];
+    assert_eq!(
+        def.get("@type").and_then(serde_json::Value::as_str),
+        Some("TimeZone")
+    );
+    assert_eq!(
+        def.get("tzId").and_then(serde_json::Value::as_str),
+        Some("/example.org/Custom_Eastern")
+    );
+    assert!(
+        def.get("standard")
+            .and_then(serde_json::Value::as_array)
+            .is_some(),
+        "must define standard observance"
+    );
+    assert!(
+        def.get("daylight")
+            .and_then(serde_json::Value::as_array)
+            .is_some(),
+        "must define daylight observance"
+    );
+
+    // 2. Outbound serialization re-emits VTIMEZONE and DTSTART with custom TZID
+    let out = event_to_ical(&parsed);
+    assert!(
+        out.contains("BEGIN:VTIMEZONE\r\n"),
+        "outbound serialization must emit BEGIN:VTIMEZONE"
+    );
+    assert!(
+        out.contains("TZID:/example.org/Custom_Eastern\r\n"),
+        "outbound serialization must emit custom TZID"
+    );
+    assert!(
+        out.contains("BEGIN:STANDARD\r\n"),
+        "outbound serialization must emit standard observance"
+    );
+    assert!(
+        out.contains("BEGIN:DAYLIGHT\r\n"),
+        "outbound serialization must emit daylight observance"
+    );
+    assert!(
+        out.contains("DTSTART;TZID=/example.org/Custom_Eastern:20261015T140000\r\n"),
+        "emits DTSTART with custom TZID"
+    );
+
+    // 3. Lossless round-trip: parsing serialized output recovers identical custom timezone definition
+    let roundtrip = ical_to_event(&out).expect("parses serialized custom timezone output");
+    assert_eq!(roundtrip.time_zone, parsed.time_zone);
+    assert_eq!(roundtrip.start, parsed.start);
+    assert_eq!(roundtrip.duration, parsed.duration);
+    let roundtrip_zones = roundtrip
+        .time_zones
+        .expect("roundtrip time_zones map present");
+    assert!(roundtrip_zones.contains_key("/example.org/Custom_Eastern"));
+}
