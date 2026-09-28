@@ -48232,3 +48232,42 @@ fn differential_oracle_custom_vtimezone_definition_and_roundtrip_stability() {
         .expect("roundtrip time_zones map present");
     assert!(roundtrip_zones.contains_key("/example.org/Custom_Eastern"));
 }
+
+#[test]
+fn differential_oracle_dst_transition_spanning_event_duration_and_roundtrip_stability() {
+    // Audit divergence 438: DST-transition-spanning timed event duration calculation:
+    // Nominal wall-clock difference (PT3H) vs timeline elapsed UTC difference (PT4H):
+    // RFC 5545 Section 3.8.2.4 / Section 3.8.2.2 vs RFC 8984 Section 4.2.2.
+
+    let fixture = include_str!("fixtures/dst_transition_spanning_export.ics");
+
+    // 1. Inbound parsing computes nominal wall-clock duration between DTSTART and DTEND
+    let parsed = ical_to_event(fixture).expect("parses DST transition spanning fixture");
+    assert_eq!(parsed.start.as_deref(), Some("2026-10-25T01:00:00"));
+    assert_eq!(parsed.time_zone.as_deref(), Some("Europe/Berlin"));
+    // jmap-ical computes 04:00 minus 01:00 on the wall clock (3 hours), producing PT3H
+    assert_eq!(parsed.duration.as_deref(), Some("PT3H"));
+    assert_eq!(
+        parsed.title.as_deref(),
+        Some("Overnight Database Migration Spanning DST Fall Back")
+    );
+    assert_eq!(parsed.status.as_deref(), Some("confirmed"));
+    assert_eq!(parsed.free_busy_status.as_deref(), Some("busy"));
+
+    // 2. Outbound serialization emits DURATION:PT3H and preserves DTSTART with TZID
+    let out = event_to_ical(&parsed);
+    assert!(
+        out.contains("DTSTART;TZID=Europe/Berlin:20261025T010000\r\n"),
+        "emits DTSTART with timezone"
+    );
+    assert!(out.contains("DURATION:PT3H\r\n"), "emits DURATION:PT3H");
+
+    // 3. Lossless round-trip: parsing serialized output recovers identical start, duration, and status
+    let roundtrip = ical_to_event(&out).expect("parses serialized DST output");
+    assert_eq!(roundtrip.start, parsed.start);
+    assert_eq!(roundtrip.time_zone, parsed.time_zone);
+    assert_eq!(roundtrip.duration, parsed.duration);
+    assert_eq!(roundtrip.title, parsed.title);
+    assert_eq!(roundtrip.status, parsed.status);
+    assert_eq!(roundtrip.free_busy_status, parsed.free_busy_status);
+}

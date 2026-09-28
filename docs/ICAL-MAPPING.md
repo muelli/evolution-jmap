@@ -8301,8 +8301,8 @@ The nine existing client export fixtures are:
 #### 23. DST-Transition-Spanning Timed Events
 - **Specification**: RFC 5545 Section 3.8.2.4, RFC 8984 Section 4.1.2.
 - **Code Reference**: `event.rs:3953-3956,4084-4120`.
-- **Corpus Coverage**: None of the 11 fixtures contains an event whose scheduled window crosses the civil clock shift of a daylight saving transition (such as 02:00 to 03:00 or 03:00 to 02:00).
-- **Status**: UNCOVERED (REAL HOLE).
+- **Corpus Coverage**: Present in `dst_transition_spanning_export.ics` (`DTSTART;TZID=Europe/Berlin:20261025T010000` to `DTEND;TZID=Europe/Berlin:20261025T040000`, crossing the 03:00 to 02:00 autumn daylight saving transition).
+- **Status**: COVERED.
 
 ### 15.2 Differential Oracle Adjudications for Point-in-Time Zero-Duration Milestone Events
 
@@ -8344,4 +8344,26 @@ To close the real coverage hole identified in Section 15.1 Item 21 (RFC 8984 Sec
   Conforming specification adaptation and rich client fidelity. `jmap-ical`'s inbound ingestion conforms to RFC 8984 Section 1.4.9 and Section 4.7.2 by elevating custom solidus-prefixed `VTIMEZONE` definitions to first-class `timeZones` dictionary entries and referencing them from `event.time_zone`. Stalwart's `CalendarEvent/parse` shelving of custom `TZID` parameters in `convertedProperties` represents a conservative server-side fallback to floating local time when the server does not evaluate custom transition rules. On CalDAV PUT and GET, both implementations demonstrate complete preservation of custom `VTIMEZONE` components without property loss.
 - **Status**:
   Conforming specification adaptation. Documented and pinned in `tests/event.rs`.
+
+### 15.4 Differential Oracle Adjudications for DST-Transition-Spanning Events
+
+To close the real coverage hole identified in Section 15.1 Item 23 (RFC 5545 Section 3.8.2.4 and RFC 8984 Section 4.1.2 DST-transition-spanning events), fixture `dst_transition_spanning_export.ics` was added and probed through both differential fidelity harnesses (`calendar-parse-probe.rs` and `caldav-put-probe.rs`).
+
+### 15.438 Divergence 438: DST-Transition-Spanning Timed Event Duration Calculation: Nominal Wall-Clock Difference (PT3H) vs Timeline Elapsed UTC Difference (PT4H): RFC 5545 Section 3.8.2.4 / Section 3.8.2.2 vs RFC 8984 Section 4.2.2 Duration and CalDAV Normalization
+
+- **Observed Behavior**:
+  Duration derivation when converting an iCalendar appointment bounded by `DTSTART` and `DTEND` across a daylight saving transition into JSCalendar `duration`:
+  1. Inbound nominal wall-clock subtraction (`read_duration`, `instant`, `to_duration`): In `jmap-ical`, `read_duration` extracts `DTSTART` and `DTEND`, computes wall-clock seconds from civil date fields via `instant` and `days_from_civil`, and formats the difference using `to_duration`. On an event scheduled in `Europe/Berlin` from `20261025T010000` to `20261025T040000` across the autumn transition (where clocks turn back from 03:00 CEST to 02:00 CET), `instant` computes 04:00:00 minus 01:00:00 = 3 hours (10,800 seconds), yielding `duration: "PT3H"`. This calculation operates strictly on the nominal wall-clock difference without evaluating transition rules.
+  2. Oracle timeline elapsed UTC calculation: In contrast, Stalwart v1.0.0's `CalendarEvent/parse` resolves `DTSTART` (01:00 CEST = 23:00 UTC Oct 24) and `DTEND` (04:00 CET = 03:00 UTC Oct 25) against tzdata, computing the elapsed physical time on the UTC timeline: 4 hours (14,400 seconds), yielding `duration: "PT4H"`. Under RFC 8984 Section 4.2.2, adding `PT4H` to `2026-10-25T01:00:00` in `Europe/Berlin` accounts for the repeated hour and lands at `2026-10-25T04:00:00`.
+  3. Outbound serialization and CalDAV storage stability (`vevent_of`, CalDAV PUT): On outbound serialization, `jmap-ical` emits `DURATION:PT3H` alongside `DTSTART;TZID=Europe/Berlin:20261025T010000`. When uploaded via CalDAV PUT to Stalwart v1.0.0, the server accepts the component with HTTP 201 Created. On CalDAV GET, Stalwart returns the normalized resource with `DURATION:PT3H` preserved verbatim, matching local serialization across all 19 properties with zero property divergences.
+- **Specification and Architectural Context**:
+  1. RFC 5545 Section 3.6.1 (`Event Component`), Section 3.8.2.2 (`Date-Time End`), and Section 3.8.2.5 (`Duration`).
+  2. RFC 8984 Section 4.1.2 (`start`), Section 4.1.3 (`timeZone`), and Section 4.2.2 (`duration`).
+  3. Evolution Data Server (`evolution-data-server`) appointment editor UI model.
+  4. RFC 4791 Section 5.3.2 (`PUT Processing`).
+- **Adjudication**:
+  Deliberate client and bridge design deviation justified by offline parsing architecture and UI model fidelity. In Evolution Data Server, appointments are scheduled with explicit wall-clock start and end times. Measuring duration on the wall clock allows `jmap-ical` to operate as a self-contained, offline mapping crate without depending on external tzdata or libical runtime tables. Both representations are valid within their respective models, and outbound CalDAV PUT preserves the emitted duration with zero property divergences.
+- **Status**:
+  Deliberate client and bridge design deviation. Documented and pinned in `tests/event.rs`.
+
 
