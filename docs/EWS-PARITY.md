@@ -294,15 +294,18 @@ Two further divergences (`get_permanent_flags`'s `0` vs. every reference provide
 
 ## Summary
 
-Six of the first seven named surfaces show close-to-exact parity, with every
+Seven of the eight named surfaces show close-to-exact parity, with every
 divergence traceable to a real, already-documented JMAP-vs-EWS protocol
 difference (unified-account-vs-per-service settings, unauthenticated SRV/RFC
 8414/7591 discovery vs. authenticated Exchange Autodiscover, Bearer/HTTP
 auth vs. wire-level SASL, dynamically-registered OAuth2 clients vs. a fixed
-Office 365 app registration). The module-registration surface is now exact
-four-for-four parity after item 12's fix, and this audit additionally found
-and corrected two places where this project's own comments *mis-cited*
-evolution-ews's actual behavior (claiming single-module OAuth2 registration
+Office 365 app registration). The eighth, Surface 8's mail store/folder
+vfuncs, is the one surface whose divergences are not a protocol difference:
+it found three real gaps, detailed below. The module-registration surface
+is now exact four-for-four parity after item 12's fix, and this audit
+additionally found and corrected two places where this project's own
+comments *mis-cited* evolution-ews's actual behavior (claiming
+single-module OAuth2 registration
 when EWS in fact registers in all four of the same processes this project
 does) — the same root-cause shape as item 12's bug, caught here by reading
 evolution-ews's real source instead of trusting a two-sessions-old paraphrase
@@ -380,16 +383,18 @@ and write actually goes through, and it shows the same close parity as the
 other seven: every write vfunc (create/delete/rename folder, append,
 transfer, expunge, synchronize) matches EWS's shape one for one, with the
 JMAP write substituted for the Exchange one. Three real gaps were found,
-none of them a JMAP-vs-EWS protocol difference: `initial_setup_sync` is
-never implemented, so a fresh account's Sent/Drafts identity settings are
-never pre-filled from the account's actual roled mailboxes the way Inbox,
-Trash and Junk already are; `get_message_cached` is never implemented, so
-every message open takes the folder lock even for a pure cache hit that
-needs no network access; and `search_body_sync` is never implemented, so a
-body-contains search silently finds nothing on an EDS built against the
-newer (3.58+) search engine even though the same condition already reaches
-the server through the older search path. All three have the data or the
-machinery they need already sitting elsewhere in this crate. Two further
+none of them a JMAP-vs-EWS protocol difference, and all three are now
+fixed: `initial_setup_sync` was not implemented, so a fresh account's
+Sent/Drafts identity settings were never pre-filled from the account's
+actual roled mailboxes the way Inbox, Trash and Junk already were
+(**fixed 2026-09-23**, item 69); `get_message_cached` was not implemented,
+so every message open took the folder lock even for a pure cache hit that
+needed no network access (**fixed 2026-09-23**, item 70); and
+`search_body_sync` was not implemented, so a body-contains search silently
+found nothing on an EDS built against the newer (3.58+) search engine even
+though the same condition already reached the server through the older
+search path (**fixed 2026-09-23**, item 71). All three had the data or the
+machinery they needed already sitting elsewhere in this crate. Two further
 divergences (`get_permanent_flags`, `cmp_uids`) could not be confirmed as
 observable and are recorded as open questions rather than gaps.
 
