@@ -30,10 +30,9 @@ use eds_sys::{
     E_SOURCE_EXTENSION_MAIL_ACCOUNT, E_SOURCE_EXTENSION_MAIL_IDENTITY,
     E_SOURCE_EXTENSION_MAIL_TRANSPORT, E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication,
     ESourceBackend, ESourceCamel, ESourceSecurity, camel_network_settings_get_security_method,
-    e_source_authentication_get_credential_name, e_source_authentication_get_host,
-    e_source_authentication_get_method, e_source_authentication_get_port,
-    e_source_authentication_get_type, e_source_authentication_get_user,
-    e_source_authentication_set_credential_name, e_source_authentication_set_host,
+    e_source_authentication_get_host, e_source_authentication_get_method,
+    e_source_authentication_get_port, e_source_authentication_get_type,
+    e_source_authentication_get_user, e_source_authentication_set_host,
     e_source_authentication_set_method, e_source_authentication_set_port,
     e_source_authentication_set_user, e_source_backend_set_backend_name,
     e_source_camel_generate_subtype, e_source_camel_get_extension_name,
@@ -41,6 +40,18 @@ use eds_sys::{
     e_source_mail_account_get_type, e_source_mail_identity_get_type,
     e_source_mail_transport_get_type, e_source_new_with_uid, e_source_security_get_method,
     e_source_security_get_type, e_source_security_set_method, e_source_security_set_secure,
+};
+// The token-cache-key accessors: whichever pair the installed EDS actually
+// has — see `jmap_backend_collection::child_added::CREDENTIAL_PROPERTY`.
+#[cfg(not(eds_credential_store_id))]
+use eds_sys::{
+    e_source_authentication_get_credential_name as get_credential_name,
+    e_source_authentication_set_credential_name as set_credential_name,
+};
+#[cfg(eds_credential_store_id)]
+use eds_sys::{
+    e_source_authentication_get_credential_store_id as get_credential_name,
+    e_source_authentication_set_credential_store_id as set_credential_name,
 };
 use glib_sys::{GFALSE, GTRUE};
 use gobject_sys::g_object_unref;
@@ -198,18 +209,12 @@ impl Source {
     fn set_credential_name(&self, name: &str) {
         let name = CString::new(name).expect("no NUL in a literal");
         // SAFETY: as above.
-        unsafe {
-            e_source_authentication_set_credential_name(self.authentication(), name.as_ptr())
-        };
+        unsafe { set_credential_name(self.authentication(), name.as_ptr()) };
     }
 
     fn credential_name(&self) -> Option<String> {
         // SAFETY: as above.
-        unsafe {
-            read_string(e_source_authentication_get_credential_name(
-                self.authentication(),
-            ))
-        }
+        unsafe { read_string(get_credential_name(self.authentication())) }
     }
 
     fn set_secure(&self, secure: bool) {

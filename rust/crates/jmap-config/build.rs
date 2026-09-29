@@ -20,8 +20,17 @@
 // (rustc-link-arg is package-scoped, and that crate is a different package) —
 // that crate carries its own copy of this exact build script for the same
 // reason.
+//
+// Also re-emits the one `eds-sys` feature cfg this crate's sources need —
+// see `jmap-mail/build.rs`'s module comment for why the detection lives in
+// `eds-sys` and only the re-emission is duplicated per dependent.
 
 use std::env;
+
+/// The `eds-sys` feature `account.rs` `#[cfg]`s on: whether the installed EDS
+/// has `ESourceAuthentication:credential-store-id` (eds#663) to write an
+/// OAuth 2.0 account's token-cache key onto, in place of `credential-name`.
+const EDS_FEATURES: &[&str] = &["eds_credential_store_id"];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -35,5 +44,16 @@ fn main() {
         // `-rpath` and not `-rpath-link`: this has to be recorded in the file,
         // not merely used while linking it.
         println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
+    }
+
+    for feature in EDS_FEATURES {
+        // Declared regardless of whether this EDS sets it, so `-D warnings`
+        // does not trip over the `#[cfg]`s it turns out not to satisfy.
+        println!("cargo::rustc-check-cfg=cfg({feature})");
+        let key = format!("DEP_EVOLUTION_DATA_SERVER_{}", feature.to_uppercase());
+        println!("cargo:rerun-if-env-changed={key}");
+        if std::env::var_os(&key).is_some() {
+            println!("cargo::rustc-cfg={feature}");
+        }
     }
 }

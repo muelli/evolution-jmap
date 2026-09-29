@@ -88,10 +88,20 @@ use crate::mail_child::{follow_server, mail_service_of};
 pub const BOUND: [(&CStr, &[&CStr]); 2] = [
     (
         E_SOURCE_EXTENSION_AUTHENTICATION,
-        &[c"host", c"port", c"user", c"method", c"credential-name"],
+        &[c"host", c"port", c"user", c"method", CREDENTIAL_PROPERTY],
     ),
     (E_SOURCE_EXTENSION_SECURITY, &[c"secure"]),
 ];
+
+/// The name `apply` in `jmap_config::account` actually wrote the account's
+/// OAuth 2.0 token-cache key under — `credential-store-id` where the
+/// installed EDS has it (eds#663), `credential-name` otherwise. See that
+/// module's doc comment; this crate binds whichever one is real rather than
+/// hard-coding the pre-eds#663 name.
+#[cfg(eds_credential_store_id)]
+pub const CREDENTIAL_PROPERTY: &CStr = c"credential-store-id";
+#[cfg(not(eds_credential_store_id))]
+pub const CREDENTIAL_PROPERTY: &CStr = c"credential-name";
 
 /// Binds every property of [`BOUND`] from `collection` onto `child`, for the
 /// groups both sources already have.

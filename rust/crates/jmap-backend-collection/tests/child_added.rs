@@ -23,12 +23,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use eds_sys::{
     E_SOURCE_EXTENSION_ADDRESS_BOOK, E_SOURCE_EXTENSION_AUTHENTICATION,
     E_SOURCE_EXTENSION_SECURITY, ESource, ESourceAuthentication, ESourceSecurity,
-    e_source_authentication_get_credential_name, e_source_authentication_get_host,
-    e_source_authentication_get_type, e_source_authentication_set_credential_name,
+    e_source_authentication_get_host, e_source_authentication_get_type,
     e_source_authentication_set_host, e_source_authentication_set_method,
     e_source_authentication_set_port, e_source_authentication_set_user, e_source_get_extension,
     e_source_has_extension, e_source_new_with_uid, e_source_security_get_type,
     e_source_security_set_secure,
+};
+// The token-cache-key accessors: whichever pair the installed EDS actually
+// has — see `jmap_backend_collection::child_added::CREDENTIAL_PROPERTY`.
+#[cfg(not(eds_credential_store_id))]
+use eds_sys::{
+    e_source_authentication_get_credential_name as get_credential_name,
+    e_source_authentication_set_credential_name as set_credential_name,
+};
+#[cfg(eds_credential_store_id)]
+use eds_sys::{
+    e_source_authentication_get_credential_store_id as get_credential_name,
+    e_source_authentication_set_credential_store_id as set_credential_name,
 };
 use glib_sys::{GFALSE, GTRUE, gpointer};
 use gobject_sys::{g_object_unref, g_object_weak_ref};
@@ -141,13 +152,13 @@ impl Source {
         let name = CString::new(name).expect("no NUL in a literal");
         let auth: *mut ESourceAuthentication = self.authentication();
         // SAFETY: as above.
-        unsafe { e_source_authentication_set_credential_name(auth, name.as_ptr()) };
+        unsafe { set_credential_name(auth, name.as_ptr()) };
     }
 
     fn credential_name(&self) -> Option<String> {
         let auth: *mut ESourceAuthentication = self.extension(E_SOURCE_EXTENSION_AUTHENTICATION);
         // SAFETY: a live extension; the string is owned by it.
-        unsafe { read_string(e_source_authentication_get_credential_name(auth)) }
+        unsafe { read_string(get_credential_name(auth)) }
     }
 
     fn set_secure(&self, secure: bool) {

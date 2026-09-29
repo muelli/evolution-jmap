@@ -792,6 +792,21 @@ const EDS_FEATURES: &[(&str, &str)] = &[
     // a future EDS ever decouples them, that is exactly the kind of surprise
     // this matrix exists to surface.
     ("eds_death_date_field", "E_CONTACT_DEATHDATE"),
+    // eds#663 (MR 247, merged upstream 2026-09-29 as `592d95d`; `Since: 3.64`,
+    // not yet released, master-only headers only): `ESourceAuthentication`
+    // gains `credential-store-id`, which the credentials engine now keys an
+    // OAuth 2.0 account's stored token by instead of `credential-name` — a
+    // key that is stable and never shared between two accounts of the same
+    // host, unlike the host-derived one `credential-name` could produce.
+    // Detected by its setter rather than a version comparison, the same
+    // reasoning every other entry in this table gives; no installed headers
+    // anywhere this crate has been built against yet declare it, so this cfg
+    // has never fired outside of the marker itself being read from a future
+    // bindings dump.
+    (
+        "eds_credential_store_id",
+        "e_source_authentication_set_credential_store_id",
+    ),
 ];
 
 /// Emit one `cargo::rustc-cfg` per [`EDS_FEATURES`] entry the generated

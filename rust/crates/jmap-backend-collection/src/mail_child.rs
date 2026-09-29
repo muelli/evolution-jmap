@@ -135,12 +135,17 @@ pub const MAIL_SECURITY_METHOD_NONE: &CStr = c"none";
 /// while the receiving account, whose `method` `jmap_config::mail::apply_server`
 /// writes directly, worked. Following it here keeps the two in step.
 ///
-/// `credential-name` follows for exactly the same class of bug: a mail source
-/// that did not carry the account's own uid there would look its OAuth 2.0
-/// token up under a key of its own rather than the account's, the token-cache
-/// counterpart of the `method` gap above (eds#663).
-pub const BOUND_MAIL_AUTHENTICATION: &[&CStr] =
-    &[c"host", c"port", c"user", c"method", c"credential-name"];
+/// `credential-name`/`credential-store-id` follows for exactly the same class
+/// of bug: a mail source that did not carry the account's own uid there would
+/// look its OAuth 2.0 token up under a key of its own rather than the
+/// account's, the token-cache counterpart of the `method` gap above (eds#663).
+pub const BOUND_MAIL_AUTHENTICATION: &[&CStr] = &[
+    c"host",
+    c"port",
+    c"user",
+    c"method",
+    crate::child_added::CREDENTIAL_PROPERTY,
+];
 
 /// The two extensions that make a source one of an account's mail *services*.
 ///

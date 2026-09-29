@@ -21,10 +21,15 @@ use std::ptr;
 use eds_sys::{
     E_SOURCE_EXTENSION_AUTHENTICATION, E_SOURCE_EXTENSION_COLLECTION, E_SOURCE_EXTENSION_SECURITY,
     ESource, ESourceAuthentication, ESourceBackend, ESourceCollection,
-    e_source_authentication_get_credential_name, e_source_backend_get_backend_name,
-    e_source_collection_get_identity, e_source_get_extension, e_source_has_extension,
-    e_source_new_with_uid, e_source_set_enabled,
+    e_source_backend_get_backend_name, e_source_collection_get_identity, e_source_get_extension,
+    e_source_has_extension, e_source_new_with_uid, e_source_set_enabled,
 };
+// The token-cache-key getter: whichever one the installed EDS actually has —
+// see `jmap_config::account`'s module comment.
+#[cfg(not(eds_credential_store_id))]
+use eds_sys::e_source_authentication_get_credential_name as get_credential_id;
+#[cfg(eds_credential_store_id)]
+use eds_sys::e_source_authentication_get_credential_store_id as get_credential_id;
 use glib_sys::{GFALSE, GTRUE};
 use gobject_sys::g_object_unref;
 use jmap_backend_collection::collection_source::{Server, parts_of, server_of, user_of};
@@ -83,13 +88,14 @@ impl TestSource {
         unsafe { user_of(self.0) }
     }
 
-    /// `[Authentication] credential-name`, which the reader has no accessor
-    /// for: nothing downstream of the collection backend reads it back, only
-    /// EDS's own credentials engine does.
+    /// `[Authentication] credential-name` (or `credential-store-id` on an EDS
+    /// that has it — see `jmap_config::account`'s module comment), which the
+    /// reader has no accessor for: nothing downstream of the collection
+    /// backend reads it back, only EDS's own credentials engine does.
     fn credential_name(&self) -> Option<String> {
         let auth: *mut ESourceAuthentication = self.authentication();
         // SAFETY: a live extension; the string is owned by it.
-        unsafe { read_string(e_source_authentication_get_credential_name(auth)) }
+        unsafe { read_string(get_credential_id(auth)) }
     }
 
     fn authentication(&self) -> *mut ESourceAuthentication {

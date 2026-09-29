@@ -48,7 +48,7 @@
 //! for "ask for a password the ordinary way" — but it is not the identity, and
 //! `tests/account.rs` pins it so rather than pretending otherwise.
 //!
-//! ## `credential-name` is derived, not a field of `Account`
+//! ## `credential-name`/`credential-store-id` is derived, not a field of `Account`
 //!
 //! `ESourceAuthentication:credential-name` gives an OAuth 2.0 account's stored
 //! token a key that is the account's own uid — stable across a server move,
@@ -65,6 +65,14 @@
 //! `child_added` and `mail_child` bind it from the account onto every child the
 //! same way they bind `host`/`user`/`method`, so every service the account has
 //! shares one token cache entry.
+//!
+//! eds#663 (MR 247) later moved the credentials engine itself onto a
+//! differently-named property, `credential-store-id` (`Since: 3.64`, not yet
+//! released as of this writing) — same value, same derivation, but the
+//! setter the installed EDS actually has determines which one this writes;
+//! `#[cfg(eds_credential_store_id)]` picks it, `eds-sys`'s `build.rs`
+//! decides it from the headers, and pre-3.64 builds keep writing
+//! `credential-name` exactly as before.
 //!
 //! ## `[Security]` is written as the method, and read as the boolean
 //!
@@ -110,17 +118,23 @@ use eds_sys::{
     ESource, ESourceAuthentication, ESourceBackend, ESourceCollection, ESourceSecurity,
     e_source_authentication_get_host, e_source_authentication_get_method,
     e_source_authentication_get_port, e_source_authentication_get_type,
-    e_source_authentication_get_user, e_source_authentication_set_credential_name,
-    e_source_authentication_set_host, e_source_authentication_set_method,
-    e_source_authentication_set_port, e_source_authentication_set_user,
-    e_source_backend_set_backend_name, e_source_collection_get_calendar_enabled,
-    e_source_collection_get_contacts_enabled, e_source_collection_get_identity,
-    e_source_collection_get_mail_enabled, e_source_collection_get_type,
-    e_source_collection_set_calendar_enabled, e_source_collection_set_contacts_enabled,
-    e_source_collection_set_identity, e_source_collection_set_mail_enabled, e_source_get_extension,
-    e_source_get_uid, e_source_has_extension, e_source_security_get_secure,
-    e_source_security_get_type, e_source_security_set_method,
+    e_source_authentication_get_user, e_source_authentication_set_host,
+    e_source_authentication_set_method, e_source_authentication_set_port,
+    e_source_authentication_set_user, e_source_backend_set_backend_name,
+    e_source_collection_get_calendar_enabled, e_source_collection_get_contacts_enabled,
+    e_source_collection_get_identity, e_source_collection_get_mail_enabled,
+    e_source_collection_get_type, e_source_collection_set_calendar_enabled,
+    e_source_collection_set_contacts_enabled, e_source_collection_set_identity,
+    e_source_collection_set_mail_enabled, e_source_get_extension, e_source_get_uid,
+    e_source_has_extension, e_source_security_get_secure, e_source_security_get_type,
+    e_source_security_set_method,
 };
+// The token-cache-key setter: whichever one the installed EDS actually has —
+// see the module comment on `credential-name`/`credential-store-id`.
+#[cfg(not(eds_credential_store_id))]
+use eds_sys::e_source_authentication_set_credential_name as set_credential_id;
+#[cfg(eds_credential_store_id)]
+use eds_sys::e_source_authentication_set_credential_store_id as set_credential_id;
 use glib_sys::{GFALSE, GTRUE, gboolean};
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::marshal::read_string;
@@ -245,31 +259,32 @@ pub unsafe fn apply(source: *mut ESource, account: &Account) {
         // the reader turns back into `None`.
         e_source_authentication_set_port(auth, account.connection.port.unwrap_or(0));
 
-        // `credential-name` (eds#663): only ever the account's own uid, and
-        // only for OAuth 2.0 — see the module comment. NULL on every other
-        // method rather than a skipped write, for the same idempotency reason
-        // the fields above are: an account switched back to a password must
-        // not go on carrying the credential-name a previous OAuth 2.0 commit
-        // left behind, which would change the parameter name the credentials
-        // engine passes to `authenticate` for what is now a plain password.
+        // `credential-name`/`credential-store-id` (eds#663): only ever the
+        // account's own uid, and only for OAuth 2.0 — see the module comment.
+        // NULL on every other method rather than a skipped write, for the
+        // same idempotency reason the fields above are: an account switched
+        // back to a password must not go on carrying the key a previous
+        // OAuth 2.0 commit left behind, which would change the parameter
+        // name the credentials engine passes to `authenticate` for what is
+        // now a plain password.
         //
         // `OAUTH2_METHOD` ("OAuth2") is the generic alias; `oauth2_service::NAME`
         // ("JMAP") is the one real accounts actually carry, since it is what
         // `backend.rs`'s setup combo and `config_lookup.rs`'s discovery both
         // write. Checking only the former left every real OAuth 2.0 account
-        // without a credential-name, silently defeating eds#663.
+        // without this key, silently defeating eds#663.
         let oauth2_service_name = oauth2_service::NAME
             .to_str()
             .expect("oauth2_service::NAME is a fixed ASCII string");
         let connection_auth_method = account.connection.auth_method.as_deref();
-        let credential_name = if connection_auth_method == Some(OAUTH2_METHOD)
+        let credential_id = if connection_auth_method == Some(OAUTH2_METHOD)
             || connection_auth_method == Some(oauth2_service_name)
         {
             e_source_get_uid(source)
         } else {
             ptr::null()
         };
-        e_source_authentication_set_credential_name(auth, credential_name);
+        set_credential_id(auth, credential_id);
 
         let security: *mut ESourceSecurity =
             e_source_get_extension(source, E_SOURCE_EXTENSION_SECURITY.as_ptr()).cast();
