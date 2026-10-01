@@ -32,7 +32,9 @@ use std::env;
 
 use jmap_book_sync::BookSync;
 use jmap_client::{Client, Credentials};
+use jmap_proto::contacts::AddressBook;
 use jmap_proto::session::CAPABILITY_CONTACTS;
+use serde_json::json;
 
 /// A value unique to this process invocation, so a concurrent or prior run's
 /// leftover contact can never be mistaken for this run's own.
@@ -242,4 +244,111 @@ fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
         error.is_cannot_calculate_changes(),
         "expected cannotCalculateChanges for another account's state, got: {error:?}"
     );
+}
+
+/// `BookSync::classify`'s own doc comment reasons that since
+/// `ContactCard/changes` is account-wide, a card that shows up as
+/// **updated** but that this book no longer holds must have moved to a
+/// different address book, and reports it as `removed` rather than
+/// `changed` — protocol-semantics reasoning that had never been checked
+/// against a real server (every other test here only edits or destroys a
+/// card within a single book, so `holds()` always took its `Ok(true)`
+/// branch). `jmap-book-sync/tests/sync.rs`'s
+/// `a_card_moved_to_another_address_book_is_reported_as_removed` already
+/// pins this against `jmap-mockd`; this confirms the same real server
+/// behaviour the move relies on: a raw `ContactCard/set` update of
+/// `addressBookIds` away from the book being synced shows up in
+/// `ContactCard/changes` as an updated id, not a destroy, which is exactly
+/// what makes `classify`'s `removed` branch reachable at all.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn a_card_moved_to_another_address_book_is_reported_as_removed_against_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+    let origin_book_id = client
+        .address_books(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default address book")
+        .id
+        .expect("the server named the address book");
+
+    let other_book = client
+        .address_book_create(
+            &account_id,
+            &AddressBook {
+                name: format!("agent-booksync-move-target-{}", unique_suffix()),
+                ..AddressBook::default()
+            },
+        )
+        .expect("AddressBook/set create failed against the real server");
+    let other_book_id = other_book
+        .id
+        .clone()
+        .expect("the server named the new address book");
+
+    // A second, independent connection: `BookSync::new` takes ownership of a
+    // `Client`, but the raw `address_book_create`/`contact_update`/
+    // `contact_destroy`/`address_book_destroy` calls below need one too.
+    let sync_client =
+        connect_for_write().expect("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD vanished mid-test");
+    let sync = BookSync::new(sync_client, account_id.clone(), origin_book_id);
+
+    let (state_before_create, _) = sync
+        .list_existing()
+        .expect("listing the book failed before the create");
+
+    let name = format!("agent-booksync-move-{}", unique_suffix());
+    let vcard = format!(
+        "BEGIN:VCARD\r\n\
+         VERSION:3.0\r\n\
+         UID:pas-id-not-a-server-id\r\n\
+         FN:{name}\r\n\
+         N:{name};;;;\r\n\
+         END:VCARD\r\n"
+    );
+    let saved = sync
+        .save_contact(&vcard, None)
+        .expect("ContactCard/set create failed against the real server");
+
+    let state_before_move = sync
+        .get_changes(&state_before_create)
+        .expect("get_changes after the create failed against the real server")
+        .new_state;
+
+    let card_id = jmap_proto::Id::from(saved.uid.as_str());
+    client
+        .contact_update(
+            &account_id,
+            &card_id,
+            json!({"addressBookIds": {other_book_id.to_string(): true}}),
+        )
+        .expect("ContactCard/set move failed against the real server");
+
+    let after_move = sync
+        .get_changes(&state_before_move)
+        .expect("get_changes after the move failed against the real server");
+    assert!(
+        after_move.removed.contains(&saved.uid),
+        "a card moved to another address book should be reported as removed: {:?}",
+        after_move
+    );
+    assert!(
+        !after_move.changed.iter().any(|c| c.uid == saved.uid),
+        "a card moved out of this book must not also be reported as changed: {:?}",
+        after_move
+    );
+
+    client
+        .contact_destroy(&account_id, &card_id)
+        .expect("cleanup: ContactCard/set destroy failed against the real server");
+    client
+        .address_book_destroy(&account_id, &other_book_id)
+        .expect("cleanup: AddressBook/set destroy failed against the real server");
 }
