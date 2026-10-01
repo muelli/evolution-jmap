@@ -108,3 +108,51 @@ fn creating_then_deleting_a_folder_round_trips_through_the_real_server() {
         "the deleted folder should no longer be listed"
     );
 }
+
+/// `created_folder_name` falls back to the requested name whenever
+/// `Mailbox/set` reports none, reading that as "the server accepted the name
+/// as asked" per RFC 8620 section 5.3. Real Stalwart's `created` response
+/// does leave `name` out for a padded name like this one, but it does not
+/// mean "accepted as asked": `Mailbox/get` right after shows the stored name
+/// is trimmed. So the two disagree right after create, until the next
+/// listing catches up. This pins that real, currently uncorrected gap rather
+/// than leaving it as an untested assumption.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn a_server_trimmed_name_the_create_response_omits_is_not_reflected_until_the_next_listing() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    let sync = MailSync::new(client, account_id);
+
+    let requested = format!("  agent-mailsync-padded-{}  ", unique_suffix());
+    let trimmed = requested.trim().to_owned();
+    let created = sync
+        .create_folder(None, &requested)
+        .expect("Mailbox/set create failed against the real server");
+    assert_eq!(
+        created.display_name, requested,
+        "the server reported no name, so the client falls back to the padded \
+         name it asked for"
+    );
+
+    let (_, tree) = sync.folder_tree().expect("listing the folder tree failed");
+    let listed = tree
+        .iter()
+        .find(|folder| folder.id == created.id)
+        .expect("the newly created folder should be listed in the account's folder tree");
+    assert_eq!(
+        listed.display_name, trimmed,
+        "a fresh listing reads the server's own stored name, which Stalwart \
+         trimmed on create even though its created response said nothing \
+         about name"
+    );
+
+    sync.delete_folder(&created.id)
+        .expect("Mailbox/set destroy failed against the real server");
+}
