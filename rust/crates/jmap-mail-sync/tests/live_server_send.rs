@@ -16,6 +16,12 @@
 //! send.rs`). This file is their live-server counterpart, following the same
 //! two-account recipe `jmap-client`'s own send-email test uses.
 //!
+//! A second test below confirms the other half of `Outgoing::envelope`'s own
+//! reason for existing: that real Stalwart delivers from `envelope.rcptTo`
+//! even when the recipient's address is in no header at all, the way a Bcc
+//! recipient's never is. The first test above never exercises that, since
+//! its envelope recipient is also the `To` header's.
+//!
 //! ## Running it
 //!
 //! Same environment as the other sync crates' live-server tests, plus the
@@ -179,4 +185,110 @@ fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
     });
 
     assert_eq!(delivered.subject.as_deref(), Some(subject.as_str()));
+}
+
+/// `jmap-mail/src/envelope.rs`'s own reason for carrying the envelope
+/// separately from the headers: a Bcc recipient has no header, and a server
+/// deriving delivery from the headers instead of `envelope.rcptTo` would
+/// never deliver to them. Every other live-server send test here sets the
+/// envelope recipient equal to the message's own `To` header, so none of
+/// them actually exercise that divergence. This one does: the header names
+/// only the sender, and the envelope alone names the recipient.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn an_envelope_recipient_absent_from_every_header_is_still_delivered() {
+    let Some(sender_client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the send test");
+        return;
+    };
+    let Some(recipient_client) = connect_recipient() else {
+        eprintln!("JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the send test");
+        return;
+    };
+
+    let sender_email = env::var("JMAP_LIVE_SERVER_WRITE_USER").unwrap();
+    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+
+    let sender_account_id = sender_client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+    let sync = MailSync::new(sender_client, sender_account_id);
+
+    let identity = sync
+        .identity_for(&sender_email)
+        .expect("the write-test account needs a sending identity for its own address");
+    let mailboxes = sync
+        .outgoing_mailboxes()
+        .expect("the write-test account needs somewhere to stage an outgoing message");
+
+    let subject = format!("agent-mailsync-bcc-{}", unique_suffix());
+    // `To` names the sender, not the recipient — the recipient's address is
+    // nowhere in the source bytes at all, the way a real Bcc works.
+    let message = format!(
+        "From: {sender_email}\r\n\
+         To: {sender_email}\r\n\
+         Subject: {subject}\r\n\
+         Message-ID: <{subject}@agent-livewrite.net>\r\n\
+         Date: Thu, 15 Jan 2026 09:30:00 +0000\r\n\
+         \r\n\
+         Sent via MailSync::send_message's envelope, with no header naming the recipient.\r\n"
+    );
+
+    let uid = sync
+        .send_message(Outgoing {
+            source: message.into_bytes(),
+            identity,
+            envelope: Some(Envelope {
+                mail_from: EnvelopeAddress::new(sender_email.clone()),
+                rcpt_to: vec![EnvelopeAddress::new(recipient_email.clone())],
+            }),
+            staging: mailboxes.staging,
+            destination: mailboxes.destination,
+        })
+        .expect("MailSync::send_message failed against the real server");
+
+    let recipient_account_id = recipient_client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the recipient account needs the mail capability");
+    let recipient_sync = MailSync::new(recipient_client, recipient_account_id);
+    let (_, tree) = recipient_sync
+        .folder_tree()
+        .expect("listing the recipient's folder tree failed");
+    let inbox_id = tree
+        .role(FolderRole::Inbox)
+        .expect("the recipient account needs an Inbox")
+        .id
+        .clone();
+
+    // Local delivery is not necessarily synchronous with `send_message`
+    // returning, so poll rather than assume it has already landed.
+    let mut delivered = None;
+    for _ in 0..20 {
+        let (_, messages) = recipient_sync
+            .messages(&inbox_id)
+            .expect("listing the recipient's Inbox failed");
+        if let Some(row) = messages
+            .into_iter()
+            .find(|row| row.subject.as_deref() == Some(subject.as_str()))
+        {
+            delivered = Some(row);
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    let delivered = delivered.unwrap_or_else(|| {
+        panic!(
+            "the message sent via MailSync::send_message (uid {uid}) with an envelope-only \
+             recipient never showed up in that recipient's Inbox after 20s of polling — the \
+             real server appears to deliver from headers, not the envelope"
+        )
+    });
+
+    assert_eq!(delivered.subject.as_deref(), Some(subject.as_str()));
+    assert!(
+        delivered.to.iter().all(|to| to.email != recipient_email),
+        "the delivered message's own To header names the envelope-only recipient \
+         ({recipient_email}); it should name only the sender, the same way a real Bcc \
+         recipient's address never appears in the headers"
+    );
 }
