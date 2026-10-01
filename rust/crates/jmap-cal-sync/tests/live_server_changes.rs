@@ -31,7 +31,10 @@ use std::env;
 
 use jmap_cal_sync::CalSync;
 use jmap_client::{Client, Credentials};
+use jmap_proto::Id;
+use jmap_proto::calendars::Calendar;
 use jmap_proto::session::CAPABILITY_CALENDARS;
+use serde_json::json;
 
 /// A value unique to this process invocation, so a concurrent or prior run's
 /// leftover event can never be mistaken for this run's own.
@@ -244,4 +247,117 @@ fn get_changes_reports_cannot_calculate_changes_for_another_accounts_state() {
         error.is_cannot_calculate_changes(),
         "expected cannotCalculateChanges for another account's state, got: {error:?}"
     );
+}
+
+/// `CalSync::classify` reasons that since `CalendarEvent/changes` is
+/// account-wide, an event that shows up as **updated** but that this
+/// calendar no longer holds must have moved to a different calendar, and
+/// reports it as `removed` rather than `changed` — protocol-semantics
+/// reasoning that had never been checked against a real server (every other
+/// test here only edits or destroys an event within a single calendar, so
+/// `holds()` always took its `Ok(true)` branch).
+/// `jmap-cal-sync/tests/sync.rs`'s
+/// `an_event_moved_to_another_calendar_is_reported_as_removed` already pins
+/// this against `jmap-mockd`; this confirms the same real server behaviour
+/// the move relies on: a raw `CalendarEvent/set` update of `calendarIds`
+/// away from the calendar being synced shows up in `CalendarEvent/changes`
+/// as an updated id, not a destroy, which is exactly what makes
+/// `classify`'s `removed` branch reachable at all. Mirrors
+/// `jmap-book-sync/tests/live_server_changes.rs`'s
+/// `a_card_moved_to_another_address_book_is_reported_as_removed_against_the_real_server`.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn an_event_moved_to_another_calendar_is_reported_as_removed_against_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let origin_calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let other_calendar = client
+        .calendar_create(
+            &account_id,
+            &Calendar {
+                name: format!("agent-calsync-move-target-{}", unique_suffix()),
+                ..Calendar::default()
+            },
+        )
+        .expect("Calendar/set create failed against the real server");
+    let other_calendar_id = other_calendar
+        .id
+        .clone()
+        .expect("the server named the new calendar");
+
+    // A second, independent connection: `CalSync::new` takes ownership of a
+    // `Client`, but the raw `calendar_create`/`event_update`/`event_destroy`/
+    // `calendar_destroy` calls below need one too.
+    let sync_client =
+        connect_for_write().expect("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD vanished mid-test");
+    let sync = CalSync::new(sync_client, account_id.clone(), origin_calendar_id);
+
+    let (state_before_create, _) = sync
+        .list_existing()
+        .expect("listing the calendar failed before the create");
+
+    let local_uid = format!("agent-calsync-move-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-move-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T140000\r\n\
+         DURATION:PT1H\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+
+    let state_before_move = sync
+        .get_changes(&state_before_create)
+        .expect("get_changes after the create failed against the real server")
+        .new_state;
+
+    let event_id = Id::from(saved.uid.as_str());
+    client
+        .event_update(
+            &account_id,
+            &event_id,
+            json!({"calendarIds": {other_calendar_id.to_string(): true}}),
+        )
+        .expect("CalendarEvent/set move failed against the real server");
+
+    let after_move = sync
+        .get_changes(&state_before_move)
+        .expect("get_changes after the move failed against the real server");
+    assert!(
+        after_move.removed.contains(&saved.uid),
+        "an event moved to another calendar should be reported as removed: {:?}",
+        after_move
+    );
+    assert!(
+        !after_move.changed.iter().any(|c| c.uid == saved.uid),
+        "an event moved out of this calendar must not also be reported as changed: {:?}",
+        after_move
+    );
+
+    client
+        .event_destroy(&account_id, &event_id)
+        .expect("cleanup: CalendarEvent/set destroy failed against the real server");
+    client
+        .calendar_destroy(&account_id, &other_calendar_id)
+        .expect("cleanup: Calendar/set destroy failed against the real server");
 }
