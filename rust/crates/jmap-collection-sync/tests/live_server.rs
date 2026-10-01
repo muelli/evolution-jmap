@@ -168,3 +168,74 @@ fn creating_then_deleting_a_collection_round_trips_through_the_real_server() {
         );
     }
 }
+
+/// Exercises `created_resource`'s "accepted as asked" fallback (`create.rs`)
+/// with a name a server might plausibly normalise: whitespace padding.
+///
+/// `jmap-mail-sync`'s `created_folder_name` has the identical fallback for
+/// `Mailbox/set`, and against real Stalwart a padded name is silently
+/// trimmed server-side even though the `created` response omits `name` just
+/// as it does here — the two cases are indistinguishable from the response
+/// alone. Whether the same is true for `AddressBook/set`/`Calendar/set` has
+/// never been checked. It is not: a raw probe before writing this test
+/// showed Stalwart's stored name for both stays padded, unchanged. So unlike
+/// the mail case, the fallback here is exercising a true "accepted as asked"
+/// response with nothing hidden underneath, and a fresh discovery should
+/// show the same padded name the create response implied, not a trimmed one.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn creating_a_collection_with_a_padded_name_round_trips_the_padding_unchanged() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+
+    let suffix = unique_suffix();
+    for kind in [ChildKind::AddressBook, ChildKind::Calendar] {
+        let display_name = format!(
+            "  agent-collectionsync-padded-{}-{suffix}  ",
+            match kind {
+                ChildKind::AddressBook => "book",
+                ChildKind::Calendar => "cal",
+            }
+        );
+        let requested = Requested {
+            kind,
+            display_name: display_name.clone(),
+        };
+
+        let created = create_collection(&client, &requested).unwrap_or_else(|error| {
+            panic!("{kind:?}/set create failed against the real server: {error}")
+        });
+        assert_eq!(
+            created.display_name, display_name,
+            "the padded name should round-trip unchanged through the create response's \
+             fallback, whether the server echoed it or left it out"
+        );
+
+        let fanout = Fanout::discover(&client, Parts::ALL).expect("discovery failed after create");
+        let listed = match kind {
+            ChildKind::AddressBook => &fanout.address_books,
+            ChildKind::Calendar => &fanout.calendars,
+        };
+        let resource = listed
+            .iter()
+            .find(|resource| resource.id == created.collection_id)
+            .unwrap_or_else(|| {
+                panic!("the newly created {kind:?} should be listed by a fresh discovery")
+            });
+        assert_eq!(
+            resource.name, display_name,
+            "a fresh discovery should show the server's own stored name still padded, \
+             confirming Stalwart does not trim {kind:?} names the way it trims Mailbox names"
+        );
+
+        let doomed = jmap_collection_sync::Doomed {
+            kind,
+            collection_id: created.collection_id.clone(),
+        };
+        delete_collection(&client, &doomed).unwrap_or_else(|error| {
+            panic!("{kind:?}/set destroy failed against the real server: {error}")
+        });
+    }
+}

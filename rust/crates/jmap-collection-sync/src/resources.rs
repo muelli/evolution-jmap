@@ -140,9 +140,10 @@ impl Fanout {
 /// normalised the requested name to nothing would otherwise produce the one row
 /// in Evolution's sidebar with no text in it.
 pub fn shown_name(name: &str, id: &Id) -> String {
-    match name.trim() {
-        "" => id.to_string(),
-        name => name.to_owned(),
+    if name.trim().is_empty() {
+        id.to_string()
+    } else {
+        name.to_owned()
     }
 }
 

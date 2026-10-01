@@ -155,6 +155,29 @@ fn a_create_whose_response_omits_the_name_shows_the_requested_name_not_the_id() 
     }
 }
 
+/// Real-server-found, 2026-10-01: a raw probe against Stalwart showed that
+/// `AddressBook/set`/`Calendar/set` store a padded requested name exactly as
+/// sent, never trimming it server-side. But `shown_name` (used for both this
+/// fallback and discovery) matched on `name.trim()` and then bound the
+/// *trimmed* match arm's own name back as the display value, so a requested
+/// name with leading/trailing whitespace lost its padding purely client-side
+/// — even though nothing about the server's response justified it.
+#[test]
+fn a_create_whose_response_omits_the_name_keeps_whitespace_padding() {
+    let server = MockServer::builder().terse_collection_create().start();
+
+    for kind in [ChildKind::AddressBook, ChildKind::Calendar] {
+        let child = create_collection(&client(&server), &requested(kind, "  Padded Name  "))
+            .unwrap_or_else(|error| panic!("the mock creates {kind:?}s: {error}"));
+
+        assert_eq!(
+            child.display_name, "  Padded Name  ",
+            "a create whose response omits `name` must keep the requested name \
+             exactly, padding included, not just its trimmed content"
+        );
+    }
+}
+
 #[test]
 fn a_login_whose_server_serves_no_contacts_refuses_the_create() {
     // Not "send it to the primary account and hope": on a server whose contacts
