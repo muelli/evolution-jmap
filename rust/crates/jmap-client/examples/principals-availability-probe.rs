@@ -31,8 +31,10 @@ fn main() {
         std::process::exit(2);
     };
 
-    let client =
-        Client::connect(&origin, Credentials::basic(user.clone(), password)).expect("connect");
+    let client = Client::builder()
+        .rebase_urls_to_origin(true)
+        .connect(&origin, Credentials::basic(user.clone(), password))
+        .expect("connect");
     let session = client.session();
     println!(
         "session capabilities: {}",
@@ -66,7 +68,16 @@ fn main() {
         .principal_query(&account_id, PrincipalQueryFilter::email(&user))
         .expect("Principal/query");
     println!("Principal/query({user}) -> {ids:?}");
-    let Some(principal_id) = ids.into_iter().next() else {
+    let principal_id = ids.into_iter().next().or_else(|| {
+        session
+            .accounts
+            .get(&account_id)
+            .and_then(|acct| acct.account_capabilities.get(CAPABILITY_PRINCIPALS))
+            .and_then(|cap| cap.get("currentUserPrincipalId"))
+            .and_then(|id| id.as_str())
+            .map(jmap_proto::Id::from)
+    });
+    let Some(principal_id) = principal_id else {
         println!("NOT FOUND: no principal resolves for {user}");
         return;
     };

@@ -208,3 +208,61 @@ fn session_names_the_current_user_principal() {
         .expect("server advertises the principals account capability");
     assert_eq!(capability["currentUserPrincipalId"], me.as_str());
 }
+
+#[test]
+fn get_availability_reports_busy_period_for_event_with_participants() {
+    let (server, account_id, me, _attendee) = server_with_principals();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let calendar = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_calendar("Work", true)
+    };
+
+    let mut participant = jmap_proto::calendars::Participant::new("Bob Example", "bob@example.com");
+    participant.participation_status = Some("needs-action".to_owned());
+    participant.roles = Some([("attendee".to_owned(), true)].into());
+
+    let mut event = CalendarEvent::simple(calendar, "Team Sync", "2026-09-01T10:00:00", "PT1H");
+    event.participants = Some(
+        [(
+            "bob".to_owned(),
+            serde_json::to_value(&participant).unwrap(),
+        )]
+        .into(),
+    );
+    let created = client.event_create(&account_id, &event).unwrap();
+    let event_id = created.id.unwrap();
+
+    let busy = client
+        .get_availability(
+            &account_id,
+            &me,
+            "2026-09-01T00:00:00Z",
+            "2026-09-02T00:00:00Z",
+            false,
+        )
+        .unwrap();
+
+    assert_eq!(busy.len(), 1);
+    assert_eq!(busy[0].utc_start.as_str(), "2026-09-01T10:00:00Z");
+    assert_eq!(busy[0].utc_end.as_str(), "2026-09-01T11:00:00Z");
+    assert_eq!(busy[0].busy_status, "confirmed");
+
+    client.event_destroy(&account_id, &event_id).unwrap();
+
+    let busy_after = client
+        .get_availability(
+            &account_id,
+            &me,
+            "2026-09-01T00:00:00Z",
+            "2026-09-02T00:00:00Z",
+            false,
+        )
+        .unwrap();
+    assert!(busy_after.is_empty());
+}

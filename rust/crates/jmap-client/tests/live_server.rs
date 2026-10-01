@@ -58,6 +58,7 @@
 //! — the one exception, and scoped to an account this suite seeded for
 //! exactly this test.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::time::{Duration, Instant};
 
@@ -65,7 +66,9 @@ use jmap_client::eventsource::{SharedHeaders, expand_url};
 use jmap_client::{CancelFlag, Client, Credentials, EventSourceSubscription};
 use jmap_proto::Id;
 use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
-use jmap_proto::calendars::{Calendar, CalendarEvent, CalendarEventQueryFilter, RecurrenceRule};
+use jmap_proto::calendars::{
+    Calendar, CalendarEvent, CalendarEventQueryFilter, Participant, RecurrenceRule,
+};
 use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
@@ -2547,4 +2550,165 @@ fn calendar_share_grant_and_revoke_deliver_a_real_share_notification() {
     owner
         .calendar_destroy(&owner_account_id, &calendar_id)
         .expect("Calendar/set destroy failed against the real server (cleanup)");
+}
+
+/// `Principal/getAvailability` (draft-ietf-jmap-calendars section 2.2) against a real
+/// server: creates an event with an invited participant on the owner's default calendar,
+/// queries free/busy for the owner's principal over that window, asserts that the
+/// busy interval is reported with confirmed status, then destroys the event and
+/// verifies the busy period is no longer reported.
+///
+/// When a second account is provisioned via `JMAP_LIVE_SERVER_RECIPIENT_USER`, this
+/// also verifies that the recipient account cannot read the unshared owner's busy
+/// interval (reported as empty, matching RFC 9670 section 4 and calendars draft
+/// section 2.2).
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn calendar_event_with_participant_reports_busy_period_in_free_busy_query() {
+    let Some(owner) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the free/busy test");
+        return;
+    };
+    if !owner
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_PRINCIPALS)
+    {
+        eprintln!("server does not advertise {CAPABILITY_PRINCIPALS}; skipping the free/busy test");
+        return;
+    }
+
+    let owner_email = env::var("JMAP_LIVE_SERVER_WRITE_USER").unwrap();
+    let recipient_client = connect_recipient();
+
+    let suffix = unique_suffix();
+    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER")
+        .unwrap_or_else(|_| format!("attendee-{}@agent-livewrite.net", suffix));
+
+    let owner_account_id = owner
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = owner
+        .calendars(&owner_account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let current_principal_id = owner
+        .session()
+        .accounts
+        .get(&owner_account_id)
+        .and_then(|acct| acct.account_capabilities.get(CAPABILITY_PRINCIPALS))
+        .and_then(|cap| cap.get("currentUserPrincipalId"))
+        .and_then(|id| id.as_str())
+        .map(Id::from);
+
+    let owner_principal_id = current_principal_id
+        .or_else(|| {
+            owner
+                .principal_query(&owner_account_id, PrincipalQueryFilter::email(&owner_email))
+                .ok()
+                .and_then(|ids| ids.into_iter().next())
+        })
+        .or_else(|| {
+            owner
+                .principals(&owner_account_id)
+                .ok()?
+                .into_iter()
+                .find(|p| p.email.as_deref() == Some(&owner_email) || p.name == owner_email)
+                .and_then(|p| p.id)
+        })
+        .expect("the owner account has no principal id for free/busy lookup");
+
+    let hour = 1 + (suffix % 20) as u8;
+    let start_time = format!("2026-10-15T{hour:02}:00:00");
+    let expected_utc_start = format!("2026-10-15T{hour:02}:00:00Z");
+    let expected_utc_end = format!("2026-10-15T{:02}:00:00Z", hour + 1);
+
+    let title = format!("agent-freebusy-{}", suffix);
+    let mut participant = Participant::new("Recipient", &recipient_email);
+    participant.participation_status = Some("needs-action".to_owned());
+    participant.roles = Some([("attendee".to_owned(), true)].into());
+    participant.send_to = Some([("imip".to_owned(), format!("mailto:{recipient_email}"))].into());
+
+    let mut participants = BTreeMap::new();
+    participants.insert(
+        "attendee-1".to_owned(),
+        serde_json::to_value(&participant).unwrap(),
+    );
+
+    let mut event = CalendarEvent::simple(calendar_id, &title, &start_time, "PT1H");
+    event.participants = Some(participants);
+
+    let created = owner
+        .event_create(&owner_account_id, &event)
+        .expect("CalendarEvent/set create failed against the real server");
+    let event_id = created.id.clone().expect("the server named the new event");
+
+    let periods = owner
+        .get_availability(
+            &owner_account_id,
+            &owner_principal_id,
+            "2026-10-15T00:00:00Z",
+            "2026-10-16T00:00:00Z",
+            false,
+        )
+        .expect("Principal/getAvailability failed against the real server");
+
+    let busy_slot = periods.iter().find(|p| {
+        p.utc_start.as_str() == expected_utc_start && p.utc_end.as_str() == expected_utc_end
+    });
+    assert!(
+        busy_slot.is_some(),
+        "owner free/busy query did not report the busy interval {expected_utc_start}..{expected_utc_end}, got: {periods:?}"
+    );
+    assert_eq!(
+        busy_slot.unwrap().busy_status,
+        "confirmed",
+        "expected confirmed busy status for the scheduled event"
+    );
+
+    if let Some(ref recipient) = recipient_client {
+        let recipient_account_id = recipient
+            .primary_account(CAPABILITY_CALENDARS)
+            .expect("the recipient account needs the calendars capability");
+        let recipient_view = recipient
+            .get_availability(
+                &recipient_account_id,
+                &owner_principal_id,
+                &*expected_utc_start,
+                &*expected_utc_end,
+                false,
+            )
+            .expect("Principal/getAvailability failed for recipient query");
+        assert!(
+            recipient_view.is_empty(),
+            "recipient saw ungranted owner free/busy, expected empty list: {recipient_view:?}"
+        );
+    }
+
+    owner
+        .event_destroy(&owner_account_id, &event_id)
+        .expect("CalendarEvent/set destroy failed against the real server (cleanup)");
+
+    let periods_after = owner
+        .get_availability(
+            &owner_account_id,
+            &owner_principal_id,
+            "2026-10-15T00:00:00Z",
+            "2026-10-16T00:00:00Z",
+            false,
+        )
+        .expect("Principal/getAvailability failed against the real server after destroy");
+
+    let busy_after = periods_after.iter().find(|p| {
+        p.utc_start.as_str() == expected_utc_start && p.utc_end.as_str() == expected_utc_end
+    });
+    assert!(
+        busy_after.is_none(),
+        "busy interval still reported after destroying the event"
+    );
 }

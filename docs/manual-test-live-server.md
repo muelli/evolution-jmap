@@ -285,6 +285,15 @@ in the invocation, worth failing loudly on.
   new `MockServerBuilder::terse_submission_create` in
   `jmap-client/tests/mail_send.rs`). Skipped, not failed, when
   `JMAP_LIVE_SERVER_RECIPIENT_USER`/`_PASSWORD` (step 3a) are not set.
+- `calendar_event_with_participant_reports_busy_period_in_free_busy_query`:
+  creates an event with an invited participant on the write-test account's default
+  calendar, queries free/busy for that account via `Client::get_availability` over
+  the event day window, asserts that the busy interval is reported with confirmed
+  status, and confirms the busy period is cleared once the event is destroyed.
+  When `JMAP_LIVE_SERVER_RECIPIENT_USER` is configured, it also asserts that the
+  recipient account cannot see unshared busy periods (reported as an empty list per
+  RFC 9670 and draft-ietf-jmap-calendars Section 2.2). Skipped, not failed, when
+  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 Anything short of that is a finding, not a nuisance — report it as you
 would any other bug in this project.
