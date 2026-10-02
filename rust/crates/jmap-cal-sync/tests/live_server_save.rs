@@ -924,3 +924,112 @@ fn an_unrelated_edit_leaves_a_deleted_occurrences_exdate_in_place() {
     sync.remove_component(&saved.uid)
         .expect("CalendarEvent/set destroy failed against the real server");
 }
+
+/// The lines of the single `VALARM` block in an iCalendar document: its
+/// `UID` and `TRIGGER` lines, or `None` if there is no `VALARM`.
+fn valarm_uid_and_trigger(icalendar: &str) -> Option<(&str, &str)> {
+    let start = icalendar.find("BEGIN:VALARM")?;
+    let end = icalendar[start..].find("END:VALARM")? + start;
+    let block = &icalendar[start..end];
+    let uid = block.lines().find(|line| line.starts_with("UID:"))?;
+    let trigger = block.lines().find(|line| line.starts_with("TRIGGER"))?;
+    Some((uid, trigger))
+}
+
+/// Saves a `VEVENT` carrying a single reminder (a `VALARM` naming an explicit
+/// RFC 9074 `UID`, the way a client that understood the key would write one),
+/// then saves an edit that rewrites only the `TRIGGER` of that same `VALARM`,
+/// and confirms the reloaded event shows the new offset under the same `UID`
+/// rather than a second, duplicate reminder. `patch::diff_alerts` sends the
+/// whole `alerts` map, not a per-member patch, but keyed by each `VALARM`'s
+/// own `UID` (`jmap_ical::read_alerts`), so an edit under the server's own
+/// key must still land on the one entry that already exists, not a new one
+/// next to it. `tests/save.rs`'s
+/// `moving_a_reminder_sends_the_whole_set_under_the_servers_own_key` proves
+/// this against `jmap-mockd`; this is the first time the positive edit
+/// itself has been driven by an actual Stalwart round trip. The "unrelated
+/// edit leaves an untouched reminder alone" guard is the same remaining gap
+/// and is left for a future session.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn moving_an_events_reminder_reaches_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!("agent-calsync-reminder-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-reminder-{}", unique_suffix());
+    let alarm_uid = format!("agent-calsync-reminder-alarm-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         BEGIN:VALARM\r\n\
+         UID:{alarm_uid}\r\n\
+         ACTION:DISPLAY\r\n\
+         TRIGGER:-PT15M\r\n\
+         END:VALARM\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let (uid_before, trigger_before) = valarm_uid_and_trigger(&saved.icalendar)
+        .expect("the created event should carry the VALARM we sent");
+    assert_eq!(
+        uid_before,
+        format!("UID:{alarm_uid}"),
+        "{}",
+        saved.icalendar
+    );
+    assert_eq!(trigger_before, "TRIGGER:-PT15M", "{}", saved.icalendar);
+
+    let edited_icalendar = saved.icalendar.replace("TRIGGER:-PT15M", "TRIGGER:-PT1H");
+    sync.save_component(&edited_icalendar, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the edited event failed");
+
+    let valarm_count = reloaded.icalendar.matches("BEGIN:VALARM").count();
+    assert_eq!(
+        valarm_count, 1,
+        "the edit must patch the server's own reminder, not create a second one: {}",
+        reloaded.icalendar
+    );
+    let (uid_after, trigger_after) = valarm_uid_and_trigger(&reloaded.icalendar)
+        .expect("the reloaded event should still carry a VALARM");
+    assert_eq!(
+        uid_after,
+        format!("UID:{alarm_uid}"),
+        "the edit must keep the server's own key: {}",
+        reloaded.icalendar
+    );
+    assert_eq!(
+        trigger_after, "TRIGGER:-PT1H",
+        "the new offset must reach the server: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
