@@ -78,10 +78,12 @@ use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter,
     EmailSubmissionQueryFilter, Mailbox, keyword, role,
 };
-use jmap_proto::methods::{BlobCopyRequest, Comparator, GetRequest};
+use jmap_proto::methods::{
+    BlobCopyRequest, ChangesRequest, ChangesResponse, Comparator, GetRequest, SetRequest,
+};
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
-use jmap_proto::request::Request;
+use jmap_proto::request::{Request, ResultReference};
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
     CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION,
@@ -3582,4 +3584,308 @@ fn server_call_and_object_limits_enforced_through_the_real_api() {
         }
         other => panic!("expected requestTooLarge MethodError for Email/set, got: {other:?}"),
     }
+}
+
+/// Protocol edge cases (RFC 8620 §3.7 and §5.3) against a real server:
+/// 1. Optimistic locking with `ifInState`: verifies that `ContactCard/set` with a
+///    mismatched (outdated) state is rejected with MethodError `stateMismatch` and
+///    leaves the data untouched, while a matching `ifInState` succeeds.
+/// 2. Back-reference failure when referenced call fails (RFC 8620 §3.7):
+///    request calling unknown method `c0` followed by `ContactCard/get` `c1` with
+///    `#ids` referencing `c0` returns `unknownMethod` for `c0` and
+///    `invalidResultReference` for `c1`.
+/// 3. Back-reference failure when referenced call succeeds but property path is missing:
+///    request calling `Core/echo` `c0` followed by `ContactCard/get` `c1` with `#ids`
+///    referencing nonexistent path in `c0` returns `Core/echo` for `c0` and
+///    `invalidResultReference` for `c1`.
+/// 4. Successful back-reference resolution: chaining `ContactCard/query` ->
+///    `ContactCard/get` via `ids_ref` in a single request resolves `/ids` into `#ids`.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn protocol_edges_optimistic_locking_and_backreference_failures_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the protocol edges test"
+        );
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+
+    let books = client
+        .address_books(&account_id)
+        .expect("AddressBook/get failed against the real server");
+    let book_id = books
+        .iter()
+        .find(|b| b.is_default == Some(true))
+        .or_else(|| books.first())
+        .and_then(|b| b.id.clone())
+        .expect("account has no address book for the test");
+
+    // 1. Optimistic locking: verify ifInState mismatch rejection.
+    let state_before = client
+        .contact_get(&account_id, &[])
+        .expect("contact_get failed")
+        .state;
+
+    let full_name = format!("agent-edge-{}", unique_suffix());
+    let card = ContactCard::simple(book_id.clone(), &full_name, "agent-edge@example.invalid");
+    let created = client
+        .contact_create(&account_id, &card)
+        .expect("contact_create failed");
+    let card_id = created.id.expect("server must return id for created card");
+
+    let state_after_create = client
+        .contact_get(&account_id, &[])
+        .expect("contact_get failed")
+        .state;
+    assert_ne!(state_before, state_after_create);
+
+    // Mismatched state must be rejected with stateMismatch without destroying the card.
+    let mismatch_request = SetRequest::<ContactCard>::new(account_id.clone())
+        .destroy(card_id.clone())
+        .if_in_state(state_before.clone());
+    let mismatch_err = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CONTACTS],
+            "ContactCard/set",
+            &mismatch_request,
+        )
+        .expect_err("ContactCard/set with mismatched ifInState must fail");
+    match mismatch_err {
+        Error::Method(err) => {
+            assert_eq!(err.error_type, method::STATE_MISMATCH);
+        }
+        other => panic!("expected stateMismatch MethodError, got {other:?}"),
+    }
+
+    // Verify card still exists.
+    let fetched = client
+        .contact_get(&account_id, std::slice::from_ref(&card_id))
+        .expect("contact_get failed");
+    assert_eq!(fetched.list.len(), 1);
+
+    // Matching state succeeds in destroying the card.
+    let match_request = SetRequest::<ContactCard>::new(account_id.clone())
+        .destroy(card_id.clone())
+        .if_in_state(state_after_create);
+    let match_resp = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CONTACTS],
+            "ContactCard/set",
+            &match_request,
+        )
+        .expect("ContactCard/set with matching ifInState must succeed");
+    let destroyed: Vec<Id> = serde_json::from_value(match_resp["destroyed"].clone())
+        .expect("destroyed must be an array of IDs");
+    assert!(destroyed.contains(&card_id));
+
+    // 2. Back-reference failure when referenced call fails.
+    let mut get_failed = GetRequest::all(account_id.clone());
+    get_failed.ids_ref = Some(ResultReference {
+        result_of: "c0".to_owned(),
+        name: "ContactCard/query".to_owned(),
+        path: "/ids".to_owned(),
+    });
+    let req_failed = Request::new([CAPABILITY_CORE, CAPABILITY_CONTACTS])
+        .call("ContactCard/nonexistentQuery", &json!({}), "c0")
+        .unwrap()
+        .call("ContactCard/get", &get_failed, "c1")
+        .unwrap();
+    let resp_failed = client
+        .api_call(&req_failed)
+        .expect("api_call must succeed at HTTP level");
+    assert_eq!(resp_failed.method_responses.len(), 2);
+
+    assert!(resp_failed.method_responses[0].is_error());
+    let err0: jmap_proto::error::MethodError = resp_failed.method_responses[0].parse().unwrap();
+    assert_eq!(err0.error_type, method::UNKNOWN_METHOD);
+
+    assert!(resp_failed.method_responses[1].is_error());
+    let err1: jmap_proto::error::MethodError = resp_failed.method_responses[1].parse().unwrap();
+    assert_eq!(err1.error_type, method::INVALID_RESULT_REFERENCE);
+
+    // 3. Back-reference failure when referenced call succeeds but property path is missing.
+    let mut get_bad_path = GetRequest::all(account_id.clone());
+    get_bad_path.ids_ref = Some(ResultReference {
+        result_of: "c0".to_owned(),
+        name: "Core/echo".to_owned(),
+        path: "/nonexistentPath".to_owned(),
+    });
+    let req_bad_path = Request::new([CAPABILITY_CORE, CAPABILITY_CONTACTS])
+        .call("Core/echo", &json!({"greeting": "hello"}), "c0")
+        .unwrap()
+        .call("ContactCard/get", &get_bad_path, "c1")
+        .unwrap();
+    let resp_bad_path = client
+        .api_call(&req_bad_path)
+        .expect("api_call must succeed at HTTP level");
+    assert_eq!(resp_bad_path.method_responses.len(), 2);
+    assert_eq!(resp_bad_path.method_responses[0].name, "Core/echo");
+    assert!(resp_bad_path.method_responses[1].is_error());
+    let err_bad_path: jmap_proto::error::MethodError =
+        resp_bad_path.method_responses[1].parse().unwrap();
+    assert_eq!(err_bad_path.error_type, method::INVALID_RESULT_REFERENCE);
+
+    // 4. Successful back-reference resolution chaining Principal/query -> Principal/get.
+    let mut get_success = GetRequest::all(account_id.clone());
+    get_success.ids_ref = Some(ResultReference {
+        result_of: "q0".to_owned(),
+        name: "Principal/query".to_owned(),
+        path: "/ids".to_owned(),
+    });
+    let req_success = Request::new([CAPABILITY_CORE, CAPABILITY_PRINCIPALS])
+        .call("Principal/query", &json!({"accountId": account_id}), "q0")
+        .unwrap()
+        .call("Principal/get", &get_success, "g0")
+        .unwrap();
+    let resp_success = client
+        .api_call(&req_success)
+        .expect("api_call must succeed at HTTP level");
+    assert_eq!(resp_success.method_responses.len(), 2);
+    assert_eq!(resp_success.method_responses[0].name, "Principal/query");
+    assert_eq!(resp_success.method_responses[1].name, "Principal/get");
+    assert!(!resp_success.method_responses[1].is_error());
+}
+
+/// Incremental sync paging and state resumption (RFC 8620 §5.2) against a real server:
+/// 1. Verifies that `ContactCard/changes` with `maxChanges: 1` returns `hasMoreChanges: true`
+///    and an intermediate `newState` when more than 1 change has occurred.
+/// 2. Verifies that following the intermediate `newState` with a second page fetches
+///    the remaining changes and terminates with `hasMoreChanges: false` at the current state.
+/// 3. Validates that high-level `Client::all_changes` automatically traverses multiple pages
+///    across intermediate states and folds them into a complete `ChangeSet`.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn changes_paging_and_resumption_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the changes paging test"
+        );
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+
+    let books = client
+        .address_books(&account_id)
+        .expect("AddressBook/get failed against the real server");
+    let book_id = books
+        .iter()
+        .find(|b| b.is_default == Some(true))
+        .or_else(|| books.first())
+        .and_then(|b| b.id.clone())
+        .expect("account has no address book for the test");
+
+    let initial_state = client
+        .contact_get(&account_id, &[])
+        .expect("contact_get failed")
+        .state;
+
+    // Seed two contacts to create two changes.
+    let suffix = unique_suffix();
+    let card1 = ContactCard::simple(
+        book_id.clone(),
+        &format!("agent-page1-{suffix}"),
+        "agent-page1@example.invalid",
+    );
+    let card2 = ContactCard::simple(
+        book_id,
+        &format!("agent-page2-{suffix}"),
+        "agent-page2@example.invalid",
+    );
+
+    let created1 = client
+        .contact_create(&account_id, &card1)
+        .expect("contact_create card1 failed");
+    let id1 = created1.id.expect("server must return id for card1");
+
+    let created2 = client
+        .contact_create(&account_id, &card2)
+        .expect("contact_create card2 failed");
+    let id2 = created2.id.expect("server must return id for card2");
+
+    let final_state = client
+        .contact_get(&account_id, &[])
+        .expect("contact_get failed")
+        .state;
+
+    // Page 1: request maxChanges: 1
+    let changes_req1 = ChangesRequest {
+        account_id: account_id.clone(),
+        since_state: initial_state.clone(),
+        max_changes: Some(1),
+    };
+    let page1_val = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CONTACTS],
+            "ContactCard/changes",
+            &changes_req1,
+        )
+        .expect("ContactCard/changes page 1 failed");
+    let page1: ChangesResponse =
+        serde_json::from_value(page1_val).expect("ChangesResponse parse failed");
+
+    assert!(
+        page1.has_more_changes,
+        "page 1 must report hasMoreChanges: true"
+    );
+    assert_eq!(
+        page1.created.len(),
+        1,
+        "page 1 must return exactly 1 created id"
+    );
+    assert_ne!(page1.new_state, initial_state);
+    assert_ne!(page1.new_state, final_state);
+
+    // Page 2: resume from page 1's newState
+    let changes_req2 = ChangesRequest {
+        account_id: account_id.clone(),
+        since_state: page1.new_state.clone(),
+        max_changes: Some(1),
+    };
+    let page2_val = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CONTACTS],
+            "ContactCard/changes",
+            &changes_req2,
+        )
+        .expect("ContactCard/changes page 2 failed");
+    let page2: ChangesResponse =
+        serde_json::from_value(page2_val).expect("ChangesResponse parse failed");
+
+    assert!(
+        !page2.has_more_changes,
+        "page 2 must report hasMoreChanges: false"
+    );
+    assert_eq!(
+        page2.created.len(),
+        1,
+        "page 2 must return exactly 1 created id"
+    );
+    assert_eq!(page2.new_state, final_state);
+
+    let mut all_paged_ids = vec![page1.created[0].clone(), page2.created[0].clone()];
+    all_paged_ids.sort();
+    let mut expected_ids = vec![id1.clone(), id2.clone()];
+    expected_ids.sort();
+    assert_eq!(all_paged_ids, expected_ids);
+
+    // High-level Client::all_changes follows pages and aggregates all created ids.
+    let full_change_set = client
+        .all_changes(&account_id, "ContactCard", &initial_state)
+        .expect("Client::all_changes must succeed across pages");
+    assert!(full_change_set.created.contains(&id1));
+    assert!(full_change_set.created.contains(&id2));
+    assert_eq!(full_change_set.new_state, final_state);
+
+    // Clean up created cards.
+    client
+        .contact_destroy(&account_id, &id1)
+        .expect("cleanup destroy id1 failed");
+    client
+        .contact_destroy(&account_id, &id2)
+        .expect("cleanup destroy id2 failed");
 }

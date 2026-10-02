@@ -341,6 +341,23 @@ in the invocation, worth failing loudly on.
   `maxObjectsInGet`, and confirms that `Email/set` destroy with 500 ids succeeds while 501 ids
   are rejected with `requestTooLarge`. Skipped, not failed, when
   `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `protocol_edges_optimistic_locking_and_backreference_failures_through_the_real_api`:
+  exercises optimistic locking (`ifInState`) and back-reference failure and resolution modes
+  (RFC 8620 §3.7 and §5.3). Proves that `ContactCard/set` with an outdated `ifInState` is rejected
+  with `stateMismatch` without mutating data, while matching `ifInState` succeeds; verifies that
+  a back-reference `#ids` referencing a failed method call fails with `invalidResultReference`;
+  confirms that a back-reference referencing a nonexistent path in a successful call fails with
+  `invalidResultReference`; and proves that successful back-reference resolution (`Principal/query`
+  -> `Principal/get` via `#ids` pointing to `/ids`) resolves IDs across calls in a single request.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `changes_paging_and_resumption_through_the_real_api`:
+  exercises incremental sync pagination and state resumption (RFC 8620 §5.2). Validates that
+  `ContactCard/changes` with `maxChanges: 1` returns `hasMoreChanges: true` and an intermediate
+  `newState` when multiple changes occurred; proves that following the intermediate `newState`
+  with a second page fetches the remaining changes and terminates with `hasMoreChanges: false`
+  at the current state; and proves that high-level `Client::all_changes` automatically traverses
+  multiple pages across intermediate states and folds them into a complete `ChangeSet`.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 
