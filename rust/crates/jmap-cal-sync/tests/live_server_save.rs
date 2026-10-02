@@ -572,6 +572,101 @@ fn an_unrelated_edit_leaves_an_events_conference_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
+/// Saves a `VEVENT` carrying a single `CONFERENCE`, then saves an edit that
+/// rewrites only the URI inside the same line (keeping whatever
+/// `X-JMAP-KEY` the server assigned on create, the way a client that
+/// understood the key would edit it), and confirms the reloaded event shows
+/// the new address on the server's own entry rather than a second, duplicate
+/// one. `patch::diff_virtual_locations` resolves the entry to patch by the
+/// server-chosen key and writes `virtualLocations/<key>/uri` alone, leaving
+/// any other member untouched — `tests/save.rs`'s
+/// `moving_where_an_event_is_joined_online_patches_the_link_in_place` proves
+/// this against `jmap-mockd`; this is the first time the positive rename
+/// itself, rather than only the guard that leaves an untouched `CONFERENCE`
+/// alone (the test above), has been driven by an actual Stalwart round trip.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn renaming_an_events_conference_reaches_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!(
+        "agent-calsync-conference-rename-{}@localhost",
+        unique_suffix()
+    );
+    let summary = format!("agent-calsync-conference-rename-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         CONFERENCE;VALUE=URI:https://meet.example.com/planning\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let conference_before = conference_line(&saved.icalendar)
+        .expect("the created event should carry the CONFERENCE we sent")
+        .to_owned();
+
+    let conference_after = conference_before.replace(
+        "https://meet.example.com/planning",
+        "https://meet.example.com/planning-2",
+    );
+    assert_ne!(
+        conference_before, conference_after,
+        "the rewrite must actually change the URI: {conference_before}"
+    );
+    let edited_icalendar = saved
+        .icalendar
+        .replace(&conference_before, &conference_after);
+    sync.save_component(&edited_icalendar, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the renamed event failed");
+
+    let conference_lines: Vec<&str> = reloaded
+        .icalendar
+        .lines()
+        .filter(|line| line.starts_with("CONFERENCE"))
+        .collect();
+    assert_eq!(
+        conference_lines.len(),
+        1,
+        "the rename must patch the server's own entry, not create a second one: {}",
+        reloaded.icalendar
+    );
+    assert!(
+        conference_lines[0].ends_with(":https://meet.example.com/planning-2"),
+        "the renamed conference must reach the server: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
+
 fn attach_line(icalendar: &str) -> Option<&str> {
     icalendar.lines().find(|line| line.starts_with("ATTACH"))
 }
