@@ -231,3 +231,90 @@ fn an_unrelated_edit_leaves_a_recurring_events_rrule_unchanged() {
     sync.remove_component(&saved.uid)
         .expect("CalendarEvent/set destroy failed against the real server");
 }
+
+/// Saves a recurring `VEVENT`, deletes one occurrence (an `EXDATE`), then
+/// saves a second edit that only changes the summary, and confirms the
+/// `EXDATE` is still present on reload. `patch::diff_overrides` only ever
+/// sends `recurrenceOverrides` when the baseline (the server's own event,
+/// rendered to iCalendar and re-parsed) differs from the edit, the same
+/// guard `diff_recurrence` uses for `RRULE` — here so a real excluded
+/// instance is never misread by an unrelated edit and dropped. This is the
+/// first time that guard has been driven by an actual Stalwart round trip
+/// for overrides rather than `jmap-mockd`'s modeled ones
+/// (`deleting_one_occurrence_reaches_the_server_as_an_excluded_override` in
+/// `tests/save.rs`).
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn an_unrelated_edit_leaves_a_deleted_occurrences_exdate_in_place() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!("agent-calsync-exdate-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-exdate-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         RRULE:FREQ=DAILY\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+
+    let excluded_icalendar = saved.icalendar.replace(
+        "END:VEVENT\r\n",
+        "EXDATE;TZID=Europe/Berlin:20260923T130000\r\nEND:VEVENT\r\n",
+    );
+    let after_delete = sync
+        .save_component(&excluded_icalendar, Some(&saved.uid))
+        .expect(
+            "CalendarEvent/set update (deleting one occurrence) failed against the real server",
+        );
+    assert!(
+        after_delete.icalendar.contains("EXDATE"),
+        "the deleted occurrence should carry an EXDATE on reload: {}",
+        after_delete.icalendar
+    );
+
+    let new_summary = format!("{summary}-renamed");
+    let unrelated_edit = after_delete.icalendar.replacen(&summary, &new_summary, 1);
+    sync.save_component(&unrelated_edit, Some(&saved.uid))
+        .expect("CalendarEvent/set update (unrelated summary edit) failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the edited event failed");
+    assert!(
+        reloaded.icalendar.contains(&new_summary),
+        "the summary edit should be visible on reload: {}",
+        reloaded.icalendar
+    );
+    assert!(
+        reloaded.icalendar.contains("EXDATE"),
+        "an edit that never touched recurrence overrides must not drop the server's own EXDATE: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
