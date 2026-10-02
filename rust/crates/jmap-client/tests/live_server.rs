@@ -67,8 +67,8 @@ use jmap_client::{CancelFlag, Client, Credentials, EventSourceSubscription};
 use jmap_proto::Id;
 use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{
-    Calendar, CalendarEvent, CalendarEventQueryFilter, Participant, ParticipantIdentity,
-    RecurrenceRule,
+    Calendar, CalendarEvent, CalendarEventNotificationQueryFilter, CalendarEventQueryFilter,
+    Participant, ParticipantIdentity, RecurrenceRule,
 };
 use jmap_proto::contacts::{
     AddressBook, ContactCard, ContactCardParseRequest, ContactCardQueryFilter,
@@ -85,6 +85,7 @@ use jmap_proto::session::{
     CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA,
 };
 use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
+use jmap_proto::state::UtcDate;
 use serde_json::json;
 
 const CAPABILITY_CONTACTS_PARSE: &str = "urn:ietf:params:jmap:contacts:parse";
@@ -3054,5 +3055,150 @@ fn participant_identity_lifecycle_and_validation_through_the_real_api() {
         client
             .participant_identity_set_default(&account_id, id)
             .expect("ParticipantIdentity/set onSuccessSetIsDefault failed");
+    }
+}
+
+/// `CalendarEventNotification/*` (draft-ietf-jmap-calendars-28 §8):
+/// exercises `Client::calendar_event_notifications` (`CalendarEventNotification/get`),
+/// validates that querying unknown ids via `CalendarEventNotification/get` reports
+/// them in `notFound`, exercises `Client::calendar_event_notification_query`
+/// (`CalendarEventNotification/query`) with empty and time-range filters, verifies
+/// `CalendarEventNotification/changes` via `Client::changes`, verifies server-enforced
+/// constraints rejecting direct `create` and `update` calls with `forbidden`, and
+/// confirms that destroying a nonexistent notification with a formatted id returns `notFound`.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn calendar_event_notification_lifecycle_and_validation_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping calendar event notification test"
+        );
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CALENDARS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CALENDARS}; skipping");
+        return;
+    };
+    if !client
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_CALENDARS)
+    {
+        eprintln!("server does not advertise {CAPABILITY_CALENDARS}; skipping");
+        return;
+    }
+
+    // 1. Fetch all calendar event notifications visible to this account (draft §8).
+    let notifications = client
+        .calendar_event_notifications(&account_id)
+        .expect("CalendarEventNotification/get failed against the real server");
+
+    // 2. Querying unknown ids via CalendarEventNotification/get reports them in notFound.
+    let unknown_id = Id::new("nonexistent-cen-id");
+    let not_found_arg = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "CalendarEventNotification/get",
+            &GetRequest::ids(account_id.clone(), [unknown_id.as_str()]),
+        )
+        .expect("CalendarEventNotification/get with ids failed against the real server");
+    let not_found_list: Vec<Id> = serde_json::from_value(
+        not_found_arg
+            .get("notFound")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(Vec::new())),
+    )
+    .expect("could not deserialize notFound list");
+    assert_eq!(not_found_list, vec![unknown_id]);
+
+    // 3. Querying notifications via CalendarEventNotification/query:
+    // a. Empty filter returns the id list matching get count.
+    let query_ids = client
+        .calendar_event_notification_query(&account_id, CalendarEventNotificationQueryFilter::new())
+        .expect("CalendarEventNotification/query failed against the real server");
+    assert_eq!(query_ids.len(), notifications.len());
+
+    // b. Filter with after/before time window executes cleanly.
+    let filtered_ids = client
+        .calendar_event_notification_query(
+            &account_id,
+            CalendarEventNotificationQueryFilter::new()
+                .with_after(UtcDate::new("2026-01-01T00:00:00Z"))
+                .with_before(UtcDate::new("2027-01-01T00:00:00Z")),
+        )
+        .expect("CalendarEventNotification/query with time filter failed against the real server");
+    assert!(filtered_ids.len() <= query_ids.len());
+
+    // 4. Server-enforced creation and update constraints:
+    // CalendarEventNotification objects are strictly server-created (draft §8).
+    // a. Direct create call must be rejected with forbidden.
+    let create_resp = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "CalendarEventNotification/set",
+            &json!({
+                "accountId": account_id,
+                "create": {
+                    "new_notif": {
+                        "eventId": "evt-dummy",
+                        "created": "2026-10-01T00:00:00Z",
+                    }
+                }
+            }),
+        )
+        .expect("CalendarEventNotification/set create call failed on wire");
+    assert_eq!(
+        create_resp["notCreated"]["new_notif"]["type"],
+        json!("forbidden"),
+        "expected forbidden error when client attempts to create CalendarEventNotification"
+    );
+
+    // b. Direct update call must be rejected with forbidden.
+    let update_resp = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "CalendarEventNotification/set",
+            &json!({
+                "accountId": account_id,
+                "update": {
+                    "u1": {
+                        "comment": "forbidden update",
+                    }
+                }
+            }),
+        )
+        .expect("CalendarEventNotification/set update call failed on wire");
+    assert_eq!(
+        update_resp["notUpdated"]["u1"]["type"],
+        json!("forbidden"),
+        "expected forbidden error when client attempts to update CalendarEventNotification"
+    );
+
+    // 5. Querying changes via CalendarEventNotification/changes:
+    if let Some(state_str) = not_found_arg.get("state").and_then(|s| s.as_str()) {
+        let state = jmap_proto::State::new(state_str);
+        let changes = client
+            .changes(&account_id, "CalendarEventNotification", &state)
+            .expect("CalendarEventNotification/changes failed against the real server");
+        assert_eq!(changes.old_state, state);
+    }
+
+    // 6. Destroying a nonexistent notification with a formatted id reports notFound.
+    match client.calendar_event_notification_destroy(&account_id, &Id::new("n000000000000")) {
+        Err(jmap_client::Error::Set(err)) => {
+            assert_eq!(err.error_type, "notFound");
+        }
+        other => {
+            panic!("expected notFound SetError for unknown notification destroy, got {other:?}")
+        }
+    }
+
+    // 7. If any notification exists for this account, verify destroy roundtrip.
+    if let Some(first) = notifications.first()
+        && let Some(id) = &first.id
+    {
+        client
+            .calendar_event_notification_destroy(&account_id, id)
+            .expect("destroying existing CalendarEventNotification failed");
     }
 }

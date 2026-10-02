@@ -10,8 +10,9 @@
 use jmap_client::{Client, Credentials};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
-use jmap_proto::calendars::CalendarEvent;
+use jmap_proto::calendars::{CalendarEvent, CalendarEventNotificationQueryFilter};
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CORE};
+use jmap_proto::state::UtcDate;
 use serde_json::json;
 
 fn new_event(calendar_id: &Id, title: &str) -> CalendarEvent {
@@ -225,5 +226,111 @@ fn destroy_dismisses_a_notification_and_create_update_are_forbidden() {
         response["notCreated"]["new"]["type"],
         json!("forbidden"),
         "create is always rejected"
+    );
+}
+
+#[test]
+fn calendar_event_notification_query_filters_by_types_and_time_range() {
+    let bob = Id::new("P-bob");
+    let server = MockServer::builder()
+        .bearer_token("alice-token")
+        .bearer_token_as("bob-token", bob.clone())
+        .start();
+    let account_id = server.account_id();
+    let work = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_calendar("Work", false)
+    };
+
+    let alice = Client::connect(server.origin(), Credentials::bearer("alice-token")).unwrap();
+    let bob_client = Client::connect(server.origin(), Credentials::bearer("bob-token")).unwrap();
+
+    alice
+        .calendar_update(
+            &account_id,
+            &work,
+            json!({"shareWith": {bob.as_str(): {"mayReadItems": true}}}),
+        )
+        .unwrap();
+
+    let created = alice
+        .event_create(&account_id, &new_event(&work, "Sprint Review"))
+        .unwrap();
+    let event_id = created.id.clone().unwrap();
+
+    alice
+        .event_update(
+            &account_id,
+            &event_id,
+            json!({"title": "Sprint Review (updated)"}),
+        )
+        .unwrap();
+
+    alice.event_destroy(&account_id, &event_id).unwrap();
+
+    let all_ids = bob_client
+        .calendar_event_notification_query(&account_id, CalendarEventNotificationQueryFilter::new())
+        .unwrap();
+    assert_eq!(
+        all_ids.len(),
+        3,
+        "query with empty filter returns all notifications"
+    );
+
+    let created_ids = bob_client
+        .calendar_event_notification_query(
+            &account_id,
+            CalendarEventNotificationQueryFilter::new().with_types(vec!["created".to_owned()]),
+        )
+        .unwrap();
+    assert_eq!(created_ids.len(), 1, "query filtered to 'created' type");
+    assert_eq!(created_ids[0], all_ids[0]);
+
+    let updated_ids = bob_client
+        .calendar_event_notification_query(
+            &account_id,
+            CalendarEventNotificationQueryFilter::new().with_types(vec!["updated".to_owned()]),
+        )
+        .unwrap();
+    assert_eq!(updated_ids.len(), 1, "query filtered to 'updated' type");
+    assert_eq!(updated_ids[0], all_ids[1]);
+
+    let destroyed_ids = bob_client
+        .calendar_event_notification_query(
+            &account_id,
+            CalendarEventNotificationQueryFilter::new().with_types(vec!["destroyed".to_owned()]),
+        )
+        .unwrap();
+    assert_eq!(destroyed_ids.len(), 1, "query filtered to 'destroyed' type");
+    assert_eq!(destroyed_ids[0], all_ids[2]);
+
+    let in_window_ids = bob_client
+        .calendar_event_notification_query(
+            &account_id,
+            CalendarEventNotificationQueryFilter::new()
+                .with_after(UtcDate::new("2025-12-31T23:59:59Z"))
+                .with_before(UtcDate::new("2026-12-31T23:59:59Z")),
+        )
+        .unwrap();
+    assert_eq!(
+        in_window_ids.len(),
+        3,
+        "query within time window matches all"
+    );
+
+    let out_of_window_ids = bob_client
+        .calendar_event_notification_query(
+            &account_id,
+            CalendarEventNotificationQueryFilter::new()
+                .with_after(UtcDate::new("2027-01-01T00:00:00Z")),
+        )
+        .unwrap();
+    assert!(
+        out_of_window_ids.is_empty(),
+        "query outside time window matches none"
     );
 }

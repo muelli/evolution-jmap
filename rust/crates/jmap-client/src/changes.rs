@@ -28,7 +28,9 @@ impl Client {
         let capability = match type_name {
             "Mailbox" | "Email" | "Thread" => CAPABILITY_MAIL,
             "AddressBook" | "ContactCard" => CAPABILITY_CONTACTS,
-            "Calendar" | "CalendarEvent" | "ParticipantIdentity" => CAPABILITY_CALENDARS,
+            "Calendar" | "CalendarEvent" | "ParticipantIdentity" | "CalendarEventNotification" => {
+                CAPABILITY_CALENDARS
+            }
             "EmailSubmission" => CAPABILITY_SUBMISSION,
             other => {
                 return Err(Error::Protocol(format!(

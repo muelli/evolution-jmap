@@ -311,6 +311,15 @@ in the invocation, worth failing loudly on.
   proves that `Client::participant_identity_update` and
   `Client::participant_identity_set_default` round-trip. Skipped, not failed,
   when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `calendar_event_notification_lifecycle_and_validation_through_the_real_api`:
+  exercises `Client::calendar_event_notifications` (`CalendarEventNotification/get`),
+  validates that querying unknown ids via `CalendarEventNotification/get` reports
+  them in `notFound`, exercises `Client::calendar_event_notification_query`
+  (`CalendarEventNotification/query`) with empty and time-range filters, verifies
+  `CalendarEventNotification/changes` via `Client::changes`, verifies server-enforced
+  constraints rejecting direct `create` and `update` calls with `forbidden`, and
+  confirms that destroying a nonexistent notification with a formatted id returns `notFound`.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 Anything short of that is a finding, not a nuisance — report it as you
