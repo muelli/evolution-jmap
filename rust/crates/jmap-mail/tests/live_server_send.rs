@@ -299,3 +299,106 @@ fn a_message_sent_through_the_real_vfunc_is_delivered_by_the_real_server() {
         "the write-test account's own sent copy was not reported as saved"
     );
 }
+
+/// `jmap-mail-sync/tests/live_server_send.rs`'s
+/// `an_envelope_recipient_absent_from_every_header_is_still_delivered` proves
+/// real Stalwart honours `envelope.rcptTo` over headers, but only by handing
+/// `MailSync::send_message` a hand-built `Envelope` directly. `tests/send.rs`'s
+/// `the_addresses_camel_hands_over_are_the_envelope_that_goes_out` proves
+/// `src/envelope.rs`'s `read_envelope` builds that same divergence out of a
+/// real `CamelAddress` recipients list, but only against the mock. Neither
+/// proves the join: a real `CamelAddress` list, with a Bcc-shaped recipient
+/// absent from every header, translated by `read_envelope` and delivered by a
+/// real server through the actual `send_to_sync` vfunc. This test does: the
+/// message's only header-named party is the sender, and the recipient's
+/// address is in the `recipients` argument alone.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn a_recipient_absent_from_every_header_is_still_delivered_through_the_real_vfunc() {
+    let Some(sender_client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the send test");
+        return;
+    };
+    let Some(recipient_client) = connect_recipient() else {
+        eprintln!("JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the send test");
+        return;
+    };
+
+    let sender_email = env::var("JMAP_LIVE_SERVER_WRITE_USER").unwrap();
+    let recipient_email = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").unwrap();
+
+    let sender_account_id = sender_client
+        .primary_account(jmap_proto::session::CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+    let sync = MailSync::new(sender_client, sender_account_id);
+
+    let account = Account::open();
+    let transport = Transport::open(&account);
+    transport.connect(sync);
+
+    let subject = format!("agent-transport-bcc-{}", unique_suffix());
+    // `To` names the sender, not the recipient — the recipient's address is
+    // nowhere in the source bytes at all, the way a real Bcc works.
+    let message = format!(
+        "From: {sender_email}\r\n\
+         To: {sender_email}\r\n\
+         Subject: {subject}\r\n\
+         Message-ID: <{subject}@agent-livewrite.net>\r\n\
+         Date: Thu, 15 Jan 2026 09:30:00 +0000\r\n\
+         \r\n\
+         Sent via JmapTransport::send_message, with no header naming the recipient.\r\n"
+    );
+
+    let outcome = send(
+        &transport,
+        &Message::parsed(message.as_bytes()),
+        &Addresses::of(&[("", sender_email.as_str())]),
+        &Addresses::of(&[("", recipient_email.as_str())]),
+    );
+    assert!(outcome.sent, "the send failed: {:?}", outcome.message());
+
+    let recipient_account_id = recipient_client
+        .primary_account(jmap_proto::session::CAPABILITY_MAIL)
+        .expect("the recipient account needs the mail capability");
+    let recipient_sync = MailSync::new(recipient_client, recipient_account_id);
+    let (_, tree) = recipient_sync
+        .folder_tree()
+        .expect("listing the recipient's folder tree failed");
+    let inbox_id = tree
+        .role(FolderRole::Inbox)
+        .expect("the recipient account needs an Inbox")
+        .id
+        .clone();
+
+    // Local delivery is not necessarily synchronous with the vfunc returning,
+    // so poll rather than assume it has already landed.
+    let mut delivered = None;
+    for _ in 0..20 {
+        let (_, messages) = recipient_sync
+            .messages(&inbox_id)
+            .expect("listing the recipient's Inbox failed");
+        if let Some(row) = messages
+            .into_iter()
+            .find(|row| row.subject.as_deref() == Some(subject.as_str()))
+        {
+            delivered = Some(row);
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    let delivered = delivered.unwrap_or_else(|| {
+        panic!(
+            "the message sent through the real send_to_sync vfunc (recipient in the envelope \
+             only) never showed up in that recipient's Inbox after 20s of polling — the real \
+             server appears to deliver from headers, not the envelope"
+        )
+    });
+
+    assert_eq!(delivered.subject.as_deref(), Some(subject.as_str()));
+    assert!(
+        delivered.to.iter().all(|to| to.email != recipient_email),
+        "the delivered message's own To header names the envelope-only recipient \
+         ({recipient_email}); it should name only the sender, the same way a real Bcc \
+         recipient's address never appears in the headers"
+    );
+}
