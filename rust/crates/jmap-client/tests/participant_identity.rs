@@ -253,3 +253,30 @@ fn changes_reports_a_newly_created_identity() {
     assert!(response.updated.is_empty());
     assert!(response.destroyed.is_empty());
 }
+
+#[test]
+fn participant_identity_roundtrips_calendar_address_and_send_to() {
+    let (server, client) = connect();
+    let account_id = server.account_id();
+
+    let created = client
+        .participant_identity_create(
+            &account_id,
+            &ParticipantIdentity::new("Alice")
+                .with_calendar_address(ALICE)
+                .with_send_to_method("imip", "mailto:alice@example.com"),
+        )
+        .unwrap();
+
+    assert_eq!(created.name, "Alice");
+    assert_eq!(created.calendar_address.as_deref(), Some(ALICE));
+    let send_to = created.send_to.as_ref().expect("send_to map populated");
+    assert_eq!(
+        send_to.get("imip").map(String::as_str),
+        Some("mailto:alice@example.com")
+    );
+
+    let all = client.participant_identities(&account_id).unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].calendar_address.as_deref(), Some(ALICE));
+}

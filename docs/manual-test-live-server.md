@@ -301,6 +301,16 @@ in the invocation, worth failing loudly on.
   placed in `notParsable`, and proves the parsed `ContactCard` can be filed into
   an address book via `Client::contact_create` and destroyed cleanly. Skipped,
   not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `participant_identity_lifecycle_and_validation_through_the_real_api`:
+  exercises `Client::participant_identities` (`ParticipantIdentity/get`), validates
+  that querying unknown ids via `ParticipantIdentity/get` reports them in `notFound`,
+  confirms that destroying an unknown identity returns `notFound`, proves that
+  server-enforced creation rules reject client-supplied `id`, client-supplied
+  `isDefault`, missing `calendarAddress`, and unassigned `calendarAddress` with
+  `invalidProperties`, and (if an identity is provisioned for the write account)
+  proves that `Client::participant_identity_update` and
+  `Client::participant_identity_set_default` round-trip. Skipped, not failed,
+  when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 Anything short of that is a finding, not a nuisance — report it as you

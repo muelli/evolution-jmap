@@ -13,6 +13,7 @@ use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CORE};
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::client::Client;
@@ -256,7 +257,7 @@ impl Client {
             "ParticipantIdentity/get",
             &GetRequest::all(account_id.clone()),
         )?;
-        let response: GetResponse<ParticipantIdentity> = serde_json::from_value(arguments)?;
+        let response: ParticipantIdentityGetResponse = serde_json::from_value(arguments)?;
         Ok(response.list)
     }
 
@@ -345,4 +346,11 @@ impl Client {
         let arguments = self.single_call(USING, "ParticipantIdentity/set", request)?;
         Ok(serde_json::from_value(arguments)?)
     }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParticipantIdentityGetResponse {
+    #[serde(default)]
+    list: Vec<ParticipantIdentity>,
 }

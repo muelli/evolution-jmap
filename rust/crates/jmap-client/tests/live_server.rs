@@ -67,7 +67,8 @@ use jmap_client::{CancelFlag, Client, Credentials, EventSourceSubscription};
 use jmap_proto::Id;
 use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{
-    Calendar, CalendarEvent, CalendarEventQueryFilter, Participant, RecurrenceRule,
+    Calendar, CalendarEvent, CalendarEventQueryFilter, Participant, ParticipantIdentity,
+    RecurrenceRule,
 };
 use jmap_proto::contacts::{
     AddressBook, ContactCard, ContactCardParseRequest, ContactCardQueryFilter,
@@ -76,7 +77,7 @@ use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
     keyword, role,
 };
-use jmap_proto::methods::{BlobCopyRequest, Comparator};
+use jmap_proto::methods::{BlobCopyRequest, Comparator, GetRequest};
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
 use jmap_proto::session::{
@@ -2870,4 +2871,188 @@ fn contact_card_parse_parses_an_uploaded_vcard_blob_through_the_real_api() {
         fetched_after.list.is_empty(),
         "destroyed card still returned in ContactCard/get"
     );
+}
+
+/// `ParticipantIdentity/*` (draft-ietf-jmap-calendars-28 §3) against a real server:
+/// exercises `Client::participant_identities` (`ParticipantIdentity/get`), validates
+/// that `ParticipantIdentity/get` with unknown ids returns `notFound`, proves that
+/// server-enforced validation rules reject client-supplied `id`, client-supplied
+/// `isDefault`, missing `calendarAddress`, and unassigned `calendarAddress` with
+/// `invalidProperties` errors, confirms that destroying an unknown identity returns
+/// `notFound`, and (if an identity is provisioned for the write account) proves that
+/// `participant_identity_update` and `participant_identity_set_default` round-trip.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn participant_identity_lifecycle_and_validation_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping participant identity test"
+        );
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CALENDARS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CALENDARS}; skipping");
+        return;
+    };
+    if !client
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_CALENDARS)
+    {
+        eprintln!("server does not advertise {CAPABILITY_CALENDARS}; skipping");
+        return;
+    }
+
+    // 1. Fetch all participant identities visible to this account.
+    let identities = client
+        .participant_identities(&account_id)
+        .expect("ParticipantIdentity/get failed against the real server");
+
+    // 2. Querying unknown ids via ParticipantIdentity/get reports them in notFound.
+    let unknown_id = Id::new("nonexistent-pi-id");
+    let not_found_arg = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "ParticipantIdentity/get",
+            &GetRequest::ids(account_id.clone(), [unknown_id.as_str()]),
+        )
+        .expect("ParticipantIdentity/get with ids failed against the real server");
+    let not_found_list: Vec<Id> = serde_json::from_value(
+        not_found_arg
+            .get("notFound")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(Vec::new())),
+    )
+    .expect("could not deserialize notFound list");
+    assert_eq!(not_found_list, vec![unknown_id]);
+
+    // 3. Destroying a nonexistent identity returns notFound.
+    match client.participant_identity_destroy(&account_id, &Id::new("nonexistent-pi-destroy")) {
+        Err(jmap_client::Error::Set(err)) => {
+            assert_eq!(err.error_type, "notFound");
+        }
+        other => panic!("expected notFound SetError for unknown identity destroy, got {other:?}"),
+    }
+
+    // 4. Server-enforced creation constraints:
+    // a. Client-supplied id must be rejected with invalidProperties (property 'id').
+    match client.participant_identity_create(
+        &account_id,
+        &ParticipantIdentity::new("Agent").with_id("client-supplied-pi-id"),
+    ) {
+        Err(jmap_client::Error::Set(err)) => {
+            assert_eq!(err.error_type, "invalidProperties");
+            assert!(
+                err.properties
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .contains(&"id".to_string()),
+                "expected property 'id' in invalidProperties: {err:?}"
+            );
+        }
+        other => {
+            panic!("expected invalidProperties SetError for client-supplied id, got {other:?}")
+        }
+    }
+
+    // b. Client-supplied isDefault must be rejected with invalidProperties (property 'isDefault').
+    match client.participant_identity_create(
+        &account_id,
+        &ParticipantIdentity::new("Agent").is_default(false),
+    ) {
+        Err(jmap_client::Error::Set(err)) => {
+            assert_eq!(err.error_type, "invalidProperties");
+            assert!(
+                err.properties
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .contains(&"isDefault".to_string()),
+                "expected property 'isDefault' in invalidProperties: {err:?}"
+            );
+        }
+        other => {
+            panic!(
+                "expected invalidProperties SetError for client-supplied isDefault, got {other:?}"
+            )
+        }
+    }
+
+    // c. Missing calendarAddress (mandatory per draft-ietf-jmap-calendars-28 §3) must be rejected.
+    match client.participant_identity_create(&account_id, &ParticipantIdentity::new("Agent")) {
+        Err(jmap_client::Error::Set(err)) => {
+            assert_eq!(err.error_type, "invalidProperties");
+            assert!(
+                err.properties
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .contains(&"calendarAddress".to_string()),
+                "expected property 'calendarAddress' in invalidProperties: {err:?}"
+            );
+        }
+        other => {
+            panic!("expected invalidProperties SetError for missing calendarAddress, got {other:?}")
+        }
+    }
+
+    // d. Unconfigured calendarAddress must be rejected with invalidProperties.
+    match client.participant_identity_create(
+        &account_id,
+        &ParticipantIdentity::new("Agent")
+            .with_calendar_address("mailto:unconfigured-address@example.invalid"),
+    ) {
+        Err(jmap_client::Error::Set(err)) => {
+            assert_eq!(err.error_type, "invalidProperties");
+            assert!(
+                err.properties
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .contains(&"calendarAddress".to_string()),
+                "expected property 'calendarAddress' in invalidProperties: {err:?}"
+            );
+        }
+        other => {
+            panic!(
+                "expected invalidProperties SetError for unconfigured calendarAddress, got {other:?}"
+            )
+        }
+    }
+
+    // 5. If this account already has provisioned participant identities, verify update and default selection.
+    if let Some(first) = identities.first() {
+        assert!(
+            first.id.is_some(),
+            "identity must have a server-assigned id"
+        );
+        assert!(
+            first.calendar_address.is_some(),
+            "identity must have a calendarAddress"
+        );
+        let id = first.id.as_ref().unwrap();
+        let original_name = first.name.clone();
+        let updated_name = format!("{original_name} (updated)");
+
+        // Update identity name via PatchObject
+        client
+            .participant_identity_update(&account_id, id, json!({"name": updated_name}))
+            .expect("ParticipantIdentity/set update failed against real server");
+
+        let read_back = client
+            .participant_identities(&account_id)
+            .expect("ParticipantIdentity/get failed after update");
+        let updated_item = read_back
+            .iter()
+            .find(|pi| pi.id.as_ref() == Some(id))
+            .expect("updated identity missing from get");
+        assert_eq!(updated_item.name, updated_name);
+
+        // Restore original identity name
+        client
+            .participant_identity_update(&account_id, id, json!({"name": original_name}))
+            .expect("ParticipantIdentity/set restore update failed");
+
+        // Verify setting default
+        client
+            .participant_identity_set_default(&account_id, id)
+            .expect("ParticipantIdentity/set onSuccessSetIsDefault failed");
+    }
 }
