@@ -355,14 +355,22 @@ impl Client {
         properties: Option<&[&str]>,
     ) -> Result<Vec<Email>, Error> {
         let limit = self.session().max_size_request();
+        let max_objects = self
+            .session()
+            .max_objects_in_get()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|&limit| limit > 0);
         let mut fetched: Vec<Email> = Vec::with_capacity(ids.len());
         let mut rest = ids;
         loop {
             let call_id = self.next_call_id();
-            let take = match limit {
+            let mut take = match limit {
                 Some(limit) => self.ids_that_fit(account_id, rest, properties, &call_id, limit)?,
                 None => rest.len(),
             };
+            if let Some(max_objects) = max_objects {
+                take = take.min(max_objects);
+            }
             let (chunk, remaining) = rest.split_at(take);
             let request = Request::new([CAPABILITY_CORE, CAPABILITY_MAIL]).call(
                 "Email/get",

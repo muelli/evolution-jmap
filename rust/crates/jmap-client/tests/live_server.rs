@@ -63,7 +63,7 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use jmap_client::eventsource::{SharedHeaders, expand_url};
-use jmap_client::{CancelFlag, Client, Credentials, EventSourceSubscription};
+use jmap_client::{CancelFlag, Client, Credentials, Error, EventSourceSubscription};
 use jmap_proto::Id;
 use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{
@@ -73,6 +73,7 @@ use jmap_proto::calendars::{
 use jmap_proto::contacts::{
     AddressBook, ContactCard, ContactCardParseRequest, ContactCardQueryFilter,
 };
+use jmap_proto::error::method;
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter,
     EmailSubmissionQueryFilter, Mailbox, keyword, role,
@@ -80,6 +81,7 @@ use jmap_proto::mail::{
 use jmap_proto::methods::{BlobCopyRequest, Comparator, GetRequest};
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
+use jmap_proto::request::Request;
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
     CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION,
@@ -3431,4 +3433,153 @@ fn email_submission_lifecycle_and_validation_through_the_real_api() {
         json!("notFound"),
         "expected notFound in notDestroyed for unknown submission destroy"
     );
+}
+
+/// Exercise server-enforced request and call limits: maxCallsInRequest, maxObjectsInGet,
+/// and maxObjectsInSet. Validates that requests conforming to the advertised limits succeed,
+/// calls exceeding limits are rejected with the documented RFC 8620 error types, and
+/// Client::email_get transparently chunks across maxObjectsInGet.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn server_call_and_object_limits_enforced_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    // 1. Audit core capability advertised limits.
+    let max_calls = client
+        .session()
+        .max_calls_in_request()
+        .expect("session core capability must advertise maxCallsInRequest");
+    let max_objects_in_get = client
+        .session()
+        .max_objects_in_get()
+        .expect("session core capability must advertise maxObjectsInGet");
+    let max_objects_in_set = client
+        .session()
+        .max_objects_in_set()
+        .expect("session core capability must advertise maxObjectsInSet");
+
+    assert_eq!(max_calls, 16);
+    assert_eq!(max_objects_in_get, 500);
+    assert_eq!(max_objects_in_set, 500);
+
+    // 2. Provoke maxCallsInRequest:
+    // a. Exactly maxCallsInRequest (16) calls in one request succeed with 200 OK.
+    let mut req_16 = Request::new([CAPABILITY_CORE]);
+    for i in 0..max_calls {
+        req_16 = req_16
+            .call("Core/echo", &json!({"index": i}), format!("c{i}"))
+            .unwrap();
+    }
+    let resp_16 = client
+        .api_call(&req_16)
+        .expect("request with maxCallsInRequest calls must succeed");
+    assert_eq!(resp_16.method_responses.len(), max_calls as usize);
+
+    // b. Exceeding maxCallsInRequest by 1 call (17 calls) is refused whole with HTTP 400
+    // and Problem Details limit: maxCallsInRequest.
+    let mut req_17 = Request::new([CAPABILITY_CORE]);
+    for i in 0..=max_calls {
+        req_17 = req_17
+            .call("Core/echo", &json!({"index": i}), format!("c{i}"))
+            .unwrap();
+    }
+    let err_17 = client
+        .api_call(&req_17)
+        .expect_err("request exceeding maxCallsInRequest must be rejected");
+    match err_17 {
+        Error::Http {
+            status,
+            problem: Some(problem),
+        } => {
+            assert_eq!(status, 400);
+            assert_eq!(problem.error_type, "urn:ietf:params:jmap:error:limit");
+            assert_eq!(
+                problem.extra.get("limit"),
+                Some(&json!("maxCallsInRequest"))
+            );
+        }
+        other => panic!("expected HTTP 400 limit error, got: {other:?}"),
+    }
+
+    // 3. Provoke maxObjectsInGet:
+    // a. Single call with exactly maxObjectsInGet (500) ids succeeds with 200 OK.
+    let ids_500: Vec<Id> = (0..max_objects_in_get)
+        .map(|i| Id::new(format!("limit-probe-{i}")))
+        .collect();
+    let get_500 = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
+            "Email/get",
+            &json!({"accountId": account_id, "ids": ids_500}),
+        )
+        .expect("Email/get with maxObjectsInGet ids must succeed");
+    let not_found_500: Vec<String> =
+        serde_json::from_value(get_500["notFound"].clone()).expect("notFound must be a list");
+    assert_eq!(not_found_500.len(), max_objects_in_get as usize);
+
+    // b. Single call with maxObjectsInGet + 1 (501) ids is refused with requestTooLarge.
+    let ids_501: Vec<Id> = (0..=max_objects_in_get)
+        .map(|i| Id::new(format!("limit-probe-{i}")))
+        .collect();
+    let err_get_501 = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
+            "Email/get",
+            &json!({"accountId": account_id, "ids": ids_501}),
+        )
+        .expect_err("Email/get with 501 ids must be rejected with requestTooLarge");
+    match err_get_501 {
+        Error::Method(method_error) => {
+            assert_eq!(method_error.error_type, method::REQUEST_TOO_LARGE);
+        }
+        other => panic!("expected requestTooLarge MethodError, got: {other:?}"),
+    }
+
+    // c. High-level Client::email_get with 501 ids transparently splits across requests
+    // bounding chunks to maxObjectsInGet, avoiding requestTooLarge and returning all results.
+    let emails = client
+        .email_get(&account_id, &ids_501, None)
+        .expect("Client::email_get must split across maxObjectsInGet and succeed");
+    assert!(emails.is_empty(), "nonexistent probe ids yield empty list");
+
+    // 4. Provoke maxObjectsInSet:
+    // a. Single call with exactly maxObjectsInSet (500) destroy ids succeeds with 200 OK.
+    let destroy_500: Vec<Id> = (0..max_objects_in_set)
+        .map(|i| Id::new(format!("limit-destroy-probe-{i}")))
+        .collect();
+    let set_500 = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
+            "Email/set",
+            &json!({"accountId": account_id, "destroy": destroy_500}),
+        )
+        .expect("Email/set destroy with maxObjectsInSet ids must succeed");
+    assert!(
+        set_500["notDestroyed"].is_object(),
+        "expected notDestroyed object for nonexistent ids"
+    );
+
+    // b. Single call with maxObjectsInSet + 1 (501) destroy ids is refused with requestTooLarge.
+    let destroy_501: Vec<Id> = (0..=max_objects_in_set)
+        .map(|i| Id::new(format!("limit-destroy-probe-{i}")))
+        .collect();
+    let err_set_501 = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL],
+            "Email/set",
+            &json!({"accountId": account_id, "destroy": destroy_501}),
+        )
+        .expect_err("Email/set destroy with 501 ids must be rejected with requestTooLarge");
+    match err_set_501 {
+        Error::Method(method_error) => {
+            assert_eq!(method_error.error_type, method::REQUEST_TOO_LARGE);
+        }
+        other => panic!("expected requestTooLarge MethodError for Email/set, got: {other:?}"),
+    }
 }

@@ -331,6 +331,17 @@ in the invocation, worth failing loudly on.
   properties with `invalidProperties`, and confirms that destroying a nonexistent
   submission via `EmailSubmission/set` reports `notFound`. Skipped, not failed,
   when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `server_call_and_object_limits_enforced_through_the_real_api`:
+  exercises server-enforced request and call limits: `maxCallsInRequest`, `maxObjectsInGet`,
+  and `maxObjectsInSet`. Confirms advertised limits on session core capability, verifies
+  that exactly 16 calls in one request succeed while 17 calls are refused whole with HTTP 400
+  and Problem Details `urn:ietf:params:jmap:error:limit` (`maxCallsInRequest`), validates that
+  `Email/get` with 500 ids succeeds while 501 ids return MethodError `requestTooLarge`, proves
+  that high-level `Client::email_get` transparently splits 501 ids across requests to respect
+  `maxObjectsInGet`, and confirms that `Email/set` destroy with 500 ids succeeds while 501 ids
+  are rejected with `requestTooLarge`. Skipped, not failed, when
+  `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+
 
 
 Anything short of that is a finding, not a nuisance — report it as you

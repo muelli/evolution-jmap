@@ -314,3 +314,71 @@ fn a_server_that_names_no_call_limit_still_gets_the_chain() {
     assert_eq!(emails.len(), 2);
     assert_eq!(server.api_requests() - before, 1);
 }
+
+/// Seed an inbox with `count` messages and return both the inbox id and the email ids.
+fn seed_inbox_emails(server: &MockServer, count: usize) -> (Id, Vec<Id>) {
+    let account_id = server.account_id();
+    let state = server.state();
+    let mut state = state.lock().unwrap();
+    let account = state.account_mut(&account_id).unwrap();
+    let inbox = account.seed_mailbox("Inbox", Some(role::INBOX));
+    let ids = (0..count)
+        .map(|n| {
+            account.seed_email(EmailSeed::new(
+                inbox.clone(),
+                ("User", "user@example.com"),
+                &format!("Message {n}"),
+                "Body",
+                "2026-08-01T10:00:00Z",
+            ))
+        })
+        .collect();
+    (inbox, ids)
+}
+
+/// A server enforcing `maxObjectsInGet` rejects an Email/get naming more ids
+/// than advertised with `requestTooLarge`.
+#[test]
+fn a_server_enforcing_max_objects_in_get_refuses_a_call_exceeding_it() {
+    let server = MockServer::builder().objects_in_get(2).start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let ids = vec![Id::new("id1"), Id::new("id2"), Id::new("id3")];
+    let request = Request::new([CAPABILITY_CORE, CAPABILITY_MAIL])
+        .call(
+            "Email/get",
+            &json!({"accountId": account_id, "ids": ids}),
+            "c1",
+        )
+        .unwrap();
+
+    let response = client.api_call(&request).unwrap();
+    let invocation = response.responses_for("c1").next().unwrap();
+    assert!(invocation.is_error());
+    let error: jmap_proto::error::MethodError = invocation.parse().unwrap();
+    assert_eq!(
+        error.error_type,
+        jmap_proto::error::method::REQUEST_TOO_LARGE
+    );
+}
+
+/// An `Email/get` naming more ids than `maxObjectsInGet` splits across requests
+/// so that each request respects the server limit and all messages are fetched.
+#[test]
+fn email_get_splits_across_max_objects_in_get() {
+    let server = MockServer::builder().objects_in_get(2).start();
+    let account_id = server.account_id();
+    let (_inbox, ids) = seed_inbox_emails(&server, 3);
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let before = server.api_requests();
+    let emails = client.email_get(&account_id, &ids, Some(&["id"])).unwrap();
+
+    assert_eq!(emails.len(), 3);
+    assert_eq!(
+        server.api_requests() - before,
+        2,
+        "three ids with maxObjectsInGet=2 split across two requests"
+    );
+}
