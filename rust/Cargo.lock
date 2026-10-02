@@ -329,6 +329,7 @@ dependencies = [
  "evolution-jmap-ical",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
+ "evolution-jmap-vcard",
  "getrandom 0.3.4",
  "percent-encoding",
  "proptest",
