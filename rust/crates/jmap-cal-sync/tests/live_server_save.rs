@@ -747,6 +747,97 @@ fn an_unrelated_edit_leaves_an_events_attach_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
+/// Saves a `VEVENT` carrying a single `ATTACH`, then saves an edit that
+/// rewrites only the URI inside the same line (keeping whatever
+/// `X-JMAP-KEY` the server assigned on create, the way a client that
+/// understood the key would edit it), and confirms the reloaded event shows
+/// the new address on the server's own entry rather than a second, duplicate
+/// one. `patch::diff_links` resolves the entry to patch by the
+/// server-chosen key, confirms it via `the_servers_own_entry`'s href match,
+/// and writes `links/<key>/href` alone, leaving any other member untouched
+/// — `tests/save.rs`'s `moving_an_attachment_patches_the_entry_the_server_
+/// chose` proves this against `jmap-mockd`; this is the first time the
+/// positive rehref itself, rather than only the guard that leaves an
+/// untouched `ATTACH` alone (the test above), has been driven by an actual
+/// Stalwart round trip.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn renaming_an_events_attachment_reaches_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!("agent-calsync-attach-rename-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-attach-rename-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         ATTACH:https://files.example.com/planning.pdf\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let attach_before = attach_line(&saved.icalendar)
+        .expect("the created event should carry the ATTACH we sent")
+        .to_owned();
+
+    let attach_after = attach_before.replace(
+        "https://files.example.com/planning.pdf",
+        "https://files.example.com/planning-2.pdf",
+    );
+    assert_ne!(
+        attach_before, attach_after,
+        "the rewrite must actually change the URI: {attach_before}"
+    );
+    let edited_icalendar = saved.icalendar.replace(&attach_before, &attach_after);
+    sync.save_component(&edited_icalendar, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the renamed event failed");
+
+    let attach_lines: Vec<&str> = reloaded
+        .icalendar
+        .lines()
+        .filter(|line| line.starts_with("ATTACH"))
+        .collect();
+    assert_eq!(
+        attach_lines.len(),
+        1,
+        "the rehref must patch the server's own entry, not create a second one: {}",
+        reloaded.icalendar
+    );
+    assert!(
+        attach_lines[0].ends_with(":https://files.example.com/planning-2.pdf"),
+        "the renamed attachment must reach the server: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
+
 /// Saves a recurring `VEVENT`, deletes one occurrence (an `EXDATE`), then
 /// saves a second edit that only changes the summary, and confirms the
 /// `EXDATE` is still present on reload. `patch::diff_overrides` only ever
