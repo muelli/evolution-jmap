@@ -314,6 +314,87 @@ fn an_unrelated_edit_leaves_an_events_categories_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
+/// The `LOCATION` line of an iCalendar document, `None` if there is none.
+fn location_line(icalendar: &str) -> Option<&str> {
+    icalendar.lines().find(|line| line.starts_with("LOCATION"))
+}
+
+/// Saves a `VEVENT` carrying a single `LOCATION`, then saves an edit that only
+/// changes the summary, and confirms the reloaded event's `LOCATION` line is
+/// unchanged. `patch::diff_locations` only ever sends `locations/<key>/name`
+/// when the baseline (the server's own event, rendered to iCalendar and
+/// re-parsed) names a different place than the edit, the same guard
+/// `diff_recurrence`/`diff_keywords`/`diff_overrides` use for their own
+/// properties — here so real Stalwart's own `LOCATION`/`X-JMAP-KEY` round trip
+/// is never misread as the user renaming or clearing the place. This is the
+/// first time that guard has been driven by an actual Stalwart round trip
+/// rather than `jmap-mockd`'s modeled one
+/// (`a_place_that_did_not_change_is_not_sent_at_all` in `tests/save.rs`).
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn an_unrelated_edit_leaves_an_events_location_unchanged() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!("agent-calsync-location-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-location-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         LOCATION:Room 42\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let location = location_line(&saved.icalendar)
+        .expect("the created event should carry the LOCATION we sent")
+        .to_owned();
+
+    let new_summary = format!("{summary}-renamed");
+    let edited_icalendar = icalendar.replacen(&summary, &new_summary, 1);
+    sync.save_component(&edited_icalendar, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the edited event failed");
+    assert!(
+        reloaded.icalendar.contains(&new_summary),
+        "the summary edit should be visible on reload: {}",
+        reloaded.icalendar
+    );
+    assert_eq!(
+        location_line(&reloaded.icalendar),
+        Some(location.as_str()),
+        "an edit that never touched the place must not drop or reword the server's own LOCATION: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
+
 /// Saves a recurring `VEVENT`, deletes one occurrence (an `EXDATE`), then
 /// saves a second edit that only changes the summary, and confirms the
 /// `EXDATE` is still present on reload. `patch::diff_overrides` only ever
