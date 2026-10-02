@@ -395,6 +395,99 @@ fn an_unrelated_edit_leaves_an_events_location_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
+/// Saves a `VEVENT` carrying a single `LOCATION`, then saves an edit that
+/// renames the place by rewriting the `LOCATION` line itself without its
+/// `X-JMAP-KEY` (the way Evolution's appointment editor writes a `LOCATION`
+/// it has no UI concept of a key for), and confirms the reloaded event shows
+/// the new name on the server's own entry rather than a second, duplicate
+/// one. `patch::diff_locations` resolves which entry a keyless rename
+/// belongs to by position (there is only ever one place to rename) and
+/// patches `locations/<key>/name` under the server's own key, never the
+/// property whole — `tests/save.rs`'s
+/// `a_place_renamed_without_its_key_still_reaches_the_servers_own_entry`
+/// proves this against `jmap-mockd`; this is the first time the positive
+/// rename itself, rather than only the guard that leaves an untouched
+/// `LOCATION` alone (the test above), has been driven by an actual Stalwart
+/// round trip.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn renaming_an_events_location_reaches_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!(
+        "agent-calsync-location-rename-{}@localhost",
+        unique_suffix()
+    );
+    let summary = format!("agent-calsync-location-rename-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         LOCATION:Room 42\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let location_before = location_line(&saved.icalendar)
+        .expect("the created event should carry the LOCATION we sent")
+        .to_owned();
+
+    let edited_icalendar = saved
+        .icalendar
+        .replace(&location_before, "LOCATION:Room 43");
+    assert!(
+        edited_icalendar.contains("LOCATION:Room 43"),
+        "{edited_icalendar}"
+    );
+    sync.save_component(&edited_icalendar, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the renamed event failed");
+
+    let location_lines: Vec<&str> = reloaded
+        .icalendar
+        .lines()
+        .filter(|line| line.starts_with("LOCATION"))
+        .collect();
+    assert_eq!(
+        location_lines.len(),
+        1,
+        "the rename must patch the server's own entry, not create a second one: {}",
+        reloaded.icalendar
+    );
+    assert!(
+        location_lines[0].ends_with(":Room 43"),
+        "the renamed place must reach the server: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
+
 /// The `CONFERENCE` line of an iCalendar document, `None` if there is none.
 fn conference_line(icalendar: &str) -> Option<&str> {
     icalendar
