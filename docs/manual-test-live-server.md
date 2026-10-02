@@ -320,6 +320,17 @@ in the invocation, worth failing loudly on.
   constraints rejecting direct `create` and `update` calls with `forbidden`, and
   confirms that destroying a nonexistent notification with a formatted id returns `notFound`.
   Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `email_submission_lifecycle_and_validation_through_the_real_api`:
+  exercises `Client::email_submission_query` (`EmailSubmission/query`) with empty,
+  undoStatus, emailIds, threadIds, identityIds, and time-range filters, validates
+  that querying unknown ids via `Client::email_submission_get` (`EmailSubmission/get`)
+  reports them in `notFound`, exercises `EmailSubmission/changes` via `Client::changes`
+  and `Client::all_changes`, proves that canceling a nonexistent submission via
+  `Client::cancel_email_submission` returns `notFound`, validates server-enforced creation
+  constraints rejecting client-supplied `id`, missing `emailId`/`identityId`, and invalid
+  properties with `invalidProperties`, and confirms that destroying a nonexistent
+  submission via `EmailSubmission/set` reports `notFound`. Skipped, not failed,
+  when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 Anything short of that is a finding, not a nuisance — report it as you

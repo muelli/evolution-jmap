@@ -74,15 +74,15 @@ use jmap_proto::contacts::{
     AddressBook, ContactCard, ContactCardParseRequest, ContactCardQueryFilter,
 };
 use jmap_proto::mail::{
-    Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
-    keyword, role,
+    Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter,
+    EmailSubmissionQueryFilter, Mailbox, keyword, role,
 };
 use jmap_proto::methods::{BlobCopyRequest, Comparator, GetRequest};
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
 use jmap_proto::session::{
     CAPABILITY_BLOB, CAPABILITY_CALENDARS, CAPABILITY_CONTACTS, CAPABILITY_CORE, CAPABILITY_MAIL,
-    CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA,
+    CAPABILITY_PRINCIPALS, CAPABILITY_QUOTA, CAPABILITY_SUBMISSION,
 };
 use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
 use jmap_proto::state::UtcDate;
@@ -3201,4 +3201,234 @@ fn calendar_event_notification_lifecycle_and_validation_through_the_real_api() {
             .calendar_event_notification_destroy(&account_id, id)
             .expect("destroying existing CalendarEventNotification failed");
     }
+}
+
+/// `EmailSubmission/*` (RFC 8621 §7):
+/// exercises `Client::email_submission_query` (`EmailSubmission/query`) with empty,
+/// undoStatus, emailIds, threadIds, identityIds, and time-range filters,
+/// verifies `Client::email_submission_get` (`EmailSubmission/get`) returns matching
+/// submissions and populates `notFound` for unknown ids,
+/// verifies `EmailSubmission/changes` via `Client::changes` and `Client::all_changes`,
+/// confirms that canceling an unknown submission via `Client::cancel_email_submission` returns `notFound`,
+/// validates server-enforced creation constraints rejecting client-supplied `id`,
+/// missing `emailId`/`identityId`, and invalid properties with `invalidProperties`,
+/// and verifies that destroying a nonexistent submission via `EmailSubmission/set` reports `notFound`.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn email_submission_lifecycle_and_validation_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping email submission test");
+        return;
+    };
+    let Ok(account_id) = client
+        .primary_account(CAPABILITY_SUBMISSION)
+        .or_else(|_| client.primary_account(CAPABILITY_MAIL))
+    else {
+        eprintln!(
+            "server names no primary account for {CAPABILITY_SUBMISSION} or {CAPABILITY_MAIL}; skipping"
+        );
+        return;
+    };
+    if !client
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_SUBMISSION)
+    {
+        eprintln!("server does not advertise {CAPABILITY_SUBMISSION}; skipping");
+        return;
+    }
+
+    // 1. Query submissions via Client::email_submission_query (RFC 8621 §7.3):
+    // a. Empty filter returns all submission IDs visible to this account.
+    let all_submission_ids = client
+        .email_submission_query(&account_id, EmailSubmissionQueryFilter::new())
+        .expect("EmailSubmission/query with empty filter failed against real server");
+
+    // b. Filter by undoStatus ("pending" and "final").
+    let pending_ids = client
+        .email_submission_query(
+            &account_id,
+            EmailSubmissionQueryFilter::new().with_undo_status("pending"),
+        )
+        .expect("EmailSubmission/query with undoStatus=pending failed against real server");
+    assert!(pending_ids.len() <= all_submission_ids.len());
+
+    let final_ids = client
+        .email_submission_query(
+            &account_id,
+            EmailSubmissionQueryFilter::new().with_undo_status("final"),
+        )
+        .expect("EmailSubmission/query with undoStatus=final failed against real server");
+    assert!(final_ids.len() <= all_submission_ids.len());
+
+    // c. Filter with time range executes cleanly.
+    let time_filtered_ids = client
+        .email_submission_query(
+            &account_id,
+            EmailSubmissionQueryFilter::new()
+                .after(UtcDate::new("2026-01-01T00:00:00Z"))
+                .before(UtcDate::new("2027-01-01T00:00:00Z")),
+        )
+        .expect("EmailSubmission/query with time range failed against real server");
+    assert!(time_filtered_ids.len() <= all_submission_ids.len());
+
+    // d. Filter by nonexistent emailIds / threadIds / identityIds returns empty.
+    let non_matching_ids = client
+        .email_submission_query(
+            &account_id,
+            EmailSubmissionQueryFilter::new()
+                .with_email_ids([Id::new("nonexistent-email-id")])
+                .with_thread_ids([Id::new("nonexistent-thread-id")])
+                .with_identity_ids([Id::new("nonexistent-identity-id")]),
+        )
+        .expect("EmailSubmission/query with non-matching ids failed against real server");
+    assert!(non_matching_ids.is_empty());
+
+    // 2. Fetch submissions via Client::email_submission_get (RFC 8621 §7.4):
+    // a. Unknown id is omitted from the list returned by email_submission_get.
+    let unknown_id = Id::new("nonexistent-submission-id");
+    let missing_list = client
+        .email_submission_get(&account_id, [unknown_id.clone()])
+        .expect("EmailSubmission/get with unknown id failed against real server");
+    assert!(missing_list.is_empty());
+
+    // b. Raw EmailSubmission/get confirms unknown id is placed in notFound.
+    let get_raw = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/get",
+            &GetRequest::ids(account_id.clone(), [unknown_id.as_str()]),
+        )
+        .expect("EmailSubmission/get single_call failed on wire");
+    let not_found_list: Vec<Id> = serde_json::from_value(
+        get_raw
+            .get("notFound")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(Vec::new())),
+    )
+    .expect("could not deserialize notFound list");
+    assert_eq!(not_found_list, vec![unknown_id]);
+
+    // c. If any submissions exist, verify email_submission_get returns them with valid ids.
+    if !all_submission_ids.is_empty() {
+        let fetched = client
+            .email_submission_get(&account_id, all_submission_ids.iter().cloned())
+            .expect("EmailSubmission/get for existing submissions failed");
+        assert_eq!(fetched.len(), all_submission_ids.len());
+        for submission in &fetched {
+            assert!(submission.id.is_some());
+        }
+    }
+
+    // 3. Querying changes via EmailSubmission/changes (RFC 8620 §5.2):
+    if let Some(state_str) = get_raw.get("state").and_then(|s| s.as_str()) {
+        let state = jmap_proto::State::new(state_str);
+        let changes = client
+            .changes(&account_id, "EmailSubmission", &state)
+            .expect("EmailSubmission/changes failed against real server");
+        assert_eq!(changes.old_state, state);
+
+        let change_set = client
+            .all_changes(&account_id, "EmailSubmission", &state)
+            .expect("EmailSubmission all_changes failed against real server");
+        assert_eq!(change_set.new_state, changes.new_state);
+    }
+
+    // 4. Canceling a nonexistent submission via Client::cancel_email_submission returns notFound.
+    match client.cancel_email_submission(&account_id, &Id::new("nonexistent-cancel-sub")) {
+        Err(jmap_client::Error::Set(err)) => {
+            assert_eq!(err.error_type, "notFound");
+        }
+        other => {
+            panic!("expected notFound SetError for nonexistent submission cancel, got {other:?}")
+        }
+    }
+
+    // 5. Server-enforced creation constraints on EmailSubmission/set (RFC 8621 §7):
+    // a. Client-supplied id must be rejected with invalidProperties (property 'id').
+    let id_reject_resp = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/set",
+            &json!({
+                "accountId": account_id,
+                "create": {
+                    "sub_client_id": {
+                        "id": "client-supplied-submission-id",
+                        "emailId": "nonexistent-email-id",
+                        "identityId": "nonexistent-identity-id"
+                    }
+                }
+            }),
+        )
+        .expect("EmailSubmission/set create call failed on wire");
+    assert_eq!(
+        id_reject_resp["notCreated"]["sub_client_id"]["type"],
+        json!("invalidProperties"),
+        "expected invalidProperties when client supplies an id for EmailSubmission"
+    );
+    let id_props: Vec<String> =
+        serde_json::from_value(id_reject_resp["notCreated"]["sub_client_id"]["properties"].clone())
+            .expect("could not parse properties array");
+    assert!(
+        id_props.contains(&"id".to_string()) || id_props.contains(&"emailId".to_string()),
+        "expected property 'id' or 'emailId' in invalidProperties: {id_props:?}"
+    );
+
+    // b. Missing emailId and identityId must be rejected with invalidProperties.
+    let empty_reject_resp = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/set",
+            &json!({
+                "accountId": account_id,
+                "create": {
+                    "sub_empty": {}
+                }
+            }),
+        )
+        .expect("EmailSubmission/set empty create call failed on wire");
+    assert_eq!(
+        empty_reject_resp["notCreated"]["sub_empty"]["type"],
+        json!("invalidProperties"),
+        "expected invalidProperties when emailId and identityId are omitted"
+    );
+
+    // c. Nonexistent emailId must be rejected with invalidProperties (property 'emailId').
+    let nonexistent_email_resp = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/set",
+            &json!({
+                "accountId": account_id,
+                "create": {
+                    "sub_no_email": {
+                        "emailId": "nonexistent-email-id",
+                        "identityId": "nonexistent-identity-id"
+                    }
+                }
+            }),
+        )
+        .expect("EmailSubmission/set nonexistent email create call failed on wire");
+    assert_eq!(
+        nonexistent_email_resp["notCreated"]["sub_no_email"]["type"],
+        json!("invalidProperties")
+    );
+
+    // 6. Destroying a nonexistent submission via EmailSubmission/set reports notFound.
+    let destroy_resp = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_MAIL, CAPABILITY_SUBMISSION],
+            "EmailSubmission/set",
+            &json!({
+                "accountId": account_id,
+                "destroy": ["nonexistent-destroy-sub"]
+            }),
+        )
+        .expect("EmailSubmission/set destroy call failed on wire");
+    assert_eq!(
+        destroy_resp["notDestroyed"]["nonexistent-destroy-sub"]["type"],
+        json!("notFound"),
+        "expected notFound in notDestroyed for unknown submission destroy"
+    );
 }

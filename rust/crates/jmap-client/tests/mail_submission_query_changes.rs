@@ -7,11 +7,11 @@
 
 use jmap_client::{Client, Credentials};
 use jmap_mock::{EmailSeed, MockServer};
-use jmap_proto::Id;
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailSubmissionQueryFilter, Envelope,
     EnvelopeAddress, Schedule, keyword, role,
 };
+use jmap_proto::{Id, UtcDate};
 
 fn draft(mailbox: &Id, to: &str) -> Email {
     Email {
@@ -291,4 +291,114 @@ fn submission_changes_reports_a_canceled_submission_as_updated() {
     assert!(changes.created.is_empty());
     assert_eq!(changes.updated, vec![submission_id]);
     assert!(changes.destroyed.is_empty());
+}
+
+/// Filtering by `identityIds`, `threadIds`, and `after`/`before` time range
+/// (RFC 8621 §7.3) narrows submissions to matching criteria.
+#[test]
+fn submission_query_filters_by_identity_ids_thread_ids_and_time_range() {
+    let server = MockServer::builder().max_delayed_send(3600).start();
+    let account_id = server.account_id();
+    let (drafts, inbox, alice_identity, bob_identity) = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        let alice_id = account.seed_identity("Alice", "alice@example.com");
+        let bob_id = account.seed_identity("Bob", "bob@example.com");
+        (
+            account.seed_mailbox("Drafts", Some(role::DRAFTS)),
+            account.seed_mailbox("Inbox", Some(role::INBOX)),
+            alice_id,
+            bob_id,
+        )
+    };
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let (sent_email, first_submission) = client
+        .send_email(
+            &account_id,
+            &draft(&drafts, "carol@example.com"),
+            &alice_identity,
+            None,
+        )
+        .unwrap();
+
+    let held_email_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_email(EmailSeed::new(
+                inbox,
+                ("Bob", "bob@example.com"),
+                "Held Message",
+                "Hi Carol",
+                "2026-08-01T10:00:00Z",
+            ))
+    };
+
+    let second_submission = client
+        .submit_email_at(
+            &account_id,
+            &held_email_id,
+            &bob_identity,
+            Envelope::new(
+                EnvelopeAddress::new("bob@example.com"),
+                [EnvelopeAddress::new("carol@example.com")],
+            ),
+            &Schedule::HoldFor(600),
+            None,
+        )
+        .unwrap();
+
+    let first_id = first_submission.id.unwrap();
+    let second_id = second_submission.id.unwrap();
+
+    // 1. Filter by identityIds:
+    let alice_ids = client
+        .email_submission_query(
+            &account_id,
+            EmailSubmissionQueryFilter::new().with_identity_ids([alice_identity.clone()]),
+        )
+        .unwrap();
+    assert_eq!(alice_ids, vec![first_id.clone()]);
+
+    let bob_ids = client
+        .email_submission_query(
+            &account_id,
+            EmailSubmissionQueryFilter::new().with_identity_ids([bob_identity.clone()]),
+        )
+        .unwrap();
+    assert_eq!(bob_ids, vec![second_id.clone()]);
+
+    // 2. Filter by threadIds:
+    if let Some(thread_id) = sent_email.thread_id {
+        let thread_matches = client
+            .email_submission_query(
+                &account_id,
+                EmailSubmissionQueryFilter::new().with_thread_ids([thread_id]),
+            )
+            .unwrap();
+        assert_eq!(thread_matches, vec![first_id.clone()]);
+    }
+
+    // 3. Filter by time range (sendAt is 2026-01-01T00:10:00Z for the held submission):
+    let in_window = client
+        .email_submission_query(
+            &account_id,
+            EmailSubmissionQueryFilter::new()
+                .after(UtcDate::new("2026-01-01T00:05:00Z"))
+                .before(UtcDate::new("2026-01-01T00:15:00Z")),
+        )
+        .unwrap();
+    assert_eq!(in_window, vec![second_id.clone()]);
+
+    let outside_window = client
+        .email_submission_query(
+            &account_id,
+            EmailSubmissionQueryFilter::new().after(UtcDate::new("2026-01-01T00:15:00Z")),
+        )
+        .unwrap();
+    assert!(outside_window.is_empty());
 }
