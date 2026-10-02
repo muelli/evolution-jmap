@@ -232,6 +232,83 @@ fn an_unrelated_edit_leaves_a_recurring_events_rrule_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
+/// Saves a `VEVENT` carrying an `RRULE`, then saves an edit that changes the
+/// rule itself (adding `COUNT`), and confirms the reloaded event's `RRULE`
+/// carries the new rule rather than the old one. `patch::diff_recurrence`
+/// sends the whole edited `recurrenceRule` whenever it differs from the
+/// baseline; `tests/save.rs`'s rule-editing tests (e.g.
+/// `the_weeks_of_the_year_a_rule_repeats_in_reach_the_server`) prove this
+/// against `jmap-mockd`. This is the first time the positive edit itself,
+/// rather than only the guard that leaves an untouched `RRULE` alone (the
+/// test above), has been driven by an actual Stalwart round trip.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn changing_an_events_recurrence_rule_reaches_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!("agent-calsync-rrule-edit-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-rrule-edit-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;WKST=SU\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let old_rrule = rrule_line(&saved.icalendar)
+        .expect("the created event should carry the RRULE we sent")
+        .to_owned();
+
+    let edited_icalendar = saved
+        .icalendar
+        .replacen(&old_rrule, &format!("{old_rrule};COUNT=5"), 1);
+    sync.save_component(&edited_icalendar, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the edited event failed");
+    assert_ne!(
+        rrule_line(&reloaded.icalendar),
+        Some(old_rrule.as_str()),
+        "the rule edit should have reached the server: {}",
+        reloaded.icalendar
+    );
+    assert!(
+        rrule_line(&reloaded.icalendar)
+            .expect("the edited event should still carry an RRULE")
+            .contains("COUNT=5"),
+        "the reloaded RRULE should carry the new rule part: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
+
 /// The `CATEGORIES` line of an iCalendar document, `None` if there is none.
 fn categories_line(icalendar: &str) -> Option<&str> {
     icalendar
