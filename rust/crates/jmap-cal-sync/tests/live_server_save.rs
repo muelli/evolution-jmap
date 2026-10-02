@@ -152,3 +152,82 @@ fn saving_then_removing_an_event_round_trips_through_the_real_server() {
         "the removed event should no longer be listed"
     );
 }
+
+/// The first `RRULE` line in an iCalendar document, `None` if there is none.
+fn rrule_line(icalendar: &str) -> Option<&str> {
+    icalendar.lines().find(|line| line.starts_with("RRULE:"))
+}
+
+/// Saves a recurring `VEVENT`, then saves an edit that only changes its
+/// summary, and confirms the reloaded event's `RRULE` is exactly what the
+/// server returned on create. `patch::diff_recurrence` only ever sends
+/// `recurrenceRule` when the baseline (the server's own event, rendered to
+/// iCalendar and re-parsed) differs from the edit; the baseline exists
+/// specifically so real Stalwart's own `RRULE` spelling is never misread as a
+/// user edit and narrowed or dropped. This is the first time that guard has
+/// been driven by an actual Stalwart round trip rather than `jmap-mockd`'s
+/// modeled `RRULE` strings.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn an_unrelated_edit_leaves_a_recurring_events_rrule_unchanged() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!("agent-calsync-rrule-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-rrule-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;WKST=SU\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let rrule = rrule_line(&saved.icalendar)
+        .expect("the created event should carry the RRULE we sent")
+        .to_owned();
+
+    let new_summary = format!("{summary}-renamed");
+    let edited_icalendar = icalendar.replacen(&summary, &new_summary, 1);
+    sync.save_component(&edited_icalendar, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the edited event failed");
+    assert!(
+        reloaded.icalendar.contains(&new_summary),
+        "the summary edit should be visible on reload: {}",
+        reloaded.icalendar
+    );
+    assert_eq!(
+        rrule_line(&reloaded.icalendar),
+        Some(rrule.as_str()),
+        "an edit that never touched recurrence must not narrow or drop the server's own RRULE: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
