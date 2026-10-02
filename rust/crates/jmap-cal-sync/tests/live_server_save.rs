@@ -937,6 +937,102 @@ fn valarm_uid_and_trigger(icalendar: &str) -> Option<(&str, &str)> {
 }
 
 /// Saves a `VEVENT` carrying a single reminder (a `VALARM` naming an explicit
+/// RFC 9074 `UID`), then saves an edit that only changes the summary, and
+/// confirms the reloaded event's `VALARM` is byte-identical. `patch::
+/// diff_alerts` only sends the whole `alerts` map when the baseline (the
+/// server's own event, rendered to iCalendar and re-parsed) names a
+/// different set of reminders than the edit, the same guard the
+/// locations/virtualLocations/links families use — here so real Stalwart's
+/// own `VALARM`/`UID` round trip is never misread as the user moving or
+/// clearing the reminder. `tests/save.rs`'s
+/// `a_reminder_that_did_not_change_is_not_sent_at_all` proves this against
+/// `jmap-mockd`; this is the first time the guard itself, rather than only
+/// the positive edit (the test below), has been driven by an actual
+/// Stalwart round trip.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn an_unrelated_edit_leaves_an_events_reminder_unchanged() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!("agent-calsync-reminder-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-reminder-{}", unique_suffix());
+    let alarm_uid = format!("agent-calsync-reminder-alarm-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         BEGIN:VALARM\r\n\
+         UID:{alarm_uid}\r\n\
+         ACTION:DISPLAY\r\n\
+         TRIGGER:-PT15M\r\n\
+         END:VALARM\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let reminder = valarm_uid_and_trigger(&saved.icalendar)
+        .expect("the created event should carry the VALARM we sent");
+    assert_eq!(
+        reminder.0,
+        format!("UID:{alarm_uid}"),
+        "{}",
+        saved.icalendar
+    );
+    assert_eq!(reminder.1, "TRIGGER:-PT15M", "{}", saved.icalendar);
+
+    let new_summary = format!("{summary}-renamed");
+    let edited_icalendar = saved.icalendar.replacen(&summary, &new_summary, 1);
+    sync.save_component(&edited_icalendar, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the edited event failed");
+    assert!(
+        reloaded.icalendar.contains(&new_summary),
+        "the summary edit should be visible on reload: {}",
+        reloaded.icalendar
+    );
+
+    let valarm_count = reloaded.icalendar.matches("BEGIN:VALARM").count();
+    assert_eq!(
+        valarm_count, 1,
+        "an edit that never touched the reminder must not drop or duplicate the server's own VALARM: {}",
+        reloaded.icalendar
+    );
+    assert_eq!(
+        valarm_uid_and_trigger(&reloaded.icalendar),
+        Some(reminder),
+        "an edit that never touched the reminder must not drop or reword the server's own VALARM: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
+
+/// Saves a `VEVENT` carrying a single reminder (a `VALARM` naming an explicit
 /// RFC 9074 `UID`, the way a client that understood the key would write one),
 /// then saves an edit that rewrites only the `TRIGGER` of that same `VALARM`,
 /// and confirms the reloaded event shows the new offset under the same `UID`
@@ -947,9 +1043,7 @@ fn valarm_uid_and_trigger(icalendar: &str) -> Option<(&str, &str)> {
 /// next to it. `tests/save.rs`'s
 /// `moving_a_reminder_sends_the_whole_set_under_the_servers_own_key` proves
 /// this against `jmap-mockd`; this is the first time the positive edit
-/// itself has been driven by an actual Stalwart round trip. The "unrelated
-/// edit leaves an untouched reminder alone" guard is the same remaining gap
-/// and is left for a future session.
+/// itself has been driven by an actual Stalwart round trip.
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn moving_an_events_reminder_reaches_the_real_server() {
