@@ -133,3 +133,49 @@ fn two_ids_report_independently() {
     assert!(response.parsed.expect("parsed map").contains_key(&good));
     assert_eq!(response.not_parsable, Some(vec![bad]));
 }
+
+#[test]
+fn parsed_contact_card_can_be_created_in_address_book() {
+    let server = jmap_mock::MockServer::builder().start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let book_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        state
+            .account_mut(&account_id)
+            .unwrap()
+            .seed_address_book("Default", true)
+    };
+
+    let blob_id = upload(&client, &account_id, VCARD);
+
+    let response = client
+        .contact_card_parse(&ContactCardParseRequest::new(
+            account_id.clone(),
+            [blob_id.clone()],
+        ))
+        .expect("contact_card_parse");
+
+    let parsed = response.parsed.expect("parsed map");
+    let mut card = parsed.get(&blob_id).expect("blob was parsed").clone();
+    card.address_book_ids = Some([(book_id.clone(), true)].into());
+
+    let created = client
+        .contact_create(&account_id, &card)
+        .expect("contact_create");
+    let card_id = created.id.expect("the server named the card");
+
+    let fetched = client
+        .contact_get(&account_id, &[card_id])
+        .expect("contact_get")
+        .list
+        .into_iter()
+        .next()
+        .expect("created card found");
+    assert_eq!(
+        fetched.name.as_ref().unwrap().full.as_deref(),
+        Some("Vera Oldenburg")
+    );
+}

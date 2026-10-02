@@ -69,7 +69,9 @@ use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{
     Calendar, CalendarEvent, CalendarEventQueryFilter, Participant, RecurrenceRule,
 };
-use jmap_proto::contacts::{AddressBook, ContactCard, ContactCardQueryFilter};
+use jmap_proto::contacts::{
+    AddressBook, ContactCard, ContactCardParseRequest, ContactCardQueryFilter,
+};
 use jmap_proto::mail::{
     Email, EmailAddress, EmailBodyPart, EmailBodyValue, EmailImport, EmailQueryFilter, Mailbox,
     keyword, role,
@@ -83,6 +85,8 @@ use jmap_proto::session::{
 };
 use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
 use serde_json::json;
+
+const CAPABILITY_CONTACTS_PARSE: &str = "urn:ietf:params:jmap:contacts:parse";
 
 /// A value unique to this process invocation, for naming a record so a
 /// concurrent or prior run's leftover can never be mistaken for this run's
@@ -2710,5 +2714,160 @@ fn calendar_event_with_participant_reports_busy_period_in_free_busy_query() {
     assert!(
         busy_after.is_none(),
         "busy interval still reported after destroying the event"
+    );
+}
+
+/// `ContactCard/parse` (RFC 9610 §3.4) against a real server: uploads a vCard
+/// blob, parses it into a typed JSContact `ContactCard`, asserts the parsed
+/// properties (name and email), verifies `properties` projection filtering,
+/// confirms that invalid vCard data is placed in `notParsable`, and proves the
+/// parsed card can be stored via `ContactCard/set` create and then destroyed.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn contact_card_parse_parses_an_uploaded_vcard_blob_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the contact card parse test"
+        );
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CONTACTS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
+        return;
+    };
+    if !client
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_CONTACTS_PARSE)
+    {
+        eprintln!("server does not advertise {CAPABILITY_CONTACTS_PARSE}; skipping");
+        return;
+    }
+
+    let suffix = unique_suffix();
+    let full_name = format!("Vera Live-{}", suffix);
+    let email_addr = format!("vera-{}@example.com", suffix);
+    let vcard = format!(
+        "BEGIN:VCARD\r\n\
+         VERSION:3.0\r\n\
+         FN:{full_name}\r\n\
+         N:Live-{suffix};Vera;;;\r\n\
+         EMAIL;TYPE=WORK:{email_addr}\r\n\
+         END:VCARD\r\n"
+    );
+
+    let upload = client
+        .upload_blob(&account_id, "text/vcard", vcard.into_bytes())
+        .expect("blob upload failed against the real server");
+
+    let response = client
+        .contact_card_parse(&ContactCardParseRequest::new(
+            account_id.clone(),
+            [upload.blob_id.clone()],
+        ))
+        .expect("ContactCard/parse failed against the real server");
+
+    let parsed_map = response
+        .parsed
+        .expect("ContactCard/parse response missing parsed map");
+    let mut parsed_card = parsed_map
+        .get(&upload.blob_id)
+        .expect("uploaded blobId missing from parsed map")
+        .clone();
+    assert_eq!(
+        parsed_card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some(full_name.as_str()),
+        "parsed card name full mismatch"
+    );
+    let emails = parsed_card
+        .emails
+        .as_ref()
+        .expect("parsed card missing emails map");
+    assert!(
+        emails.values().any(|e| e.address == email_addr),
+        "parsed card emails missing {email_addr}: {emails:?}"
+    );
+
+    // Verify properties projection filtering.
+    let filtered_response = client
+        .contact_card_parse(
+            &ContactCardParseRequest::new(account_id.clone(), [upload.blob_id.clone()])
+                .properties(["name"]),
+        )
+        .expect("ContactCard/parse with properties failed against the real server");
+    let filtered_card = filtered_response
+        .parsed
+        .as_ref()
+        .and_then(|p| p.get(&upload.blob_id))
+        .cloned()
+        .expect("uploaded blobId missing in filtered parsed map");
+    assert_eq!(
+        filtered_card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some(full_name.as_str())
+    );
+    assert!(
+        filtered_card.emails.is_none(),
+        "properties=['name'] filter should have omitted emails"
+    );
+
+    // Verify unparsable content is placed in notParsable.
+    let bad_upload = client
+        .upload_blob(&account_id, "text/vcard", b"not a valid vcard".to_vec())
+        .expect("bad blob upload failed against the real server");
+    let bad_response = client
+        .contact_card_parse(&ContactCardParseRequest::new(
+            account_id.clone(),
+            [bad_upload.blob_id.clone()],
+        ))
+        .expect("ContactCard/parse on bad blob failed against the real server");
+    let not_parsable = bad_response
+        .not_parsable
+        .expect("expected notParsable list in response");
+    assert!(
+        not_parsable.contains(&bad_upload.blob_id),
+        "bad blob id not reported in notParsable: {not_parsable:?}"
+    );
+
+    // Verify that the parsed ContactCard can be filed into an address book via
+    // ContactCard/set create, and clean it up afterwards.
+    let books = client
+        .address_books(&account_id)
+        .expect("AddressBook/get failed against the real server");
+    let book_id = books
+        .iter()
+        .find(|b| b.is_default == Some(true))
+        .or_else(|| books.first())
+        .and_then(|b| b.id.clone())
+        .expect("account has no address book for the test");
+
+    parsed_card.address_book_ids = Some([(book_id.clone(), true)].into());
+    let created = client
+        .contact_create(&account_id, &parsed_card)
+        .expect("ContactCard/set create with parsed card failed against the real server");
+    let card_id = created.id.expect("the server named the new card");
+
+    let fetched = client
+        .contact_get(&account_id, std::slice::from_ref(&card_id))
+        .expect("ContactCard/get failed for created card")
+        .list
+        .into_iter()
+        .next()
+        .expect("created card not found in ContactCard/get");
+    assert_eq!(
+        fetched.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some(full_name.as_str())
+    );
+
+    // Clean up: destroy the created card and verify it is gone.
+    client
+        .contact_destroy(&account_id, &card_id)
+        .expect("ContactCard/set destroy failed against the real server (cleanup)");
+
+    let fetched_after = client
+        .contact_get(&account_id, std::slice::from_ref(&card_id))
+        .expect("ContactCard/get failed after destroy");
+    assert!(
+        fetched_after.list.is_empty(),
+        "destroyed card still returned in ContactCard/get"
     );
 }

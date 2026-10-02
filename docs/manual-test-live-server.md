@@ -294,6 +294,14 @@ in the invocation, worth failing loudly on.
   recipient account cannot see unshared busy periods (reported as an empty list per
   RFC 9670 and draft-ietf-jmap-calendars Section 2.2). Skipped, not failed, when
   `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `contact_card_parse_parses_an_uploaded_vcard_blob_through_the_real_api`:
+  uploads a vCard blob via `Client::upload_blob`, parses it with
+  `Client::contact_card_parse`, asserts the extracted name and email properties,
+  verifies `properties` projection filtering, confirms unparsable blobs are
+  placed in `notParsable`, and proves the parsed `ContactCard` can be filed into
+  an address book via `Client::contact_create` and destroyed cleanly. Skipped,
+  not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+
 
 Anything short of that is a finding, not a nuisance — report it as you
 would any other bug in this project.
