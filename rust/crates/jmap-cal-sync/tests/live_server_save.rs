@@ -232,6 +232,88 @@ fn an_unrelated_edit_leaves_a_recurring_events_rrule_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
+/// The `CATEGORIES` line of an iCalendar document, `None` if there is none.
+fn categories_line(icalendar: &str) -> Option<&str> {
+    icalendar
+        .lines()
+        .find(|line| line.starts_with("CATEGORIES"))
+}
+
+/// Saves a `VEVENT` carrying two tags, one of them holding a comma (so the
+/// `CATEGORIES` escaping round-trips too), then saves an edit that only
+/// changes the summary, and confirms the reloaded event's `CATEGORIES` line
+/// is unchanged. `patch::diff_keywords` only ever sends `keywords` when the
+/// baseline (the server's own event, rendered to iCalendar and re-parsed)
+/// differs from the edit, the same guard `diff_recurrence`/`diff_overrides`
+/// use for `RRULE`/overrides — here so real Stalwart's own `CATEGORIES`
+/// spelling is never misread as the user clearing or changing their tags.
+/// This is the first time that guard has been driven by an actual Stalwart
+/// round trip rather than `jmap-mockd`'s modeled `CATEGORIES` strings.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn an_unrelated_edit_leaves_an_events_categories_unchanged() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!("agent-calsync-categories-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-categories-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         CATEGORIES:Berlin\\, offsite,travel\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let categories = categories_line(&saved.icalendar)
+        .expect("the created event should carry the CATEGORIES we sent")
+        .to_owned();
+
+    let new_summary = format!("{summary}-renamed");
+    let edited_icalendar = icalendar.replacen(&summary, &new_summary, 1);
+    sync.save_component(&edited_icalendar, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the edited event failed");
+    assert!(
+        reloaded.icalendar.contains(&new_summary),
+        "the summary edit should be visible on reload: {}",
+        reloaded.icalendar
+    );
+    assert_eq!(
+        categories_line(&reloaded.icalendar),
+        Some(categories.as_str()),
+        "an edit that never touched tags must not drop or reword the server's own CATEGORIES: {}",
+        reloaded.icalendar
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
+
 /// Saves a recurring `VEVENT`, deletes one occurrence (an `EXDATE`), then
 /// saves a second edit that only changes the summary, and confirms the
 /// `EXDATE` is still present on reload. `patch::diff_overrides` only ever
