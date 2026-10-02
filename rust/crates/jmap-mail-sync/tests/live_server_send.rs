@@ -22,6 +22,16 @@
 //! recipient's never is. The first test above never exercises that, since
 //! its envelope recipient is also the `To` header's.
 //!
+//! The first test also now confirms `Outgoing::accepted_patch`'s own premise
+//! (`jmap-mail-sync/src/send.rs`'s doc comment): that real Stalwart applies
+//! the combined `$draft`/`$seen`/mailboxIds patch named by
+//! `onSuccessUpdateEmail` atomically with accepting the submission, by
+//! re-listing the *sender's* own Drafts and Sent mailboxes after the send,
+//! not just the recipient's Inbox. `jmap-mail-sync/tests/send.rs`'s
+//! `a_sent_message_leaves_the_mailbox_it_was_staged_in_for_the_one_it_is_
+//! filed_in` already proves this shape against `jmap-mockd`; nothing
+//! previously checked it against a real server.
+//!
 //! ## Running it
 //!
 //! Same environment as the other sync crates' live-server tests, plus the
@@ -126,6 +136,11 @@ fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
     let mailboxes = sync
         .outgoing_mailboxes()
         .expect("the write-test account needs somewhere to stage an outgoing message");
+    let staging = mailboxes.staging.clone();
+    let destination = mailboxes
+        .destination
+        .clone()
+        .expect("the write-test account needs a Sent mailbox to prove the filing half of this");
 
     let subject = format!("agent-mailsync-send-{}", unique_suffix());
     let message = format!(
@@ -185,6 +200,43 @@ fn sending_a_message_delivers_to_a_second_account_on_the_real_server() {
     });
 
     assert_eq!(delivered.subject.as_deref(), Some(subject.as_str()));
+
+    // `Outgoing::accepted_patch`'s own premise: the server applies the
+    // combined `$draft`/`$seen`/mailboxIds patch atomically with accepting
+    // the submission. Proven against `jmap-mockd` by `jmap-mail-sync/tests/
+    // send.rs`'s `a_sent_message_leaves_the_mailbox_it_was_staged_in_for_
+    // the_one_it_is_filed_in`; checked here against the real server for the
+    // first time.
+    let (_, staging_messages) = sync
+        .messages(&staging)
+        .expect("listing the sender's own staging mailbox failed");
+    assert!(
+        staging_messages
+            .iter()
+            .all(|row| row.subject.as_deref() != Some(subject.as_str())),
+        "the sent message (uid {uid}) is still left behind in the staging mailbox on the real server"
+    );
+
+    let (_, destination_messages) = sync
+        .messages(&destination)
+        .expect("listing the sender's own destination mailbox failed");
+    let filed = destination_messages
+        .into_iter()
+        .find(|row| row.subject.as_deref() == Some(subject.as_str()))
+        .unwrap_or_else(|| {
+            panic!(
+                "the sent message (uid {uid}) never showed up in the sender's own destination \
+                 mailbox on the real server"
+            )
+        });
+    assert!(
+        !filed.flags.draft,
+        "the sent message (uid {uid}) still carries $draft on the real server"
+    );
+    assert!(
+        filed.flags.seen,
+        "the sent message (uid {uid}) came back unread in the sender's own mailbox"
+    );
 }
 
 /// `jmap-mail/src/envelope.rs`'s own reason for carrying the envelope
