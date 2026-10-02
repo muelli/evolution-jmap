@@ -408,6 +408,6 @@ mod tests {
             .filter_map(Result::ok)
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "vcf"))
             .count();
-        assert_eq!(count, 9);
+        assert_eq!(count, 10);
     }
 }
