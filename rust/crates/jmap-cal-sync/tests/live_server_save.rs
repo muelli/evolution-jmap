@@ -314,6 +314,77 @@ fn an_unrelated_edit_leaves_an_events_categories_unchanged() {
         .expect("CalendarEvent/set destroy failed against the real server");
 }
 
+/// Saves a `VEVENT` carrying a single `CATEGORIES` tag, then saves an edit
+/// that adds a second tag to the same line, and confirms the reloaded
+/// event's `CATEGORIES` carries both. `patch::diff_keywords` sends the whole
+/// `keywords` map on any change, never a per-tag patch — the same shape
+/// `diff_alerts` uses and already has live confirmation for.
+/// `tests/save.rs`'s `adding_a_tag_to_a_tagged_event_sends_the_whole_set`
+/// proves this against `jmap-mockd`; this is the first time the positive
+/// edit itself, rather than only the guard that leaves an untouched
+/// `CATEGORIES` alone (the test above), has been driven by an actual
+/// Stalwart round trip.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn adding_a_tag_to_an_events_categories_reaches_the_real_server() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the write-path test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("the write-test account needs the calendars capability");
+    let calendar_id = client
+        .calendars(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default calendar")
+        .id
+        .expect("the server named the calendar");
+
+    let sync = CalSync::new(client, account_id, calendar_id);
+
+    let local_uid = format!("agent-calsync-addtag-{}@localhost", unique_suffix());
+    let summary = format!("agent-calsync-addtag-{}", unique_suffix());
+    let icalendar = format!(
+        "BEGIN:VCALENDAR\r\n\
+         VERSION:2.0\r\n\
+         BEGIN:VEVENT\r\n\
+         UID:{local_uid}\r\n\
+         SUMMARY:{summary}\r\n\
+         DTSTART;TZID=Europe/Berlin:20260922T130000\r\n\
+         DURATION:PT1H\r\n\
+         CATEGORIES:offsite\r\n\
+         END:VEVENT\r\n\
+         END:VCALENDAR\r\n"
+    );
+    let saved = sync
+        .save_component(&icalendar, None)
+        .expect("CalendarEvent/set create failed against the real server");
+    let categories = categories_line(&saved.icalendar)
+        .expect("the created event should carry the CATEGORIES we sent");
+    assert!(categories.contains("offsite"), "{categories}");
+
+    let edited_icalendar = saved
+        .icalendar
+        .replace("CATEGORIES:offsite", "CATEGORIES:offsite,travel");
+    sync.save_component(&edited_icalendar, Some(&saved.uid))
+        .expect("CalendarEvent/set update failed against the real server");
+    let reloaded = sync
+        .load_component(&saved.uid)
+        .expect("loading the edited event failed");
+    let reloaded_categories = categories_line(&reloaded.icalendar)
+        .expect("the edited event should still carry a CATEGORIES line");
+    assert!(
+        reloaded_categories.contains("offsite") && reloaded_categories.contains("travel"),
+        "adding a tag must reach the server alongside the one already there: {reloaded_categories}"
+    );
+
+    sync.remove_component(&saved.uid)
+        .expect("CalendarEvent/set destroy failed against the real server");
+}
+
 /// The `LOCATION` line of an iCalendar document, `None` if there is none.
 fn location_line(icalendar: &str) -> Option<&str> {
     icalendar.lines().find(|line| line.starts_with("LOCATION"))
