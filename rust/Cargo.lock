@@ -666,6 +666,7 @@ dependencies = [
 name = "jmap-backend-book-module"
 version = "0.4.1"
 dependencies = [
+ "evo-sys",
  "gobject-sys",
  "jmap-backend-book",
 ]
@@ -695,6 +696,7 @@ dependencies = [
 name = "jmap-backend-cal-module"
 version = "0.4.1"
 dependencies = [
+ "evo-sys",
  "gobject-sys",
  "jmap-backend-cal",
 ]
@@ -722,6 +724,7 @@ dependencies = [
 name = "jmap-backend-collection-module"
 version = "0.4.1"
 dependencies = [
+ "evo-sys",
  "gobject-sys",
  "jmap-backend-collection",
 ]

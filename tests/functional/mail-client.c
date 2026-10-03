@@ -51,6 +51,33 @@ fail (const gchar *step,
 	return 1;
 }
 
+/* 3.60 replaced the borrowed `camel_folder_get_uids`/`camel_folder_free_uids`
+ * pair with `camel_folder_dup_uids`, an ordinary reference-counted
+ * `GPtrArray` the caller owns (see `docs/eds-version-matrix.md`; the Rust
+ * side has the same two names behind `eds-sys`'s `compat::folder_dup_uids`/
+ * `folder_free_uids`). This test client links no crate from this
+ * repository, so the same two names are repeated here as plain C. */
+static GPtrArray *
+folder_dup_uids (CamelFolder *folder)
+{
+#if EDS_CHECK_VERSION(3, 60, 0)
+	return camel_folder_dup_uids (folder);
+#else
+	return camel_folder_get_uids (folder);
+#endif
+}
+
+static void
+folder_free_uids (CamelFolder *folder,
+		   GPtrArray *uids)
+{
+#if EDS_CHECK_VERSION(3, 60, 0)
+	g_ptr_array_unref (uids);
+#else
+	camel_folder_free_uids (folder, uids);
+#endif
+}
+
 /* The folder tree, flattened into a list of full names. A tree is what the
  * store returns and a flat sorted list is what the test can hold to; the
  * nesting is not what this test is about — jmap-mail's own tests own the
@@ -268,7 +295,7 @@ main (int argc,
 	if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
 		return fail ("refresh", error);
 
-	uids = camel_folder_get_uids (inbox);
+	uids = folder_dup_uids (inbox);
 	g_print ("inbox-count=%u\n", uids->len);
 
 	/* Every message, twice over — once out of the summary and once as a
@@ -317,7 +344,7 @@ main (int argc,
 
 		message = camel_folder_get_message_sync (inbox, uid, NULL, &error);
 		if (!message) {
-			camel_folder_free_uids (inbox, uids);
+			folder_free_uids (inbox, uids);
 			return fail ("get-message", error);
 		}
 
@@ -328,7 +355,7 @@ main (int argc,
 				stream, NULL, &error) < 0) {
 			g_object_unref (stream);
 			g_object_unref (message);
-			camel_folder_free_uids (inbox, uids);
+			folder_free_uids (inbox, uids);
 			return fail ("message-body", error);
 		}
 
@@ -344,7 +371,7 @@ main (int argc,
 		g_object_unref (message);
 	}
 
-	camel_folder_free_uids (inbox, uids);
+	folder_free_uids (inbox, uids);
 
 	report_sorted ("inbox-subjects", subjects);
 	report_sorted ("message-bodies", bodies);
@@ -442,11 +469,11 @@ main (int argc,
 		if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
 			return fail ("refresh-after-append", error);
 
-		uids = camel_folder_get_uids (inbox);
+		uids = folder_dup_uids (inbox);
 		g_print ("inbox-count-after-append=%u\n", uids->len);
 
 		reread = camel_folder_get_message_sync (inbox, appended_uid, NULL, &error);
-		camel_folder_free_uids (inbox, uids);
+		folder_free_uids (inbox, uids);
 		if (!reread)
 			return fail ("get-appended-message", error);
 
@@ -540,17 +567,17 @@ main (int argc,
 				g_object_unref (receipts);
 				return fail ("refresh-after-transfer-inbox", error);
 			}
-			uids = camel_folder_get_uids (inbox);
+			uids = folder_dup_uids (inbox);
 			g_print ("inbox-count-after-transfer=%u\n", uids->len);
-			camel_folder_free_uids (inbox, uids);
+			folder_free_uids (inbox, uids);
 
 			if (!camel_folder_refresh_info_sync (receipts, NULL, &error)) {
 				g_object_unref (receipts);
 				return fail ("refresh-after-transfer-receipts", error);
 			}
-			uids = camel_folder_get_uids (receipts);
+			uids = folder_dup_uids (receipts);
 			g_print ("receipts-count-after-transfer=%u\n", uids->len);
-			camel_folder_free_uids (receipts, uids);
+			folder_free_uids (receipts, uids);
 
 			/* Moved back, the mirror image: a JMAP server refuses to
 			 * destroy a mailbox that still holds a message
@@ -582,17 +609,17 @@ main (int argc,
 				g_object_unref (receipts);
 				return fail ("refresh-after-transfer-back-receipts", error);
 			}
-			uids = camel_folder_get_uids (receipts);
+			uids = folder_dup_uids (receipts);
 			g_print ("receipts-count-after-transfer-back=%u\n", uids->len);
-			camel_folder_free_uids (receipts, uids);
+			folder_free_uids (receipts, uids);
 
 			if (!camel_folder_refresh_info_sync (inbox, NULL, &error)) {
 				g_object_unref (receipts);
 				return fail ("refresh-after-transfer-back-inbox", error);
 			}
-			uids = camel_folder_get_uids (inbox);
+			uids = folder_dup_uids (inbox);
 			g_print ("inbox-count-after-transfer-back=%u\n", uids->len);
-			camel_folder_free_uids (inbox, uids);
+			folder_free_uids (inbox, uids);
 
 			g_object_unref (receipts);
 		}
@@ -669,7 +696,7 @@ main (int argc,
 		return fail ("expunge", error);
 	}
 
-	uids = camel_folder_get_uids (inbox);
+	uids = folder_dup_uids (inbox);
 	g_print ("inbox-count-after-expunge=%u\n", uids->len);
 	{
 		gboolean still_listed = FALSE;
@@ -682,7 +709,7 @@ main (int argc,
 		}
 		g_print ("expunged-uid-still-listed=%d\n", still_listed ? 1 : 0);
 	}
-	camel_folder_free_uids (inbox, uids);
+	folder_free_uids (inbox, uids);
 	g_free (flagged_uid);
 	g_free (deleted_uid);
 

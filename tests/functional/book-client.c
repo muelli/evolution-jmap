@@ -686,7 +686,11 @@ write_phase (EBookClient *book,
 	 * date line carries, so the two ends of this leg compare like with
 	 * like without either of them re-deriving it. */
 	read_back_birthday = e_contact_get (read_back, E_CONTACT_BIRTH_DATE);
+	#if EDS_CHECK_VERSION(3, 60, 0)
+	read_back_birthday_text = read_back_birthday ? e_contact_date_to_string (read_back_birthday, E_VCARD_VERSION_30) : NULL;
+	#else
 	read_back_birthday_text = read_back_birthday ? e_contact_date_to_string (read_back_birthday) : NULL;
+	#endif
 	g_print ("read-back-birthday=%s\n", read_back_birthday_text ? read_back_birthday_text : "");
 	g_free (read_back_birthday_text);
 	if (read_back_birthday)

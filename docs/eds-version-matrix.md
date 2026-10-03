@@ -290,6 +290,71 @@ changes underneath — passes this matrix silently. Only behavioural tests
 (the M9 functional layer, run against the version actually shipped) and
 human changelog review catch that.
 
+## M9 functional layer on EDS 3.60.2 (measured 2026-10-03, in the pinned container)
+
+The matrix above only ever ran `cargo test` for the EDS-facing crates
+directly: it proves this repository's own code compiles and passes its own
+unit/integration suite against 3.60.2's headers. It says nothing about
+`rust/crates/jmap-functional` (`docs/functional-tests.md`), the one layer
+that drives real EDS daemons (`evolution-source-registry`,
+`evolution-addressbook-factory`, `evolution-calendar-factory`) loading this
+repository's actual built modules. That layer had only ever been run against
+the pinned 3.52 the CI `functional` job installs. This entry is the first
+time it ran against 3.60.2.
+
+**Environment note for whoever reruns this: rootless podman silently drops
+`CAP_SETPCAP` from its default capability set**, even with an explicit
+`--cap-add=SETPCAP` (confirmed: the container's `CapBnd` is unchanged either
+way). `gnome-keyring-daemon` needs that capability to drop its own
+capabilities on startup and aborts without it
+(`error dropping process capabilities - -5, aborting`), which otherwise fails
+every single functional test that touches a credential lookup — in practice
+all twenty, since `Session::run` unlocks a login keyring up front regardless
+of whether the test's own account needs one. `--privileged` on the `podman
+run` from item 71's recipe restores the full bounding set (still confined by
+the rootless user namespace, so no more capable than any other rootless
+container here) and is what actually worked.
+
+Two harness-only breaks, both the same class of thing the matrix above
+already fixes inside `eds-sys`, just unfixed in the plain-C/plain-Rust test
+clients that link no crate from this repository: `tests/functional/
+book-client.c` called the pre-3.60 one-argument `e_contact_date_to_string`
+unconditionally (now `#if EDS_CHECK_VERSION(3, 60, 0)`-gated, matching
+`src/m-calendar-ui.c`'s existing style for this exact macro); `tests/
+functional/mail-client.c` called the removed `camel_folder_get_uids`/
+`camel_folder_free_uids` pair unconditionally (now behind two small local
+wrappers, `folder_dup_uids`/`folder_free_uids`, gated the same way, mirroring
+`eds-sys::compat`'s pair of the same name).
+
+One real product bug, found only because this layer `dlopen`s the actual
+built modules the way `evolution-source-registry` does rather than linking
+them: `jmap-backend-book-module`, `jmap-backend-cal-module` and
+`jmap-backend-collection-module` carried no `RUNPATH` at all, unlike
+`jmap-config-module` (which already had this exact fix, for the exact same
+reason, since an earlier session needed it for that module's own standalone
+test). All three link `libevolution-mail.so` transitively, through
+`jmap-config`'s own need for `evo-sys` — and `cargo:rustc-link-arg` from a
+dependency's build script never reaches a downstream crate's own final link,
+so each cdylib needed its own copy of the fix. Without it, the module loads
+fine wherever the host's ld cache already has Evolution's private libdir
+registered (true on any machine with the `evolution` GUI package installed
+alongside this backend, which is why this was invisible on every previous
+run) and fails everywhere else, including this minimal build-only container.
+Fixed: `evo-sys` added as a metadata-only direct dependency of each module
+crate (for `DEP_EVOLUTION_SHELL_LIBDIRS`), plus a `build.rs` identical in
+shape to `jmap-config-module`'s.
+
+With both classes of fix in: **all 20 non-`gui-smoke` functional ctest
+targets pass on EDS 3.60.2**, inside the item 71 podman recipe's pinned
+Fedora container, `--privileged` as above. `ci/checks.sh` (host, pinned
+3.52) stays green with the same changes, including the packaging leg.
+
+Stage 2 (pointing the book/calendar/collection legs at the live Stalwart
+server instead of the mock, per the roadmap item that asked for this) is not
+done in this pass — it is new scope on top of an already-sized increment,
+left for a follow-up session the way item 78's own fixture survey was
+batched.
+
 ## Supported versions
 
 The plugin is built against, and must be deployed against, the EDS it was
