@@ -143,7 +143,13 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# their own registry lookups.
 	# The calendar analogue of `functional-book-client`'s `list` phase, for
 	# `get_changes_sync` coverage — see tests/functional/cal-changes-client.c.
-	add_executable(functional-cal-changes-client tests/functional/cal-changes-client.c)
+	# connection-status.c is linked in for the same reason cal-live-client.c
+	# needs it: a real server's authenticate_sync does not settle until this
+	# thread's main context is iterated, which only `functional_report_
+	# connection_status` does here.
+	add_executable(functional-cal-changes-client
+		tests/functional/cal-changes-client.c
+		tests/functional/connection-status.c)
 	target_include_directories(functional-cal-changes-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
 	target_compile_options(functional-cal-changes-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
 	target_link_libraries(functional-cal-changes-client PRIVATE ${LIBECAL_LIBRARIES})
@@ -449,6 +455,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
 	)
 	set_tests_properties(functional-cal-changes PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_CHANGES_CLIENT=$<TARGET_FILE:functional-cal-changes-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
+	# Item 83 batch 2: `functional-cal-changes`'s own two-connects-one-cache
+	# leg, pointed at a real Stalwart instead of the in-process mock.
+	# `#[ignore]`d in the Rust source for the same reason
+	# functional-book-changes-live-stalwart is, so this registration only ever
+	# reports "ignored" in the ordinary functional run.
+	add_test(
+		NAME functional-cal-changes-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-calendar-changes
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-changes-live-stalwart PROPERTIES
 		LABELS functional
 		TIMEOUT 300
 		ENVIRONMENT

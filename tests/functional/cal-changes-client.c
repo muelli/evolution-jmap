@@ -22,6 +22,8 @@
 
 #include <libecal/libecal.h>
 
+#include "connection-status.h"
+
 static int
 fail (const gchar *step,
       GError *error)
@@ -65,6 +67,19 @@ main (int argc,
 		return 1;
 	}
 
+	/* A real server needs a password the mock never checks, and nothing
+	 * here has a GUI to be prompted through. Stored the ordinary way EDS
+	 * looks one up for Basic auth, mirroring `book-client.c`'s/
+	 * `cal-live-client.c`'s own step. Unset for every test against the
+	 * mock, which needs no password at all. */
+	{
+		const gchar *seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
+
+		if (seed_password && *seed_password &&
+		    !e_source_store_password_sync (source, seed_password, TRUE, NULL, &error))
+			return fail ("store-password", error);
+	}
+
 	/* Activates evolution-calendar-factory, which is what dlopens
 	 * libecalbackendjmap.so; see the same call in cal-client.c for why
 	 * this does not wait for connected. */
@@ -74,6 +89,13 @@ main (int argc,
 		return fail ("connect", error);
 
 	cal = E_CAL_CLIENT (client);
+
+	/* EDS's own verdict on the connect, waited for properly: against the
+	 * mock this is immediate, but a real server's authenticate_sync does
+	 * not settle until this thread's main context is iterated, which
+	 * nothing else here does — see connection-status.c's own header for
+	 * why `e_client_retrieve_properties_sync` alone is not enough. */
+	functional_report_connection_status (source, 10);
 
 	/* Over the bus rather than out of the client's cached copy; see the
 	 * same call in cal-client.c/book-client.c for why. */
