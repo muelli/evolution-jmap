@@ -516,6 +516,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_FREE_BUSY_CLIENT=$<TARGET_FILE:functional-cal-free-busy-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
+	# Item 83 batch 3: `functional-cal-free-busy`'s own `get_free_busy_sync`
+	# leg, pointed at a real Stalwart instead of the in-process mock.
+	# `#[ignore]`d in the Rust source for the same reason
+	# functional-cal-changes-live-stalwart is, so this registration only ever
+	# reports "ignored" in the ordinary functional run.
+	add_test(
+		NAME functional-cal-free-busy-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-calendar-free-busy
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-free-busy-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_FREE_BUSY_CLIENT=$<TARGET_FILE:functional-cal-free-busy-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
+	)
+
 	# The collection backend's populate/fan-out: a real
 	# evolution-source-registry loading module-jmap-backend.so for the
 	# account keyfile the Rust side writes, and the client above waiting for

@@ -148,6 +148,19 @@ main (int argc,
 		return 1;
 	}
 
+	/* A real server needs a password the mock never checks, and nothing
+	 * here has a GUI to be prompted through. Stored the ordinary way EDS
+	 * looks one up for Basic auth, mirroring `cal-live-client.c`'s own
+	 * step. Unset for every test against the mock, which needs no
+	 * password at all. */
+	{
+		const gchar *seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
+
+		if (seed_password && *seed_password &&
+		    !e_source_store_password_sync (source, seed_password, TRUE, NULL, &error))
+			return fail ("store-password", error);
+	}
+
 	/* Activates evolution-calendar-factory and keeps a live backend
 	 * instance running for the rest of this process's life —
 	 * `get_free_busy_sync` only ever fires on a backend that is connected
