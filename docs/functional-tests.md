@@ -1467,6 +1467,26 @@ For more from the daemons, add `G_MESSAGES_DEBUG=all` to the session's
 environment in `rust/crates/jmap-functional/src/lib.rs` and run the test with
 `--nocapture`.
 
+## Against a real server instead of the mock
+
+`tests/live-stalwart-book.rs` is the one leg of this suite that drives real
+EDS against a real Stalwart instead of the in-process mock — answering item
+80's own question of whether this harness can be pointed at a different
+server at all. A `.source` keyfile names a host and port, and
+`jmap-backend-core::connect_target` refuses plaintext to anything but a
+loopback one; `spawn_loopback_proxy` (`src/lib.rs`) satisfies that honestly by
+forwarding a loopback port onward to the real server, rather than relaxing
+the rule. The password a real server needs — the mock never checks one — is
+seeded into the session's own keyring before connecting
+(`JMAP_FUNCTIONAL_STORE_PASSWORD`, read by `tests/functional/book-client.c`),
+and the server's own stated `apiUrl` is rebased onto the address actually
+connected through (`JMAP_LIVE_SERVER_REBASE_URLS`, same mechanism every
+`jmap-*-sync` crate's live-server tests already use).
+
+`#[ignore]`d, same convention as those: skipped, not failed, without
+`JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` set (see
+`docs/manual-test-live-server.md`) and `-- --ignored` passed by hand.
+
 ## Related
 
 - `docs/manual-test-book-backend.md`, `docs/manual-test-cal-backend.md` and

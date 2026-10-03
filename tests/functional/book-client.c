@@ -1355,6 +1355,20 @@ main (int argc,
 		return 1;
 	}
 
+	/* A real server needs a password the mock never checks, and nothing
+	 * here has a GUI to be prompted through. Stored the ordinary way EDS
+	 * looks one up for Basic auth, so a keyfile naming a real `User=` and
+	 * this variable connects on its first attempt rather than failing
+	 * `CredentialsRequired` before ever reaching the server. Unset for
+	 * every test against the mock, which needs no password at all. */
+	{
+		const gchar *seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
+
+		if (seed_password && *seed_password &&
+		    !e_source_store_password_sync (source, seed_password, TRUE, NULL, &error))
+			return fail ("store-password", error);
+	}
+
 	/* Activates evolution-addressbook-factory, which is what dlopens
 	 * libebookbackendjmap.so out of EDS_ADDRESS_BOOK_MODULES and picks
 	 * the factory matching the keyfile's BackendName. A failure here is

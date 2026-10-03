@@ -343,6 +343,27 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
+	# Item 80 stage 2: the same `functional-book-client` binary and module,
+	# pointed at a real Stalwart instead of the in-process mock. `#[ignore]`d
+	# in the Rust source (needs `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/
+	# `_WRITE_PASSWORD`, set by hand from `live-server-env.sh` plus a
+	# throwaway `stw seed` account — see docs/manual-test-live-server.md), so
+	# this registration only ever reports "ignored" in the ordinary
+	# functional run; it exists so CTest's own "did not run" vs "ran" rule
+	# applies here too, same as every other test in this file.
+	add_test(
+		NAME functional-book-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-book
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
 	add_test(
 		NAME functional-cal
 		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional

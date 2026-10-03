@@ -510,3 +510,51 @@ pub fn observations(stdout: &str) -> BTreeMap<&str, &str> {
         .filter_map(|line| line.split_once('='))
         .collect()
 }
+
+/// Forward every connection accepted on a fresh loopback port to `target` (an
+/// address `TcpStream::connect` accepts, e.g. a JMAP origin's bracketed-IPv6
+/// authority), and return the port it bound.
+///
+/// `jmap-backend-core`'s `connect_target` refuses plaintext to anything but a
+/// loopback host (`Host=127.0.0.1` in a `.source` keyfile, same as the mock
+/// tests here use) — a real, honest rule, and one that would otherwise make
+/// real-server coverage of this harness impossible, since `.source` keyfiles
+/// name a host and port, not an arbitrary client object the way
+/// `jmap_client::Client::connect` takes one. This satisfies the rule rather
+/// than bypassing it: the backend's own plaintext traffic genuinely never
+/// leaves the loopback interface, and the plaintext hop onward to the real
+/// server is the same one every other live-server test in this workspace
+/// already makes directly.
+pub fn spawn_loopback_proxy(target: String) -> u16 {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a loopback proxy port");
+    let port = listener
+        .local_addr()
+        .expect("the bound address has a port")
+        .port();
+    std::thread::spawn(move || {
+        for incoming in listener.incoming() {
+            let Ok(incoming) = incoming else { continue };
+            let target = target.clone();
+            std::thread::spawn(move || relay(incoming, &target));
+        }
+    });
+    port
+}
+
+/// One proxied connection's two directions. Ends, without reporting, the
+/// moment either side closes — a relay has no opinion of its own on whether
+/// that was expected.
+fn relay(mut incoming: std::net::TcpStream, target: &str) {
+    let Ok(mut outgoing) = std::net::TcpStream::connect(target) else {
+        return;
+    };
+    let (Ok(mut incoming_reader), Ok(mut outgoing_writer)) =
+        (incoming.try_clone(), outgoing.try_clone())
+    else {
+        return;
+    };
+    let upstream =
+        std::thread::spawn(move || std::io::copy(&mut incoming_reader, &mut outgoing_writer));
+    let _ = std::io::copy(&mut outgoing, &mut incoming);
+    let _ = upstream.join();
+}
