@@ -12,7 +12,8 @@
  * a real daemon instead of by a person).
  *
  * Everything around it — the scratch XDG tree, the account `.source`
- * keyfile, the private D-Bus session, the mock server and every assertion —
+ * keyfile, the private D-Bus session, the mock server (or, for
+ * `tests/live-stalwart-collection.rs`, the real one) and every assertion —
  * belongs to `rust/crates/jmap-functional/tests/collection.rs`, which runs
  * this program and reads its output. So this file has no test framework in
  * it and no notion of what "correct" is: it reports what the registry told
@@ -179,6 +180,42 @@ main (gint argc,
 		return 1;
 	}
 	g_print ("account-found=1\n");
+
+	/* A real server needs a password the mock never checks, and nothing
+	 * here has a GUI to be prompted through. Stored against the account
+	 * itself -- the collection backend's own `authenticate_sync` is what
+	 * populate's first credentials lookup resolves against, not a child.
+	 * Unlike `book-client.c`, which stores the password before the call
+	 * that first triggers its backend's own `authenticate_sync`
+	 * (`e_book_client_connect_sync`), the collection backend's populate
+	 * runs the moment the registry loads the account, which is before this
+	 * client has even connected to the bus -- so by the time it is safe to
+	 * store the password, the first attempt has already run with none
+	 * available, scheduled `credentials-required`, and gone quiet (no GUI
+	 * here to answer it). `e_source_invoke_authenticate_sync` is the
+	 * ordinary way a client answers that signal -- passing no credentials
+	 * tells EDS to resolve them itself, the same stored-password lookup
+	 * the first attempt already found empty, now populated. */
+	{
+		const gchar *seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
+
+		if (seed_password && *seed_password) {
+			if (!e_source_store_password_sync (account, seed_password, TRUE, NULL, &error)) {
+				g_printerr ("store-password: %s\n", error->message);
+				g_error_free (error);
+				g_object_unref (account);
+				g_object_unref (registry);
+				return 1;
+			}
+			if (!e_source_invoke_authenticate_sync (account, NULL, NULL, &error)) {
+				g_printerr ("invoke-authenticate: %s\n", error->message);
+				g_error_free (error);
+				g_object_unref (account);
+				g_object_unref (registry);
+				return 1;
+			}
+		}
+	}
 
 	children = wait_for_children (registry, account_uid);
 	g_print ("children-found=%d\n", g_list_length (children));

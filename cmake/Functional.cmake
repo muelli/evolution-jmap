@@ -482,6 +482,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CLIENT=$<TARGET_FILE:functional-collection-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
 	)
 
+	# Item 80 stage 2 batch 3: the same functional-collection-client binary
+	# and module, pointed at a real Stalwart instead of the in-process mock.
+	# `#[ignore]`d in the Rust source for the same reason
+	# functional-book-live-stalwart is, so this registration only ever
+	# reports "ignored" in the ordinary functional run.
+	add_test(
+		NAME functional-collection-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-collection
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-collection-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_COLLECTION_CLIENT=$<TARGET_FILE:functional-collection-client>;JMAP_FUNCTIONAL_COLLECTION_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_collection_module.so"
+	)
+
 	# The write half: "New Address Book"/"Delete" through the same registry,
 	# proving create_resource_sync/delete_resource_sync end to end.
 	add_test(
