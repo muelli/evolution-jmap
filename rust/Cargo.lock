@@ -783,6 +783,7 @@ dependencies = [
 name = "jmap-functional"
 version = "0.4.1"
 dependencies = [
+ "evolution-jmap-client",
  "evolution-jmap-mock",
  "evolution-jmap-proto",
  "libc",

@@ -390,6 +390,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
 	)
 
+	# Item 83 batch 1: `functional-book-changes`'s own two-connects-one-cache
+	# leg, pointed at a real Stalwart instead of the in-process mock.
+	# `#[ignore]`d in the Rust source for the same reason
+	# functional-book-live-stalwart is, so this registration only ever
+	# reports "ignored" in the ordinary functional run.
+	add_test(
+		NAME functional-book-changes-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-book-changes
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-book-changes-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
 	# Item 80 stage 2 batch 2: functional-cal-live-client, pointed at a real
 	# Stalwart instead of the in-process mock. `#[ignore]`d in the Rust
 	# source for the same reason functional-book-live-stalwart is, so this
