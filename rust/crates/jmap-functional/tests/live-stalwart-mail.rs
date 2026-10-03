@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 82 batches 1 and 2: the mail leg driven against a real Stalwart
-//! instead of the in-process mock -- first its receive half, then the flag
-//! and expunge writes.
+//! Item 82 batches 1 to 3: the mail leg driven against a real Stalwart
+//! instead of the in-process mock -- its receive half, the flag and expunge
+//! writes, and the transfer between folders.
 //!
 //! The fourth live-server leg, after the address book, the calendar and the
 //! collection account, and the one the other three cannot stand in for: a
@@ -21,8 +21,9 @@
 //! at a time instead: batch 1 opens the store, lists the folder tree,
 //! resolves the three purpose folders by their JMAP role, puts one message in
 //! and reads it back; batch 2 writes to a message's flags and then expunges
-//! it. Transfer between folders and the `EmailSubmission` send are item 82's
-//! later batches.
+//! it; batch 3 creates a folder of its own, moves the message into it, copies
+//! it back, and deletes the folder again. The `EmailSubmission` send is item
+//! 82's last batch.
 //!
 //! The mechanism is unchanged from the other three legs:
 //! `spawn_loopback_proxy` satisfies `jmap-backend-core::connect_target`'s
@@ -129,13 +130,14 @@ fn keyfile(port: u16, user: &str) -> String {
 
 /// Held for the length of every test in this file.
 ///
-/// The two legs share one throwaway account, and both of them count the
+/// The legs share one throwaway account, and every one of them counts the
 /// inbox: batch 1 claims the listing grew by exactly its own append, batch 2
-/// that it shrank by exactly its own expunge. Cargo runs the tests in one
-/// binary on threads, so without this the two appends interleave and either
-/// count can be off by one for a reason that has nothing to do with the
-/// provider. Serialising them is cheaper and more honest than making each
-/// claim weak enough to survive the other.
+/// that it shrank by exactly its own expunge, batch 3 that a move emptied it
+/// of exactly its own message. Cargo runs the tests in one binary on
+/// threads, so without this the appends interleave and any count can be off
+/// by one for a reason that has nothing to do with the provider. Serialising
+/// them is cheaper and more honest than making each claim weak enough to
+/// survive the others.
 static ONE_ACCOUNT_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 /// The guard, with a poisoned lock treated as an ordinary one: the poison
@@ -424,6 +426,183 @@ fn camel_writes_flags_and_expunges_through_the_real_server() {
         seen.get("reopened-expunged-listed"),
         Some(&"0"),
         "the expunged message is still on the real server\n{report}"
+    );
+}
+
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn camel_moves_and_copies_a_message_between_real_folders() {
+    let Some((origin, user, password)) = live_server_params() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the real-server mail transfer leg"
+        );
+        return;
+    };
+    let _account = exclusive_account();
+    let client = required_path("JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT");
+    let session = live_session(
+        concat!(env!("CARGO_TARGET_TMPDIR"), "/live-stalwart-mail-transfer"),
+        &origin,
+        &user,
+        &password,
+    );
+
+    // One string names both the message's subject and the scratch folder:
+    // each only has to be unique per run, and two differently-derived values
+    // would just be two ways to misspell the same nonce.
+    let subject = format!("agent-fnxfer-{:x}", unique_suffix() & 0xffff_ffff_ffff);
+    let output = session.run(&client, &["jmap-functional", &subject, "transfer"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    assert_eq!(
+        seen.get("store-connected"),
+        Some(&"1"),
+        "Camel never opened the store against the real server\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed against the real server with {}\n{report}",
+        output.status
+    );
+
+    // The scratch folder is this run's own: created at the account root under
+    // the unique subject, so it has to come back empty -- unlike the inbox,
+    // whose counts are differences because the throwaway account outlives any
+    // one run.
+    assert_eq!(
+        seen.get("created-folder"),
+        Some(&subject.as_str()),
+        "create_folder_sync reported a different full name than the folder it was asked for\n{report}"
+    );
+    assert_eq!(
+        parsed(&seen, "count-scratch-before", &report),
+        0,
+        "a folder created moments ago under a name nobody else uses is not empty\n{report}"
+    );
+
+    // The move. RFC 8621 gives an `Email` one immutable id per account and a
+    // move only patches its `mailboxIds`, so the uid the vfunc reports is the
+    // uid that went in -- the claim `mail.rs` makes against the mock, now
+    // against a server that actually stores the thing.
+    let append_uid = seen
+        .get("append-uid")
+        .filter(|uid| !uid.is_empty())
+        .unwrap_or_else(|| panic!("append_message_sync did not mint a uid\n{report}"));
+    assert_eq!(
+        seen.get("moved-uid"),
+        Some(append_uid),
+        "the move reported a different uid than the message it moved was appended under\n{report}"
+    );
+
+    let count_before = parsed(&seen, "inbox-count-before", &report);
+    assert_eq!(
+        parsed(&seen, "count-inbox-after-move", &report),
+        count_before,
+        "the inbox listing did not shrink back by exactly the moved message\n{report}"
+    );
+    assert_eq!(
+        seen.get("holds-inbox-after-move"),
+        Some(&"0"),
+        "the inbox still lists the message after it was moved out\n{report}"
+    );
+    assert_eq!(
+        parsed(&seen, "count-scratch-after-move", &report),
+        1,
+        "the destination folder does not hold exactly the moved message\n{report}"
+    );
+    assert_eq!(
+        seen.get("holds-scratch-after-move"),
+        Some(&"1"),
+        "the destination folder's listing does not name the moved message's uid\n{report}"
+    );
+    assert_eq!(
+        seen.get("moved-subject"),
+        Some(&subject.as_str()),
+        "the destination folder's summary row is not the message that was moved\n{report}"
+    );
+
+    // The same filing question put to a store that has never seen this
+    // account: its answers come off the real server's `Email/query`, not out
+    // of any summary database the move itself wrote to.
+    assert_eq!(
+        seen.get("reopened-moved-inbox-listed"),
+        Some(&"0"),
+        "a store opening this account afresh still finds the moved message in the inbox\n{report}"
+    );
+    assert_eq!(
+        seen.get("reopened-moved-folder-listed"),
+        Some(&"1"),
+        "a store opening this account afresh does not find the message in the destination folder\n{report}"
+    );
+    assert_eq!(
+        seen.get("reopened-moved-subject"),
+        Some(&subject.as_str()),
+        "the message a fresh store finds in the destination folder is not the one that was moved\n{report}"
+    );
+
+    // The copy back, `delete_originals=FALSE`: a different `Email/set` patch
+    // (the destination's `mailboxIds` member is added and nothing is taken
+    // away), after which one message is in two folders under one uid.
+    assert_eq!(
+        seen.get("copied-uid"),
+        Some(append_uid),
+        "the copy reported a different uid than the message it copied\n{report}"
+    );
+    assert_eq!(
+        parsed(&seen, "count-inbox-after-copy", &report),
+        count_before + 1,
+        "the inbox listing did not grow back by exactly the copied message\n{report}"
+    );
+    assert_eq!(
+        seen.get("holds-inbox-after-copy"),
+        Some(&"1"),
+        "the inbox listing does not name the copied message's uid\n{report}"
+    );
+    assert_eq!(
+        parsed(&seen, "count-scratch-after-copy", &report),
+        1,
+        "the copy did not leave the original in the folder it was copied from\n{report}"
+    );
+    assert_eq!(
+        seen.get("reopened-copied-inbox-listed"),
+        Some(&"1"),
+        "the copy never reached the real server's inbox\n{report}"
+    );
+    assert_eq!(
+        seen.get("reopened-copied-folder-listed"),
+        Some(&"1"),
+        "the copy took the original with it on the real server\n{report}"
+    );
+
+    // The cleanup move files the message into a folder that already holds it
+    // -- the one `mailboxIds` patch shape the move and the copy above cannot
+    // produce -- so the inbox must end up listing it once, not twice.
+    assert_eq!(
+        parsed(&seen, "count-inbox-after-cleanup", &report),
+        count_before + 1,
+        "moving a message into a folder that already holds it duplicated its row\n{report}"
+    );
+    assert_eq!(
+        parsed(&seen, "count-scratch-after-cleanup", &report),
+        0,
+        "the cleanup move did not empty the scratch folder\n{report}"
+    );
+
+    // And the account ends where this run found it: the emptied folder
+    // destroyed (a JMAP server refuses `mailboxHasEmail` otherwise, which is
+    // exactly why the cleanup move comes first), the message expunged.
+    assert_eq!(
+        seen.get("deleted-folder-listed"),
+        Some(&"0"),
+        "the store's own listing still names the deleted folder\n{report}"
+    );
+    assert_eq!(
+        parsed(&seen, "final-inbox-count", &report),
+        count_before,
+        "the run did not leave the inbox where it found it\n{report}"
     );
 }
 

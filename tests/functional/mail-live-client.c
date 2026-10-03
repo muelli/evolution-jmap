@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Item 82 batches 1 and 2: the mail leg's own client against a real server,
+ * Item 82 batches 1 to 3: the mail leg's own client against a real server,
  * the fourth of the live-server clients after book-client.c's `write` phase,
  * cal-live-client.c and collection-client.c.
  *
@@ -20,11 +20,14 @@
  *   - `receive` opens the store, lists the tree, resolves the three purpose
  *     folders by role, puts one message in and reads it back;
  *   - `flags` shares all of that except the reporting, and then writes to the
- *     appended message's flags, clears them again, and expunges it.
+ *     appended message's flags, clears them again, and expunges it;
+ *   - `transfer` creates a folder of its own, moves the appended message into
+ *     it, copies it back to the inbox, and then puts everything away again:
+ *     the folder emptied and deleted, the message expunged.
  *
- * One program rather than two because the setup `flags` needs -- a connected
- * store with one known message in the inbox -- is exactly what `receive`
- * already does, and every later batch needs it too.
+ * One program rather than three because the setup the later phases need -- a
+ * connected store with one known message in the inbox -- is exactly what
+ * `receive` already does.
  *
  * ## Reading a write back
  *
@@ -89,6 +92,15 @@ static guint password_prompts = 0;
 static ESource *account_source = NULL;
 static const gchar *account_uid = NULL;
 static const gchar *account_protocol = NULL;
+
+/* Which batch of observations one run of this program makes -- see the
+ * header. Every phase shares the preamble: a connected store and one known
+ * message appended to the inbox. */
+typedef enum {
+	PHASE_RECEIVE,
+	PHASE_FLAGS,
+	PHASE_TRANSFER
+} MailPhase;
 
 typedef struct _TestSession {
 	CamelSession parent;
@@ -424,6 +436,145 @@ report_counts (CamelFolder *folder,
 		 camel_folder_summary_count (camel_folder_get_folder_summary (folder)));
 }
 
+/* One message, filed from `from` into `to` -- the move when
+ * `delete_originals`, the copy otherwise. The uid the vfunc reports back goes
+ * out under `key`: RFC 8621 gives an Email one immutable id per account and a
+ * transfer only patches its `mailboxIds`, so it should be the uid that went
+ * in, not one the destination minted. */
+static gboolean
+transfer_one (CamelFolder *from,
+	      CamelFolder *to,
+	      const gchar *uid,
+	      gboolean delete_originals,
+	      const gchar *key,
+	      GError **error)
+{
+	GPtrArray *uids;
+	GPtrArray *transferred = NULL;
+	gboolean ok;
+
+	uids = g_ptr_array_new ();
+	g_ptr_array_add (uids, (gpointer) uid);
+
+	ok = camel_folder_transfer_messages_to_sync (from, uids, to,
+						     delete_originals,
+						     &transferred, NULL, error);
+	g_ptr_array_unref (uids);
+
+	if (!ok)
+		return FALSE;
+
+	g_print ("%s=%s\n", key,
+		 (transferred && transferred->len > 0 && transferred->pdata[0])
+		 ? (const gchar *) transferred->pdata[0] : "");
+	if (transferred) {
+		guint t;
+
+		for (t = 0; t < transferred->len; t++)
+			g_free (transferred->pdata[t]);
+		g_ptr_array_unref (transferred);
+	}
+
+	return TRUE;
+}
+
+/* `folder`'s uid listing after a refresh: its length under `count-<tag>`, and
+ * whether it names `uid` under `holds-<tag>`. The refresh is what makes either
+ * number a claim about the server rather than about the summary rows the last
+ * transfer left behind. */
+static gboolean
+report_refreshed_listing (CamelFolder *folder,
+			  const gchar *uid,
+			  const gchar *tag,
+			  GError **error)
+{
+	GPtrArray *uids;
+	guint index;
+	gboolean listed = FALSE;
+
+	if (!camel_folder_refresh_info_sync (folder, NULL, error))
+		return FALSE;
+
+	uids = folder_dup_uids (folder);
+	for (index = 0; index < uids->len && !listed; index++)
+		listed = g_strcmp0 (uids->pdata[index], uid) == 0;
+
+	g_print ("count-%s=%u\n", tag, uids->len);
+	g_print ("holds-%s=%d\n", tag, listed ? 1 : 0);
+	folder_free_uids (folder, uids);
+
+	return TRUE;
+}
+
+/* What a store that has never seen this account before makes of the message's
+ * filing: whether the inbox lists it, whether `folder_name` lists it, and the
+ * subject `folder_name`'s own summary gives it. Reported as
+ * `<tag>-inbox-listed`, `<tag>-folder-listed` and `<tag>-subject`, the last
+ * only when the folder holds the row at all. Same scratch-tree-per-tag
+ * discipline as report_reopened, and for the same reason: no earlier call's
+ * summary database can answer for this one. */
+static gboolean
+report_reopened_filed (const gchar *tag,
+		       const gchar *uid,
+		       const gchar *folder_name,
+		       GError **error)
+{
+	CamelSession *session = NULL;
+	CamelStore *store;
+	CamelFolder *inbox;
+	CamelFolder *folder;
+	CamelMessageInfo *info;
+	gchar *data_dir;
+	gchar *cache_dir;
+
+	data_dir = g_build_filename (g_get_user_data_dir (), "reopened", tag, NULL);
+	cache_dir = g_build_filename (g_get_user_cache_dir (), "reopened", tag, NULL);
+	g_mkdir_with_parents (data_dir, 0700);
+	g_mkdir_with_parents (cache_dir, 0700);
+
+	store = open_store (data_dir, cache_dir, &session, error);
+	g_free (data_dir);
+	g_free (cache_dir);
+
+	if (!store)
+		return FALSE;
+
+	inbox = camel_store_get_inbox_folder_sync (store, NULL, error);
+	if (!inbox || !camel_folder_refresh_info_sync (inbox, NULL, error)) {
+		g_clear_object (&inbox);
+		g_object_unref (store);
+		g_object_unref (session);
+		return FALSE;
+	}
+
+	info = camel_folder_get_message_info (inbox, uid);
+	g_print ("%s-inbox-listed=%d\n", tag, info ? 1 : 0);
+	g_clear_object (&info);
+	g_object_unref (inbox);
+
+	folder = camel_store_get_folder_sync (store, folder_name,
+					      CAMEL_STORE_FOLDER_NONE,
+					      NULL, error);
+	if (!folder || !camel_folder_refresh_info_sync (folder, NULL, error)) {
+		g_clear_object (&folder);
+		g_object_unref (store);
+		g_object_unref (session);
+		return FALSE;
+	}
+
+	info = camel_folder_get_message_info (folder, uid);
+	g_print ("%s-folder-listed=%d\n", tag, info ? 1 : 0);
+	if (info)
+		g_print ("%s-subject=%s\n", tag, camel_message_info_get_subject (info));
+	g_clear_object (&info);
+
+	g_object_unref (folder);
+	g_object_unref (store);
+	g_object_unref (session);
+
+	return TRUE;
+}
+
 int
 main (int argc,
       char **argv)
@@ -448,7 +599,7 @@ main (int argc,
 	guint count_before;
 	guint index;
 	gboolean listed = FALSE;
-	gboolean receive_phase;
+	MailPhase phase_id;
 	const gchar *subject;
 	const gchar *phase;
 	const gchar *data_dir;
@@ -465,9 +616,11 @@ main (int argc,
 	seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
 
 	if (g_strcmp0 (phase, "receive") == 0) {
-		receive_phase = TRUE;
+		phase_id = PHASE_RECEIVE;
 	} else if (g_strcmp0 (phase, "flags") == 0) {
-		receive_phase = FALSE;
+		phase_id = PHASE_FLAGS;
+	} else if (g_strcmp0 (phase, "transfer") == 0) {
+		phase_id = PHASE_TRANSFER;
 	} else {
 		g_printerr ("%s: unknown phase '%s'\n", argv[0], phase);
 		return 2;
@@ -521,7 +674,7 @@ main (int argc,
 	 * pass/fail here -- the harness decides what it means. */
 	g_print ("password-prompts=%u\n", password_prompts);
 
-	if (receive_phase) {
+	if (phase_id == PHASE_RECEIVE) {
 		info = camel_store_get_folder_info_sync (store, NULL,
 							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
 							 NULL, &error);
@@ -547,7 +700,7 @@ main (int argc,
 		return fail ("inbox", error);
 	g_print ("inbox-full-name=%s\n", camel_folder_get_full_name (inbox));
 
-	if (receive_phase) {
+	if (phase_id == PHASE_RECEIVE) {
 		trash = camel_store_get_trash_folder_sync (store, NULL, &error);
 		if (!trash)
 			return fail ("trash", error);
@@ -632,7 +785,7 @@ main (int argc,
 	g_print ("appended-in-listing=%d\n", listed ? 1 : 0);
 	folder_free_uids (inbox, uids);
 
-	if (receive_phase) {
+	if (phase_id == PHASE_RECEIVE) {
 		/* Read back twice over, because those are two different
 		 * requests: the summary comes from Email/query plus Email/get,
 		 * and the body from a blob download, which is a plain HTTP GET
@@ -665,7 +818,7 @@ main (int argc,
 		g_print ("appended-body=%s\n", body);
 		g_free (body);
 		g_object_unref (reread);
-	} else {
+	} else if (phase_id == PHASE_FLAGS) {
 		/* What the message arrived carrying. The two writes below are
 		 * both measured as differences from here, so a server that
 		 * handed keywords of its own to an imported message has to be
@@ -750,6 +903,175 @@ main (int argc,
 			g_free (appended_uid);
 			return fail ("reopen-after-expunge", error);
 		}
+	} else {
+		CamelFolderInfo *created;
+		CamelFolder *scratch;
+		CamelMessageInfo *filed_info;
+		gchar *scratch_name;
+
+		/* A folder of this run's own, named by the unique subject, so
+		 * a rerun against the same throwaway account can never open a
+		 * previous run's folder and call it this one's. A NULL parent
+		 * is the account root, the same convention mail-client.c
+		 * uses. */
+		created = camel_store_create_folder_sync (store, NULL, subject,
+							  NULL, &error);
+		if (!created)
+			return fail ("create-folder", error);
+
+		g_print ("created-folder=%s\n", created->full_name);
+		scratch_name = g_strdup (created->full_name);
+		camel_folder_info_free (created);
+
+		scratch = camel_store_get_folder_sync (store, scratch_name,
+						       CAMEL_STORE_FOLDER_NONE,
+						       NULL, &error);
+		if (!scratch)
+			return fail ("get-scratch-folder", error);
+
+		/* Counted so the transfers below are measured against a
+		 * known-empty folder; the inbox's own counts can only ever be
+		 * differences, because the account outlives the run. */
+		if (!report_refreshed_listing (scratch, appended_uid,
+					       "scratch-before", &error)) {
+			g_object_unref (scratch);
+			return fail ("relist-scratch-before", error);
+		}
+
+		/* The move: `delete_originals=TRUE`, one `Email/set` that adds
+		 * the destination's `mailboxIds` member and takes the inbox's
+		 * away. Checked from both folders, not merely that the call
+		 * answered -- the row has to leave the inbox as well as land
+		 * in the scratch folder. */
+		if (!transfer_one (inbox, scratch, appended_uid, TRUE,
+				   "moved-uid", &error)) {
+			g_object_unref (scratch);
+			return fail ("transfer-move", error);
+		}
+
+		if (!report_refreshed_listing (inbox, appended_uid,
+					       "inbox-after-move", &error)) {
+			g_object_unref (scratch);
+			return fail ("relist-inbox-after-move", error);
+		}
+		if (!report_refreshed_listing (scratch, appended_uid,
+					       "scratch-after-move", &error)) {
+			g_object_unref (scratch);
+			return fail ("relist-scratch-after-move", error);
+		}
+
+		/* The destination's own summary row -- the refresh above is
+		 * what wrote it, since a transfer only ever removes rows
+		 * (`transfer.rs`'s "what is not decided here"). */
+		filed_info = camel_folder_get_message_info (scratch, appended_uid);
+		g_print ("moved-subject=%s\n",
+			 filed_info ? camel_message_info_get_subject (filed_info) : "");
+		g_clear_object (&filed_info);
+
+		if (!report_reopened_filed ("reopened-moved", appended_uid,
+					    scratch_name, &error)) {
+			g_object_unref (scratch);
+			return fail ("reopen-after-move", error);
+		}
+
+		/* The copy back: `delete_originals=FALSE`, the patch that only
+		 * adds a `mailboxIds` member -- after which one message is in
+		 * two folders under one uid. */
+		if (!transfer_one (scratch, inbox, appended_uid, FALSE,
+				   "copied-uid", &error)) {
+			g_object_unref (scratch);
+			return fail ("transfer-copy", error);
+		}
+
+		if (!report_refreshed_listing (inbox, appended_uid,
+					       "inbox-after-copy", &error)) {
+			g_object_unref (scratch);
+			return fail ("relist-inbox-after-copy", error);
+		}
+		if (!report_refreshed_listing (scratch, appended_uid,
+					       "scratch-after-copy", &error)) {
+			g_object_unref (scratch);
+			return fail ("relist-scratch-after-copy", error);
+		}
+
+		if (!report_reopened_filed ("reopened-copied", appended_uid,
+					    scratch_name, &error)) {
+			g_object_unref (scratch);
+			return fail ("reopen-after-copy", error);
+		}
+
+		/* A third transfer shape the two above cannot produce: a move
+		 * into a folder that already holds the message. The patch
+		 * adds a `mailboxIds` member that is already there and takes
+		 * the scratch folder's away, so the inbox must end up listing
+		 * the message once, not twice. */
+		if (!transfer_one (scratch, inbox, appended_uid, TRUE,
+				   "cleanup-uid", &error)) {
+			g_object_unref (scratch);
+			return fail ("transfer-cleanup", error);
+		}
+
+		if (!report_refreshed_listing (inbox, appended_uid,
+					       "inbox-after-cleanup", &error)) {
+			g_object_unref (scratch);
+			return fail ("relist-inbox-after-cleanup", error);
+		}
+		if (!report_refreshed_listing (scratch, appended_uid,
+					       "scratch-after-cleanup", &error)) {
+			g_object_unref (scratch);
+			return fail ("relist-scratch-after-cleanup", error);
+		}
+
+		/* The folder can go now it is empty -- a JMAP server refuses
+		 * to destroy a mailbox that still holds a message
+		 * (`mailboxHasEmail`), which is why the cleanup move comes
+		 * first. Unreffed before the delete, the way mail-client.c
+		 * lets go of "Receipts" before renaming it. */
+		g_object_unref (scratch);
+
+		if (!camel_store_delete_folder_sync (store, scratch_name,
+						     NULL, &error))
+			return fail ("delete-folder", error);
+
+		/* And the store's own listing has to agree it is gone, not
+		 * merely the call answer -- manage.rs's own point, made here
+		 * against a listing the real server backs. */
+		info = camel_store_get_folder_info_sync (store, NULL,
+							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
+							 NULL, &error);
+		if (!info)
+			return fail ("folder-info-after-delete", error);
+
+		names = g_ptr_array_new_with_free_func (g_free);
+		collect_folder_names (info, names);
+		camel_folder_info_free (info);
+
+		listed = FALSE;
+		for (index = 0; index < names->len && !listed; index++)
+			listed = g_strcmp0 (names->pdata[index], scratch_name) == 0;
+		g_ptr_array_unref (names);
+		g_print ("deleted-folder-listed=%d\n", listed ? 1 : 0);
+
+		g_free (scratch_name);
+
+		/* Leave the account where this run found it: the message
+		 * marked deleted and expunged, the same sequence the flags
+		 * phase measures as its own observation. */
+		message_info = camel_folder_get_message_info (inbox, appended_uid);
+		if (!message_info) {
+			g_printerr ("summary: no message info to mark deleted\n");
+			return 1;
+		}
+		camel_message_info_set_flags (message_info, CAMEL_MESSAGE_DELETED,
+					      CAMEL_MESSAGE_DELETED);
+		g_clear_object (&message_info);
+
+		if (!camel_folder_expunge_sync (inbox, NULL, &error))
+			return fail ("cleanup-expunge", error);
+
+		uids = folder_dup_uids (inbox);
+		g_print ("final-inbox-count=%u\n", uids->len);
+		folder_free_uids (inbox, uids);
 	}
 
 	/* Camel schedules its own `folder_changed` emissions onto the default
