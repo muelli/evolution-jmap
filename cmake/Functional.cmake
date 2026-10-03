@@ -308,7 +308,12 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# server rather than the mock. It subclasses `CamelSession` too, and for
 	# the neighbouring reason: a real server wants a password, and a session
 	# is the only object allowed to put one on a `CamelService`.
-	foreach(_client mail transport mail-stale-token mail-live)
+	#
+	# Item 82 batch 4 adds `transport-live`, the send half pointed at a real
+	# server: transport-client.c's chain walk, mail-live's password
+	# discipline, and the delivery check into a second account that the
+	# mock leg has no counterpart for.
+	foreach(_client mail transport mail-stale-token mail-live transport-live)
 		add_executable(functional-${_client}-client tests/functional/${_client}-client.c)
 		target_include_directories(functional-${_client}-client PRIVATE
 			${CAMEL_CLIENT_INCLUDE_DIRS} ${LIBEDATASERVER_INCLUDE_DIRS})
@@ -575,7 +580,10 @@ if(ENABLE_FUNCTIONAL_TESTS)
 	# names and for the reason the transport leg below gives: it is one
 	# provider. `#[ignore]`d in the Rust source the way the other three
 	# live-server registrations are, so this only ever reports "ignored" in
-	# the ordinary functional run.
+	# the ordinary functional run. Batch 4 added the send half's own client,
+	# functional-transport-live-client, to the same test file: one
+	# registration, because the four legs share one throwaway account and
+	# serialise on one mutex.
 	add_test(
 		NAME functional-mail-live-stalwart
 		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
@@ -586,7 +594,7 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		LABELS functional
 		TIMEOUT 300
 		ENVIRONMENT
-			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT=$<TARGET_FILE:functional-mail-live-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT=$<TARGET_FILE:functional-mail-live-client>;JMAP_FUNCTIONAL_TRANSPORT_LIVE_CLIENT=$<TARGET_FILE:functional-transport-live-client>;JMAP_FUNCTIONAL_MAIL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_mail.so;JMAP_FUNCTIONAL_MAIL_URLS=${CMAKE_SOURCE_DIR}/rust/crates/jmap-mail/libcameljmap.urls"
 	)
 
 	# The send half, which stages the same module and the same `.urls` file

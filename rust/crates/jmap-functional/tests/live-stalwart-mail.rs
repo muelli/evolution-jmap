@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 82 batches 1 to 3: the mail leg driven against a real Stalwart
+//! Item 82 batches 1 to 4: the mail leg driven against a real Stalwart
 //! instead of the in-process mock -- its receive half, the flag and expunge
-//! writes, and the transfer between folders.
+//! writes, the transfer between folders, and the `EmailSubmission` send.
 //!
 //! The fourth live-server leg, after the address book, the calendar and the
 //! collection account, and the one the other three cannot stand in for: a
@@ -22,8 +22,14 @@
 //! resolves the three purpose folders by their JMAP role, puts one message in
 //! and reads it back; batch 2 writes to a message's flags and then expunges
 //! it; batch 3 creates a folder of its own, moves the message into it, copies
-//! it back, and deletes the folder again. The `EmailSubmission` send is item
-//! 82's last batch.
+//! it back, and deletes the folder again; batch 4 sends through the
+//! `CamelTransport` to a second seeded account and watches the message
+//! actually arrive there -- intra-server delivery, the one claim the mock
+//! structurally cannot back, because its outbox is a list it never delivers
+//! from. The send leg has a client of its own,
+//! `tests/functional/transport-live-client.c`: what it walks (account to
+//! identity to transport, through two uids) is the mock leg's
+//! `transport-client.c` chain, not `mail-live-client.c`'s store preamble.
 //!
 //! The mechanism is unchanged from the other three legs:
 //! `spawn_loopback_proxy` satisfies `jmap-backend-core::connect_target`'s
@@ -85,6 +91,35 @@ const DEFAULT_FOLDERS: [&str; 5] = [
     "Sent Items",
 ];
 
+/// Where a real Stalwart's sent and drafts roles live, by name. The send leg
+/// has to open the sent folder to find the copy the transport left, and a
+/// `CamelStore` has no by-role getter for either (inbox, trash and junk are
+/// the three it has) -- so these two names are harness constants handed to
+/// the client, pinned here the way `TRASH_NAME` and `JUNK_NAME` are.
+const SENT_NAME: &str = "Sent Items";
+const DRAFTS_NAME: &str = "Drafts";
+
+/// The body of the message the send leg posts. Its own string rather than
+/// [`BODY`] so a delivery assertion can never be satisfied by a message some
+/// other leg left behind.
+const SEND_BODY: &str = "Posted from the corner box.";
+
+/// The three sources of the send leg's chain, which are also their file
+/// names -- `transport.rs`'s own convention: `IdentityUid` and `TransportUid`
+/// are these strings, and the client is handed only the first of the three.
+const SENDER_UID: &str = "jmap-functional";
+const IDENTITY_UID: &str = "jmap-functional-identity";
+const TRANSPORT_UID: &str = "jmap-functional-transport";
+
+/// The recipient's account source: a second real account, not a second file
+/// of the sender's.
+const RECIPIENT_UID: &str = "jmap-functional-recipient";
+
+/// Who the sender claims to be. Only the address matters to the server --
+/// `Identity/get` is matched on it -- but the name rides the `From` header,
+/// so it is pinned too.
+const SENDER_NAME: &str = "Agent Sender";
+
 /// A value unique to this process invocation, so a repeated run against the
 /// same throwaway account never mistakes a previous run's message for this
 /// one's. Mirrors every `jmap-*-sync` live-server test's own copy.
@@ -128,12 +163,73 @@ fn keyfile(port: u16, user: &str) -> String {
     )
 }
 
+/// `(user, password)` for the second account the send leg delivers to, or
+/// `None` to skip -- the same two variables, and the same skip-not-fail
+/// shape, as `jmap-mail-sync/tests/live_server_send.rs` established.
+fn recipient_params() -> Option<(String, String)> {
+    let user = env::var("JMAP_LIVE_SERVER_RECIPIENT_USER").ok()?;
+    let password = env::var("JMAP_LIVE_SERVER_RECIPIENT_PASSWORD").expect(
+        "JMAP_LIVE_SERVER_RECIPIENT_USER is set but JMAP_LIVE_SERVER_RECIPIENT_PASSWORD is not",
+    );
+    Some((user, password))
+}
+
+/// The sender's account source for the send leg: [`keyfile`] plus the
+/// `IdentityUid` line the chain walk starts from.
+fn sender_account(port: u16, user: &str) -> String {
+    keyfile(port, user).replace(
+        "BackendName=jmap\n",
+        &format!("BackendName=jmap\nIdentityUid={IDENTITY_UID}\n"),
+    )
+}
+
+/// The identity: who the mail is from, and where the chain turns towards the
+/// transport. It names no server of its own -- an identity is not a service.
+fn identity(address: &str) -> String {
+    format!(
+        "[Data Source]\n\
+         DisplayName=JMAP functional live identity\n\
+         Enabled=true\n\
+         \n\
+         [Mail Identity]\n\
+         Name={SENDER_NAME}\n\
+         Address={address}\n\
+         \n\
+         [Mail Submission]\n\
+         TransportUid={TRANSPORT_UID}\n"
+    )
+}
+
+/// The transport: a second `CamelService` with a server of its own. The
+/// `[Authentication]` group is a second copy of the account's and has to be,
+/// for the reason `transport.rs` gives: nothing copies a server between two
+/// standalone sources.
+fn transport(port: u16, user: &str) -> String {
+    format!(
+        "[Data Source]\n\
+         DisplayName=JMAP functional live transport\n\
+         Enabled=true\n\
+         \n\
+         [Mail Transport]\n\
+         BackendName=jmap\n\
+         \n\
+         [Authentication]\n\
+         Host=127.0.0.1\n\
+         Port={port}\n\
+         User={user}\n\
+         \n\
+         [Security]\n\
+         Method=none\n"
+    )
+}
+
 /// Held for the length of every test in this file.
 ///
 /// The legs share one throwaway account, and every one of them counts the
 /// inbox: batch 1 claims the listing grew by exactly its own append, batch 2
 /// that it shrank by exactly its own expunge, batch 3 that a move emptied it
-/// of exactly its own message. Cargo runs the tests in one binary on
+/// of exactly its own message, and batch 4 writes to the same account's Sent
+/// folder. Cargo runs the tests in one binary on
 /// threads, so without this the appends interleave and any count can be off
 /// by one for a reason that has nothing to do with the provider. Serialising
 /// them is cheaper and more honest than making each claim weak enough to
@@ -603,6 +699,185 @@ fn camel_moves_and_copies_a_message_between_real_folders() {
         parsed(&seen, "final-inbox-count", &report),
         count_before,
         "the run did not leave the inbox where it found it\n{report}"
+    );
+}
+
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn camel_sends_through_a_real_transport_and_a_second_account_receives_it() {
+    let Some((origin, user, password)) = live_server_params() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the real-server send leg"
+        );
+        return;
+    };
+    let Some((recipient_user, recipient_password)) = recipient_params() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_RECIPIENT_USER/_PASSWORD not set; skipping the real-server send leg"
+        );
+        return;
+    };
+    let _account = exclusive_account();
+    let client = required_path("JMAP_FUNCTIONAL_TRANSPORT_LIVE_CLIENT");
+
+    // The chain's three sources plus the recipient's own account, all behind
+    // one proxy: four `[Authentication]` groups, one server. `live_session`
+    // writes only the plain one-account keyfile, so the tree is built here.
+    let module = required_path("JMAP_FUNCTIONAL_MAIL_MODULE");
+    let urls = required_path("JMAP_FUNCTIONAL_MAIL_URLS");
+    let authority = origin
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let port = spawn_loopback_proxy(authority.to_owned());
+
+    let mut session = Session::new(concat!(
+        env!("CARGO_TARGET_TMPDIR"),
+        "/live-stalwart-mail-send"
+    ));
+    session.write_source(SENDER_UID, &sender_account(port, &user));
+    session.write_source(IDENTITY_UID, &identity(&user));
+    session.write_source(TRANSPORT_UID, &transport(port, &user));
+    session.write_source(RECIPIENT_UID, &keyfile(port, &recipient_user));
+    session.set_variable("JMAP_FUNCTIONAL_STORE_PASSWORD", &password);
+    session.set_variable("JMAP_FUNCTIONAL_RECIPIENT_PASSWORD", &recipient_password);
+    session.set_variable("JMAP_LIVE_SERVER_REBASE_URLS", "1");
+    session.stage_camel_provider(&module, &urls);
+
+    let subject = format!("agent-fnsend-{:x}", unique_suffix() & 0xffff_ffff_ffff);
+    let output = session.run(
+        &client,
+        &[
+            SENDER_UID,
+            RECIPIENT_UID,
+            &recipient_user,
+            &subject,
+            SENT_NAME,
+            DRAFTS_NAME,
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    // The chain before anything about the send, `transport.rs`'s own order:
+    // the client was handed the sender's account uid and nothing else, so a
+    // wrong link here explains every later failure.
+    assert_eq!(
+        seen.get("identity-uid"),
+        Some(&IDENTITY_UID),
+        "the account does not name the identity\n{report}"
+    );
+    assert_eq!(
+        seen.get("identity-address"),
+        Some(&user.as_str()),
+        "the identity does not carry the address the account sends as\n{report}"
+    );
+    assert_eq!(
+        seen.get("transport-uid"),
+        Some(&TRANSPORT_UID),
+        "the identity's submission extension does not name the transport\n{report}"
+    );
+    assert_eq!(
+        seen.get("protocol"),
+        Some(&"jmap"),
+        "the transport source names a protocol the provider does not register\n{report}"
+    );
+
+    // The transport slot of the registered provider, connected with Basic
+    // auth against a server that actually checks the password -- the half of
+    // the connect the mock leg never exercises.
+    assert_eq!(
+        seen.get("transport-connected"),
+        Some(&"1"),
+        "Camel never connected the transport against the real server\n{report}"
+    );
+
+    assert!(
+        output.status.success(),
+        "the client failed against the real server with {}\n{report}",
+        output.status
+    );
+
+    assert_eq!(
+        seen.get("sent"),
+        Some(&"1"),
+        "the send did not report success\n{report}"
+    );
+    // A seeded Stalwart account has both a drafts and a sent role, which is
+    // the ordinary account and the one whose answer is TRUE: told 0 here,
+    // Evolution would append a second copy of its own to Sent.
+    assert_eq!(
+        seen.get("sent-copy-saved"),
+        Some(&"1"),
+        "the transport did not claim the sent copy it left in Sent\n{report}"
+    );
+    assert_eq!(
+        seen.get("transport-disconnected"),
+        Some(&"1"),
+        "the transport did not let go of its connection\n{report}"
+    );
+
+    // The sent copy, read back through a store that has never seen this
+    // account -- so the filing is the real server's, not a summary row the
+    // send wrote. In Sent and no longer in Drafts, because the staging and
+    // the move are RFC 8621 section 7.5's `onSuccessUpdateEmail`, applied by
+    // the server as part of accepting the submission: a copy still sitting
+    // in Drafts is a submission that was posted but never accepted.
+    assert_eq!(
+        seen.get("sent-copy-listed"),
+        Some(&"1"),
+        "the sender's real Sent folder does not hold the sent copy\n{report}"
+    );
+    assert_eq!(
+        seen.get("sent-copy-draft"),
+        Some(&"0"),
+        "the sent copy still carries the draft mark the staging gave it\n{report}"
+    );
+    assert_eq!(
+        seen.get("staged-copy-listed"),
+        Some(&"0"),
+        "the sent copy is still sitting in the Drafts it was staged in\n{report}"
+    );
+
+    // Delivery, the claim this batch exists for: the message in the SECOND
+    // account's inbox, found by a `CamelStore` authenticated as that account,
+    // with the headers and body it was composed with. The mock's outbox is a
+    // list; this is a letter that actually crossed.
+    assert_eq!(
+        seen.get("delivered-listed"),
+        Some(&"1"),
+        "the message never arrived in the recipient's real inbox\n{report}"
+    );
+    assert_eq!(
+        seen.get("delivered-subject"),
+        Some(&subject.as_str()),
+        "the delivered message is not the one that was sent\n{report}"
+    );
+    let delivered_from = seen
+        .get("delivered-from")
+        .unwrap_or_else(|| panic!("the client reported no delivered-from\n{report}"));
+    assert!(
+        delivered_from.contains(&user),
+        "the delivered message's From is not the identity's address: {delivered_from:?}\n{report}"
+    );
+    assert_eq!(
+        seen.get("delivered-body"),
+        Some(&SEND_BODY),
+        "the delivered message's body did not survive the trip\n{report}"
+    );
+
+    // Both accounts end where the run found them, and the expunges that get
+    // them there are themselves measured against a relisting.
+    assert_eq!(
+        seen.get("recipient-cleaned"),
+        Some(&"1"),
+        "the delivered message survived the recipient's expunge\n{report}"
+    );
+    assert_eq!(
+        seen.get("sender-cleaned"),
+        Some(&"1"),
+        "the sent copy survived the sender's expunge\n{report}"
     );
 }
 
