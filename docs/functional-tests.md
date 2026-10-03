@@ -1487,6 +1487,19 @@ connected through (`JMAP_LIVE_SERVER_REBASE_URLS`, same mechanism every
 `JMAP_LIVE_SERVER_URL`/`_WRITE_USER`/`_WRITE_PASSWORD` set (see
 `docs/manual-test-live-server.md`) and `-- --ignored` passed by hand.
 
+`tests/live-stalwart-calendar.rs` is the calendar leg's counterpart, batch 2
+of item 80 stage 2, and the same mechanism throughout. It deliberately does
+not reuse `functional-cal-client`'s binary the way the book leg reuses
+`functional-book-client`'s: that program's one run also creates an all-day
+event, a zoned event, a six-occurrence recurring series with three kinds of
+exception, a THISANDFUTURE split, and a second zoned recurring series with one
+occurrence moved into a different zone, and a real server genuinely differing
+on any one of those would fail the whole client rather than just mismeasure a
+field. `tests/functional/cal-live-client.c` is a client of its own, scoped to
+one plain event -- the same shape `book-client.c`'s `write` phase covers for
+the address book -- leaving the richer legs (recurring, zoned, the collection
+leg) for a further batch.
+
 ## Related
 
 - `docs/manual-test-book-backend.md`, `docs/manual-test-cal-backend.md` and

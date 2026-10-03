@@ -110,6 +110,22 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		target_link_directories(functional-${_client}-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
 	endforeach()
 
+	# Item 80 stage 2 batch 2: the calendar leg's own live-server client, the
+	# twin of functional-book-client above. A single event only — see the
+	# file's own header for why it does not reuse functional-cal-client,
+	# whose one run also creates an all-day event, a zoned event, a
+	# recurring series with three kinds of exception and a split, and a
+	# second zoned recurring series, any one of which genuinely differing
+	# against a real server would fail the whole run rather than just
+	# mismeasure a field.
+	add_executable(functional-cal-live-client
+		tests/functional/cal-live-client.c
+		tests/functional/connection-status.c)
+	target_include_directories(functional-cal-live-client PRIVATE ${LIBECAL_INCLUDE_DIRS})
+	target_compile_options(functional-cal-live-client PRIVATE ${LIBECAL_CFLAGS_OTHER})
+	target_link_libraries(functional-cal-live-client PRIVATE ${LIBECAL_LIBRARIES})
+	target_link_directories(functional-cal-live-client PRIVATE ${LIBECAL_LIBRARY_DIRS})
+
 	# The config-lookup client is the odd one out in a different way: it does
 	# not open a `.source` keyfile at all, because a lookup happens *before*
 	# an account exists. It links evolution-shell-3.0 rather than a libe*
@@ -362,6 +378,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 		TIMEOUT 300
 		ENVIRONMENT
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_BOOK_CLIENT=$<TARGET_FILE:functional-book-client>;JMAP_FUNCTIONAL_BOOK_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_book_module.so"
+	)
+
+	# Item 80 stage 2 batch 2: functional-cal-live-client, pointed at a real
+	# Stalwart instead of the in-process mock. `#[ignore]`d in the Rust
+	# source for the same reason functional-book-live-stalwart is, so this
+	# registration only ever reports "ignored" in the ordinary functional
+	# run.
+	add_test(
+		NAME functional-cal-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-calendar
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-cal-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CAL_LIVE_CLIENT=$<TARGET_FILE:functional-cal-live-client>;JMAP_FUNCTIONAL_CAL_MODULE=${CARGO_TARGET_DIR}/release/libjmap_backend_cal_module.so"
 	)
 
 	add_test(
