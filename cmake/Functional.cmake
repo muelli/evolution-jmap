@@ -618,6 +618,24 @@ if(ENABLE_FUNCTIONAL_TESTS)
 			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CONFIG_LOOKUP_CLIENT=$<TARGET_FILE:functional-config-lookup-client>;JMAP_FUNCTIONAL_CONFIG_LOOKUP_MODULE=${CARGO_TARGET_DIR}/release/libjmap_config_module.so"
 	)
 
+	# Item 83 last batch: `functional-config-lookup`'s own discovery leg,
+	# pointed at a real Stalwart instead of the in-process mock.
+	# `#[ignore]`d in the Rust source for the same reason
+	# functional-book-changes-live-stalwart is, so this registration only ever
+	# reports "ignored" in the ordinary functional run.
+	add_test(
+		NAME functional-config-lookup-live-stalwart
+		COMMAND ${CARGO_EXECUTABLE} test --locked -p jmap-functional
+			--test live-stalwart-config-lookup
+		WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/rust"
+	)
+	set_tests_properties(functional-config-lookup-live-stalwart PROPERTIES
+		LABELS functional
+		TIMEOUT 300
+		ENVIRONMENT
+			"CARGO_INCREMENTAL=0;JMAP_FUNCTIONAL_CONFIG_LOOKUP_CLIENT=$<TARGET_FILE:functional-config-lookup-client>;JMAP_FUNCTIONAL_CONFIG_LOOKUP_MODULE=${CARGO_TARGET_DIR}/release/libjmap_config_module.so"
+	)
+
 	# The mail leg needs a third path the other two do not: the `.urls` file,
 	# which is what makes Camel open the module at all and which is
 	# therefore staged from the source tree rather than written by the test.

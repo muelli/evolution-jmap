@@ -18,6 +18,8 @@
 typedef struct {
 	GMainLoop *loop;
 	gboolean finished;
+	gboolean worker_finished_seen;
+	GError *worker_error;
 } RunState;
 
 static void
@@ -33,6 +35,26 @@ run_finished_cb (GObject *source_object,
 
 	state->finished = TRUE;
 	g_main_loop_quit (state->loop);
+}
+
+/* `e_config_lookup_run_finish()` is documented void — real upstream
+ * `e-config-lookup.c` says outright "it's expected that the extensions may
+ * fail, thus it doesn't return anything" — so a worker's own GError only
+ * ever reaches this signal, never the async result above. Nothing before
+ * this test observed that path at all. */
+static void
+worker_finished_cb (EConfigLookup *config_lookup,
+                     EConfigLookupWorker *worker,
+                     ENamedParameters *restart_params,
+                     GError *error,
+                     gpointer user_data)
+{
+	RunState *state = user_data;
+
+	state->worker_finished_seen = TRUE;
+	g_clear_error (&state->worker_error);
+	if (error)
+		state->worker_error = g_error_copy (error);
 }
 
 static gboolean
@@ -118,6 +140,14 @@ main (int argc,
 
 	state.loop = g_main_loop_new (NULL, FALSE);
 	state.finished = FALSE;
+	state.worker_finished_seen = FALSE;
+	state.worker_error = NULL;
+
+	/* Real upstream's own doc comment on this signal says it "is always
+	 * emitted in the main thread", so connecting here, before the run,
+	 * races nothing against the worker thread `e_config_lookup_run` is
+	 * about to start. */
+	g_signal_connect (config_lookup, "worker-finished", G_CALLBACK (worker_finished_cb), &state);
 
 	timeout_source = g_timeout_source_new_seconds (30);
 	g_source_set_callback (timeout_source, timeout_cb, &state, NULL);
@@ -135,6 +165,11 @@ main (int argc,
 		g_printerr ("e_config_lookup_run never finished\n");
 		return 1;
 	}
+
+	g_print ("worker-finished-seen=%d\n", state.worker_finished_seen ? 1 : 0);
+	if (state.worker_error)
+		g_print ("worker-error-message=%s\n", state.worker_error->message);
+	g_clear_error (&state.worker_error);
 
 	results = e_config_lookup_dup_results (config_lookup, E_CONFIG_LOOKUP_RESULT_COLLECTION, "jmap");
 	g_print ("result-count=%d\n", g_slist_length (results));
