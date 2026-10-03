@@ -1,8 +1,8 @@
 /* SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Item 82 batch 1: the mail leg's own client against a real server, the
- * fourth of the live-server clients after book-client.c's `write` phase,
+ * Item 82 batches 1 and 2: the mail leg's own client against a real server,
+ * the fourth of the live-server clients after book-client.c's `write` phase,
  * cal-live-client.c and collection-client.c.
  *
  * `mail-client.c` beside this file is the mock-based suite's client, and it
@@ -13,10 +13,25 @@
  * program the moment a real server answers it differently. It also assumes
  * the mock's own seeding throughout: two messages already in the inbox, and
  * mailboxes named exactly "Sent", "Trash" and "Junk", none of which a freshly
- * seeded Stalwart account has. This file is the receive half only -- open the
- * store, list the tree, resolve the three purpose folders by role, put one
- * message in and read it back -- which is the same bet cal-live-client.c
- * made: the simplest leg first, the richer ones as later batches.
+ * seeded Stalwart account has. This file takes the same bet
+ * cal-live-client.c made instead -- the simplest leg first, the richer ones
+ * as later batches -- and the batch is chosen by argv:
+ *
+ *   - `receive` opens the store, lists the tree, resolves the three purpose
+ *     folders by role, puts one message in and reads it back;
+ *   - `flags` shares all of that except the reporting, and then writes to the
+ *     appended message's flags, clears them again, and expunges it.
+ *
+ * One program rather than two because the setup `flags` needs -- a connected
+ * store with one known message in the inbox -- is exactly what `receive`
+ * already does, and every later batch needs it too.
+ *
+ * ## Reading a write back
+ *
+ * A flag Camel wrote is in Camel's own summary database a moment later
+ * whether or not the server ever heard about it, so the `flags` phase asks a
+ * second `CamelStore` on a scratch tree of its own (`report_reopened`). It
+ * has no summary to answer from, so what it reports came off the server.
  *
  * Everything around it -- the scratch XDG tree, the `.source` keyfile, the
  * private D-Bus session, the proxy to the real server and every assertion --
@@ -49,7 +64,7 @@
  * turned it down once and the loop had to re-offer it. Against the mock,
  * which checks no password at all, neither path runs.
  *
- *   usage: functional-mail-live-client <source-uid> <subject>
+ *   usage: functional-mail-live-client <source-uid> <subject> <phase>
  */
 
 #include <camel/camel.h>
@@ -66,6 +81,14 @@
  * mail-stale-token-client.c's own counters use. */
 static const gchar *seed_password = NULL;
 static guint password_prompts = 0;
+
+/* The one account this program drives, and the two things opening a store on
+ * it takes. Statics for the same reason the password above is one: there is
+ * exactly one of each in this process, and the alternative is threading three
+ * more arguments through every helper that opens a second store. */
+static ESource *account_source = NULL;
+static const gchar *account_uid = NULL;
+static const gchar *account_protocol = NULL;
 
 typedef struct _TestSession {
 	CamelSession parent;
@@ -211,16 +234,204 @@ message_body (CamelMimeMessage *message,
 	return g_strstrip (text);
 }
 
+/* A connected store on this account, with its summary database and message
+ * cache under `data_dir`/`cache_dir`.
+ *
+ * The session is handed back rather than dropped: `CamelService` holds only a
+ * weak reference to the session that made it, so a session the caller let go
+ * of would take the service's notion of itself with it.
+ *
+ * NULL with `error` set on any failure, and nothing left alive behind it. */
+static CamelStore *
+open_store (const gchar *data_dir,
+	    const gchar *cache_dir,
+	    CamelSession **out_session,
+	    GError **error)
+{
+	CamelSession *session;
+	CamelService *service;
+
+	session = g_object_new (test_session_get_type (),
+				"user-data-dir", data_dir,
+				"user-cache-dir", cache_dir,
+				NULL);
+
+	service = camel_session_add_service (session, account_uid, account_protocol,
+					     CAMEL_PROVIDER_STORE, error);
+	if (!service) {
+		g_object_unref (session);
+		return NULL;
+	}
+
+	/* Copies the keyfile's settings onto the service -- the host, the port,
+	 * the user name and the security method the provider reads in
+	 * connect_sync. */
+	e_source_camel_configure_service (account_source, service);
+
+	/* The state EMailSession reaches by looking the stored credential up,
+	 * reached here by being told it. See this file's header. */
+	if (seed_password && *seed_password)
+		camel_service_set_password (service, seed_password);
+
+	if (!camel_service_connect_sync (service, NULL, error)) {
+		g_object_unref (service);
+		g_object_unref (session);
+		return NULL;
+	}
+
+	*out_session = session;
+
+	return CAMEL_STORE (service);
+}
+
+/* What a store that has never seen this account before makes of one message:
+ * whether the inbox holds it at all, and its read and important marks.
+ *
+ * Reported as `<tag>-listed`, `<tag>-seen` and `<tag>-flagged`, the last two
+ * only when the message is there at all. The scratch tree is `tag`'s own, so
+ * no earlier call's summary database can answer for this one -- which is the
+ * whole point: every one of these three numbers came off the real server. */
+static gboolean
+report_reopened (const gchar *tag,
+		 const gchar *uid,
+		 GError **error)
+{
+	CamelSession *session = NULL;
+	CamelStore *store;
+	CamelFolder *inbox;
+	CamelMessageInfo *info;
+	gchar *data_dir;
+	gchar *cache_dir;
+	gboolean refreshed;
+
+	data_dir = g_build_filename (g_get_user_data_dir (), "reopened", tag, NULL);
+	cache_dir = g_build_filename (g_get_user_cache_dir (), "reopened", tag, NULL);
+	g_mkdir_with_parents (data_dir, 0700);
+	g_mkdir_with_parents (cache_dir, 0700);
+
+	store = open_store (data_dir, cache_dir, &session, error);
+	g_free (data_dir);
+	g_free (cache_dir);
+
+	if (!store)
+		return FALSE;
+
+	inbox = camel_store_get_inbox_folder_sync (store, NULL, error);
+	if (!inbox) {
+		g_object_unref (store);
+		g_object_unref (session);
+		return FALSE;
+	}
+
+	refreshed = camel_folder_refresh_info_sync (inbox, NULL, error);
+	if (refreshed) {
+		info = camel_folder_get_message_info (inbox, uid);
+		g_print ("%s-listed=%d\n", tag, info ? 1 : 0);
+
+		if (info) {
+			guint32 flags = camel_message_info_get_flags (info);
+
+			g_print ("%s-seen=%d\n", tag,
+				 (flags & CAMEL_MESSAGE_SEEN) ? 1 : 0);
+			g_print ("%s-flagged=%d\n", tag,
+				 (flags & CAMEL_MESSAGE_FLAGGED) ? 1 : 0);
+			g_clear_object (&info);
+		}
+	}
+
+	g_object_unref (inbox);
+	g_object_unref (store);
+	g_object_unref (session);
+
+	return refreshed;
+}
+
+/* Sets `mask` to `set` on one message of `folder`'s, then pushes the change
+ * with `synchronize_sync` -- which is the only call in this program that ever
+ * writes to a message's flags, and the one a real server can answer
+ * differently from the mock.
+ *
+ * `set` is a flags word and not a boolean because clearing a mark is a
+ * different `Email/set` patch from setting one, not the same write with the
+ * other value. */
+static gboolean
+write_flags (CamelFolder *folder,
+	     const gchar *uid,
+	     guint32 mask,
+	     guint32 set,
+	     GError **error)
+{
+	CamelMessageInfo *info;
+
+	info = camel_folder_get_message_info (folder, uid);
+	if (!info) {
+		g_set_error_literal (error, CAMEL_ERROR, CAMEL_ERROR_GENERIC,
+				     "the summary has no row for the message to flag");
+		return FALSE;
+	}
+
+	camel_message_info_set_flags (info, mask, set);
+	g_clear_object (&info);
+
+	return camel_folder_synchronize_sync (folder, FALSE, NULL, error);
+}
+
+/* One message's read and important marks as the summary row holds them now,
+ * reported as `seen-<tag>` and `flagged-<tag>`.
+ *
+ * Weaker than report_reopened and deliberately kept beside it: this is the
+ * row the program just wrote to, so it separates a write that never reached
+ * the server from one Camel never attempted in the first place. */
+static gboolean
+report_local_flags (CamelFolder *folder,
+		    const gchar *uid,
+		    const gchar *tag)
+{
+	CamelMessageInfo *info;
+	guint32 flags;
+
+	info = camel_folder_get_message_info (folder, uid);
+	if (!info)
+		return FALSE;
+
+	flags = camel_message_info_get_flags (info);
+	g_print ("seen-%s=%d\n", tag, (flags & CAMEL_MESSAGE_SEEN) ? 1 : 0);
+	g_print ("flagged-%s=%d\n", tag, (flags & CAMEL_MESSAGE_FLAGGED) ? 1 : 0);
+	g_clear_object (&info);
+
+	return TRUE;
+}
+
+/* The folder's two counts, under `inbox-count-<tag>` and
+ * `inbox-summary-<tag>`.
+ *
+ * Two of them rather than one because they are two different questions with
+ * two different answers to get wrong: the uid listing is what a message list
+ * is drawn from, and `camel_folder_summary_count` is what the folder tree's
+ * own total column asks. A provider that dropped a row from one and not the
+ * other leaves a folder claiming a message nobody can open. */
+static void
+report_counts (CamelFolder *folder,
+	       const gchar *tag)
+{
+	GPtrArray *uids;
+
+	uids = folder_dup_uids (folder);
+	g_print ("inbox-count-%s=%u\n", tag, uids->len);
+	folder_free_uids (folder, uids);
+
+	g_print ("inbox-summary-%s=%u\n", tag,
+		 camel_folder_summary_count (camel_folder_get_folder_summary (folder)));
+}
+
 int
 main (int argc,
       char **argv)
 {
 	GError *error = NULL;
 	ESourceRegistry *registry;
-	ESource *source;
 	ESourceBackend *backend_extension;
-	CamelSession *session;
-	CamelService *service;
+	CamelSession *session = NULL;
 	CamelStore *store;
 	CamelFolder *inbox;
 	CamelFolder *trash;
@@ -237,20 +448,30 @@ main (int argc,
 	guint count_before;
 	guint index;
 	gboolean listed = FALSE;
-	const gchar *source_uid;
+	gboolean receive_phase;
 	const gchar *subject;
-	const gchar *protocol;
+	const gchar *phase;
 	const gchar *data_dir;
 	const gchar *cache_dir;
 
-	if (argc != 3) {
-		g_printerr ("usage: %s <source-uid> <subject>\n", argv[0]);
+	if (argc != 4) {
+		g_printerr ("usage: %s <source-uid> <subject> <phase>\n", argv[0]);
 		return 2;
 	}
 
-	source_uid = argv[1];
+	account_uid = argv[1];
 	subject = argv[2];
+	phase = argv[3];
 	seed_password = g_getenv ("JMAP_FUNCTIONAL_STORE_PASSWORD");
+
+	if (g_strcmp0 (phase, "receive") == 0) {
+		receive_phase = TRUE;
+	} else if (g_strcmp0 (phase, "flags") == 0) {
+		receive_phase = FALSE;
+	} else {
+		g_printerr ("%s: unknown phase '%s'\n", argv[0], phase);
+		return 2;
+	}
 
 	/* The scratch tree the harness built. Camel keeps a summary database
 	 * and a message cache per service under these, and a session that fell
@@ -271,68 +492,49 @@ main (int argc,
 	if (!registry)
 		return fail ("registry", error);
 
-	source = e_source_registry_ref_source (registry, source_uid);
-	if (!source) {
-		g_printerr ("registry: no source with UID '%s'\n", source_uid);
+	account_source = e_source_registry_ref_source (registry, account_uid);
+	if (!account_source) {
+		g_printerr ("registry: no source with UID '%s'\n", account_uid);
 		return 1;
 	}
 
 	/* The protocol comes off the source rather than being spelled here --
 	 * see mail-client.c's own note on why a program that hardcoded it
 	 * would only agree with itself. */
-	if (!e_source_has_extension (source, E_SOURCE_EXTENSION_MAIL_ACCOUNT)) {
-		g_printerr ("source '%s' is not a mail account\n", source_uid);
+	if (!e_source_has_extension (account_source, E_SOURCE_EXTENSION_MAIL_ACCOUNT)) {
+		g_printerr ("source '%s' is not a mail account\n", account_uid);
 		return 1;
 	}
 
-	backend_extension = e_source_get_extension (source, E_SOURCE_EXTENSION_MAIL_ACCOUNT);
-	protocol = e_source_backend_get_backend_name (backend_extension);
-	g_print ("protocol=%s\n", protocol ? protocol : "");
+	backend_extension = e_source_get_extension (account_source, E_SOURCE_EXTENSION_MAIL_ACCOUNT);
+	account_protocol = e_source_backend_get_backend_name (backend_extension);
+	g_print ("protocol=%s\n", account_protocol ? account_protocol : "");
 
-	session = g_object_new (test_session_get_type (),
-				"user-data-dir", data_dir,
-				"user-cache-dir", cache_dir,
-				NULL);
-
-	service = camel_session_add_service (session, source_uid, protocol,
-					     CAMEL_PROVIDER_STORE, &error);
-	if (!service)
-		return fail ("add-service", error);
-
-	/* Copies the keyfile's settings onto the service -- the host, the port,
-	 * the user name and the security method the provider reads in
-	 * connect_sync. */
-	e_source_camel_configure_service (source, service);
-
-	/* The state EMailSession reaches by looking the stored credential up,
-	 * reached here by being told it. See this file's header. */
-	if (seed_password && *seed_password)
-		camel_service_set_password (service, seed_password);
-
-	if (!camel_service_connect_sync (service, NULL, &error))
+	store = open_store (data_dir, cache_dir, &session, &error);
+	if (!store)
 		return fail ("connect", error);
 
 	g_print ("store-connected=%d\n",
-		 camel_service_get_connection_status (service) == CAMEL_SERVICE_CONNECTED ? 1 : 0);
+		 camel_service_get_connection_status (CAMEL_SERVICE (store)) == CAMEL_SERVICE_CONNECTED ? 1 : 0);
 
 	/* 0 when the seeded password was taken on the first attempt. Not a
 	 * pass/fail here -- the harness decides what it means. */
 	g_print ("password-prompts=%u\n", password_prompts);
 
-	store = CAMEL_STORE (service);
+	if (receive_phase) {
+		info = camel_store_get_folder_info_sync (store, NULL,
+							 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
+							 NULL, &error);
+		if (!info)
+			return fail ("folder-info", error);
 
-	info = camel_store_get_folder_info_sync (store, NULL,
-						 CAMEL_STORE_FOLDER_INFO_RECURSIVE,
-						 NULL, &error);
-	if (!info)
-		return fail ("folder-info", error);
+		names = g_ptr_array_new_with_free_func (g_free);
+		collect_folder_names (info, names);
+		camel_folder_info_free (info);
 
-	names = g_ptr_array_new_with_free_func (g_free);
-	collect_folder_names (info, names);
-	camel_folder_info_free (info);
-
-	report_sorted ("folders", names);
-	g_ptr_array_unref (names);
+		report_sorted ("folders", names);
+		g_ptr_array_unref (names);
+	}
 
 	/* The three purpose folders by their JMAP role rather than by name.
 	 * This is the assertion the whole leg exists for: a real Stalwart
@@ -345,17 +547,19 @@ main (int argc,
 		return fail ("inbox", error);
 	g_print ("inbox-full-name=%s\n", camel_folder_get_full_name (inbox));
 
-	trash = camel_store_get_trash_folder_sync (store, NULL, &error);
-	if (!trash)
-		return fail ("trash", error);
-	g_print ("trash-full-name=%s\n", camel_folder_get_full_name (trash));
-	g_object_unref (trash);
+	if (receive_phase) {
+		trash = camel_store_get_trash_folder_sync (store, NULL, &error);
+		if (!trash)
+			return fail ("trash", error);
+		g_print ("trash-full-name=%s\n", camel_folder_get_full_name (trash));
+		g_object_unref (trash);
 
-	junk = camel_store_get_junk_folder_sync (store, NULL, &error);
-	if (!junk)
-		return fail ("junk", error);
-	g_print ("junk-full-name=%s\n", camel_folder_get_full_name (junk));
-	g_object_unref (junk);
+		junk = camel_store_get_junk_folder_sync (store, NULL, &error);
+		if (!junk)
+			return fail ("junk", error);
+		g_print ("junk-full-name=%s\n", camel_folder_get_full_name (junk));
+		g_object_unref (junk);
+	}
 
 	if (!camel_folder_refresh_info_sync (inbox, NULL, &error))
 		return fail ("refresh", error);
@@ -428,43 +632,144 @@ main (int argc,
 	g_print ("appended-in-listing=%d\n", listed ? 1 : 0);
 	folder_free_uids (inbox, uids);
 
-	/* Read back twice over, because those are two different requests: the
-	 * summary comes from Email/query plus Email/get, and the body from a
-	 * blob download, which is a plain HTTP GET rather than a method call.
-	 * A provider that lists mail it cannot open is a common enough failure
-	 * to be worth separating. */
-	message_info = camel_folder_get_message_info (inbox, appended_uid);
-	if (!message_info) {
-		g_free (appended_uid);
-		g_printerr ("summary: no message info for the appended uid\n");
-		return 1;
-	}
+	if (receive_phase) {
+		/* Read back twice over, because those are two different
+		 * requests: the summary comes from Email/query plus Email/get,
+		 * and the body from a blob download, which is a plain HTTP GET
+		 * rather than a method call. A provider that lists mail it
+		 * cannot open is a common enough failure to be worth
+		 * separating. */
+		message_info = camel_folder_get_message_info (inbox, appended_uid);
+		if (!message_info) {
+			g_free (appended_uid);
+			g_printerr ("summary: no message info for the appended uid\n");
+			return 1;
+		}
 
-	g_print ("appended-subject=%s\n", camel_message_info_get_subject (message_info));
-	g_clear_object (&message_info);
+		g_print ("appended-subject=%s\n", camel_message_info_get_subject (message_info));
+		g_clear_object (&message_info);
 
-	reread = camel_folder_get_message_sync (inbox, appended_uid, NULL, &error);
-	if (!reread) {
-		g_free (appended_uid);
-		return fail ("get-message", error);
-	}
+		reread = camel_folder_get_message_sync (inbox, appended_uid, NULL, &error);
+		if (!reread) {
+			g_free (appended_uid);
+			return fail ("get-message", error);
+		}
 
-	body = message_body (reread, &error);
-	if (!body) {
+		body = message_body (reread, &error);
+		if (!body) {
+			g_object_unref (reread);
+			g_free (appended_uid);
+			return fail ("message-body", error);
+		}
+
+		g_print ("appended-body=%s\n", body);
+		g_free (body);
 		g_object_unref (reread);
-		g_free (appended_uid);
-		return fail ("message-body", error);
+	} else {
+		/* What the message arrived carrying. The two writes below are
+		 * both measured as differences from here, so a server that
+		 * handed keywords of its own to an imported message has to be
+		 * visible rather than assumed away. */
+		if (!report_local_flags (inbox, appended_uid, "after-append")) {
+			g_free (appended_uid);
+			g_printerr ("summary: no message info for the appended uid\n");
+			return 1;
+		}
+
+		/* Read and important together, because they are one patch:
+		 * `synchronize_sync` sends the whole difference between the
+		 * keywords the last listing found and the ones the row claims
+		 * now, not one request per bit. */
+		if (!write_flags (inbox, appended_uid,
+				  CAMEL_MESSAGE_SEEN | CAMEL_MESSAGE_FLAGGED,
+				  CAMEL_MESSAGE_SEEN | CAMEL_MESSAGE_FLAGGED,
+				  &error)) {
+			g_free (appended_uid);
+			return fail ("synchronize-set", error);
+		}
+
+		report_local_flags (inbox, appended_uid, "local-after-set");
+
+		if (!report_reopened ("reopened-set", appended_uid, &error)) {
+			g_free (appended_uid);
+			return fail ("reopen-after-set", error);
+		}
+
+		/* The other direction, which is the half a provider that only
+		 * ever added keywords would still pass the check above on. */
+		if (!write_flags (inbox, appended_uid,
+				  CAMEL_MESSAGE_SEEN | CAMEL_MESSAGE_FLAGGED, 0,
+				  &error)) {
+			g_free (appended_uid);
+			return fail ("synchronize-clear", error);
+		}
+
+		if (!report_reopened ("reopened-cleared", appended_uid, &error)) {
+			g_free (appended_uid);
+			return fail ("reopen-after-clear", error);
+		}
+
+		/* `expunge_sync`: the deletion itself. CAMEL_MESSAGE_DELETED is
+		 * a bit of Camel's own -- JMAP has no deleted keyword -- so
+		 * marking the row reaches no server at all and the expunge is
+		 * the request that does. */
+		report_counts (inbox, "before-expunge");
+
+		message_info = camel_folder_get_message_info (inbox, appended_uid);
+		if (!message_info) {
+			g_free (appended_uid);
+			g_printerr ("summary: no message info to mark deleted\n");
+			return 1;
+		}
+		camel_message_info_set_flags (message_info, CAMEL_MESSAGE_DELETED,
+					      CAMEL_MESSAGE_DELETED);
+		g_clear_object (&message_info);
+
+		if (!camel_folder_expunge_sync (inbox, NULL, &error)) {
+			g_free (appended_uid);
+			return fail ("expunge", error);
+		}
+
+		/* No refresh in between: the rows go when the expunge does
+		 * rather than at the next listing, so a provider that left
+		 * them for a later refresh has to fail here rather than be
+		 * covered for by one. */
+		report_counts (inbox, "after-expunge");
+
+		listed = FALSE;
+		uids = folder_dup_uids (inbox);
+		for (index = 0; index < uids->len && !listed; index++)
+			listed = g_strcmp0 (uids->pdata[index], appended_uid) == 0;
+		folder_free_uids (inbox, uids);
+		g_print ("expunged-still-listed=%d\n", listed ? 1 : 0);
+
+		/* And the same question of the server, which neither of the
+		 * two counts above can answer: they would both look right for
+		 * a provider that only forgot the message locally. */
+		if (!report_reopened ("reopened-expunged", appended_uid, &error)) {
+			g_free (appended_uid);
+			return fail ("reopen-after-expunge", error);
+		}
 	}
 
-	g_print ("appended-body=%s\n", body);
-	g_free (body);
-	g_object_unref (reread);
+	/* Camel schedules its own `folder_changed` emissions onto the default
+	 * main context, and this program runs no main loop, so some are still
+	 * pending here. `ESourceRegistry`'s dispose iterates that context,
+	 * which would otherwise dispatch them in the middle of the teardown
+	 * below: the closure's own unref then reaches a `CamelStore` whose
+	 * finalizer is already holding the folder bag it wants, and the process
+	 * stops there (seen as a hang on EDS 3.60.2, and as a crash once this
+	 * file grew a second store). Draining them here, while everything they
+	 * refer to is still alive, costs nothing and is what a program with a
+	 * main loop of its own would have done all along. */
+	while (g_main_context_iteration (NULL, FALSE))
+		;
 
 	g_free (appended_uid);
 	g_object_unref (inbox);
-	g_object_unref (service);
+	g_object_unref (store);
 	g_object_unref (session);
-	g_object_unref (source);
+	g_object_unref (account_source);
 	g_object_unref (registry);
 
 	return 0;

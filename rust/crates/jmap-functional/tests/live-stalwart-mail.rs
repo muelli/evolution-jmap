@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Item 82 batch 1: the mail leg's receive half, driven against a real
-//! Stalwart instead of the in-process mock.
+//! Item 82 batches 1 and 2: the mail leg driven against a real Stalwart
+//! instead of the in-process mock -- first its receive half, then the flag
+//! and expunge writes.
 //!
 //! The fourth live-server leg, after the address book, the calendar and the
 //! collection account, and the one the other three cannot stand in for: a
@@ -16,10 +17,12 @@
 //! subscribes and unsubscribes, flags a message, creates, renames and deletes
 //! a folder, transfers a message out and back, and expunges, and a real
 //! server genuinely differing on any one of those would fail the whole client
-//! rather than just mismeasure a field. This is the receive half only -- open
-//! the store, list the folder tree, resolve the three purpose folders by
-//! their JMAP role, put one message in and read it back. The write-side
-//! vfuncs are item 82's later batches.
+//! rather than just mismeasure a field. So the legs here are split one batch
+//! at a time instead: batch 1 opens the store, lists the folder tree,
+//! resolves the three purpose folders by their JMAP role, puts one message in
+//! and reads it back; batch 2 writes to a message's flags and then expunges
+//! it. Transfer between folders and the `EmailSubmission` send are item 82's
+//! later batches.
 //!
 //! The mechanism is unchanged from the other three legs:
 //! `spawn_loopback_proxy` satisfies `jmap-backend-core::connect_target`'s
@@ -49,6 +52,7 @@
 //! unset.
 
 use std::env;
+use std::sync::{Mutex, MutexGuard};
 
 use jmap_functional::{Session, observations, required_path, spawn_loopback_proxy};
 
@@ -123,6 +127,53 @@ fn keyfile(port: u16, user: &str) -> String {
     )
 }
 
+/// Held for the length of every test in this file.
+///
+/// The two legs share one throwaway account, and both of them count the
+/// inbox: batch 1 claims the listing grew by exactly its own append, batch 2
+/// that it shrank by exactly its own expunge. Cargo runs the tests in one
+/// binary on threads, so without this the two appends interleave and either
+/// count can be off by one for a reason that has nothing to do with the
+/// provider. Serialising them is cheaper and more honest than making each
+/// claim weak enough to survive the other.
+static ONE_ACCOUNT_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+/// The guard, with a poisoned lock treated as an ordinary one: the poison
+/// only means the other leg already failed, which this one still wants to be
+/// measured independently of.
+fn exclusive_account() -> MutexGuard<'static, ()> {
+    ONE_ACCOUNT_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
+
+/// The scratch session both legs run their client in, pointed at the real
+/// server through a loopback proxy of its own.
+///
+/// `root` differs per leg so the two scratch trees -- the XDG directories,
+/// the `.source` keyfile, the private D-Bus socket -- never overlap even
+/// though the account behind them is shared.
+fn live_session(root: &str, origin: &str, user: &str, password: &str) -> Session {
+    let module = required_path("JMAP_FUNCTIONAL_MAIL_MODULE");
+    let urls = required_path("JMAP_FUNCTIONAL_MAIL_URLS");
+
+    let authority = origin
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let port = spawn_loopback_proxy(authority.to_owned());
+
+    let mut session = Session::new(root);
+    session.write_source("jmap-functional", &keyfile(port, user));
+    session.set_variable("JMAP_FUNCTIONAL_STORE_PASSWORD", password);
+    // Stalwart's session document states its own configured `apiUrl`, not the
+    // loopback proxy address it was actually asked through -- see
+    // `live-stalwart-book.rs`'s own comment on this line for the mechanism.
+    session.set_variable("JMAP_LIVE_SERVER_REBASE_URLS", "1");
+    session.stage_camel_provider(&module, &urls);
+
+    session
+}
+
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn camel_opens_the_store_and_serves_a_real_inbox() {
@@ -132,26 +183,17 @@ fn camel_opens_the_store_and_serves_a_real_inbox() {
         );
         return;
     };
+    let _account = exclusive_account();
     let client = required_path("JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT");
-    let module = required_path("JMAP_FUNCTIONAL_MAIL_MODULE");
-    let urls = required_path("JMAP_FUNCTIONAL_MAIL_URLS");
-
-    let authority = origin
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let port = spawn_loopback_proxy(authority.to_owned());
-
-    let mut session = Session::new(concat!(env!("CARGO_TARGET_TMPDIR"), "/live-stalwart-mail"));
-    session.write_source("jmap-functional", &keyfile(port, &user));
-    session.set_variable("JMAP_FUNCTIONAL_STORE_PASSWORD", &password);
-    // Stalwart's session document states its own configured `apiUrl`, not the
-    // loopback proxy address it was actually asked through -- see
-    // `live-stalwart-book.rs`'s own comment on this line for the mechanism.
-    session.set_variable("JMAP_LIVE_SERVER_REBASE_URLS", "1");
-    session.stage_camel_provider(&module, &urls);
+    let session = live_session(
+        concat!(env!("CARGO_TARGET_TMPDIR"), "/live-stalwart-mail"),
+        &origin,
+        &user,
+        &password,
+    );
 
     let subject = format!("agent-fnmail-{:x}", unique_suffix() & 0xffff_ffff_ffff);
-    let output = session.run(&client, &["jmap-functional", &subject]);
+    let output = session.run(&client, &["jmap-functional", &subject, "receive"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
@@ -245,6 +287,143 @@ fn camel_opens_the_store_and_serves_a_real_inbox() {
         seen.get("appended-body"),
         Some(&BODY),
         "the appended message's body did not survive the round trip through the real server\n{report}"
+    );
+}
+
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn camel_writes_flags_and_expunges_through_the_real_server() {
+    let Some((origin, user, password)) = live_server_params() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the real-server mail flags leg"
+        );
+        return;
+    };
+    let _account = exclusive_account();
+    let client = required_path("JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT");
+    let session = live_session(
+        concat!(env!("CARGO_TARGET_TMPDIR"), "/live-stalwart-mail-flags"),
+        &origin,
+        &user,
+        &password,
+    );
+
+    let subject = format!("agent-fnflag-{:x}", unique_suffix() & 0xffff_ffff_ffff);
+    let output = session.run(&client, &["jmap-functional", &subject, "flags"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    assert_eq!(
+        seen.get("store-connected"),
+        Some(&"1"),
+        "Camel never opened the store against the real server\n{report}"
+    );
+    assert!(
+        output.status.success(),
+        "the client failed against the real server with {}\n{report}",
+        output.status
+    );
+
+    // `Email/import` of a blob with no keywords on it. Asserted rather than
+    // merely reported because the two writes below are both measured as
+    // differences from here: a server that handed its own keywords to an
+    // imported message would make "the flag the user set arrived" and "the
+    // flag was already there" indistinguishable.
+    assert_eq!(
+        seen.get("seen-after-append"),
+        Some(&"0"),
+        "the appended message arrived already marked read\n{report}"
+    );
+    assert_eq!(
+        seen.get("flagged-after-append"),
+        Some(&"0"),
+        "the appended message arrived already marked important\n{report}"
+    );
+
+    // What `synchronize_sync` left in Camel's own summary row. Weak on its
+    // own -- the row is what the client just wrote to -- but it separates a
+    // write that never reached the server from one Camel never attempted.
+    assert_eq!(
+        seen.get("seen-local-after-set"),
+        Some(&"1"),
+        "the summary row lost the read mark across the synchronise\n{report}"
+    );
+    assert_eq!(
+        seen.get("flagged-local-after-set"),
+        Some(&"1"),
+        "the summary row lost the important mark across the synchronise\n{report}"
+    );
+
+    // The claim this leg exists for. A second `CamelStore` on a scratch tree
+    // of its own has no summary database to answer from, so these two come
+    // off the real server's `Email/get` -- which is the only way to tell a
+    // keyword Stalwart stored from one Camel only ever remembered locally.
+    assert_eq!(
+        seen.get("reopened-set-listed"),
+        Some(&"1"),
+        "a store opening this account afresh does not find the appended message at all\n{report}"
+    );
+    assert_eq!(
+        seen.get("reopened-set-seen"),
+        Some(&"1"),
+        "the read mark never reached the real server\n{report}"
+    );
+    assert_eq!(
+        seen.get("reopened-set-flagged"),
+        Some(&"1"),
+        "the important mark never reached the real server\n{report}"
+    );
+
+    // And the other direction, which is a different `Email/set` patch
+    // (a keyword set to null rather than to true) and the half a provider
+    // that wrote keywords additively would still pass the first check on.
+    assert_eq!(
+        seen.get("reopened-cleared-seen"),
+        Some(&"0"),
+        "clearing the read mark never reached the real server\n{report}"
+    );
+    assert_eq!(
+        seen.get("reopened-cleared-flagged"),
+        Some(&"0"),
+        "clearing the important mark never reached the real server\n{report}"
+    );
+
+    // Item 82 names the folder-summary counts after an expunge as one of the
+    // divergences worth hunting, so both counters are read: the uid listing
+    // the message list is drawn from, and `camel_folder_summary_count`, which
+    // is what the folder tree's unread/total column asks. A provider that
+    // dropped the row from one and not the other leaves a folder claiming a
+    // message nobody can open.
+    let listed_before = parsed(&seen, "inbox-count-before-expunge", &report);
+    let listed_after = parsed(&seen, "inbox-count-after-expunge", &report);
+    let summary_before = parsed(&seen, "inbox-summary-before-expunge", &report);
+    let summary_after = parsed(&seen, "inbox-summary-after-expunge", &report);
+    assert_eq!(
+        listed_after,
+        listed_before - 1,
+        "the inbox listing did not shrink by exactly the expunged message\n{report}"
+    );
+    assert_eq!(
+        summary_after,
+        summary_before - 1,
+        "the folder summary count did not shrink by exactly the expunged message\n{report}"
+    );
+    assert_eq!(
+        seen.get("expunged-still-listed"),
+        Some(&"0"),
+        "the expunged message is still in the folder's own uid list\n{report}"
+    );
+
+    // The rows go when the expunge does rather than at the next listing
+    // (`expunge.rs`'s own "the rows go now" note), so the two checks above
+    // would both pass against a provider that only forgot the message
+    // locally. This one reopens and asks the server.
+    assert_eq!(
+        seen.get("reopened-expunged-listed"),
+        Some(&"0"),
+        "the expunged message is still on the real server\n{report}"
     );
 }
 
