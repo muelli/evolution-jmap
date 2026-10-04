@@ -327,7 +327,7 @@ main (int argc,
 	CamelSession *session = NULL;
 	CamelSession *sender_session = NULL;
 	CamelSession *recipient_session = NULL;
-	CamelService *service;
+	CamelService *service = NULL;
 	CamelStore *sender_store;
 	CamelStore *recipient_store;
 	CamelFolder *sent_folder;
@@ -729,6 +729,7 @@ out:
 	g_free (delivered_uid);
 	g_free (staged_uid);
 	g_free (sent_copy_uid);
+	g_clear_object (&service);
 	g_clear_object (&session);
 	g_clear_object (&recipient_account);
 	g_clear_object (&transport_source);
