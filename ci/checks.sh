@@ -99,6 +99,25 @@ echo "== packaging (.deb ctest, if EDS dev headers/cmake/ninja are present) =="
 if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution-calendar-3.0 evolution-mail-3.0 libecal-2.0 2>/dev/null; then
     cmake -S . -B build -G Ninja >/dev/null
     ninja -C build
+    # package-deb-lintian is only registered by cmake/Packaging.cmake when
+    # `find_program(lintian)` succeeds, so on a machine without lintian the
+    # ctest filter below runs the other packaging tests, reports success, and
+    # never touches lintian at all. That silent gap is exactly what let
+    # `3930b24e` (item 80 stage 1, a RUNPATH with no matching override) pass
+    # every local pre-push run while real CI, which `ci/install-deps.sh`
+    # guarantees has lintian, sat red for 30 pushes and 24+ hours. Fail loudly
+    # instead of silently proceeding; CI_CHECKS_ALLOW_MISSING_LINTIAN=1 is the
+    # explicit, visible escape hatch for a deliberately bare machine.
+    if ! have lintian && [ -z "${CI_CHECKS_ALLOW_MISSING_LINTIAN:-}" ]; then
+        echo "FAIL: lintian is not installed, so package-deb-lintian would silently" >&2
+        echo "not run, the exact check CI enforces. Install lintian, or set" >&2
+        echo "CI_CHECKS_ALLOW_MISSING_LINTIAN=1 to acknowledge this machine won't" >&2
+        echo "verify it and continue anyway." >&2
+        exit 1
+    fi
+    if ! have lintian; then
+        echo "!! CI_CHECKS_ALLOW_MISSING_LINTIAN set: package-deb-lintian will NOT run here !!" >&2
+    fi
     ctest --test-dir build -R 'package-deb|debian-copyright-in-sync' --output-on-failure
 else
     echo "-- cmake, ninja, or the EDS dev headers are not available; skipping the .deb packaging check (expected on a bare Rust-only machine) --" >&2
