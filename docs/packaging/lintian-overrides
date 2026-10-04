@@ -11,3 +11,15 @@
 # load, the fix is this override arguing the entry is deliberate, not
 # removing the RUNPATH.
 evolution-jmap: custom-library-search-path RUNPATH /usr/lib/evolution [usr/lib/evolution/modules/module-jmap-configuration.so]
+
+# Same justification as above, for the three modules item 80 stage 1 gave
+# the identical RUNPATH to (they dlopen libevolution-mail.so transitively
+# through jmap-config's own need for evo-sys). Their install directories
+# come from pkg-config (libedata-book-1.2/libedata-cal-2.0/libebackend-1.2's
+# own backenddir/moduledir) rather than this package's own layout, so the
+# path up to the backend/module directory name itself can carry a multiarch
+# triplet on some distros and not on others; the leading `*` absorbs that
+# instead of hardcoding one distro's layout.
+evolution-jmap: custom-library-search-path RUNPATH /usr/lib/evolution [usr/lib/*evolution-data-server/addressbook-backends/libebookbackendjmap.so]
+evolution-jmap: custom-library-search-path RUNPATH /usr/lib/evolution [usr/lib/*evolution-data-server/calendar-backends/libecalbackendjmap.so]
+evolution-jmap: custom-library-search-path RUNPATH /usr/lib/evolution [usr/lib/*evolution-data-server/registry-modules/module-jmap-backend.so]
