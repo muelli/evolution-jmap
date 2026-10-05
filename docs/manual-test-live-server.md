@@ -374,6 +374,13 @@ in the invocation, worth failing loudly on.
   falls back to the requested name trimmed of whitespace, and returns the expected name
   matching what is stored on the server.
   Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `calendar_event_notification_destroy_tolerates_server_dropped_id_through_the_real_api`:
+  exercises Finding 20 (STALWART-RFC-FINDINGS.md) where `CalendarEventNotification/set`
+  destroy with an unformatted ID silently drops it from the response map on Stalwart v1.0.0
+  rather than returning a `notFound` SetError in `notDestroyed` (RFC 8620 Section 5.3).
+  Verifies that `Client::calendar_event_notification_destroy` tolerates the omitted ID
+  and reports `notFound` instead of failing with a protocol error.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 

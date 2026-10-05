@@ -142,3 +142,50 @@ fn finding_16_mailbox_set_create_omitted_trimmed_name_tolerated() {
         "mailbox_create must report the trimmed name when the server omits it"
     );
 }
+
+/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// CalendarEventNotification/set destroy with an unformatted ID (Finding 20).
+/// Stalwart silently drops the unformatted ID from both destroyed and notDestroyed.
+const STALWART_NOTIFICATION_SET_DESTROY_DROPPING_ID: &str = r#"{"methodResponses":[["CalendarEventNotification/set",{"accountId":"d333333"},"c0"]],"sessionState":"aa288e37"}"#;
+
+const STALWART_AUTHENTICATED_SESSION_WITH_CALENDARS: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:calendars":{}},"accounts":{"d333333":{"name":"admin","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:calendars":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:calendars":"d333333"},"username":"admin","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
+
+struct MockNotificationSetTransport;
+
+impl Transport for MockNotificationSetTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => STALWART_AUTHENTICATED_SESSION_WITH_CALENDARS
+                .as_bytes()
+                .to_vec(),
+            HttpMethod::Post => STALWART_NOTIFICATION_SET_DESTROY_DROPPING_ID
+                .as_bytes()
+                .to_vec(),
+        };
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn finding_20_calendar_event_notification_destroy_dropped_id_tolerated_as_not_found() {
+    let client = Client::builder()
+        .transport(MockNotificationSetTransport)
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let result =
+        client.calendar_event_notification_destroy(&account_id, &Id::new("unformatted_id"));
+
+    match result {
+        Err(Error::Set(err)) => {
+            assert_eq!(err.error_type, "notFound");
+        }
+        other => panic!("expected Error::Set with notFound, got {other:?}"),
+    }
+}

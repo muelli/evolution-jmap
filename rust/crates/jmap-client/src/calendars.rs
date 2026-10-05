@@ -9,6 +9,7 @@ use jmap_proto::calendars::{
     CalendarEventParseRequest, CalendarEventParseResponse, CalendarEventQueryFilter,
     CalendarEventSetRequest, ParticipantIdentity, ParticipantIdentitySetRequest,
 };
+use jmap_proto::error::SetError;
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
@@ -241,9 +242,14 @@ impl Client {
         {
             return Ok(());
         }
-        Err(set_failure(
-            response.not_destroyed.as_ref().and_then(|map| map.get(id)),
-        ))
+        if let Some(err) = response.not_destroyed.as_ref().and_then(|map| map.get(id)) {
+            return Err(Error::Set(err.clone()));
+        }
+        // Stalwart v1.0.0 silently drops malformed or unformatted IDs from
+        // CalendarEventNotification/set destroy rather than returning notDestroyed
+        // with notFound (Finding 20). If the server omitted the requested ID from
+        // both destroyed and notDestroyed, treat it as notFound.
+        Err(Error::Set(SetError::new("notFound")))
     }
 
     /// Fetch all participant identities (`ParticipantIdentity/get` with

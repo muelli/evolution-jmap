@@ -3973,3 +3973,42 @@ fn mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api() {
         .mailbox_destroy(&account_id, &id)
         .expect("Mailbox/set destroy failed");
 }
+
+/// Finding 20 (STALWART-RFC-FINDINGS.md): CalendarEventNotification/set destroy
+/// with an unformatted ID silently drops it from the response map on Stalwart v1.0.0
+/// rather than returning a notFound SetError in notDestroyed (RFC 8620 Section 5.3).
+/// Verifies that Client::calendar_event_notification_destroy tolerates the omitted ID
+/// and reports notFound instead of failing with a protocol error.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn calendar_event_notification_destroy_tolerates_server_dropped_id_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_CALENDARS)
+        .expect("write account has a calendars capability");
+
+    // Formatted unknown ID returns notFound via notDestroyed:
+    match client.calendar_event_notification_destroy(&account_id, &Id::new("n000000000000")) {
+        Err(jmap_client::Error::Set(err)) => {
+            assert_eq!(err.error_type, "notFound");
+        }
+        other => {
+            panic!(
+                "expected notFound SetError for formatted unknown notification destroy, got {other:?}"
+            )
+        }
+    }
+
+    // Unformatted ID dropped by Stalwart also returns notFound:
+    match client.calendar_event_notification_destroy(&account_id, &Id::new("unformatted_id")) {
+        Err(jmap_client::Error::Set(err)) => {
+            assert_eq!(err.error_type, "notFound");
+        }
+        other => {
+            panic!("expected notFound SetError for unformatted notification destroy, got {other:?}")
+        }
+    }
+}
