@@ -293,3 +293,50 @@ fn current_user_principal_and_principal_get_fetch_seeded_principal() {
     assert!(get_list.iter().any(|p| p.id.as_ref() == Some(&me)));
     assert!(get_list.iter().any(|p| p.id.as_ref() == Some(&attendee)));
 }
+
+/// `Principal/query`'s "text"/"email" filters match by substring
+/// containment (RFC 9670 Section 2.4.1), so a server with two principals
+/// that both happen to contain the account's own username as a substring
+/// can answer with the wrong one first. `current_user_principal` (used when
+/// the session omits `currentUserPrincipalId` entirely, the same fallback
+/// Finding 18's account-id-mismatch shape also lands in) must not accept
+/// whichever principal the query returns first; it must pick the one that
+/// actually identifies the account owner.
+#[test]
+fn current_user_principal_does_not_accept_an_unverified_decoy_candidate() {
+    let server = MockServer::builder().start();
+    let account_id = server.account_id();
+    let real_principal_id = {
+        let state = server.state();
+        let mut state = state.lock().unwrap();
+        let account = state.account_mut(&account_id).unwrap();
+        account.name = "alice".to_owned();
+        // Seeded first, so it sorts before the real principal below — a
+        // "take whichever Principal/get answers first" bug would return
+        // this one. Its email contains "alice", matching the substring
+        // filter, but it is not the account owner.
+        account.seed_principal(Principal {
+            principal_type: Some("individual".to_owned()),
+            name: "Alice Decoy Team".to_owned(),
+            email: Some("alice.decoy@example.com".to_owned()),
+            ..Principal::default()
+        });
+        account.seed_principal(Principal {
+            principal_type: Some("individual".to_owned()),
+            name: "Alice Example".to_owned(),
+            email: Some("alice@example.com".to_owned()),
+            ..Principal::default()
+        })
+    };
+
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+    let principal = client
+        .current_user_principal(&account_id)
+        .unwrap()
+        .expect("must resolve to the account owner's own principal");
+    assert_eq!(
+        principal.id.as_ref(),
+        Some(&real_principal_id),
+        "must not resolve to a principal that merely shares a substring with the account's own name"
+    );
+}
