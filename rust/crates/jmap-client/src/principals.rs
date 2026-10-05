@@ -126,6 +126,16 @@ impl Client {
 
     /// Helper to resolve the owner principal when currentUserPrincipalId is missing or
     /// points to the account ID (Finding 18 fallback).
+    ///
+    /// `Principal/query`'s own "text"/"email" filters match by substring
+    /// containment (RFC 9670 Section 2.4.1), so a server with more than one
+    /// principal sharing a substring with `username` can return several
+    /// candidate ids. Every candidate is checked with
+    /// [`principal_identifies_username`] before being accepted; the earlier
+    /// shape here returned whichever one `Principal/get` answered first with
+    /// no check at all, so a decoy principal that merely contained
+    /// `username` as a substring and happened to sort first would be
+    /// returned as if it were the account owner.
     fn resolve_owner_principal(&self, account_id: &Id) -> Result<Option<Principal>, Error> {
         let username = &self.session().username;
         if !username.is_empty() {
@@ -134,12 +144,8 @@ impl Client {
             } else {
                 PrincipalQueryFilter::default().text(username)
             };
-            if let Ok(ids) = self.principal_query(account_id, filter) {
-                for candidate_id in ids {
-                    if let Some(principal) = self.fetch_principal(account_id, &candidate_id) {
-                        return Ok(Some(principal));
-                    }
-                }
+            if let Some(principal) = self.find_verified_principal(account_id, filter, username) {
+                return Ok(Some(principal));
             }
 
             let alt_filter = if username.contains('@') {
@@ -147,29 +153,37 @@ impl Client {
             } else {
                 PrincipalQueryFilter::email(username)
             };
-            if let Ok(ids) = self.principal_query(account_id, alt_filter) {
-                for candidate_id in ids {
-                    if let Some(principal) = self.fetch_principal(account_id, &candidate_id) {
-                        return Ok(Some(principal));
-                    }
-                }
+            if let Some(principal) = self.find_verified_principal(account_id, alt_filter, username)
+            {
+                return Ok(Some(principal));
             }
         }
 
         if let Ok(all) = self.principals(account_id) {
-            let matched = all.into_iter().find(|p| {
-                p.is_personal == Some(true)
-                    || (!username.is_empty()
-                        && (p.email.as_deref() == Some(username)
-                            || p.name == *username
-                            || p.name.starts_with(username)))
-            });
+            let matched = all
+                .into_iter()
+                .find(|p| principal_identifies_username(p, username));
             if let Some(principal) = matched {
                 return Ok(Some(principal));
             }
         }
 
         Ok(None)
+    }
+
+    /// Resolve `filter` and return the first candidate whose own email or
+    /// name actually identifies `username`, not merely the first one the
+    /// query happened to return.
+    fn find_verified_principal(
+        &self,
+        account_id: &Id,
+        filter: PrincipalQueryFilter,
+        username: &str,
+    ) -> Option<Principal> {
+        let ids = self.principal_query(account_id, filter).ok()?;
+        ids.into_iter()
+            .filter_map(|id| self.fetch_principal(account_id, &id))
+            .find(|p| principal_identifies_username(p, username))
     }
 
     /// Resolve principals matching `filter` (`Principal/query`) — e.g. by
@@ -237,4 +251,32 @@ impl Client {
         let response: GetAvailabilityResponse = serde_json::from_value(arguments)?;
         Ok(response.list)
     }
+}
+
+/// Whether `principal` is the one `username` (the session's own login
+/// identity) actually names, checked by exact identity rather than the
+/// substring containment `Principal/query`'s own filters use: `username`
+/// equals the principal's email outright, or — when `username` carries no
+/// `@` and is plausibly a bare login name rather than an address — equals
+/// the local part of its email, or equals its name outright. RFC 9670
+/// defines no `isPersonal` property on `Principal` at all (Section 2 lists
+/// exactly `id`/`type`/`name`/`description`/`email`/`timeZone`/
+/// `capabilities`/`accounts`); no server this crate talks to, mock or real,
+/// has ever been seen to set one, so a prior revision of this check that
+/// also accepted any candidate with `is_personal == Some(true)` could never
+/// actually fire and is not reinstated here.
+fn principal_identifies_username(principal: &Principal, username: &str) -> bool {
+    if username.is_empty() {
+        return false;
+    }
+    if principal.email.as_deref() == Some(username) {
+        return true;
+    }
+    if !username.contains('@')
+        && let Some(email) = &principal.email
+        && email.split('@').next() == Some(username)
+    {
+        return true;
+    }
+    principal.name == username
 }
