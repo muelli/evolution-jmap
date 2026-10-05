@@ -23,14 +23,27 @@ use crate::state::Store;
 /// `maxChanges` caps it further. Either way the answer is truncated at a state
 /// boundary — `newState` has to be a state the client can ask again from, and
 /// half of a transition is not one.
+///
+/// `unrecognized_state_is_invalid_arguments` picks which of two answers an
+/// unparseable `sinceState` gets: RFC 8620 §5.2's own `cannotCalculateChanges`
+/// by default, or real Stalwart's own non-conformance
+/// ([`crate::MockServerBuilder::stalwart_shaped_unrecognized_changes_state`],
+/// `STALWART-RFC-FINDINGS.md` finding 17) when a test asks for that shape
+/// specifically.
 pub(crate) fn store_changes<T>(
     store: &Store<T>,
     request: jmap_proto::methods::ChangesRequest,
     page_size: Option<u64>,
+    unrecognized_state_is_invalid_arguments: bool,
 ) -> Result<jmap_proto::methods::ChangesResponse, MethodError> {
     let since: u64 = request.since_state.as_str().parse().map_err(|_| {
-        MethodError::new("cannotCalculateChanges")
-            .with_description("sinceState was not issued by this server")
+        if unrecognized_state_is_invalid_arguments {
+            MethodError::new(error::method::INVALID_ARGUMENTS)
+                .with_description("invalid JMAP State")
+        } else {
+            MethodError::new("cannotCalculateChanges")
+                .with_description("sinceState was not issued by this server")
+        }
     })?;
     let cap = [page_size, request.max_changes].into_iter().flatten().min();
     let (window_end, has_more_changes) = window(store, since, cap);

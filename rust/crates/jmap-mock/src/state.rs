@@ -82,6 +82,14 @@ pub struct ServerState {
     /// [`crate::MockServerBuilder::changes_page_size`] asked. `None` answers
     /// every change at once.
     pub changes_page_size: Option<u64>,
+    /// Whether an unparseable `/changes` `sinceState` is answered the way
+    /// real Stalwart answers it (`invalidArguments`) rather than RFC 8620
+    /// §5.2's own `cannotCalculateChanges`, as
+    /// [`crate::MockServerBuilder::stalwart_shaped_unrecognized_changes_state`]
+    /// asked (`STALWART-RFC-FINDINGS.md` finding 17). `false` answers with
+    /// the RFC's own error type, which is what every other client-facing
+    /// behaviour here still assumes.
+    pub stalwart_shaped_unrecognized_changes_state: bool,
     /// How many ids one `Email/get` may name, as
     /// [`crate::MockServerBuilder::objects_in_get`] asked — advertised in the
     /// session document and enforced. `None` advertises
@@ -238,6 +246,7 @@ impl ServerState {
             omit_primary_accounts: false,
             calls_in_request: Some(crate::DEFAULT_CALLS_IN_REQUEST),
             changes_page_size: None,
+            stalwart_shaped_unrecognized_changes_state: false,
             objects_in_get: None,
             query_page_size: None,
             query_never_terminates: false,

@@ -385,6 +385,31 @@ fn a_state_the_server_cannot_calculate_from_lists_the_mailbox_again() {
     }
 }
 
+/// Same unrecognized state, but answered the way real Stalwart answers it —
+/// `invalidArguments` rather than RFC 8620 §5.2's own `cannotCalculateChanges`
+/// (`STALWART-RFC-FINDINGS.md` finding 17). A Camel store still has nowhere
+/// to report that to, so the answer has to be the same relist.
+#[test]
+fn a_real_stalwart_shaped_unrecognized_state_lists_the_mailbox_again_too() {
+    let fixture =
+        Fixture::started_with(MockServer::builder().stalwart_shaped_unrecognized_changes_state());
+    let inbox = fixture.edit(|account| account.seed_mailbox("Inbox", Some(role::INBOX)));
+    fixture.seed(&inbox, "First", 9);
+    fixture.seed(&inbox, "Second", 10);
+    let sync = fixture.sync();
+
+    match sync
+        .messages_since(&inbox, &State::new("nonsense"), 2)
+        .unwrap()
+    {
+        MessageUpdate::Relisted { state, messages } => {
+            assert_eq!(Fixture::subjects(&messages), ["First", "Second"]);
+            assert_eq!(state, fixture.edit(|account| account.emails.state()));
+        }
+        other => panic!("a state the server cannot use produced {other:?}"),
+    }
+}
+
 /// The rows a delta produces are ordered like the rows a listing produces —
 /// oldest first, by the server's own clock — because they are appended to the
 /// same summary and Camel numbers messages in the order they are added.

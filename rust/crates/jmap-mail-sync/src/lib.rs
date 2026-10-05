@@ -158,11 +158,18 @@ impl MailSync {
     /// The EDS meta backends pass that condition up because EDS knows how to
     /// diff a collection against its cache; Camel has nothing of the kind, so
     /// a store that reported it would be a folder tree that never recovers.
+    /// The same answer is given for a state real Stalwart does not recognize
+    /// at all, which it reports as `invalidArguments` rather than the RFC's
+    /// own `cannotCalculateChanges` (`STALWART-RFC-FINDINGS.md` finding 17).
     pub fn folder_tree_since(&self, since: &State) -> Result<FolderUpdate, SyncError> {
         match self.client.all_changes(&self.account_id, "Mailbox", since) {
             Ok(changes) if changes.is_empty() => Ok(FolderUpdate::Unchanged(changes.new_state)),
             Ok(_) => self.rebuild(),
-            Err(error) if error.is_cannot_calculate_changes() => self.rebuild(),
+            Err(error)
+                if error.is_cannot_calculate_changes() || error.is_unrecognized_changes_state() =>
+            {
+                self.rebuild()
+            }
             Err(error) => Err(error.into()),
         }
     }
@@ -243,10 +250,13 @@ impl MailSync {
     /// is gone is gone from every mailbox, and there is nothing left to look up.
     ///
     /// A state the server cannot calculate from — too old, or from some other
-    /// server entirely — is answered with the mailbox rather than reported, the
-    /// judgement [`MailSync::folder_tree_since`] makes about the same condition
-    /// and for the same reason: Camel has nowhere to report it to, so a folder
-    /// that failed here would be one that never recovers.
+    /// server entirely, or (against real Stalwart) not recognized at all,
+    /// which it reports as `invalidArguments` rather than the RFC's own
+    /// `cannotCalculateChanges` (`STALWART-RFC-FINDINGS.md` finding 17) — is
+    /// answered with the mailbox rather than reported, the judgement
+    /// [`MailSync::folder_tree_since`] makes about the same condition and for
+    /// the same reason: Camel has nowhere to report it to, so a folder that
+    /// failed here would be one that never recovers.
     ///
     /// `held` is how many rows the caller already has for this mailbox, and it
     /// is used for one thing: deciding when catching up has stopped being the
@@ -266,7 +276,11 @@ impl MailSync {
                 return Ok(MessageUpdate::Unchanged(changes.new_state));
             }
             Ok(changes) => changes,
-            Err(error) if error.is_cannot_calculate_changes() => return self.relist(mailbox),
+            Err(error)
+                if error.is_cannot_calculate_changes() || error.is_unrecognized_changes_state() =>
+            {
+                return self.relist(mailbox);
+            }
             Err(error) => return Err(error.into()),
         };
 

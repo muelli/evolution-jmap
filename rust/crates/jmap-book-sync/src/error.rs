@@ -23,14 +23,22 @@ pub enum SyncError {
 
 impl SyncError {
     /// Whether the server refused an incremental sync because the state it
-    /// was given is too old (RFC 8620 §5.2).
+    /// was given is too old (RFC 8620 §5.2) — or, against real Stalwart,
+    /// unrecognized altogether, which it answers as `invalidArguments`
+    /// rather than the RFC's own `cannotCalculateChanges`
+    /// (`jmap_client::Error::is_unrecognized_changes_state`,
+    /// `STALWART-RFC-FINDINGS.md` finding 17).
     ///
     /// This is not a real error: the caller's answer is to fall back to
     /// [`crate::BookSync::list_existing`] and let the meta backend diff the
     /// whole book, which is why it gets its own predicate rather than being
     /// left for callers to string-match.
     pub fn is_cannot_calculate_changes(&self) -> bool {
-        matches!(self, Self::Client(error) if error.is_cannot_calculate_changes())
+        matches!(
+            self,
+            Self::Client(error)
+                if error.is_cannot_calculate_changes() || error.is_unrecognized_changes_state()
+        )
     }
 
     /// Whether the server rejected the request with HTTP 401 — on a
@@ -82,6 +90,19 @@ impl From<VCardError> for SyncError {
 #[cfg(test)]
 mod tests {
     use super::SyncError;
+
+    #[test]
+    fn a_client_invalid_arguments_about_an_unrecognized_state_cannot_calculate_changes_too() {
+        assert!(
+            SyncError::Client(jmap_client::Error::Method(jmap_proto::error::MethodError {
+                error_type: "invalidArguments".into(),
+                description: Some("invalid JMAP State at line 1 column 1".into()),
+                extra: Default::default(),
+            }))
+            .is_cannot_calculate_changes(),
+            "real Stalwart answers an unrecognized sinceState this way, not with cannotCalculateChanges"
+        );
+    }
 
     #[test]
     fn only_a_client_401_is_unauthorized() {

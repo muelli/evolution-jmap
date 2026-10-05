@@ -303,35 +303,63 @@ fn handle_method(
         | "ParticipantIdentity/changes" => {
             let request: jmap_proto::methods::ChangesRequest = parse_arguments(arguments)?;
             let page_size = state.changes_page_size;
+            let unrecognized_state_shape = state.stalwart_shaped_unrecognized_changes_state;
             let account = account_mut(state, &request.account_id)?;
             let response = match name {
-                "Mailbox/changes" => {
-                    crate::setops::store_changes(&account.mailboxes, request, page_size)
-                }
-                "Email/changes" => {
-                    crate::setops::store_changes(&account.emails, request, page_size)
-                }
-                "Thread/changes" => {
-                    crate::setops::store_changes(&account.threads, request, page_size)
-                }
-                "AddressBook/changes" => {
-                    crate::setops::store_changes(&account.address_books, request, page_size)
-                }
-                "ContactCard/changes" => {
-                    crate::setops::store_changes(&account.contact_cards, request, page_size)
-                }
-                "Calendar/changes" => {
-                    crate::setops::store_changes(&account.calendars, request, page_size)
-                }
-                "EmailSubmission/changes" => {
-                    crate::setops::store_changes(&account.submissions, request, page_size)
-                }
+                "Mailbox/changes" => crate::setops::store_changes(
+                    &account.mailboxes,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
+                "Email/changes" => crate::setops::store_changes(
+                    &account.emails,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
+                "Thread/changes" => crate::setops::store_changes(
+                    &account.threads,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
+                "AddressBook/changes" => crate::setops::store_changes(
+                    &account.address_books,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
+                "ContactCard/changes" => crate::setops::store_changes(
+                    &account.contact_cards,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
+                "Calendar/changes" => crate::setops::store_changes(
+                    &account.calendars,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
+                "EmailSubmission/changes" => crate::setops::store_changes(
+                    &account.submissions,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
                 "ParticipantIdentity/changes" => crate::setops::store_changes(
                     &account.participant_identities,
                     request,
                     page_size,
+                    unrecognized_state_shape,
                 ),
-                _ => crate::setops::store_changes(&account.calendar_events, request, page_size),
+                _ => crate::setops::store_changes(
+                    &account.calendar_events,
+                    request,
+                    page_size,
+                    unrecognized_state_shape,
+                ),
             }?;
             to_result(&response)
         }

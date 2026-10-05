@@ -94,6 +94,7 @@ pub struct MockServerBuilder {
     omit_primary_accounts: bool,
     calls_in_request: Option<u64>,
     changes_page_size: Option<u64>,
+    stalwart_shaped_unrecognized_changes_state: bool,
     objects_in_get: Option<u64>,
     query_page_size: Option<u64>,
     query_never_terminates: bool,
@@ -199,6 +200,19 @@ impl MockServerBuilder {
     /// case that hides the bug.
     pub fn changes_page_size(mut self, ids: u64) -> Self {
         self.changes_page_size = Some(ids);
+        self
+    }
+
+    /// Answer an unparseable `/changes` `sinceState` the way real Stalwart
+    /// does: `invalidArguments`/`"invalid JMAP State"`, not RFC 8620 §5.2's
+    /// own `cannotCalculateChanges` (`STALWART-RFC-FINDINGS.md` finding 17).
+    ///
+    /// Off by default, so every test not about this specific quirk keeps
+    /// getting the RFC's own error type; a client that only ever recognizes
+    /// `cannotCalculateChanges` would otherwise look like it coped with real
+    /// Stalwart's state errors when it never actually does.
+    pub fn stalwart_shaped_unrecognized_changes_state(mut self) -> Self {
+        self.stalwart_shaped_unrecognized_changes_state = true;
         self
     }
 
@@ -517,6 +531,8 @@ impl MockServerBuilder {
         state.omit_primary_accounts = self.omit_primary_accounts;
         state.calls_in_request = self.calls_in_request;
         state.changes_page_size = self.changes_page_size;
+        state.stalwart_shaped_unrecognized_changes_state =
+            self.stalwart_shaped_unrecognized_changes_state;
         state.objects_in_get = self.objects_in_get;
         state.query_page_size = self.query_page_size;
         state.query_never_terminates = self.query_never_terminates;
@@ -593,6 +609,7 @@ impl MockServer {
             omit_primary_accounts: false,
             calls_in_request: Some(DEFAULT_CALLS_IN_REQUEST),
             changes_page_size: None,
+            stalwart_shaped_unrecognized_changes_state: false,
             objects_in_get: None,
             query_page_size: None,
             query_never_terminates: false,

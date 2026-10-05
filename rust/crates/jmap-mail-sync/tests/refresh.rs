@@ -6,7 +6,7 @@
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{FolderTree, FolderUpdate, MailSync};
-use jmap_mock::MockServer;
+use jmap_mock::{MockServer, MockServerBuilder};
 use jmap_proto::mail::role;
 use jmap_proto::{Id, State};
 
@@ -17,7 +17,11 @@ struct Fixture {
 
 impl Fixture {
     fn start() -> Self {
-        let server = MockServer::builder().start();
+        Self::started_with(MockServer::builder())
+    }
+
+    fn started_with(builder: MockServerBuilder) -> Self {
+        let server = builder.start();
         let account_id = server.account_id();
         Self { server, account_id }
     }
@@ -139,6 +143,22 @@ fn a_state_the_server_cannot_calculate_from_is_not_a_failure() {
     // A state from another server, or one this one has forgotten. Camel has
     // no machinery for reporting that upwards — the store's only answer is to
     // list the account again, so that is the answer given here.
+    let (_, tree) = rebuilt(sync.folder_tree_since(&State::new("nonsense")).unwrap());
+    assert_eq!(tree.len(), 1);
+}
+
+/// Same unrecognized state, but answered the way real Stalwart answers it —
+/// `invalidArguments` rather than RFC 8620 §5.2's own `cannotCalculateChanges`
+/// (`STALWART-RFC-FINDINGS.md` finding 17). Camel still has nowhere to report
+/// it to, so the answer has to be the same relist, not a failure that never
+/// recovers.
+#[test]
+fn a_real_stalwart_shaped_unrecognized_state_is_not_a_failure_either() {
+    let fixture =
+        Fixture::started_with(MockServer::builder().stalwart_shaped_unrecognized_changes_state());
+    fixture.edit(|account| account.seed_mailbox("Inbox", Some(role::INBOX)));
+    let sync = fixture.sync();
+
     let (_, tree) = rebuilt(sync.folder_tree_since(&State::new("nonsense")).unwrap());
     assert_eq!(tree.len(), 1);
 }

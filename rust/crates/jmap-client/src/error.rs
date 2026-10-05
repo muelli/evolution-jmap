@@ -126,6 +126,32 @@ impl Error {
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Http { status: 401, .. })
     }
+
+    /// Whether a `/changes` call's `sinceState` was rejected as
+    /// `invalidArguments` rather than RFC 8620 §5.2's `cannotCalculateChanges`
+    /// — confirmed live against real Stalwart (`STALWART-RFC-FINDINGS.md`
+    /// finding 17): any unrecognized or non-conforming state string answers
+    /// `invalidArguments`/`"invalid JMAP State..."`, never the RFC's own error
+    /// type.
+    ///
+    /// Its own predicate rather than folded into
+    /// [`Self::is_cannot_calculate_changes`]'s meaning: that one answers a
+    /// real, RFC-defined condition for any caller, while this one is a single
+    /// server's non-conformance, identifiable only by matching its
+    /// description text, and only meaningful for a caller that already knows
+    /// the request it sent was a `/changes` call. A caller treating the two
+    /// the same way should check both, not assume one implies the other.
+    pub fn is_unrecognized_changes_state(&self) -> bool {
+        matches!(
+            self,
+            Self::Method(error)
+                if error.error_type == jmap_proto::error::method::INVALID_ARGUMENTS
+                    && error
+                        .description
+                        .as_deref()
+                        .is_some_and(|description| description.to_lowercase().contains("state"))
+        )
+    }
 }
 
 impl std::fmt::Display for Error {
@@ -248,6 +274,54 @@ mod tests {
             extra: Default::default(),
         });
         assert_eq!(error.to_string(), "set error: forbidden (nope)");
+    }
+
+    #[test]
+    fn invalid_arguments_mentioning_state_is_an_unrecognized_changes_state() {
+        assert!(
+            Error::Method(jmap_proto::error::MethodError {
+                error_type: "invalidArguments".into(),
+                description: Some("invalid JMAP State at line 1 column 42".into()),
+                extra: Default::default(),
+            })
+            .is_unrecognized_changes_state(),
+            "this is the exact shape real Stalwart answers an unrecognized sinceState with"
+        );
+    }
+
+    #[test]
+    fn invalid_arguments_about_something_else_is_not_an_unrecognized_changes_state() {
+        assert!(
+            !Error::Method(jmap_proto::error::MethodError {
+                error_type: "invalidArguments".into(),
+                description: Some("accountId is not a valid id".into()),
+                extra: Default::default(),
+            })
+            .is_unrecognized_changes_state(),
+            "an invalidArguments about a different argument must not be swallowed"
+        );
+        assert!(
+            !Error::Method(jmap_proto::error::MethodError {
+                error_type: "invalidArguments".into(),
+                description: None,
+                extra: Default::default(),
+            })
+            .is_unrecognized_changes_state(),
+            "no description at all gives nothing to recognize the state-shaped case by"
+        );
+    }
+
+    #[test]
+    fn cannot_calculate_changes_is_not_also_an_unrecognized_changes_state() {
+        assert!(
+            !Error::Method(jmap_proto::error::MethodError {
+                error_type: "cannotCalculateChanges".into(),
+                description: None,
+                extra: Default::default(),
+            })
+            .is_unrecognized_changes_state(),
+            "the two predicates stay disjoint so a caller can tell which server shape it saw"
+        );
     }
 
     #[test]
