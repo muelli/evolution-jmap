@@ -413,6 +413,35 @@ runtime daemons this job needs) is heavier still and is left for a follow-up
 pass; `eds-version-matrix` already has its own thorough, repeatedly
 reconfirmed coverage above and did not need rerunning for this entry.
 
+## The `gui-smoke` job, reproduced from scratch (measured 2026-10-05)
+
+Same motivation and method as the `functional` entry above: `ci.yml`'s
+`gui-smoke` job is also gated behind `workflow_dispatch`/a PR label, so
+master can go a long time with no confirmed run of it. Reproduced in a
+fresh `ubuntu:24.04` podman container, following the same disk discipline
+(checkout bind-mounted read-only, no `cp -r` of the host checkout or its
+17G+ `rust/target`): `ci/install-deps.sh`, `ci/install-deps-functional.sh`,
+`ci/install-deps-gui-smoke.sh`, `cmake -G Ninja` configure and build,
+`cmake --install --component camel-provider`, then `ci/gui-smoke.sh` with
+the same `JMAP_MOCKD`/`GUI_SMOKE_ARTIFACTS` env vars the job sets.
+
+Result: **passed on the first attempt**, no retry needed. The script's own
+assertion output: `dismissed: Mail authentication request` followed by
+`PASS: account 'JMAP mock mail' appeared, inbox has 2 message(s)`. No code
+or script change was needed; `libclang-dev` (the gap batch 1 found and
+fixed in `ci/install-deps.sh`) covers this job too since it builds through
+the same `cmake` target. Evolution, Xvfb, dbus-daemon, AT-SPI and the
+recording/screenshot tooling (`ffmpeg`, `imagemagick`) all installed and
+ran cleanly from `ci/install-deps-gui-smoke.sh`'s package list alone, no
+extra container capabilities needed beyond the ordinary rootless-podman
+default.
+
+Item 86 is now fully closed: both batches (`functional`, `gui-smoke`) are
+confirmed passing as CI actually defines them, and `eds-version-matrix`
+already had its own recent, separate coverage. Do not re-run any of the
+three without new evidence (more commits landing in the gated
+crates/scripts since this date).
+
 ## Supported versions
 
 The plugin is built against, and must be deployed against, the EDS it was
