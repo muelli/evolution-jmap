@@ -164,6 +164,47 @@ fn no_password_means_no_credentials_rather_than_an_empty_one() {
     assert_eq!(error.authentication_result(), CAMEL_AUTHENTICATION_REJECTED);
 }
 
+/// The test above relies on the server answering a missing `Authorization`
+/// header with a real 401, which is what lets `is_wrong_password` recognise
+/// the refusal. Real Stalwart does not (RFC 8620 §2/§8.1; Finding 12 in
+/// `STALWART-RFC-FINDINGS.md`): it answers 200 OK with an anonymous,
+/// empty-accounts session instead, which `session_via_redirect`'s mock shape
+/// reproduces byte for byte (see that builder's own doc comment). Without
+/// `StoreError::Unauthenticated`, that 200 resolves no primary account and
+/// reports the generic, unprompted `CAMEL_AUTHENTICATION_ERROR` — so the very
+/// first connection attempt a fresh account against Stalwart ever makes would
+/// dead-end instead of prompting for a password.
+#[test]
+fn an_anonymous_session_from_a_server_that_never_sends_401_is_still_reported_as_rejected() {
+    let server = MockServer::builder()
+        .basic_auth("vera", "hunter2")
+        .session_via_redirect()
+        .start();
+    let mut config = config(&server);
+    config.user = Some("vera".to_owned());
+
+    let error = expect_error(open(&config, None));
+    assert_eq!(error.authentication_result(), CAMEL_AUTHENTICATION_REJECTED);
+}
+
+/// A server already authenticated the session via a redirect without
+/// dropping the credential (the ordinary case `session_via_redirect` tests
+/// elsewhere already pin) must not be swept into the anonymous case: an
+/// account whose connection genuinely succeeded must still resolve its
+/// account the usual way, not refuse with `Unauthenticated`.
+#[test]
+fn an_authenticated_session_through_a_redirect_is_not_reported_as_anonymous() {
+    let server = MockServer::builder()
+        .basic_auth("vera", "hunter2")
+        .session_via_redirect()
+        .start();
+    let mut config = config(&server);
+    config.user = Some("vera".to_owned());
+
+    let sync = open(&config, Some("hunter2")).expect("connected");
+    assert_eq!(sync.account_id(), &server.account_id());
+}
+
 /// A server that is down, or one that says the account may not do this, is not
 /// a password problem: re-prompting cannot fix either, and doing so forever is
 /// how an account becomes unusable.
@@ -299,6 +340,10 @@ fn each_failure_carries_the_camel_service_error_code_evolution_routes_on() {
                 status: 401,
                 problem: None,
             }),
+            CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
+        ),
+        (
+            StoreError::Unauthenticated,
             CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
         ),
         (

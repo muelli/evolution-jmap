@@ -74,6 +74,29 @@ pub enum StoreError {
     /// `CAMEL_SERVICE_ERROR_UNAVAILABLE` it would be a store Evolution keeps
     /// hopefully reconnecting to forever.
     Config(SourceError),
+    /// The server answered with a session that proves it never saw the
+    /// credentials this connection sent: an empty user name and no
+    /// accessible accounts, which is what [`Client::is_anonymous`] reads back.
+    ///
+    /// This is not the shape of a server with nothing to report — it is the
+    /// shape of a server this request never authenticated with at all, which
+    /// a conformant one would say with a 401, the 401 that
+    /// [`is_wrong_password`] already turns into [`CAMEL_AUTHENTICATION_REJECTED`]
+    /// below. Real Stalwart does not send that 401 (RFC 8620 §2/§8.1; Finding
+    /// 12 in `STALWART-RFC-FINDINGS.md`): it answers 200 OK with the same
+    /// anonymous session a request that supplied no `Authorization` header at
+    /// all gets, which is exactly the request `password_credentials`/
+    /// `bearer_credentials` send for an account with a user and no password
+    /// stored yet, relying on the 401 this module's own doc says should turn
+    /// into a prompt. Left unhandled, that 200 would resolve no primary
+    /// account and surface as a generic, unprompted `ERROR` — the very first
+    /// connection attempt a fresh account ever makes would dead-end instead
+    /// of asking for a password. Checked in [`open_mail`] before the account
+    /// is even looked up, so a server that merely has no mail capability
+    /// (still a real, authenticated session) is unaffected.
+    ///
+    /// [`Client::is_anonymous`]: jmap_client::Client::is_anonymous
+    Unauthenticated,
     /// The server refused, failed, or is unreachable.
     Client(Error),
     /// The account authenticates with OAuth 2.0 and no access token could be
@@ -223,6 +246,12 @@ impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Config(error) => error.fmt(f),
+            Self::Unauthenticated => f.write_str(&translate(
+                // TRANSLATORS: shown when the server did not recognise this
+                // connection as authenticated at all, rather than rejecting a
+                // specific password.
+                c"the server did not accept the account's credentials",
+            )),
             Self::Client(error) => error.fmt(f),
             Self::OAuth2(message) => f.write_str(message),
             Self::Disconnected => f.write_str(&translate(
@@ -272,6 +301,10 @@ impl StoreError {
     pub fn authentication_result(&self) -> CamelAuthenticationResult {
         match self {
             Self::Client(error) if is_wrong_password(error) => CAMEL_AUTHENTICATION_REJECTED,
+            // The same verdict a real 401 would get, for the server's
+            // Finding-12-shaped substitute for one — see the variant's own
+            // doc comment.
+            Self::Unauthenticated => CAMEL_AUTHENTICATION_REJECTED,
             // `Self::OAuth2` falls in here on purpose — see its own doc
             // comment for why this is the safer of the two values Camel has
             // to choose between.
@@ -397,6 +430,9 @@ impl StoreError {
             Self::Client(error) if is_wrong_password(error) => {
                 CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE
             }
+            // Same code as the line above, for the same reason: see
+            // `Self::Unauthenticated`'s own doc comment.
+            Self::Unauthenticated => CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE,
             // Not a wrong password, but the same shape of problem: the
             // account cannot prove who it is, which is what this code — not
             // `INVALID`'s generic "something about this account is wrong" — is
@@ -461,6 +497,13 @@ pub fn open_mail(config: &ServerConfig, credentials: Credentials) -> Result<Mail
     // REBASE_URLS` still applies, unchanged, through `source::connect`'s own
     // OR with the environment variable.
     let client = source::connect(&config.target, false, credentials)?;
+    // Checked before the account is even looked up: a session this
+    // anonymous answers no capability at all, so resolving one first would
+    // report it as "no mail capability" rather than as the unauthenticated
+    // connection it actually is. See `StoreError::Unauthenticated`.
+    if client.is_anonymous() {
+        return Err(StoreError::Unauthenticated);
+    }
     // Under `urn:ietf:params:jmap:mail`, the way the address book backend
     // resolves its own account under `:contacts`. An account that offers the
     // one and not the other is not a mail account, and a store that ignored
