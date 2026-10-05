@@ -111,6 +111,8 @@ Against that same mock server, with hand-written accounts:
 - Mail provider: [docs/manual-test-mail-provider.md](docs/manual-test-mail-provider.md)
 - Collection backend (all three together): [docs/manual-test-collection-backend.md](docs/manual-test-collection-backend.md)
 
+User-facing setup guide: [docs/USER-GUIDE.md](docs/USER-GUIDE.md)
+
 ## Architecture
 
 ```
