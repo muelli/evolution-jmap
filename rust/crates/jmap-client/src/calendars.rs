@@ -158,7 +158,18 @@ impl Client {
         &self,
         request: &CalendarEventParseRequest,
     ) -> Result<CalendarEventParseResponse, Error> {
-        let arguments = self.single_call(USING, "CalendarEvent/parse", request)?;
+        let mut arguments = self.single_call(USING, "CalendarEvent/parse", request)?;
+        if let Some(parsed) = arguments.get_mut("parsed").and_then(Value::as_object_mut) {
+            for val in parsed.values_mut() {
+                if val.is_array() {
+                    let mut arr = match std::mem::replace(val, Value::Null) {
+                        Value::Array(arr) => arr,
+                        _ => unreachable!(),
+                    };
+                    *val = arr.drain(..).next().unwrap_or(Value::Null);
+                }
+            }
+        }
         Ok(serde_json::from_value(arguments)?)
     }
 

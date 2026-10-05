@@ -9,7 +9,7 @@ use jmap_client::transport::{HttpMethod, HttpRequest, HttpResponse, Transport, T
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
-use jmap_proto::calendars::ParticipantIdentity;
+use jmap_proto::calendars::{CalendarEvent, CalendarEventParseRequest, ParticipantIdentity};
 use jmap_proto::mail::Mailbox;
 use jmap_proto::methods::GetResponse;
 use jmap_proto::session;
@@ -415,4 +415,141 @@ fn finding_18_principal_get_tolerates_account_id_as_principal_id() {
         .principal_get(&account_id, &[Id::new("unknown_id")])
         .expect("principal_get must succeed");
     assert!(list_unknown.is_empty());
+}
+
+/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// CalendarEvent/set create when timeZones property is supplied (Finding 13).
+/// Stalwart rejects the call with invalidProperties: ["timeZones"].
+const STALWART_CALENDAR_EVENT_SET_TIMEZONES_REJECTED: &str = r#"{"methodResponses":[["CalendarEvent/set",{"accountId":"d333333","oldState":"spq","newState":"spq","notCreated":{"new":{"type":"invalidProperties","description":"Invalid property.","properties":["timeZones"]}}},"c0"]],"sessionState":"aa288e37"}"#;
+
+/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// CalendarEvent/parse for an uploaded iCalendar blob containing a custom VTIMEZONE.
+/// Stalwart represents the custom timezone under iCalendar convertedProperties
+/// rather than RFC 8984 Section 4.7.2 timeZones.
+const STALWART_CALENDAR_EVENT_PARSE_RESPONSE: &str = r#"{"methodResponses":[["CalendarEvent/parse",{"accountId":"d333333","parsed":{"blob1":[{"@type":"Event","iCalendar":{"convertedProperties":{"start":{"parameters":{"tzid":"/custom/zone1"}}},"name":"vevent"},"updated":"2026-10-05T00:00:00Z","title":"Test Event","start":"2026-10-05T12:00:00","uid":"test-tz-1"}]}},"c0"]],"sessionState":"aa288e37"}"#;
+
+const CONFORMANT_CALENDAR_EVENT_PARSE_RESPONSE_WITH_TIMEZONES: &str = r#"{"methodResponses":[["CalendarEvent/parse",{"accountId":"d333333","parsed":{"blob1":[{"@type":"Event","title":"Test Event","start":"2026-10-05T12:00:00","uid":"test-tz-1","timeZones":{"/custom/zone1":{"@type":"TimeZone","timeZoneId":"/custom/zone1"}}}]}},"c0"]],"sessionState":"aa288e37"}"#;
+
+const STALWART_AUTHENTICATED_SESSION_WITH_CALENDARS_AND_PARSE: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:calendars":{},"urn:ietf:params:jmap:calendars:parse":{}},"accounts":{"d333333":{"name":"admin","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:calendars":{},"urn:ietf:params:jmap:calendars:parse":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:calendars":"d333333","urn:ietf:params:jmap:calendars:parse":"d333333"},"username":"admin","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
+
+struct MockCalendarEventTransport {
+    session_body: &'static str,
+    response_body: &'static str,
+}
+
+impl Transport for MockCalendarEventTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => self.session_body.as_bytes().to_vec(),
+            HttpMethod::Post => self.response_body.as_bytes().to_vec(),
+        };
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn finding_13_calendar_event_set_rejects_timezones_invalid_properties() {
+    let client = Client::builder()
+        .transport(MockCalendarEventTransport {
+            session_body: STALWART_AUTHENTICATED_SESSION_WITH_CALENDARS,
+            response_body: STALWART_CALENDAR_EVENT_SET_TIMEZONES_REJECTED,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let mut event = CalendarEvent::simple(
+        Id::new("b"),
+        "Probe Event With TimeZones",
+        "2026-10-05T12:00:00",
+        "PT1H",
+    );
+    let mut tz_map = std::collections::BTreeMap::new();
+    tz_map.insert(
+        "/custom/zone1".to_string(),
+        serde_json::json!({
+            "@type": "TimeZone",
+            "timeZoneId": "/custom/zone1"
+        }),
+    );
+    event.time_zones = Some(tz_map);
+
+    let result = client.event_create(&account_id, &event);
+    match result {
+        Err(Error::Set(err)) => {
+            assert_eq!(err.error_type, "invalidProperties");
+            assert_eq!(err.description.as_deref(), Some("Invalid property."));
+            assert_eq!(
+                err.properties.as_ref(),
+                Some(&vec!["timeZones".to_string()])
+            );
+        }
+        other => panic!("expected Error::Set with invalidProperties, got {other:?}"),
+    }
+}
+
+#[test]
+fn finding_13_calendar_event_parse_tolerates_stalwart_custom_timezone_representation() {
+    let client = Client::builder()
+        .transport(MockCalendarEventTransport {
+            session_body: STALWART_AUTHENTICATED_SESSION_WITH_CALENDARS_AND_PARSE,
+            response_body: STALWART_CALENDAR_EVENT_PARSE_RESPONSE,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let request = CalendarEventParseRequest::new(account_id.clone(), vec![Id::new("blob1")]);
+    let response = client
+        .event_parse(&request)
+        .expect("event_parse must parse Stalwart wire response");
+
+    assert_eq!(response.account_id, account_id);
+    let parsed_map = response.parsed.expect("parsed map must be present");
+    let event = parsed_map
+        .get(&Id::new("blob1"))
+        .expect("event for blob1 must be present");
+
+    assert_eq!(event.title.as_deref(), Some("Test Event"));
+    assert_eq!(event.start.as_deref(), Some("2026-10-05T12:00:00"));
+    assert_eq!(event.uid.as_deref(), Some("test-tz-1"));
+    assert_eq!(event.updated.as_deref(), Some("2026-10-05T00:00:00Z"));
+
+    // Stalwart does not emit standard timeZones property, mapping it to convertedProperties:
+    assert!(event.time_zones.is_none());
+    assert!(
+        event.extra.contains_key("iCalendar"),
+        "iCalendar convertedProperties must be preserved in event extra map"
+    );
+}
+
+#[test]
+fn finding_13_calendar_event_parse_tolerates_standard_timezones() {
+    let client = Client::builder()
+        .transport(MockCalendarEventTransport {
+            session_body: STALWART_AUTHENTICATED_SESSION_WITH_CALENDARS_AND_PARSE,
+            response_body: CONFORMANT_CALENDAR_EVENT_PARSE_RESPONSE_WITH_TIMEZONES,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let request = CalendarEventParseRequest::new(account_id.clone(), vec![Id::new("blob1")]);
+    let response = client
+        .event_parse(&request)
+        .expect("event_parse must parse response with standard timeZones");
+
+    let parsed_map = response.parsed.expect("parsed map must be present");
+    let event = &parsed_map[&Id::new("blob1")];
+    assert_eq!(event.title.as_deref(), Some("Test Event"));
+    let time_zones = event
+        .time_zones
+        .as_ref()
+        .expect("time_zones must be populated when returned by server");
+    assert!(time_zones.contains_key("/custom/zone1"));
 }

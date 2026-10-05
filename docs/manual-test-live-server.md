@@ -396,6 +396,15 @@ in the invocation, worth failing loudly on.
   with that ID to report `notFound` (RFC 9670 Section 2). Verifies that `Client::current_user_principal`
   and `Client::current_user_principal_id` tolerate the server mismatch and resolve the true owner
   principal object and ID, and confirms that `Client::principal_get` tolerates the advertised ID.
+- `calendar_event_set_rejects_timezones_property_through_the_real_api`:
+  exercises Finding 13 (STALWART-RFC-FINDINGS.md) where `CalendarEvent/set` (create or update)
+  rejects the standard JSCalendar `timeZones` property (RFC 8984 Section 4.7.2) with `invalidProperties: ["timeZones"]`,
+  and `CalendarEvent/parse` outputs custom timezone definitions into `iCalendar` `convertedProperties`
+  as an array of events rather than an RFC 8984 `timeZones` object. Verifies that `Client::event_create` surfaces
+  the `invalidProperties` SetError cleanly, that events without `timeZones` create and destroy cleanly,
+  and that `Client::event_parse` tolerates Stalwart's event array representation and passes the parsed
+  event through intact to the client.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 

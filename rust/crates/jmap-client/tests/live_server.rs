@@ -67,8 +67,8 @@ use jmap_client::{CancelFlag, Client, Credentials, Error, EventSourceSubscriptio
 use jmap_proto::Id;
 use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{
-    Calendar, CalendarEvent, CalendarEventNotificationQueryFilter, CalendarEventQueryFilter,
-    Participant, ParticipantIdentity, RecurrenceRule,
+    Calendar, CalendarEvent, CalendarEventNotificationQueryFilter, CalendarEventParseRequest,
+    CalendarEventQueryFilter, Participant, ParticipantIdentity, RecurrenceRule,
 };
 use jmap_proto::contacts::{
     AddressBook, ContactCard, ContactCardParseRequest, ContactCardQueryFilter,
@@ -4161,4 +4161,168 @@ fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api
         .expect("principal_get with real ID must succeed");
     assert_eq!(list_b.len(), 1);
     assert_eq!(list_b[0].id.as_ref(), Some(&Id::new("b")));
+}
+
+/// Finding 13 (STALWART-RFC-FINDINGS.md): CalendarEvent/set rejects the standard
+/// JSCalendar timeZones property (RFC 8984 Section 4.7.2) with invalidProperties,
+/// and CalendarEvent/parse converts custom VTIMEZONE definitions into iCalendar
+/// convertedProperties rather than RFC 8984 timeZones.
+/// Verifies that Client::event_create surfaces the invalidProperties SetError cleanly,
+/// and that CalendarEvent/parse output is passed through intact to the client.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn calendar_event_set_rejects_timezones_property_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("no live server configured or write credentials missing; skipping");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CALENDARS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CALENDARS}; skipping");
+        return;
+    };
+
+    // 1. Resolve a calendar to target:
+    let calendar_id = client
+        .calendars(&account_id)
+        .expect("calendars call succeeds")
+        .into_iter()
+        .next()
+        .expect("must find a calendar")
+        .id
+        .expect("calendar must have an ID");
+
+    // 2. Direct raw CalendarEvent/set create with empty "timeZones": {} reproduces the
+    // invalidProperties rejection on live Stalwart (Finding 13):
+    let raw_args = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "CalendarEvent/set",
+            &json!({
+                "accountId": account_id,
+                "create": {
+                    "probe_raw_tz": {
+                        "calendarIds": { calendar_id.as_str(): true },
+                        "title": "Probe Event Raw TZ",
+                        "start": "2026-10-05T12:00:00",
+                        "timeZones": {}
+                    }
+                }
+            }),
+        )
+        .expect("raw CalendarEvent/set call succeeds on wire");
+    let not_created = raw_args
+        .get("notCreated")
+        .and_then(|v| v.as_object())
+        .expect("notCreated map present in response");
+    let error_obj = not_created
+        .get("probe_raw_tz")
+        .expect("probe_raw_tz present in notCreated");
+    assert_eq!(
+        error_obj.get("type").and_then(|v| v.as_str()),
+        Some("invalidProperties")
+    );
+    let props = error_obj
+        .get("properties")
+        .and_then(|v| v.as_array())
+        .expect("properties array present");
+    assert!(
+        props.iter().any(|p| p.as_str() == Some("timeZones")),
+        "properties array must name timeZones"
+    );
+
+    // 3. Client::event_create with time_zones set returns Error::Set cleanly:
+    let mut event_with_tz = CalendarEvent::simple(
+        calendar_id.clone(),
+        "Probe Event With TimeZones",
+        "2026-10-05T12:00:00",
+        "PT1H",
+    );
+    let mut tz_map = BTreeMap::new();
+    tz_map.insert(
+        "/custom/zone1".to_string(),
+        json!({
+            "@type": "TimeZone",
+            "timeZoneId": "/custom/zone1"
+        }),
+    );
+    event_with_tz.time_zones = Some(tz_map);
+
+    let set_err = client
+        .event_create(&account_id, &event_with_tz)
+        .expect_err("event_create with time_zones must fail on Stalwart");
+    match set_err {
+        Error::Set(err) => {
+            assert_eq!(err.error_type, "invalidProperties");
+            assert_eq!(err.description.as_deref(), Some("Invalid property."));
+            assert_eq!(
+                err.properties.as_ref(),
+                Some(&vec!["timeZones".to_string()])
+            );
+        }
+        other => panic!("expected Error::Set with invalidProperties, got {other:?}"),
+    }
+
+    // 4. Client::event_create without time_zones succeeds cleanly:
+    let event_clean = CalendarEvent::simple(
+        calendar_id,
+        "Probe Event Without TimeZones",
+        "2026-10-05T12:00:00",
+        "PT1H",
+    );
+    let created = client
+        .event_create(&account_id, &event_clean)
+        .expect("event_create without time_zones must succeed on Stalwart");
+    let created_id = created.id.expect("created event must have an ID");
+
+    // Clean up created event:
+    client
+        .event_destroy(&account_id, &created_id)
+        .expect("event_destroy succeeds");
+
+    // 5. CalendarEvent/parse on an .ics blob with custom VTIMEZONE passes the server's
+    // representation through intact to the client:
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VTIMEZONE\r\n\
+TZID:/custom/zone1\r\n\
+BEGIN:STANDARD\r\n\
+DTSTART:19700101T000000\r\n\
+TZOFFSETFROM:+0000\r\n\
+TZOFFSETTO:+0000\r\n\
+END:STANDARD\r\n\
+END:VTIMEZONE\r\n\
+BEGIN:VEVENT\r\n\
+UID:test-tz-probe\r\n\
+DTSTAMP:20261005T000000Z\r\n\
+DTSTART;TZID=/custom/zone1:20261005T120000\r\n\
+SUMMARY:Test Event Custom TZ\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let upload_res = client
+        .blob_upload(
+            &BlobUploadRequest::new(account_id.clone())
+                .create_blob("b0", UploadBlob::from_text(ics, "text/calendar")),
+        )
+        .expect("blob_upload succeeds")
+        .created
+        .expect("blob created map present");
+    let blob_id = upload_res.get("b0").expect("b0 created").id.clone();
+
+    let parse_req = CalendarEventParseRequest::new(account_id, vec![blob_id.clone()]);
+    let parse_res = client
+        .event_parse(&parse_req)
+        .expect("event_parse succeeds on Stalwart");
+    let parsed_map = parse_res
+        .parsed
+        .expect("parsed map must be present in response");
+    let parsed_ev = parsed_map
+        .get(&blob_id)
+        .expect("parsed event must be present for blob ID");
+    assert_eq!(parsed_ev.title.as_deref(), Some("Test Event Custom TZ"));
+    assert_eq!(parsed_ev.start.as_deref(), Some("2026-10-05T12:00:00"));
+    assert_eq!(parsed_ev.uid.as_deref(), Some("test-tz-probe"));
+    assert!(parsed_ev.time_zones.is_none());
+    assert!(parsed_ev.extra.contains_key("iCalendar"));
 }
