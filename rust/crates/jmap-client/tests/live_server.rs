@@ -79,7 +79,8 @@ use jmap_proto::mail::{
     EmailSubmissionQueryFilter, Mailbox, keyword, role,
 };
 use jmap_proto::methods::{
-    BlobCopyRequest, ChangesRequest, ChangesResponse, Comparator, GetRequest, SetRequest,
+    BlobCopyRequest, ChangesRequest, ChangesResponse, Comparator, GetRequest, GetResponse,
+    SetRequest,
 };
 use jmap_proto::principals::PrincipalQueryFilter;
 use jmap_proto::quota::{Quota, quota_resource_type, quota_scope};
@@ -4010,5 +4011,66 @@ fn calendar_event_notification_destroy_tolerates_server_dropped_id_through_the_r
         other => {
             panic!("expected notFound SetError for unformatted notification destroy, got {other:?}")
         }
+    }
+}
+
+/// Finding 19 (STALWART-RFC-FINDINGS.md): ParticipantIdentity/get response omits
+/// mandatory state property required by RFC 8620 Section 5.1 and
+/// draft-ietf-jmap-calendars Section 3.1.
+/// Verifies that Client::participant_identities tolerates the omitted state field,
+/// while confirming that raw wire responses omit state and fail strict GetResponse
+/// deserialization.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn participant_identity_get_tolerates_server_omitted_state_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping participant identity test"
+        );
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CALENDARS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CALENDARS}; skipping");
+        return;
+    };
+
+    // 1. Client::participant_identities succeeds against real Stalwart:
+    let _identities = client
+        .participant_identities(&account_id)
+        .expect("Client::participant_identities must succeed against live Stalwart");
+
+    // 2. Make raw ParticipantIdentity/get call to inspect the wire response directly:
+    let raw_args = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_CALENDARS],
+            "ParticipantIdentity/get",
+            &GetRequest::all(account_id.clone()),
+        )
+        .expect("raw ParticipantIdentity/get succeeds");
+
+    // 3. Confirm that live Stalwart indeed omits the mandatory state field (Finding 19):
+    assert!(
+        raw_args.get("state").is_none(),
+        "live Stalwart ParticipantIdentity/get response must omit the state field (Finding 19), got: {raw_args:?}"
+    );
+    assert!(
+        raw_args.get("list").is_some(),
+        "live Stalwart ParticipantIdentity/get response must contain list"
+    );
+
+    // 4. Demonstrate that standard RFC 8620 GetResponse<ParticipantIdentity> fails
+    // deserialization due to the missing state field, proving the necessity of
+    // the client-level tolerance:
+    let strict_result: Result<GetResponse<ParticipantIdentity>, _> =
+        serde_json::from_value(raw_args);
+    match strict_result {
+        Err(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("missing field") && msg.contains("state"),
+                "expected missing field `state` error, got: {msg}"
+            );
+        }
+        Ok(_) => panic!("expected strict GetResponse deserialization to fail on omitted state"),
     }
 }

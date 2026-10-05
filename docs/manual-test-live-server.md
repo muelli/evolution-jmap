@@ -381,6 +381,14 @@ in the invocation, worth failing loudly on.
   Verifies that `Client::calendar_event_notification_destroy` tolerates the omitted ID
   and reports `notFound` instead of failing with a protocol error.
   Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `participant_identity_get_tolerates_server_omitted_state_through_the_real_api`:
+  exercises Finding 19 (STALWART-RFC-FINDINGS.md) where `ParticipantIdentity/get`
+  responses on Stalwart v1.0.0 omit the mandatory `state` property required by RFC 8620
+  Section 5.1 and draft-ietf-jmap-calendars Section 3.1. Verifies that
+  `Client::participant_identities` tolerates the omitted property and deserializes
+  identities cleanly, and confirms that raw responses omit `state` and fail strict
+  `GetResponse<ParticipantIdentity>` deserialization.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 

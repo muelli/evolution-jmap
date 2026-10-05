@@ -9,7 +9,9 @@ use jmap_client::transport::{HttpMethod, HttpRequest, HttpResponse, Transport, T
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
+use jmap_proto::calendars::ParticipantIdentity;
 use jmap_proto::mail::Mailbox;
+use jmap_proto::methods::GetResponse;
 use jmap_proto::session;
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
@@ -188,4 +190,90 @@ fn finding_20_calendar_event_notification_destroy_dropped_id_tolerated_as_not_fo
         }
         other => panic!("expected Error::Set with notFound, got {other:?}"),
     }
+}
+
+/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// ParticipantIdentity/get (Finding 19).
+/// Stalwart returns accountId, list, and notFound, but omits the mandatory state property
+/// required by RFC 8620 Section 5.1 and draft-ietf-jmap-calendars Section 3.1.
+const STALWART_PARTICIPANT_IDENTITY_GET_OMITTING_STATE: &str = r#"{"methodResponses":[["ParticipantIdentity/get",{"accountId":"d333333","list":[],"notFound":[]},"c0"]],"sessionState":"aa288e37"}"#;
+
+const STALWART_PARTICIPANT_IDENTITY_GET_WITH_LIST_OMITTING_STATE: &str = r#"{"methodResponses":[["ParticipantIdentity/get",{"accountId":"d333333","list":[{"id":"pi1","name":"Admin PI","calendarAddress":"mailto:admin@example.internal","isDefault":true}],"notFound":[]},"c0"]],"sessionState":"aa288e37"}"#;
+
+struct MockParticipantIdentityGetTransport {
+    response_body: &'static str,
+}
+
+impl Transport for MockParticipantIdentityGetTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => STALWART_AUTHENTICATED_SESSION_WITH_CALENDARS
+                .as_bytes()
+                .to_vec(),
+            HttpMethod::Post => self.response_body.as_bytes().to_vec(),
+        };
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn finding_19_participant_identity_get_omits_state_tolerated() {
+    let client = Client::builder()
+        .transport(MockParticipantIdentityGetTransport {
+            response_body: STALWART_PARTICIPANT_IDENTITY_GET_OMITTING_STATE,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let identities = client
+        .participant_identities(&account_id)
+        .expect("participant_identities must tolerate omitted state property");
+    assert!(identities.is_empty());
+
+    // Strict RFC 8620 GetResponse<ParticipantIdentity> fails deserialization
+    // on Stalwart's wire response because state is required:
+    let wire_args: serde_json::Value =
+        serde_json::from_str(r#"{"accountId":"d333333","list":[],"notFound":[]}"#).unwrap();
+    let strict_result: Result<GetResponse<ParticipantIdentity>, _> =
+        serde_json::from_value(wire_args);
+    match strict_result {
+        Err(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("missing field") && msg.contains("state"),
+                "expected missing field `state` error, got: {msg}"
+            );
+        }
+        Ok(_) => panic!("expected strict GetResponse deserialization to fail on omitted state"),
+    }
+}
+
+#[test]
+fn finding_19_participant_identity_get_with_list_omits_state_tolerated() {
+    let client = Client::builder()
+        .transport(MockParticipantIdentityGetTransport {
+            response_body: STALWART_PARTICIPANT_IDENTITY_GET_WITH_LIST_OMITTING_STATE,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let identities = client
+        .participant_identities(&account_id)
+        .expect("participant_identities must tolerate omitted state property");
+    assert_eq!(identities.len(), 1);
+    let identity = &identities[0];
+    assert_eq!(identity.id.as_ref(), Some(&Id::new("pi1")));
+    assert_eq!(identity.name, "Admin PI");
+    assert_eq!(
+        identity.calendar_address.as_deref(),
+        Some("mailto:admin@example.internal")
+    );
+    assert_eq!(identity.is_default, Some(true));
 }
