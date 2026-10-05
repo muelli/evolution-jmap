@@ -5,9 +5,11 @@
 //! real-world spec deviations emitted by live Stalwart deployments
 //! (STALWART-RFC-FINDINGS.md, Batch 25).
 
-use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError};
+use jmap_client::transport::{HttpMethod, HttpRequest, HttpResponse, Transport, TransportError};
 use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
+use jmap_proto::Id;
+use jmap_proto::mail::Mailbox;
 use jmap_proto::session;
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
@@ -88,5 +90,55 @@ fn authenticated_session_reports_not_anonymous() {
     assert!(
         !client.is_anonymous(),
         "mock server session with seeded accounts must not report is_anonymous()"
+    );
+}
+
+/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// Mailbox/set create with whitespace-padded name (Finding 16).
+/// Stalwart stores the trimmed name ("Padded Name"), but omits the name property
+/// from the created map, returning only the identifier.
+const STALWART_MAILBOX_SET_CREATED_OMITTING_NAME: &str = r#"{"methodResponses":[["Mailbox/set",{"accountId":"d333333","oldState":"sn2","newState":"soa","created":{"new":{"id":"m"}}},"c0"]],"sessionState":"aa288e37"}"#;
+
+const STALWART_AUTHENTICATED_SESSION: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:mail":{}},"accounts":{"d333333":{"name":"admin","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:mail":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:mail":"d333333"},"username":"admin","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
+
+struct MockMailboxSetTransport;
+
+impl Transport for MockMailboxSetTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => STALWART_AUTHENTICATED_SESSION.as_bytes().to_vec(),
+            HttpMethod::Post => STALWART_MAILBOX_SET_CREATED_OMITTING_NAME
+                .as_bytes()
+                .to_vec(),
+        };
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn finding_16_mailbox_set_create_omitted_trimmed_name_tolerated() {
+    let client = Client::builder()
+        .transport(MockMailboxSetTransport)
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let requested = Mailbox::new("  Padded Name  ");
+    let created = client
+        .mailbox_create(&account_id, &requested)
+        .expect("mailbox_create succeeds");
+
+    // 1. The server allocated an id:
+    assert_eq!(created.id, Some(Id::new("m")));
+
+    // 2. The client layer tolerates the omitted name and trims the requested name:
+    assert_eq!(
+        created.name, "Padded Name",
+        "mailbox_create must report the trimmed name when the server omits it"
     );
 }

@@ -3920,3 +3920,56 @@ fn unauthenticated_session_discovery_reports_anonymous_through_the_real_api() {
     assert!(session.capabilities.contains_key(CAPABILITY_CORE));
     assert!(client.primary_account(CAPABILITY_MAIL).is_err());
 }
+
+/// Finding 16 (STALWART-RFC-FINDINGS.md): Mailbox/set create with whitespace-padded
+/// name trims the stored name on Stalwart v1.0.0, but omits the name property from
+/// the `created` map, returning only `{"id": "<id>"}`. Verifies that `Client::mailbox_create`
+/// tolerates the omitted name, falls back to the requested name trimmed of whitespace,
+/// and returns the expected name matching what is stored on the server.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping write test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("write account has a mail capability");
+
+    let raw_name = format!("  agent-livewrite-pad-{}  ", unique_suffix());
+    let mailbox = Mailbox {
+        name: raw_name.clone(),
+        ..Mailbox::default()
+    };
+
+    let created = client
+        .mailbox_create(&account_id, &mailbox)
+        .expect("Mailbox/set create failed against the real server");
+    let id = created
+        .id
+        .clone()
+        .expect("the server named the new mailbox");
+
+    // Assert that the client layer returned the trimmed name:
+    assert_eq!(
+        created.name,
+        raw_name.trim(),
+        "created.name must report the trimmed name when the server omits it"
+    );
+
+    // Verify against the real server storage via Mailbox/get:
+    let fetched = client
+        .mailbox_get(&account_id)
+        .expect("Mailbox/get failed")
+        .list
+        .into_iter()
+        .find(|m| m.id.as_ref() == Some(&id))
+        .expect("created mailbox found in Mailbox/get");
+    assert_eq!(fetched.name, raw_name.trim());
+
+    // Clean up created mailbox:
+    client
+        .mailbox_destroy(&account_id, &id)
+        .expect("Mailbox/set destroy failed");
+}

@@ -366,6 +366,14 @@ in the invocation, worth failing loudly on.
   `Client::connect` without credentials tolerates the response, parses session
   capabilities, and accurately detects the unauthenticated state via
   `Client::is_anonymous()`.
+- `mailbox_create_tolerates_server_omitted_trimmed_name_through_the_real_api`:
+  exercises Finding 16 (STALWART-RFC-FINDINGS.md) where creating a mailbox with leading
+  or trailing whitespace in the `name` argument causes Stalwart v1.0.0 to trim the stored
+  name, but omit the `name` property from the `Mailbox/set` `created` response map (RFC 8620
+  Section 5.3). Verifies that `Client::mailbox_create` tolerates the omitted property,
+  falls back to the requested name trimmed of whitespace, and returns the expected name
+  matching what is stored on the server.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 

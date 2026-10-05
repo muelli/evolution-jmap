@@ -182,7 +182,28 @@ impl Client {
     pub fn mailbox_create(&self, account_id: &Id, mailbox: &Mailbox) -> Result<Mailbox, Error> {
         let request = SetRequest::<Mailbox>::new(account_id.clone()).create("new", mailbox.clone());
         let response = self.mailbox_set(&request)?;
-        expect_created(&response, "new")
+        let mut created = expect_created(&response, "new")?;
+        // If the server omitted properties (RFC 8620 Section 5.3 allows omitting unchanged
+        // properties; Stalwart also omits trimmed name, Finding 16), fall back to the
+        // requested properties.
+        if created.name.is_empty() {
+            created.name = mailbox.name.trim().to_string();
+        } else {
+            created.name = created.name.trim().to_string();
+        }
+        if created.parent_id.is_none() {
+            created.parent_id = mailbox.parent_id.clone();
+        }
+        if created.role.is_none() {
+            created.role = mailbox.role.clone();
+        }
+        if created.sort_order.is_none() {
+            created.sort_order = mailbox.sort_order;
+        }
+        if created.is_subscribed.is_none() {
+            created.is_subscribed = mailbox.is_subscribed;
+        }
+        Ok(created)
     }
 
     /// Change a mailbox (`Mailbox/set` update): its name, where it hangs, or
