@@ -17,6 +17,7 @@ $SUDO apt-get install -y --no-install-recommends \
     cmake \
     ninja-build \
     pkg-config \
+    libclang-dev \
     libglib2.0-dev \
     libgtk-3-dev \
     libcamel1.2-dev \

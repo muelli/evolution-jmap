@@ -355,6 +355,64 @@ done in this pass — it is new scope on top of an already-sized increment,
 left for a follow-up session the way item 78's own fixture survey was
 batched.
 
+## The `functional` job itself, reproduced from scratch (measured 2026-10-05)
+
+The section above reused item 71's pinned-Fedora/3.60.2 recipe, which answers
+a different question (does this repository's code still work on a *newer*
+EDS) than the one `.github/workflows/ci.yml`'s own `functional` job asks:
+does the job as written, on the plain `ubuntu-24.04` base it actually runs
+on, still pass at all. That job is gated behind `workflow_dispatch`/a PR
+label, so master can go a long time with no confirmed run of it; this entry
+reproduces its exact steps (`ci/install-deps.sh`, `ci/install-deps-functional.sh`,
+`ci/functional.sh`) in a from-scratch `ubuntu:24.04` podman container rather
+than reusing a recipe built for a different question.
+
+**Two implicit dependencies on the GitHub-hosted runner image, invisible
+until reproduced on a genuinely bare base.** Both the `checks`/`build` jobs
+and this one compile `eds-sys`/`evo-sys` through `bindgen`, which needs
+`libclang`; and every job assumes a working Rust toolchain. GitHub's
+`ubuntu-24.04` runner image ships both preinstalled, so `ci/install-deps.sh`
+(by design, Evolution/EDS packages only) never needed to name either, and
+this project's own dev VM already carries both system-wide for unrelated
+reasons — so the gap had no occasion to surface. A bare `ubuntu:24.04`
+container has neither: `cargo build` fails immediately with "Unable to find
+libclang" once a toolchain is present, and there is no toolchain at all
+without a separate `rustup` step. Fixed the first half, since it is a real
+gap in "the one authoritative list of Evolution/EDS build dependencies" the
+script's own header comment claims to be: `ci/install-deps.sh` now installs
+`libclang-dev` explicitly. The second half is not a script gap — relying on
+the hosted runner's preinstalled Rust is a deliberate, ordinary choice, not
+an omission — but it is a real prerequisite anyone standing up a self-hosted
+runner for this job (item 57's bootstrap work is the one place that might
+eventually matter) needs to know about.
+
+With both in place (`rustup` added by hand for this reproduction, `libclang-dev`
+now scripted): configured with `-DENABLE_FUNCTIONAL_TESTS=ON` against the
+same Ubuntu 24.04 EDS 3.52.3 packages the real job installs, built, and
+**all 28 `functional`-labelled ctest targets pass**, matching the 20 (now 28,
+after items 82/83 added the `-live-stalwart` legs) the Fedora recipe already
+covered plus the ones that recipe does not run (the `-live-stalwart` legs
+need no live server to merely build and skip cleanly without credentials).
+No product-code divergence from the Fedora/3.60.2 run found; the two
+reproductions exercise different EDS builds of the same source; the pass
+counts are expected to differ in composition, not in what they confirm.
+
+One environment-setup trap worth recording for whoever reruns this: a
+container built by `cp -r`'ing the checkout (including `rust/target`) into a
+writable copy is not just slow, it is actively dangerous on a disk sized for
+one working copy — `rust/target` alone routinely exceeds 15G. Bind-mount the
+checkout read-only instead (`-v "$PWD:/src:ro"`) and give cargo a separate,
+disposable target directory (a tmpfs shadow-mounted at `/src/rust/target`
+inside the container's own mount namespace works well and needs no host-side
+scratch file at all); the checkout stays untouched and the container's own
+disk use is bounded by what the fresh build actually needs, not by
+duplicating a cache that was never meant to leave the host.
+
+`gui-smoke` (needs the full `evolution` package and Xvfb/AT-SPI, not just the
+runtime daemons this job needs) is heavier still and is left for a follow-up
+pass; `eds-version-matrix` already has its own thorough, repeatedly
+reconfirmed coverage above and did not need rerunning for this entry.
+
 ## Supported versions
 
 The plugin is built against, and must be deployed against, the EDS it was
