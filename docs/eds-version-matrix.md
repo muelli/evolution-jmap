@@ -442,6 +442,69 @@ already had its own recent, separate coverage. Do not re-run any of the
 three without new evidence (more commits landing in the gated
 crates/scripts since this date).
 
+## Building EDS master locally (measured 2026-10-05, EDS 3.63.1)
+
+Neither the pinned-Fedora leg above (packaged EDS, currently 3.60.2) nor
+this runner's own system headers (3.52) reach an unreleased API change.
+When that is what is in question — as it was for `camel_data_cache_add`'s
+removal in favour of `camel_data_cache_add_atomic`/`commit_atomic`/
+`discard_atomic` — EDS has to be built from source:
+
+```sh
+sudo podman run -d --name edsmaster <same pinned fedora image as above> sleep infinity
+sudo podman exec edsmaster mkdir -p /work
+sudo podman exec edsmaster dnf -y install dnf-plugins-core git gperf cmake \
+    ninja-build gcc gcc-c++ clang-devel pkgconf-pkg-config libdb-devel evolution-devel
+sudo podman exec edsmaster dnf -y builddep evolution-data-server
+sudo podman exec edsmaster sh -c \
+    'cd /work && git clone --depth 1 --branch <branch> \
+     https://gitlab.gnome.org/<fork>/evolution-data-server.git eds-src'
+sudo podman exec edsmaster sh -c \
+    'cmake -S /work/eds-src -B /work/build -G Ninja \
+     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/work/prefix \
+     -DENABLE_GOA=OFF -DENABLE_INTROSPECTION=OFF -DENABLE_VALA_BINDINGS=OFF \
+     -DENABLE_GTK_DOC=OFF -DENABLE_GTK4=OFF -DWITH_KRB5=OFF -DWITH_OPENLDAP=OFF'
+sudo podman exec edsmaster sh -c 'cd /work/build && ninja -j"$(nproc)" install'
+sudo podman exec edsmaster sh -c \
+    'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+     --default-toolchain stable --profile minimal'
+sudo podman exec edsmaster sh -c \
+    'export PATH=/root/.cargo/bin:$PATH
+     export PKG_CONFIG_PATH=/work/prefix/lib/pkgconfig:/usr/lib64/pkgconfig:/usr/share/pkgconfig
+     export LD_LIBRARY_PATH=/work/prefix/lib
+     export CARGO_TARGET_DIR=/work/cargo-target
+     cd /src/rust && cargo test -p jmap-mail -p jmap-config -p jmap-backend-collection --locked'
+```
+
+A few things worth knowing before reusing this:
+
+- `libdb-devel` has to be installed *before* the `cmake` configure runs —
+  CMake caches a failed `HAVE_LIBDB` check otherwise, and a stale
+  `CMakeCache.txt` repeats the failure even after the package lands; wipe
+  `/work/build` and reconfigure rather than re-running `cmake` in place.
+- `evolution-shell-3.0` (and the other `evolution-*` pkg-config files
+  `evo-sys` needs, as opposed to `eds-sys`'s `camel-1.2`/
+  `evolution-data-server-1.2`) comes from the distro's packaged
+  `evolution-devel`, not from the from-source build — EDS and Evolution
+  are separate source trees, and only the former was in question here.
+  `PKG_CONFIG_PATH` lists the from-source prefix first so it wins for the
+  packages both provide, and falls through to the system path for the one
+  only the system package does.
+- Build only the `install` target, not plain `ninja` — a full build
+  includes EDS's own several-hundred-strong test-binary suite, none of
+  which this repository's own tests touch, and skipping it cut the build
+  from several minutes to under one.
+- **Disk discipline matters more here than in the pinned-Fedora leg**: a
+  from-source EDS build plus its install tree is multiple gigabytes in a
+  container already carrying a full build-dep closure, on a runner with
+  this little headroom to begin with. Never `cp -r` the host checkout into the container for
+  this — bind-mount it read-only (`-v "$PWD:/src:ro"`) and point
+  `CARGO_TARGET_DIR` at a container-local directory, the same discipline
+  the `functional`/`gui-smoke` reproductions above already use. Remove
+  `/work/eds-src` and `/work/build` once `ninja install` succeeds; nothing
+  after that step needs them, and `rm -rf` the whole container the moment
+  the `cargo test` run above is read.
+
 ## Supported versions
 
 The plugin is built against, and must be deployed against, the EDS it was
