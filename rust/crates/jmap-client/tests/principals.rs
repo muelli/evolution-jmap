@@ -266,3 +266,30 @@ fn get_availability_reports_busy_period_for_event_with_participants() {
         .unwrap();
     assert!(busy_after.is_empty());
 }
+
+#[test]
+fn current_user_principal_and_principal_get_fetch_seeded_principal() {
+    let (server, account_id, me, attendee) = server_with_principals();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    let principal = client
+        .current_user_principal(&account_id)
+        .unwrap()
+        .expect("current_user_principal must be found");
+    assert_eq!(principal.id.as_ref(), Some(&me));
+    assert_eq!(principal.name, "Alice Example");
+    assert_eq!(principal.email.as_deref(), Some("alice@example.com"));
+
+    let principal_id = client
+        .current_user_principal_id(&account_id)
+        .unwrap()
+        .expect("current_user_principal_id must resolve");
+    assert_eq!(principal_id, me);
+
+    let get_list = client
+        .principal_get(&account_id, &[me.clone(), attendee.clone()])
+        .unwrap();
+    assert_eq!(get_list.len(), 2);
+    assert!(get_list.iter().any(|p| p.id.as_ref() == Some(&me)));
+    assert!(get_list.iter().any(|p| p.id.as_ref() == Some(&attendee)));
+}

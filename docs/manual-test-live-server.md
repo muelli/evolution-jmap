@@ -389,6 +389,13 @@ in the invocation, worth failing loudly on.
   identities cleanly, and confirms that raw responses omit `state` and fail strict
   `GetResponse<ParticipantIdentity>` deserialization.
   Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `current_user_principal_resolves_past_account_id_mismatch_through_the_real_api`:
+  exercises Finding 18 (STALWART-RFC-FINDINGS.md) where `currentUserPrincipalId` in the
+  account's principals capability on Stalwart v1.0.0 advertises the account identifier
+  (for example, `"d333333"`) instead of the principal identifier (`"b"`), causing `Principal/get`
+  with that ID to report `notFound` (RFC 9670 Section 2). Verifies that `Client::current_user_principal`
+  and `Client::current_user_principal_id` tolerate the server mismatch and resolve the true owner
+  principal object and ID, and confirms that `Client::principal_get` tolerates the advertised ID.
 
 
 

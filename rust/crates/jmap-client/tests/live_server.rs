@@ -2589,7 +2589,7 @@ fn calendar_event_with_participant_reports_busy_period_in_free_busy_query() {
         return;
     }
 
-    let owner_email = env::var("JMAP_LIVE_SERVER_WRITE_USER").unwrap();
+    let _owner_email = env::var("JMAP_LIVE_SERVER_WRITE_USER").unwrap();
     let recipient_client = connect_recipient();
 
     let suffix = unique_suffix();
@@ -2620,7 +2620,10 @@ fn calendar_event_with_participant_reports_busy_period_in_free_busy_query() {
     let owner_principal_id = current_principal_id
         .or_else(|| {
             owner
-                .principal_query(&owner_account_id, PrincipalQueryFilter::email(&owner_email))
+                .principal_query(
+                    &owner_account_id,
+                    PrincipalQueryFilter::email(&_owner_email),
+                )
                 .ok()
                 .and_then(|ids| ids.into_iter().next())
         })
@@ -2629,7 +2632,7 @@ fn calendar_event_with_participant_reports_busy_period_in_free_busy_query() {
                 .principals(&owner_account_id)
                 .ok()?
                 .into_iter()
-                .find(|p| p.email.as_deref() == Some(&owner_email) || p.name == owner_email)
+                .find(|p| p.email.as_deref() == Some(&_owner_email) || p.name == _owner_email)
                 .and_then(|p| p.id)
         })
         .expect("the owner account has no principal id for free/busy lookup");
@@ -4073,4 +4076,89 @@ fn participant_identity_get_tolerates_server_omitted_state_through_the_real_api(
         }
         Ok(_) => panic!("expected strict GetResponse deserialization to fail on omitted state"),
     }
+}
+
+/// Finding 18 (STALWART-RFC-FINDINGS.md): Session capability currentUserPrincipalId
+/// advertises the account ID instead of the principal ID, causing Principal/get to
+/// report notFound.
+/// Verifies that Client::current_user_principal and Client::current_user_principal_id
+/// resolve the true principal object ("b") and principal identifier, and that
+/// Client::principal_get tolerates the advertised account ID.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn current_user_principal_resolves_past_account_id_mismatch_through_the_real_api() {
+    let client = connect();
+    let Ok(account_id) = client.primary_account(CAPABILITY_PRINCIPALS) else {
+        eprintln!("server names no primary account for {CAPABILITY_PRINCIPALS}; skipping");
+        return;
+    };
+
+    // 1. Session advertises currentUserPrincipalId as the account id:
+    let advertised = client
+        .session()
+        .accounts
+        .get(&account_id)
+        .and_then(|acct| acct.account_capabilities.get(CAPABILITY_PRINCIPALS))
+        .and_then(|cap| cap.get("currentUserPrincipalId"))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        advertised,
+        Some(account_id.as_str()),
+        "Stalwart advertises account ID as currentUserPrincipalId (Finding 18)"
+    );
+
+    // 2. Direct raw Principal/get with the advertised ID reproduces the notFound response:
+    let raw_args = client
+        .single_call(
+            &[CAPABILITY_CORE, CAPABILITY_PRINCIPALS],
+            "Principal/get",
+            &json!({ "accountId": account_id, "ids": [account_id.as_str()] }),
+        )
+        .expect("raw Principal/get call succeeds");
+    let not_found = raw_args
+        .get("notFound")
+        .and_then(|v| v.as_array())
+        .expect("notFound array present in response");
+    assert!(
+        not_found
+            .iter()
+            .any(|v| v.as_str() == Some(account_id.as_str())),
+        "raw Principal/get with account ID must return notFound on live Stalwart"
+    );
+
+    // 3. Client::current_user_principal tolerates the mismatch and resolves the true principal:
+    let principal = client
+        .current_user_principal(&account_id)
+        .expect("current_user_principal must succeed")
+        .expect("owner principal must be resolved");
+    assert!(principal.id.is_some(), "principal must have an ID");
+    assert_ne!(
+        principal.id.as_ref(),
+        Some(&account_id),
+        "resolved principal ID must be distinct from the account ID"
+    );
+    assert_eq!(principal.id.as_ref(), Some(&Id::new("b")));
+    assert_eq!(principal.name, "admin@example.internal");
+    assert_eq!(principal.email.as_deref(), Some("admin@example.internal"));
+
+    // 4. Client::current_user_principal_id resolves the true principal ID:
+    let principal_id = client
+        .current_user_principal_id(&account_id)
+        .expect("current_user_principal_id must succeed")
+        .expect("owner principal ID must be resolved");
+    assert_eq!(principal_id, Id::new("b"));
+
+    // 5. Client::principal_get with the advertised account ID tolerates the mismatch:
+    let list = client
+        .principal_get(&account_id, std::slice::from_ref(&account_id))
+        .expect("principal_get with advertised ID must succeed via tolerance fallback");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id.as_ref(), Some(&Id::new("b")));
+
+    // 6. Client::principal_get with the real principal ID succeeds directly:
+    let list_b = client
+        .principal_get(&account_id, &[Id::new("b")])
+        .expect("principal_get with real ID must succeed");
+    assert_eq!(list_b.len(), 1);
+    assert_eq!(list_b[0].id.as_ref(), Some(&Id::new("b")));
 }

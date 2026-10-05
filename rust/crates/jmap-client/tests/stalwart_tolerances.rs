@@ -277,3 +277,142 @@ fn finding_19_participant_identity_get_with_list_omits_state_tolerated() {
     );
     assert_eq!(identity.is_default, Some(true));
 }
+
+/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) for session with
+/// currentUserPrincipalId set to the account identifier (Finding 18).
+const STALWART_AUTHENTICATED_SESSION_WITH_PRINCIPALS: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:principals":{}},"accounts":{"d333333":{"name":"admin","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:principals":{"currentUserPrincipalId":"d333333"}}}},"primaryAccounts":{"urn:ietf:params:jmap:principals":"d333333"},"username":"admin","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
+
+struct MockCurrentUserPrincipalTransport;
+
+impl Transport for MockCurrentUserPrincipalTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => STALWART_AUTHENTICATED_SESSION_WITH_PRINCIPALS
+                .as_bytes()
+                .to_vec(),
+            HttpMethod::Post => {
+                let json: serde_json::Value =
+                    serde_json::from_slice(request.body.unwrap_or_default())
+                        .map_err(|e| TransportError::Failed(e.to_string()))?;
+                let method_call = &json["methodCalls"][0];
+                let method = method_call[0].as_str().unwrap_or_default();
+                let args = &method_call[1];
+                let tag = method_call[2].as_str().unwrap_or("c0");
+
+                let response_json = match method {
+                    "Principal/get" => {
+                        let ids = args["ids"].as_array();
+                        if let Some(ids) = ids {
+                            if ids.len() == 1 && ids[0].as_str() == Some("d333333") {
+                                // Finding 18: Stalwart returns notFound when querying currentUserPrincipalId:
+                                format!(
+                                    r#"{{"methodResponses":[["Principal/get",{{"accountId":"d333333","state":"n","list":[],"notFound":["d333333"]}},"{tag}"]],"sessionState":"aa288e37"}}"#
+                                )
+                            } else if ids.len() == 1 && ids[0].as_str() == Some("b") {
+                                // True principal object on Stalwart:
+                                format!(
+                                    r#"{{"methodResponses":[["Principal/get",{{"accountId":"d333333","state":"n","list":[{{"id":"b","type":"individual","name":"admin@example.internal","description":"System administrator","email":"admin@example.internal"}}],"notFound":[]}},"{tag}"]],"sessionState":"aa288e37"}}"#
+                                )
+                            } else {
+                                format!(
+                                    r#"{{"methodResponses":[["Principal/get",{{"accountId":"d333333","state":"n","list":[],"notFound":["unknown_id"]}},"{tag}"]],"sessionState":"aa288e37"}}"#
+                                )
+                            }
+                        } else {
+                            format!(
+                                r#"{{"methodResponses":[["Principal/get",{{"accountId":"d333333","state":"n","list":[{{"id":"b","type":"individual","name":"admin@example.internal","description":"System administrator","email":"admin@example.internal"}}],"notFound":[]}},"{tag}"]],"sessionState":"aa288e37"}}"#
+                            )
+                        }
+                    }
+                    "Principal/query" => {
+                        format!(
+                            r#"{{"methodResponses":[["Principal/query",{{"accountId":"d333333","queryState":"n","canCalculateChanges":true,"position":0,"ids":["b"]}},"{tag}"]],"sessionState":"aa288e37"}}"#
+                        )
+                    }
+                    _ => {
+                        format!(
+                            r#"{{"methodResponses":[["error",{{"type":"unknownMethod"}},"{tag}"]],"sessionState":"aa288e37"}}"#
+                        )
+                    }
+                };
+                response_json.into_bytes()
+            }
+        };
+
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn finding_18_current_user_principal_resolves_past_account_id_mismatch() {
+    let client = Client::builder()
+        .transport(MockCurrentUserPrincipalTransport)
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+
+    // 1. Session advertises currentUserPrincipalId as "d333333" (account id):
+    let advertised = client
+        .session()
+        .accounts
+        .get(&account_id)
+        .and_then(|acct| {
+            acct.account_capabilities
+                .get(session::CAPABILITY_PRINCIPALS)
+        })
+        .and_then(|cap| cap.get("currentUserPrincipalId"))
+        .and_then(|v| v.as_str());
+    assert_eq!(advertised, Some("d333333"));
+
+    // 2. Client resolves the true principal object ("b") rather than failing:
+    let principal = client
+        .current_user_principal(&account_id)
+        .expect("current_user_principal must succeed")
+        .expect("principal must be found");
+    assert_eq!(principal.id.as_ref(), Some(&Id::new("b")));
+    assert_eq!(principal.name, "admin@example.internal");
+    assert_eq!(principal.email.as_deref(), Some("admin@example.internal"));
+
+    // 3. Client resolves the true principal id:
+    let principal_id = client
+        .current_user_principal_id(&account_id)
+        .expect("current_user_principal_id must succeed")
+        .expect("principal id must be found");
+    assert_eq!(principal_id, Id::new("b"));
+}
+
+#[test]
+fn finding_18_principal_get_tolerates_account_id_as_principal_id() {
+    let client = Client::builder()
+        .transport(MockCurrentUserPrincipalTransport)
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+
+    // Querying with the advertised account ID "d333333" resolves the true principal:
+    let list = client
+        .principal_get(&account_id, &[Id::new("d333333")])
+        .expect("principal_get must succeed");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id.as_ref(), Some(&Id::new("b")));
+
+    // Querying with the real principal ID "b" succeeds directly:
+    let list_b = client
+        .principal_get(&account_id, &[Id::new("b")])
+        .expect("principal_get must succeed");
+    assert_eq!(list_b.len(), 1);
+    assert_eq!(list_b[0].id.as_ref(), Some(&Id::new("b")));
+
+    // Querying with an unrelated unknown ID returns empty without fallback:
+    let list_unknown = client
+        .principal_get(&account_id, &[Id::new("unknown_id")])
+        .expect("principal_get must succeed");
+    assert!(list_unknown.is_empty());
+}
