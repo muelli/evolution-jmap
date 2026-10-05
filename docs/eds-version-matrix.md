@@ -505,6 +505,33 @@ A few things worth knowing before reusing this:
   after that step needs them, and `rm -rf` the whole container the moment
   the `cargo test` run above is read.
 
+## `credential-store-id` (eds#663) confirmed against EDS master (measured 2026-10-05)
+
+Item 73's subtask (3) asked for one more thing this matrix had not yet
+measured: not just that `eds-sys`'s `eds_credential_store_id` marker probe
+is correctly *written*, but that it actually *fires* against a real EDS that
+declares `e_source_authentication_set_credential_store_id` (eds#663, merged
+upstream `592d95d` 2026-09-29, `Since: 3.64`, still unreleased). Reused the
+from-source recipe above unchanged (same pinned Fedora image, same disk
+discipline) to build current GNOME master again.
+
+Confirmed from `cargo build -vv`'s own rustc invocation line, not inferred:
+`--cfg eds_credential_store_id` is present alongside the other markers this
+EDS also trips (`eds_vcard_version_enum`, `camel_folder_search_body_sync`,
+`eds_death_date_field`, `camel_data_cache_atomic`). `cargo test -p
+jmap-config -p jmap-backend-collection` then ran the existing cfg-dispatched
+credential tests against the genuine property for the first time ever on
+this repository's own tooling (every prior run, including item 87's EDS
+master build the day before, happened to only need `camel_data_cache_atomic`
+and never checked this cfg specifically): `an_oauth2_account_is_given_a_credential_name_of_its_own_uid`,
+`switching_an_account_away_from_oauth2_clears_its_credential_name`,
+`the_credential_name_follows_too` and
+`a_mail_sources_credential_name_follows_the_account_too` all passed, and
+`cargo clippy -p jmap-config -p jmap-backend-collection --all-targets -D
+warnings` stayed clean. The `credential-name` branch (what every build here
+still ships, since no released EDS has the new property) was untouched by
+this and is unaffected.
+
 ## Supported versions
 
 The plugin is built against, and must be deployed against, the EDS it was
