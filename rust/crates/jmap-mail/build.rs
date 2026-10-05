@@ -44,6 +44,11 @@ const FEATURES: &[&str] = &[
     // copied (`dup_uids`). Only the tests ask a folder directly, but the cfg is
     // re-emitted for every target alike.
     "camel_folder_get_uids",
+    // Whether the message cache can write a new entry under a temporary name
+    // and rename it into place (`camel_data_cache_add_atomic`/`commit_atomic`/
+    // `discard_atomic`) or has to write straight to the final path
+    // (`camel_data_cache_add`) — `crate::cache`.
+    "camel_data_cache_atomic",
 ];
 
 fn main() {

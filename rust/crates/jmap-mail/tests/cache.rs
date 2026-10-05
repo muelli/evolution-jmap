@@ -477,3 +477,27 @@ fn a_directory_that_cannot_be_created_is_not_a_cache() {
         "a cache was opened over a plain file"
     );
 }
+
+/// On EDS 3.62+, `store` writes under a temporary name and renames it into
+/// place (`camel_data_cache_add_atomic`/`commit_atomic` — see
+/// `src/cache.rs`'s module docs), rather than opening a stream directly on
+/// the final path the way 3.52-3.61 do. This is the one thing about that
+/// which a round trip cannot tell apart from the non-atomic arm: a bug that
+/// renamed into place but left the temporary file behind too (instead of
+/// `commit_atomic` consuming it) would still read back correctly, and would
+/// only show up as a `.`-suffixed file this test's directory walk catches.
+#[cfg(camel_data_cache_atomic)]
+#[test]
+fn storing_leaves_no_temporary_file_behind() {
+    let scratch = Scratch::new();
+    let cache = MessageCache::open(scratch.as_str()).expect("a cache in a fresh directory");
+
+    assert!(cache.store("M1", SOURCE, None));
+
+    let files = files_under(&scratch.path);
+    assert_eq!(
+        files.len(),
+        1,
+        "a temporary file was left behind alongside the committed entry: {files:?}"
+    );
+}

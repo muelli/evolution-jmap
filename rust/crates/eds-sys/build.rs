@@ -807,6 +807,13 @@ const EDS_FEATURES: &[(&str, &str)] = &[
         "eds_credential_store_id",
         "e_source_authentication_set_credential_store_id",
     ),
+    // 3.62 removed `camel_data_cache_add` outright in favour of
+    // `camel_data_cache_add_atomic`/`commit_atomic`/`discard_atomic`: a write
+    // under a temporary name in the cache directory, renamed into place only
+    // once it is complete, instead of a stream opened directly on the final
+    // path. `jmap-mail/src/cache.rs` is the only caller either spelling is
+    // written in.
+    ("camel_data_cache_atomic", "camel_data_cache_add_atomic"),
 ];
 
 /// Emit one `cargo::rustc-cfg` per [`EDS_FEATURES`] entry the generated
