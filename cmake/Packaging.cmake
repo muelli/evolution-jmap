@@ -168,6 +168,8 @@ configure_file(
 	@ONLY
 )
 
+include(cmake/PackagingRpm.cmake)
+
 include(CPack)
 
 # Every regular file the package must contain — and, because the check is an

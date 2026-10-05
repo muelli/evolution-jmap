@@ -95,3 +95,9 @@ components.
 - No CMake or CI behavior changed in this increment.
 - No RPM build target added yet.
 - No containerized Fedora validation run yet.
+
+## 2026-10-05 implementation increment (item 2 start)
+
+- Added `cmake/PackagingRpm.cmake` and included it from `cmake/Packaging.cmake` with one include line, keeping RPM logic split from DEB logic.
+- Added `ci/rpm.sh` as a loud gate wrapper that errors clearly when `rpmbuild` or `rpmlint` are unavailable.
+- Initial RPM config is intentionally small for a safe first step and will be extended with Fedora container reproducibility and lint policy documentation in the next increments.
