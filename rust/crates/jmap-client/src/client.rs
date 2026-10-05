@@ -316,6 +316,20 @@ impl Client {
             .clone()
     }
 
+    /// Whether the session document returned by the server is anonymous
+    /// (empty username and no accessible accounts).
+    ///
+    /// Stalwart v1.0.0 (RFC Finding 12) answers unauthenticated requests to
+    /// the session resource with HTTP 200 OK and an anonymous empty-accounts
+    /// session rather than HTTP 401 Unauthorized with a WWW-Authenticate
+    /// challenge (RFC 8620 Section 2 and Section 8.1). Callers can check this
+    /// predicate to determine whether authentication is required to access
+    /// accounts.
+    pub fn is_anonymous(&self) -> bool {
+        let session = self.session();
+        session.username.is_empty() && session.accounts.is_empty()
+    }
+
     /// The account id serving a capability URN — `primaryAccounts` where the
     /// server states one, else the sole personal account offering it (see
     /// [`jmap_proto::session::Session::resolve_primary_account`]).

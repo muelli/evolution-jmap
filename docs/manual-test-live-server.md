@@ -358,6 +358,14 @@ in the invocation, worth failing loudly on.
   at the current state; and proves that high-level `Client::all_changes` automatically traverses
   multiple pages across intermediate states and folds them into a complete `ChangeSet`.
   Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `unauthenticated_session_discovery_reports_anonymous_through_the_real_api`:
+  exercises Finding 12 (STALWART-RFC-FINDINGS.md) where an unauthenticated GET
+  to the JMAP session resource on Stalwart v1.0.0 returns HTTP 200 OK with empty
+  `accounts: {}` and `username: ""` instead of HTTP 401 Unauthorized with a
+  `WWW-Authenticate` header (RFC 8620 Section 2 and Section 8.1). Verifies that
+  `Client::connect` without credentials tolerates the response, parses session
+  capabilities, and accurately detects the unauthenticated state via
+  `Client::is_anonymous()`.
 
 
 

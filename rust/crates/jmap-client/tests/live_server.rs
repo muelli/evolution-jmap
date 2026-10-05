@@ -3889,3 +3889,34 @@ fn changes_paging_and_resumption_through_the_real_api() {
         .contact_destroy(&account_id, &id2)
         .expect("cleanup destroy id2 failed");
 }
+
+/// Finding 12 (STALWART-RFC-FINDINGS.md): Unauthenticated GET to the session
+/// resource on Stalwart v1.0.0 returns HTTP 200 OK with empty `accounts: {}`
+/// and `username: ""` rather than HTTP 401 Unauthorized with a WWW-Authenticate
+/// header. Verifies that `Client::connect` with `Credentials::none()` tolerates
+/// the response, deserializes the session, and accurately reports `is_anonymous()`.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn unauthenticated_session_discovery_reports_anonymous_through_the_real_api() {
+    let origin = env::var("JMAP_LIVE_SERVER_URL").expect(
+        "set JMAP_LIVE_SERVER_URL to the server's origin, e.g. https://jmap.example.com \
+         (see docs/manual-test-live-server.md)",
+    );
+    let rebase = env::var("JMAP_LIVE_SERVER_REBASE_URLS").is_ok_and(|value| value != "0");
+
+    let client = Client::builder()
+        .rebase_urls_to_origin(rebase)
+        .connect(&origin, Credentials::none())
+        .expect("unauthenticated session discovery must succeed on live server");
+
+    assert!(
+        client.is_anonymous(),
+        "unauthenticated session on Stalwart must report is_anonymous() == true"
+    );
+    let session = client.session();
+    assert_eq!(session.username, "");
+    assert!(session.accounts.is_empty());
+    assert!(session.primary_accounts.is_empty());
+    assert!(session.capabilities.contains_key(CAPABILITY_CORE));
+    assert!(client.primary_account(CAPABILITY_MAIL).is_err());
+}
