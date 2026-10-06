@@ -405,6 +405,21 @@ in the invocation, worth failing loudly on.
   and that `Client::event_parse` tolerates Stalwart's event array representation and passes the parsed
   event through intact to the client.
   Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `contact_card_online_service_without_uri_through_the_real_api`:
+  exercises Finding 14 (STALWART-RFC-FINDINGS.md) where `ContactCard/set` create with
+  an `onlineServices` entry that contains `user` and `service` but no `uri` (valid per
+  RFC 9553 Section 2.3.2) is accepted on write, but silently discarded upon storage by
+  Stalwart v1.0.0. Verifies that `Client::contact_create` and `Client::contact_get`
+  tolerate the server response, pass the data through intact without error, and clean
+  up the created card.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `contact_card_parse_promotes_type_internet_to_context_through_the_real_api`:
+  exercises Finding 15 (STALWART-RFC-FINDINGS.md) where `ContactCard/parse` converts
+  vCard `TYPE=internet` on email addresses to `"internet": true` in `contexts` (RFC 9553
+  Section 1.7.3 and Section 2.2.3 define only `private` and `work`). Verifies that
+  `Client::contact_card_parse` tolerates the non-standard context property and passes
+  the parsed card through intact to the client.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 
