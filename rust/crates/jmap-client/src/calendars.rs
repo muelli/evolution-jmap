@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::client::Client;
-use crate::contacts::set_failure;
+use crate::contacts::{demote_multi_element_parsed_blobs, set_failure};
 use crate::error::Error;
 
 const USING: &[&str] = &[CAPABILITY_CORE, CAPABILITY_CALENDARS];
@@ -153,23 +153,18 @@ impl Client {
     }
 
     /// `CalendarEvent/parse` (draft-ietf-jmap-calendars §5.7): reads an
-    /// uploaded iCalendar blob into a JSCalendar `CalendarEvent`.
+    /// uploaded iCalendar blob into a JSCalendar `CalendarEvent`. Tolerates
+    /// Stalwart wrapping the parsed event in a single-element array; a blob
+    /// that holds more than one distinct top-level event (confirmed live:
+    /// Stalwart returns one array element per event) reports as
+    /// `notParsable` rather than silently keeping just the first (see
+    /// `demote_multi_element_parsed_blobs`).
     pub fn event_parse(
         &self,
         request: &CalendarEventParseRequest,
     ) -> Result<CalendarEventParseResponse, Error> {
         let mut arguments = self.single_call(USING, "CalendarEvent/parse", request)?;
-        if let Some(parsed) = arguments.get_mut("parsed").and_then(Value::as_object_mut) {
-            for val in parsed.values_mut() {
-                if val.is_array() {
-                    let mut arr = match std::mem::replace(val, Value::Null) {
-                        Value::Array(arr) => arr,
-                        _ => unreachable!(),
-                    };
-                    *val = arr.drain(..).next().unwrap_or(Value::Null);
-                }
-            }
-        }
+        demote_multi_element_parsed_blobs(&mut arguments);
         Ok(serde_json::from_value(arguments)?)
     }
 
