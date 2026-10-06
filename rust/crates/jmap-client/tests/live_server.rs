@@ -4327,6 +4327,70 @@ END:VCALENDAR\r\n";
     assert!(parsed_ev.extra.contains_key("iCalendar"));
 }
 
+/// `CalendarEvent/parse` on a blob holding two distinct top-level VEVENTs
+/// (different UIDs). Confirmed live 2026-10-06 against real Stalwart: it
+/// answers with one array element per event under the single blob id, which
+/// `Client::event_parse` cannot represent in its one-event-per-blob-id
+/// `parsed` map without silently discarding every event but the first.
+/// Verifies the blob id is reported via `notParsable` instead.
+#[test]
+#[ignore = "needs a running JMAP server (see docs/manual-test-live-server.md)"]
+fn calendar_event_parse_reports_multi_event_blob_as_not_parsable_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("no live server configured or write credentials missing; skipping");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CALENDARS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CALENDARS}; skipping");
+        return;
+    };
+
+    let ics = "BEGIN:VCALENDAR\r\n\
+VERSION:2.0\r\n\
+PRODID:-//Test//EN\r\n\
+BEGIN:VEVENT\r\n\
+UID:multi-event-probe-1\r\n\
+DTSTAMP:20261006T000000Z\r\n\
+DTSTART:20261006T120000Z\r\n\
+SUMMARY:First Event\r\n\
+END:VEVENT\r\n\
+BEGIN:VEVENT\r\n\
+UID:multi-event-probe-2\r\n\
+DTSTAMP:20261006T000000Z\r\n\
+DTSTART:20261007T120000Z\r\n\
+SUMMARY:Second Event\r\n\
+END:VEVENT\r\n\
+END:VCALENDAR\r\n";
+
+    let upload_res = client
+        .blob_upload(
+            &BlobUploadRequest::new(account_id.clone())
+                .create_blob("b0", UploadBlob::from_text(ics, "text/calendar")),
+        )
+        .expect("blob_upload succeeds")
+        .created
+        .expect("blob created map present");
+    let blob_id = upload_res.get("b0").expect("b0 created").id.clone();
+
+    let parse_req = CalendarEventParseRequest::new(account_id, vec![blob_id.clone()]);
+    let parse_res = client
+        .event_parse(&parse_req)
+        .expect("event_parse succeeds on wire even when demoting the blob");
+
+    assert!(
+        parse_res
+            .parsed
+            .as_ref()
+            .is_none_or(|parsed| !parsed.contains_key(&blob_id)),
+        "a multi-event blob must not surface as a single parsed event"
+    );
+    assert_eq!(
+        parse_res.not_parsable.as_deref(),
+        Some([blob_id].as_slice()),
+        "a multi-event blob must be reported as notParsable"
+    );
+}
+
 /// `ContactCard/set` create with `onlineServices` lacking a `uri`, and subsequent
 /// `ContactCard/get` against a real server (Finding 14).
 /// Stalwart accepts the creation, but silently discards the `onlineServices` entry on storage

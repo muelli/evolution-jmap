@@ -556,6 +556,48 @@ fn finding_13_calendar_event_parse_tolerates_standard_timezones() {
 }
 
 /// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// CalendarEvent/parse for a blob containing two distinct top-level VEVENTs
+/// (different UIDs): Stalwart returns one array element per event under the
+/// single blob id, confirmed live 2026-10-06 against `stalwart-runner`.
+const STALWART_CALENDAR_EVENT_PARSE_RESPONSE_TWO_EVENTS: &str = r#"{"methodResponses":[["CalendarEvent/parse",{"accountId":"d333333","parsed":{"blob1":[{"@type":"Event","uid":"probe-multi-1","title":"First Event","start":"2026-10-05T12:00:00","updated":"2026-10-05T00:00:00Z"},{"@type":"Event","uid":"probe-multi-2","title":"Second Event","start":"2026-10-06T12:00:00","updated":"2026-10-05T00:00:00Z"}]}},"c0"]],"sessionState":"aa288e37"}"#;
+
+/// A blob holding more than one top-level event cannot be represented by
+/// this client's one-event-per-blob-id `parsed` map; silently keeping only
+/// the array's first element would discard the rest without any sign of
+/// data loss, so the blob id must move to `notParsable` instead.
+#[test]
+fn finding_13_calendar_event_parse_reports_multi_event_blob_as_not_parsable() {
+    let client = Client::builder()
+        .transport(MockCalendarEventTransport {
+            session_body: STALWART_AUTHENTICATED_SESSION_WITH_CALENDARS_AND_PARSE,
+            response_body: STALWART_CALENDAR_EVENT_PARSE_RESPONSE_TWO_EVENTS,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let request = CalendarEventParseRequest::new(account_id.clone(), vec![Id::new("blob1")]);
+    let response = client
+        .event_parse(&request)
+        .expect("event_parse must still succeed on wire, just demote the blob");
+
+    let blob1 = Id::new("blob1");
+    assert!(
+        response
+            .parsed
+            .as_ref()
+            .is_none_or(|parsed| !parsed.contains_key(&blob1)),
+        "a multi-event blob must not surface as a single parsed event (would \
+         silently discard every event but the first)"
+    );
+    assert_eq!(
+        response.not_parsable.as_deref(),
+        Some([blob1].as_slice()),
+        "a multi-event blob must be reported as notParsable"
+    );
+}
+
+/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
 /// ContactCard/set create when onlineServices has no uri (Finding 14).
 /// Stalwart accepts the creation and returns the allocated id.
 const STALWART_CONTACT_CARD_SET_CREATED: &str = r#"{"methodResponses":[["ContactCard/set",{"accountId":"d333333","oldState":"snu","newState":"sqeaq","created":{"new":{"id":"y"}}},"c0"]],"sessionState":"9f961f52"}"#;
