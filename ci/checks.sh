@@ -126,6 +126,22 @@ if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution
     if ! have lintian; then
         echo "!! CI_CHECKS_ALLOW_MISSING_LINTIAN set: package-deb-lintian will NOT run here !!" >&2
     fi
+    # debian-copyright-in-sync is gated by cmake/Packaging.cmake's own
+    # `find_program(python3)` the exact same way package-deb-lintian is gated
+    # on lintian, but it went without a loud-fail escape hatch until now.
+    # Same reasoning as the lintian case above: a bare machine should say so
+    # explicitly rather than silently report success on a filter that never
+    # touched the check at all.
+    if ! have python3 && [ -z "${CI_CHECKS_ALLOW_MISSING_PYTHON3:-}" ]; then
+        echo "FAIL: python3 is not installed, so debian-copyright-in-sync would silently" >&2
+        echo "not run, the exact check CI enforces. Install python3, or set" >&2
+        echo "CI_CHECKS_ALLOW_MISSING_PYTHON3=1 to acknowledge this machine won't" >&2
+        echo "verify it and continue anyway." >&2
+        exit 1
+    fi
+    if ! have python3; then
+        echo "!! CI_CHECKS_ALLOW_MISSING_PYTHON3 set: debian-copyright-in-sync will NOT run here !!" >&2
+    fi
     ctest --test-dir build -E '^rust-test$' --output-on-failure
 else
     echo "-- cmake, ninja, or the EDS dev headers are not available; skipping the .deb packaging check (expected on a bare Rust-only machine) --" >&2

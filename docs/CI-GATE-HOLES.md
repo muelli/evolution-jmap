@@ -20,14 +20,13 @@ whether it can silently no-op, and whether CI actually has what it needs.
 | **`translations`, `release-workflow`, `install-*-backend` (4 tests)** | same cmake/ninja/EDS-header gate as above, nothing further | Same hole as `rust-test-eds`: registered, cheap, needed nothing beyond what the existing gate already confirms, but excluded by the old narrow filter. **Fixed in the same change.** | Yes, same `build` job |
 | `package-deb`, `package-deb-reproducible` | cmake, ninja, EDS headers, `cpack`/`dpkg` | Already ran before this session (matched the old filter) | Yes |
 | `package-deb-lintian` | `lintian` (CMake `find_program`, test only registered if found) | Loud: `ci/checks.sh` already `exit 1`s unless `CI_CHECKS_ALLOW_MISSING_LINTIAN=1` is set (fixed after an earlier incident where this ran silently vacuous) | Yes, `ci/install-deps.sh` installs it |
-| `debian-copyright-in-sync` | `python3` (CMake `find_program`, test only registered if found) | **Open hole, not yet fixed**: unlike `lintian`, there is no loud check here. If `python3` is absent, the test is silently never registered and the ctest run reports success without it. Low risk (python3 is close to universal on dev/CI images) but the same shape of bug as the two incidents above. Left for a follow-up increment. | Yes |
+| `debian-copyright-in-sync` | `python3` (CMake `find_program`, test only registered if found) | Loud: `ci/checks.sh` now `exit 1`s unless `CI_CHECKS_ALLOW_MISSING_PYTHON3=1` is set, mirroring the `lintian` row above. | Yes |
 | `functional`, `gui-smoke` ctest labels (`Functional.cmake`) | `dbus-run-session`, `gnome-keyring-daemon`, the full `evolution`/Xvfb runtime, `-DENABLE_FUNCTIONAL_TESTS=ON` | Not registered at all without the runtime (`find_program` guards): **by design**, not a hole. These need a live D-Bus/Xvfb registry `ci/checks.sh` has never assumed; they are exercised by the separately gated `functional`/`gui-smoke` CI jobs instead, each independently reproduced from scratch already. | Only on `workflow_dispatch` or a PR label, not every push — also by design, documented in `ci.yml` |
 | `eds-version-matrix` job | a newer EDS (Fedora container), `ci/eds-matrix.sh` | Not run by `ci/checks.sh` at all: a second-EDS-version leg, not a correctness gate (`continue-on-error: true` in CI itself) | Only on `workflow_dispatch` or a PR label |
 | `#[ignore]`d live-server tests (`--features live-server`) | a real Stalwart server, `STALWART_URL`/credentials | Never run by `ci/checks.sh` or any CI job: no live server exists in CI. **By design**, operator/agent-run only. | No, intentionally |
 
 ## Still open after this session
 
-`debian-copyright-in-sync`'s missing-`python3` case has no loud escape
-hatch, unlike `lintian`'s. A future increment should add the same
-`CI_CHECKS_ALLOW_MISSING_PYTHON3`-shaped check `ci/checks.sh` already uses
-for lintian, then install `python3` on any runner VM found to lack it.
+None from this sweep. The `python3` escape hatch is now in place; whether
+any runner VM actually lacks `python3` and needs it installed is an
+operator-side question, not a code-repo gap.
