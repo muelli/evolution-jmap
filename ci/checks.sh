@@ -83,19 +83,27 @@ cargo deny check
 
 cd ..
 
-echo "== packaging (.deb ctest, if EDS dev headers/cmake/ninja are present) =="
-# Scoped to the package-deb* and debian-copyright-in-sync tests, not the full
-# ctest suite: those are pure packaging/doc-sync checks (build the .deb, run
-# lintian, check reproducibility, diff the generated copyright/third-party-
-# notices against `cargo metadata`) that need nothing beyond a CMake
-# configure + build, unlike the functional/gui-smoke legs, which need a live
-# D-Bus/Xvfb registry this script has never assumed. package-deb* is what
-# would have caught `ac00396`'s lintian-clean-.deb regression before it sat
-# red in CI for days; debian-copyright-in-sync is what would have caught
+echo "== CMake/CTest suite, if EDS dev headers/cmake/ninja are present =="
+# Everything CI's `build` job's own `ctest --test-dir build` runs (no -R
+# filter there), except the plain `rust-test`, already covered by the
+# `cargo test --locked` above. This used to be narrowed to just the
+# package-deb*/debian-copyright-in-sync tests, which are pure packaging/
+# doc-sync checks that need nothing beyond a CMake configure + build, unlike
+# the functional/gui-smoke legs, which need a live D-Bus/Xvfb registry this
+# script has never assumed. That narrower filter is what let `d5d3ee96` sit
+# red in CI for a day: it silently skipped `rust-test-eds` (the ctest that
+# runs `cargo test` on the EDS-gated crates `rust/Cargo.toml` keeps out of
+# default-members, `jmap-backend-core` among them) on a machine, like this
+# one, with real EDS dev headers natively, so a stale translation catalogue
+# never failed locally even though `cargo test -p jmap-backend-core` would
+# have caught it directly. The same narrow filter also missed `translations`,
+# `release-workflow` and the `install-*-backend` staging tests, none of which
+# need anything beyond what the EDS-header check below already confirms is
+# present. package-deb* is what would have caught `ac00396`'s
+# lintian-clean-.deb regression before it sat red in CI for days;
+# debian-copyright-in-sync is what would have caught
 # `docs/packaging/third-party-notices` drifting from a `Cargo.lock` bump
-# before that sat red in CI for 31+ hours (2026-09-20) — both packaging jobs
-# that do catch these run separately from this script, so nobody watching
-# only `ci/checks.sh` saw either break.
+# before that sat red in CI for 31+ hours (2026-09-20).
 if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution-calendar-3.0 evolution-mail-3.0 libecal-2.0 2>/dev/null; then
     cmake -S . -B build -G Ninja >/dev/null
     ninja -C build
@@ -118,7 +126,7 @@ if have cmake && have ninja && pkg-config --exists evolution-shell-3.0 evolution
     if ! have lintian; then
         echo "!! CI_CHECKS_ALLOW_MISSING_LINTIAN set: package-deb-lintian will NOT run here !!" >&2
     fi
-    ctest --test-dir build -R 'package-deb|debian-copyright-in-sync' --output-on-failure
+    ctest --test-dir build -E '^rust-test$' --output-on-failure
 else
     echo "-- cmake, ninja, or the EDS dev headers are not available; skipping the .deb packaging check (expected on a bare Rust-only machine) --" >&2
 fi
