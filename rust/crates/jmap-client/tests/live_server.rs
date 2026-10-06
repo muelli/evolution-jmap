@@ -71,7 +71,7 @@ use jmap_proto::calendars::{
     CalendarEventQueryFilter, Participant, ParticipantIdentity, RecurrenceRule,
 };
 use jmap_proto::contacts::{
-    AddressBook, ContactCard, ContactCardParseRequest, ContactCardQueryFilter,
+    AddressBook, ContactCard, ContactCardParseRequest, ContactCardQueryFilter, OnlineService,
 };
 use jmap_proto::error::method;
 use jmap_proto::mail::{
@@ -4325,4 +4325,161 @@ END:VCALENDAR\r\n";
     assert_eq!(parsed_ev.uid.as_deref(), Some("test-tz-probe"));
     assert!(parsed_ev.time_zones.is_none());
     assert!(parsed_ev.extra.contains_key("iCalendar"));
+}
+
+/// `ContactCard/set` create with `onlineServices` lacking a `uri`, and subsequent
+/// `ContactCard/get` against a real server (Finding 14).
+/// Stalwart accepts the creation, but silently discards the `onlineServices` entry on storage
+/// because it has no `uri` (RFC 9553 Section 2.3.2).
+/// Verifies that `Client::contact_create` and `Client::contact_get` pass the server's reply
+/// through intact without error.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn contact_card_online_service_without_uri_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping online_service test");
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CONTACTS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
+        return;
+    };
+
+    let books = client
+        .address_books(&account_id)
+        .expect("AddressBook/get failed against the real server");
+    let book_id = books
+        .iter()
+        .find(|b| b.is_default == Some(true))
+        .or_else(|| books.first())
+        .and_then(|b| b.id.clone())
+        .expect("no address book available for contact card create");
+
+    let suffix = unique_suffix();
+    let full_name = format!("Alice Probe-{}", suffix);
+    let mut card = ContactCard::simple(book_id, &full_name, "alice@example.org");
+    let mut online_services = BTreeMap::new();
+    online_services.insert(
+        "s1".to_string(),
+        OnlineService {
+            service: Some("Jabber".to_string()),
+            user: Some(format!("alice-{}@example.org", suffix)),
+            uri: None,
+            ..Default::default()
+        },
+    );
+    card.online_services = Some(online_services);
+
+    // 1. Create succeeds on Stalwart:
+    let created = client
+        .contact_create(&account_id, &card)
+        .expect("contact_create with onlineServices lacking uri must succeed on Stalwart");
+    let card_id = created.id.expect("created card must have an id");
+
+    // 2. Fetch the card back: Stalwart accepted the create, but discarded onlineServices on storage (Finding 14):
+    let fetched = client
+        .contact_get(&account_id, std::slice::from_ref(&card_id))
+        .expect("contact_get must succeed on Stalwart");
+    assert_eq!(fetched.list.len(), 1);
+    let fetched_card = &fetched.list[0];
+    assert_eq!(
+        fetched_card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some(full_name.as_str())
+    );
+    assert!(
+        fetched_card.online_services.is_none(),
+        "Stalwart v1.0.0 discards onlineServices entries lacking a uri upon storage (Finding 14)"
+    );
+
+    // 3. Clean up created contact:
+    client
+        .contact_destroy(&account_id, &card_id)
+        .expect("contact_destroy must succeed on Stalwart");
+}
+
+/// `ContactCard/parse` with `EMAIL;TYPE=home,internet:...` against a real server (Finding 15).
+/// Stalwart promotes `TYPE=internet` to an unrecognized context (`"internet": true`) in `contexts`
+/// (RFC 9553 Section 1.7.3 / Section 2.2.3).
+/// Verifies that `Client::contact_card_parse` tolerates the non-standard context and passes
+/// the parsed card through intact to the client.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn contact_card_parse_promotes_type_internet_to_context_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping contact_card_parse test"
+        );
+        return;
+    };
+    let Ok(account_id) = client.primary_account(CAPABILITY_CONTACTS) else {
+        eprintln!("server names no primary account for {CAPABILITY_CONTACTS}; skipping");
+        return;
+    };
+    if !client
+        .session()
+        .capabilities
+        .contains_key(CAPABILITY_CONTACTS_PARSE)
+    {
+        eprintln!("server does not advertise {CAPABILITY_CONTACTS_PARSE}; skipping");
+        return;
+    }
+
+    let suffix = unique_suffix();
+    let full_name = format!("Probe Card-{}", suffix);
+    let email_addr = format!("user-{}@example.com", suffix);
+    let vcard = format!(
+        "BEGIN:VCARD\r\n\
+         VERSION:4.0\r\n\
+         FN:{full_name}\r\n\
+         EMAIL;TYPE=home,internet:{email_addr}\r\n\
+         END:VCARD\r\n"
+    );
+
+    let upload = client
+        .upload_blob(&account_id, "text/vcard", vcard.into_bytes())
+        .expect("blob upload failed against the real server");
+
+    let response = client
+        .contact_card_parse(&ContactCardParseRequest::new(
+            account_id.clone(),
+            [upload.blob_id.clone()],
+        ))
+        .expect("ContactCard/parse failed against the real server");
+
+    let parsed_map = response
+        .parsed
+        .expect("ContactCard/parse response missing parsed map");
+    let parsed_card = parsed_map
+        .get(&upload.blob_id)
+        .expect("uploaded blobId missing from parsed map");
+
+    assert_eq!(
+        parsed_card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some(full_name.as_str())
+    );
+
+    let emails = parsed_card
+        .emails
+        .as_ref()
+        .expect("parsed card missing emails map");
+    let email = emails
+        .values()
+        .find(|e| e.address == email_addr)
+        .expect("expected email address in parsed card");
+
+    // Finding 15: Stalwart promotes TYPE=internet to an unrecognized context key:
+    let contexts = email
+        .contexts
+        .as_ref()
+        .expect("contexts map must be present");
+    assert_eq!(
+        contexts.get("private"),
+        Some(&serde_json::Value::Bool(true)),
+        "private context should be present"
+    );
+    assert_eq!(
+        contexts.get("internet"),
+        Some(&serde_json::Value::Bool(true)),
+        "Stalwart v1.0.0 promotes TYPE=internet to context key 'internet' (Finding 15)"
+    );
 }

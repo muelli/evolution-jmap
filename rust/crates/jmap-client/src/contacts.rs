@@ -174,11 +174,24 @@ impl Client {
 
     /// `ContactCard/parse` (RFC 9610 §3.4): reads an uploaded vCard blob
     /// into a `ContactCard`, without filing it into any address book.
+    /// Tolerates server implementations that wrap the parsed card in a
+    /// single-element array.
     pub fn contact_card_parse(
         &self,
         request: &ContactCardParseRequest,
     ) -> Result<ContactCardParseResponse, Error> {
-        let arguments = self.single_call(USING, "ContactCard/parse", request)?;
+        let mut arguments = self.single_call(USING, "ContactCard/parse", request)?;
+        if let Some(parsed) = arguments.get_mut("parsed").and_then(Value::as_object_mut) {
+            for val in parsed.values_mut() {
+                if val.is_array() {
+                    let mut arr = match std::mem::replace(val, Value::Null) {
+                        Value::Array(arr) => arr,
+                        _ => unreachable!(),
+                    };
+                    *val = arr.drain(..).next().unwrap_or(Value::Null);
+                }
+            }
+        }
         Ok(serde_json::from_value(arguments)?)
     }
 

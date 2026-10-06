@@ -10,6 +10,7 @@ use jmap_client::{Client, Credentials, Error};
 use jmap_mock::MockServer;
 use jmap_proto::Id;
 use jmap_proto::calendars::{CalendarEvent, CalendarEventParseRequest, ParticipantIdentity};
+use jmap_proto::contacts::{ContactCard, ContactCardParseRequest, OnlineService};
 use jmap_proto::mail::Mailbox;
 use jmap_proto::methods::GetResponse;
 use jmap_proto::session;
@@ -552,4 +553,216 @@ fn finding_13_calendar_event_parse_tolerates_standard_timezones() {
         .as_ref()
         .expect("time_zones must be populated when returned by server");
     assert!(time_zones.contains_key("/custom/zone1"));
+}
+
+/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// ContactCard/set create when onlineServices has no uri (Finding 14).
+/// Stalwart accepts the creation and returns the allocated id.
+const STALWART_CONTACT_CARD_SET_CREATED: &str = r#"{"methodResponses":[["ContactCard/set",{"accountId":"d333333","oldState":"snu","newState":"sqeaq","created":{"new":{"id":"y"}}},"c0"]],"sessionState":"9f961f52"}"#;
+
+/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// ContactCard/get for a card created with onlineServices lacking uri (Finding 14).
+/// Stalwart discards onlineServices on storage, omitting it from the retrieved card.
+const STALWART_CONTACT_CARD_GET_DISCARDING_ONLINE_SERVICES: &str = r#"{"methodResponses":[["ContactCard/get",{"accountId":"d333333","state":"sqeaq","list":[{"name":{"full":"Alice Probe"},"@type":"Card","version":"1.0","id":"y","addressBookIds":{"b":true}}],"notFound":[]},"c0"]],"sessionState":"9f961f52"}"#;
+
+/// Wire JSON for conformant ContactCard/get where onlineServices lacking uri
+/// is preserved per RFC 9553 Section 2.3.2.
+const CONFORMANT_CONTACT_CARD_GET_WITH_ONLINE_SERVICE_WITHOUT_URI: &str = r#"{"methodResponses":[["ContactCard/get",{"accountId":"d333333","state":"sqeaq","list":[{"name":{"full":"Alice Probe"},"@type":"Card","version":"1.0","id":"y","addressBookIds":{"b":true},"onlineServices":{"s1":{"service":"Jabber","user":"alice@example.org"}}}],"notFound":[]},"c0"]],"sessionState":"9f961f52"}"#;
+
+const STALWART_AUTHENTICATED_SESSION_WITH_CONTACTS: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:contacts":{}},"accounts":{"d333333":{"name":"admin","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:contacts":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:contacts":"d333333"},"username":"admin","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
+
+struct MockContactCardTransport {
+    response_body: &'static str,
+}
+
+impl Transport for MockContactCardTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => STALWART_AUTHENTICATED_SESSION_WITH_CONTACTS
+                .as_bytes()
+                .to_vec(),
+            HttpMethod::Post => self.response_body.as_bytes().to_vec(),
+        };
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn finding_14_contact_card_create_tolerates_online_service_without_uri() {
+    let client = Client::builder()
+        .transport(MockContactCardTransport {
+            response_body: STALWART_CONTACT_CARD_SET_CREATED,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let mut card = ContactCard::simple("b", "Alice Probe", "alice@example.org");
+    let mut online_services = std::collections::BTreeMap::new();
+    online_services.insert(
+        "s1".to_string(),
+        OnlineService {
+            service: Some("Jabber".to_string()),
+            user: Some("alice@example.org".to_string()),
+            uri: None,
+            ..Default::default()
+        },
+    );
+    card.online_services = Some(online_services);
+
+    let created = client
+        .contact_create(&account_id, &card)
+        .expect("contact_create with online_services lacking uri succeeds");
+    assert_eq!(created.id, Some(Id::new("y")));
+}
+
+#[test]
+fn finding_14_contact_card_get_tolerates_stalwart_discarded_online_services() {
+    let client = Client::builder()
+        .transport(MockContactCardTransport {
+            response_body: STALWART_CONTACT_CARD_GET_DISCARDING_ONLINE_SERVICES,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let response = client
+        .contact_get(&account_id, &[Id::new("y")])
+        .expect("contact_get succeeds");
+    assert_eq!(response.list.len(), 1);
+    let card = &response.list[0];
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Alice Probe")
+    );
+    // Finding 14: Stalwart silently discarded onlineServices on storage:
+    assert!(card.online_services.is_none());
+}
+
+#[test]
+fn finding_14_contact_card_get_tolerates_online_service_without_uri() {
+    let client = Client::builder()
+        .transport(MockContactCardTransport {
+            response_body: CONFORMANT_CONTACT_CARD_GET_WITH_ONLINE_SERVICE_WITHOUT_URI,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let response = client
+        .contact_get(&account_id, &[Id::new("y")])
+        .expect("contact_get succeeds");
+    assert_eq!(response.list.len(), 1);
+    let card = &response.list[0];
+    let services = card
+        .online_services
+        .as_ref()
+        .expect("online_services must be populated when returned by server");
+    let s1 = services.get("s1").expect("s1 service must be present");
+    assert_eq!(s1.service.as_deref(), Some("Jabber"));
+    assert_eq!(s1.user.as_deref(), Some("alice@example.org"));
+    assert!(s1.uri.is_none());
+}
+
+/// Exact wire JSON returned by live Stalwart v1.0.0 (0.16.22) on
+/// ContactCard/parse for an uploaded vCard containing EMAIL;TYPE=home,internet:... (Finding 15).
+/// Stalwart promotes TYPE=internet to an unrecognized context ("internet": true).
+const STALWART_CONTACT_CARD_PARSE_RESPONSE_WITH_INTERNET_CONTEXT: &str = r#"{"methodResponses":[["ContactCard/parse",{"accountId":"d333333","parsed":{"blob1":{"emails":{"k1":{"address":"user@example.com","contexts":{"private":true,"internet":true}}},"@type":"Card","version":"1.0","vCard":{"properties":[["version",{},"unknown","4.0"]]},"name":{"full":"Probe Card"}}}},"c0"]],"sessionState":"9f961f52"}"#;
+
+/// Wire JSON where ContactCard/parse wraps the parsed card in an array,
+/// similar to Stalwart's CalendarEvent/parse output.
+const ARRAY_WRAPPED_CONTACT_CARD_PARSE_RESPONSE: &str = r#"{"methodResponses":[["ContactCard/parse",{"accountId":"d333333","parsed":{"blob1":[{"emails":{"k1":{"address":"user@example.com","contexts":{"private":true,"internet":true}}},"@type":"Card","version":"1.0","name":{"full":"Probe Card"}}]}},"c0"]],"sessionState":"9f961f52"}"#;
+
+const STALWART_AUTHENTICATED_SESSION_WITH_CONTACTS_AND_PARSE: &str = r#"{"capabilities":{"urn:ietf:params:jmap:core":{"maxSizeUpload":50000000,"maxConcurrentUpload":4,"maxSizeRequest":10000000,"maxConcurrentRequests":4,"maxCallsInRequest":16,"maxObjectsInGet":500,"maxObjectsInSet":500,"collationAlgorithms":["i;ascii-numeric","i;ascii-casemap","i;unicode-casemap"]},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:contacts:parse":{}},"accounts":{"d333333":{"name":"admin","isPersonal":true,"isReadOnly":false,"accountCapabilities":{"urn:ietf:params:jmap:core":{},"urn:ietf:params:jmap:contacts":{},"urn:ietf:params:jmap:contacts:parse":{}}}},"primaryAccounts":{"urn:ietf:params:jmap:contacts":"d333333","urn:ietf:params:jmap:contacts:parse":"d333333"},"username":"admin","apiUrl":"https://mail.example.internal/jmap/","downloadUrl":"https://mail.example.internal/jmap/download/{accountId}/{blobId}/{name}?accept={type}","uploadUrl":"https://mail.example.internal/jmap/upload/{accountId}/","eventSourceUrl":"https://mail.example.internal/jmap/eventsource/","state":"0"}"#;
+
+struct MockContactCardParseTransport {
+    response_body: &'static str,
+}
+
+impl Transport for MockContactCardParseTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        let body = match request.method {
+            HttpMethod::Get => STALWART_AUTHENTICATED_SESSION_WITH_CONTACTS_AND_PARSE
+                .as_bytes()
+                .to_vec(),
+            HttpMethod::Post => self.response_body.as_bytes().to_vec(),
+        };
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body,
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn finding_15_contact_card_parse_tolerates_internet_context() {
+    let client = Client::builder()
+        .transport(MockContactCardParseTransport {
+            response_body: STALWART_CONTACT_CARD_PARSE_RESPONSE_WITH_INTERNET_CONTEXT,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let request = ContactCardParseRequest::new(account_id.clone(), vec![Id::new("blob1")]);
+    let response = client
+        .contact_card_parse(&request)
+        .expect("contact_card_parse must parse Stalwart wire response");
+
+    assert_eq!(response.account_id, account_id);
+    let parsed_map = response.parsed.expect("parsed map must be present");
+    let card = parsed_map
+        .get(&Id::new("blob1"))
+        .expect("card for blob1 must be present");
+
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Probe Card")
+    );
+    let emails = card.emails.as_ref().expect("emails map must be present");
+    let email = emails.get("k1").expect("k1 email must be present");
+    assert_eq!(email.address, "user@example.com");
+
+    // Finding 15: Stalwart promotes TYPE=internet to an unrecognized context key:
+    let contexts = email.contexts.as_ref().expect("contexts must be present");
+    assert_eq!(
+        contexts.get("private"),
+        Some(&serde_json::Value::Bool(true))
+    );
+    assert_eq!(
+        contexts.get("internet"),
+        Some(&serde_json::Value::Bool(true))
+    );
+}
+
+#[test]
+fn finding_15_contact_card_parse_tolerates_array_wrapped_card() {
+    let client = Client::builder()
+        .transport(MockContactCardParseTransport {
+            response_body: ARRAY_WRAPPED_CONTACT_CARD_PARSE_RESPONSE,
+        })
+        .connect("https://mail.example.internal", Credentials::none())
+        .expect("Client::connect succeeds");
+
+    let account_id = Id::new("d333333");
+    let request = ContactCardParseRequest::new(account_id.clone(), vec![Id::new("blob1")]);
+    let response = client
+        .contact_card_parse(&request)
+        .expect("contact_card_parse must parse array-wrapped response");
+
+    let parsed_map = response.parsed.expect("parsed map must be present");
+    let card = parsed_map
+        .get(&Id::new("blob1"))
+        .expect("card for blob1 must be present");
+    assert_eq!(
+        card.name.as_ref().and_then(|n| n.full.as_deref()),
+        Some("Probe Card")
+    );
 }
