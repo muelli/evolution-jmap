@@ -3,15 +3,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
-if ! command -v rpmbuild >/dev/null 2>&1; then
-	echo "ci/rpm.sh: missing required tool: rpmbuild" >&2
-	exit 1
-fi
-if ! command -v rpmlint >/dev/null 2>&1; then
-	echo "ci/rpm.sh: missing required tool: rpmlint" >&2
-	exit 1
-fi
-
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 build_dir="${repo_root}/build-rpm"
@@ -48,6 +39,16 @@ if command -v podman >/dev/null 2>&1 && [[ "${1-}" != "--host" ]]; then
 			./ci/rpm.sh --host
 		'
 fi
+
+if ! command -v rpmbuild >/dev/null 2>&1; then
+	echo "ci/rpm.sh: missing required tool: rpmbuild" >&2
+	exit 1
+fi
+if ! command -v rpmlint >/dev/null 2>&1; then
+	echo "ci/rpm.sh: missing required tool: rpmlint" >&2
+	exit 1
+fi
+
 
 cmake -S "${repo_root}" -B "${build_dir}" -G Ninja
 cmake --build "${build_dir}"
