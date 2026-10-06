@@ -5,7 +5,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Crate extraction assessment
 
-**Date:** 2026-08-28
+**Date:** 2026-08-28 (re-audited 2026-10-06 for Batch 26 publication readiness)
+**Status:** In progress (Batch 26: jmap-proto publication-ready as of 2026-10-06; jmap-client pending)
 
 Which of this workspace's crates could be published to crates.io (or split
 into their own repositories), what that would cost, and what stands in the

@@ -45,6 +45,41 @@
 //! [draft-ietf-jmap-refplus]: https://datatracker.ietf.org/doc/draft-ietf-jmap-refplus/
 //! [draft-ietf-jmap-metadata]: https://datatracker.ietf.org/doc/draft-ietf-jmap-metadata/
 //! [draft-ietf-jmap-mail-sharing]: https://datatracker.ietf.org/doc/draft-ietf-jmap-mail-sharing/
+//!
+//! # Examples
+//!
+//! ```rust
+//! use jmap_proto::id::Id;
+//! use jmap_proto::request::Request;
+//! use serde_json::json;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let request = Request::new([
+//!     "urn:ietf:params:jmap:core",
+//!     "urn:ietf:params:jmap:mail",
+//! ])
+//! .call(
+//!     "Core/echo",
+//!     &json!({
+//!         "message": "hello jmap"
+//!     }),
+//!     "c0",
+//! )?;
+//!
+//! let serialized = serde_json::to_string_pretty(&request)?;
+//! let deserialized: Request = serde_json::from_str(&serialized)?;
+//!
+//! assert_eq!(deserialized.using.len(), 2);
+//! assert_eq!(deserialized.method_calls.len(), 1);
+//! assert_eq!(deserialized.method_calls[0].name, "Core/echo");
+//! assert_eq!(deserialized.method_calls[0].call_id, "c0");
+//! assert_eq!(deserialized.method_calls[0].arguments["message"], "hello jmap");
+//!
+//! let account_id = Id::from("acc123");
+//! assert_eq!(account_id.as_str(), "acc123");
+//! # Ok(())
+//! # }
+//! ```
 
 pub mod blob;
 #[cfg(feature = "calendars")]
