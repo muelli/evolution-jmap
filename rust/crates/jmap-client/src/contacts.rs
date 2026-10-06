@@ -175,23 +175,15 @@ impl Client {
     /// `ContactCard/parse` (RFC 9610 §3.4): reads an uploaded vCard blob
     /// into a `ContactCard`, without filing it into any address book.
     /// Tolerates server implementations that wrap the parsed card in a
-    /// single-element array.
+    /// single-element array; a blob that parses to more than one card
+    /// reports as `notParsable` rather than silently keeping just the
+    /// first (see `demote_multi_element_parsed_blobs`).
     pub fn contact_card_parse(
         &self,
         request: &ContactCardParseRequest,
     ) -> Result<ContactCardParseResponse, Error> {
         let mut arguments = self.single_call(USING, "ContactCard/parse", request)?;
-        if let Some(parsed) = arguments.get_mut("parsed").and_then(Value::as_object_mut) {
-            for val in parsed.values_mut() {
-                if val.is_array() {
-                    let mut arr = match std::mem::replace(val, Value::Null) {
-                        Value::Array(arr) => arr,
-                        _ => unreachable!(),
-                    };
-                    *val = arr.drain(..).next().unwrap_or(Value::Null);
-                }
-            }
-        }
+        demote_multi_element_parsed_blobs(&mut arguments);
         Ok(serde_json::from_value(arguments)?)
     }
 
@@ -213,5 +205,45 @@ pub(crate) fn set_failure(set_error: Option<&SetError>) -> Error {
     match set_error {
         Some(set_error) => Error::Set(set_error.clone()),
         None => Error::Protocol("/set response reports neither success nor failure".to_owned()),
+    }
+}
+
+/// Stalwart wraps a `/parse` blob's result in a JSON array rather than the
+/// bare object the spec models (observed on both `CalendarEvent/parse` and
+/// `ContactCard/parse`), with one array element per distinct top-level
+/// entry it found in the blob: a single element for the common case, but
+/// more than one for a blob that bundles several events or cards. The typed
+/// response here models exactly one parsed value per blob id, so a
+/// single-element array is unwrapped transparently; an array holding zero
+/// or more than one element cannot be represented that way without
+/// silently discarding entries, so its blob id is moved to `notParsable`
+/// instead of letting only the first element survive.
+pub(crate) fn demote_multi_element_parsed_blobs(arguments: &mut Value) {
+    let Some(obj) = arguments.as_object_mut() else {
+        return;
+    };
+    let Some(parsed) = obj.get_mut("parsed").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let mut unrepresentable_ids = Vec::new();
+    for (id, val) in parsed.iter_mut() {
+        if let Value::Array(arr) = val {
+            if arr.len() == 1 {
+                *val = arr.pop().expect("len checked above");
+            } else {
+                unrepresentable_ids.push(id.clone());
+            }
+        }
+    }
+    for id in &unrepresentable_ids {
+        parsed.remove(id);
+    }
+    if !unrepresentable_ids.is_empty() {
+        let not_parsable = obj
+            .entry("notParsable")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Value::Array(not_parsable) = not_parsable {
+            not_parsable.extend(unrepresentable_ids.into_iter().map(Value::String));
+        }
     }
 }
