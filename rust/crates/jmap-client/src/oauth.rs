@@ -281,15 +281,15 @@ pub struct ClientRegistrationRequest<'a> {
 
 /// A client registered with a deployment, as RFC 7591 §3.2.1 hands one back.
 ///
-/// Only [`ClientRegistration::parse`] and [`register_client`] construct one,
+/// Only `ClientRegistration::parse` and [`register_client`] construct one,
 /// so a value of this type has already been checked for the one thing this
-/// client cannot proceed without — a `client_id`.
+/// client cannot proceed without: a `client_id`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientRegistration {
     /// RFC 7591 §3.2.1's one required response field.
     pub client_id: String,
     /// Present if the server issued one despite this client asking to
-    /// register as public (see [`CLIENT_AUTH_METHOD`]) — a server is free to
+    /// register as public (see `CLIENT_AUTH_METHOD`), a server is free to
     /// ignore that request, and a secret this client never sends back is not
     /// a reason to refuse the account.
     pub client_secret: Option<String>,

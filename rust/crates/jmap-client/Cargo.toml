@@ -3,7 +3,11 @@
 
 [package]
 name = "evolution-jmap-client"
-description = "Blocking JMAP client for the Evolution JMAP plugin"
+description = "Blocking JMAP client with pluggable transport, OAuth 2.0 discovery/PKCE, and mail, contacts, and calendars support"
+repository = "https://gitlab.gnome.org/GNOME/evolution-jmap"
+readme = "README.md"
+keywords = ["jmap", "client", "email", "calendar", "contacts"]
+categories = ["email", "network-programming", "api-bindings"]
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -24,7 +28,7 @@ transport-ureq = ["dep:ureq"]
 live-server = []
 
 [dependencies]
-evolution-jmap-proto = { workspace = true }
+evolution-jmap-proto = { path = "../jmap-proto", version = "0.4.1" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ureq = { workspace = true, optional = true }

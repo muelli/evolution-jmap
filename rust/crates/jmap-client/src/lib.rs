@@ -14,6 +14,74 @@
 //!
 //! [`Transport`]: transport::Transport
 //! [`CancelFlag`]: transport::CancelFlag
+//!
+//! # Minimal Working Example
+//!
+//! ```rust
+//! use std::time::Duration;
+//! use jmap_client::{Client, Credentials};
+//! use jmap_client::transport::{HttpRequest, HttpResponse, Transport, TransportError};
+//!
+//! struct MockTransport;
+//!
+//! impl Transport for MockTransport {
+//!     fn execute(&self, req: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+//!         Ok(HttpResponse {
+//!             status: 200,
+//!             content_type: Some("application/json".to_string()),
+//!             body: br#"{
+//!                 "capabilities": {
+//!                     "urn:ietf:params:jmap:core": {
+//!                         "maxSizeUpload": 50000000,
+//!                         "maxConcurrentUpload": 4,
+//!                         "maxSizeRequest": 10000000,
+//!                         "maxConcurrentRequests": 4,
+//!                         "maxCallsInRequest": 16,
+//!                         "maxObjectsInGet": 500,
+//!                         "maxObjectsInSet": 500,
+//!                         "collationAlgorithms": ["i;ascii-numeric", "i;ascii-casemap", "i;octet"]
+//!                     }
+//!                 },
+//!                 "accounts": {
+//!                     "acc1": {
+//!                         "name": "user@example.com",
+//!                         "isPersonal": true,
+//!                         "isReadOnly": false,
+//!                         "accountCapabilities": {
+//!                             "urn:ietf:params:jmap:core": {}
+//!                         }
+//!                     }
+//!                 },
+//!                 "primaryAccounts": {
+//!                     "urn:ietf:params:jmap:core": "acc1"
+//!                 },
+//!                 "username": "user@example.com",
+//!                 "apiUrl": "https://example.com/api",
+//!                 "downloadUrl": "https://example.com/download/{blobId}",
+//!                 "uploadUrl": "https://example.com/upload",
+//!                 "eventSourceUrl": "https://example.com/events",
+//!                 "state": "init-state"
+//!             }"#.to_vec(),
+//!             final_url: req.url.to_string(),
+//!         })
+//!     }
+//! }
+//!
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     let client = Client::builder()
+//!         .transport(MockTransport)
+//!         .timeout(Duration::from_secs(10))
+//!         .connect("https://example.com", Credentials::bearer("secret-token"))?;
+//!
+//!     assert!(!client.is_anonymous());
+//!     assert_eq!(client.session().username, "user@example.com");
+//!     assert_eq!(
+//!         client.primary_account("urn:ietf:params:jmap:core")?.as_str(),
+//!         "acc1"
+//!     );
+//!     Ok(())
+//! }
+//! ```
 
 mod blob;
 mod calendars;
