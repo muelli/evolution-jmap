@@ -808,3 +808,30 @@ fn finding_15_contact_card_parse_tolerates_array_wrapped_card() {
         Some("Probe Card")
     );
 }
+
+#[test]
+fn stalwart_max_size_upload_advertised_and_limit_plus_one_refused() {
+    let server = MockServer::builder().size_upload(50_000_000).start();
+    let account_id = server.account_id();
+    let client = Client::connect(server.origin(), Credentials::none()).unwrap();
+
+    assert_eq!(client.session().max_size_upload(), Some(50_000_000));
+
+    // Limit+1 is refused client-side before sending:
+    let limit = 50_000_000;
+    let oversized = vec![0u8; (limit + 1) as usize];
+    let err = client
+        .upload_blob(&account_id, "application/octet-stream", oversized)
+        .expect_err("upload exceeding maxSizeUpload must be refused");
+
+    match err {
+        Error::TooLarge { size, limit: l } => {
+            assert_eq!(l, 50_000_000);
+            assert_eq!(size, 50_000_001);
+            let msg = err.to_string();
+            assert!(msg.contains("50000001"));
+            assert!(msg.contains("50000000"));
+        }
+        other => panic!("expected Error::TooLarge, got {other:?}"),
+    }
+}

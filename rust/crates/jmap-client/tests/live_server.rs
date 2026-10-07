@@ -63,7 +63,7 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use jmap_client::eventsource::{SharedHeaders, expand_url};
-use jmap_client::{CancelFlag, Client, Credentials, Error, EventSourceSubscription};
+use jmap_client::{CancelFlag, Client, Credentials, Error, EventSourceSubscription, limits};
 use jmap_proto::Id;
 use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{
@@ -92,6 +92,7 @@ use jmap_proto::session::{
 use jmap_proto::sieve::{CAPABILITY_SIEVE, SieveScript};
 use jmap_proto::state::UtcDate;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 const CAPABILITY_CONTACTS_PARSE: &str = "urn:ietf:params:jmap:contacts:parse";
 
@@ -4546,4 +4547,155 @@ fn contact_card_parse_promotes_type_internet_to_context_through_the_real_api() {
         Some(&serde_json::Value::Bool(true)),
         "Stalwart v1.0.0 promotes TYPE=internet to context key 'internet' (Finding 15)"
     );
+}
+
+/// Reads current resident set size (VmRSS) and peak resident set size (VmHWM)
+/// in kilobytes from Linux /proc/self/status.
+fn current_and_peak_rss_kb() -> (u64, u64) {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let mut vmrss = 0;
+    let mut vmhwm = 0;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:")
+            && let Some(val) = rest.trim_start().strip_suffix("kB")
+        {
+            vmrss = val.trim().parse::<u64>().unwrap_or(0);
+        } else if let Some(rest) = line.strip_prefix("VmHWM:")
+            && let Some(val) = rest.trim_start().strip_suffix("kB")
+        {
+            vmhwm = val.trim().parse::<u64>().unwrap_or(0);
+        }
+    }
+    (vmrss, vmhwm)
+}
+
+/// Batch 27: Large blob transfers, byte fidelity, memory/RSS, and limit edges.
+///
+/// Uploads and downloads blobs across 1 MB, 10 MB, and 50 MB (the advertised
+/// maxSizeUpload limit), validating:
+/// 1. Byte fidelity: SHA-256 hashes of downloaded bytes match uploaded bytes.
+/// 2. Memory / RSS characteristics: tracks VmRSS and VmHWM at each stage.
+/// 3. Wall-clock timing for upload and download.
+/// 4. Limit+1 enforcement: client refuses upload exceeding maxSizeUpload
+///    before sending, reporting both size and limit in Error::TooLarge.
+/// 5. Download ceiling enforcement: download_blob with a max_bytes ceiling
+///    below blob size returns Error::ResponseTooLarge.
+#[test]
+#[ignore = "touches the live server; see tests/live_server.rs header"]
+fn large_blob_upload_download_fidelity_rss_and_limits_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping large-blob test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write account must have the mail capability");
+
+    let upload_limit = client
+        .session()
+        .max_size_upload()
+        .expect("session core capability must advertise maxSizeUpload");
+    assert_eq!(
+        upload_limit, 50_000_000,
+        "Stalwart v1.0.0 advertises maxSizeUpload of 50 MB (50,000,000 bytes)"
+    );
+
+    // 1. Upload and download blobs of 1 MB, 10 MB, and 50 MB (the limit).
+    let test_sizes: [usize; 3] = [1_000_000, 10_000_000, upload_limit as usize];
+
+    let mut uploaded_blobs = Vec::new();
+
+    for size in test_sizes {
+        let (rss_init, _hwm_init) = current_and_peak_rss_kb();
+
+        let payload: Vec<u8> = (0..size).map(|n| (n % 251) as u8).collect();
+        let expected_hash = Sha256::digest(&payload);
+
+        let (rss_alloc, _hwm_alloc) = current_and_peak_rss_kb();
+
+        let t_upload_start = Instant::now();
+        let upload = client
+            .upload_blob(&account_id, "application/octet-stream", payload)
+            .unwrap_or_else(|e| panic!("failed to upload {size}-byte blob to live server: {e}"));
+        let upload_dur = t_upload_start.elapsed();
+
+        let (rss_uploaded, _hwm_uploaded) = current_and_peak_rss_kb();
+
+        assert_eq!(upload.size, size as u64);
+        uploaded_blobs.push((upload.blob_id.clone(), size));
+
+        let t_download_start = Instant::now();
+        let downloaded = client
+            .download_blob(
+                &account_id,
+                &upload.blob_id,
+                &format!("probe_{size}.bin"),
+                limits::MAX_BLOB_BYTES,
+            )
+            .unwrap_or_else(|e| {
+                panic!("failed to download {size}-byte blob from live server: {e}")
+            });
+        let download_dur = t_download_start.elapsed();
+
+        let (rss_downloaded, hwm_downloaded) = current_and_peak_rss_kb();
+
+        assert_eq!(
+            downloaded.len(),
+            size,
+            "downloaded blob byte length must match uploaded size"
+        );
+        let actual_hash = Sha256::digest(&downloaded);
+        assert_eq!(
+            actual_hash, expected_hash,
+            "SHA-256 digest of downloaded blob must match uploaded bytes for size {size}"
+        );
+
+        eprintln!(
+            "Large blob transfer {size} bytes ({:.2} MB): upload {:.3}s, download {:.3}s | RSS: init={rss_init}kB, payload_alloc={rss_alloc}kB, after_upload={rss_uploaded}kB, after_download={rss_downloaded}kB | Peak RSS (VmHWM): {hwm_downloaded}kB",
+            size as f64 / 1_000_000.0,
+            upload_dur.as_secs_f64(),
+            download_dur.as_secs_f64(),
+        );
+    }
+
+    // 2. Limit + 1 behaviour:
+    // Attempting to upload upload_limit + 1 bytes must be refused client-side
+    // before sending over the wire, returning Error::TooLarge with both numbers.
+    let oversized = vec![0x5a; (upload_limit + 1) as usize];
+    let err = client
+        .upload_blob(&account_id, "application/octet-stream", oversized)
+        .expect_err("upload exceeding maxSizeUpload must be refused");
+
+    match err {
+        Error::TooLarge { size, limit } => {
+            assert_eq!(limit, upload_limit);
+            assert_eq!(size, upload_limit + 1);
+            let msg = err.to_string();
+            assert!(
+                msg.contains(&format!("{size}")),
+                "error message must communicate the attempted size to the caller: {msg}"
+            );
+            assert!(
+                msg.contains(&format!("{limit}")),
+                "error message must communicate the account's upload limit to the caller: {msg}"
+            );
+        }
+        other => panic!("expected Error::TooLarge for limit+1 upload, got: {other:?}"),
+    }
+
+    // 3. Download ceiling enforcement:
+    // If a caller specifies max_bytes smaller than the blob size, download_blob
+    // must refuse with Error::ResponseTooLarge, reporting the caller's ceiling.
+    let (first_blob_id, first_size) = &uploaded_blobs[0];
+    let ceiling = (*first_size / 2) as u64;
+    let download_err = client
+        .download_blob(&account_id, first_blob_id, "ceiling_test.bin", ceiling)
+        .expect_err("downloading blob larger than max_bytes ceiling must be refused");
+
+    match download_err {
+        Error::ResponseTooLarge { limit } => {
+            assert_eq!(limit, ceiling);
+        }
+        other => panic!("expected Error::ResponseTooLarge, got: {other:?}"),
+    }
 }

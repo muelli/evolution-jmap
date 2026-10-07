@@ -562,7 +562,7 @@ fn every_vtable_slot_dispatches_to_the_function_this_crate_wrote_into_it() {
                 service,
                 source,
                 c"a title".as_ptr(),
-                c"https://probe.invalid/done?code=x".as_ptr(),
+                c"https://probe.invalid/done".as_ptr(),
                 ptr::null(),
                 &mut code,
             ),
