@@ -70,6 +70,8 @@ pub fn rebase_urls_from_env() -> bool {
 
 pub struct ClientBuilder {
     timeout: Duration,
+    connect_timeout: Option<Duration>,
+    read_timeout: Option<Duration>,
     transport: Option<Box<dyn Transport>>,
     cancel: Option<CancelFlag>,
     rebase_urls_to_origin: bool,
@@ -80,6 +82,8 @@ impl Default for ClientBuilder {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(30),
+            connect_timeout: None,
+            read_timeout: None,
             transport: None,
             cancel: None,
             rebase_urls_to_origin: false,
@@ -89,6 +93,21 @@ impl Default for ClientBuilder {
 }
 
 impl ClientBuilder {
+    /// Set the connect timeout for establishing HTTP connections.
+    /// Defaults to the total timeout if not explicitly set.
+    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = Some(timeout);
+        self
+    }
+
+    /// Set the read timeout for receiving HTTP response headers and bodies.
+    /// Defaults to the total timeout if not explicitly set.
+    pub fn read_timeout(mut self, timeout: Duration) -> Self {
+        self.read_timeout = Some(timeout);
+        self
+    }
+
+    /// Set the total end-to-end timeout for HTTP operations.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -142,7 +161,13 @@ impl ClientBuilder {
             None => {
                 #[cfg(feature = "transport-ureq")]
                 {
-                    Box::new(crate::transport::UreqTransport::new(self.timeout))
+                    let connect = self.connect_timeout.unwrap_or(self.timeout);
+                    let read = self.read_timeout.unwrap_or(self.timeout);
+                    Box::new(crate::transport::UreqTransport::with_timeouts(
+                        connect,
+                        read,
+                        self.timeout,
+                    ))
                 }
                 #[cfg(not(feature = "transport-ureq"))]
                 {

@@ -431,6 +431,13 @@ const ALLOWED_FUNCTIONS: &[&str] = &[
     // instantiates.
     "camel_sasl_get_type",
     "camel_sasl_xoauth2_get_type",
+    // Upstream's own dynamically-configured XOAUTH2 mechanism (SASL name
+    // "OAuth2Dynamic"), e-d-s `bf6e074`, item 91's replacement for this
+    // provider's `CamelSaslXOAuth2Jmap` on a host whose EDS has it. Only the
+    // type accessor, not the type itself: like `CamelSaslXOAuth2Google` and
+    // its two siblings, this is one of EDS's own built-in subclasses that
+    // nothing here derives from.
+    "camel_sasl_xoauth2_dynamic_get_type",
     "camel_sasl_authtype",
     "camel_sasl_is_xoauth2_alias",
     // `camel_folder_info_new` and `_free` are the allocator pair the folder
@@ -807,6 +814,19 @@ const EDS_FEATURES: &[(&str, &str)] = &[
         "eds_credential_store_id",
         "e_source_authentication_set_credential_store_id",
     ),
+    // e-d-s `bf6e074` (merged upstream 2026-10-07, plus `efe25dc` for
+    // `e_util_fill_random_bytes`; `Since: 3.64`, not yet released,
+    // master-only headers only): `ESourceOAuth2Client` is the keyfile group
+    // ("OAuth2 Client") an account configured for upstream's own dynamic
+    // OAuth 2.0 support (method "OAuth2Dynamic") writes its client-id,
+    // client-secret, authorization-endpoint, token-endpoint, redirect-uri,
+    // scope, resource and issuer into, instead of this provider's own "JMAP
+    // OAuth2" group. Detected the same way as `eds_credential_store_id`: the
+    // type's own accessor, not a version comparison. `ESourceOAuth2Client`
+    // and `e_source_oauth2_client_get_type` both already match the
+    // `ESource.*`/`e_source_.*` wildcards above, so nothing else needs
+    // adding here for bindgen to emit them once a header declares them.
+    ("eds_oauth2_dynamic", "e_source_oauth2_client_get_type"),
     // 3.62 removed `camel_data_cache_add` outright in favour of
     // `camel_data_cache_add_atomic`/`commit_atomic`/`discard_atomic`: a write
     // under a temporary name in the cache directory, renamed into place only

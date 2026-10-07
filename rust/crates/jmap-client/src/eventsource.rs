@@ -29,6 +29,7 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -44,6 +45,31 @@ use crate::transport::CancelFlag;
 const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_READ_HEAD_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_STREAM_READ_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Timeouts configured for an [`EventSourceSubscription`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventSourceTimeouts {
+    /// Maximum duration allowed for the initial TCP connection.
+    pub connect: Duration,
+    /// Maximum duration allowed for reading the initial HTTP response head.
+    pub read_head: Duration,
+    /// Maximum duration allowed between SSE events while streaming.
+    pub stream_read: Duration,
+}
+
+impl Default for EventSourceTimeouts {
+    fn default() -> Self {
+        Self {
+            connect: DEFAULT_CONNECT_TIMEOUT,
+            read_head: DEFAULT_READ_HEAD_TIMEOUT,
+            stream_read: DEFAULT_STREAM_READ_TIMEOUT,
+        }
+    }
+}
 
 /// RFC 8620 §7.3's `types` value meaning "push every type", as opposed to a
 /// comma-separated list of the ones the subscriber cares about.
@@ -75,33 +101,53 @@ impl SharedHeaders {
     }
 }
 
+/// An item received over an [`EventSourceSubscription`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum EventSourceItem {
+    /// A parsed state change event pushed by the server.
+    State(StateChange),
+    /// The connection dropped and was re-established.
+    Reconnected {
+        /// The last event ID seen before reconnection, if any.
+        last_event_id: Option<String>,
+        /// The total number of successful reconnections so far.
+        reconnect_count: u64,
+    },
+}
+
 /// A live subscription to one account's `eventSourceUrl`, kept alive on its
 /// own thread; see the module doc.
 pub struct EventSourceSubscription {
-    receiver: Receiver<StateChange>,
+    receiver: Receiver<EventSourceItem>,
     cancel: CancelFlag,
     socket: Arc<Mutex<Option<TcpStream>>>,
     handle: Option<JoinHandle<()>>,
     headers: SharedHeaders,
+    last_event_id: Arc<Mutex<Option<String>>>,
+    reconnect_count: Arc<AtomicU64>,
 }
 
 impl EventSourceSubscription {
-    /// Start listening on `url` — a full `GET` target, i.e. the session's
-    /// `eventSourceUrl` already put through [`expand_url`]. A missing port is
-    /// defaulted from the scheme, since a real server's `eventSourceUrl`
-    /// names none.
-    ///
-    /// `headers` are sent on every connection attempt, read fresh each time
-    /// rather than fixed for the life of the subscription — see
-    /// [`set_headers`](Self::set_headers).
-    pub fn start(url: String, headers: SharedHeaders, cancel: CancelFlag) -> Self {
+    /// Start listening on `url` with explicit timeout configuration.
+    pub fn start_with_timeouts(
+        url: String,
+        headers: SharedHeaders,
+        cancel: CancelFlag,
+        timeouts: EventSourceTimeouts,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel();
         let socket = Arc::new(Mutex::new(None));
+        let last_event_id = Arc::new(Mutex::new(None));
+        let reconnect_count = Arc::new(AtomicU64::new(0));
         let handle = {
             let cancel = cancel.clone();
-            let socket = Arc::clone(&socket);
             let headers = headers.clone();
-            thread::spawn(move || run(url, headers, cancel, socket, sender))
+            let ctx = ConnectionContext {
+                socket: Arc::clone(&socket),
+                last_id_slot: Arc::clone(&last_event_id),
+                reconnect_count: Arc::clone(&reconnect_count),
+            };
+            thread::spawn(move || run(url, headers, cancel, sender, ctx, timeouts))
         };
         Self {
             receiver,
@@ -109,16 +155,72 @@ impl EventSourceSubscription {
             socket,
             handle: Some(handle),
             headers,
+            last_event_id,
+            reconnect_count,
         }
     }
 
+    /// Start listening on `url` (a full `GET` target: the session's
+    /// `eventSourceUrl` already put through [`expand_url`]). A missing port is
+    /// defaulted from the scheme, since a real server's `eventSourceUrl`
+    /// names none.
+    ///
+    /// `headers` are sent on every connection attempt, read fresh each time
+    /// rather than fixed for the life of the subscription; see
+    /// [`set_headers`](Self::set_headers).
+    pub fn start(url: String, headers: SharedHeaders, cancel: CancelFlag) -> Self {
+        Self::start_with_timeouts(url, headers, cancel, EventSourceTimeouts::default())
+    }
+
     /// Block until a [`StateChange`] arrives or `timeout` elapses.
+    ///
+    /// If a reconnection occurs while waiting, this method continues waiting
+    /// for a [`StateChange`] until `timeout` expires. To observe reconnection
+    /// notifications directly, use [`recv_item_timeout`](Self::recv_item_timeout)
+    /// or inspect [`reconnect_count`](Self::reconnect_count).
     pub fn recv_timeout(&self, timeout: Duration) -> Option<StateChange> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let remaining = deadline - now;
+            match self.receiver.recv_timeout(remaining).ok()? {
+                EventSourceItem::State(change) => return Some(change),
+                EventSourceItem::Reconnected { .. } => continue,
+            }
+        }
+    }
+
+    /// Block until an [`EventSourceItem`] arrives or `timeout` elapses.
+    pub fn recv_item_timeout(&self, timeout: Duration) -> Option<EventSourceItem> {
         self.receiver.recv_timeout(timeout).ok()
     }
 
+    /// Return the last event ID received from the server, if any.
+    pub fn last_event_id(&self) -> Option<String> {
+        self.last_event_id
+            .lock()
+            .expect("last event id lock poisoned")
+            .clone()
+    }
+
+    /// Return the total number of successful reconnections so far.
+    pub fn reconnect_count(&self) -> u64 {
+        self.reconnect_count.load(Ordering::SeqCst)
+    }
+
+    /// Drop the active TCP connection from the client side by shutting down
+    /// the socket, without cancelling the subscription.
+    pub fn drop_connection(&self) {
+        if let Some(stream) = self.socket.lock().expect("socket lock poisoned").as_ref() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+    }
+
     /// Replace the headers (typically `Authorization`) sent on future
-    /// reconnect attempts — e.g. after a
+    /// reconnect attempts: e.g. after a
     /// [`Client::set_credentials`](crate::Client::set_credentials) installs
     /// a fresh OAuth 2.0 access token on the backend's connection, so a
     /// subscription refused with a stale token picks up the new one on its
@@ -130,7 +232,7 @@ impl EventSourceSubscription {
 
     /// Stop listening: cancel, shut down the current socket (if any) so a
     /// blocking read on it returns immediately, and join the background
-    /// thread. Idempotent; also runs on [`Drop`] — calling it explicitly is
+    /// thread. Idempotent; also runs on [`Drop`]. Calling it explicitly is
     /// only useful to observe completion at a chosen point.
     pub fn stop(&mut self) {
         self.cancel.cancel();
@@ -149,6 +251,13 @@ impl Drop for EventSourceSubscription {
     }
 }
 
+/// Internal handles bundled together across reconnect attempts.
+struct ConnectionContext {
+    socket: Arc<Mutex<Option<TcpStream>>>,
+    last_id_slot: Arc<Mutex<Option<String>>>,
+    reconnect_count: Arc<AtomicU64>,
+}
+
 /// Reconnect loop: keep opening `url` until `cancel` fires. Reads `headers`
 /// fresh on every attempt, so a [`SharedHeaders::set`] reaches the very next
 /// one.
@@ -156,16 +265,28 @@ fn run(
     url: String,
     headers: SharedHeaders,
     cancel: CancelFlag,
-    socket: Arc<Mutex<Option<TcpStream>>>,
-    sender: Sender<StateChange>,
+    sender: Sender<EventSourceItem>,
+    ctx: ConnectionContext,
+    timeouts: EventSourceTimeouts,
 ) {
     let mut backoff = INITIAL_BACKOFF;
+    let mut connection_attempts: u64 = 0;
     while !cancel.is_cancelled() {
-        match connect_and_stream(&url, &headers.snapshot(), &cancel, &socket, &sender) {
+        let is_reconnect = connection_attempts > 0;
+        match connect_and_stream(
+            &url,
+            &headers.snapshot(),
+            &cancel,
+            &sender,
+            &ctx,
+            is_reconnect,
+            timeouts,
+        ) {
             Ok(()) => backoff = INITIAL_BACKOFF,
             Err(error) => tracing::debug!(%error, url, "eventsource connection ended"),
         }
-        *socket.lock().expect("socket lock poisoned") = None;
+        connection_attempts += 1;
+        *ctx.socket.lock().expect("socket lock poisoned") = None;
         if cancel.is_cancelled() {
             break;
         }
@@ -193,16 +314,42 @@ fn connect_and_stream(
     url: &str,
     headers: &[(String, String)],
     cancel: &CancelFlag,
-    socket_slot: &Arc<Mutex<Option<TcpStream>>>,
-    sender: &Sender<StateChange>,
+    sender: &Sender<EventSourceItem>,
+    ctx: &ConnectionContext,
+    is_reconnect: bool,
+    timeouts: EventSourceTimeouts,
 ) -> io::Result<()> {
+    use std::net::ToSocketAddrs;
+
     let parts = parse_url(url)
         .ok_or_else(|| io::Error::other(format!("eventsource url is not http(s)://: {url}")))?;
-    let stream = TcpStream::connect(&parts.dial)?;
+    let mut connected_stream = None;
+    let mut last_error = None;
+    for addr in parts.dial.to_socket_addrs()? {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        match TcpStream::connect_timeout(&addr, timeouts.connect) {
+            Ok(s) => {
+                connected_stream = Some(s);
+                break;
+            }
+            Err(e) => {
+                last_error = Some(e);
+            }
+        }
+    }
+    let stream = connected_stream.ok_or_else(|| {
+        last_error.unwrap_or_else(|| io::Error::other(format!("could not resolve {}", parts.dial)))
+    })?;
+
+    stream.set_read_timeout(Some(timeouts.read_head))?;
+    stream.set_write_timeout(Some(timeouts.connect))?;
+
     // Stored before the TLS handshake (if any): `shutdown()` on this clone
-    // aborts the handshake or any in-flight read/write on the *other* clone
+    // aborts the handshake or any in-flight read/write on the other clone
     // `Conn` goes on to own, since both are handles onto the same socket.
-    *socket_slot.lock().expect("socket lock poisoned") = Some(stream.try_clone()?);
+    *ctx.socket.lock().expect("socket lock poisoned") = Some(stream.try_clone()?);
     if cancel.is_cancelled() {
         return Ok(());
     }
@@ -225,10 +372,24 @@ fn connect_and_stream(
         "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: text/event-stream\r\n",
         parts.path_and_query, parts.authority
     );
+    let mut sent_last_event_id = false;
     for (name, value) in headers {
+        if name.eq_ignore_ascii_case("last-event-id") {
+            sent_last_event_id = true;
+        }
         request.push_str(name);
         request.push_str(": ");
         request.push_str(value);
+        request.push_str("\r\n");
+    }
+    let last_event_id = ctx
+        .last_id_slot
+        .lock()
+        .expect("last id lock poisoned")
+        .clone();
+    if !sent_last_event_id && let Some(ref id) = last_event_id {
+        request.push_str("Last-Event-ID: ");
+        request.push_str(id);
         request.push_str("\r\n");
     }
     request.push_str("\r\n");
@@ -236,8 +397,26 @@ fn connect_and_stream(
 
     let mut reader = BufReader::new(conn);
     read_response_head(&mut reader)?;
+
+    if is_reconnect {
+        let count = ctx.reconnect_count.fetch_add(1, Ordering::SeqCst) + 1;
+        let last_id = ctx
+            .last_id_slot
+            .lock()
+            .expect("last id lock poisoned")
+            .clone();
+        let _ = sender.send(EventSourceItem::Reconnected {
+            last_event_id: last_id,
+            reconnect_count: count,
+        });
+    }
+
+    if let Some(sock) = ctx.socket.lock().expect("socket lock poisoned").as_ref() {
+        let _ = sock.set_read_timeout(Some(timeouts.stream_read));
+    }
+
     let mut body = BufReader::new(ChunkedBody::new(reader));
-    stream_events(&mut body, cancel, sender)
+    stream_events(&mut body, cancel, sender, &ctx.last_id_slot)
 }
 
 /// The two shapes a connection can take once a scheme is known — `Read`/
@@ -460,17 +639,19 @@ fn read_response_head(reader: &mut impl BufRead) -> io::Result<()> {
 
 /// Read SSE frames (RFC 8620 §7.3 example: `event: state` / `data: {…}`,
 /// blank-line terminated) off `reader`, forwarding a `state` event's `data`
-/// — parsed as a [`StateChange`] — to `sender`. Returns `Ok(())` on a clean
+/// (parsed as a [`StateChange`]) to `sender`. Returns `Ok(())` on a clean
 /// end (terminal chunk / EOF) as readily as on cancellation: both just mean
 /// "stop reading", and [`run`] treats every `Ok`/`Err` return alike, as a
 /// reason to reconnect.
 fn stream_events(
     reader: &mut impl BufRead,
     cancel: &CancelFlag,
-    sender: &Sender<StateChange>,
+    sender: &Sender<EventSourceItem>,
+    last_id_slot: &Arc<Mutex<Option<String>>>,
 ) -> io::Result<()> {
     let mut event = String::new();
     let mut data = String::new();
+    let mut frame_id: Option<Option<String>> = None;
     let mut line = String::new();
     loop {
         if cancel.is_cancelled() {
@@ -482,9 +663,12 @@ fn stream_events(
         }
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.is_empty() {
+            if let Some(maybe_id) = frame_id.take() {
+                *last_id_slot.lock().expect("last id lock poisoned") = maybe_id;
+            }
             if event == "state"
                 && let Ok(change) = serde_json::from_str::<StateChange>(&data)
-                && sender.send(change).is_err()
+                && sender.send(EventSourceItem::State(change)).is_err()
             {
                 return Ok(());
             }
@@ -496,6 +680,15 @@ fn stream_events(
             event = value.trim().to_owned();
         } else if let Some(value) = trimmed.strip_prefix("data:") {
             data = value.trim().to_owned();
+        } else if let Some(value) = trimmed.strip_prefix("id:") {
+            let val = value.trim();
+            if val.is_empty() {
+                frame_id = Some(None);
+            } else {
+                frame_id = Some(Some(val.to_owned()));
+            }
+        } else if trimmed == "id" {
+            frame_id = Some(None);
         }
     }
 }
@@ -720,13 +913,39 @@ mod tests {
         let raw = b"event: ping\ndata: {\"interval\":60}\n\nevent: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}\n\n";
         let mut reader = BufReader::new(Cursor::new(&raw[..]));
         let (sender, receiver) = mpsc::channel();
-        stream_events(&mut reader, &CancelFlag::new(), &sender).expect("no I/O error");
+        let last_id_slot = Arc::new(Mutex::new(None));
+        stream_events(&mut reader, &CancelFlag::new(), &sender, &last_id_slot)
+            .expect("no I/O error");
         let received = receiver.try_recv().expect("one state event forwarded");
-        assert_eq!(received, changed("a1", "Mailbox", "1"));
+        assert_eq!(
+            received,
+            EventSourceItem::State(changed("a1", "Mailbox", "1"))
+        );
         assert!(
             receiver.try_recv().is_err(),
             "the ping must not be forwarded"
         );
+    }
+
+    #[test]
+    fn stream_events_tracks_and_resets_event_id() {
+        let raw = b"id: 42\nevent: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"1\"}}}\n\n\
+                    id:\nevent: state\ndata: {\"@type\":\"StateChange\",\"changed\":{\"a1\":{\"Mailbox\":\"2\"}}}\n\n";
+        let mut reader = BufReader::new(Cursor::new(&raw[..]));
+        let (sender, receiver) = mpsc::channel();
+        let last_id_slot = Arc::new(Mutex::new(None));
+        stream_events(&mut reader, &CancelFlag::new(), &sender, &last_id_slot)
+            .expect("no I/O error");
+
+        let first = receiver.try_recv().expect("first event");
+        assert_eq!(first, EventSourceItem::State(changed("a1", "Mailbox", "1")));
+
+        let second = receiver.try_recv().expect("second event");
+        assert_eq!(
+            second,
+            EventSourceItem::State(changed("a1", "Mailbox", "2"))
+        );
+        assert_eq!(*last_id_slot.lock().unwrap(), None);
     }
 
     #[test]

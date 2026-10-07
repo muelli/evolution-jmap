@@ -114,6 +114,24 @@ fn the_secret_keys_are_the_names_eds_stores_a_token_under() {
 }
 
 // ---------------------------------------------------------------------------
+// Feature detection, not vtable dispatch: whether this EDS has upstream's
+// OAuth2Dynamic pieces at all (item 91, e-d-s `bf6e074`).
+
+/// `e_source_oauth2_client_get_type` is the marker `eds-sys/build.rs` probes
+/// for the `eds_oauth2_dynamic` cfg. No header this crate has ever built
+/// against declares it (`Since: 3.64`, upstream master-only as of
+/// 2026-10-07), so this test, gated on the cfg being absent, is the one that
+/// should compile and run on this EDS. Before `build.rs` declared the cfg,
+/// naming it here at all was an unexpected-cfg condition under this crate's
+/// `-D warnings`, which is the red this test was written against. A future
+/// EDS that does declare the marker stops compiling this test, which is the
+/// signal to write its `#[cfg(eds_oauth2_dynamic)]` sibling, the same way
+/// `tests/contacts.rs` carries one test per side of `eds_death_date_field`.
+#[test]
+#[cfg(not(eds_oauth2_dynamic))]
+fn eds_oauth2_dynamic_is_not_yet_available_on_this_eds() {}
+
+// ---------------------------------------------------------------------------
 // The interface itself.
 
 /// An interface, which is what puts it out of `tests/layout.rs`'s reach, and
