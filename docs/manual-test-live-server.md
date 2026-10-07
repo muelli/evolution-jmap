@@ -420,6 +420,16 @@ in the invocation, worth failing loudly on.
   `Client::contact_card_parse` tolerates the non-standard context property and passes
   the parsed card through intact to the client.
   Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `large_blob_upload_download_fidelity_rss_and_limits_through_the_real_api`:
+  exercises large blob transfers and limits (Batch 27). Uploads and downloads
+  blobs across 1 MB, 10 MB, and 50 MB (Stalwart's advertised `maxSizeUpload`),
+  verifying SHA-256 byte fidelity, tracking wall time and peak resident set size
+  (VmHWM via /proc/self/status), asserting that the client does not double-buffer
+  the body, verifying that uploading `maxSizeUpload + 1` (50,000,001 bytes) is
+  refused client-side prior to network dispatch with `Error::TooLarge` reporting
+  both the size and limit, and verifying that downloading with a `max_bytes` ceiling
+  smaller than the blob size returns `Error::ResponseTooLarge`.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 
