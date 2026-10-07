@@ -61,18 +61,42 @@ use eds_sys::{
 use glib_sys::{GFALSE, GType};
 use gobject_sys::{
     G_PARAM_READWRITE, G_PARAM_USER_SHIFT, G_TYPE_STRING, GObject, GObjectClass, GParamFlags,
-    GParamSpec, GValue, g_object_class_install_property, g_object_set_property,
-    g_param_spec_string, g_value_get_string, g_value_init, g_value_set_string, g_value_unset,
+    GParamSpec, GValue, g_object_class_install_property, g_object_get_property,
+    g_object_set_property, g_param_spec_string, g_value_get_string, g_value_init,
+    g_value_set_string, g_value_unset,
 };
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::instance::Slot;
-use jmap_backend_core::subclass::{ObjectSubclass, register_static};
+use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, log_critical};
 
-/// The keyfile group EDS finds this extension by — `e_source_get_extension`'s
+/// The keyfile group EDS finds this storage by: `e_source_get_extension`'s
 /// `extension_name` argument, and what an account's `.source` file shows as
-/// `[JMAP OAuth2]`.
+/// a group header.
+///
+/// On an EDS that has no `ESourceOAuth2Client` of its own, that group is
+/// `[JMAP OAuth2]` and the type behind it is [`Extension`] below. On EDS
+/// 3.63.1 and newer it is upstream's own `[OAuth2 Client]`
+/// (`E_SOURCE_EXTENSION_OAUTH2_CLIENT`), whose eight string properties are
+/// this module's seven plus an `issuer` nothing here writes, and which
+/// upstream's `EOAuth2ServiceDynamic` reads directly. Nothing of this
+/// module's own is registered there: two `ESourceExtension` classes
+/// answering to one name would make `e_source_get_extension` return
+/// whichever `source_find_extension_classes_rec` hashed last.
+///
+/// Accounts set up against an older EDS are not carried over; see
+/// [`crate::oauth2_service::register`], which is where that decision is
+/// written down.
+#[cfg(not(eds_oauth2_dynamic))]
 pub const EXTENSION_NAME: &CStr = c"JMAP OAuth2";
+
+/// See the `#[cfg(not(eds_oauth2_dynamic))]` arm above, which carries this
+/// constant's documentation. The literal is upstream's
+/// `E_SOURCE_EXTENSION_OAUTH2_CLIENT`, a `#define` of a string rather than a
+/// symbol, so there is nothing for bindgen to hand back and it is spelled
+/// again here.
+#[cfg(eds_oauth2_dynamic)]
+pub const EXTENSION_NAME: &CStr = c"OAuth2 Client";
 
 /// `E_SOURCE_PARAM_SETTING`, computed rather than bound: `e-source.h` defines
 /// it as a plain `#define (1 << G_PARAM_USER_SHIFT)`, not a symbol, so there
@@ -402,8 +426,21 @@ unsafe fn read_cstring(value: *const GValue) -> Option<CString> {
 /// have run — once, at module load, alongside registering the module's other
 /// types — before EDS is asked to parse a keyfile that carries `[JMAP
 /// OAuth2]`, or that group is silently unrecognised rather than restored.
+#[cfg(not(eds_oauth2_dynamic))]
 pub fn ensure_registered() {
-    register_static::<Extension>();
+    jmap_backend_core::subclass::register_static::<Extension>();
+}
+
+/// Where EDS brings its own `ESourceOAuth2Client`, "registering" is referencing
+/// upstream's type rather than defining one: `e_source_get_extension`'s name
+/// lookup walks `g_type_children` of `ESourceExtension`, and a type whose
+/// `get_type` nothing has called yet is not among them. See the
+/// `#[cfg(not(eds_oauth2_dynamic))]` arm above for the rest of the contract,
+/// which is unchanged.
+#[cfg(eds_oauth2_dynamic)]
+pub fn ensure_registered() {
+    // SAFETY: no arguments, and the type registers itself on first call.
+    unsafe { eds_sys::e_source_oauth2_client_get_type() };
 }
 
 /// `source`'s `[JMAP OAuth2]` extension, registering the type and creating
@@ -488,44 +525,55 @@ pub unsafe fn read(source: *mut ESource) -> Config {
         return Config::default();
     }
 
-    // SAFETY: the extension is present, so this returns the source's own,
-    // whose `instance_init` has already run.
-    let extension =
-        unsafe { e_source_get_extension(source, EXTENSION_NAME.as_ptr()) }.cast::<Extension>();
-    let fields = unsafe { &*extension }
-        .fields
-        .get()
-        .expect("e_source_get_extension returned an instance instance_init did not run on");
-    let fields = fields.lock().unwrap_or_else(PoisonError::into_inner);
+    // SAFETY: the extension is present, so this returns the source's own.
+    let extension = unsafe { e_source_get_extension(source, EXTENSION_NAME.as_ptr()) };
+    // SAFETY: a live extension of whichever class answers to `EXTENSION_NAME`
+    // on this build; both install every name in `PROPERTY_NAMES` as a
+    // readable string property.
+    let read_one = |name: &CStr| unsafe { get_string_property(extension.cast(), name) };
+
     Config {
-        client_id: fields
-            .client_id
-            .as_ref()
-            .map(|value| value.to_string_lossy().into_owned()),
-        client_secret: fields
-            .client_secret
-            .as_ref()
-            .map(|value| value.to_string_lossy().into_owned()),
-        authorization_endpoint: fields
-            .authorization_endpoint
-            .as_ref()
-            .map(|value| value.to_string_lossy().into_owned()),
-        token_endpoint: fields
-            .token_endpoint
-            .as_ref()
-            .map(|value| value.to_string_lossy().into_owned()),
-        redirect_uri: fields
-            .redirect_uri
-            .as_ref()
-            .map(|value| value.to_string_lossy().into_owned()),
-        scope: fields
-            .scope
-            .as_ref()
-            .map(|value| value.to_string_lossy().into_owned()),
-        resource: fields
-            .resource
-            .as_ref()
-            .map(|value| value.to_string_lossy().into_owned()),
+        client_id: read_one(PROPERTY_NAMES[0]),
+        client_secret: read_one(PROPERTY_NAMES[1]),
+        authorization_endpoint: read_one(PROPERTY_NAMES[2]),
+        token_endpoint: read_one(PROPERTY_NAMES[3]),
+        redirect_uri: read_one(PROPERTY_NAMES[4]),
+        scope: read_one(PROPERTY_NAMES[5]),
+        resource: read_one(PROPERTY_NAMES[6]),
+    }
+}
+
+/// One string property of `object`, copied out, `None` for an unset one.
+///
+/// Asking the property system rather than this module's own storage is what
+/// lets [`read`] be one function on every EDS: where upstream owns the class
+/// behind [`EXTENSION_NAME`] there are no Rust fields to reach into, and
+/// `g_object_get_property` is the door both classes have. It is also what
+/// makes the EDS-3.52 test suite exercise the very code the 3.63.1+ build
+/// runs, rather than a parallel implementation nothing here can run.
+///
+/// One asymmetry worth naming, since it is upstream's and not reversible
+/// here: `ESourceOAuth2Client`'s setters pass values through
+/// `e_util_strdup_strip`, so a value that is empty or all whitespace reads
+/// back as unset there while [`Extension`] keeps it verbatim. No field of a
+/// [`Config`] has a meaningful blank value (an empty client id or token
+/// endpoint is not a registration), so the two agree everywhere it matters.
+///
+/// # Safety
+///
+/// `object` must be a valid `GObject` carrying a readable `G_TYPE_STRING`
+/// property called `name`.
+unsafe fn get_string_property(object: *mut GObject, name: &CStr) -> Option<String> {
+    // SAFETY: the contract above; the GValue is initialised before it is
+    // filled and unset before it goes out of scope, and `read_cstring` copies
+    // whatever it points at rather than keeping the borrow.
+    unsafe {
+        let mut gvalue: GValue = std::mem::zeroed();
+        g_value_init(&mut gvalue, G_TYPE_STRING);
+        g_object_get_property(object, name.as_ptr(), &mut gvalue);
+        let text = read_cstring(&gvalue).map(|text| text.to_string_lossy().into_owned());
+        g_value_unset(&mut gvalue);
+        text
     }
 }
 
@@ -578,6 +626,19 @@ unsafe fn borrowed(
     source: *mut ESource,
     field: impl FnOnce(&Fields) -> &Option<CString>,
 ) -> *const c_char {
+    // Where EDS brings its own class for this group, the object behind
+    // `EXTENSION_NAME` is an `ESourceOAuth2Client` and not an [`Extension`],
+    // so there is no `Fields` here to borrow out of and the cast below would
+    // be reading one type's memory as another's. Nothing asks: the
+    // `EOAuth2Service` whose five vfuncs these serve is not registered on
+    // such a build (`crate::oauth2_service::register`), upstream's
+    // `EOAuth2ServiceDynamic` having taken the account over, and it reads
+    // the group through its own extension anyway. Answering NULL makes that
+    // true by construction rather than by inspection.
+    if jmap_backend_core::oauth2::EDS_HAS_DYNAMIC_OAUTH2 {
+        return ptr::null();
+    }
+
     ensure_registered();
 
     // SAFETY: `source` is valid by this function's contract.

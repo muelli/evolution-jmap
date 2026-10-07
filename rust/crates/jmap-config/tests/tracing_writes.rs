@@ -7,23 +7,11 @@
 //! discovery, client registration, protected-resource indicator probing,
 //! PKCE query / token form preparation, and JMAP config lookup.
 
-use std::ffi::CString;
-use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use eds_sys::{
-    EOAuth2Services, e_oauth2_service_prepare_authentication_uri_query,
-    e_oauth2_service_prepare_get_token_form, e_oauth2_service_prepare_refresh_token_form,
-    e_oauth2_services_new, e_source_new_with_uid,
-};
-use glib_sys::{g_free, g_hash_table_destroy, g_hash_table_new_full, g_str_equal, g_str_hash};
-use jmap_backend_core::subclass::register_static;
 use jmap_client::resolver::{Resolver, SrvTarget};
 use jmap_client::transport::UreqTransport;
 use jmap_config::config_lookup::probe_host;
-use jmap_config::oauth2::{self, Config};
-use jmap_config::oauth2_service::Service;
 use jmap_config::oauth2_setup::discover_and_register;
 use jmap_mock::MockServer;
 use serde_json::json;
@@ -244,146 +232,176 @@ fn probe_host_traces_domain_and_srv_record() {
     );
 }
 
-struct TestSource(*mut eds_sys::ESource);
+/// This project's own `EOAuth2Service` vfuncs, which exist only where EDS has
+/// no `EOAuth2ServiceDynamic` of its own: `oauth2_service::register` stands
+/// ours down where it does, and the vfuncs below read borrowed storage that
+/// belongs to `ESourceOAuth2Client` there. `tests/oauth2_service.rs` is gated
+/// whole for the same reason, and names what covers the account instead.
+#[cfg(not(eds_oauth2_dynamic))]
+mod own_oauth2_service {
+    use std::ffi::CString;
+    use std::ptr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-impl TestSource {
-    fn new() -> Self {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let uid = format!(
-            "jmap-tracing-writes-test-{}",
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
-        let uid = CString::new(uid).expect("no NUL in a generated uid");
-        let mut error = ptr::null_mut();
-        let source = unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
-        assert!(!source.is_null(), "e_source_new_with_uid failed");
-        Self(source)
-    }
+    use eds_sys::{
+        EOAuth2Services, e_oauth2_service_prepare_authentication_uri_query,
+        e_oauth2_service_prepare_get_token_form, e_oauth2_service_prepare_refresh_token_form,
+        e_oauth2_services_new, e_source_new_with_uid,
+    };
+    use glib_sys::{g_free, g_hash_table_destroy, g_hash_table_new_full, g_str_equal, g_str_hash};
+    use gobject_sys::{
+        G_TYPE_OBJECT, GValue, g_object_new_with_properties, g_value_init, g_value_set_object,
+        g_value_unset,
+    };
+    use jmap_backend_core::subclass::register_static;
+    use jmap_config::oauth2::{self, Config};
+    use jmap_config::oauth2_service::Service;
+    use tracing::Level;
 
-    fn written(self, config: &Config) -> Self {
-        unsafe { oauth2::apply(self.0, config) };
-        self
-    }
-}
+    use super::{REDIRECT_URI, capture, has};
 
-impl Drop for TestSource {
-    fn drop(&mut self) {
-        unsafe { gobject_sys::g_object_unref(self.0.cast()) };
-    }
-}
+    struct TestSource(*mut eds_sys::ESource);
 
-use gobject_sys::{
-    G_TYPE_OBJECT, GValue, g_object_new_with_properties, g_value_init, g_value_set_object,
-    g_value_unset,
-};
-
-fn service_in(registry: *mut EOAuth2Services) -> *mut eds_sys::EOAuth2Service {
-    let gtype = register_static::<Service>();
-    let name = c"extensible";
-
-    unsafe {
-        let mut value: GValue = std::mem::zeroed();
-        g_value_init(&mut value, G_TYPE_OBJECT);
-        g_value_set_object(&mut value, registry.cast());
-        let mut names = [name.as_ptr()];
-        let service = g_object_new_with_properties(gtype, 1, names.as_mut_ptr(), &value)
-            .cast::<eds_sys::EOAuth2Service>();
-        g_value_unset(&mut value);
-        assert!(!service.is_null(), "g_object_new_with_properties failed");
-        service
-    }
-}
-
-fn test_config() -> Config {
-    Config {
-        client_id: Some("client-abc123".to_owned()),
-        client_secret: Some("s3cret".to_owned()),
-        authorization_endpoint: Some("https://jmap.example.com/authorize".to_owned()),
-        token_endpoint: Some("https://jmap.example.com/token".to_owned()),
-        redirect_uri: Some(REDIRECT_URI.to_owned()),
-        scope: Some("urn:ietf:params:oauth:scope:mail offline_access".to_owned()),
-        resource: Some("https://jmap.example.com/session".to_owned()),
-    }
-}
-
-#[test]
-fn prepare_authentication_uri_query_and_token_form_trace_structured_fields() {
-    let registry = unsafe { e_oauth2_services_new() };
-    let service = service_in(registry);
-    let source = TestSource::new().written(&test_config());
-
-    unsafe {
-        let query = g_hash_table_new_full(
-            Some(g_str_hash),
-            Some(g_str_equal),
-            Some(g_free),
-            Some(g_free),
-        );
-
-        let captured_query = capture(|| {
-            e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
-        });
-
-        assert!(
-            has(&captured_query, Level::DEBUG, "has_scope", "true"),
-            "expected has_scope=true in query preparation, got {captured_query:?}"
-        );
-        // `has_pkce` rather than the `pkce_challenge_method=S256` this used to
-        // assert: the challenge is now added only when its verifier could be
-        // stashed, so what the query side has to report is whether one was
-        // sent at all. S256 stays the only method this crate ever names, and
-        // `oauth2_service.rs`'s own tests pin the query's `code_challenge_
-        // method` key. The two sides of the flow now log the same field name.
-        assert!(
-            has(&captured_query, Level::DEBUG, "has_pkce", "true"),
-            "expected has_pkce=true in query preparation, got {captured_query:?}"
-        );
-
-        let form = g_hash_table_new_full(
-            Some(g_str_hash),
-            Some(g_str_equal),
-            Some(g_free),
-            Some(g_free),
-        );
-
-        let captured_form = capture(|| {
-            e_oauth2_service_prepare_get_token_form(service, source.0, c"auth-code".as_ptr(), form);
-        });
-
-        assert!(
-            has(&captured_form, Level::DEBUG, "has_pkce", "true"),
-            "expected has_pkce=true in token form preparation, got {captured_form:?}"
-        );
-
-        let refresh_form = g_hash_table_new_full(
-            Some(g_str_hash),
-            Some(g_str_equal),
-            Some(g_free),
-            Some(g_free),
-        );
-
-        let captured_refresh = capture(|| {
-            e_oauth2_service_prepare_refresh_token_form(
-                service,
-                source.0,
-                c"refresh-token".as_ptr(),
-                refresh_form,
+    impl TestSource {
+        fn new() -> Self {
+            static NEXT: AtomicUsize = AtomicUsize::new(0);
+            let uid = format!(
+                "jmap-tracing-writes-test-{}",
+                NEXT.fetch_add(1, Ordering::Relaxed)
             );
-        });
+            let uid = CString::new(uid).expect("no NUL in a generated uid");
+            let mut error = ptr::null_mut();
+            let source =
+                unsafe { e_source_new_with_uid(uid.as_ptr(), ptr::null_mut(), &mut error) };
+            assert!(!source.is_null(), "e_source_new_with_uid failed");
+            Self(source)
+        }
 
-        assert!(
-            has(&captured_refresh, Level::DEBUG, "has_refresh_token", "true"),
-            "expected has_refresh_token=true in refresh token form preparation, got {captured_refresh:?}"
-        );
-        assert!(
-            captured_refresh
-                .iter()
-                .any(|(lvl, name, _)| *lvl == Level::DEBUG && name == "account_uid"),
-            "expected account_uid in refresh token form preparation, got {captured_refresh:?}"
-        );
+        fn written(self, config: &Config) -> Self {
+            unsafe { oauth2::apply(self.0, config) };
+            self
+        }
+    }
 
-        g_hash_table_destroy(query);
-        g_hash_table_destroy(form);
-        g_hash_table_destroy(refresh_form);
+    impl Drop for TestSource {
+        fn drop(&mut self) {
+            unsafe { gobject_sys::g_object_unref(self.0.cast()) };
+        }
+    }
+
+    fn service_in(registry: *mut EOAuth2Services) -> *mut eds_sys::EOAuth2Service {
+        let gtype = register_static::<Service>();
+        let name = c"extensible";
+
+        unsafe {
+            let mut value: GValue = std::mem::zeroed();
+            g_value_init(&mut value, G_TYPE_OBJECT);
+            g_value_set_object(&mut value, registry.cast());
+            let mut names = [name.as_ptr()];
+            let service = g_object_new_with_properties(gtype, 1, names.as_mut_ptr(), &value)
+                .cast::<eds_sys::EOAuth2Service>();
+            g_value_unset(&mut value);
+            assert!(!service.is_null(), "g_object_new_with_properties failed");
+            service
+        }
+    }
+
+    fn test_config() -> Config {
+        Config {
+            client_id: Some("client-abc123".to_owned()),
+            client_secret: Some("s3cret".to_owned()),
+            authorization_endpoint: Some("https://jmap.example.com/authorize".to_owned()),
+            token_endpoint: Some("https://jmap.example.com/token".to_owned()),
+            redirect_uri: Some(REDIRECT_URI.to_owned()),
+            scope: Some("urn:ietf:params:oauth:scope:mail offline_access".to_owned()),
+            resource: Some("https://jmap.example.com/session".to_owned()),
+        }
+    }
+
+    #[test]
+    fn prepare_authentication_uri_query_and_token_form_trace_structured_fields() {
+        let registry = unsafe { e_oauth2_services_new() };
+        let service = service_in(registry);
+        let source = TestSource::new().written(&test_config());
+
+        unsafe {
+            let query = g_hash_table_new_full(
+                Some(g_str_hash),
+                Some(g_str_equal),
+                Some(g_free),
+                Some(g_free),
+            );
+
+            let captured_query = capture(|| {
+                e_oauth2_service_prepare_authentication_uri_query(service, source.0, query);
+            });
+
+            assert!(
+                has(&captured_query, Level::DEBUG, "has_scope", "true"),
+                "expected has_scope=true in query preparation, got {captured_query:?}"
+            );
+            // `has_pkce` rather than the `pkce_challenge_method=S256` this used to
+            // assert: the challenge is now added only when its verifier could be
+            // stashed, so what the query side has to report is whether one was
+            // sent at all. S256 stays the only method this crate ever names, and
+            // `oauth2_service.rs`'s own tests pin the query's `code_challenge_
+            // method` key. The two sides of the flow now log the same field name.
+            assert!(
+                has(&captured_query, Level::DEBUG, "has_pkce", "true"),
+                "expected has_pkce=true in query preparation, got {captured_query:?}"
+            );
+
+            let form = g_hash_table_new_full(
+                Some(g_str_hash),
+                Some(g_str_equal),
+                Some(g_free),
+                Some(g_free),
+            );
+
+            let captured_form = capture(|| {
+                e_oauth2_service_prepare_get_token_form(
+                    service,
+                    source.0,
+                    c"auth-code".as_ptr(),
+                    form,
+                );
+            });
+
+            assert!(
+                has(&captured_form, Level::DEBUG, "has_pkce", "true"),
+                "expected has_pkce=true in token form preparation, got {captured_form:?}"
+            );
+
+            let refresh_form = g_hash_table_new_full(
+                Some(g_str_hash),
+                Some(g_str_equal),
+                Some(g_free),
+                Some(g_free),
+            );
+
+            let captured_refresh = capture(|| {
+                e_oauth2_service_prepare_refresh_token_form(
+                    service,
+                    source.0,
+                    c"refresh-token".as_ptr(),
+                    refresh_form,
+                );
+            });
+
+            assert!(
+                has(&captured_refresh, Level::DEBUG, "has_refresh_token", "true"),
+                "expected has_refresh_token=true in refresh token form preparation, got {captured_refresh:?}"
+            );
+            assert!(
+                captured_refresh
+                    .iter()
+                    .any(|(lvl, name, _)| *lvl == Level::DEBUG && name == "account_uid"),
+                "expected account_uid in refresh token form preparation, got {captured_refresh:?}"
+            );
+
+            g_hash_table_destroy(query);
+            g_hash_table_destroy(form);
+            g_hash_table_destroy(refresh_form);
+        }
     }
 }

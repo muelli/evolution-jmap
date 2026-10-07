@@ -121,6 +121,7 @@ use jmap_backend_core::i18n::{N_, translate};
 #[cfg(feature = "testing")]
 use jmap_backend_core::instance::zeroed_box;
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 use jmap_backend_core::subclass::ObjectSubclass;
 use jmap_backend_core::trampoline::{guard, log_critical};
 
@@ -128,7 +129,6 @@ use crate::account::{apply, read};
 use crate::complete::{check, status_message};
 use crate::defaults::from_identity;
 use crate::mail::{MAIL_BACKEND_NAME, apply_server};
-use crate::oauth2_service;
 
 /// The JMAP account setup backend.
 #[repr(C)]
@@ -365,9 +365,9 @@ const AUTH_LABEL: &CStr = N_(c"A_uthentication:");
 /// All three ids are load-bearing elsewhere, not chosen for this dialog:
 /// `"none"` is `ESourceAuthentication:method`'s own default and the one
 /// `crate::account`'s own doc pins as "ask for a password the ordinary way";
-/// [`oauth2_service::NAME`] is the exact string
+/// [`OAUTH2_AUTH_METHOD`] is the exact string
 /// `EOAuth2Service::can_process`'s default implementation compares `method`
-/// against (see that module's own doc) — the only spelling of "use OAuth 2.0"
+/// against (see that constant's own doc): the only spelling of "use OAuth 2.0"
 /// `e_source_get_oauth2_access_token_sync` will actually honour for this
 /// account, as opposed to the generic `"OAuth2"` alias
 /// [`jmap_backend_core::oauth2::method_is_oauth2`] also accepts but
@@ -385,7 +385,7 @@ const AUTH_LABEL: &CStr = N_(c"A_uthentication:");
 /// [`jmap_backend_core::api_token`]'s module docs for why).
 const AUTH_CHOICES: [(&CStr, &CStr); 3] = [
     (c"none", N_(c"Password")),
-    (oauth2_service::NAME, N_(c"OAuth 2.0")),
+    (OAUTH2_AUTH_METHOD, N_(c"OAuth 2.0")),
     (
         jmap_backend_core::api_token::API_TOKEN_METHOD,
         N_(c"API Token"),

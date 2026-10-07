@@ -83,7 +83,7 @@ use jmap_backend_core::i18n::{translate, translate_with};
 use jmap_backend_core::source::{SourceError, origin};
 
 use crate::account::Account;
-use crate::oauth2_service;
+use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 
 /// Why an account cannot be committed yet.
 ///
@@ -206,9 +206,9 @@ pub fn check(account: &Account) -> Result<(), Incomplete> {
     let host = (!connection.host.is_empty()).then_some(&*connection.host);
     origin(host, connection.port.unwrap_or(0), connection.secure).map_err(Incomplete::Server)?;
 
-    let oauth2_method = oauth2_service::NAME
+    let oauth2_method = OAUTH2_AUTH_METHOD
         .to_str()
-        .expect("oauth2_service::NAME is a fixed ASCII string");
+        .expect("OAUTH2_AUTH_METHOD is a fixed ASCII string");
     if connection.auth_method.as_deref() == Some(oauth2_method) && !account.oauth2_registered {
         return Err(Incomplete::OAuth2NotRegistered);
     }
@@ -300,7 +300,7 @@ mod tests {
     fn oauth2_with_no_registered_client_is_reported() {
         let account = Account {
             connection: Connection {
-                auth_method: Some(crate::oauth2_service::NAME.to_str().unwrap().to_owned()),
+                auth_method: Some(OAUTH2_AUTH_METHOD.to_str().unwrap().to_owned()),
                 ..complete_account().connection
             },
             oauth2_registered: false,
@@ -317,7 +317,7 @@ mod tests {
     fn oauth2_with_a_registered_client_has_no_status_message() {
         let account = Account {
             connection: Connection {
-                auth_method: Some(crate::oauth2_service::NAME.to_str().unwrap().to_owned()),
+                auth_method: Some(OAUTH2_AUTH_METHOD.to_str().unwrap().to_owned()),
                 ..complete_account().connection
             },
             oauth2_registered: true,

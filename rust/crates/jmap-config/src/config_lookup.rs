@@ -106,13 +106,13 @@ use gobject_sys::{GObject, GObjectClass};
 use jmap_backend_core::cancel::CancelBridge;
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::i18n::{self, N_, translate_with};
+use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 use jmap_backend_core::subclass::{self, InterfaceDecl, InterfaceImpl, ObjectSubclass};
 use jmap_backend_core::trampoline::guard;
 use jmap_client::transport::UreqTransport;
 
 use crate::account::BACKEND_NAME;
 use crate::oauth2::{self, Config};
-use crate::oauth2_service;
 use crate::oauth2_setup::discover_and_register;
 
 /// The private-use URI scheme registered with RFC 7591 and answered by
@@ -489,7 +489,7 @@ unsafe fn add_result(
             result,
             E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr(),
             c"method".as_ptr(),
-            oauth2_service::NAME.as_ptr(),
+            OAUTH2_AUTH_METHOD.as_ptr(),
         );
         e_config_lookup_result_simple_add_string(
             result,

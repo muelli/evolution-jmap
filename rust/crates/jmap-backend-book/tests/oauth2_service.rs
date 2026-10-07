@@ -27,8 +27,8 @@ use gobject_sys::{
     g_type_module_use,
 };
 use jmap_backend_book::module::{load, unload};
+use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
-use jmap_config::oauth2_service::NAME;
 
 /// A `GTypeModule` standing in for the `EModule` the factory would load us
 /// as — the same stand-in `tests/factory.rs`/`tests/textdomain.rs` use.
@@ -91,7 +91,7 @@ fn source_naming_this_service() -> *mut ESource {
     unsafe {
         let auth =
             e_source_get_extension(source, E_SOURCE_EXTENSION_AUTHENTICATION.as_ptr()).cast();
-        e_source_authentication_set_method(auth, NAME.as_ptr());
+        e_source_authentication_set_method(auth, OAUTH2_AUTH_METHOD.as_ptr());
     }
     source
 }
@@ -136,6 +136,29 @@ fn the_registry_finds_the_jmap_service_once_the_module_has_loaded() {
              address book would fall back to a password prompt it has no \
              password for"
         );
+
+        // Which service answered is the half that changes with the EDS in
+        // front of us, and it is the half worth pinning: on an EDS with no
+        // dynamic service of its own, the module load above is the only
+        // reason anything answers at all, and where upstream has one, this
+        // project must have stood its own down rather than leave two services
+        // claiming one account for `e_oauth2_services_find` to pick between
+        // by list order.
+        let found_type = (*(*found.cast::<gobject_sys::GTypeInstance>()).g_class).g_type;
+        let found_name = std::ffi::CStr::from_ptr(gobject_sys::g_type_name(found_type));
+        #[cfg(not(eds_oauth2_dynamic))]
+        assert_eq!(found_name, c"JmapOAuth2Service");
+        #[cfg(eds_oauth2_dynamic)]
+        {
+            assert_eq!(found_name, c"EOAuth2ServiceDynamic");
+            assert_eq!(
+                gobject_sys::g_type_from_name(c"JmapOAuth2Service".as_ptr()),
+                0,
+                "the module registered this project's own EOAuth2Service on \
+                 an EDS that brings its own, so two services now claim the \
+                 same account"
+            );
+        }
         g_object_unref(found.cast());
         g_object_unref(source.cast());
     }

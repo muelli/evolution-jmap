@@ -49,6 +49,10 @@ const FEATURES: &[&str] = &[
     // `discard_atomic`) or has to write straight to the final path
     // (`camel_data_cache_add`) — `crate::cache`.
     "camel_data_cache_atomic",
+    // Whether EDS ships upstream's `CamelSaslXOAuth2Dynamic`, the mechanism of
+    // its own `EOAuth2ServiceDynamic`. Where it does, this provider publishes
+    // that type instead of declaring one of its own: `crate::sasl`.
+    "eds_oauth2_dynamic",
 ];
 
 fn main() {

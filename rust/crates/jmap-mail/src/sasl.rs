@@ -110,15 +110,19 @@
 //! to keep the account out of.
 
 use std::ffi::CStr;
+#[cfg(not(eds_oauth2_dynamic))]
 use std::sync::OnceLock;
 
-use eds_sys::{
-    CamelSaslClass, CamelSaslXOAuth2, CamelSaslXOAuth2Class, CamelServiceAuthType, CamelSettings,
-    camel_sasl_xoauth2_get_type,
-};
-use glib_sys::{GFALSE, GType, gchar};
+use eds_sys::{CamelSaslClass, CamelServiceAuthType, CamelSettings};
+#[cfg(not(eds_oauth2_dynamic))]
+use eds_sys::{CamelSaslXOAuth2, CamelSaslXOAuth2Class, camel_sasl_xoauth2_get_type};
+#[cfg(not(eds_oauth2_dynamic))]
+use glib_sys::GFALSE;
+use glib_sys::{GType, gchar};
+#[cfg(not(eds_oauth2_dynamic))]
 use jmap_backend_core::i18n::N_;
-use jmap_backend_core::oauth2::OAUTH2_SERVICE_NAME;
+use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
+#[cfg(not(eds_oauth2_dynamic))]
 use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 
 /// What Evolution's *Authentication type* combo shows for this mechanism.
@@ -148,6 +152,7 @@ use jmap_backend_core::subclass::{ObjectSubclass, register_static};
 // TRANSLATORS: the name of an authentication method, in the "Authentication
 // type" list of a JMAP account's settings. "JMAP" is a protocol name — leave it
 // as it is unless your language writes it in another script.
+#[cfg(not(eds_oauth2_dynamic))]
 const NAME: &CStr = N_(c"OAuth2 (JMAP)");
 
 /// The one-line description of that entry, translated by the same loop and so
@@ -160,6 +165,7 @@ const NAME: &CStr = N_(c"OAuth2 (JMAP)");
 /// keyword in a doc comment either — `po/extract.sh` reads this file as C, so
 /// prose mentioning it is scraped into the catalogue as if it were the note.)
 // TRANSLATORS: the description of the "OAuth2 (JMAP)" authentication method.
+#[cfg(not(eds_oauth2_dynamic))]
 const DESCRIPTION: &CStr = N_(c"Uses an OAuth 2.0 access token to connect to the JMAP server.");
 
 /// The mechanism as Camel describes it, as a pointer Camel and this module
@@ -174,6 +180,7 @@ const DESCRIPTION: &CStr = N_(c"Uses an OAuth 2.0 access token to connect to the
 /// and `description` fields in place when it translates them — see
 /// [`NAME`] — so the `static` this would otherwise obviously be
 /// would put it in `.rodata` and turn registration into a segfault.
+#[cfg(not(eds_oauth2_dynamic))]
 struct AuthType(*mut CamelServiceAuthType);
 
 // SAFETY: the pointer is set once, under the OnceLock, and what it points at
@@ -181,13 +188,17 @@ struct AuthType(*mut CamelServiceAuthType);
 // translatable fields exactly once, from inside `camel_provider_register`,
 // which this module reaches from `provider::register` before the provider
 // (and so the auth type) is visible to anything else.
+#[cfg(not(eds_oauth2_dynamic))]
 unsafe impl Send for AuthType {}
+#[cfg(not(eds_oauth2_dynamic))]
 unsafe impl Sync for AuthType {}
 
+#[cfg(not(eds_oauth2_dynamic))]
 static AUTH_TYPE: OnceLock<AuthType> = OnceLock::new();
 
 /// The instance struct. Nothing of our own: the mechanism is a *declaration*,
 /// and what declares it is the class.
+#[cfg(not(eds_oauth2_dynamic))]
 #[repr(C)]
 pub struct JmapSasl {
     parent: CamelSaslXOAuth2,
@@ -196,6 +207,7 @@ pub struct JmapSasl {
 /// The class struct, which is where the declaration lives — in the
 /// `auth_type` slot [`class_init`](ObjectSubclass::class_init) fills, three
 /// levels up in `CamelSaslClass`.
+#[cfg(not(eds_oauth2_dynamic))]
 #[repr(C)]
 pub struct JmapSaslClass {
     parent_class: CamelSaslXOAuth2Class,
@@ -205,6 +217,7 @@ pub struct JmapSaslClass {
 // instance and class structs, whose layouts eds-sys's tests/layout.rs checks
 // against `g_type_query`; CamelSaslXOAuth2 derives from CamelSasl, from
 // GObject.
+#[cfg(not(eds_oauth2_dynamic))]
 unsafe impl ObjectSubclass for JmapSasl {
     /// `CamelSaslXOAuth2Jmap`, matching evolution-ews's
     /// `CamelSaslXOAuth2Office365` and Camel's own `CamelSaslXOAuth2Google`:
@@ -247,18 +260,39 @@ unsafe impl ObjectSubclass for JmapSasl {
 /// act of publishing the mechanism — there is no `camel_sasl_register` —
 /// so [`crate::provider::register`] calls it, and everything downstream is
 /// Camel walking `CAMEL_TYPE_SASL`'s children.
+#[cfg(not(eds_oauth2_dynamic))]
 pub fn sasl_type() -> GType {
     register_static::<JmapSasl>()
 }
 
+/// Where EDS ships `CamelSaslXOAuth2Dynamic`, publishing the mechanism is
+/// referencing upstream's type rather than declaring one of our own: it
+/// already carries the `authproto` [`MECHANISM`] now is, and the account this
+/// provider serves is claimed by upstream's `EOAuth2ServiceDynamic` under the
+/// same name. Two classes under one `authproto` would be the very collision
+/// the `class_init` in the arm above exists to avoid, with `camel_sasl.c`'s
+/// `class_table` keeping whichever `g_type_children` reached last.
+///
+/// See the `#[cfg(not(eds_oauth2_dynamic))]` arm above for the rest: the act
+/// of registering is still the whole of publishing, there being no
+/// `camel_sasl_register`.
+#[cfg(eds_oauth2_dynamic)]
+pub fn sasl_type() -> GType {
+    // SAFETY: no arguments, and the type registers itself on first call.
+    unsafe { eds_sys::camel_sasl_xoauth2_dynamic_get_type() }
+}
+
 /// The mechanism's name, as the string Camel and Evolution look it up by.
 ///
-/// The same bytes as [`OAUTH2_SERVICE_NAME`], named again here so that a caller
+/// The same bytes as [`OAUTH2_AUTH_METHOD`], named again here so that a caller
 /// asking "what mechanism does this provider offer?" — [`crate::service`]'s
 /// `connect_sync`, and this crate's tests — reads it off the mechanism rather
-/// than reaching for the OAuth 2.0 service's name and relying on the two being
-/// equal by inspection.
-pub const MECHANISM: &CStr = OAUTH2_SERVICE_NAME;
+/// than reaching for the account's method and relying on the two being equal
+/// by inspection. They have to be equal: both of Evolution's lookups start
+/// from the method the account carries, and the second one
+/// (`mail_config_auth_check_host_changed_cb`) literally passes
+/// `e_oauth2_service_get_name` to `camel_sasl_authtype`.
+pub const MECHANISM: &CStr = OAUTH2_AUTH_METHOD;
 
 /// The mechanism as a pointer to put in [`crate::provider`]'s `authtypes`
 /// list, which is how the account editor's combo learns the entry exists.
@@ -279,6 +313,7 @@ pub const MECHANISM: &CStr = OAUTH2_SERVICE_NAME;
 /// whose token is in the keyring never sees a consent window; one whose token
 /// the *server* rejects still does, because a rejection is that branch's
 /// recovery rather than its failure.
+#[cfg(not(eds_oauth2_dynamic))]
 pub fn auth_type() -> *mut CamelServiceAuthType {
     AUTH_TYPE
         .get_or_init(|| {
@@ -287,11 +322,37 @@ pub fn auth_type() -> *mut CamelServiceAuthType {
                 description: DESCRIPTION.as_ptr(),
                 // The string both of Evolution's lookups key on — see the
                 // module docs.
-                authproto: OAUTH2_SERVICE_NAME.as_ptr(),
+                authproto: OAUTH2_AUTH_METHOD.as_ptr(),
                 need_password: GFALSE,
             })))
         })
         .0
+}
+
+/// Where the mechanism is upstream's, so is the struct that describes it:
+/// `camel_sasl_xoauth2_dynamic_class_init` puts its own file-static
+/// `CamelServiceAuthType` in the class slot, and that one is already keyed
+/// under [`MECHANISM`] in `camel_sasl_authtype`'s table.
+///
+/// Reading it back out of the class rather than building a second one is the
+/// same "one allocation, both consumers" rule the arm above documents, and
+/// here it is not even a choice: a copy of our own would leave Camel's table
+/// pointing at upstream's struct and the account editor's combo at ours, two
+/// rows for one mechanism with only one of them matching.
+///
+/// `g_type_class_ref` and no matching unref, deliberately: the struct has to
+/// outlive the provider that holds a pointer into it, which is the process.
+#[cfg(eds_oauth2_dynamic)]
+pub fn auth_type() -> *mut CamelServiceAuthType {
+    // SAFETY: `sasl_type` has registered the type, so `g_type_class_ref`
+    // returns its initialised class; that class leads with
+    // `CamelSaslXOAuth2Class`, which leads with `CamelSaslClass`, where Camel
+    // declares the slot, the same transitive leading-field cast the
+    // `class_init` in the other arm writes through.
+    unsafe {
+        let class = gobject_sys::g_type_class_ref(sasl_type()).cast::<CamelSaslClass>();
+        (*class).auth_type
+    }
 }
 
 /// The mechanism name [`crate::service`]'s `connect_sync` names when it asks

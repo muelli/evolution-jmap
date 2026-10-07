@@ -90,7 +90,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
         unsafe {
             remember_backend_type(register_dynamic::<JmapCalBackend>(type_module));
             register_dynamic::<JmapCalFactory>(type_module);
-            register_dynamic::<jmap_config::oauth2_service::Service>(type_module);
+            jmap_config::oauth2_service::register(type_module);
         }
     });
 }

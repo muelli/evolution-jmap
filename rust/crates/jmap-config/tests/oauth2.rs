@@ -21,9 +21,9 @@ use eds_sys::{
 };
 use glib_sys::{GFALSE, g_free};
 use gobject_sys::{
-    G_TYPE_STRING, GObject, GParamSpec, GValue, g_object_get_property, g_object_set_property,
-    g_object_unref, g_signal_connect_data, g_value_get_string, g_value_init, g_value_set_string,
-    g_value_unset,
+    G_TYPE_STRING, GObject, GParamSpec, GTypeInstance, GValue, g_object_get_property,
+    g_object_set_property, g_object_unref, g_signal_connect_data, g_type_name, g_value_get_string,
+    g_value_init, g_value_set_string, g_value_unset,
 };
 use jmap_config::oauth2::{Config, EXTENSION_NAME, PROPERTY_NAMES, apply, client_id, read};
 
@@ -327,6 +327,7 @@ fn a_value_set_through_the_gobject_property_is_read_back_through_this_crates_own
 /// `pointer` is NULL or points at a NUL-terminated string that is still
 /// alive — which is exactly what these tests exist to establish, so a
 /// failure here is the finding rather than a misuse.
+#[cfg(not(eds_oauth2_dynamic))]
 unsafe fn text_at(pointer: *const c_char) -> Option<String> {
     (!pointer.is_null()).then(|| {
         unsafe { CStr::from_ptr(pointer) }
@@ -338,6 +339,7 @@ unsafe fn text_at(pointer: *const c_char) -> Option<String> {
 /// Same-sized allocations, made between a free and a read so that a reused
 /// heap block shows up as changed bytes instead of passing on a stale one
 /// nothing happened to overwrite.
+#[cfg(not(eds_oauth2_dynamic))]
 fn churn_the_allocator(like: &str) -> Vec<CString> {
     let filler = "X".repeat(like.len());
     (0..256)
@@ -345,6 +347,7 @@ fn churn_the_allocator(like: &str) -> Vec<CString> {
         .collect()
 }
 
+#[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn rewriting_a_field_with_the_same_value_keeps_the_pointer_it_handed_out() {
     // `apply` is documented as an idempotent rewrite that runs again every
@@ -364,6 +367,7 @@ fn rewriting_a_field_with_the_same_value_keeps_the_pointer_it_handed_out() {
     );
 }
 
+#[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn setting_a_property_to_the_value_it_already_has_keeps_the_pointer_it_handed_out() {
     // The same rule through EDS's own door. `source_set_property_from_key_
@@ -382,6 +386,7 @@ fn setting_a_property_to_the_value_it_already_has_keeps_the_pointer_it_handed_ou
     );
 }
 
+#[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn a_pointer_handed_out_before_a_changed_write_still_reads_its_original_bytes() {
     // The race itself, made deterministic: EDS asks for the client id, and
@@ -404,6 +409,7 @@ fn a_pointer_handed_out_before_a_changed_write_still_reads_its_original_bytes() 
     drop(churn);
 }
 
+#[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn a_pointer_handed_out_survives_writes_arriving_on_another_thread() {
     // The same rule as the test above, minus the part that made it easy. The
@@ -530,6 +536,17 @@ fn applying_a_config_raises_notify_for_every_property_it_wrote() {
     );
 }
 
+/// `Fields::set` performs no write at all when the value is unchanged, yet
+/// the property system still emits `notify`, because [`Extension`]'s pspecs
+/// are not `G_PARAM_EXPLICIT_NOTIFY`. The bindings onto an account's children
+/// therefore re-sync on every `apply`, whether or not anything moved.
+///
+/// Not asserted where EDS owns the class: `ESourceOAuth2Client`'s setters do
+/// take `G_PARAM_EXPLICIT_NOTIFY` and return early on an equal value, so an
+/// unchanged rewrite is silent there. Nothing depends on the louder
+/// behaviour. A binding that is already in sync has nothing to carry, and
+/// `apply` is the only writer.
+#[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn an_unchanged_rewrite_still_raises_notify() {
     // `Fields::set` returns early when the value did not change — that is what
@@ -574,9 +591,10 @@ fn every_field_persists_into_the_keyfile_an_evolution_restart_reads_back() {
 
     let text = source.serialised();
 
+    let group = format!("[{}]", EXTENSION_NAME.to_string_lossy());
     assert!(
-        text.contains("[JMAP OAuth2]"),
-        "the extension wrote no group into the keyfile:\n{text}"
+        text.contains(&group),
+        "the extension wrote no {group} group into the keyfile:\n{text}"
     );
     for (property, expected) in PROPERTY_NAMES.iter().zip([
         "client-abc123",
@@ -876,5 +894,131 @@ fn a_notify_handler_can_write_another_property_of_the_same_extension() {
         after.token_endpoint.as_deref(),
         Some("https://reentrant.example.com/token"),
         "the write a `notify` handler made from inside the outer one did not survive it"
+    );
+}
+
+/// Exactly one `ESourceExtension` class answers to [`EXTENSION_NAME`], and on
+/// an EDS that brings its own it is upstream's rather than this crate's.
+///
+/// The group name and the class behind it are one decision, not two, and
+/// getting them out of step is silent in both directions. A build that kept
+/// the name `[JMAP OAuth2]` while upstream's `EOAuth2ServiceDynamic` looked
+/// in `[OAuth2 Client]` would store a registration nothing reads; one that
+/// registered this crate's own `Extension` under the name `OAuth2 Client`
+/// would put two classes under one key in
+/// `source_find_extension_classes_rec`'s hash table, and whichever
+/// `g_type_children` walked last would win the lookup, including for EDS's
+/// own `.source` parser.
+#[test]
+fn the_class_behind_the_group_is_the_one_this_eds_owns_it_with() {
+    let source = TestSource::new();
+    // SAFETY: a live source; the extension is created on demand, and
+    // `EXTENSION_NAME` is a 'static NUL-terminated string.
+    let extension = unsafe { e_source_get_extension(source.0, EXTENSION_NAME.as_ptr()) };
+    assert!(
+        !extension.is_null(),
+        "no class answers to {EXTENSION_NAME:?}"
+    );
+
+    // SAFETY: a live GObject. This is the `G_TYPE_FROM_INSTANCE` macro, spelled out,
+    // and `g_type_name` on a registered type returns a 'static string.
+    let instance_type = unsafe { (*(*extension.cast::<GTypeInstance>()).g_class).g_type };
+    let type_name = unsafe { CStr::from_ptr(g_type_name(instance_type)) };
+
+    #[cfg(not(eds_oauth2_dynamic))]
+    {
+        assert_eq!(EXTENSION_NAME, c"JMAP OAuth2");
+        assert_eq!(type_name, c"JmapOAuth2Extension");
+    }
+    #[cfg(eds_oauth2_dynamic)]
+    {
+        assert_eq!(EXTENSION_NAME, c"OAuth2 Client");
+        // SAFETY: no arguments, and the type registers itself on first call.
+        assert_eq!(instance_type, unsafe {
+            eds_sys::e_source_oauth2_client_get_type()
+        });
+        assert_eq!(type_name, c"ESourceOAuth2Client");
+    }
+}
+
+/// A registration written through this crate's own door comes back out of
+/// upstream's accessors, which is the door `EOAuth2ServiceDynamic` reads it
+/// through: `eos_dynamic_get_client_id` and its siblings call
+/// `e_source_oauth2_client_dup_*`, never the property API [`apply`] writes.
+///
+/// Property name and accessor are separately plausible and separately wrong:
+/// `g_object_set_property` with a misspelled name is a runtime `g-critical`
+/// this crate's own `read` would never notice, because it would read the same
+/// misspelled name straight back.
+#[cfg(eds_oauth2_dynamic)]
+#[test]
+fn what_this_crate_writes_is_what_upstreams_own_service_reads() {
+    let source = TestSource::new().written(&config());
+    // SAFETY: a live source carrying the group `written` just created.
+    let extension = unsafe { e_source_get_extension(source.0, EXTENSION_NAME.as_ptr()) };
+
+    // SAFETY: a live `ESourceOAuth2Client`, the type the test above pins,
+    // and each `dup_` returns a newly allocated string or NULL.
+    let read_back =
+        |dup: unsafe extern "C" fn(*mut eds_sys::ESourceOAuth2Client) -> *mut c_char| unsafe {
+            let text = dup(extension.cast());
+            assert!(!text.is_null(), "upstream's accessor read back nothing");
+            let owned = CStr::from_ptr(text).to_string_lossy().into_owned();
+            g_free(text.cast());
+            owned
+        };
+
+    let expected = config();
+    assert_eq!(
+        read_back(eds_sys::e_source_oauth2_client_dup_client_id),
+        expected.client_id.unwrap()
+    );
+    assert_eq!(
+        read_back(eds_sys::e_source_oauth2_client_dup_client_secret),
+        expected.client_secret.unwrap()
+    );
+    assert_eq!(
+        read_back(eds_sys::e_source_oauth2_client_dup_authorization_endpoint),
+        expected.authorization_endpoint.unwrap()
+    );
+    assert_eq!(
+        read_back(eds_sys::e_source_oauth2_client_dup_token_endpoint),
+        expected.token_endpoint.unwrap()
+    );
+    assert_eq!(
+        read_back(eds_sys::e_source_oauth2_client_dup_redirect_uri),
+        expected.redirect_uri.unwrap()
+    );
+    assert_eq!(
+        read_back(eds_sys::e_source_oauth2_client_dup_scope),
+        expected.scope.unwrap()
+    );
+    assert_eq!(
+        read_back(eds_sys::e_source_oauth2_client_dup_resource),
+        expected.resource.unwrap()
+    );
+}
+
+/// The counterpart to the four pointer-stability tests above, which are about
+/// storage this crate owns and are not compiled where it does not.
+///
+/// `jmap_config::oauth2`'s borrowed accessors hand an `EOAuth2Service` vfunc a
+/// `const gchar *` into an [`Extension`]'s own `CString`. Where EDS owns the
+/// class behind the group, the object there is an `ESourceOAuth2Client` and
+/// there is no such `CString` to point at, so they answer NULL rather than
+/// reading one type's memory as another's. Nothing is lost by that: the
+/// service those vfuncs serve is not registered on this build, and upstream's
+/// reads the group through its own accessors. The owned door still works, and
+/// is asserted here too so that a NULL cannot be mistaken for "nothing was
+/// stored".
+#[cfg(eds_oauth2_dynamic)]
+#[test]
+fn the_borrowed_door_is_shut_where_eds_owns_the_class() {
+    let source = TestSource::new().written(&config());
+
+    assert_eq!(source.config(), config(), "the owned door stopped working");
+    assert!(
+        source.borrowed_client_id().is_null(),
+        "a borrowed pointer was handed out of a class this crate does not own"
     );
 }

@@ -21,6 +21,17 @@
 // to be built with, once, costs one helper and also lets
 // `e_oauth2_services_find` be exercised directly — the entry point real code
 // will actually call.
+//
+// The whole file is compiled only where this project registers a service of
+// its own at all. On an EDS that brings `EOAuth2ServiceDynamic`,
+// `oauth2_service::register` stands ours down and nothing ever constructs or
+// dispatches it; its vfuncs would answer NULL there in any case, because the
+// borrowed storage they read is this crate's `Extension` and the group now
+// belongs to `ESourceOAuth2Client`. What replaces this coverage on such a
+// build is `tests/module.rs`'s `the_entry_point_leaves_the_oauth2_service_to_eds`
+// and the three backend modules' own `oauth2_service.rs`, which assert that
+// the service the registry finds for one of these accounts is upstream's.
+#![cfg(not(eds_oauth2_dynamic))]
 
 use std::ffi::{CStr, CString, c_char};
 use std::ptr;

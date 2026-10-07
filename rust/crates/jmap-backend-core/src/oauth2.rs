@@ -163,6 +163,51 @@ pub const OAUTH2_METHOD: &str = "OAuth2";
 /// [`jmap_mail::sasl`]: ../../jmap_mail/sasl/index.html
 pub const OAUTH2_SERVICE_NAME: &CStr = c"JMAP";
 
+/// The `[Authentication] Method` string an OAuth 2.0 JMAP account carries:
+/// the one spelling every part of this project has to agree on, and the only
+/// one `EOAuth2Service::can_process`'s default implementation honours
+/// (`eos_default_can_process`, e-oauth2-service.c: it compares the source's
+/// method against `e_oauth2_service_get_name` and nothing else).
+///
+/// On an EDS old enough to have no dynamically-registered-client service of
+/// its own, that is [`OAUTH2_SERVICE_NAME`], the name of the
+/// `EOAuth2Service` this project registers. On EDS 3.63.1 and newer it is
+/// upstream's `EOAuth2ServiceDynamic`, whose `get_name` answers
+/// `"OAuth2Dynamic"` and which reads the very client registration this
+/// project already stores, out of its own `[OAuth2 Client]` group. Where
+/// upstream has it, this project registers no service of its own at all:
+/// two services claiming one account is a coin toss over which
+/// `e_oauth2_services_find` returns.
+///
+/// Named apart from [`OAUTH2_SERVICE_NAME`] on purpose. The two were once the
+/// same string and so the same constant, and that is exactly how a method
+/// name comes to be updated in one of the five places that compare against
+/// it and left stale in the other four. A reader here is always asking "what
+/// does this account's `method` say", never "what is our own service
+/// called", and only the former varies with the EDS in front of it.
+#[cfg(not(eds_oauth2_dynamic))]
+pub const OAUTH2_AUTH_METHOD: &CStr = OAUTH2_SERVICE_NAME;
+
+/// See the `#[cfg(not(eds_oauth2_dynamic))]` arm above, which carries this
+/// constant's documentation.
+#[cfg(eds_oauth2_dynamic)]
+pub const OAUTH2_AUTH_METHOD: &CStr = c"OAuth2Dynamic";
+
+/// Whether the EDS this was built against brings its own
+/// `EOAuth2ServiceDynamic`, and so whether this project must stand its own
+/// `EOAuth2Service` and `CamelSasl` down in favour of it.
+///
+/// A `const bool` rather than a second `#[cfg]` for every caller: the crates
+/// that only need to *skip a registration* (the three backend modules, the
+/// Camel provider) then need neither the cfg nor a `build.rs` re-emitting it,
+/// and the decision stays in one place with the constant it follows from.
+#[cfg(not(eds_oauth2_dynamic))]
+pub const EDS_HAS_DYNAMIC_OAUTH2: bool = false;
+
+/// See the `#[cfg(not(eds_oauth2_dynamic))]` arm above.
+#[cfg(eds_oauth2_dynamic)]
+pub const EDS_HAS_DYNAMIC_OAUTH2: bool = true;
+
 /// The process's `EOAuth2Services`, kept alive for as long as the process is —
 /// see the module docs on why holding one is part of asking the question
 /// safely.
