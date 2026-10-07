@@ -430,6 +430,16 @@ in the invocation, worth failing loudly on.
   both the size and limit, and verifying that downloading with a `max_bytes` ceiling
   smaller than the blob size returns `Error::ResponseTooLarge`.
   Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
+- `eventsource_reconnect_and_gap_handling_through_the_real_api`:
+  exercises EventSource stream reconnection and gap handling (RFC 8620 Section 7.3,
+  Batch 27). Connects to Stalwart's `eventSourceUrl`, shuts down the active socket from
+  the client side via `EventSourceSubscription::drop_connection`, creates a mailbox
+  during the disconnection gap, verifies that the client reconnects and notifies the caller
+  via `EventSourceItem::Reconnected`, confirms Stalwart does not replay missed events on
+  reconnect (omitting `id:` headers on state events), verifies that the caller performs
+  the required resync via `Client::mailbox_get` to recover the missed mailbox, and confirms
+  the reconnected stream remains live and delivers subsequent real-time changes.
+  Skipped, not failed, when `JMAP_LIVE_SERVER_WRITE_USER`/`_PASSWORD` are not set.
 
 
 

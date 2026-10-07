@@ -63,7 +63,9 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use jmap_client::eventsource::{SharedHeaders, expand_url};
-use jmap_client::{CancelFlag, Client, Credentials, Error, EventSourceSubscription, limits};
+use jmap_client::{
+    CancelFlag, Client, Credentials, Error, EventSourceItem, EventSourceSubscription, limits,
+};
 use jmap_proto::Id;
 use jmap_proto::blob::{BlobGetRequest, BlobUploadRequest, UploadBlob};
 use jmap_proto::calendars::{
@@ -1466,6 +1468,139 @@ fn push_notifies_a_subscribed_eventsource_of_a_real_mailbox_change() {
     client
         .mailbox_destroy(&account_id, &id)
         .expect("Mailbox/set destroy failed against the real server");
+}
+
+/// EventSource reconnection and gap handling (RFC 8620 §7.3) against a real server.
+/// Opens an `EventSource` subscription, drops the TCP connection from the client side
+/// via [`EventSourceSubscription::drop_connection`], creates a mailbox during the
+/// disconnection gap, and verifies client reconnection behavior.
+///
+/// On live Stalwart v1.0.0, the server emits no `id:` headers on SSE state events and
+/// does not replay missed events on reconnection. `EventSourceSubscription` surfaces
+/// [`EventSourceItem::Reconnected`], informing the caller of the gap so that the caller
+/// can perform a full resync. This test verifies that the gap notification is delivered,
+/// the missed change is recovered via resync, and the reconnected push stream remains
+/// live for subsequent mutations.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn eventsource_reconnect_and_gap_handling_through_the_real_api() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the reconnect test");
+        return;
+    };
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+
+    let template = client.session().event_source_url.clone();
+    assert!(
+        !template.trim().is_empty(),
+        "the server advertises no eventSourceUrl"
+    );
+
+    let url = expand_url(&template, &["Mailbox"], false, 300);
+    let headers = client
+        .authorization_header()
+        .map(|value| vec![("Authorization".to_owned(), value)])
+        .unwrap_or_default();
+    let subscription =
+        EventSourceSubscription::start(url, SharedHeaders::new(headers), CancelFlag::new());
+
+    // Give the initial connection a moment to be established.
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(subscription.reconnect_count(), 0);
+    assert_eq!(subscription.last_event_id(), None);
+
+    // 1. Drop the TCP connection from the client side.
+    subscription.drop_connection();
+
+    // 2. Mutate state during the disconnection gap.
+    let gap_name = format!("agent-livewrite-gap-{}", unique_suffix());
+    let gap_mailbox = Mailbox {
+        name: gap_name.clone(),
+        ..Mailbox::default()
+    };
+    let gap_created = client
+        .mailbox_create(&account_id, &gap_mailbox)
+        .expect("Mailbox/set create failed against the real server during gap");
+    let gap_id = gap_created
+        .id
+        .clone()
+        .expect("the server named the gap mailbox");
+
+    // 3. Verify the client reconnects and notifies the caller.
+    let reconnected = subscription
+        .recv_item_timeout(Duration::from_secs(5))
+        .expect("Reconnected notification must arrive after dropping the socket");
+    assert_eq!(
+        reconnected,
+        EventSourceItem::Reconnected {
+            last_event_id: None,
+            reconnect_count: 1,
+        }
+    );
+    assert!(subscription.reconnect_count() >= 1);
+
+    // 4. Verify Stalwart does not replay the missed event from the gap.
+    let gap_stream_change = subscription.recv_timeout(Duration::from_secs(1));
+    assert!(
+        gap_stream_change.is_none(),
+        "Stalwart v1.0.0 sends no id lines and does not replay missed events on reconnect"
+    );
+
+    // 5. Caller performs the required resync to recover missed changes.
+    let resync_mailboxes = client
+        .mailbox_get(&account_id)
+        .expect("mailbox_get resync failed against the real server");
+    assert!(
+        resync_mailboxes
+            .list
+            .iter()
+            .any(|m| m.id.as_ref() == Some(&gap_id)),
+        "the missed change created during the gap must be recovered by resync"
+    );
+
+    // 6. Verify subsequent real-time changes are delivered over the reconnected stream.
+    let post_name = format!("agent-livewrite-post-{}", unique_suffix());
+    let post_mailbox = Mailbox {
+        name: post_name.clone(),
+        ..Mailbox::default()
+    };
+    let post_created = client
+        .mailbox_create(&account_id, &post_mailbox)
+        .expect("Mailbox/set create failed against the real server after reconnect");
+    let post_id = post_created
+        .id
+        .clone()
+        .expect("the server named the post-reconnect mailbox");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut saw_it = false;
+    while Instant::now() < deadline {
+        let Some(change) = subscription.recv_timeout(Duration::from_secs(1)) else {
+            continue;
+        };
+        if change
+            .changed
+            .get(&account_id)
+            .is_some_and(|type_state| type_state.contains_key("Mailbox"))
+        {
+            saw_it = true;
+            break;
+        }
+    }
+    assert!(
+        saw_it,
+        "new StateChange naming Mailbox must arrive over the reconnected EventSource stream"
+    );
+
+    // Clean up created mailboxes.
+    client
+        .mailbox_destroy(&account_id, &gap_id)
+        .expect("Mailbox/set destroy failed for gap mailbox");
+    client
+        .mailbox_destroy(&account_id, &post_id)
+        .expect("Mailbox/set destroy failed for post-reconnect mailbox");
 }
 
 /// `Blob/copy` (RFC 8620 §5.7) against a real server: uploading a blob and
