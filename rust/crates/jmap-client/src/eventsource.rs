@@ -46,6 +46,31 @@ const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_READ_HEAD_TIMEOUT: Duration = Duration::from_secs(30);
+pub const DEFAULT_STREAM_READ_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Timeouts configured for an [`EventSourceSubscription`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventSourceTimeouts {
+    /// Maximum duration allowed for the initial TCP connection.
+    pub connect: Duration,
+    /// Maximum duration allowed for reading the initial HTTP response head.
+    pub read_head: Duration,
+    /// Maximum duration allowed between SSE events while streaming.
+    pub stream_read: Duration,
+}
+
+impl Default for EventSourceTimeouts {
+    fn default() -> Self {
+        Self {
+            connect: DEFAULT_CONNECT_TIMEOUT,
+            read_head: DEFAULT_READ_HEAD_TIMEOUT,
+            stream_read: DEFAULT_STREAM_READ_TIMEOUT,
+        }
+    }
+}
+
 /// RFC 8620 §7.3's `types` value meaning "push every type", as opposed to a
 /// comma-separated list of the ones the subscriber cares about.
 pub const ALL_TYPES: &str = "*";
@@ -103,15 +128,13 @@ pub struct EventSourceSubscription {
 }
 
 impl EventSourceSubscription {
-    /// Start listening on `url` (a full `GET` target: the session's
-    /// `eventSourceUrl` already put through [`expand_url`]). A missing port is
-    /// defaulted from the scheme, since a real server's `eventSourceUrl`
-    /// names none.
-    ///
-    /// `headers` are sent on every connection attempt, read fresh each time
-    /// rather than fixed for the life of the subscription; see
-    /// [`set_headers`](Self::set_headers).
-    pub fn start(url: String, headers: SharedHeaders, cancel: CancelFlag) -> Self {
+    /// Start listening on `url` with explicit timeout configuration.
+    pub fn start_with_timeouts(
+        url: String,
+        headers: SharedHeaders,
+        cancel: CancelFlag,
+        timeouts: EventSourceTimeouts,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel();
         let socket = Arc::new(Mutex::new(None));
         let last_event_id = Arc::new(Mutex::new(None));
@@ -124,7 +147,7 @@ impl EventSourceSubscription {
                 last_id_slot: Arc::clone(&last_event_id),
                 reconnect_count: Arc::clone(&reconnect_count),
             };
-            thread::spawn(move || run(url, headers, cancel, sender, ctx))
+            thread::spawn(move || run(url, headers, cancel, sender, ctx, timeouts))
         };
         Self {
             receiver,
@@ -135,6 +158,18 @@ impl EventSourceSubscription {
             last_event_id,
             reconnect_count,
         }
+    }
+
+    /// Start listening on `url` (a full `GET` target: the session's
+    /// `eventSourceUrl` already put through [`expand_url`]). A missing port is
+    /// defaulted from the scheme, since a real server's `eventSourceUrl`
+    /// names none.
+    ///
+    /// `headers` are sent on every connection attempt, read fresh each time
+    /// rather than fixed for the life of the subscription; see
+    /// [`set_headers`](Self::set_headers).
+    pub fn start(url: String, headers: SharedHeaders, cancel: CancelFlag) -> Self {
+        Self::start_with_timeouts(url, headers, cancel, EventSourceTimeouts::default())
     }
 
     /// Block until a [`StateChange`] arrives or `timeout` elapses.
@@ -232,6 +267,7 @@ fn run(
     cancel: CancelFlag,
     sender: Sender<EventSourceItem>,
     ctx: ConnectionContext,
+    timeouts: EventSourceTimeouts,
 ) {
     let mut backoff = INITIAL_BACKOFF;
     let mut connection_attempts: u64 = 0;
@@ -244,6 +280,7 @@ fn run(
             &sender,
             &ctx,
             is_reconnect,
+            timeouts,
         ) {
             Ok(()) => backoff = INITIAL_BACKOFF,
             Err(error) => tracing::debug!(%error, url, "eventsource connection ended"),
@@ -280,10 +317,35 @@ fn connect_and_stream(
     sender: &Sender<EventSourceItem>,
     ctx: &ConnectionContext,
     is_reconnect: bool,
+    timeouts: EventSourceTimeouts,
 ) -> io::Result<()> {
+    use std::net::ToSocketAddrs;
+
     let parts = parse_url(url)
         .ok_or_else(|| io::Error::other(format!("eventsource url is not http(s)://: {url}")))?;
-    let stream = TcpStream::connect(&parts.dial)?;
+    let mut connected_stream = None;
+    let mut last_error = None;
+    for addr in parts.dial.to_socket_addrs()? {
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
+        match TcpStream::connect_timeout(&addr, timeouts.connect) {
+            Ok(s) => {
+                connected_stream = Some(s);
+                break;
+            }
+            Err(e) => {
+                last_error = Some(e);
+            }
+        }
+    }
+    let stream = connected_stream.ok_or_else(|| {
+        last_error.unwrap_or_else(|| io::Error::other(format!("could not resolve {}", parts.dial)))
+    })?;
+
+    stream.set_read_timeout(Some(timeouts.read_head))?;
+    stream.set_write_timeout(Some(timeouts.connect))?;
+
     // Stored before the TLS handshake (if any): `shutdown()` on this clone
     // aborts the handshake or any in-flight read/write on the other clone
     // `Conn` goes on to own, since both are handles onto the same socket.
@@ -347,6 +409,10 @@ fn connect_and_stream(
             last_event_id: last_id,
             reconnect_count: count,
         });
+    }
+
+    if let Some(sock) = ctx.socket.lock().expect("socket lock poisoned").as_ref() {
+        let _ = sock.set_read_timeout(Some(timeouts.stream_read));
     }
 
     let mut body = BufReader::new(ChunkedBody::new(reader));

@@ -181,18 +181,23 @@ mod ureq_transport {
     }
 
     impl UreqTransport {
-        pub fn new(timeout: Duration) -> Self {
+        /// Build a transport with explicit timeouts for connection, response read,
+        /// and total call duration.
+        pub fn with_timeouts(connect: Duration, read: Duration, total: Duration) -> Self {
             let config = ureq::Agent::config_builder()
                 // Non-2xx responses must reach the client as data (the body
                 // carries RFC 7807 problem details), not as transport errors.
                 .http_status_as_error(false)
-                .timeout_global(Some(timeout))
+                .timeout_connect(Some(connect))
+                .timeout_recv_response(Some(read))
+                .timeout_recv_body(Some(read))
+                .timeout_global(Some(total))
                 // ureq's default (`Never`) strips `Authorization` on every
                 // redirect, even a same-host one. A server that serves its
                 // session document via a same-host redirect (Stalwart's
                 // `/.well-known/jmap` -> `/jmap/session`, for one) then sees
                 // an unauthenticated request and answers with an anonymous,
-                // empty-accounts session — not a 401, so the failure surfaces
+                // empty-accounts session: not a 401, so the failure surfaces
                 // confusingly downstream as "no primary account" rather than
                 // here. Cross-host redirects still get no auth header, which
                 // is the safe default RFC 7235 leaves it out for.
@@ -201,6 +206,10 @@ mod ureq_transport {
             Self {
                 agent: config.into(),
             }
+        }
+
+        pub fn new(timeout: Duration) -> Self {
+            Self::with_timeouts(timeout, timeout, timeout)
         }
     }
 
