@@ -7,9 +7,9 @@
 //! real account has tens of thousands, and the failure modes differ:
 //! `Email/query` position paging, `maxObjectsInGet`/`maxCallsInRequest`
 //! chunking, the time a cold listing takes, and whether `messages_since`'s
-//! incremental path stays cheap once a mailbox is no longer small. This is
-//! the first batch, scoped to a few hundred messages; later batches can
-//! raise the size once this one has a clean baseline.
+//! incremental path stays cheap once a mailbox is no longer small. Batch 1
+//! covered the import/listing/catch-up path at N=500; this file also covers
+//! deletion from an already-large mailbox, which batch 1 did not reach.
 //!
 //! ## Running it
 //!
@@ -33,10 +33,11 @@
 //! an unconfigured environment.
 
 use std::env;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use jmap_client::{Client, Credentials};
 use jmap_mail_sync::{Keywords, MailSync, MessageUpdate};
+use jmap_proto::Id;
 use jmap_proto::session::CAPABILITY_MAIL;
 
 /// A value unique to this process invocation, so a concurrent or prior run's
@@ -95,6 +96,31 @@ fn message(subject: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+/// Imports `n` messages into `mailbox`, tagged with `run` and `label` so a
+/// concurrent or prior run's leftovers are never mistaken for this batch's
+/// own. Returns the imported uids, oldest first, and how long the whole
+/// batch took.
+fn import_batch(
+    sync: &MailSync,
+    mailbox: &Id,
+    run: u128,
+    label: &str,
+    n: usize,
+) -> (Vec<Id>, Duration) {
+    let start = Instant::now();
+    let mut imported = Vec::with_capacity(n);
+    for i in 0..n {
+        let subject = format!("agent-scale-{run}-{label}-{i}");
+        let uid = sync
+            .import_message(mailbox, message(&subject), &Keywords::default(), None)
+            .unwrap_or_else(|error| {
+                panic!("Email/import {label}#{i} failed against the real server: {error}")
+            });
+        imported.push(uid);
+    }
+    (imported, start.elapsed())
+}
+
 #[test]
 #[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
 fn importing_a_real_sized_batch_round_trips_through_the_real_server() {
@@ -132,18 +158,7 @@ fn importing_a_real_sized_batch_round_trips_through_the_real_server() {
     let n = batch_size();
     let run = unique_suffix();
 
-    let import_start = Instant::now();
-    let mut imported = Vec::with_capacity(n);
-    for i in 0..n {
-        let subject = format!("agent-scale-{run}-{i}");
-        let uid = sync
-            .import_message(&inbox_id, message(&subject), &Keywords::default(), None)
-            .unwrap_or_else(|error| {
-                panic!("Email/import #{i} failed against the real server: {error}")
-            });
-        imported.push(uid);
-    }
-    let import_elapsed = import_start.elapsed();
+    let (imported, import_elapsed) = import_batch(&sync, &inbox_id, run, "main", n);
     eprintln!(
         "SCALE: imported {n} messages in {:?} ({:?}/message)",
         import_elapsed,
@@ -168,16 +183,7 @@ fn importing_a_real_sized_batch_round_trips_through_the_real_server() {
     }
 
     let extra = 50usize;
-    let mut extra_imported = Vec::with_capacity(extra);
-    for i in 0..extra {
-        let subject = format!("agent-scale-{run}-extra-{i}");
-        let uid = sync
-            .import_message(&inbox_id, message(&subject), &Keywords::default(), None)
-            .unwrap_or_else(|error| {
-                panic!("Email/import of extra message #{i} failed against the real server: {error}")
-            });
-        extra_imported.push(uid);
-    }
+    let (extra_imported, _) = import_batch(&sync, &inbox_id, run, "extra", extra);
 
     let since_start = Instant::now();
     let update = sync
@@ -198,6 +204,102 @@ fn importing_a_real_sized_batch_round_trips_through_the_real_server() {
         assert!(
             present.iter().any(|summary| &summary.uid == uid),
             "every newly added message should be reported present by messages_since"
+        );
+    }
+
+    if let Some(kb) = peak_rss_kb() {
+        eprintln!("SCALE: peak RSS so far {kb} kB");
+    }
+}
+
+/// Batch 2's own case: `destroyed` ids cost nothing in `messages_since` (see
+/// its doc comment), so deleting from an already-large mailbox should stay on
+/// the cheap `Changed` path rather than tripping `catch_up_limit`'s relist,
+/// however large the mailbox has grown. Batch 1 only ever added messages.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn deleting_from_a_real_sized_mailbox_is_reported_without_a_relist() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the scale test");
+        return;
+    };
+
+    let account_id = client
+        .primary_account(CAPABILITY_MAIL)
+        .expect("the write-test account needs the mail capability");
+    let inbox_id = client
+        .mailbox_get(&account_id)
+        .unwrap()
+        .list
+        .into_iter()
+        .find(|mailbox| mailbox.role.as_deref() == Some(jmap_proto::mail::role::INBOX))
+        .expect("the write-test account needs an Inbox")
+        .id
+        .expect("the server named the Inbox");
+
+    let sync = MailSync::new(client, account_id);
+    let n = batch_size();
+    let run = unique_suffix();
+
+    let (imported, import_elapsed) = import_batch(&sync, &inbox_id, run, "del", n);
+    eprintln!(
+        "SCALE: imported {n} messages in {:?} ({:?}/message), ahead of the deletion case",
+        import_elapsed,
+        import_elapsed / n as u32
+    );
+
+    let (state_after_import, listed) = sync
+        .messages(&inbox_id)
+        .expect("listing the Inbox failed after the bulk import");
+
+    // "A few hundred", per the item's own wording, capped at the batch size
+    // itself so a small manual run never tries to delete more than exists.
+    let delete_count = n.min(300);
+    let to_delete: Vec<Id> = imported.into_iter().take(delete_count).collect();
+
+    let delete_start = Instant::now();
+    for uid in &to_delete {
+        sync.client()
+            .email_destroy(sync.account_id(), uid)
+            .unwrap_or_else(|error| panic!("Email/set destroy of {uid} failed: {error}"));
+    }
+    let delete_elapsed = delete_start.elapsed();
+    eprintln!(
+        "SCALE: deleted {delete_count} of {n} messages in {:?} ({:?}/message)",
+        delete_elapsed,
+        delete_elapsed / delete_count as u32
+    );
+
+    let since_start = Instant::now();
+    let update = sync
+        .messages_since(&inbox_id, &state_after_import, listed.len())
+        .expect("messages_since failed after deleting from an already-large mailbox");
+    let since_elapsed = since_start.elapsed();
+
+    let (present, absent) = match update {
+        MessageUpdate::Changed {
+            present, absent, ..
+        } => (present, absent),
+        other => panic!(
+            "expected the cheap Changed path after only deletions, got {other:?} \
+             (a Relisted here would mean catch_up_limit mistakenly counted destroyed ids)"
+        ),
+    };
+    eprintln!(
+        "SCALE: messages_since after deleting {delete_count} from a {n}-message mailbox took {:?}, \
+         reported {} absent",
+        since_elapsed,
+        absent.len()
+    );
+    assert!(
+        present.is_empty(),
+        "nothing but deletions happened, so present should be empty, got {} rows",
+        present.len()
+    );
+    for uid in &to_delete {
+        assert!(
+            absent.contains(uid),
+            "every deleted message should be reported absent by messages_since"
         );
     }
 
