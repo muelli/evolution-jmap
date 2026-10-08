@@ -24,6 +24,13 @@
  *   - `transfer` creates a folder of its own, moves the appended message into
  *     it, copies it back to the inbox, and then puts everything away again:
  *     the folder emptied and deleted, the message expunged.
+ *   - `password-prompt` is item 90: it skips the shared preamble entirely and
+ *     opens the account's own store twice instead, first with no password
+ *     seeded at all (the state a freshly created account is in) and then with
+ *     the real one, to confirm with real Camel, not the mock, that the first
+ *     attempt ends in the authentication-required state the base class's own
+ *     retry loop drives `test_session_get_password` through -- see
+ *     `run_password_prompt_phase`.
  *
  * One program rather than three because the setup the later phases need -- a
  * connected store with one known message in the inbox -- is exactly what
@@ -95,11 +102,13 @@ static const gchar *account_protocol = NULL;
 
 /* Which batch of observations one run of this program makes -- see the
  * header. Every phase shares the preamble: a connected store and one known
- * message appended to the inbox. */
+ * message appended to the inbox -- except PHASE_PASSWORD_PROMPT, which opens
+ * its own store twice and returns before the shared preamble runs. */
 typedef enum {
 	PHASE_RECEIVE,
 	PHASE_FLAGS,
-	PHASE_TRANSFER
+	PHASE_TRANSFER,
+	PHASE_PASSWORD_PROMPT
 } MailPhase;
 
 typedef struct _TestSession {
@@ -115,9 +124,9 @@ GType test_session_get_type (void) G_GNUC_CONST;
 G_DEFINE_TYPE (TestSession, test_session, CAMEL_TYPE_SESSION)
 
 /* `EMailSession`'s vfunc, with the credential lookup replaced by the value
- * the harness put in the environment. The base `CamelSession` answers this
- * one by returning NULL, which ends its own authenticate loop with "no
- * password" rather than with a password -- see this file's header. */
+ * the harness put in the environment. Returns NULL, with
+ * `CAMEL_SERVICE_ERROR_CANT_AUTHENTICATE` set, for an account this test
+ * seeded no password for -- see this file's header. */
 static gchar *
 test_session_get_password (CamelSession *session,
 			   CamelService *service,
@@ -138,10 +147,56 @@ test_session_get_password (CamelSession *session,
 	return g_strdup (seed_password);
 }
 
+/* `CamelSessionClass::authenticate_sync`, the vfunc `camel_session_
+ * authenticate_sync` (called from every provider's own `connect_sync`,
+ * including this one's -- see `jmap-mail/src/service.rs`'s module docs)
+ * actually dispatches to. The base class ships a default for this slot, but
+ * it is explicitly documented upstream (`camel-session.c`) as "a rough
+ * example ... not intended to be used as is": it retries
+ * `camel_service_authenticate_sync` forever on `CAMEL_AUTHENTICATION_REJECTED`
+ * without ever consulting `get_password` at all, which is a busy-loop here,
+ * not the credentials-required state item 90 exists to prove real Camel
+ * reaches. A real session (`EMailSession`) overrides this slot with the
+ * genuine prompt loop; this is this file's own minimal stand-in: one
+ * attempt, and on `REJECTED` exactly one offer of whatever `get_password`
+ * has -- which is nothing, for `PHASE_PASSWORD_PROMPT`'s first attempt. */
+static gboolean
+test_session_authenticate_sync (CamelSession *session,
+				CamelService *service,
+				const gchar *mechanism,
+				GCancellable *cancellable,
+				GError **error)
+{
+	CamelAuthenticationResult result;
+
+	result = camel_service_authenticate_sync (service, mechanism, cancellable, error);
+
+	if (result == CAMEL_AUTHENTICATION_REJECTED) {
+		GError *password_error = NULL;
+		gchar *password;
+
+		g_clear_error (error);
+
+		password = test_session_get_password (session, service, NULL, NULL, 0, &password_error);
+		if (!password) {
+			g_propagate_error (error, password_error);
+			return FALSE;
+		}
+
+		camel_service_set_password (service, password);
+		g_free (password);
+
+		result = camel_service_authenticate_sync (service, mechanism, cancellable, error);
+	}
+
+	return result == CAMEL_AUTHENTICATION_ACCEPTED;
+}
+
 static void
 test_session_class_init (TestSessionClass *klass)
 {
 	CAMEL_SESSION_CLASS (klass)->get_password = test_session_get_password;
+	CAMEL_SESSION_CLASS (klass)->authenticate_sync = test_session_authenticate_sync;
 }
 
 static void
@@ -294,6 +349,79 @@ open_store (const gchar *data_dir,
 	*out_session = session;
 
 	return CAMEL_STORE (service);
+}
+
+/* Item 90: finding 12's fix (jmap-mail/src/connect.rs's `StoreError::
+ * Unauthenticated`) has only ever been proven against the mock, which checks
+ * no password at all. This drives the real thing: `open_store` first with no
+ * password seeded anywhere, which is the state a freshly created account is
+ * in before anyone has typed one, then again with the real one.
+ *
+ * The first attempt must fail, and it must fail by asking for a password: the
+ * global `seed_password` is cleared first, so `test_session_get_password`
+ * (this file's stand-in for EDS's own credentials-required prompt) is what
+ * answers it, and it has nothing to hand back. A provider that mishandled
+ * Stalwart's Finding-12 200-OK-anonymous session would instead resolve no
+ * primary account and fail some other way *without* the base class ever
+ * reaching for a password at all -- which `unauthenticated-password-prompts`
+ * catches, and an account that connected anyway is caught by
+ * `unauthenticated-connect-succeeded`.
+ *
+ * Both attempts open the same account's own data and cache directories,
+ * deliberately: this models one real account across two real moments, not two
+ * independent stores. */
+static int
+run_password_prompt_phase (const gchar *data_dir,
+			   const gchar *cache_dir,
+			   const gchar *real_password)
+{
+	GError *error = NULL;
+	CamelSession *session = NULL;
+	CamelStore *store;
+	guint prompts_before;
+
+	if (!real_password || !*real_password) {
+		g_printerr ("password-prompt: JMAP_FUNCTIONAL_STORE_PASSWORD was not set\n");
+		return 2;
+	}
+
+	seed_password = NULL;
+	prompts_before = password_prompts;
+	store = open_store (data_dir, cache_dir, &session, &error);
+
+	g_print ("unauthenticated-connect-succeeded=%d\n", store ? 1 : 0);
+	g_print ("unauthenticated-password-prompts=%u\n", password_prompts - prompts_before);
+
+	if (store) {
+		g_printerr ("password-prompt: an account with no stored password connected anyway\n");
+		g_object_unref (store);
+		g_object_unref (session);
+		return 1;
+	}
+
+	g_print ("unauthenticated-error-domain=%s\n",
+		 (error && error->domain == CAMEL_SERVICE_ERROR) ? "camel-service-error" : "other");
+	g_print ("unauthenticated-error-code=%d\n", error ? error->code : -1);
+	g_clear_error (&error);
+
+	/* The same account, now with the password a real credentials-required
+	 * prompt would have stored. */
+	seed_password = real_password;
+	prompts_before = password_prompts;
+	session = NULL;
+	store = open_store (data_dir, cache_dir, &session, &error);
+	if (!store)
+		return fail ("authenticated-connect", error);
+
+	g_print ("authenticated-connect-succeeded=1\n");
+	g_print ("authenticated-password-prompts=%u\n", password_prompts - prompts_before);
+	g_print ("store-connected=%d\n",
+		 camel_service_get_connection_status (CAMEL_SERVICE (store)) == CAMEL_SERVICE_CONNECTED ? 1 : 0);
+
+	g_object_unref (store);
+	g_object_unref (session);
+
+	return 0;
 }
 
 /* What a store that has never seen this account before makes of one message:
@@ -621,6 +749,8 @@ main (int argc,
 		phase_id = PHASE_FLAGS;
 	} else if (g_strcmp0 (phase, "transfer") == 0) {
 		phase_id = PHASE_TRANSFER;
+	} else if (g_strcmp0 (phase, "password-prompt") == 0) {
+		phase_id = PHASE_PASSWORD_PROMPT;
 	} else {
 		g_printerr ("%s: unknown phase '%s'\n", argv[0], phase);
 		return 2;
@@ -662,6 +792,9 @@ main (int argc,
 	backend_extension = e_source_get_extension (account_source, E_SOURCE_EXTENSION_MAIL_ACCOUNT);
 	account_protocol = e_source_backend_get_backend_name (backend_extension);
 	g_print ("protocol=%s\n", account_protocol ? account_protocol : "");
+
+	if (phase_id == PHASE_PASSWORD_PROMPT)
+		return run_password_prompt_phase (data_dir, cache_dir, seed_password);
 
 	store = open_store (data_dir, cache_dir, &session, &error);
 	if (!store)
