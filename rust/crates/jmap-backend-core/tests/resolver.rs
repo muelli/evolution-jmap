@@ -147,3 +147,95 @@ fn repeated_lookups_retain_nothing_on_the_callers_context() {
          call, and only a drained private context keeps a window under the floor."
     );
 }
+
+/// A lookup attaches nothing to the calling thread's default context.
+/// Pushing a fresh context on a test thread and running lookups leaves
+/// g_main_context_pending false.
+#[test]
+fn lookups_attach_nothing_to_the_callers_thread_default_context() {
+    let handle = std::thread::spawn(|| {
+        // SAFETY: creating and pushing a private context for this thread.
+        let context = unsafe { glib_sys::g_main_context_new() };
+        unsafe { glib_sys::g_main_context_push_thread_default(context) };
+
+        for _ in 0..16 {
+            assert_eq!(
+                SystemResolver.lookup_srv("no-jmap-here.evolution-jmap-test.invalid"),
+                None
+            );
+        }
+
+        // SAFETY: context is valid and pushed on this thread.
+        let pending = unsafe { glib_sys::g_main_context_pending(context) };
+        unsafe {
+            glib_sys::g_main_context_pop_thread_default(context);
+            glib_sys::g_main_context_unref(context);
+        }
+
+        assert_eq!(
+            pending,
+            glib_sys::GFALSE,
+            "expected no pending sources on caller context"
+        );
+    });
+
+    handle.join().expect("thread join succeeded");
+}
+
+/// Concurrent lookups from several threads all answer correctly without deadlock.
+#[test]
+fn concurrent_lookups_from_several_threads_all_answer_correctly() {
+    let handles: Vec<_> = (0..8)
+        .map(|i| {
+            std::thread::spawn(move || {
+                for _ in 0..8 {
+                    assert_eq!(
+                        SystemResolver.lookup_srv("no-jmap-here.evolution-jmap-test.invalid"),
+                        None
+                    );
+                }
+                assert_eq!(
+                    SystemResolver.lookup_srv(&format!("test-{i}\0.invalid")),
+                    None
+                );
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        handle.join().expect("thread join succeeded");
+    }
+}
+
+/// The number of open file descriptors does not grow across lookups.
+/// This prevents GWakeup fd exhaustion caused by creating uniterated contexts.
+#[test]
+fn open_file_descriptors_do_not_grow_across_repeated_lookups() {
+    fn count_open_fds() -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .expect("reading /proc/self/fd succeeds")
+            .count()
+    }
+
+    // Warm up the resolver thread and one-time process allocations.
+    assert_eq!(
+        SystemResolver.lookup_srv("no-jmap-here.evolution-jmap-test.invalid"),
+        None
+    );
+
+    let fds_before = count_open_fds();
+
+    for _ in 0..256 {
+        assert_eq!(
+            SystemResolver.lookup_srv("no-jmap-here.evolution-jmap-test.invalid"),
+            None
+        );
+    }
+
+    let fds_after = count_open_fds();
+
+    assert!(
+        fds_after <= fds_before,
+        "fd count grew from {fds_before} to {fds_after} across 256 lookups"
+    );
+}
