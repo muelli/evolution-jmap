@@ -31,6 +31,20 @@
 //! identity to transport, through two uids) is the mock leg's
 //! `transport-client.c` chain, not `mail-live-client.c`'s store preamble.
 //!
+//! ## Item 90: the password prompt, against real Camel
+//!
+//! `jmap-mail/src/connect.rs`'s `StoreError::Unauthenticated` (finding 12 in
+//! `STALWART-RFC-FINDINGS.md`: real Stalwart answers an unauthenticated
+//! session request 200 OK instead of RFC 8620's own 401) exists so that a
+//! fresh account with no stored password still ends up asking the user for
+//! one, instead of silently resolving no primary account. Every test proving
+//! that so far uses the mock, which never answers with a real `REJECTED`/
+//! `get_password` round trip the way the base `CamelService` class's own
+//! retry loop does. `camel_prompts_for_a_password_before_a_fresh_account_connects`
+//! drives that loop for real: `mail-live-client.c`'s `password-prompt` phase
+//! opens the account's own store first with no password anywhere (the state
+//! a brand new account is in) and then again with the real one.
+//!
 //! The mechanism is unchanged from the other three legs:
 //! `spawn_loopback_proxy` satisfies `jmap-backend-core::connect_target`'s
 //! plaintext-stays-loopback rule honestly while the traffic actually
@@ -878,6 +892,81 @@ fn camel_sends_through_a_real_transport_and_a_second_account_receives_it() {
         seen.get("sender-cleaned"),
         Some(&"1"),
         "the sent copy survived the sender's expunge\n{report}"
+    );
+}
+
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn camel_prompts_for_a_password_before_a_fresh_account_connects() {
+    let Some((origin, user, password)) = live_server_params() else {
+        eprintln!(
+            "JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the real-server password-prompt leg"
+        );
+        return;
+    };
+    let _account = exclusive_account();
+    let client = required_path("JMAP_FUNCTIONAL_MAIL_LIVE_CLIENT");
+    let session = live_session(
+        concat!(
+            env!("CARGO_TARGET_TMPDIR"),
+            "/live-stalwart-mail-password-prompt"
+        ),
+        &origin,
+        &user,
+        &password,
+    );
+
+    let subject = format!("agent-fnpwd-{:x}", unique_suffix() & 0xffff_ffff_ffff);
+    let output = session.run(&client, &["jmap-functional", &subject, "password-prompt"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report = format!("--- client stdout ---\n{stdout}--- client stderr ---\n{stderr}");
+    let seen = observations(&stdout);
+
+    assert_eq!(
+        seen.get("protocol"),
+        Some(&"jmap"),
+        "the source names a protocol the provider does not register\n{report}"
+    );
+
+    // The claim this leg exists for: a fresh account with no stored password
+    // never connects, and real Camel's own retry loop is what decides that --
+    // not a result this test classifies after the fact, but the loop's own
+    // get_password call, counted by the client.
+    assert_eq!(
+        seen.get("unauthenticated-connect-succeeded"),
+        Some(&"0"),
+        "an account with no stored password connected to the real server anyway\n{report}"
+    );
+    assert!(
+        seen.get("unauthenticated-password-prompts")
+            .and_then(|count| count.parse::<u32>().ok())
+            .is_some_and(|count| count >= 1),
+        "Camel's own retry loop never asked for a password on the unauthenticated attempt\n{report}"
+    );
+    assert_eq!(
+        seen.get("unauthenticated-error-domain"),
+        Some(&"camel-service-error"),
+        "the unauthenticated attempt failed outside CAMEL_SERVICE_ERROR, not through the ordinary authentication-required path\n{report}"
+    );
+
+    // The same account, now with the password a real credentials-required
+    // prompt would have stored, must connect.
+    assert_eq!(
+        seen.get("authenticated-connect-succeeded"),
+        Some(&"1"),
+        "the same account did not connect once a password was stored for it\n{report}"
+    );
+    assert_eq!(
+        seen.get("store-connected"),
+        Some(&"1"),
+        "the service did not report itself connected after the authenticated attempt\n{report}"
+    );
+
+    assert!(
+        output.status.success(),
+        "the client failed against the real server with {}\n{report}",
+        output.status
     );
 }
 
