@@ -175,9 +175,10 @@ impl Drop for Class {
 /// window only if an `EOAuth2Service` answering that name is registered in
 /// that same process. The collection module registers the service for the
 /// source registry's process; this module must do the same for the shell's,
-/// or the prompter falls back to the password dialog — observed live
+/// or the prompter falls back to the password dialog, observed live
 /// (2026-08-23, Fastmail): a freshly discovered OAuth account prompted for a
 /// password that nothing could satisfy.
+#[cfg(not(eds_oauth2_dynamic))]
 #[test]
 fn the_entry_point_registers_the_oauth2_service_type() {
     loaded();
@@ -185,8 +186,25 @@ fn the_entry_point_registers_the_oauth2_service_type() {
         // SAFETY: NAME is a 'static NUL-terminated string.
         unsafe { g_type_from_name(<oauth2_service::Service as ObjectSubclass>::NAME.as_ptr()) },
         0,
-        "e_module_load did not register the OAuth2 service type — the shell's \
-         credentials prompter can only offer the password dialog without it"
+        "e_module_load did not register the OAuth2 service type, so the shell's \
+         credentials prompter can only offer the password dialog"
+    );
+}
+
+/// The other side of the test above. Where EDS brings its own
+/// `EOAuth2ServiceDynamic`, the prompter already has a service for the method
+/// these accounts carry, and registering a second one that claims the same
+/// account would leave `e_oauth2_services_find` choosing by list order.
+#[cfg(eds_oauth2_dynamic)]
+#[test]
+fn the_entry_point_leaves_the_oauth2_service_to_eds() {
+    loaded();
+    assert_eq!(
+        // SAFETY: NAME is a 'static NUL-terminated string.
+        unsafe { g_type_from_name(<oauth2_service::Service as ObjectSubclass>::NAME.as_ptr()) },
+        0,
+        "e_module_load registered this project's own EOAuth2Service on an EDS \
+         that brings its own, so two services now claim the same account"
     );
 }
 

@@ -138,11 +138,9 @@ use eds_sys::e_source_authentication_set_credential_store_id as set_credential_i
 use glib_sys::{GFALSE, GTRUE, gboolean};
 use jmap_backend_core::error::cstring_lossy;
 use jmap_backend_core::marshal::read_string;
-use jmap_backend_core::oauth2::OAUTH2_METHOD;
+use jmap_backend_core::oauth2::{OAUTH2_AUTH_METHOD, OAUTH2_METHOD};
 use jmap_collection_sync::Parts;
 use jmap_collection_sync::child_source::Connection;
-
-use crate::oauth2_service;
 
 /// The name the registry looks this account's collection factory up by.
 ///
@@ -268,17 +266,21 @@ pub unsafe fn apply(source: *mut ESource, account: &Account) {
         // name the credentials engine passes to `authenticate` for what is
         // now a plain password.
         //
-        // `OAUTH2_METHOD` ("OAuth2") is the generic alias; `oauth2_service::NAME`
-        // ("JMAP") is the one real accounts actually carry, since it is what
+        // `OAUTH2_METHOD` ("OAuth2") is the generic alias; `OAUTH2_AUTH_METHOD`
+        // is the particular one real accounts actually carry, since it is what
         // `backend.rs`'s setup combo and `config_lookup.rs`'s discovery both
         // write. Checking only the former left every real OAuth 2.0 account
-        // without this key, silently defeating eds#663.
-        let oauth2_service_name = oauth2_service::NAME
+        // without this key, silently defeating eds#663. Asking for the
+        // literal "JMAP" instead of the constant would bring that bug straight
+        // back on an EDS where the method is "OAuth2Dynamic", which is why
+        // this and the three other sites that compare a method name all read
+        // the same constant.
+        let oauth2_auth_method = OAUTH2_AUTH_METHOD
             .to_str()
-            .expect("oauth2_service::NAME is a fixed ASCII string");
+            .expect("OAUTH2_AUTH_METHOD is a fixed ASCII string");
         let connection_auth_method = account.connection.auth_method.as_deref();
         let credential_id = if connection_auth_method == Some(OAUTH2_METHOD)
-            || connection_auth_method == Some(oauth2_service_name)
+            || connection_auth_method == Some(oauth2_auth_method)
         {
             e_source_get_uid(source)
         } else {

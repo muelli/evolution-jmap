@@ -40,6 +40,7 @@ use gobject_sys::{
 };
 use jmap_backend_collection::collection_source::{parts_of, server_of, user_of};
 use jmap_backend_core::marshal::read_string;
+use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 use jmap_backend_core::source::{ConnectTarget, SourceError};
 use jmap_backend_core::subclass::register_static;
 use jmap_collection_sync::Parts;
@@ -51,7 +52,6 @@ use jmap_config::backend::{
 use jmap_config::complete::{Incomplete, check};
 use jmap_config::mail::MAIL_BACKEND_NAME;
 use jmap_config::oauth2;
-use jmap_config::oauth2_service;
 
 /// The class Evolution would dispatch through, kept referenced for the test's
 /// duration so the slots and the name stay valid.
@@ -635,13 +635,13 @@ fn a_finished_account_is_one_the_setup_may_commit() {
 fn oauth2_picked_by_hand_with_no_registered_client_is_refused() {
     // The gap session 313 found and session 314 confirmed fixable: the
     // Authentication combo (`backend.rs`'s `AUTH_CHOICES`) writes
-    // `[Authentication] Method` straight to `oauth2_service::NAME` with
+    // `[Authentication] Method` straight to `OAUTH2_AUTH_METHOD` with
     // nothing else — `discover_and_register` only ever runs from "Look Up
     // Account Details" (`config_lookup.rs`). An account that names OAuth
     // 2.0 with no `[JMAP OAuth2]` client behind it can never fetch a
     // token, so it must not be one *Next* accepts.
     let mut account = finished();
-    account.connection.auth_method = Some(oauth2_service::NAME.to_str().unwrap().to_owned());
+    account.connection.auth_method = Some(OAUTH2_AUTH_METHOD.to_str().unwrap().to_owned());
     let collection = Class::get().new_collection().edited(&account);
     assert!(!collection.complete());
     assert_eq!(collection.refusal(), Err(Incomplete::OAuth2NotRegistered));
@@ -653,7 +653,7 @@ fn oauth2_with_a_registered_client_is_accepted() {
     // entry) has written a client id, the same account is complete again —
     // this gate is about the client existing, not about how it got there.
     let mut account = finished();
-    account.connection.auth_method = Some(oauth2_service::NAME.to_str().unwrap().to_owned());
+    account.connection.auth_method = Some(OAUTH2_AUTH_METHOD.to_str().unwrap().to_owned());
     let collection = Class::get().new_collection().edited(&account);
     // SAFETY: `collection.0` is the live source `edited` just wrote to.
     unsafe {

@@ -27,10 +27,17 @@
 
 use std::env;
 
-/// The `eds-sys` feature `account.rs` `#[cfg]`s on: whether the installed EDS
-/// has `ESourceAuthentication:credential-store-id` (eds#663) to write an
-/// OAuth 2.0 account's token-cache key onto, in place of `credential-name`.
-const EDS_FEATURES: &[&str] = &["eds_credential_store_id"];
+/// The `eds-sys` features this crate's sources `#[cfg]` on:
+///
+/// - `eds_credential_store_id`: whether the installed EDS has
+///   `ESourceAuthentication:credential-store-id` (eds#663) to write an OAuth
+///   2.0 account's token-cache key onto, in place of `credential-name`:
+///   `account.rs`.
+/// - `eds_oauth2_dynamic`: whether it ships upstream's own
+///   `EOAuth2ServiceDynamic` and `ESourceOAuth2Client`, which this project
+///   then uses instead of registering a service and a storage extension of
+///   its own: `oauth2.rs`, `oauth2_service.rs`.
+const EDS_FEATURES: &[&str] = &["eds_credential_store_id", "eds_oauth2_dynamic"];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");

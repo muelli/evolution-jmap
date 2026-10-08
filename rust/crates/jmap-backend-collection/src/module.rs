@@ -128,7 +128,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
         unsafe {
             remember_backend_type(register_dynamic::<JmapCollectionBackend>(type_module));
             register_dynamic::<JmapCollectionFactory>(type_module);
-            register_dynamic::<jmap_config::oauth2_service::Service>(type_module);
+            jmap_config::oauth2_service::register(type_module);
         }
         jmap_config::oauth2::ensure_registered();
     });

@@ -344,16 +344,16 @@ fn an_oauth2_account_is_given_a_credential_name_of_its_own_uid() {
 #[test]
 fn an_account_authenticated_via_the_jmap_oauth2_service_is_given_a_credential_name() {
     // The setup UI and "Look Up Account Details" both write
-    // `oauth2_service::NAME` ("JMAP", the registered EOAuth2Service's own
-    // name), never the generic `OAUTH2_METHOD` alias ("OAuth2") the test
-    // above uses. A real account never reaches `apply` with that generic
-    // spelling, so a check against it alone would never see the field a real
-    // account actually carries.
+    // `OAUTH2_AUTH_METHOD` (the particular service's own name: "JMAP", or
+    // "OAuth2Dynamic" where EDS brings its own service), never the generic
+    // `OAUTH2_METHOD` alias ("OAuth2") the test above uses. A real account
+    // never reaches `apply` with that generic spelling, so a check against it
+    // alone would never see the field a real account actually carries.
     let mut account = account();
     account.connection.auth_method = Some(
-        jmap_config::oauth2_service::NAME
+        jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD
             .to_str()
-            .expect("oauth2_service::NAME is a fixed ASCII string")
+            .expect("OAUTH2_AUTH_METHOD is a fixed ASCII string")
             .to_owned(),
     );
     let source = TestSource::new().written(&account);

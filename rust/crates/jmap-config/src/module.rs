@@ -132,7 +132,7 @@ pub unsafe extern "C" fn load(type_module: *mut GTypeModule) {
             // password dialog — observed live (2026-08-23, Fastmail): a
             // freshly discovered OAuth account prompted for a password that
             // nothing could satisfy.
-            register_dynamic::<crate::oauth2_service::Service>(type_module);
+            crate::oauth2_service::register(type_module);
             // The two `ESourceConfigBackend`s, and the reason the New Address
             // Book and New Calendar dialogs offer JMAP at all — see
             // `crate::source_config`. Registered here rather than from a module

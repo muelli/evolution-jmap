@@ -1,18 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Re-emits the `eds-sys` feature cfgs this crate's targets need. See
+//! Re-emits the `eds-sys` feature cfg this crate's tests need. See
 //! `jmap-mail/build.rs`'s module comment for why the detection lives in
 //! `eds-sys` and only the re-emission is duplicated per dependent.
 
-/// - `eds_credential_store_id`: whether the installed EDS has
-///   `ESourceAuthentication:credential-store-id` (eds#663) to bind a child's
-///   token-cache key from, in place of `credential-name`: `child_added.rs`,
-///   `mail_child.rs`.
-/// - `eds_oauth2_dynamic`: whether it brings its own `EOAuth2ServiceDynamic`,
-///   in which case this module registers none of its own, asserted by
-///   `tests/oauth2_service.rs`.
-const EDS_FEATURES: &[&str] = &["eds_credential_store_id", "eds_oauth2_dynamic"];
+/// Whether the installed EDS brings its own `EOAuth2ServiceDynamic`, in which
+/// case this module registers no `EOAuth2Service` of its own and
+/// `tests/oauth2_service.rs` expects upstream's to be the one the registry
+/// finds.
+const EDS_FEATURES: &[&str] = &["eds_oauth2_dynamic"];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");

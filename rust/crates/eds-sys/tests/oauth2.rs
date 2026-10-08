@@ -131,6 +131,48 @@ fn the_secret_keys_are_the_names_eds_stores_a_token_under() {
 #[cfg(not(eds_oauth2_dynamic))]
 fn eds_oauth2_dynamic_is_not_yet_available_on_this_eds() {}
 
+/// The sibling the test above asks for: on an EDS that *does* declare the
+/// marker, pin the two strings this project spells by hand against the ones
+/// upstream actually answers.
+///
+/// Both are `#define`s of string literals rather than symbols
+/// (`E_SOURCE_EXTENSION_OAUTH2_CLIENT`) or the return of a vfunc
+/// (`eos_dynamic_get_name`), so bindgen hands back neither and
+/// `jmap_config::oauth2::EXTENSION_NAME` and
+/// `jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD` are literals copied from
+/// upstream's source. A copy is only as good as something that checks it:
+/// an account would be written into a group upstream's service never reads,
+/// or under a method `eos_default_can_process` never matches, and in both
+/// cases the symptom is a password prompt rather than an error.
+#[test]
+#[cfg(eds_oauth2_dynamic)]
+fn upstreams_dynamic_oauth2_pieces_answer_to_the_names_this_project_spells() {
+    // SAFETY: no arguments, and each type registers itself on first call;
+    // `g_type_class_ref` returns the initialised class, and the reference is
+    // never given back because the strings below are read out of it.
+    unsafe {
+        let extension_class = gobject_sys::g_type_class_ref(e_source_oauth2_client_get_type())
+            .cast::<ESourceExtensionClass>();
+        assert_eq!(
+            CStr::from_ptr((*extension_class).name),
+            c"OAuth2 Client",
+            "ESourceOAuth2Client's keyfile group is not the one this project writes"
+        );
+
+        // The service's name comes from a vfunc, so it takes an instance.
+        // `EOAuth2ServiceDynamic` has no construct properties of its own.
+        let service = gobject_sys::g_object_new(e_oauth2_service_dynamic_get_type(), ptr::null())
+            .cast::<EOAuth2Service>();
+        assert!(!service.is_null(), "g_object_new returned NULL");
+        assert_eq!(
+            CStr::from_ptr(e_oauth2_service_get_name(service)),
+            c"OAuth2Dynamic",
+            "EOAuth2ServiceDynamic's name is not the method this project writes"
+        );
+        gobject_sys::g_object_unref(service.cast());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The interface itself.
 

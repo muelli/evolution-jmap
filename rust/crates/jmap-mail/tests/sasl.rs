@@ -30,7 +30,7 @@ use eds_sys::{
 };
 use glib_sys::{GFALSE, GTRUE, g_list_length, g_list_nth_data};
 use gobject_sys::{g_object_new, g_object_unref};
-use jmap_backend_core::oauth2::OAUTH2_SERVICE_NAME;
+use jmap_backend_core::oauth2::OAUTH2_AUTH_METHOD;
 use jmap_mail::module::camel_provider_module_init;
 use jmap_mail::provider::PROTOCOL;
 use jmap_mail::sasl::{MECHANISM, auth_type, mechanism_for};
@@ -106,7 +106,7 @@ fn camel_knows_a_mechanism_by_the_oauth2_service_name_that_needs_no_password() {
 /// the silent attempt and then have no way back to a re-consent.
 #[test]
 fn the_mechanism_is_named_after_this_projects_oauth2_service() {
-    assert_eq!(MECHANISM, OAUTH2_SERVICE_NAME);
+    assert_eq!(MECHANISM, OAUTH2_AUTH_METHOD);
 }
 
 /// Deriving from `CamelSaslXOAuth2` rather than from `CamelSasl` is what makes

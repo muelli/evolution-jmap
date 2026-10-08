@@ -532,6 +532,53 @@ warnings` stayed clean. The `credential-name` branch (what every build here
 still ships, since no released EDS has the new property) was untouched by
 this and is unaffected.
 
+## OAuth2Dynamic (item 91) confirmed against EDS master (measured 2026-10-07)
+
+Upstream's own dynamically-registered-client OAuth 2.0 support landed on
+e-d-s master the same day (`bf6e074`, plus `efe25dc` for
+`e_util_fill_random_bytes`), all of it `Since: 3.64` and so unreleased.
+Reused the from-source recipe above unchanged, which reported **3.63.1** from
+`pkg-config --modversion libedataserver-1.2`.
+
+Confirmed from `cargo build -p eds-sys -vv`'s own build-script output, not
+inferred: `cargo::rustc-cfg=eds_oauth2_dynamic` is emitted, so the marker
+probe added for item 91 subtask (1) fires for real against a header tree
+that declares `e_source_oauth2_client_get_type`.
+
+What that then switches on, and what was run against it:
+
+- `eds-sys`'s own `upstreams_dynamic_oauth2_pieces_answer_to_the_names_this_project_spells`,
+  which is the test that keeps two hand-copied literals honest.
+  `E_SOURCE_EXTENSION_OAUTH2_CLIENT` and `eos_dynamic_get_name`'s answer are
+  a `#define` and a vfunc return, so bindgen emits neither and the project
+  spells `"OAuth2 Client"` and `"OAuth2Dynamic"` by hand. The test class-refs
+  `ESourceOAuth2Client` to read `ESourceExtensionClass::name` back out, and
+  instantiates `EOAuth2ServiceDynamic` to call `e_oauth2_service_get_name`
+  through EDS's own wrapper.
+- `jmap-config`'s `the_class_behind_the_group_is_the_one_this_eds_owns_it_with`
+  and `what_this_crate_writes_is_what_upstreams_own_service_reads`: that
+  `e_source_get_extension (source, EXTENSION_NAME)` returns an
+  `ESourceOAuth2Client` and not a class of this project's, and that a
+  registration written through `jmap_config::oauth2::apply` comes back out of
+  `e_source_oauth2_client_dup_*`, which is the door
+  `eos_dynamic_get_client_id` and its siblings actually read it through.
+- `jmap-mail`'s existing SASL suite, unchanged except for the constant it
+  reads: `camel_sasl_authtype("OAuth2Dynamic")` finds upstream's
+  `CamelSaslXOAuth2Dynamic`, reports `need_password == FALSE`, and is
+  recognised by `camel_sasl_is_xoauth2_alias`.
+
+One upstream behaviour change found while checking item 91's subtask (3),
+worth knowing beyond this item.
+`e_source_registry_server_get_access_token_sync` has grown a "prefer the
+collection source" step in front of `e_oauth2_services_find`, gated on
+`e_util_can_use_collection_as_credential_source`. Read against 3.52.4,
+3.56.0 and 3.60.2, which all pass the asking source straight through, this
+is new on master. It does not remove the need for
+`jmap_backend_collection::child_added`'s `follow_oauth2` binding: the gate
+declines whenever the child's `[Authentication]` host and user are both
+filled and differ from the collection's, so the collection is a preference
+and never a guarantee.
+
 ## Supported versions
 
 The plugin is built against, and must be deployed against, the EDS it was

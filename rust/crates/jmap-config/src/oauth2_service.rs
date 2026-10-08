@@ -140,6 +140,45 @@ use crate::oauth2;
 /// that have to agree.
 pub const NAME: &CStr = jmap_backend_core::oauth2::OAUTH2_SERVICE_NAME;
 
+/// Registers [`Service`] against `type_module`, unless the EDS in front of us
+/// has an `EOAuth2ServiceDynamic` of its own, in which case it registers
+/// nothing and that service takes the account.
+///
+/// Every module that would otherwise call `register_dynamic::<Service>`
+/// directly calls this instead, so the stand-down is decided once, here,
+/// rather than once per module with a `#[cfg]` and a `build.rs` re-emitting
+/// it in each. The decision reads
+/// [`EDS_HAS_DYNAMIC_OAUTH2`](jmap_backend_core::oauth2::EDS_HAS_DYNAMIC_OAUTH2),
+/// which is a `const bool`, so the call folds away on both kinds of build.
+///
+/// Standing down is not merely tidiness. Our service and upstream's would
+/// both answer `can_process` for an account whose method named either one,
+/// and `e_oauth2_services_find` returns the first match out of a list whose
+/// order nothing here controls; and an inert registration still puts a dead
+/// "JMAP" entry in Evolution's *Authentication type* combo, because
+/// `e_auth_combo_box_update_available` builds that list by walking the
+/// registered services.
+///
+/// # Safety
+///
+/// `type_module` must be the `GTypeModule *` the caller's `e_module_load` was
+/// passed, alive for the duration of the call.
+pub unsafe fn register(type_module: *mut gobject_sys::GTypeModule) {
+    if jmap_backend_core::oauth2::EDS_HAS_DYNAMIC_OAUTH2 {
+        // No migration, by decision (Tobias, 2026-10-07): an account set up
+        // against an older EDS keeps the method "JMAP" and its `[JMAP
+        // OAuth2]` group, neither of which a build that takes this branch
+        // looks at, so it stops working and has to be set up again. Do not
+        // add migration code here. The stored tokens could not be carried
+        // over in any case: the keyring key is
+        // `OAuth2::<service name>[user][credential-store-id]`, so the old
+        // ones are not visible to the new service to begin with.
+        return;
+    }
+    // SAFETY: a live `GTypeModule` by this function's contract.
+    unsafe { jmap_backend_core::subclass::register_dynamic::<Service>(type_module) };
+}
+
 /// The instance struct: nothing but [`EOAuth2ServiceBase`]'s own state. No
 /// per-instance storage of our own — everything this service answers is
 /// either `'static` or reached through the `source` argument every

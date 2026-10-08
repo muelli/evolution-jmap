@@ -171,26 +171,39 @@ pub unsafe fn follow_collection(collection: *mut ESource, child: *mut ESource) {
     }
 }
 
-/// Binds the account's `[JMAP OAuth2]` client registration onto a child,
-/// creating the group on the child — the second exception to the
-/// both-sides-or-neither rule, and one for [`crate::mail_child`]'s own reason:
-/// a group created here is created in a source of this account's, for want of
-/// anywhere else it could come from.
+/// Binds the account's OAuth 2.0 client registration
+/// ([`jmap_config::oauth2::EXTENSION_NAME`], whichever group that is on this
+/// EDS) onto a child, creating the group on the child: the second exception
+/// to the both-sides-or-neither rule, and one for [`crate::mail_child`]'s own
+/// reason: a group created here is created in a source of this account's, for
+/// want of anywhere else it could come from.
 ///
 /// It has to be on the child because EDS hands the `EOAuth2Service` whichever
 /// source asked for the token: `e_source_registry_server_get_access_token_sync`
-/// (e-source-registry-server.c, EDS 3.52) passes the asking source straight
-/// into `e_oauth2_service_get_access_token_sync` — the silent-refresh path
-/// never resolves the collection as the credential source (only the
-/// interactive prompter does). EDS's own OAuth2 services never feel this,
-/// their client ids being compile-time constants; ours is per-account state in
-/// `[JMAP OAuth2]`, and a child without it is a child whose token refresh has
-/// no client id, no token endpoint and no scope — so the first expired access
-/// token became a full re-consent (observed live 2026-08-26: the registry
-/// prepared a refresh form for a memory-only calendar child's uid, and mail's
-/// connect escalated to the consent window; that same send-time re-consent
-/// (`jmap-mail`'s `connect_sync` not authenticating before the shell's
-/// prompt-first path) is the mechanism seen here, through the transport).
+/// (e-source-registry-server.c) passes the asking source straight into
+/// `e_oauth2_service_get_access_token_sync`. The silent-refresh path never
+/// resolves the collection as the credential source (only the interactive
+/// prompter does). EDS's own OAuth2 services never feel this, their client ids
+/// being compile-time constants; ours is per-account state in that group, and
+/// a child without it is a child whose token refresh has no client id, no
+/// token endpoint and no scope, so the first expired access token became a
+/// full re-consent (observed live 2026-08-26: the registry prepared a refresh
+/// form for a memory-only calendar child's uid, and mail's connect escalated
+/// to the consent window; that same send-time re-consent (`jmap-mail`'s
+/// `connect_sync` not authenticating before the shell's prompt-first path) is
+/// the mechanism seen here, through the transport).
+///
+/// That is true of every EDS this project supports today, and read again
+/// rather than assumed: the paragraph above describes 3.52 through 3.62
+/// verbatim, and on current master the same function has grown a "prefer the
+/// collection source" step in front of the lookup, gated on
+/// `e_util_can_use_collection_as_credential_source`. The binding stays either
+/// way, and not only for the older releases. That gate compares the child's
+/// `[Authentication] Host` and `User` against the collection's and declines
+/// when they are both filled and differ, which is exactly the case EDS
+/// documents it for: a mail service of the account living on another server.
+/// So the collection is a *preference*, never a guarantee, and the child it
+/// falls back to still has to carry the registration itself.
 ///
 /// The account's side is never invented: an account without the group has no
 /// registration to carry, and its `.source` file is the user's — the same
