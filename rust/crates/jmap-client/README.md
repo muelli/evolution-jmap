@@ -103,6 +103,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Common Workflows
+
+### Mailbox Listing and Email Retrieval
+
+```rust,no_run
+use jmap_client::{Client, Credentials, Id};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::connect("https://mail.example.com", Credentials::bearer("secret-token"))?;
+    let account_id = client.primary_account("urn:ietf:params:jmap:mail")?;
+
+    // List all mailboxes for the primary mail account.
+    let mailboxes = client.mailbox_get(&account_id)?;
+    for mailbox in &mailboxes.list {
+        println!("{}: {}", mailbox.id.as_str(), mailbox.name);
+    }
+
+    // Fetch messages by ID.
+    let emails = client.email_get(&account_id, &[Id::from("m1234")], None)?;
+    for email in emails {
+        println!("Subject: {:?}", email.subject);
+    }
+    Ok(())
+}
+```
+
+### EventSource Push Stream
+
+```rust,no_run
+use std::time::Duration;
+use jmap_client::{Client, Credentials, EventSourceItem};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::connect("https://mail.example.com", Credentials::bearer("secret-token"))?;
+    let subscription = client.event_source(&["Mailbox", "Email"])?;
+
+    if let Some(item) = subscription.recv_item_timeout(Duration::from_secs(10)) {
+        match item {
+            EventSourceItem::State(state) => println!("State change: {:?}", state),
+            EventSourceItem::Reconnected { reconnect_count, .. } => {
+                println!("Reconnected #{reconnect_count}");
+            }
+        }
+    }
+    Ok(())
+}
+```
+
 ## Feature flags
 
 | Feature | Default | Description |

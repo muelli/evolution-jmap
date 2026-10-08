@@ -13,12 +13,17 @@ use jmap_client::rebase_urls_from_env;
 const VAR: &str = "JMAP_LIVE_SERVER_REBASE_URLS";
 
 #[test]
-fn parses_the_documented_truthy_and_falsy_spellings() {
-    // SAFETY: this test is the only thing in this binary that touches `VAR`.
+fn rebase_urls_from_env_and_client_builder() {
+    use jmap_client::ClientBuilder;
+
+    // SAFETY: this test is the only test in this binary, so no concurrent threads mutate VAR.
     unsafe {
         std::env::remove_var(VAR);
     }
     assert!(!rebase_urls_from_env(), "unset means off");
+
+    let builder_unset = ClientBuilder::default();
+    assert!(format!("{builder_unset:?}").contains("rebase_urls_to_origin: false"));
 
     for truthy in ["1", "true", "TRUE", "True"] {
         unsafe {
@@ -26,6 +31,9 @@ fn parses_the_documented_truthy_and_falsy_spellings() {
         }
         assert!(rebase_urls_from_env(), "{truthy:?} should enable rebasing");
     }
+
+    let builder_set = ClientBuilder::default();
+    assert!(format!("{builder_set:?}").contains("rebase_urls_to_origin: true"));
 
     for falsy in ["0", "false", "yes", ""] {
         unsafe {

@@ -101,6 +101,15 @@ impl SharedHeaders {
     }
 }
 
+impl std::fmt::Debug for SharedHeaders {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let count = self.0.lock().expect("shared headers lock poisoned").len();
+        f.debug_struct("SharedHeaders")
+            .field("header_count", &count)
+            .finish()
+    }
+}
+
 /// An item received over an [`EventSourceSubscription`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum EventSourceItem {
@@ -125,6 +134,15 @@ pub struct EventSourceSubscription {
     headers: SharedHeaders,
     last_event_id: Arc<Mutex<Option<String>>>,
     reconnect_count: Arc<AtomicU64>,
+}
+
+impl std::fmt::Debug for EventSourceSubscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventSourceSubscription")
+            .field("reconnect_count", &self.reconnect_count())
+            .field("last_event_id", &self.last_event_id())
+            .finish_non_exhaustive()
+    }
 }
 
 impl EventSourceSubscription {

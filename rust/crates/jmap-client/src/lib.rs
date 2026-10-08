@@ -104,5 +104,10 @@ mod url;
 pub use changes::ChangeSet;
 pub use client::{Client, ClientBuilder, Credentials, rebase_urls_from_env};
 pub use error::Error;
-pub use eventsource::{EventSourceItem, EventSourceSubscription, EventSourceTimeouts};
+pub use eventsource::{
+    EventSourceItem, EventSourceSubscription, EventSourceTimeouts, SharedHeaders, expand_url,
+};
+pub use jmap_proto as proto;
+pub use jmap_proto;
+pub use jmap_proto::{Id, State};
 pub use transport::CancelFlag;
