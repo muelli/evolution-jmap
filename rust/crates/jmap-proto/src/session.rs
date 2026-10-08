@@ -284,24 +284,28 @@ impl Session {
     }
 
     /// Typed mail capability struct, if present (RFC 8621 §1.3).
+    #[cfg(feature = "mail")]
     pub fn mail_capability(&self) -> Option<crate::mail::MailCapability> {
         let val = self.capabilities.get(CAPABILITY_MAIL)?;
         serde_json::from_value(val.clone()).ok()
     }
 
     /// Typed submission capability struct, if present (RFC 8621 §1.4).
+    #[cfg(feature = "mail")]
     pub fn submission_capability(&self) -> Option<crate::mail::SubmissionCapability> {
         let val = self.capabilities.get(CAPABILITY_SUBMISSION)?;
         serde_json::from_value(val.clone()).ok()
     }
 
     /// Typed contacts capability struct, if present (RFC 9610 §1.3).
+    #[cfg(feature = "contacts")]
     pub fn contacts_capability(&self) -> Option<crate::contacts::ContactsCapability> {
         let val = self.capabilities.get(CAPABILITY_CONTACTS)?;
         serde_json::from_value(val.clone()).ok()
     }
 
     /// Typed calendars capability struct, if present (draft-ietf-jmap-calendars-28 §1.3).
+    #[cfg(feature = "calendars")]
     pub fn calendars_capability(&self) -> Option<crate::calendars::CalendarsCapability> {
         let val = self.capabilities.get(CAPABILITY_CALENDARS)?;
         serde_json::from_value(val.clone()).ok()
@@ -654,6 +658,7 @@ impl Account {
     /// The scheduled-send gate reads two of its fields together: a non-zero
     /// `max_delayed_send` and
     /// [`crate::mail::SubmissionCapability::supports_future_release`].
+    #[cfg(feature = "mail")]
     pub fn submission_capability(&self) -> Option<crate::mail::SubmissionCapability> {
         let val = self.account_capabilities.get(CAPABILITY_SUBMISSION)?;
         serde_json::from_value(val.clone()).ok()
