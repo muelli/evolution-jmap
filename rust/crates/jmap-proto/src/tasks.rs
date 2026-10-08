@@ -234,7 +234,7 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub virtual_locations: Option<BTreeMap<String, VirtualLocation>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub links: Option<BTreeMap<String, crate::contacts::Link>>,
+    pub links: Option<BTreeMap<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
