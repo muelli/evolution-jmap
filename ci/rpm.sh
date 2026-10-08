@@ -9,10 +9,15 @@ build_dir="${repo_root}/build-rpm"
 
 if command -v podman >/dev/null 2>&1 && [[ "${1-}" != "--host" ]]; then
 	image="registry.fedoraproject.org/fedora:rawhide"
+	host_uid="$(id -u)"
+	host_gid="$(id -g)"
 	echo "ci/rpm.sh: running rootless in podman image ${image}"
 	exec podman run --rm --userns=keep-id \
+		-u 0 \
 		-v "${repo_root}:${repo_root}:Z" \
 		-w "${repo_root}" \
+		-e HOST_UID="${host_uid}" \
+		-e HOST_GID="${host_gid}" \
 		"${image}" \
 		bash -lc '
 			set -euo pipefail
@@ -36,7 +41,8 @@ if command -v podman >/dev/null 2>&1 && [[ "${1-}" != "--host" ]]; then
 				libsoup3-devel \
 				gettext \
 				python3
-			./ci/rpm.sh --host
+			chown -R "${HOST_UID}:${HOST_GID}" "${PWD}"
+			su -s /bin/bash -c "./ci/rpm.sh --host" "#${HOST_UID}"
 		'
 fi
 
