@@ -162,6 +162,20 @@ pub enum TransportError {
     },
 }
 
+impl std::fmt::Display for TransportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TransportError::Cancelled => write!(f, "transport request cancelled"),
+            TransportError::Failed(message) => write!(f, "transport error: {message}"),
+            TransportError::ResponseTooLarge { limit } => {
+                write!(f, "response body exceeded maximum limit of {limit} bytes")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TransportError {}
+
 pub trait Transport: Send + Sync + 'static {
     fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError>;
 }

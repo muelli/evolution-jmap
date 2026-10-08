@@ -72,6 +72,10 @@ fn readme_exists_and_contains_required_sections() {
         "README must provide a minimal working example"
     );
     assert!(
+        content.contains("## Common Workflows"),
+        "README must document common workflows"
+    );
+    assert!(
         content.contains("## Feature flags"),
         "README must document feature flags"
     );

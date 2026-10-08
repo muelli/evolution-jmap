@@ -1021,12 +1021,17 @@ impl Client {
     /// A server that names no limit is sent the data: see
     /// [`Session::max_size_upload`] for why no number is invented for it.
     ///
+    /// Upload a binary blob from a byte slice (RFC 8620 §6.1).
+    ///
+    /// A server that names no limit is sent the data: see
+    /// [`Session::max_size_upload`] for why no number is invented for it.
+    ///
     /// [`Session::max_size_upload`]: jmap_proto::session::Session::max_size_upload
-    pub fn upload_blob(
+    pub fn upload_blob_slice(
         &self,
         account_id: &Id,
         content_type: &str,
-        data: Vec<u8>,
+        data: &[u8],
     ) -> Result<UploadResponse, Error> {
         let size = data.len() as u64;
         if let Some(limit) = self.session().max_size_upload()
@@ -1039,13 +1044,25 @@ impl Client {
             .session()
             .upload_url
             .replace("{accountId}", &encode_template_value(account_id.as_str()));
-        let response = self.execute_with_content_type(
-            HttpMethod::Post,
-            &url,
-            Some(&data),
-            Some(content_type),
-        )?;
+        let response =
+            self.execute_with_content_type(HttpMethod::Post, &url, Some(data), Some(content_type))?;
         Ok(serde_json::from_slice(&response.body)?)
+    }
+
+    /// Upload a binary blob via the session's `uploadUrl` template (RFC 8620
+    /// §6.1).
+    ///
+    /// A server that names no limit is sent the data: see
+    /// [`Session::max_size_upload`] for why no number is invented for it.
+    ///
+    /// [`Session::max_size_upload`]: jmap_proto::session::Session::max_size_upload
+    pub fn upload_blob(
+        &self,
+        account_id: &Id,
+        content_type: &str,
+        data: Vec<u8>,
+    ) -> Result<UploadResponse, Error> {
+        self.upload_blob_slice(account_id, content_type, &data)
     }
 
     /// Download a blob's raw bytes via the session's `downloadUrl` template

@@ -54,8 +54,7 @@ during implementation is catalogued below with an actionable verdict:
   domain types. A consumer adding only `evolution-jmap-client` to `Cargo.toml`
   cannot write signatures or declare variables for these types without also
   discovering and adding a direct dependency on `evolution-jmap-proto`.
-- **Verdict:** **fix now**. Add `pub use evolution_jmap_proto as proto;` and
-  re-export foundational primitives `Id` and `State` at the root of `jmap-client`.
+- **Verdict:** **fix now** (fixed in Batch 28 Item 2). Re-exported `proto`, `Id`, and `State` at crate root.
 
 ### Paper Cut 2: `EventSource` push stream requires high-friction manual boilerplate
 - **Category:** Ergonomics / missing convenience method
@@ -69,7 +68,7 @@ during implementation is catalogued below with an actionable verdict:
   6. Instantiating `CancelFlag::new()` and calling `EventSourceSubscription::start(...)`.
   `Client` holds both the session document and the authorization header, yet provides
   no helper method to spawn an EventSource subscription.
-- **Verdict:** **fix now**. Add `client.event_source(&self, types: &[&str]) -> Result<EventSourceSubscription, Error>`
+- **Verdict:** **fix now** (fixed in Batch 28 Item 2). Added `client.event_source(&self, types: &[&str]) -> Result<EventSourceSubscription, Error>`
   and `client.event_source_with_timeouts(...)` on `Client`.
 
 ### Paper Cut 3: Incomplete re-exports for `eventsource` submodule types at crate root
@@ -80,7 +79,7 @@ during implementation is catalogued below with an actionable verdict:
   are only available through the sub-module path `jmap_client::eventsource::*`.
   A caller constructing a subscription manually must mix root imports and
   submodule imports.
-- **Verdict:** **fix now**. Re-export `SharedHeaders` and `expand_url` in `jmap_client::*`.
+- **Verdict:** **fix now** (fixed in Batch 28 Item 2). Re-exported `SharedHeaders` and `expand_url` in `jmap_client::*`.
 
 ### Paper Cut 4: `Client::upload_blob` requires owned `Vec<u8>` instead of borrowed slice
 - **Category:** Needless conversion / allocation
@@ -89,10 +88,10 @@ during implementation is catalogued below with an actionable verdict:
   requires `data` by value. Callers with borrowed slices (`&[u8]`) or static payloads
   (such as `b"..."` RFC 822 messages) cannot pass them directly and must allocate
   an unnecessary `Vec<u8>` via `.to_vec()`.
-- **Verdict:** **fix at next breaking release**. Changing `Vec<u8>` to `&[u8]`
+- **Verdict:** **fix at next breaking release** (helper added in Batch 28 Item 2). Changing `Vec<u8>` to `&[u8]`
   or `impl Into<Vec<u8>>` changes the public method signature on `Client`.
-  In the meantime, a non-breaking helper `upload_blob_slice(&self, account_id: &Id, content_type: &str, data: &[u8])`
-  can be added.
+  In the meantime, added non-breaking helper `upload_blob_slice(&self, account_id: &Id, content_type: &str, data: &[u8])`
+  on `Client`.
 
 ### Paper Cut 5: `ClientBuilder::connect` does not default to `rebase_urls_from_env()`
 - **Category:** Ergonomics / configuration divergence
@@ -104,7 +103,7 @@ during implementation is catalogued below with an actionable verdict:
   the environment variable is silently ignored unless `.rebase_urls_to_origin(rebase_urls_from_env())`
   is explicitly chained. On test deployments advertising internal DNS names (such
   as Stalwart's `https://mail.example.internal`), calls fail with connection refused.
-- **Verdict:** **fix now**. Initialize `ClientBuilder::default().rebase_urls_to_origin`
+- **Verdict:** **fix now** (fixed in Batch 28 Item 2). Initialized `ClientBuilder::default().rebase_urls_to_origin`
   with `rebase_urls_from_env()` so builder usage matches `Client::connect`.
 
 ### Paper Cut 6: README lacks working examples for mailbox and email workflows
@@ -115,8 +114,8 @@ during implementation is catalogued below with an actionable verdict:
   It provides no guidance on method names or patterns for listing mailboxes,
   importing messages, or handling push streams. An outsider is forced to inspect
   the crate source code or rustdoc to find methods like `mailbox_get` or `email_import`.
-- **Verdict:** **fix now**. Add concise code snippets in `README.md` showing
-  mailbox listing and message retrieval.
+- **Verdict:** **fix now** (fixed in Batch 28 Item 2). Added Common Workflows section in
+  `README.md` showing mailbox listing, email retrieval, and event source push streams.
 
 ### Paper Cut 7: `cargo package` checks registry for local sibling dependency
 - **Category:** Packaging / Cargo semantics

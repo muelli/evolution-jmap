@@ -78,6 +78,17 @@ pub struct ClientBuilder {
     resolver: Box<dyn Resolver>,
 }
 
+impl std::fmt::Debug for ClientBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientBuilder")
+            .field("timeout", &self.timeout)
+            .field("connect_timeout", &self.connect_timeout)
+            .field("read_timeout", &self.read_timeout)
+            .field("rebase_urls_to_origin", &self.rebase_urls_to_origin)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Default for ClientBuilder {
     fn default() -> Self {
         Self {
@@ -86,7 +97,7 @@ impl Default for ClientBuilder {
             read_timeout: None,
             transport: None,
             cancel: None,
-            rebase_urls_to_origin: false,
+            rebase_urls_to_origin: rebase_urls_from_env(),
             resolver: Box::new(NoSrvResolver),
         }
     }
@@ -586,6 +597,46 @@ impl Client {
             });
         }
         Ok(response)
+    }
+
+    /// Open an EventSource push stream for the specified data types.
+    ///
+    /// Expands the session's `eventSourceUrl` URI template, attaches the current
+    /// authorization header, and connects with default timeouts and a fresh
+    /// cancellation token.
+    pub fn event_source(
+        &self,
+        types: &[&str],
+    ) -> Result<crate::eventsource::EventSourceSubscription, Error> {
+        self.event_source_with_timeouts(types, crate::eventsource::EventSourceTimeouts::default())
+    }
+
+    /// Open an EventSource push stream for the specified data types with explicit timeouts.
+    pub fn event_source_with_timeouts(
+        &self,
+        types: &[&str],
+        timeouts: crate::eventsource::EventSourceTimeouts,
+    ) -> Result<crate::eventsource::EventSourceSubscription, Error> {
+        let template = self.session().event_source_url.trim();
+        if template.is_empty() {
+            return Err(Error::Protocol(
+                "session does not advertise an eventSourceUrl".into(),
+            ));
+        }
+        let url = crate::eventsource::expand_url(template, types, false, 0);
+        let headers = self
+            .authorization_header()
+            .map(|auth| vec![("Authorization".to_string(), auth)])
+            .unwrap_or_default();
+        let cancel = crate::transport::CancelFlag::default();
+        Ok(
+            crate::eventsource::EventSourceSubscription::start_with_timeouts(
+                url,
+                crate::eventsource::SharedHeaders::new(headers),
+                cancel,
+                timeouts,
+            ),
+        )
     }
 }
 
