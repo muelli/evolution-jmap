@@ -1,0 +1,8 @@
+{
+  "methodResponses": [[  "
+ m ethod1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["method2", {"isBlah": true}, "c2" ["error", {"type": "unknownMethod"te{
+  "]
+  ],
+  "sessionSdate": "75128aab4b1b"
+}

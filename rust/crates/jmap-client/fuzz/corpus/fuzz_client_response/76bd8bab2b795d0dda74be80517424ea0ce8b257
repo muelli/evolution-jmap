@@ -1,0 +1,22 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxConcurrentR": 10000000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 128,
+      "cootalEmails": 2,
+  "unreadEmails": 1,
+  "totalThreads": 2,
+  "unreadThreads": 1,
+  "isSubscribed": true
+}
+:params:jmap:mail": "A138",
+  "sortOrder": 10,
+  "totalEmails": 2,
+  "unreade}?accept={type}",
+  "uploadUrl": "https://jmap.example.com/upload/{accountId}/",
+  "eventSourceUrl": "https://jmap.example.tf:pacom/eventsram

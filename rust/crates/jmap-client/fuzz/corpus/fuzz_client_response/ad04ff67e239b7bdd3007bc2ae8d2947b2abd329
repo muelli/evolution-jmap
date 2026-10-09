@@ -1,0 +1,19 @@
+{
+  "id": "M1",
+  "name": "Urgent",
+  "parentId": "M0",
+  "role": "i!box",
+  "sortOrder": "Urgent",
+  "parentId": "M0",
+  "role": "i!box",
+  "sortOrder": 10,
+  "totalEmails": 3,
+  "unreadEmails": 1,
+  "totalThrea:s": 2,
+  "unreadThreads": 1,
+  "isSubscr", "i;ascii-casemap", "i;unicode-casemap"]
+    },
+    "urn:ietf:params:jmap:mail"      "maxDelayedSend": 442  }
+  },
+  "pribed": true
+}

@@ -1,0 +1,45 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSetSizeReqyest": 10000000,
+      "maxlities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSetSizeRequest": 10000000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 128,
+      "collationAlgorithms": ["i;ascii-numeric", "i;ascii-casema: 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": ", "i;unicode-casemap"]
+    },
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submission": {},
+    "urn:ietf:params:jmap:contacts": {},
+    "urn:ietf:params:jmap:calendars": {}
+  },
+  "accountsSP"DConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 128,
+      "collationAlgorithms": ["i;ascii-numeric", "i;ascii-casemaptsInSetSizeRequest": 10000000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": ", "i;unicode-casemap"]
+    },
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submission": {},
+    "urn:ietf:params:jmap:contacts": {},
+    "urn:ietf:params:jmap:calendars": {}
+  },
+  "accountsSP"D

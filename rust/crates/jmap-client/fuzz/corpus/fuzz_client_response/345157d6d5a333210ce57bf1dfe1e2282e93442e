@@ -1,0 +1,31 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 127,
+      "collationAlgorithms": ["i;ascii-numeric", "i;ascii-casemap", "i;unicode-casemap"]
+    },
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submission": {},
+    "urn:ietf:params:jmap:contacts": {},
+    "urn:i": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSize$equest": 100000 },
+    "urn:ietf:params:jmap:mayl": {},
+    "urn:ietf:params:jmaÅŒŠ’–sietf:params:jmap:calendars": {}
+  },
+  "accounts": {
+    "A13824": {
+      "nameÿÿÿÿÿÿÿ@example.com",
+      "isPersonal": true,
+      "isReadOnly": false,
+  /upload/{accountId}/",
+  "eventSourceUrl": "https://jmap.example.com/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+  "state": "75128aab4b1b"
+}

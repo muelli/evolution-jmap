@@ -1,0 +1,8 @@
+{
+  "id": "M1",
+  "name": "Urgent",
+  "parentId": "M0",
+  "role": "inbox",
+  "sortOrder": 10,
+  "ribed": true
+}

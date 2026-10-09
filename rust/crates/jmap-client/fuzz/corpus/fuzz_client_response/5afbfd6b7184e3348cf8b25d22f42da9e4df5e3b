@@ -1,0 +1,14 @@
+{
+  "capabilzeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxConczrrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 128,
+      "collationAlgorithms": ["i;ascii-numeric", "i;ascii-case},
+    "urn:ieton": {},
+    "urn:ietf:params:jmap:contacts": {},
+    "urn:ietf:params:jmap:calendars": {}
+  },
+  "accountsSP"D

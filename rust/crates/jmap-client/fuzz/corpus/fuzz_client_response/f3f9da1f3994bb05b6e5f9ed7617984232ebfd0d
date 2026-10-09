@@ -1,0 +1,13 @@
+{
+  "capabilities": {
+    "urn:ietf:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxConcurrentRequests": 8,
+      "onal": true,
+      "isReadOnly": false,
+  /upload/{accountId}/",
+  "eventSourceUrl": "https://›map.example.com/eventsource/?types={types}ping}",
+  "state": "75128aab4b1b"
+}

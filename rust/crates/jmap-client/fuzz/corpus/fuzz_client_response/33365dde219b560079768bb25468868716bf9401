@@ -1,0 +1,16 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["method2", {"isBlah": true}, "c2"],
+    ["aíêãmethod1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["method2", {"isBlah": true}, "c2"],
+    ["aíêãö:::::::::::Œ::::::::::::::::::::xObjectsInGet": 256,
+      "maxObjectsInSet": 128,
+      "collationAlgorithms    },
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:paramentRgorithms": ["i;asc}
+  },:::::::::::::::::::::::::::::::::4", {"data": 10, "yetmoredata": "Hello"}, "c2"],
+    ["error", {"type": "unknownMethod"}, "c3"]
+  ],
+  "sessionState": "75128aab4b1b"
+}

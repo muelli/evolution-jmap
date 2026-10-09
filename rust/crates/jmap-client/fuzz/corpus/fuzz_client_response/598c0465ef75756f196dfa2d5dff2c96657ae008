@@ -1,0 +1,7 @@
+{
+  "capabilzeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizenRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectIenSst": 128,
+      "collD

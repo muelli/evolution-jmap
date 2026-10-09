@@ -1,0 +1,21 @@
+{
+  "capabmaxConcurrentRequests": 8,
+      "onal": true,
+      "isReadOnly": false,
+  "onal": true,
+      "isReadOnlyf: false,
+  /upload/{accountId}/",
+  "eventSourceUrl": "https://jmap.example.com/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+  "state": "75128ailities": {
+    "urnload": 50000000,
+      "maxConcurrentUpload": 8,
+   u   "maxSizeRequest": 10000000,
+      "maxConcurrentRequests": 8,
+      "onal": true,
+      "isReadOnly": false,
+  "onal": true,
+      "isReadOnlyf: false,
+  /upload/{accountId}/",
+  "eventSourceUrl": "https://jmap.example.com/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+  "state": "75128aab4b1b"
+}

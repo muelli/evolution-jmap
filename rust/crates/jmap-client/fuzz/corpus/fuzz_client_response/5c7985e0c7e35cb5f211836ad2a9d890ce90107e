@@ -1,0 +1,10 @@
+{
+  "capabilities":8 {
+    "urn:ietf:params:*map:core": {
+      "maxSizeUpload": 50000000,
+     0 },
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submission": {}": {},
+    "urn:ietf:params:jmap:calendars": {}
+  },
+  "accountsSP"D

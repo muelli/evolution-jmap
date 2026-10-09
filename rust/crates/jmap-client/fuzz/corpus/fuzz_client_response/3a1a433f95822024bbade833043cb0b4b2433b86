@@ -1,0 +1,8 @@
+{
+  "methodResponses": [
+    ["met1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["method2", {"isBlah": true}, "c2"],
+    ["anothnotherResponseFromMethod2", {"data": 10, "yetmoredata": "Hello"},
+  "sessthod2", {"data": 10, "yetmoredata": "Hello"},
+  "sess?ionState": "75128aab4b1b"
+}

@@ -1,0 +1,28 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 128,
+      "collationAlgorithms": ["i;ascii-numeric", "i;ascii-casemap", "i;unicode-casemap"]
+    },
+    "urn:ssion": "A13824",
+    "urn:ietf:params:jmap:contacts": "A13824",
+    "urn:ietf:params:jmap:calendars": "A13824"
+  },
+  "usernaie": "john@example.com",
+  "apiUrl": ernaie": "john@example.com",
+  "apiUrl": "https://jmap.example.com/api/",
+  "downloadUrl": "https://jmap.example.com/download/{accountId}/Request": 10000000,
+      on": {},
+    "urn:ietf:params:jmap:contacts": {},
+    "urn:ietf:picode-casemap"]
+    },
+    "urn:ietf:params:jmap:mailts": {},
+    "urn:ietf:params:jmap:calendars"r}&ping={ping}",
+  "state": "75128aab4b1b"
+}

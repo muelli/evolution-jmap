@@ -1,0 +1,11 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["method2", {"isBlah": true}, "c2"],
+    ["aíêãöerResponseFromMethod::::::::::::::::::::::::::::::::::::::::::::::::::::::
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 20000000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      {
+  ""capabm
