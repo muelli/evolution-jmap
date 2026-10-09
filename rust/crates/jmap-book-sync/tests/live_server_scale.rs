@@ -10,15 +10,17 @@
 //! `get_changes` cost once the book is no longer tiny.
 //!
 //! This file covers the first, smallest slice of item 94(a): 500 cards (half
-//! of the item's first checkpoint) and a handful of edits afterward. One
-//! `ContactCard/set` call per card, no batching, hits Stalwart's
-//! `Http.rateLimitAuthenticated` (1000 req/60s) well before 500 calls even at
-//! the default throwaway plan — confirmed empirically (a 429 on call #498,
-//! 2.2 seconds in, far faster than the window the limit is measured over) —
-//! so [`retrying`] below absorbs a 429 with a short sleep rather than this
-//! file assuming it never happens the way item 89's mail equivalent could.
-//! The 5,000-card step, the PHOTO-blob variant, bulk deletes and the real-EDS
-//! leg (item 80's live-Stalwart book factory) are still open.
+//! of the item's first checkpoint) and a handful of edits afterward, plus
+//! bulk deletes from an already-large book. One `ContactCard/set` call per
+//! card, no batching, hits Stalwart's `Http.rateLimitAuthenticated` (1000
+//! req/60s) well before 500 calls even at the default throwaway plan —
+//! confirmed empirically (a 429 on call #498, 2.2 seconds in, far faster than
+//! the window the limit is measured over) — so [`retrying`] below absorbs a
+//! 429 with a short sleep rather than this file assuming it never happens the
+//! way item 89's mail equivalent could.
+//! The 5,000-card step, the PHOTO-blob variant, `jmap-cal-sync`'s (b) and the
+//! real-EDS leg (item 80's live-Stalwart book factory) are still open.
+//! Numbers so far are recorded in `docs/BOOK-SYNC-SCALE.md`.
 //!
 //! ## Running it
 //!
@@ -107,8 +109,8 @@ fn peak_rss_kb() -> Option<u64> {
     })
 }
 
-fn vcard(run: u128, i: usize) -> String {
-    let name = format!("agent-scale-{run}-{i}");
+fn vcard(run: u128, label: &str, i: usize) -> String {
+    let name = format!("agent-scale-{run}-{label}-{i}");
     format!(
         "BEGIN:VCARD\r\n\
          VERSION:3.0\r\n\
@@ -146,7 +148,7 @@ fn a_real_sized_address_book_round_trips_through_the_real_server() {
     let import_start = Instant::now();
     let mut saved_uids = Vec::with_capacity(n);
     for i in 0..n {
-        let saved = retrying(|| sync.save_contact(&vcard(run, i), None))
+        let saved = retrying(|| sync.save_contact(&vcard(run, "main", i), None))
             .unwrap_or_else(|error| panic!("ContactCard/set create #{i} failed: {error}"));
         saved_uids.push(saved.uid);
     }
@@ -178,7 +180,7 @@ fn a_real_sized_address_book_round_trips_through_the_real_server() {
     let to_edit: Vec<String> = saved_uids.iter().take(edit_count).cloned().collect();
     let edit_start = Instant::now();
     for uid in &to_edit {
-        let edited = vcard(run, 999_999).replace("agent-scale", "agent-scale-edited");
+        let edited = vcard(run, "main", 999_999).replace("agent-scale", "agent-scale-edited");
         retrying(|| sync.save_contact(&edited, Some(uid.as_str())))
             .unwrap_or_else(|error| panic!("ContactCard/set update of {uid} failed: {error}"));
     }
@@ -203,6 +205,100 @@ fn a_real_sized_address_book_round_trips_through_the_real_server() {
         assert!(
             changes.changed.iter().any(|contact| &contact.uid == uid),
             "every edited card should be reported changed by get_changes"
+        );
+    }
+
+    if let Some(kb) = peak_rss_kb() {
+        eprintln!("SCALE: peak RSS so far {kb} kB");
+    }
+}
+
+/// Deleting from an already-large address book, the case the import/edit
+/// test above does not reach. Unlike `jmap-mail-sync`'s `messages_since`,
+/// `BookSync::get_changes` has no `catch_up_limit`/relist concept to trip —
+/// `classify` only calls `ContactCard/get` for the created/updated union, so
+/// a delete-only delta costs nothing beyond the `/changes` call itself -- but
+/// that is exactly the kind of assumption worth checking against a real
+/// server rather than just this crate's own mock.
+#[test]
+#[ignore = "needs a real JMAP server; see docs/manual-test-live-server.md"]
+fn deleting_from_a_real_sized_address_book_is_reported_correctly() {
+    let Some(client) = connect_for_write() else {
+        eprintln!("JMAP_LIVE_SERVER_WRITE_USER/_PASSWORD not set; skipping the scale test");
+        return;
+    };
+
+    let account_id = client
+        .primary_account(CAPABILITY_CONTACTS)
+        .expect("the write-test account needs the contacts capability");
+    let address_book_id = client
+        .address_books(&account_id)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("the write-test account needs a default address book")
+        .id
+        .expect("the server named the address book");
+
+    let sync = BookSync::new(client, account_id, address_book_id);
+    let n = batch_size();
+    let run = unique_suffix();
+
+    let import_start = Instant::now();
+    let mut saved_uids = Vec::with_capacity(n);
+    for i in 0..n {
+        let saved = retrying(|| sync.save_contact(&vcard(run, "del", i), None))
+            .unwrap_or_else(|error| panic!("ContactCard/set create #{i} failed: {error}"));
+        saved_uids.push(saved.uid);
+    }
+    let import_elapsed = import_start.elapsed();
+    eprintln!(
+        "SCALE: imported {n} cards in {:?} ({:?}/card), ahead of the deletion case",
+        import_elapsed,
+        import_elapsed / n as u32
+    );
+
+    let (state_after_import, _listed) = sync
+        .list_existing()
+        .expect("listing the book failed after the bulk import");
+
+    // "A few hundred", per the item's own wording, capped at the batch size
+    // itself so a small manual run never tries to delete more than exists.
+    let delete_count = n.min(300);
+    let to_delete: Vec<String> = saved_uids.into_iter().take(delete_count).collect();
+
+    let delete_start = Instant::now();
+    for uid in &to_delete {
+        retrying(|| sync.remove_contact(uid))
+            .unwrap_or_else(|error| panic!("ContactCard/set destroy of {uid} failed: {error}"));
+    }
+    let delete_elapsed = delete_start.elapsed();
+    eprintln!(
+        "SCALE: deleted {delete_count} of {n} cards in {:?} ({:?}/card)",
+        delete_elapsed,
+        delete_elapsed / delete_count as u32
+    );
+
+    let changes_start = Instant::now();
+    let changes = sync
+        .get_changes(&state_after_import)
+        .expect("get_changes failed after deleting from an already-large book");
+    let changes_elapsed = changes_start.elapsed();
+    eprintln!(
+        "SCALE: get_changes after deleting {delete_count} from a {n}-card book took {:?}, \
+         reported {} removed",
+        changes_elapsed,
+        changes.removed.len()
+    );
+    assert!(
+        changes.changed.is_empty(),
+        "nothing but deletions happened, so changed should be empty, got {} rows",
+        changes.changed.len()
+    );
+    for uid in &to_delete {
+        assert!(
+            changes.removed.contains(uid),
+            "every deleted card should be reported removed by get_changes"
         );
     }
 
