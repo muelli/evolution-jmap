@@ -13,6 +13,7 @@ use jmap_proto::error::SetError;
 use jmap_proto::methods::{
     GetRequest, GetResponse, QueryRequest, QueryResponse, SetRequest, SetResponse,
 };
+use jmap_proto::request::Request;
 use jmap_proto::session::{CAPABILITY_CALENDARS, CAPABILITY_CORE};
 use serde::Deserialize;
 use serde_json::Value;
@@ -109,14 +110,61 @@ impl Client {
     }
 
     /// Fetch calendar events by id.
+    ///
+    /// Sent as several requests when naming every id at once would be more
+    /// than the server's `maxObjectsInGet` (RFC 8620 §2) — the same limit
+    /// [`Client::contact_get`](crate::Client::contact_get) chunks around,
+    /// found the hard way scale-testing item 94's `jmap-book-sync` slice
+    /// against real Stalwart, and just as reachable here: `CalSync::classify`
+    /// calls this with every created/updated id `CalendarEvent/changes`
+    /// named, unbounded by anything this crate controls. Mirrors
+    /// `contact_get`'s own chunking exactly, including always making at
+    /// least one call for an empty `ids`.
     pub fn event_get(
         &self,
         account_id: &Id,
         ids: &[Id],
     ) -> Result<GetResponse<CalendarEvent>, Error> {
-        let request = GetRequest::ids(account_id.clone(), ids.iter().cloned());
-        let arguments = self.single_call(USING, "CalendarEvent/get", &request)?;
-        Ok(serde_json::from_value(arguments)?)
+        let max_objects = self
+            .session()
+            .max_objects_in_get()
+            .and_then(|limit| usize::try_from(limit).ok())
+            .filter(|&limit| limit > 0)
+            .unwrap_or(ids.len().max(1));
+
+        let mut combined: Option<GetResponse<CalendarEvent>> = None;
+        let mut rest = ids;
+        loop {
+            let take = rest.len().min(max_objects);
+            let (chunk, remaining) = rest.split_at(take);
+
+            let call_id = self.next_call_id();
+            let request = Request::new([CAPABILITY_CORE, CAPABILITY_CALENDARS]).call(
+                "CalendarEvent/get",
+                &GetRequest::ids(account_id.clone(), chunk.iter().cloned()),
+                &call_id,
+            )?;
+            let response = self.api_call(&request)?;
+            let invocation = response
+                .responses_for(&call_id)
+                .next()
+                .ok_or_else(|| Error::Protocol("no CalendarEvent/get response".to_owned()))?;
+            let arguments = Self::unwrap_invocation(invocation, "CalendarEvent/get")?;
+            let chunk_response: GetResponse<CalendarEvent> = serde_json::from_value(arguments)?;
+            match &mut combined {
+                None => combined = Some(chunk_response),
+                Some(combined) => {
+                    combined.list.extend(chunk_response.list);
+                    combined.not_found.extend(chunk_response.not_found);
+                    combined.state = chunk_response.state;
+                }
+            }
+
+            rest = remaining;
+            if rest.is_empty() {
+                return Ok(combined.expect("the loop always sets combined on its first iteration"));
+            }
+        }
     }
 
     /// Apply a patch to a calendar event (RFC 8620 PatchObject).
