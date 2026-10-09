@@ -138,3 +138,45 @@ Operator CI wiring for this lane, without editing `.github/workflows` in-repo:
 cmake -S . -B build-rpm-ci -G Ninja
 ctest --test-dir build-rpm-ci --output-on-failure -R '^package-rpm$|^package-rpm-lint$'
 ```
+
+## Batch 3A item 4 verification note (2026-10-09 UTC)
+
+Installed the locally built RPM in a clean Fedora container and verified the
+installed module locations against the same container's `pkg-config` variables.
+
+Container command used:
+
+```bash
+podman run --rm -v "$PWD:$PWD:Z" -w "$PWD" \
+  docker.io/library/fedora@sha256:6c75d5bf57cb0fa5aa4b92c6a83c86c791644496d9ac230de7711f5b8ec3b898 \
+  bash -lc '
+    dnf -y install pkgconf-pkg-config evolution-data-server-devel evolution-devel
+    dnf -y install ./build-rpm/*.rpm
+    pkg-config --variable=backenddir libedata-book-1.2
+    pkg-config --variable=backenddir libedata-cal-2.0
+    pkg-config --variable=camel_providerdir camel-1.2
+    pkg-config --variable=moduledir libebackend-1.2
+    pkg-config --variable=moduledir evolution-shell-3.0
+  '
+```
+
+Observed paths from `pkg-config` in that install-test container:
+
+- `book_dir=/usr/lib64/evolution-data-server/addressbook-backends`
+- `cal_dir=/usr/lib64/evolution-data-server/calendar-backends`
+- `camel_dir=/usr/lib64/evolution-data-server/camel-providers`
+- `registry_dir=/usr/lib64/evolution-data-server/registry-modules`
+- `config_dir=/usr/lib64/evolution/modules`
+
+Installed payload checks passed:
+
+- `${book_dir}/libebookbackendjmap.so` exists.
+- `${cal_dir}/libecalbackendjmap.so` exists.
+- `${camel_dir}/libcameljmap.so` and `${camel_dir}/libcameljmap.urls` exist.
+- `${registry_dir}/module-jmap-backend.so` exists.
+- `${config_dir}/module-jmap-configuration.so` exists.
+
+This confirms the three backend modules and the Camel provider install where
+EDS and Evolution discover them according to `pkg-config` in Fedora. Runtime
+loading under a real Evolution session remains unverified in a running
+Evolution.
