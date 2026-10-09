@@ -4001,7 +4001,10 @@ pub fn read_duration(vevent: &ICalendarComponent) -> Option<String> {
 pub fn stated_duration(value: &str) -> Option<String> {
     let value = value.strip_prefix('+').unwrap_or(value);
     let mut rest = value.strip_prefix(['P', 'p'])?;
+    let mut out = String::from("P");
     let mut measured = false;
+    let mut time_part = false;
+    let mut has_non_zero = false;
     for unit in ['W', 'D', 'T', 'H', 'M', 'S'] {
         if unit == 'T' {
             // Not a unit but the divider before the first of the time ones; it
@@ -4009,6 +4012,7 @@ pub fn stated_duration(value: &str) -> Option<String> {
             if let Some(after) = rest.strip_prefix(['T', 't']) {
                 rest = after;
                 measured = false;
+                time_part = true;
             }
             continue;
         }
@@ -4019,10 +4023,30 @@ pub fn stated_duration(value: &str) -> Option<String> {
         let Some(after) = rest[digits..].strip_prefix([unit, unit.to_ascii_lowercase()]) else {
             continue;
         };
+        let num_str = &rest[..digits];
+        let normalized_num = match num_str.trim_start_matches('0') {
+            "" => "0",
+            non_zero => {
+                has_non_zero = true;
+                non_zero
+            }
+        };
+        if time_part {
+            out.push('T');
+            time_part = false;
+        }
+        out.push_str(normalized_num);
+        out.push(unit);
         rest = after;
         measured = true;
     }
-    (measured && rest.is_empty()).then(|| value.to_owned())
+    if !measured || !rest.is_empty() {
+        return None;
+    }
+    if !has_non_zero {
+        return Some("PT0S".to_owned());
+    }
+    Some(out)
 }
 
 /// How long a period lasts, as a JSCalendar Duration, given its two halves.
@@ -5051,7 +5075,10 @@ pub fn rrule_to_rule(value: &str, ends: Ends) -> Option<RecurrenceRule> {
             _ => {}
         }
     }
-    if rule.frequency.is_empty() {
+    if !matches!(
+        rule.frequency.as_str(),
+        "secondly" | "minutely" | "hourly" | "daily" | "weekly" | "monthly" | "yearly"
+    ) {
         return None;
     }
     rule.rule_type = Some("RecurrenceRule".to_owned());

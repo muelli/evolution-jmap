@@ -86,6 +86,19 @@ Corpora are seeded from real client exports and protocol fixtures:
   - Findings: Client response dispatch across all domains (mailboxes, emails, calendars, events, contacts, address books, blobs, identities, vacation responses, threads, and session negotiation) safely converts malformed, truncated, or hostile payloads into structured `Error` variants (`Json`, `Protocol`, `Method`, `Set`, `Http`) without panics or hangs.
   - Minimized corpus: 522 files capturing 3,840 coverage edges and 7,354 features.
 
+### Session 3 (2026-10-09): Batch 30
+- Target `fuzz_ical_roundtrip` (`jmap-ical`):
+  - Total executions: 112,259 runs during bounded slice (-max_total_time=120), plus 59,932 in initial 61s slice, and 2,000+ validation runs (174,000+ total runs).
+  - Speed: ~930 exec/s.
+  - Peak RSS: 501 MB.
+  - Crashes found and fixed: 3 fixed-point stability divergences uncovered under libFuzzer mutation and resolved:
+    1. Duration leading zero normalization: In `stated_duration`, duration digit strings with redundant leading zeros (e.g. `PT07M`) were previously passed through verbatim when paired with non-standard value parameters, whereas canonical iCalendar roundtrips via `calcard` normalized them to integer representations (`PT7M`), breaking fixed-point convergence (`Export_2 != Export_3`). Fixed by stripping redundant leading zeros in `stated_duration`.
+    2. Recurrence rule frequency validation: In `writable`, unmappable non-standard recurrence frequencies (e.g. `FREQ=FICE\\,TTENDEE`) were erroneously permitted because `writable` only checked `!rule.frequency.is_empty()`. When serializing to iCalendar via `rrule_entry`, `calcard` treated the invalid RRULE as an unformatted text property and escaped backslashes, causing backslashes to double on each round trip (`\\\\` to `\\\\\\\\`). Fixed by validating that `rule.frequency` matches one of the 7 standard RFC 5545 / RFC 8984 frequencies (`secondly`, `minutely`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`).
+    3. Zero duration canonical normalization: In `stated_duration`, durations where all units are zero (e.g. `PT0H`, `P0D`, `PT0M`) were returned as written when paired with custom or unrecognized parameters, whereas standard iCalendar parsing via `calcard` and `docs/ICAL-MAPPING.md` Sections 3.2 and 7.1 normalize zero durations to `PT0S` / `-PT0S`. Fixed by canonically normalizing zero durations to `PT0S` in `stated_duration`.
+  - Regression tests: Added stable-toolchain unit regression tests for all three issues in `rust/crates/jmap-ical/tests/fuzz_smoke.rs`.
+  - Minimized corpus: 50 files (12 client export fixtures plus 38 minimized inputs) covering 9,085 edges and 32,589 features committed to the repository per Operator Override 2; full working corpus (4,659 files) preserved outside the repository in `~/fuzz-corpus/jmap-ical/fuzz_ical_roundtrip`.
+  - All three surfaces of Batch 30 (`jmap-proto`, `jmap-client`, `jmap-ical`) are now delivered and verified. Batch 30 is DRAINED.
+
 ## 6. Commands to Resume and Run Fuzz Targets
 
 All commands require the nightly toolchain and must be run from the respective crate directory.
