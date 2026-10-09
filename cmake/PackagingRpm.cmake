@@ -50,3 +50,26 @@ if(INSTALLED_CATALOGUES)
 		list(APPEND CPACK_RPM_USER_FILELIST "%attr(-,root,root) ${_catalogue}")
 	endforeach()
 endif()
+
+find_program(RPMBUILD_EXECUTABLE rpmbuild)
+find_program(RPMLINT_EXECUTABLE rpmlint)
+if(RPMBUILD_EXECUTABLE AND RPMLINT_EXECUTABLE)
+	add_test(
+		NAME package-rpm
+		COMMAND ${CMAKE_COMMAND} -E env
+			"BUILD_DIR=${CMAKE_BINARY_DIR}"
+			bash -lc
+			"set -euo pipefail; cmake --build \"$BUILD_DIR\"; rm -f \"$BUILD_DIR\"/*.rpm; cpack --config \"$BUILD_DIR/CPackConfig.cmake\" -G RPM --verbose -B \"$BUILD_DIR\""
+	)
+
+	add_test(
+		NAME package-rpm-lint
+		COMMAND ${CMAKE_COMMAND} -E env
+			"BUILD_DIR=${CMAKE_BINARY_DIR}"
+			"RPMLINT_EXECUTABLE=${RPMLINT_EXECUTABLE}"
+			bash -lc
+			"set -euo pipefail; shopt -s nullglob; set -- \"$BUILD_DIR\"/*.rpm; if [ \"$#\" -eq 0 ]; then echo 'package-rpm-lint: no RPM packages produced' >&2; exit 1; fi; \"$RPMLINT_EXECUTABLE\" \"$@\""
+	)
+
+	set_tests_properties(package-rpm-lint PROPERTIES DEPENDS package-rpm)
+endif()

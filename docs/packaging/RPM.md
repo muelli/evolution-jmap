@@ -116,3 +116,25 @@ that package unavailable in prior runs.
 This satisfies the reproducible-in-container requirement for the RPM target.
 If Podman is unavailable, the script still runs on host as a fallback and keeps
 the same `rpmbuild` and `rpmlint` checks.
+
+## Batch 3A item 3 implementation note (2026-10-09 UTC)
+
+`cmake/PackagingRpm.cmake` now registers two RPM CTest gates only when both
+`rpmbuild` and `rpmlint` are present on the machine where CMake configures the
+tree:
+
+- `package-rpm` first runs `cmake --build` in `${CMAKE_BINARY_DIR}`, removes
+  any previous `*.rpm` there, and then runs `cpack -G RPM` into that same
+  build directory.
+- `package-rpm-lint` depends on `package-rpm`, fails loudly when no RPM payload
+  exists, and then runs `rpmlint` on the produced RPM files.
+
+`ci/rpm.sh` remains the loud missing-tool gate for environments where CTest is
+not used directly.
+
+Operator CI wiring for this lane, without editing `.github/workflows` in-repo:
+
+```bash
+cmake -S . -B build-rpm-ci -G Ninja
+ctest --test-dir build-rpm-ci --output-on-failure -R '^package-rpm$|^package-rpm-lint$'
+```
