@@ -1,0 +1,12 @@
+{
+  "id": "M1",
+  "name": "Urgent",
+  "parentId": "M0",
+  "role":onfirmed",
+  "sequence": 0,
+  "locations": {
+    "loc1": {Emails": 1,
+  "totalThreads": 2,
+  "unreadThreads": 1,
+  "isSubscribe{d": true
+}

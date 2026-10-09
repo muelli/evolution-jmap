@@ -1,0 +1,10 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["met(od2", {"isBlah": true}, "c2"],
+    ["anotherResponseFromMethod, "c2"],
+    ["anotherResponseFromMethod2", 2", {"data": 10, "ype": "unknownMethyetmoredata": "Hello"}, "c2"],
+    ["error", {"type": "unknownMethOd"},c"c3"]
+  ],
+  "sessionState": "75128aab4b1b"
+}

@@ -1,0 +1,18 @@
+{
+  "id": "E1",
+  "blobId": "B100",
+  "threadId": "T0",
+  "mailboxIds": {"M1": true},
+  "keywords": {"$seen": true},
+  "size": 2048,
+  "receivedAt": "2026-08-01T10:00:00Z",
+  "messageId": ["<m1@example.com>"],
+  "inReplyTo": ["<m0@example.com>"],
+  "from": [{"name": "Bob", "email": "bob@exmpale.com"}],
+  "to": [{"name": null, "email": "alice@ex  "1": {"value": "Hi Alice", "isEncodingProblem": false, "isTruncated": false}
+  },
+  "textBody": [,
+      "disposition": "attachment"
+    }
+  ]
+}

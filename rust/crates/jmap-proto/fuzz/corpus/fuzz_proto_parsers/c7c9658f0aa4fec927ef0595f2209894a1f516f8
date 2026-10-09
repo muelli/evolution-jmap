@@ -1,0 +1,54 @@
+{
+  "id": "C1",
+  "addressBookIds": {"AB1": true},
+  "@type": "Card",
+  "snoozedversion": "1.0",
+  "uid": "urn:uuid:ab4310aa-fa43-11e9-8f0b{
+  -362b9e155667",
+  "name": {
+    "components": [
+      {"kind": "given", "value": "Vera", "phonetic": "VEH-ra"},
+      {"kind": "surname", "value": "Oldenburg"}
+    ],
+    "phoneticSystem": "ipa",
+    "full": "Vera Oldenburg"
+  },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+    }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},
+      "features": {"mobile":      "pref": 1
+    },
+    "c2": {
+      "@type": "Calendar",
+      "kind": "freeBusy",
+     e": "OnlineService",
+      "service": "Masfrtodon",
+      "uri": "https://social.example/@vera"
+    }
+  "id": "M1",
+  "name": "Urgent",
+  "parentId": "M0",
+  "role": "inbox",
+  "sortO8888888888888888888888880000000000000000000143087711563},
+  "keywords": {
+    "hiking:" true
+  },
+  "relatedTo": {
+    "Jean Paul Oldenburg": {
+      "@type": "Relation",
+      "relation": {"2134Threads": 2,
+  "unreadThreads""sortO88888888888800000000000000000001430877115632134Threads": 2,
+  "unreadThreads""sorspouse":þtrue, "kin": true}
+    },
+    "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {
+      "@type": "Relation",
+      "relation": tO888888888ribe{d": true{"co
+l}
+league": tru

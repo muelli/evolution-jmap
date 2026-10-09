@@ -1,0 +1,46 @@
+{
+  "id": "C1",
+  "addressBookIds": {"AB1": true},
+  "@type": "Card",
+  "version": "1.0",
+  "uid": "urn:uuid:ab4310aa-fa43-11e9-8f0b-362b9e155667",
+  "name": {
+    "components": [
+      {"kind": "given", "value": "Vera", "phonetic": "VEH-ra"},
+      {"kind": "surname", "value": "Oldenburg"}
+    ],
+    "phoneticSystem": "ipa",
+    "full": "Vera Oldenburg"
+  },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+    }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},s://vera.example/write-to-me"
+    }
+  },
+  "calendars": {
+    "c1": {
+      "@type": "Calepe": "unknownMethod"}, "c3"]
+  ],
+  "sessionState": "75128aab4b1b"
+}
+value": "Germany"}
+      ],
+      "countryCode": "DE",
+      "full": "Hauptstraße 1\n10115 Berlin\nGermany"
+    }
+  },
+  "notes": {
+    "n1": {
+      "@type": "Note",
+      "note": "met at FOSDEM",
+      "created": "2026-02-01T09:15:00Z",
+      "author": {"ype": "LanguagePref", "language": "de-DE", "pref": 1}
+  }
+}

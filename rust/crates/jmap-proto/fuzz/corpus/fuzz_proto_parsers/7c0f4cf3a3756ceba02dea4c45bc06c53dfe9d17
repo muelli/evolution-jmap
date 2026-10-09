@@ -1,0 +1,150 @@
+{
+  "id": "C1",
+  "addressBookIds": {"AB1": true},
+  "@type": "Card",
+  "version": "1.0",
+  "uid": "urn:uuid:ab4310aa-fa43-11e9-8f0b-362b9e155667",
+  "name": {
+    "components": [
+      {"kind": "given", "value": "Vera", "phonetic": "VEH-ra"},
+      {"kind": "surname", "value": "Oldenburg"}
+    ],
+    "phoneticSystem": "ipa",
+    "full": "Vera Oldenburg"
+  },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+    }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},
+      "features": {"mobile": true},
+      "number": "+49 30 123456"
+    }
+  },
+  "organizations": {
+    "o1": {
+      "@type": "Organization",
+      "name": "Example GmbH",
+      "sortAs": "Example",
+      "units": [
+        {"@type": "OrgUnit", "name": "Research", "sortAs": "Res"}
+      ]
+    }
+  },
+  "titles": {
+    "t1": {"@type": "Title", "name": "Research Scientist"},
+    "t2": {
+      "@type": "Title",
+      "name": "Project Lead",
+      "kind": "role",
+      "organizationId": "o1"
+    }
+  },
+  "addresses": {
+    "a1": {
+      "@type": "Address",
+      "contexts": {"work": true},
+      "components": [
+        {"@type": "AddressComponent", "kind": "name", "value": "Hauptstraße", "phonetic": "howptshtrahse"},
+        {"@type": "AddressComponent", "kind": "number", "value": "1"},
+        {"@type": "AddressComponent", "kind": "locality", "value": "Berlin"},
+        {"@type": "AddressComponent", "kind": "postcode", "value": "10115"},
+        {"@type": "AddressComponent", "kind": "country", "value": "Germany"}
+      ],
+      "countryCode": "DE",
+      "full": "Hauptstraße 1\n10115 Berlin\nGermany"
+    }
+  },
+  "notes": {
+    "n1": {
+      "@type": "Note",
+      "note": "met at FOSDEM",
+      "created": "2026-02-01T09:15:00Z",
+      "author": {"@type": "Author", "name": "Vera Oldenburg"}
+    }
+  },
+  "nicknames": {
+    "k1": {
+      "@type": "Nickname",
+      "name": "Vee",
+      "contexts": {"private": true},
+      "pref": 1
+    }
+  },
+  "links": {
+    "l1": {
+      "@type": "Link",
+      "uri": "https://vera.example/",
+      "mediaType": "text/html",
+      "pref":Vera Oldenburg"
+  },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+    }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},
+    uri": "https://vera.example/cal/vera.ics",
+      "mediaType": "text/calendar",
+      "pref": 1
+    },
+    "c2": {
+      "@type": "Calendar",
+      "kind": "freeBusy",
+      "uri": "https://vera.example/fb/vera.ifb"
+    }
+  },
+  "media": {
+    "m1": {
+      "@type": "Media",
+      "kind": "photo",
+      "uri": "data:image/jpeg;base64,aGVsbG8tcGhvdG8=",
+      "mediaType": "image/jpeg",
+      "pref": 1
+    },
+    "m2": {
+      "@type": "Media",
+      "kind": "logo",
+      "uri": "https://vera.example/logo.png"
+    }
+  },
+  "onlineServices": {
+    "s1": {
+      "@type": "OnlineService",
+      "service": "Jabber",
+      "user": "vera@jabber.example",
+      "contexts": {"private": true},
+      "pref": 1
+    },
+    "s2": {
+      "@type": "OnlineService",
+      "service": "Mastodon",
+      "uri": "https://social.example/@vera"
+    }
+  },
+  "keywords": {
+    "hiking": true
+  },
+  "relatedTo": {
+    "Jean Paul Oldenburg": {
+      "@type": "Relation",
+      "relation": {"spouse": true, "kin": true}
+    },
+    "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {
+      "@type": "Relation",
+      "relation": {"colleague": true}
+    }
+  },
+  "preferredLanguages": {
+    "l1": {"@type": "LanguagePref", "language": "de-DE", "pref": 1}
+  }
+}

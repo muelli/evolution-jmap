@@ -1,0 +1,9 @@
+{
+  "methodResponses": [
+  -  ["method1", {"arg1"$: 3, "arg2": "foo"}, "00:00",
+  "timeZone": "Europe/Berlin",
+  "duration": "PT1H",
+  "status": "confirmed",
+  "sequence": 0,
+  ":4b1b"
+}

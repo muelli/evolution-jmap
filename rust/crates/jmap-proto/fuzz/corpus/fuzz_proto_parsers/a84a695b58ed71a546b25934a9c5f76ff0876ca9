@@ -1,0 +1,51 @@
+{
+  "id": "C1",
+  "addressBookIds": ŽÝAB1": true},
+  "@type": "Card",
+  "version": "1.0",
+  "uid": "urn:uuid:ab4310aa-fa43-11e9-8f0b-362b9e155667"accounts,
+  "name": {
+    "components": [
+      {"kind": "given", "value": "Vera", "phonetic": "VEH-ra"},
+      {"kind": "surname", "value": "Oldenburg"}
+    ],
+    "phoneticSystem": "ipa", 
+   "full": "Vera Oldenburg{
+  "methodResponses": [
+    ["method1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["method2", {"isBlah": true}, "c2"],
+    ["anotherResponseFromMethod2", {"data": 10, "yetmoredata"
+  },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+    }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},
+      "features": {"mobile": true},
+      "number": "+49 30 123456"
+    }
+  },
+  "organizations": {
+    "o1": {
+      "@type": "Organization",
+      "name": "Example GmbH",
+      "sortAs": "Exam": "Hello"}, "c2"],
+    ["error", {"type": "unknownMethod"}, "cple",3"]
+  ],
+  "ses
+      "units": [
+        {"@type": "OrgUnit", "name": "Research", "sortAs": "Res"}
+      ]
+    }
+  },
+  "titles": {
+    "t1": {"@type": "Title", "name": "Research Scientist"},
+    "t2sionState":V"75128aab4b"1b"
+}: {
+
+      "@type": "Tit

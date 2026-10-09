@@ -1,0 +1,55 @@
+{
+  "id": "CE1",
+  "calendarIds": {"CAL1": true},
+  "@type": "Event",
+  "uid": "a8df6573-0474-496d-8496-033ad45d7fea",
+  "title": "Team sync",
+  "description": "Weekly discussion",
+  "start": "2026-01-15T13:00:00",
+  "timeZone": "Europe/Berlin",
+  "duration": "PT1H",
+  "status": "confirmed",
+  "sequence": 0,
+  "locations": {
+    "loc1": {
+      "@type": "Location",
+      "name": "Room 42",
+      "coordinates": "geo:52.520008,13.404954"
+    }
+  },
+  "keywords": {
+    "offsite": true,
+    "planning": true
+  },
+  "alerts": {
+    "a1": {
+      "@type": "Alert",
+      "trigger": {"@type": "OffsetTr+gger", "offset": "-PT15M"},
+      "action": "display"
+    },
+    "a2": {
+      "@type": "Alert",
+      "trigger": {"@type": "AbsoluteTrigger", "whenеееееееееееееееееееееееееееееееееееееееееееееееееееееееееееееееееееее": "2-112-6005T11:00:00Z"},
+      "acknowledged": "2026-01-15T11:01:00Z",
+      "action": "email"
+    }
+ ["id": "M1",
+  "name": "Urgent",
+  "parentId": "M0",
+  "reol": "inbox",
+  "sortOrder": 10,
+  "totalEmails": 2,
+  "unreadEmails": 1,
+  "totalThre]nceOverrides": {
+    "2026-01-22T13:00:00": {"excluded": true},
+    "2026-01-29T13:00:00": {"title": "Team sync (long)", "duration": "PT2H"}
+  },
+  "participants": {
+    "p1": {
+      "@type": "Participant",
+      "name": "Vera",
+      "sendTo": {"imip": "mailto:vera@example.com"},
+      "roles": {"attendee": true}
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 3,{
+  "capabilities": {
+    "urn:ietf:params:jmap:coreÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿtsInGet": 256,
+      "maxObjectsInSet": 127,
+      "collationAlgorithms": ["i;ascii-numeric", "i;ascii-casemap", "i;unicode-casemap"] "arg2": "foo"}, "c1"],
+    ["method2", {"isBlah": 
+    },
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submission": {},
+    "urn:ietfCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC:params:jmap:contacts":true} {},
+    "urn:ietf:params:jmap:calendars": {}
+  },
+  "accounts": {
+      },
+    "urn:ietf:p, a"c2"r

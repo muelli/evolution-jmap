@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-proto-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[dependencies.evolution-jmap-proto]
+path = ".."
+features = ["mail", "contacts", "calendars", "principals"]
+
+# Use independent workspace for fuzzers
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_proto_parsers"
+path = "fuzz_targets/fuzz_proto_parsers.rs"
+test = false
+doc = false
+bench = false

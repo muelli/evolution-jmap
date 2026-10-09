@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Tobias Mueller <muelli@cryptobitch.de>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "evolution-jmap-client-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.evolution-jmap-client]
+path = ".."
+default-features = false
+
+[dependencies.evolution-jmap-proto]
+path = "../../jmap-proto"
+features = ["mail", "contacts", "calendars", "principals"]
+
+# Use independent workspace for fuzzers
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_client_response"
+path = "fuzz_targets/fuzz_client_response.rs"
+test = false
+doc = false
+bench = false

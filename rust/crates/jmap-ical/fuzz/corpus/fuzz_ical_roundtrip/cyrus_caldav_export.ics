@@ -1,0 +1,39 @@
+BEGIN:VCALENDAR
+PRODID:-//Cyrus IMAP 3.10.0//EN
+VERSION:2.0
+CALSCALE:GREGORIAN
+BEGIN:VEVENT
+UID:cyrus-caldav-symposium-2026-c102
+DTSTAMP:20260901T080000Z
+CREATED:20260815T100000Z
+LAST-MODIFIED:20260820T143000Z
+SUMMARY:IETF Hackathon & Standards Interop
+DESCRIPTION:Annual IETF Hackathon and CalConnect interoperability testing symposium.\n\nWebsite: https://www.ietf.org/how/runningcode/hackathons/\nVirtual Bridge: https://meetecho.ietf.example/hackathon
+DTSTART;VALUE=DATE:20261110
+DTEND;VALUE=DATE:20261113
+RRULE:FREQ=YEARLY;COUNT=5
+EXDATE;VALUE=DATE:20281110
+CLASS:PUBLIC
+STATUS:CONFIRMED
+TRANSP:TRANSPARENT
+PRIORITY:1
+CATEGORIES:IETF,CalConnect,Standards
+LOCATION:San Francisco Marriott Marquis\, 780 Mission St\, San Francisco\, CA 94103
+ORGANIZER;CN="Neil Jenkins":mailto:neilj@fastmail.example
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;SCHEDULE-AGENT=SERVER;SCHEDULE-STATUS=2.0;CN="Neil Jenkins":mailto:neilj@fastmail.example
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;SCHEDULE-AGENT=SERVER;CN="Bron Gondwana":mailto:brong@fastmail.example
+ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=OPT-PARTICIPANT;PARTSTAT=NEEDS-ACTION;SCHEDULE-AGENT=SERVER;CN="Ken Murchison":mailto:murch@fastmail.example
+CONFERENCE;VALUE=URI;FEATURE=AUDIO,VIDEO:https://meetecho.ietf.example/hackathon
+ATTACH;FMTTYPE=application/pdf;SIZE=1048576:https://cal.fastmail.example/files/hackathon-guide.pdf
+IMAGE;VALUE=URI;DISPLAY=BADGE;FMTTYPE=image/png:https://cal.fastmail.example/img/ietf-badge.png
+BEGIN:VALARM
+ACTION:DISPLAY
+TRIGGER;VALUE=DURATION:-P1D
+DESCRIPTION:Reminder: IETF Hackathon starts tomorrow
+END:VALARM
+X-CALDAV-ACCESS-RESTRICTION:NONE
+X-CALDAV-SYNC-TOKEN:data:,sync-token-20260901-789
+X-CALDAV-CTAG:data:,ctag-42
+X-FASTMAIL-CLIENT-ID:web-client-v1
+END:VEVENT
+END:VCALENDAR

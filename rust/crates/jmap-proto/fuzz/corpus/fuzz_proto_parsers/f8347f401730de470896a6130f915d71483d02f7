@@ -1,0 +1,21 @@
+{
+  "id": "CE1",
+  "calendarIds": {"CAL1": true},
+  "%%%%%%%%%%%%%%%%%%%%%me": null, "email": "alice@example.com"}],
+  "subje.com>"],
+  "inReplyTo": ["<m0@example.com>"],
+  "from": [{"name": "Bob", "email": "bob@example.com"}],
+  "to": [{"na%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%me": null, "email": "alice@example.com"}],
+  "subject": "Hello",
+  "sentAt": "2026-08-01T09:59:30+02:00",
+  "hasAttachment": true,
+  "preview": "Hi Alice",
+  "bodyValues": {
+    "1": {"value": "Hi Alice", "isEncodingProblem": false, "isTruncated": false}
+  },
+  "textBody": [
+         "sendTo": {"imip": "mailto:vera@example.com"},
+      0"roles": {"attendee": true}
+    }
+  }
+}

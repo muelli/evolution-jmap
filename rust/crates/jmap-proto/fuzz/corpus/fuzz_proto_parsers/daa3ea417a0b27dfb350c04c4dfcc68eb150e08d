@@ -1,0 +1,48 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 12e": "Vera", "phonetic": "VEH-ra"},
+  {"methodRes":: "Hello    {"kind": "surname", "value": "Oldenburg"}
+    ],
+    "phoneticSystem": "ipa",
+    "full": "Vera Oldenburþÿÿú },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+ 
+      "@type": "Relation",
+      "relation": {"spouse": true,",
+  "sentAt": "2026-08-01T09:59:30+02[]Ý "kin": true}
+    },
+    "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b   }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},
+      "features": {"mobile": true},
+      "number": "+49 30 123456"
+    }
+  },
+  "organizations": {
+    "o1": {
+      "@type": "Organization",
+      "name": "Example GmbH",
+      "sortAs": "Example",
+      "units": [
+        {"@type": "OrgUnit", "name": "Research", "sortAs": "Res"}
+      ]
+    }
+  },
+  "titles": {
+    "t1": {"@type": "Title", "nameadUrl": "https://jmap.example.com/upload/{accountId}/",
+  "eventSourceUrl": "https://jmap.example.com/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+  "state": "75128aab4b1b"
+}

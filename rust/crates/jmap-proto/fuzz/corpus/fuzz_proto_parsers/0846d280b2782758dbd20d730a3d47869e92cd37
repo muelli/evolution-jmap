@@ -1,0 +1,42 @@
+{
+  "id": "C1",
+  "addressBookIds": {"AB1": true},
+  "@type": "Card",
+  "version": "1.0",
+  "uid": "urn:uuid:ab4310aa-fa43-11e9-8f0b-362b9e155667",
+  "name": {
+    "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiicomponents": [
+      {"kind": "given", "value": "Vera", "phonetic": "VEH-ra"},
+      {"kind": "surname", "value": "Oldenburg"}
+    ],
+    "phoneticSystem": "ipa",
+  directoriesVera Oldenburg"
+  },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+    }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},type": "Calendar",
+      "kind": "freeBusy",
+      "uri": "https://vera.example/fb/vera.ifb"
+    }
+  },
+  "media": {
+    "m1": {
+      "@type      "@type": "Relation",
+      "relation": {"spouse": true, "kin": true}
+    },
+    "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {
+      "@type": "Relation",
+      "relation": {"colleague": true}
+    }
+  },
+  "preferredLanguages": {
+    "l1": {"@type": "LanguagePref", "language": "de-DE", "pref": 1}
+  }
+}

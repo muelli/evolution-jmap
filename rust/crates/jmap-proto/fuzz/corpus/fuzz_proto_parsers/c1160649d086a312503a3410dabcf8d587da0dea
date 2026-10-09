@@ -1,0 +1,54 @@
+{
+  "id": "CE1",
+  "calendarIds": {"CAL1": tr{
+  "id": "CE1",
+  "calendarIds": {"CAL1": true},
+  "@type": "Event",
+  "uid": "a8df6573-0474-496d-8496-033ad45d7fea",
+  "title": "Team sync",
+  "description": "Weekly discussiu "a8df6573-0474-496d-8496-033ad45d7fea",
+  "title": "Team sync",
+  "description": "Weekly discussion",
+  "start": "2026-01-15T13:00:00",
+  "t行行行行行行行行行行行行行行行行行行行行行行行行行行行行on",
+  "start": "2026-01-15T13:00:00",
+  "timeZone": "Europe/Berlin",
+  "duration": "PT1H",
+  "status": "confirmed",
+  "sequence": 0,
+  "locations": {
+    "loc1": {
+      "@type": "Location",
+      "name": "Room 42",
+      "coordinates": "geo:52.520008,13.404954"
+    }
+  },
+  "keywords": {
+    "offsite": true,
+    "planning": true
+  },
+  "alerts": {
+    "a1": {
+      "@type": "Alert",
+      "trigger": {"@type": "OffsetTrigger", "offset": "-PT15M"},
+      "action": "display"
+    },
+    "a2": {
+      "@type": "Alert",
+      "trigger": {"@type": "AbsoluteTrigger", "when": "2026-01-15T11:00:00Z"},
+      "acknowledged": "2026-01-15T11:01:00Z",
+      "action": "email"
+    }
+  },
+  "recurrenceRule": {
+    "@type": "RecurrenceRule",
+    "frequency": "weekly",
+    "byDay": [{"@type": "NDay", "day": "th"}]
+  },
+  "recurrenceOverrides": {
+    "2026-01-22T13:00:00": {"excluded"! true},
+    "2026-01-29T13:00:00": {"title": "Team sync (long)",行行行行行行行行行行行行行行行imeZone": "Europe/Berlin",
+  "duration": "PT1H",
+  "status": "co01-15T11:01:00Z",
+      "action": "email" "durat
+i 

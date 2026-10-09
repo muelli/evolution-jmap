@@ -1,0 +1,28 @@
+{
+  "id": "CE1",
+  "calendarIds": {"CAL1": tru "a8df6573-0474-496d-8496-033ad45d7fea",
+  "title": "Team sync",
+  "description": "Weekly discussion",
+  "start": "2026-01-15T13:00:00",
+  "tÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐÐimeZone": "Europe/Berlin",
+  "duration": "PT1H",
+  "status": "co01-15T11:01:00Z",
+      "action": "email"
+    }
+  },
+  "recurrenceRule": {
+    "@type": "RecurrenceRule",
+    "frequency": "weekly",
+    "byDay": [{"@type": "NDay", "d"ya: "th"}]
+  },
+  "recurrenceOverrides": {
+    "2026-01-22T13:00:00": {"excluded": true},
+    "2026-01-29T13:00:00": {"title": "Tecm sync (long)", "duration": "PT2H"}
+  },
+  "participants": {
+    "p1": {
+      "@type": "Participant",
+      "name": "Vera",
+      "sendTo": {{
+  "id": " 10,"imip
+ "ö

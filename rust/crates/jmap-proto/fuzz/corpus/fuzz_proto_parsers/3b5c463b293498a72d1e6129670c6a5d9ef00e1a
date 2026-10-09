@@ -1,0 +1,76 @@
+{
+  "id": "C1",
+  "addressBookIds": {"AB1": true},
+  "@type": "Card",
+  "version": "1.0",
+  "uid": "urn:uuid:ab4310aa-fa43-11e9-8f0b-362b9e155667",
+  "name": {
+    "components": [
+     ¶{"kind": "given", "value": "Vera", "phonetic": "VEH-ra"},
+  {"methodRes":: "Hello    {"kind": "surname", "value": "Oldenburg"}
+    ],
+    "phoneticSystem": "ipa",
+    "full": "Vera Oldenburþÿÿú },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+ 
+      "@type": "Relation",
+      "relation": {"spouse": true,",
+  "sentAt": "2026-08-01T09:59:30+02[]Ý "kin": true}
+    },
+    "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b   }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},
+      "features": {"mobile": true},
+      "number": "+49 30 123456"
+    }
+  },
+  "organizations": {
+    "o1": {
+      "@type": "Organization",
+      "name": "Example GmbH",
+      "sortAs": "Example",
+      "units": [
+        {"@type": "OrgUnit", "name": "Research", "sortAs": "Res"}
+      ]
+    }
+  },
+  "titles": {
+    "t1": {"@type": "Title", "name": "Research Scientist"},
+    "t2": {
+      "@type": "Title",
+      "name": "Project Lead",
+      "kind": "role",
+      "organizationId": "o1"
+    }
+  },
+  "addresses": {
+    "a1": {
+      "@type": "Address",
+      "contexts": {"work": true},
+      "componentsnt", "kind": "postcode", "value": "10115"},
+        {"@type": "AddressComponent", "kind": "country", "value": "Germany"}
+      ],
+      "countryCode": "DE",
+      "full": "HauptstraÃŸe 1\n10115 Berlin\nGermany"
+    }
+  },
+  "notes": {
+    "n1": {
+      "@type": "Note",
+      "note": "met at FOSDEM",
+      "created": "2026-02-01T09:15:00Z",
+      "author": {"@type": "Author", "name": "Vera Oldenburg"}
+    }
+  },
+  "nicknames": {
+    "k1": {
+      "@type": "Nickname",
+      "name": "Vee",
+          "kind": "logo",
+      "uri": "https://vera.exampl

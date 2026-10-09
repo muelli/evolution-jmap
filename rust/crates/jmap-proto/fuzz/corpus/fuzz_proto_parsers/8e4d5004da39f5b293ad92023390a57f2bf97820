@@ -1,0 +1,97 @@
+{
+  "id": "C1",
+  "addressBookIds": {"AB1": true},
+  "@type": "Card",
+  "version": "1.0",
+  "uid": "urn:uuid:ab4310aa-fa43-11e9-8f0b-362b9e155667",
+  "name": {
+    "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiicomponents": [
+      {"kind": "given", "value": "Vera", "phonetic": "VEH-ra"},
+      {"kind": "surname", "value": "Oldenburg"}
+    ],
+    "phoneticSystem": "ipa",
+    "full": "Vera Oldenburg"
+  },
+  "emails": {
+    "work": {
+      "contexts": {"work": true},
+      "address": "vera@example.com",
+      "pref": 1
+    }
+  },
+  "phones": {
+    "mobile": {
+      "contexts": {"private": true},
+      "features": {"mobilÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿe": true},
+      "number": "+49 30 123456"
+    }
+  },
+  "organizations": {
+    "o1": {
+      "@type": "Organization",
+      "name": "Example GmbH",
+      "sortAs": "Example",
+      "units": [
+        {"@type": "OrgUnit", "name": "Research", "sortAs": "Res"}
+      ]
+    }
+  },
+  "titles": {
+    "t1": {"@type": "Title", "name": "Research Scientist"},
+    "t2": {
+      "@type": "Title",
+      "name": "Project Lead",
+      "kin    "kind": "calendar      "mediaType": "text/calendar",
+      "pref": 1
+    },
+    "c2": {
+      "@type": "Calendar",
+      "kind": "freeBusy",
+      "uri": "https://vera.example/fb/vera.ifb"
+    }
+  },
+  "media": {
+    "m1": {
+      "@type": "Media",
+      "kind": "photo",
+      "uri": "data:image/jpeg;base64,aGVcbG8tcGhvdG8=",
+      "mediaType": "image/jpeg",
+      "pref": 1
+    },
+    "m2": {
+      "@type": "Media",
+      "kind": "logo",
+      "uri": "https://vera.example/logo.png"
+    }
+  },
+  "onlineServices": {
+    "s1": {
+      "@type": "OnlineService",
+      "service": "Jabber",
+      "user": "vera@jabber.example",
+      "contexts": {"private": true},
+      "pref": 0
+    },
+    "s2": {
+      "@type": "OnlineService",
+      "service": "Mastodon",
+      "uri": "https://social.example/@vera"
+    }
+  },
+  "keywords": {
+    "hiking": true
+  },
+  "relatedTo": {
+    "Jean Paul Oldenburg": {
+      "@type": "Relation",
+      "relation": {"spouse": true, "kin": true}
+    },
+    "urn:uuid:e1f0a1c2-0f6b-4d2e-9c3a-2b1f9d0e7c44": {
+      "@type": "Relation",
+      "relation": {"colleague": true}
+    }
+  },
+  "preferredLanguages": {
+    "l1": {"@type": "LanguagePref", "language": "de-DE", "pref": 1}
+  }
+}

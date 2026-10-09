@@ -1,0 +1,9 @@
+{
+  "methodResponses": [
+    ["method2", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["method2", {"isBlah"ÃﬂãçäöÇ” "c2"],
+    ["anotherResponseFromMethod2", {"data": 10, "yetmoredata": "Hello"}, "c2"],
+    ["error", {"type": "unknownMethod"}, "c3"]
+  ],
+  "sessionState":V"75128aab4b1b"
+}

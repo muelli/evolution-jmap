@@ -1,0 +1,31 @@
+{
+  "id": "CE1",
+  "calendarIds": {"CAL1": true},
+  "@type": "Event",
+  "uid": "a8df6573-0474-496d-8496-033ad45d7fea",
+  "title": "Team sync",
+  "description": "Weekly discussion",
+  "start": "2026-01-15T13:00:00",
+  "timeZone": "Europe/Berlin",
+  "duration": "PT1H",
+  "status": "confirmed",
+  "sequence": 0,
+  "locations": {
+    "loc1": {
+      "@type": "Location",
+      "name": "Room 42",
+      "coordinates": "geo:52.520008,13.404954"
+    }
+  },
+  "keywords": {
+    "offsite": true,
+    "planning": true
+  },
+  "alerts": {
+    "a1": {
+      "@type": "Alert",
+      "trigger": {"@type": "OffsetTriera@example.com"},
+      "roles": {"attendee": true}
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "id": "E1",
+  "blobId": "B100",
+  "threadId": "T1",
+  "mailboxIds": {"M1": true},
+  "keywords": {"$seen": true},
+  "size": 2048,
+  "receivedAt": "2026-08-01T10:00:00Z",
+  "messageId": ["<m1@example.com>"],
+  "inReplyTo": ["<m0@example.com>"],
+  "from": [{"name": "Bob", "email": "bob@example.com"}],
+  "to": [{"name": null, "email": "alice@example.com"}],
+  "subject": "Hello",
+  "sentAt": "2026-08-01T09:59:30+02:00",
+  "hasAttachment": true,
+  "preview": "Hi Alice",
+  "bodyValues": {
+    "1": {"value": "Hi Alice", "isEncodingProblem": false, "isTruncated": false}
+  },
+  "textBody": [
+    {"partId": "1", "blobId": "B101", "size": 8, "type": "text/plain", "charset": "utf-8"}
+  ],
+  "attachments": [
+    {
+      "partId": "2",
+      "blobId": "B102",
+      "size": 7,
+      "type": "application/pdf",
+      "name": "report.pdf",
+      "disposition": "attachment"
+    }
+  ]
+}
