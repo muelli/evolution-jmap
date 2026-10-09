@@ -261,3 +261,36 @@ existing `calcard` dependency owns the general format layer, while the
 remaining hand-rolled code is the product-specific mapping and compatibility
 boundary. This increment is therefore a documented **KEEP** audit result;
 no code or dependency change is justified.
+
+## 2026-10-09 re-survey: `jmap-vcard` follow-up
+
+This increment re-checked `rust/crates/jmap-vcard/src` after the 2026-09-24
+entry, to ensure no newly externalisable hand-rolled slice was missed.
+
+### Candidate: line folding and date normalization helpers in `contact.rs`
+
+The crate still carries local helpers for vCard 3.0 output line folding and
+for compatibility normalization around date/date-time parsing
+(`contact.rs:1927-2048`, `2105-2112`).
+
+**KEEP.** Both helpers sit exactly at the Evolution compatibility boundary and
+encode behavior tied to EDS input/output expectations, including explicit notes
+about parser differences and round-trip safety. A generic crate would only own
+RFC-shape mechanics, while this code owns compatibility policy that is specific
+to this project's contract.
+
+### Candidate: PHOTO handling and base64/data URI policy
+
+`contact.rs` still has hand-rolled PHOTO classification and payload handling,
+including media-type filtering, URI constraints, and base64 normalization for
+round trips (`contact.rs:893-1119`, `1756-1781`, `2648-2747`).
+
+**KEEP.** This is semantic policy, not missing utility code. It intentionally
+implements Evolution-facing behavior and data-preservation rules that are
+fixture-protected in this crate. External parsers would duplicate, not replace,
+this compatibility logic.
+
+### Result
+
+No new low-risk dependency swap is justified. The previous 2026-09-24 KEEP
+conclusion remains correct.
