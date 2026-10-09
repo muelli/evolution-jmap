@@ -296,6 +296,27 @@ grace window to show up, then asserts the mock's log shows exactly 2, not 4,
 Confirmed 2026-10-09 in the same rootless-podman Ubuntu 24.04 container
 (EDS 3.52) the example-module checks use: passed twice in a row at 2, and a
 negative control (the expected count swapped for one that cannot occur)
-failed as expected, ruling out a vacuous pass. The EDS 3.60.2 leg and item
-63's own caveat (editing a JMAP account's host must trigger a fresh
-authenticate) are left for a follow-up; item 93 stays CLAIMABLE on those.
+failed as expected, ruling out a vacuous pass.
+
+**EDS 3.60.2 leg confirmed 2026-10-09, same container shape the EUIManager
+and folder-popup 3.60.2 checks used (item 71's pinned-Fedora podman recipe,
+full `evolution` package, Xvfb/AT-SPI/dbus installed, module and
+`jmap-mockd` built against the container's real 3.60.2 headers).** Two
+portability fixes needed in the assert script, both already known from the
+folder-popup EDS 3.60.2 leg and applied the same way rather than
+rediscovered: `find_app` now accepts either `"evolution"` (the minimal
+Ubuntu container's AT-SPI application name) or `"org.gnome.Evolution"` (this
+container's GApplication id), and the button lookups no longer filter on
+role (`"push button"` there, plain `"button"` here). The same one-time
+"Do you want to make Evolution your default email client?" dialog the
+folder-popup leg hit also showed up here and needed the same
+`"Do not change settings"` dismissal. With those fixed, the check passed
+twice in a row at the same healthy count of 2, and a negative control
+(expected count swapped to 999) failed both attempts as expected. No
+`EDS_CAMEL_PROVIDER_DIR` workaround was needed this time: this container's
+`cmake --install --component camel-provider` already lands the module in
+the exact directory `libcamel` reports via its own compiled-in default.
+
+Item 66 is now fully confirmed on both EDS legs. Item 93 stays CLAIMABLE
+only on item 63 (editing a JMAP account's host must trigger a fresh
+authenticate).

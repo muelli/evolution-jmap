@@ -44,11 +44,19 @@ HEALTHY_MAILBOX_GET_COUNT = 2
 INBOX_PATTERN = re.compile(r"^Inbox \((\d+)\)$")
 
 
-def find_app(name):
+def find_app(names):
+    """`names` is an iterable of acceptable AT-SPI application names: the
+    name Evolution registers under differs by environment, "evolution" in
+    the minimal rootless-podman Ubuntu container the EDS 3.52 leg uses, but
+    "org.gnome.Evolution" (its GApplication id) in the full-desktop Fedora
+    3.60.2 container, which has desktop-file-utils/shared-mime-info wired up
+    enough for GApplication's own D-Bus activation naming to take over —
+    same portability fix ci/gui-smoke-example-module-folder-popup-assert.py
+    already carries."""
     desktop = pyatspi.Registry.getDesktop(0)
     for i in range(desktop.childCount):
         app = desktop.getChildAtIndex(i)
-        if app is not None and app.name == name:
+        if app is not None and app.name in names:
             return app
     return None
 
@@ -101,20 +109,41 @@ def uncheck(checkbox):
         checkbox.queryAction().doAction(0)
 
 
+def find_button(node, name):
+    """The push-button role name itself differs by AT-SPI stack: "push
+    button" in the minimal rootless-podman Ubuntu container the EDS 3.52 leg
+    uses, plain "button" in the full-desktop Fedora 3.60.2 container's newer
+    at-spi2-core. Role is not filtered at all here (name alone is specific
+    enough for every caller), same fix
+    ci/gui-smoke-example-module-folder-popup-assert.py already carries."""
+    return find_descendant(node, role=None, name=name)
+
+
 def dismiss_transient_dialogs(evolution):
     """Same one-time dialog ci/gui-smoke-assert.py dismisses. Dismissed
     every poll, not just once: a bugged second populate would show it
     again, and leaving it up would stall that second login rather than let
-    it reach the mock where this script can see it."""
+    it reach the mock where this script can see it.
+
+    A second, unrelated one-time dialog ("Do you want to make Evolution your
+    default email client?") only shows up in the full-desktop Fedora 3.60.2
+    container (desktop-file-utils/shared-mime-info make the check fire at
+    all); "Do not change settings" leaves the throwaway container's state
+    untouched."""
     auth_dialog = find_descendant(evolution, role="dialog", name="Mail authentication request")
     if auth_dialog is not None:
         checkbox = find_descendant(auth_dialog, role="check box")
         if checkbox is not None:
             uncheck(checkbox)
-        ok_button = find_descendant(auth_dialog, role="push button", name="OK")
+        ok_button = find_button(auth_dialog, "OK")
         if ok_button is not None:
             click(ok_button)
             print("dismissed: Mail authentication request")
+
+    default_client_button = find_button(evolution, "Do not change settings")
+    if default_client_button is not None:
+        click(default_client_button)
+        print("dismissed: Do you want to make Evolution your default email client?")
 
 
 def account_inbox_count(evolution):
@@ -168,7 +197,7 @@ def main():
     account_seen = False
     inbox_seen_at = None
     while time.monotonic() < deadline:
-        evolution = find_app("evolution")
+        evolution = find_app(("evolution", "org.gnome.Evolution"))
         if evolution is not None:
             dismiss_transient_dialogs(evolution)
 
