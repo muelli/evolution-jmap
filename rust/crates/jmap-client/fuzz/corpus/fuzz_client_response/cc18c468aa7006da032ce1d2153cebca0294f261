@@ -1,0 +1,20 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxConcurrentRequests": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxConcurrentRequests": 8,
+      "mrs": {}
+  },
+  "accounts": {ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ
+    "A13824": {
+      "name": "john@example.com",
+      "isPersonal": true,
+  àßßßÝ–ŒµeadOnly": false,
+   o     "name": "john@example.com",
+      "isPersonal": true,
+  àßßßÝ–Œµe

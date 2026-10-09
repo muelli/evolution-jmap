@@ -1,0 +1,5 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 10, "yetmoredata": "Hello"}, "c2"],
+    ["error", {"type": "unknownMethod"}, "c3"]
+}

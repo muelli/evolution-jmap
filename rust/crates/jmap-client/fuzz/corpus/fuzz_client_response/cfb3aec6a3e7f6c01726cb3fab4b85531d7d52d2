@@ -1,0 +1,9 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["methoD2", {"isBlah9": true}, "c2"],
+    ["aíêãöerResponseFromMethod2", {"data": 10, "yetmoredata": "Hello"}, "c2"],
+    ["error", {"type": "unkn#ownMethod"}, "c3"]
+  ],
+  "sessionState": "7512Stab4b1b"
+}

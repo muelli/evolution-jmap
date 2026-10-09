@@ -1,0 +1,9 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["ÿÿÿÿmethod2", {"isBlah": true}, "c2"],
+    ["anotherResponseFromMethod`2", {"data": óÿÿÿ"yetmoredata": "He": "unknownMethod"te{
+  "]
+  ],
+"e& s ssionState": "75128aab4b1b"
+}

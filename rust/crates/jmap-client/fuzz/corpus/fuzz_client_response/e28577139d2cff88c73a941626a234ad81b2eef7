@@ -1,0 +1,18 @@
+{
+  "id": "M1",
+  "name": "Urgent",
+  "parentId": "M0",
+  "role": "inbox",
+  "sortOrder": 10,
+  "totalEmails": 2,
+  "unreadEmails": 1,
+  "totalThreads": 2,
+  "unreadent",
+  "parenrder": 10,
+  "totalEmails": 2,
+  "unreadEmails": 1,
+  "totalThreads": 2,
+  "unreadThreads": 1,
+  "isSubscribed": truThreads": 1,
+  "isSubscribed": true
+}

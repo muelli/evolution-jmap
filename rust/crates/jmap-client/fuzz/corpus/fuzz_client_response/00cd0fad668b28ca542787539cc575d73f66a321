@@ -1,0 +1,19 @@
+{
+  }
+        }
+      }
+    }
+  },
+  "primaryAccounts": {
+    "urn:ietf:params:jmap:mail": "A13824",
+    "urn:ietf:params:jmap:submission": "A13824",
+    "urn:ietf:params:jmap:contacts": "A13824",
+    "urn:ietf:params:jmap:calendars": "A13824"
+  },
+  "username": "john@example.com",
+  "apiUrl": "https://jmap.example.com/api/",
+  "downloadUrl": "https://jmap.example.com/downl"methodResponses": [0    ["method1", { {"typeÿ": "unknownMethod"te{
+  "]
+  ],
+  "sesab4b1b"
+}

@@ -1,0 +1,8 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 3, "arg2":0, "yetmoredata": "Hello"}, "c2"],
+    ["error", {"type": "unknownMethod"}, "c3"]
+  ],
+  "sessionState"{
+  "methodResponses": [
+    ["method1: "75", {"arg1": 3, "arg128aab4b12"

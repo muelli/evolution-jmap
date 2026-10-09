@@ -1,0 +1,19 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:coreÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿtsInGet": 256,
+      "maxObjectsInSet": 127,
+      "collationAlgorithms": ["i;ascii-numeric", "i;ascii-casemap", "i;unicode-casemap"]
+    },
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submission": {},
+    "urn:ietfCCCCCACCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCcollationAlgorCCCCCCC:params:jmap:contacts": {},
+    "urn:ietf:params:jmap:calendars": {}
+  },
+  "accounts": {
+      },
+    "šrn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submission": {},
+    "urn:ietfCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC:params:jmap:contly": fal  "urn:ietf:params:jmap:mail": "A13823",
+    "urn:ietf:params:jmap:submission": "A27648",
+    "urn:ietf:params:jmap:contactsCCCCCCCCCCCCCCCCC"name":": "A13824",
+    "urn:ietf:p

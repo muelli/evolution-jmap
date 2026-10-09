@@ -1,0 +1,5 @@
+{
+  "methodResponses": [
+    ["method2", {"arg1": 10, "yetmoredata": "Hello"}, "c2"],
+    ["error", {"txpe": "128aab4b1b"
+}

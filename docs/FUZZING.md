@@ -35,13 +35,15 @@ Three dedicated fuzz targets isolate the untrusted server parser boundaries. Eac
 
 ### Surface B: `jmap-client` (`fuzz_client_response`)
 - Location: `rust/crates/jmap-client/fuzz/fuzz_targets/fuzz_client_response.rs`
-- Coverage: Connects `jmap_client::Client` with a synthetic `Transport` that feeds arbitrary bytes as HTTP response bodies for real requests built by the client:
-  - `client.mailbox_get(&account_id)`
-  - `client.email_get(&account_id, &[Id::new("e1")], None)`
-  - `client.calendars(&account_id)`
-  - `client.event_get(&account_id, &[Id::new("ev1")])`
-  - `client.address_books(&account_id)`
-  - `client.contact_get(&account_id, &[Id::new("c1")])`
+- Coverage: Connects `jmap_client::Client` with a synthetic `Transport` that feeds arbitrary bytes as HTTP response bodies for real requests built by the client across all supported domains:
+  - Session negotiation: `Client::connect` over `FuzzSessionTransport` with arbitrary session payloads.
+  - Mailboxes: `client.mailbox_get(&account_id)`, `client.changes::<Mailbox>`, `client.mailbox_create`, `client.mailbox_destroy`
+  - Emails: `client.email_get(&account_id, &[Id::new("e1")], None)`, `client.changes::<Email>`
+  - Calendars: `client.calendars(&account_id)`, `client.changes::<Calendar>`, `client.calendar_create`, `client.calendar_destroy`
+  - Events: `client.event_get(&account_id, &[Id::new("ev1")])`, `client.changes::<CalendarEvent>`, `client.event_create`, `client.event_destroy`, `client.event_parse`
+  - Contacts: `client.address_books(&account_id)`, `client.changes::<AddressBook>`, `client.contact_create`, `client.contact_destroy`, `client.contact_get(&account_id, &[Id::new("c1")])`, `client.changes::<ContactCard>`, `client.contact_card_parse`
+  - Blobs: `client.download_blob`, `client.upload_blob`
+  - Core & Extension: `client.echo`, `client.principal_get`, `client.principals`, `client.participant_identities`, `client.calendar_event_notifications`, `client.share_notifications`, `client.vacation_response_get`, `client.identities`, `client.thread_get`
 
 ### Surface C: `jmap-ical` (`fuzz_ical_roundtrip`)
 - Location: `rust/crates/jmap-ical/fuzz/fuzz_targets/fuzz_ical_roundtrip.rs`
@@ -72,6 +74,17 @@ Corpora are seeded from real client exports and protocol fixtures:
 - Target `fuzz_ical_roundtrip` (`jmap-ical`):
   - Smoke execution: 100 runs.
   - Findings: Fixed point stability confirmed across all seeded fixture permutations.
+
+### Session 2 (2026-10-09): Batch 30
+- Target `fuzz_client_response` (`jmap-client`):
+  - Total executions: 29,565 runs during bounded slice (-max_total_time=60), plus 1,000 smoke and 2,000 validation runs (32,565+ total runs).
+  - Speed: ~484 exec/s.
+  - Peak RSS: 457 MB.
+  - Crashes: 0.
+  - Hangs: 0.
+  - OOMs: 0.
+  - Findings: Client response dispatch across all domains (mailboxes, emails, calendars, events, contacts, address books, blobs, identities, vacation responses, threads, and session negotiation) safely converts malformed, truncated, or hostile payloads into structured `Error` variants (`Json`, `Protocol`, `Method`, `Set`, `Http`) without panics or hangs.
+  - Minimized corpus: 522 files capturing 3,840 coverage edges and 7,354 features.
 
 ## 6. Commands to Resume and Run Fuzz Targets
 

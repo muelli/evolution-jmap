@@ -1,0 +1,9 @@
+{
+  "hemdtoResponses": [
+    ["method1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["ResopnseFromMethod2", {"data": 10, "yetmoredataýýýýýýýýýýýýýýýýýýýýýýýýaccountýýýýýýýýýý": "Hello"}, "c2"],
+    ["error", {"type"ýýýýýýýýýýý": "Hello"}, "c2"],
+    ["error", {"type": "unknownMethod"}, "c3"]
+  ],
+  "sessionState": "75128aab4b1b"
+}

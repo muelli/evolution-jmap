@@ -1,0 +1,7 @@
+{
+  "methodResponses": [
+    ["method1", {"aÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿomMethod3", {"data": 10, "yetmoredata": "Hello"}, "c2"],
+    ["error"Ë {"type": "unknownMethod"}, "c3"]
+  ],
+.  "sessionState": "75128aab4b@1b"
+}

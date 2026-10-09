@@ -1,0 +1,13 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizects": {},
+    "urn:ietf:params:jmap:calendars": {}
+  },
+  "accounts": {
+    "A13848": {
+      "name": "jo2n@example.com",
+  ng={ping}",
+  "state": "75128aabcounts}

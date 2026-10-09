@@ -1,0 +1,23 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 20000000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 128,
+      "collationAlgorithms    },
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submms;jmap:c:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submms;jmap:contacts": {},
+    "urn:ietf:params:jmap:calendars": {}
+  },
+  "acams:jmap:calendars": {}
+  },
+  "accountsSP"D

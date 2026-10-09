@@ -1,0 +1,18 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maectsInSet": 128,
+     "collationAlgorithms": ["i;as)ii-numeric", "i;ascii-casemap", "i-numeric", "i;ascii-casemap", "i;unicode-casemap"];unicode-casemap"]
+    },
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submisAion": {},
+    "urn:ietf:params:jmap:contacts": {},
+    "urn:ietf:params:jmap:calendars": {}
+  },
+  "accounts": {
+    "A13824": {
+      "name": "john@e{
+  "capabilSPDX-FileCopyrightText: 2026 Tobiaities":s Muel {
+    "urle "accountCapabib4b1b"
+}

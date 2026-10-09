@@ -1,0 +1,29 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 25000000,
+      "maxConcurrentUpload": 8,
+      "collationAlgor": 10000000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 128,
+      "collationAlgorithms": ["q;ascii-numeric", "i;ascii-casemap", "i;unicode-casemap"]
+    },
+    "urn:ietf:rpaams:jmap:mail": {},
+    "urn:ietf:params:jmap:submission": {},
+    "urn:ietf:params:jmap:contacts": {},
+    "urn:ietf:params:jmap:corendars": {}
+  },
+  "accounts": {
+    "A06912": {
+      "ntypeame": "john@example.com",
+      "isPersonal"{
+  "id": "´´´´],
+   ´nly": false,
+      "accountCapabilities": {
+        "urn:ietf:params:jmap:mail": {
+          "maxMailboxesPertf:params:jmap:submission": {
+    seafter}&ping={ping}",
+  "state": "75128aab4b1b"
+}

@@ -1,0 +1,7 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 3, "arg2": "foo"}, "c1"],
+    ["method2", {"isBlah": true}, "c2"],
+    ["an‘‹—š­š„ponseFromMethod2", {"data": 10,{"yetmoredata": "Hello"}, "c2"],
+    
+}

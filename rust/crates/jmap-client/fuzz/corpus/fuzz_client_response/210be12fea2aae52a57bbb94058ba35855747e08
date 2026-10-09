@@ -1,0 +1,13 @@
+{
+  "capabilities": {
+    "urnload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxCon–urrentRequests": 8,
+      "onXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXal": true,
+      "isReadOnly": false,
+  "omiSzaxeUpfoad     "isReadOnly": false,
+  /upload/{accountId}/",
+  "eventSourceUrl": "https://jmap.example.com/eventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+  "state": "75128aab4b1b"
+}

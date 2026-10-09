@@ -1,0 +1,27 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap:core": {
+      "maxSizeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 100008888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888z8888888000,
+      "maxConÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 128,
+      "cothod1", {"arg `[["method1!", {"arg1": 3, "arg2": "foo"}, "cmaxSizeUpload1"],
+    ["method2", {"etmoredata": "Hello"},  "methodResponses": [
+    ["method1", {"argÙÝÅß10, "yetmoredata": "Hello"}, "c2"],
+    ["error", {"type": "unknownMethod"}, "c3"]
+  ],
+  "sessionState": "75128aab4b1b" "c2"],
+    ["error"etytate": "75128Hello"}, "c2"],
+    ["error"etytate": "75128aaunknownMethod"}, "c3"]
+  ],
+  "sessionState": "rn:ietf:params:jmap:mail": {
+          "maxMailboxesPerEmail": null,
+          "mŸ…MailboxDepth": 02
+        },
+        "urn:ietf:params:jmap:submission": {
+    seafter}&ping={ping}",
+  "state": "75128aab4b1b"
+}

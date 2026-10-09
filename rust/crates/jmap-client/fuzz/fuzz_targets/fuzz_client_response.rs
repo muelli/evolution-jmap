@@ -30,10 +30,31 @@ impl Transport for FuzzTransport {
     }
 }
 
+struct FuzzSessionTransport {
+    session_body: Vec<u8>,
+}
+
+impl Transport for FuzzSessionTransport {
+    fn execute(&self, request: HttpRequest<'_>) -> Result<HttpResponse, TransportError> {
+        Ok(HttpResponse {
+            status: 200,
+            content_type: Some("application/json".to_owned()),
+            body: self.session_body.clone(),
+            final_url: request.url.to_owned(),
+        })
+    }
+}
+
 fuzz_target!(|data: &[u8]| {
-    // Provide arbitrary bytes as the response body to real requests built by jmap-client.
-    // Parser failures and JMAP protocol errors (Err) are expected for arbitrary data.
-    // The fuzzer asserts that response parsing never panics, aborts, or hangs.
+    // 1. Fuzz session connect response handling:
+    let session_transport = FuzzSessionTransport {
+        session_body: data.to_vec(),
+    };
+    let _ = Client::builder()
+        .transport(session_transport)
+        .connect("https://mail.example.internal", Credentials::none());
+
+    // 2. Fuzz method call response handling with authenticated session:
     let transport = FuzzTransport {
         response_body: data.to_vec(),
     };
@@ -48,5 +69,48 @@ fuzz_target!(|data: &[u8]| {
         let _ = client.event_get(&account_id, &[Id::new("ev1")]);
         let _ = client.address_books(&account_id);
         let _ = client.contact_get(&account_id, &[Id::new("c1")]);
+        let _ = client.changes(&account_id, "Mailbox", &jmap_proto::State::new("0"));
+        let _ = client.changes(&account_id, "Email", &jmap_proto::State::new("0"));
+        let _ = client.changes(&account_id, "ContactCard", &jmap_proto::State::new("0"));
+        let _ = client.changes(&account_id, "CalendarEvent", &jmap_proto::State::new("0"));
+        let _ = client.download_blob(&account_id, &Id::new("b1"), "test.txt", 1024);
+        let _ = client.upload_blob(&account_id, "application/octet-stream", vec![0]);
+        let _ = client.echo(serde_json::json!({}));
+        let _ = client.principal_get(&account_id, &[Id::new("p1")]);
+        let _ = client.principals(&account_id);
+        let _ = client.participant_identities(&account_id);
+        let _ = client.calendar_event_notifications(&account_id);
+        let _ = client.share_notifications(&account_id);
+        let _ = client.vacation_response_get(&account_id);
+        let _ = client.identities(&account_id);
+        let _ = client.thread_get(&account_id, [Id::new("t1")]);
+        let _ = client.mailbox_create(
+            &account_id,
+            &jmap_proto::mail::Mailbox::new("fuzz_test_folder"),
+        );
+        let _ = client.mailbox_destroy(&account_id, &Id::new("m1"));
+        let _ = client.calendar_create(
+            &account_id,
+            &jmap_proto::calendars::Calendar::new("fuzz_cal"),
+        );
+        let _ = client.calendar_destroy(&account_id, &Id::new("c1"));
+        let _ = client.contact_create(
+            &account_id,
+            &jmap_proto::contacts::ContactCard::new(),
+        );
+        let _ = client.contact_destroy(&account_id, &Id::new("card1"));
+        let _ = client.event_create(
+            &account_id,
+            &jmap_proto::calendars::CalendarEvent::new(),
+        );
+        let _ = client.event_destroy(&account_id, &Id::new("ev1"));
+        let _ = client.event_parse(&jmap_proto::calendars::CalendarEventParseRequest::new(
+            account_id.clone(),
+            [Id::new("b1")],
+        ));
+        let _ = client.contact_card_parse(&jmap_proto::contacts::ContactCardParseRequest::new(
+            account_id.clone(),
+            [Id::new("b1")],
+        ));
     }
 });

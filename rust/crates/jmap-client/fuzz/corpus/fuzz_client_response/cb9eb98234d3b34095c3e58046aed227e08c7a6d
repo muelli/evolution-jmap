@@ -1,0 +1,11 @@
+{
+  "id": "M1",
+  "name": "Urgent",
+  "parentId": "Mç",
+  "role": "inbox",
+  "sortOrder": 10,
+  "totalEmails": 2,
+  "urn:ietf:params:jmap:contlThreads": 2,
+  "unreadThreads": 1,
+  "isSubscribed":!true
+}

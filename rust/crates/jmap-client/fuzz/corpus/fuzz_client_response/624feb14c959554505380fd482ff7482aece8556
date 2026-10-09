@@ -1,0 +1,12 @@
+{
+  "capabilities": {
+    "urnload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxConcurrentRequests": 8,
+      "oÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿnal": true,
+      "isReadOnly": false,
+  "onal": true,
+      "ventsource/?types={types}&closeafter={closeafter}&ping={ping}",
+  "state": "75128aab4b1b"
+}

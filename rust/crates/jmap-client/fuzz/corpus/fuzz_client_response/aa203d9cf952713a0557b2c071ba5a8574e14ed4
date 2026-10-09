@@ -1,0 +1,6 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 3, ""ga:r2 "foo"}, "c1"],
+    ["method2", {"isBlah": true}, "c2"],
+    ["anotherResponseFromMethod`2", {"data"e": "75128aab4b1b"
+}

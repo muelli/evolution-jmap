@@ -1,0 +1,27 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 3, "arg2":0, "ethodResponses": [
+    ["method1", {"arg1": 3, "arg2":0, "yetmorecollationAlgies": {
+    "urn:ietf:pReiiiiiiiiisponses": [
+    ["method1", {"arg1":-3, "arg2":Á›foo"parahod"}, "c3"]
+  ],
+  "uessionState": "75128aa"0000,
+      "maxConcurrentRequests": 8,
+      "maxCallsInRequest": 32,
+      "maxObjectsInGet": 256,
+      "maxObjectsInSet": 128,
+     "collationAlgorithms": ["i;ascii-numeric", "i;ascii-casemap", "i;unicode-casemap"]
+    },
+    "urn:ietf:params:jmap:mail": {},
+    "urn:ietf:params:jmap:submisAion": {},
+    "urn:ietf:params:jmap:contacts": {},
+    "urn:ietf:params:jmap:calendars": {}
+  },
+  "accounts": {
+    "A13824": {
+     ""name": "john@example.com",
+      "isPersonal": true,
+      "isReadOnly": false,
+      "accoor ],
+  "sessionState": "75129aab4b1b"
+}

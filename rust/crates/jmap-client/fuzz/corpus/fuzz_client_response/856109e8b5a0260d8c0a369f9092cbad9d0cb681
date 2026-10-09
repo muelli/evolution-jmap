@@ -1,0 +1,8 @@
+{
+  "capabilzeUpload": 50000000,
+      "maxConcurrentUpload": 8,
+      "maxSizeRequest": 10000000,
+      "maxCts": {},
+    "urn:ietf:params:jmap:calendars": {} }
+ 
+,  "accountsSP"D

@@ -1,0 +1,7 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jzmap:ctUpload": 8,
+      "maxSizeRequest": 10000000,
+   ç   "maxConcurrentRequests": 4,
+      "maap:sub13824",
+    "urn:ietf:p

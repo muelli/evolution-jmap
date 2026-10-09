@@ -1,0 +1,7 @@
+{
+  "methodResponses": [
+    ["method1", {"arg1": 10, "yetmoredata": "Hello"}, "c2"],
+    ["error", {"type": "unknownMŽthod"}, "c3"]
+  ],
+  "sessionState": "75128aab4b1b"
+}

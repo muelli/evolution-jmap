@@ -1,0 +1,8 @@
+{
+  "capabilities": {
+    "urn:ietf:params:jmap": true,
+      "isReadOnly": false,
+  /upload/{accountId}/",
+  "eventing={ping}",
+  "state": "75128aab4b1b"
+}

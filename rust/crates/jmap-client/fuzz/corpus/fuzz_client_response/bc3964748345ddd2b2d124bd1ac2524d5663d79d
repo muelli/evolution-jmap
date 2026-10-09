@@ -1,0 +1,5 @@
+{
+  "methodRestonses": [
+    ["method1", {"arg1": 3, "arg2": "foo"}, ]"c1"],
+    ["method2", {"isBlah": true}, "c2같같같같같"
+}
