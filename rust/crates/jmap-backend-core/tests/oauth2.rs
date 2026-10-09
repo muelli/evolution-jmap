@@ -127,6 +127,16 @@ fn the_method_is_read_off_the_source() {
 fn a_source_with_no_token_is_a_required_not_a_rejected() {
     let source = TestSource::new("jmap-oauth2-no-token").with_method("OAuth2");
 
+    // Takes the same lock `capture` does, below: this call reaches the exact
+    // `tracing` call sites those tests capture, with no subscriber of its own
+    // installed. Racing it against one of those tests' first-ever
+    // registration of a call site (which happens, for a given call site, the
+    // first time any thread in the process executes it, whichever thread
+    // wins) can register that call site's cached `Interest` as `never`, under
+    // this call's absent subscriber, so this must never run concurrently with
+    // `capture`.
+    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     // SAFETY: a live source and a NULL cancellable, which is what an EDS vfunc
     // may be handed.
     let error = unsafe { access_token(source.0, ptr::null_mut()) }.expect_err("no token exists");
@@ -231,21 +241,51 @@ impl tracing::Subscriber for CapturingSubscriber {
     fn exit(&self, _span: &tracing::span::Id) {}
 }
 
-#[test]
-fn access_token_traces_account_id_on_attempt() {
+/// Serializes every test in this file that calls `access_token` (both the two
+/// below and `a_source_with_no_token_is_a_required_not_a_rejected`, which
+/// takes this same lock without using `capture`), and forces a fresh
+/// callsite-interest rebuild once this subscriber is the thread's default.
+/// Both guard against the same fact `tests/tracing_writes.rs` in several
+/// sibling crates already documents: `tracing-core` caches each macro call
+/// site's `Interest` (never/sometimes/always) once, process-wide, the first
+/// time that call site fires anywhere in the process, based on whichever
+/// `Dispatch` is current *on the thread that happens to fire it first*, not
+/// on which `Dispatch` is current on any later call. `a_source_with_no_token_
+/// is_a_required_not_a_rejected` reaches the exact same `access_token` call
+/// sites with no subscriber installed at all; left unsynchronized, it can win
+/// the race to register one of those call sites first, caching it `never`
+/// under its own absent subscriber, which then silently drops that event even
+/// under a `capture` subscriber that would otherwise have accepted it.
+/// `rebuild_interest_cache` re-evaluates every *already-registered* call site
+/// against whatever is current right now, which is why the lock alone is not
+/// enough: a call site neither test has reached yet still registers itself,
+/// under whichever subscriber is current, the first time any locked caller
+/// reaches it, so it must run after `with_default` has installed this
+/// subscriber, not before.
+static CAPTURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn capture(source: &TestSource) -> (Result<String, ConnectError>, Vec<(String, String)>) {
+    let _serialize = CAPTURE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let subscriber = CapturingSubscriber {
         captured: captured.clone(),
     };
 
-    let source = TestSource::new("jmap-oauth2-trace-uid").with_method("OAuth2");
-
-    let _ = tracing::subscriber::with_default(subscriber, || {
+    let result = tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
         // SAFETY: a live source and NULL cancellable.
         unsafe { access_token(source.0, ptr::null_mut()) }
     });
 
-    let entries = captured.lock().unwrap();
+    let entries = std::mem::take(&mut *captured.lock().unwrap());
+    (result, entries)
+}
+
+#[test]
+fn access_token_traces_account_id_on_attempt() {
+    let source = TestSource::new("jmap-oauth2-trace-uid").with_method("OAuth2");
+
+    let (_, entries) = capture(&source);
     assert!(
         entries.contains(&(
             "account_id".to_owned(),
@@ -257,20 +297,10 @@ fn access_token_traces_account_id_on_attempt() {
 
 #[test]
 fn access_token_failure_traces_structured_fields_and_consent_escalation() {
-    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let subscriber = CapturingSubscriber {
-        captured: captured.clone(),
-    };
-
     let source = TestSource::new("jmap-oauth2-trace-failure").with_method("OAuth2");
 
-    let result = tracing::subscriber::with_default(subscriber, || {
-        // SAFETY: a live source and NULL cancellable.
-        unsafe { access_token(source.0, ptr::null_mut()) }
-    });
+    let (result, entries) = capture(&source);
     assert!(result.is_err());
-
-    let entries = captured.lock().unwrap();
     assert!(
         entries.contains(&(
             "account_id".to_owned(),
