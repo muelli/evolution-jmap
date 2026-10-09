@@ -248,3 +248,54 @@ remaining gap is cosmetic, not functional: this AT-SPI check cannot observe
 the item in its *enabled* state without a real `maildir` Camel account,
 which is out of scope for a JMAP-only harness. Item 74 is fully closed on
 both UI eras; do not re-queue chasing a maildir fixture for this one script.
+
+## Sibling check: item 66's live-Evolution populate-once caveat
+
+`ci/gui-smoke-collection-populate-once.sh` plus
+`ci/gui-smoke-collection-populate-once-assert.py`, wired into a new
+`gui-smoke-collection-populate-once` CI job. Item 66 fixed a real bug
+(`jmap-backend-collection`'s `on_account_changed` repopulating an account in
+answer to a `"changed"` write its own first populate made), with Rust-level
+evidence pinning the fix, but the live-Evolution sequence itself stayed
+unverified: there is no session-bus registry in a unit test, so nothing had
+driven a real brand-new account through `evolution-source-registry` and
+checked the server only saw one login.
+
+Unlike every other check on this page, this one needs a collection account
+(`[Collection] BackendName=jmap`), not a plain `[Mail Account]`: the
+`on_account_changed`/`wants_repopulate` logic item 66 touches lives entirely
+in `jmap-backend-collection`, which a standalone mail source never
+constructs. The fixture the script writes (four small `.source` files,
+inline rather than copied from `docs/examples/`, since this exact
+combination is not one of the manual-test recipes
+`docs/manual-test-collection-backend.md` documents for a human to copy)
+turns contacts and calendars **off**: a first attempt with both on found the
+most obvious oracle, counting `AddressBook/get`/`Calendar/get` requests in
+`jmap-mock`'s own log, too noisy to use — `jmap-backend-collection`'s own
+`fan_out` auto-creates and exports a book/calendar child the moment either
+part is enabled, and each gets opened by its own independently-scheduled EDS
+client (evolution-addressbook-factory's autocompletion, the calendar
+reminder watcher) with no connection to this account's own populate, so
+their request counts did not agree between two otherwise-identical runs.
+Mail has no such confound in this headless profile: the one Evolution
+instance under test is the only client that ever opens this account's mail
+store, so `Mailbox/get` traffic maps directly onto how many times it
+connected.
+
+Its healthy baseline is not 1, though, and this script does not assume it
+is: a control run of `ci/gui-smoke.sh`'s own plain standalone mail account
+(no collection backend, no `on_account_changed` in the picture at all)
+empirically shows `Mailbox/get` firing **twice** on every healthy single
+connect — once for the store's own `connect_sync`, once more for
+Evolution's own folder-tree refresh right after. A bugged second populate
+doubles that again, to 4. The script waits for the account's inbox to prove
+the healthy first login happened, gives any erroneous second one a 15-second
+grace window to show up, then asserts the mock's log shows exactly 2, not 4,
+`Mailbox/get` calls.
+
+Confirmed 2026-10-09 in the same rootless-podman Ubuntu 24.04 container
+(EDS 3.52) the example-module checks use: passed twice in a row at 2, and a
+negative control (the expected count swapped for one that cannot occur)
+failed as expected, ruling out a vacuous pass. The EDS 3.60.2 leg and item
+63's own caveat (editing a JMAP account's host must trigger a fresh
+authenticate) are left for a follow-up; item 93 stays CLAIMABLE on those.

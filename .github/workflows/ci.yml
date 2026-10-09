@@ -192,6 +192,39 @@ jobs:
           path: ${{ runner.temp }}/gui-smoke-example-module-folder-popup-artifacts
           if-no-files-found: ignore
 
+  # Item 66's live-Evolution caveat: a brand-new JMAP collection account's
+  # first populate must authenticate once, not twice. Same install recipe as
+  # gui-smoke-example-module; see docs/gui-smoke-test.md's "item 66's
+  # live-Evolution populate-once caveat" section and
+  # ci/gui-smoke-collection-populate-once-assert.py for why the oracle is
+  # jmap-mock's own request log rather than another AT-SPI read.
+  gui-smoke-collection-populate-once:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gui-smoke-test')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: ci/install-deps.sh
+      - run: ci/install-deps-gui-smoke.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: gui-smoke
+          workspaces: rust
+      - run: cmake -S . -B build -G Ninja
+      - run: cmake --build build
+      - run: sudo cmake --install build
+      - run: ci/gui-smoke-collection-populate-once.sh
+        env:
+          JMAP_MOCKD: ${{ github.workspace }}/build/cargo-target/release/jmap-mockd
+          GUI_SMOKE_ARTIFACTS: ${{ runner.temp }}/gui-smoke-collection-populate-once-artifacts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gui-smoke-collection-populate-once-artifacts
+          path: ${{ runner.temp }}/gui-smoke-collection-populate-once-artifacts
+          if-no-files-found: ignore
+
   # M10 (docs/eds-version-matrix.md): the pinned-3.52 leg is the `build`
   # job above (ctest there already runs rust-test-eds, layout checks
   # included, against the Ubuntu 24.04 headers ci/install-deps.sh pins).
