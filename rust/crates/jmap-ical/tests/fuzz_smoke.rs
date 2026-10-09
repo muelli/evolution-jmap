@@ -58,3 +58,60 @@ fn fixture_seeds_reach_fixed_point_stability() {
         );
     }
 }
+
+#[test]
+fn duration_with_leading_zeros_reaches_fixed_point_stability() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:test-leading-zero\r\nDTSTART:20261012T093000Z\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER;VALUE=X-CUSTOM:-PT07M\r\nDESCRIPTION:Reminder\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let event1 = ical_to_event(ics).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}
+
+#[test]
+fn unmappable_rrule_frequency_reaches_fixed_point_stability() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:test-rrule-freq\r\nDTSTART:20261012T093000Z\r\nRRULE:FREQ=FICE\\\\,TTENDEE\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let event1 = ical_to_event(ics).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}
+
+#[test]
+fn zero_duration_trigger_with_custom_param_reaches_fixed_point_stability() {
+    let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:test-zero-dur\r\nDTSTART:20261012T093000Z\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER;VALUE=X-CUSTOM:-PT0H\r\nDESCRIPTION:Reminder\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+    let event1 = ical_to_event(ics).expect("Pass 1 import succeeds");
+    let ical2 = event_to_ical(&event1);
+    let event2 = ical_to_event(&ical2).expect("Pass 2 re-import succeeds");
+    let ical3 = event_to_ical(&event2);
+    let event3 = ical_to_event(&ical3).expect("Pass 3 re-import succeeds");
+
+    assert_eq!(
+        ical2, ical3,
+        "Export_2 and Export_3 must be byte-identical fixed point"
+    );
+    assert_eq!(
+        event2, event3,
+        "Event_2 and Event_3 must be identical fixed point"
+    );
+}
