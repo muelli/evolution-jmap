@@ -158,6 +158,40 @@ jobs:
           path: ${{ runner.temp }}/gui-smoke-example-module-artifacts
           if-no-files-found: ignore
 
+  # Item 74's other live-Evolution caveat: the mail-folder-popup half of the
+  # same merge, which Evolution only builds on demand when a folder's context
+  # menu is actually triggered, so (unlike the sibling job above) this drives
+  # a real right-click through AT-SPI rather than reading the tree statically.
+  # Same install recipe as gui-smoke-example-module; see
+  # ci/gui-smoke-example-module-folder-popup-assert.py for why that needs a
+  # window manager and D-Bus activation environment the other two jobs don't.
+  gui-smoke-example-module-folder-popup:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gui-smoke-test')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: ci/install-deps.sh
+      - run: ci/install-deps-gui-smoke.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: gui-smoke
+          workspaces: rust
+      - run: cmake -S . -B build -G Ninja
+      - run: cmake --build build
+      - run: sudo cmake --install build
+      - run: ci/gui-smoke-example-module-folder-popup.sh
+        env:
+          JMAP_MOCKD: ${{ github.workspace }}/build/cargo-target/release/jmap-mockd
+          GUI_SMOKE_ARTIFACTS: ${{ runner.temp }}/gui-smoke-example-module-folder-popup-artifacts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: gui-smoke-example-module-folder-popup-artifacts
+          path: ${{ runner.temp }}/gui-smoke-example-module-folder-popup-artifacts
+          if-no-files-found: ignore
+
   # M10 (docs/eds-version-matrix.md): the pinned-3.52 leg is the `build`
   # job above (ctest there already runs rust-test-eds, layout checks
   # included, against the Ubuntu 24.04 headers ci/install-deps.sh pins).

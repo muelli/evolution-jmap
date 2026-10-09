@@ -136,8 +136,8 @@ merge (`"My Message Action..."`, `src/m-mail-ui.c`) under Evolution's
 merges the `EUIManager`/`GtkUIManager` XML into real widgets at shell-view
 construction, with no menu click needed. Only that half of the caveat is
 checked; the sibling mail-folder-popup item merges into a context menu
-built on demand when a folder is right-clicked, which this script does not
-drive, and is left for a follow-up.
+built on demand when a folder is right-clicked, checked by its own sibling
+script below.
 
 Needs everything `ci/gui-smoke.sh` needs, plus `example-module` installed
 where Evolution scans modules: `cmake --install build` with **no**
@@ -150,3 +150,41 @@ assertion passes on a real build, and a negative control (the same run with
 the sought menu-item name swapped for one that cannot exist) fails as
 expected, ruling out a vacuously-passing tree walk. The EDS 3.60.2 leg
 (item 71's podman recipe) is left for a follow-up run.
+
+## Sibling check: the example-module mail-folder-popup caveat
+
+The other half of the same caveat: `ci/gui-smoke-example-module-folder-popup.sh`
+plus `ci/gui-smoke-example-module-folder-popup-assert.py`. Evolution builds
+the `mail-folder-popup` context menu fresh via `e_ui_manager_create_item`
+only when a folder is actually right-clicked, well after the shell view and
+its extensions construct, so a static tree walk (the sibling check above)
+proves nothing for this half: the item is absent from the tree until the
+popup is actually triggered. This script drives a real right-click through
+AT-SPI's synthetic pointer at the mock account's own row in the folder tree,
+then polls for `"My Maildir Folder Action..."` in the resulting popup. The
+item is expected to appear but stay insensitive (its own sensitivity gate in
+`src/m-mail-ui.c` requires a `maildir` Camel provider, which this JMAP
+account never is, and `m_utils_enable_actions` only ever toggles
+sensitivity, never visibility), so only presence is asserted, not enabled
+state.
+
+A real synthetic right-click needs two things neither `ci/gui-smoke.sh` nor
+the sibling script above needs, since both of those only ever drive AT-SPI's
+Action interface (a direct, in-process ATK call with no X input involved):
+
+- **A window manager.** Without one, Xvfb never assigns Evolution's toplevel
+  an absolute screen position, so `Component.getExtents` comes back as
+  GLib's "unknown" sentinel (`G_MININT32`) rather than a usable coordinate.
+  The script starts a minimal `openbox` for this (`ci/install-deps-gui-smoke.sh`
+  now installs it alongside the rest).
+- **`DISPLAY` pushed into the D-Bus activation environment.** `at-spi2-registryd`,
+  which owns the actual `XTestFakeButtonEvent` call the synthetic click makes,
+  is D-Bus-activated with its own environment, not the caller's, so without
+  `dbus-update-activation-environment DISPLAY` the click silently reaches no
+  display at all.
+
+Confirmed 2026-10-09 against EDS 3.52 (same rootless-podman Ubuntu 24.04
+container as the sibling check): passes twice in a row, and a negative
+control (the sought menu-item name swapped for one that cannot exist) fails
+both attempts as expected. The EDS 3.60.2 leg is left for a follow-up run,
+same as the sibling check above.
